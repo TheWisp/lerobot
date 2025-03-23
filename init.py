@@ -42,7 +42,14 @@ robot = ManipulatorRobot(
 robot.connect()
 try:
     while True:
-        robot.teleop_step()
+        leader_pos = robot.leader_arms["main"].read("Present_Position")
+        follower_pos = robot.follower_arms["main"].read("Present_Position")
+        observation, action = robot.teleop_step(record_data=True)
+
+        print(f'follower_pos = {follower_pos}')
+        print(f'observation = {observation}')
+        print(f'leader_pos = {leader_pos}')
+        print(f'action = {action}')
 except KeyboardInterrupt:
     follower_arm.write("Torque_Enable", TorqueMode.DISABLED.value)
     robot.disconnect()
