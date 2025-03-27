@@ -1,9 +1,12 @@
+from lerobot.common.robot_devices.motors.configs import DynamixelMotorsBusConfig
 from lerobot.common.robot_devices.motors.dynamixel import DynamixelMotorsBus, TorqueMode
+from lerobot.common.robot_devices.robots.configs import KochRobotConfig
+from lerobot.common.robot_devices.robots.manipulator import ManipulatorRobot
 
 leader_port = "/dev/tty.usbmodem58760429321"
 follower_port = "/dev/tty.usbmodem58760431431"
 
-leader_arm = DynamixelMotorsBus(
+leader_config = DynamixelMotorsBusConfig(
     port=leader_port,
     motors={
         # name: (index, model)
@@ -16,7 +19,7 @@ leader_arm = DynamixelMotorsBus(
     },
 )
 
-follower_arm = DynamixelMotorsBus(
+follower_config = DynamixelMotorsBusConfig(
     port=follower_port,
     motors={
         # name: (index, model)
@@ -28,30 +31,37 @@ follower_arm = DynamixelMotorsBus(
         "gripper": (6, "xl330-m288"),
     },
 )
+leader_arm = DynamixelMotorsBus(leader_config)
+follower_arm = DynamixelMotorsBus(follower_config)
 #leader_arm.connect()
 #follower_arm.connect()
 
-from lerobot.common.robot_devices.robots.manipulator import ManipulatorRobot
-robot = ManipulatorRobot(
-    robot_type="koch",
-    leader_arms={"main": leader_arm},
-    follower_arms={"main": follower_arm},
-    calibration_dir=".cache/calibration/koch",
+robot_config = KochRobotConfig(
+    leader_arms={"main": leader_config},
+    follower_arms={"main": follower_config},
+    cameras={},  # We don't use any camera for now
 )
+robot = ManipulatorRobot(robot_config)
 # Connect motors buses and cameras if any (Required)
 robot.connect()
 try:
     while True:
-        leader_pos = robot.leader_arms["main"].read("Present_Position")
-        follower_pos = robot.follower_arms["main"].read("Present_Position")
-        observation, action = robot.teleop_step(record_data=True)
+        try:
+            leader_pos = robot.leader_arms["main"].read("Present_Position")
+            follower_pos = robot.follower_arms["main"].read("Present_Position")
+            observation, action = robot.teleop_step(record_data=True)
 
-        print(f'follower_pos = {follower_pos}')
-        print(f'observation = {observation}')
-        print(f'leader_pos = {leader_pos}')
-        print(f'action = {action}')
+            print(f'follower_pos = {follower_pos}')
+            print(f'observation = {observation}')
+            print(f'leader_pos = {leader_pos}')
+            print(f'action = {action}')
+        except ConnectionError:
+            print("Connection error, continue...")
+            
 except KeyboardInterrupt:
-    follower_arm.write("Torque_Enable", TorqueMode.DISABLED.value)
+    print("Stopping motors...")
+    robot.follower_arms["main"].write("Torque_Enable", TorqueMode.DISABLED.value)
+    robot.leader_arms["main"].write("Torque_Enable", TorqueMode.DISABLED.value)
     robot.disconnect()
     print("Done")
 
