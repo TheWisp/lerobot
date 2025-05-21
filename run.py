@@ -1,3 +1,4 @@
+from lerobot.common.policies.act.modeling_act import ACTPolicy
 from lerobot.common.robot_devices.motors.configs import DynamixelMotorsBusConfig
 from lerobot.common.robot_devices.motors.dynamixel import DynamixelMotorsBus, TorqueMode
 from lerobot.common.robot_devices.robots.configs import KochRobotConfig
@@ -6,6 +7,7 @@ from lerobot.common.robot_devices.cameras.configs import OpenCVCameraConfig
 from lerobot.common.robot_devices.cameras.opencv import OpenCVCamera
 import time
 from lerobot.scripts.control_robot import busy_wait
+import torch
 
 leader_port = "/dev/tty.usbmodem58760429321"
 follower_port = "/dev/tty.usbmodem58760431431"
@@ -56,50 +58,38 @@ robot = ManipulatorRobot(robot_config)
 # Connect motors buses and cameras if any (Required)
 robot.connect()
 
-#record_time_s = 30
-record_time_s = 300
-fps = 60
+inference_time_s = 60
+fps = 30
+device = "mps"  # TODO: On Mac, use "mps" or "cpu"
 
-try:
-    states = []
-    actions = []
-    for _ in range(record_time_s * fps):
-        try:
-            start_time = time.perf_counter()
-            leader_pos = robot.leader_arms["main"].read("Present_Position")
-            follower_pos = robot.follower_arms["main"].read("Present_Position")
-            observation, action = robot.teleop_step(record_data=True)
-            #print(observation["observation.images.webcam"].shape)
+ckpt_path = "outputs/train/act_koch_test/checkpoints/last/pretrained_model"
+policy = ACTPolicy.from_pretrained(ckpt_path)
+policy.to(device)
 
-            states.append(observation["observation.state"])
-            actions.append(action["action"])
+for _ in range(inference_time_s * fps):
+    start_time = time.perf_counter()
 
-            print(f'follower_pos = {follower_pos}')
-            print(f'observation = {observation}')
-            print(f'leader_pos = {leader_pos}')
-            print(f'action = {action}')
+    # Read the follower state and access the frames from the cameras
+    observation = robot.capture_observation()
 
-            dt_s = time.perf_counter() - start_time
-            busy_wait(1 / fps - dt_s)
-        except ConnectionError:
-            print("Connection error, continue...")
-            
-except KeyboardInterrupt:
-    print("Stopping motors...")
-    robot.follower_arms["main"].write("Torque_Enable", TorqueMode.DISABLED.value)
-    robot.leader_arms["main"].write("Torque_Enable", TorqueMode.DISABLED.value)
-    # Give it some time to stop
-    time.sleep(1)
-    robot.disconnect()
-    camera.disconnect()
-    print("Done")
+    # Convert to pytorch format: channel first and float32 in [0,1]
+    # with batch dimension
+    for name in observation:
+        if "image" in name:
+            observation[name] = observation[name].type(torch.float32) / 255
+            observation[name] = observation[name].permute(2, 0, 1).contiguous()
+        observation[name] = observation[name].unsqueeze(0)
+        observation[name] = observation[name].to(device)
 
-"""
-leader_arm.connect()
-follower_arm.connect()
-leader_pos = leader_arm.read("Present_Position")
-follower_pos = follower_arm.read("Present_Position")
-print(leader_pos)
-print(follower_pos)
-print("done")
-"""
+    # Compute the next action with the policy
+    # based on the current observation
+    action = policy.select_action(observation)
+    # Remove batch dimension
+    action = action.squeeze(0)
+    # Move to cpu, if not already the case
+    action = action.to("cpu")
+    # Order the robot to move
+    robot.send_action(action)
+
+    dt_s = time.perf_counter() - start_time
+    busy_wait(1 / fps - dt_s)
