@@ -454,7 +454,7 @@ class So101RobotConfig(ManipulatorRobotConfig):
     follower_arms: dict[str, MotorsBusConfig] = field(
         default_factory=lambda: {
             "main": FeetechMotorsBusConfig(
-                port="/dev/tty.usbmodem585A0076891",
+                port="/dev/tty.usbmodem5A460850911",
                 motors={
                     # name: (index, model)
                     "shoulder_pan": [1, "sts3215"],
@@ -596,7 +596,7 @@ class LeKiwiRobotConfig(RobotConfig):
     max_relative_target: int | None = None
 
     # Network Configuration
-    ip: str = "192.168.0.193"
+    ip: str = "192.168.1.137"
     port: int = 5555
     video_port: int = 5556
 
