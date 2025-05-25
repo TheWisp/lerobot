@@ -24,6 +24,7 @@ import torch
 import zmq
 
 from lerobot.common.robot_devices.cameras.utils import make_cameras_from_configs
+from lerobot.common.robot_devices.motors.dynamixel import DynamixelMotorsBus
 from lerobot.common.robot_devices.motors.feetech import TorqueMode
 from lerobot.common.robot_devices.motors.utils import MotorsBus, make_motors_buses_from_configs
 from lerobot.common.robot_devices.robots.configs import LeKiwiRobotConfig
@@ -266,7 +267,11 @@ class MobileManipulator:
                 calibration = json.load(f)
         else:
             print(f"Missing calibration file '{arm_calib_path}'")
-            calibration = run_arm_manual_calibration(arm, self.robot_type, name, arm_type)
+            if isinstance(arm, DynamixelMotorsBus):
+                from lerobot.common.robot_devices.robots.dynamixel_calibration import run_arm_calibration
+                calibration = run_arm_calibration(arm, self.robot_type, name, arm_type)
+            else:
+                calibration = run_arm_manual_calibration(arm, self.robot_type, name, arm_type)
             print(f"Calibration is done! Saving calibration file '{arm_calib_path}'")
             arm_calib_path.parent.mkdir(parents=True, exist_ok=True)
             with open(arm_calib_path, "w") as f:
