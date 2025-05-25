@@ -4,8 +4,11 @@ from lerobot.common.robot_devices.motors.feetech import (
     FeetechMotorsBus,
 )
 
+
 def init():
-    config = FeetechMotorsBusConfig(port='/dev/ttyACM0', motors={'motor_name': (-1, 'sts3215')})
+    config = FeetechMotorsBusConfig(
+        port="/dev/ttyACM0", motors={"motor_name": (-1, "sts3215")}
+    )
     motor_bus = FeetechMotorsBus(config=config)
 
     # Try to connect to the motor bus and handle any connection-specific errors
@@ -15,7 +18,7 @@ def init():
     except OSError as e:
         print(f"Error occurred when connecting to the motor bus: {e}")
         return
-    
+
     # Motor bus is connected, proceed with the rest of the operations
     try:
         print("Scanning all baudrates and motor indices")
@@ -34,7 +37,6 @@ def init():
     finally:
         motor_bus.disconnect()
         print("Disconnected from motor bus.")
-    
+
+
 init()
-
-
