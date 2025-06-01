@@ -161,6 +161,12 @@ def run_lekiwi(robot_config):
                         else:
                             for motor, pos in zip(arm_motor_ids, arm_positions, strict=False):
                                 motors_bus.write("Goal_Position", pos, motor)
+                    if "arm_partial_positions" in data:
+                        arm_partial_positions = data["arm_partial_positions"]
+                        for motor in arm_motor_ids:
+                            if motor not in arm_partial_positions:
+                                continue
+                            motors_bus.write("Goal_Position", arm_partial_positions.get(motor), motor)
                     # Process wheel (base) commands.
                     if "raw_velocity" in data:
                         raw_command = data["raw_velocity"]
