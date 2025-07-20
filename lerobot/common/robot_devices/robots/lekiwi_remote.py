@@ -160,13 +160,50 @@ def run_lekiwi(robot_config):
                             )
                         else:
                             for motor, pos in zip(arm_motor_ids, arm_positions, strict=False):
+                                                            # Initialize motors in velocity mode if needed.
+                                if motors_bus.read("Mode", motor) != [0]:
+                                    print(f"[INFO] Setting {motor} to position mode.")
+                                    motors_bus.write("Lock", 0)
+                                    # Mode=0 for Position Control
+                                    motors_bus.write("Mode", 0)
+                                    motors_bus.write("Lock", 1)
+                                print(f"[INFO] Setting position for {motor}: {pos}")
                                 motors_bus.write("Goal_Position", pos, motor)
                     if "arm_partial_positions" in data:
                         arm_partial_positions = data["arm_partial_positions"]
                         for motor in arm_motor_ids:
                             if motor not in arm_partial_positions:
                                 continue
+
+                            if motors_bus.read("Mode", motor) != [0]:
+                                print(f"[INFO] Setting {motor} to position mode.")
+                                motors_bus.write("Lock", 0)
+                                # Mode=0 for Position Control
+                                motors_bus.write("Mode", 0)
+                                motors_bus.write("Lock", 1)
+
                             motors_bus.write("Goal_Position", arm_partial_positions.get(motor), motor)
+                        # positions = motors_bus.read("Present_Position", arm_motor_ids)
+                        # print("[INFO] Arm positions updated:")
+                        # print(
+                        #     "\n".join(
+                        #         f"{motor}: {pos}"
+                        #         for motor, pos in zip(arm_motor_ids, positions, strict=False)
+                        #     )
+                        # )
+                    if "arm_partial_velocity" in data:
+                        arm_partial_velocity = data["arm_partial_velocity"]
+                        for motor in arm_motor_ids:
+                            if motor not in arm_partial_velocity:
+                                continue
+                            # Initialize motors in velocity mode if needed.
+                            if motors_bus.read("Mode", motor) != [1]:
+                                print(f"[INFO] Setting {motor} to velocity mode.")
+                                motors_bus.write("Lock", 0)
+                                motors_bus.write("Mode", 1, motor)
+                                motors_bus.write("Lock", 1)
+                            print(f"[INFO] Setting velocity for {motor}: {arm_partial_velocity[motor]}")
+                            motors_bus.write("Goal_Speed", arm_partial_velocity.get(motor), motor)
                     # Process wheel (base) commands.
                     if "raw_velocity" in data:
                         raw_command = data["raw_velocity"]
@@ -212,6 +249,10 @@ def run_lekiwi(robot_config):
             }
             # Send the observation over the video socket.
             video_socket.send_string(json.dumps(observation))
+
+            # Print the current state for debugging.
+            print("Follower arm state:")
+            print(follower_arm_state)
 
             # Ensure a short sleep to avoid overloading the CPU.
             elapsed = time.time() - loop_start_time
