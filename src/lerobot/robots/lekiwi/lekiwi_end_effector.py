@@ -37,11 +37,16 @@ class LeKiwiEndEffectorConfig(LeKiwiConfig):
     urdf_path: str | None = None
 
     # End-effector frame name in the URDF
-    target_frame_name: str = (
-        "TODO"  # TODO look up the Lekiwi URDF for the correct frame name
-    )
+    # https://github.com/SIGRobotics-UIUC/LeKiwi/blob/main/URDF/LeKiwi.urdf
+    target_frame_name: str = "STS3215_03a-v1-4"
 
-    # TODO end_effector_bounds
+    # Default bounds for the end-effector position (in meters)
+    end_effector_bounds: dict[str, list[float]] = field(
+        default_factory=lambda: {
+            "min": [-1.0, -1.0, -1.0],  # min x, y, z
+            "max": [1.0, 1.0, 1.0],  # max x, y, z
+        }
+    )
 
     # Same as so100/101
     max_gripper_pos: float = 50
@@ -92,6 +97,7 @@ class LeKiwiEndEffector(LeKiwi):
 
         self.current_ee_pos = None
         self.current_joint_pos = None
+        print (f"Using URDF: {self.config.urdf_path}")
 
     @property
     def action_features(self) -> dict[str, Any]:
