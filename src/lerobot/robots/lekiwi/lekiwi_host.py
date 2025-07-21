@@ -23,6 +23,8 @@ import cv2
 import zmq
 
 from .config_lekiwi import LeKiwiConfig, LeKiwiHostConfig
+from .. import RobotConfig
+from .lekiwi_end_effector import LeKiwiEndEffectorConfig
 from .lekiwi import LeKiwi
 import draccus
 from dataclasses import dataclass, field
@@ -52,7 +54,7 @@ class LeKiwiHost:
 
 @dataclass
 class CLIConfig:
-    robot: LeKiwiConfig = field(default_factory=LeKiwiConfig)
+    robot: RobotConfig = field(default_factory=LeKiwiConfig)
 
 @draccus.wrap()
 def main(cfg: CLIConfig):

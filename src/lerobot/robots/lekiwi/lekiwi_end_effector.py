@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.errors import DeviceNotConnectedError
 from lerobot.model.kinematics import RobotKinematics
-from . import LeKiwiConfig, Lekiwi
+from . import LeKiwiConfig
+from .lekiwi import LeKiwi
 from ..config import RobotConfig
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ class LeKiwiEndEffectorConfig(LeKiwiConfig):
     )
 
 
-class LekiwiEndEffector(Lekiwi):
+class LeKiwiEndEffector(LeKiwi):
     """
     Lekiwi robot with end-effector space control.
 
@@ -73,7 +74,6 @@ class LekiwiEndEffector(Lekiwi):
         self.cameras = make_cameras_from_configs(self.config.cameras)
 
         self.config = config
-        self.kinematics = RobotKinematics(self.config.kinematics)
 
         # Initialize the kinematics module for the lekiwi robot
         if self.config.urdf_path is None:
