@@ -24,6 +24,10 @@ import zmq
 
 from .config_lekiwi import LeKiwiConfig, LeKiwiHostConfig
 from .lekiwi import LeKiwi
+import draccus
+from dataclasses import dataclass, field
+from ..utils import make_robot_from_config
+from lerobot.utils.utils import init_logging
 
 
 class LeKiwiHost:
@@ -46,11 +50,16 @@ class LeKiwiHost:
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
 
+@dataclass
+class CLIConfig:
+    robot: LeKiwiConfig = field(default_factory=LeKiwiConfig)
 
-def main():
+@draccus.wrap()
+def main(cfg: CLIConfig):
     logging.info("Configuring LeKiwi")
-    robot_config = LeKiwiConfig()
-    robot = LeKiwi(robot_config)
+    logging.info(f"Configuration: {cfg}")
+    
+    robot = make_robot_from_config(cfg.robot)
 
     logging.info("Connecting LeKiwi")
     robot.connect()
@@ -124,4 +133,5 @@ def main():
 
 
 if __name__ == "__main__":
+    init_logging()
     main()
