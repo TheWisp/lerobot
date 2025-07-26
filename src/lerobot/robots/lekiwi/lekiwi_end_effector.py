@@ -95,6 +95,9 @@ class LeKiwiEndEffector(LeKiwi):
             target_frame_name=self.config.target_frame_name,
         )
 
+        # The first 6 motors are the arm motors
+        self.arm_motors = dict(list(self.bus.motors.items())[:6])
+
         # Store the bounds for end-effector position
         self.end_effector_bounds = self.config.end_effector_bounds
 
@@ -142,7 +145,7 @@ class LeKiwiEndEffector(LeKiwi):
             # Read current joint positions
             current_joint_pos = self.bus.sync_read("Present_Position")
             self.current_joint_pos = np.array(
-                [current_joint_pos[name] for name in self.bus.motors]
+                [current_joint_pos[name] for name in self.arm_motors]
             )
 
         # Calculate current end-effector position using forward kinematics
@@ -172,7 +175,7 @@ class LeKiwiEndEffector(LeKiwi):
         # Create joint space action dictionary
         joint_action = {
             f"{key}.pos": target_joint_values_in_degrees[i]
-            for i, key in enumerate(self.bus.motors.keys())
+            for i, key in enumerate(self.arm_motors.keys())
         }
 
         # Handle gripper separately if included in action
@@ -194,7 +197,7 @@ class LeKiwiEndEffector(LeKiwi):
         joint_action["theta.vel"] = action["theta.vel"] if "theta.vel" in action else 0.0
 
         # Log before sending
-        logger.warning(f"Sending joint action: {joint_action}")
+        #logger.warning(f"Sending joint action: {joint_action}")
 
         # Send joint space action to parent class
         return super().send_action(joint_action)
