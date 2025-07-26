@@ -40,6 +40,9 @@ class LeKiwiEndEffectorConfig(LeKiwiConfig):
     # https://github.com/SIGRobotics-UIUC/LeKiwi/blob/main/URDF/LeKiwi.urdf
     target_frame_name: str = "STS3215_03a-v1-4"
 
+    # Duration of the application
+    connection_time_s: int = 300
+
     # Default bounds for the end-effector position (in meters)
     end_effector_bounds: dict[str, list[float]] = field(
         default_factory=lambda: {
@@ -108,7 +111,7 @@ class LeKiwiEndEffector(LeKiwi):
         return {
             "dtype": "float32",
             "shape": (4,),
-            "names": {"delta_x": 0, "delta_y": 1, "delta_z": 2, "gripper": 3},
+            "names": {"delta_x": 0, "delta_y": 1, "delta_z": 2, "arm_gripper": 3},
         }
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
@@ -126,9 +129,9 @@ class LeKiwiEndEffector(LeKiwi):
                     ],
                     dtype=np.float32,
                 )
-                if "gripper" not in action:
-                    action["gripper"] = [1.0]
-                action = np.append(delta_ee, action["gripper"])
+                if "arm_gripper" not in action:
+                    action["arm_gripper"] = [1.0]
+                action = np.append(delta_ee, action["arm_gripper"])
             else:
                 logger.warning(
                     f"Expected action keys 'delta_x', 'delta_y', 'delta_z', got {list(action.keys())}"
@@ -175,7 +178,7 @@ class LeKiwiEndEffector(LeKiwi):
         # Handle gripper separately if included in action
         # Gripper delta action is in the range 0 - 2,
         # We need to shift the action to the range -1, 1 so that we can expand it to -Max_gripper_pos, Max_gripper_pos
-        joint_action["gripper.pos"] = np.clip(
+        joint_action["arm_gripper.pos"] = np.clip(
             self.current_joint_pos[-1] + (action[-1] - 1) * self.config.max_gripper_pos,
             5,
             self.config.max_gripper_pos,
@@ -183,7 +186,15 @@ class LeKiwiEndEffector(LeKiwi):
 
         self.current_ee_pos = desired_ee_pos.copy()
         self.current_joint_pos = target_joint_values_in_degrees.copy()
-        self.current_joint_pos[-1] = joint_action["gripper.pos"]
+        self.current_joint_pos[-1] = joint_action["arm_gripper.pos"]
+
+        # Copy over wheel movements
+        joint_action["x.vel"] = action["x.vel"] if "x.vel" in action else 0.0
+        joint_action["y.vel"] = action["y.vel"] if "y.vel" in action else 0.0
+        joint_action["theta.vel"] = action["theta.vel"] if "theta.vel" in action else 0.0
+
+        # Log before sending
+        logger.warning(f"Sending joint action: {joint_action}")
 
         # Send joint space action to parent class
         return super().send_action(joint_action)
