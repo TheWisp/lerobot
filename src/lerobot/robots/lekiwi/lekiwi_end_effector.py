@@ -38,10 +38,10 @@ class LeKiwiEndEffectorConfig(LeKiwiConfig):
 
     # End-effector frame name in the URDF
     # https://github.com/SIGRobotics-UIUC/LeKiwi/blob/main/URDF/LeKiwi.urdf
-    target_frame_name: str = "STS3215_03a-v1-4"
+    #target_frame_name: str = "STS3215_03a-v1-4"
 
-    # Duration of the application
-    connection_time_s: int = 300
+    # End-effector frame name in the URDF
+    target_frame_name: str = "gripper_frame_link"
 
     # Default bounds for the end-effector position (in meters)
     end_effector_bounds: dict[str, list[float]] = field(
@@ -53,15 +53,6 @@ class LeKiwiEndEffectorConfig(LeKiwiConfig):
 
     # Same as so100/101
     max_gripper_pos: float = 50
-
-    end_effector_step_sizes: dict[str, float] = field(
-        default_factory=lambda: {
-            "x": 0.02,
-            "y": 0.02,
-            "z": 0.02,
-        }
-    )
-
 
 class LeKiwiEndEffector(LeKiwi):
     """
@@ -97,14 +88,14 @@ class LeKiwiEndEffector(LeKiwi):
             urdf_path=self.config.urdf_path,
             target_frame_name=self.config.target_frame_name,
             # This is to ensure IK doesn't use the wheels. We should refactor the code later for simplicity.
-            joint_names=[
-                'STS3215_03a-v1_Revolute-45', 
-                'STS3215_03a-v1-1_Revolute-49', 
-                'STS3215_03a-v1-2_Revolute-51', 
-                'STS3215_03a-v1-3_Revolute-53', 
-                'STS3215_03a_Wrist_Roll-v1_Revolute-55', 
-                'STS3215_03a-v1-4_Revolute-57', 
-            ]
+            # joint_names=[
+            #     'STS3215_03a-v1_Revolute-45', 
+            #     'STS3215_03a-v1-1_Revolute-49', 
+            #     'STS3215_03a-v1-2_Revolute-51', 
+            #     'STS3215_03a-v1-3_Revolute-53', 
+            #     'STS3215_03a_Wrist_Roll-v1_Revolute-55', 
+            #     'STS3215_03a-v1-4_Revolute-57', 
+            # ]
         )
 
 
@@ -135,11 +126,13 @@ class LeKiwiEndEffector(LeKiwi):
             # Convert action to numpy array if not already
             if isinstance(action, dict):
                 if all(k in action for k in ["delta_x", "delta_y", "delta_z"]):
+                    if action['delta_z'] != 0:
+                        print(f"Time: {time.time()} Delta Z: {action['delta_z']}")
                     delta_ee = np.array(
                         [
-                            action["delta_x"] * self.config.end_effector_step_sizes["x"],
-                            action["delta_y"] * self.config.end_effector_step_sizes["y"],
-                            action["delta_z"] * self.config.end_effector_step_sizes["z"],
+                            action["delta_x"],
+                            action["delta_y"],
+                            action["delta_z"]
                         ],
                         dtype=np.float32,
                     )
@@ -208,7 +201,7 @@ class LeKiwiEndEffector(LeKiwi):
             joint_action["theta.vel"] = action["theta.vel"] if "theta.vel" in action else 0.0
 
             # Log before sending
-            logger.warning(f"Sending joint action: {joint_action}")
+            #logger.warning(f"Sending joint action: {joint_action}")
 
             # Send joint space action to parent class
             return super().send_action(joint_action)
