@@ -41,7 +41,7 @@ class LeKiwiEndEffectorConfig(LeKiwiConfig):
     #target_frame_name: str = "STS3215_03a-v1-4"
 
     # End-effector frame name in the URDF
-    target_frame_name: str = "gripper_frame_link"
+    target_frame_name: str = "wrist_link"
 
     # Default bounds for the end-effector position (in meters)
     end_effector_bounds: dict[str, list[float]] = field(
