@@ -114,14 +114,23 @@ class LeKiwiEndEffector(LeKiwi):
         """
         return {
             "dtype": "float32",
-            "shape": (4,),
-            "names": {"delta_x": 0, "delta_y": 1, "delta_z": 2, "arm_gripper": 3},
+            "shape": (6,),
+            "names": {
+                "delta_x": 0, 
+                "delta_y": 1, 
+                "delta_z": 2, 
+                "arm_gripper": 3, 
+                "wrist_roll.pos": 4,
+                "wrist_flex.pos": 5,
+            },
         }
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         try:
             if not self.is_connected:
                 raise DeviceNotConnectedError(f"{self} is not connected.")
+            
+            arm_wrist_flex, arm_wrist_roll, x_vel, y_vel, theta_vel = 0.0, 0.0, 0.0, 0.0, 0.0
 
             # Convert action to numpy array if not already
             if isinstance(action, dict):
@@ -136,9 +145,22 @@ class LeKiwiEndEffector(LeKiwi):
                         ],
                         dtype=np.float32,
                     )
+
+                    # Copy over wheel movements
+                    x_vel = action.get("x.vel", 0.0)
+                    y_vel = action.get("y.vel", 0.0)
+                    theta_vel = action.get("theta.vel", 0.0)
+                    
+                    # Overwrite wrist roll and flex positions if provided
+                    if "arm_wrist_roll.pos" in action:
+                        arm_wrist_roll = action["arm_wrist_roll.pos"]
+                    if "arm_wrist_flex.pos" in action:
+                        arm_wrist_flex = action["arm_wrist_flex.pos"]
+
                     if "arm_gripper" not in action:
                         action["arm_gripper"] = [1.0]
                     action = np.append(delta_ee, action["arm_gripper"])
+
                 else:
                     logger.warning(
                         f"Expected action keys 'delta_x', 'delta_y', 'delta_z', got {list(action.keys())}"
@@ -185,20 +207,25 @@ class LeKiwiEndEffector(LeKiwi):
             # Handle gripper separately if included in action
             # Gripper delta action is in the range 0 - 2,
             # We need to shift the action to the range -1, 1 so that we can expand it to -Max_gripper_pos, Max_gripper_pos
-            joint_action["arm_gripper.pos"] = np.clip(
-                self.current_joint_pos[-1] + (action[-1] - 1) * self.config.max_gripper_pos,
-                5,
-                self.config.max_gripper_pos,
-            )
+            # TODO
+            # joint_action["arm_gripper.pos"] = np.clip(
+            #     self.current_joint_pos[-1] + (action[-1] - 1) * self.config.max_gripper_pos,
+            #     5,
+            #     self.config.max_gripper_pos,
+            # )
 
             self.current_ee_pos = desired_ee_pos.copy()
             self.current_joint_pos = target_joint_values_in_degrees.copy()
-            self.current_joint_pos[-1] = joint_action["arm_gripper.pos"]
+            # self.current_joint_pos[-1] = joint_action["arm_gripper.pos"]
 
-            # Copy over wheel movements
-            joint_action["x.vel"] = action["x.vel"] if "x.vel" in action else 0.0
-            joint_action["y.vel"] = action["y.vel"] if "y.vel" in action else 0.0
-            joint_action["theta.vel"] = action["theta.vel"] if "theta.vel" in action else 0.0
+            # Overwrite wrist positions in joint action
+            joint_action["arm_wrist_flex.pos"] = arm_wrist_flex
+            joint_action["arm_wrist_roll.pos"] = arm_wrist_roll
+
+            # Add wheel movements if provided
+            joint_action["x.vel"] = x_vel
+            joint_action["y.vel"] = y_vel
+            joint_action["theta.vel"] = theta_vel
 
             # Log before sending
             #logger.warning(f"Sending joint action: {joint_action}")
