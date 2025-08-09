@@ -135,8 +135,6 @@ class LeKiwiEndEffector(LeKiwi):
             # Convert action to numpy array if not already
             if isinstance(action, dict):
                 if all(k in action for k in ["delta_x", "delta_y", "delta_z"]):
-                    if action['delta_z'] != 0:
-                        print(f"Time: {time.time()} Delta Z: {action['delta_z']}")
                     delta_ee = np.array(
                         [
                             action["delta_x"],
@@ -204,15 +202,6 @@ class LeKiwiEndEffector(LeKiwi):
                 for i, key in enumerate(self.arm_bus_motors.keys())
             }
 
-            # Handle gripper separately if included in action
-            # Gripper delta action is in the range 0 - 2,
-            # We need to shift the action to the range -1, 1 so that we can expand it to -Max_gripper_pos, Max_gripper_pos
-            joint_action["arm_gripper.pos"] = np.clip(
-                self.current_joint_pos[-1] + (action[-1] - 1) * self.config.max_gripper_pos,
-                5,
-                self.config.max_gripper_pos,
-            )
-
             self.current_ee_pos = desired_ee_pos.copy()
             self.current_joint_pos = target_joint_values_in_degrees.copy()
             self.current_joint_pos[-1] = joint_action["arm_gripper.pos"]
@@ -220,6 +209,9 @@ class LeKiwiEndEffector(LeKiwi):
             # Overwrite wrist positions in joint action
             joint_action["arm_wrist_flex.pos"] = arm_wrist_flex
             joint_action["arm_wrist_roll.pos"] = arm_wrist_roll
+
+            # Overwrite the gripper action
+            joint_action["arm_gripper.pos"] = action[-1] * self.config.max_gripper_pos
 
             # Add wheel movements if provided
             joint_action["x.vel"] = x_vel
