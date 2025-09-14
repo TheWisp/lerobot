@@ -6,32 +6,24 @@
         "urdf_path": "/Users/shared/GitHub/SO-ARM100/Simulation/SO101/so101_new_calib.urdf",
         "target_frame_name": "gripper_frame_link",
         "cameras": {
-            "front": {
+            "top": {
                 "type": "opencv",
                 "index_or_path": 1,
-                "height": 720,
-                "width": 1280,
+                "height": 480,
+                "width": 640,
                 "fps": 30
             },
             "wrist": {
                 "type": "opencv",
                 "index_or_path": 0,
-                "height": 720,
-                "width": 1280,
+                "height": 480,
+                "width": 640,
                 "fps": 30
             }
         },
         "end_effector_bounds": {
-            "min": [
-                0.1362,
-                0.0148,
-                -0.0144
-            ],
-            "max": [
-                0.1377,
-                0.0151,
-                -0.0133
-            ]
+            "max": [0.24, 0.20, 0.10],
+            "min": [0.16, -0.08, 0.03]
         },
         "end_effector_step_sizes": {
             "x": 0.025,
@@ -50,7 +42,7 @@
         "add_current_to_observation": true,
         "add_ee_pose_to_observation": true,
         "crop_params_dict": {
-            "observation.images.front": [
+            "observation.images.top": [
                 270,
                 170,
                 90,
@@ -67,7 +59,7 @@
             128,
             128
         ],
-        "control_time_s": 20.0,
+        "control_time_s": 40.0,
         "use_gripper": true,
         "gripper_quantization_threshold": null,
         "gripper_penalty": -0.02,
@@ -93,9 +85,9 @@
     "pretrained_policy_name_or_path": null,
     "device": "cpu",
     "push_to_hub": false,
-    "fps": 10,
+    "fps": 24,
     "features": {
-        "observation.images.front": {
+        "observation.images.top": {
             "type": "VISUAL",
             "shape": [
                 3,
@@ -125,7 +117,7 @@
         }
     },
     "features_map": {
-        "observation.images.front": "observation.images.side",
+        "observation.images.top": "observation.images.side",
         "observation.images.wrist": "observation.images.wrist",
         "observation.state": "observation.state",
         "action": "action"
