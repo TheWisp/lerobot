@@ -347,12 +347,16 @@ class GamepadControllerHID(InputController):
         devices = hid.enumerate()
         for device in devices:
             device_name = device["product_string"]
-            if any(controller in device_name for controller in ["Logitech", "Xbox", "PS4", "PS5"]):
+            if any(
+                controller in device_name
+                for controller in ["Logitech", "Xbox", "PS4", "PS5", "DualSense"]
+            ):
                 return device
 
-        logging.error(
-            "No gamepad found, check the connection and the product string in HID to add your gamepad"
-        )
+        error_msg = "No compatible gamepad found. Available devices:"
+        for device in devices:
+            error_msg += f"\n  {device['product_string']} (VID: {device['vendor_id']:04x}, PID: {device['product_id']:04x})"
+        logging.error(error_msg)
         return None
 
     def start(self):
