@@ -1,0 +1,80 @@
+{
+  "env": {
+    "name": "real_robot",
+    "fps": 10,
+    "processor": {
+      "control_mode": "gamepad",
+      "observation": {
+        "display_cameras": false
+      },
+      "image_preprocessing": {
+        "crop_params_dict": {},
+        "resize_size": [128, 128]
+      },
+      "gripper": {
+        "use_gripper": true,
+        "gripper_penalty": 0.0
+      },
+      "reset": {
+        "reset_time_s": 5.0,
+        "control_time_s": 20.0
+      },
+      "inverse_kinematics": {
+        "urdf_path": "/home/feit/Documents/SO-ARM100/Simulation/SO101/so101_new_calib.urdf",
+        "target_frame_name": "gripper_frame_link",
+        "end_effector_bounds": {
+            "min": [
+                0.195,
+                -0.065,
+                0.005
+            ],
+            "max": [
+                0.25,
+                0.065,
+                0.1
+            ]
+        },
+        "end_effector_step_sizes": {
+            "x": 0.02,
+            "y": 0.02,
+            "z": 0.02
+        }
+      }
+    },
+    "robot": {
+        "type": "so100_follower",
+        "port": "/dev/ttyACM1",
+        "id": "black",
+        "cameras": {
+            "top": {
+                "type": "opencv",
+                "index_or_path": 0,
+                "height": 480,
+                "width": 640,
+                "fps": 30
+            },
+            "wrist": {
+                "type": "opencv",
+                "index_or_path": 2,
+                "height": 480,
+                "width": 640,
+                "fps": 30
+            }
+        }
+    },
+    "teleop": {
+        "type": "keyboard_ee",
+        "use_gripper": true
+    }
+  },
+  "dataset": {
+    "repo_id": "thewisp/hil_serl_move_cube",
+    "root": null,
+    "task": "move_cube",
+    "num_episodes_to_record": 15,
+    "replay_episode": 0,
+    "push_to_hub": true
+  },
+  "mode": "record",
+  "device": "cpu"
+}
