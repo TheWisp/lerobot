@@ -24,13 +24,13 @@
         "target_frame_name": "gripper_frame_link",
         "end_effector_bounds": {
             "min": [
-                0.195,
-                -0.065,
-                0.005
+                0.16,
+                -0.08,
+                0.03
             ],
             "max": [
-                0.25,
-                0.065,
+                0.24,
+                0.20,
                 0.1
             ]
         },
