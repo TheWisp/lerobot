@@ -16,6 +16,8 @@
 
 import logging
 
+from lerobot.utils.utils import log_say
+
 from ..utils import TeleopEvents
 
 
@@ -198,11 +200,12 @@ class KeyboardController(InputController):
 class GamepadController(InputController):
     """Generate motion deltas from gamepad input."""
 
-    def __init__(self, x_step_size=1.0, y_step_size=1.0, z_step_size=1.0, deadzone=0.1):
+    def __init__(self, x_step_size=1.0, y_step_size=1.0, z_step_size=1.0, deadzone=0.1, play_sounds=True):
         super().__init__(x_step_size, y_step_size, z_step_size)
         self.deadzone = deadzone
         self.joystick = None
         self.intervention_flag = False
+        self.play_sounds = play_sounds
 
     def start(self):
         """Initialize pygame and the gamepad."""
@@ -245,12 +248,15 @@ class GamepadController(InputController):
         for event in pygame.event.get():
             if event.type == pygame.JOYBUTTONDOWN:
                 if event.button == 3:
+                    log_say("Success", self.play_sounds)
                     self.episode_end_status = TeleopEvents.SUCCESS
                 # A button (1) for failure
                 elif event.button == 1:
+                    log_say("Failure", self.play_sounds)
                     self.episode_end_status = TeleopEvents.FAILURE
                 # X button (0) for rerecord
                 elif event.button == 0:
+                    log_say("Re-record episode", self.play_sounds)
                     self.episode_end_status = TeleopEvents.RERECORD_EPISODE
 
                 # RB button (6) for closing gripper
