@@ -90,6 +90,7 @@ class DatasetConfig:
     num_episodes_to_record: int = 5
     replay_episode: int | None = None
     push_to_hub: bool = False
+    resume: bool = False
 
 
 @dataclass
@@ -599,6 +600,7 @@ def control_loop(
 
     dataset = None
     if cfg.mode == "record":
+        # Build dataset features
         action_features = teleop_device.action_features
         features = {
             ACTION: action_features,
@@ -626,16 +628,29 @@ def control_loop(
                     "names": ["channels", "height", "width"],
                 }
 
-        # Create dataset
-        dataset = LeRobotDataset.create(
-            cfg.dataset.repo_id,
-            cfg.env.fps,
-            root=cfg.dataset.root,
-            use_videos=True,
-            image_writer_threads=4,
-            image_writer_processes=0,
-            features=features,
-        )
+        if cfg.dataset.resume:
+            # Resume recording on an existing dataset
+            dataset = LeRobotDataset(
+                cfg.dataset.repo_id,
+                root=cfg.dataset.root,
+            )
+
+            if hasattr(env, "robot") and hasattr(env.robot, "cameras") and len(env.robot.cameras) > 0:
+                dataset.start_image_writer(
+                    num_processes=0,
+                    num_threads=4 * len(env.robot.cameras),
+                )
+        else:
+            # Create new dataset
+            dataset = LeRobotDataset.create(
+                cfg.dataset.repo_id,
+                cfg.env.fps,
+                root=cfg.dataset.root,
+                use_videos=True,
+                image_writer_threads=4,
+                image_writer_processes=0,
+                features=features,
+            )
 
     episode_idx = 0
     episode_step = 0
