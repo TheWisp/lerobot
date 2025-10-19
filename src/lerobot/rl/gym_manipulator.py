@@ -232,11 +232,10 @@ class RobotEnv(gym.Env):
         """
         # Reset the robot
         # self.robot.reset()
+        log_say("Reset the environment.", play_sounds=True)
         start_time = time.perf_counter()
         if self.reset_pose is not None:
-            log_say("Reset the environment.", play_sounds=True)
             reset_follower_position(self.robot, np.array(self.reset_pose))
-            log_say("Reset the environment done.", play_sounds=True)
 
         busy_wait(self.reset_time_s - (time.perf_counter() - start_time))
 
@@ -247,6 +246,7 @@ class RobotEnv(gym.Env):
         self.episode_data = None
         obs = self._get_observation()
         self._raw_joint_positions = {f"{key}.pos": obs[f"{key}.pos"] for key in self._joint_names}
+        log_say("Reset the environment done.", play_sounds=True)
         return obs, {TeleopEvents.IS_INTERVENTION: False}
 
     def step(self, action) -> tuple[dict[str, np.ndarray], float, bool, bool, dict[str, Any]]:
