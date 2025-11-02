@@ -19,7 +19,7 @@
       },
       "reward_classifier": {
         "pretrained_path": "thewisp/hil_serl_move_cube_reward_classifier",
-        "success_threshold": 0.7,
+        "success_threshold": 0.01,
         "success_reward": 1.0
       },
       "reset": {
@@ -88,7 +88,7 @@
     "repo_id": "thewisp/hil_serl_move_cube",
     "root": null,
     "task": "move_cube",
-    "num_episodes_to_record": 15,
+    "num_episodes_to_record": 50,
     "replay_episode": 0,
     "push_to_hub": true
   },
