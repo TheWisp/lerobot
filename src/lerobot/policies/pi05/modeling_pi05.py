@@ -539,17 +539,6 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
                 raise ValueError(msg)
         except ImportError:
             raise ValueError(msg) from None
-        
-        self.set_requires_grad()
-        
-    def set_requires_grad(self):
-        self.paligemma_with_expert.paligemma.vision_tower.eval()
-        for params in self.paligemma_with_expert.paligemma.vision_tower.parameters():
-            params.requires_grad = False
-
-        for name, params in self.paligemma_with_expert.paligemma.named_parameters():
-            if "embed_tokens" in name:  # lm heads and embedding layer are tied
-                params.requires_grad = False
 
     def gradient_checkpointing_enable(self):
         """Enable gradient checkpointing for memory optimization."""
