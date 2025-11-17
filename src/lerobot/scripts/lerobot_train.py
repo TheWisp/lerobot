@@ -321,47 +321,49 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         logging.info("Using PEFT! Wrapping model.")
         policy = wrap_policy_in_peft_model(cfg, policy)
     else:
-        # Freeze language and leave these unfrozen to reduce VRAM usage
-        for name, param in policy.named_parameters():
-            param.requires_grad = (
-                "gemma_expert" in name or
-                "vision_tower" in name or
-                "multi_modal" in name or
-                "action_in_proj" in name or
-                "action_out_proj" in name or
-                "time_mlp_in" in name or
-                "time_mlp_out" in name
-            )
+        # Hack: Apply selective parameter freezing for Pi0.5 to reduce VRAM usage on single GPU
+        if cfg.policy.type == "pi05":
+            # Freeze language and leave these unfrozen to reduce VRAM usage
+            for name, param in policy.named_parameters():
+                param.requires_grad = (
+                    "gemma_expert" in name or
+                    "vision_tower" in name or
+                    "multi_modal" in name or
+                    "action_in_proj" in name or
+                    "action_out_proj" in name or
+                    "time_mlp_in" in name or
+                    "time_mlp_out" in name
+                )
 
-        # Log which parameters will be trained and frozen
-        logging.info("Parameter freezing summary:")
-        trainable_params = []
-        frozen_params = []
-        trainable_count = 0
-        frozen_count = 0
-        trainable_numel = 0
-        frozen_numel = 0
+            # Log which parameters will be trained and frozen
+            logging.info("Parameter freezing summary:")
+            trainable_params = []
+            frozen_params = []
+            trainable_count = 0
+            frozen_count = 0
+            trainable_numel = 0
+            frozen_numel = 0
 
-        for name, param in policy.named_parameters():
-            if param.requires_grad:
-                trainable_params.append((name, param.numel()))
-                trainable_count += 1
-                trainable_numel += param.numel()
-            else:
-                frozen_params.append((name, param.numel()))
-                frozen_count += 1
-                frozen_numel += param.numel()
+            for name, param in policy.named_parameters():
+                if param.requires_grad:
+                    trainable_params.append((name, param.numel()))
+                    trainable_count += 1
+                    trainable_numel += param.numel()
+                else:
+                    frozen_params.append((name, param.numel()))
+                    frozen_count += 1
+                    frozen_numel += param.numel()
 
-        logging.info(f"\nTrainable parameters ({trainable_count} groups, {trainable_numel:,} params):")
-        for name, numel in trainable_params:
-            logging.info(f"  ✓ {name}: {numel:,} params")
+            logging.info(f"\nTrainable parameters ({trainable_count} groups, {trainable_numel:,} params):")
+            for name, numel in trainable_params:
+                logging.info(f"  ✓ {name}: {numel:,} params")
 
-        logging.info(f"\nFrozen parameters ({frozen_count} groups, {frozen_numel:,} params):")
-        for name, numel in frozen_params:
-            logging.info(f"  ✗ {name}: {numel:,} params")
+            logging.info(f"\nFrozen parameters ({frozen_count} groups, {frozen_numel:,} params):")
+            for name, numel in frozen_params:
+                logging.info(f"  ✗ {name}: {numel:,} params")
 
-        total_params = trainable_numel + frozen_numel
-        logging.info(f"\nTotal: {trainable_count}/{trainable_count + frozen_count} groups trainable, {trainable_numel:,}/{total_params:,} params trainable ({100*trainable_numel/total_params:.1f}%)")
+            total_params = trainable_numel + frozen_numel
+            logging.info(f"\nTotal: {trainable_count}/{trainable_count + frozen_count} groups trainable, {trainable_numel:,}/{total_params:,} params trainable ({100*trainable_numel/total_params:.1f}%)")
 
     # Wait for all processes to finish policy creation before continuing
     accelerator.wait_for_everyone()
