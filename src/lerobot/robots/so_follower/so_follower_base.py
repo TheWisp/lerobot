@@ -26,6 +26,7 @@ from lerobot.motors.feetech import (
     OperatingMode,
 )
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.utils.utils import log_say
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
@@ -60,6 +61,8 @@ class SOFollowerBase(Robot):
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
+        # Cache for all motor positions to handle communication failures when motors can't reach goal
+        self._cached_motor_positions: dict[str, float] = {}
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -174,13 +177,37 @@ class SOFollowerBase(Robot):
             self.bus.setup_motor(motor)
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
+    def _sync_read_with_motor_fallback(self, data_name: str, num_retry: int = 5) -> dict[str, Any]:
+        """Read motor positions with fallback to cached values on communication failures.
+
+        When motors can't reach their goal positions (e.g., gripper grasping rigid object),
+        communication can fail. This method uses cached motor positions as fallback.
+        """
+        try:
+            # Try reading all motors
+            result = self.bus.sync_read(data_name, num_retry=num_retry)
+            # Update cache with successful read
+            self._cached_motor_positions.update(result)
+            return result
+        except ConnectionError as e:
+            # Sync read failed - use cached values
+            if self._cached_motor_positions:
+                logger.warning(f"Motor sync_read failed: {e}")
+                log_say("Using cached motor positions", play_sounds=True, blocking=False)
+                return self._cached_motor_positions.copy()
+            else:
+                # No cache available, initialize with zeros
+                logger.error("Motor sync_read failed and no cache available, using zeros")
+                log_say("Motor read failed, no cache available", play_sounds=True, blocking=False)
+                return {motor: 0.0 for motor in self.bus.motors}
+
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         # Read arm position
         start = time.perf_counter()
-        obs_dict = self.bus.sync_read("Present_Position")
+        obs_dict = self._sync_read_with_motor_fallback("Present_Position")
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
@@ -215,7 +242,7 @@ class SOFollowerBase(Robot):
         # Cap goal position when too far away from present position.
         # /!\ Slower fps expected due to reading from the follower.
         if self.config.max_relative_target is not None:
-            present_pos = self.bus.sync_read("Present_Position")
+            present_pos = self._sync_read_with_motor_fallback("Present_Position")
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
