@@ -40,3 +40,17 @@ class SOFollowerConfigBase(RobotConfig):
 
     # Set to `True` for backward compatibility with previous policies/dataset
     use_degrees: bool = False
+
+    # Motor sensitivity parameters to improve responsiveness to small movements
+    # P_Coefficient: Proportional gain for position control (default 16, motor default is 32)
+    # Higher values = more responsive but potentially shakier
+    p_coefficient: int = 16
+
+    # Dead zones: Range around target position where motor doesn't move
+    # Set to 0 to allow all movements, even very small ones
+    cw_dead_zone: int = 0
+    ccw_dead_zone: int = 0
+
+    # Minimum force threshold - motor won't move if computed torque is below this
+    # Set to 0 to allow movement even with very small position errors
+    minimum_startup_force: int = 0

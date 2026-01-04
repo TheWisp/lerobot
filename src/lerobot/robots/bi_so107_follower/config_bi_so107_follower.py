@@ -35,5 +35,18 @@ class BiSO107FollowerConfig(RobotConfig):
     right_arm_max_relative_target: float | dict[str, float] | None = None
     right_arm_use_degrees: bool = False
 
+    # Motor sensitivity parameters for better responsiveness to small movements
+    # Left arm parameters
+    left_arm_p_coefficient: int = 32
+    left_arm_cw_dead_zone: int = 0
+    left_arm_ccw_dead_zone: int = 0
+    left_arm_minimum_startup_force: int = 0
+
+    # Right arm parameters
+    right_arm_p_coefficient: int = 32
+    right_arm_cw_dead_zone: int = 0
+    right_arm_ccw_dead_zone: int = 0
+    right_arm_minimum_startup_force: int = 0
+
     # cameras (shared between both arms)
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
