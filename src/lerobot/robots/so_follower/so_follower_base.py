@@ -160,11 +160,15 @@ class SOFollowerBase(Robot):
             self.bus.configure_motors()
             for motor in self.bus.motors:
                 self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
-                # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
-                self.bus.write("P_Coefficient", motor, 16)
-                # Set I_Coefficient and D_Coefficient to default value 0 and 32
+                # Set PID coefficients
+                self.bus.write("P_Coefficient", motor, self.config.p_coefficient) # The most important factor
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 32)
+
+                # Set dead zones and minimum startup force for better responsiveness
+                self.bus.write("CW_Dead_Zone", motor, self.config.cw_dead_zone)
+                self.bus.write("CCW_Dead_Zone", motor, self.config.ccw_dead_zone)
+                self.bus.write("Minimum_Startup_Force", motor, self.config.minimum_startup_force)
 
                 if motor == "gripper":
                     self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
