@@ -53,6 +53,9 @@ class SO100Leader(Teleoperator):
             },
             calibration=self.calibration,
         )
+        self.shoulder_pan_neutral_position = None
+        self.wrist_roll_neutral_position = None
+        self.gripper_neutral_position = None
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -150,6 +153,93 @@ class SO100Leader(Teleoperator):
     def send_feedback(self, feedback: dict[str, float]) -> None:
         # TODO(rcadene, aliberts): Implement force feedback
         raise NotImplementedError
+
+    def set_shoulder_pan_neutral(self) -> None:
+        """Set the current shoulder_pan position as neutral with weak return force.
+
+        Torque_Limit range: 0-1000 (where 1000 = 100% of motor's stall torque)
+        """
+        weak_torque = 150
+
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        # Read current max torque limit to inform user
+        max_torque = self.bus.read("Max_Torque_Limit", "shoulder_pan", normalize=False)
+        logger.info(f"Current Max_Torque_Limit for shoulder_pan: {max_torque}/1000")
+
+        input("Press ENTER to set current shoulder_pan position as neutral position...")
+
+        # Read current position
+        current_pos = self.bus.read("Present_Position", "shoulder_pan", normalize=True)
+        self.shoulder_pan_neutral_position = current_pos
+
+        logger.info(f"Shoulder pan neutral position set to: {current_pos:.2f}")
+        logger.info(f"Applying weak torque limit: {weak_torque}/1000 ({weak_torque/10:.1f}%)")
+
+        # Set weak torque limit for gentle return
+        self.bus.write("Torque_Limit", "shoulder_pan", weak_torque, normalize=False)
+
+        # Command to neutral position with weak torque
+        self.bus.write("Goal_Position", "shoulder_pan", self.shoulder_pan_neutral_position, normalize=True)
+
+    def set_wrist_roll_neutral(self) -> None:
+        """Set the current wrist_roll position as neutral with weak return force.
+
+        Torque_Limit range: 0-1000 (where 1000 = 100% of motor's stall torque)
+        """
+        weak_torque = 250
+
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        # Read current max torque limit to inform user
+        max_torque = self.bus.read("Max_Torque_Limit", "wrist_roll", normalize=False)
+        logger.info(f"Current Max_Torque_Limit for wrist_roll: {max_torque}/1000")
+
+        input("Press ENTER to set current wrist_roll position as neutral position...")
+
+        # Read current position
+        current_pos = self.bus.read("Present_Position", "wrist_roll", normalize=True)
+        self.wrist_roll_neutral_position = current_pos
+
+        logger.info(f"Wrist roll neutral position set to: {current_pos:.2f}")
+        logger.info(f"Applying weak torque limit: {weak_torque}/1000 ({weak_torque/10:.1f}%)")
+
+        # Set weak torque limit for gentle return
+        self.bus.write("Torque_Limit", "wrist_roll", weak_torque, normalize=False)
+
+        # Command to neutral position with weak torque
+        self.bus.write("Goal_Position", "wrist_roll", self.wrist_roll_neutral_position, normalize=True)
+
+    def set_gripper_neutral(self) -> None:
+        """Set the current gripper position as neutral with weak return force.
+
+        Torque_Limit range: 0-1000 (where 1000 = 100% of motor's stall torque)
+        """
+        weak_torque = 125
+
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        # Read current max torque limit to inform user
+        max_torque = self.bus.read("Max_Torque_Limit", "gripper", normalize=False)
+        logger.info(f"Current Max_Torque_Limit for gripper: {max_torque}/1000")
+
+        input("Press ENTER to set current gripper position as neutral position...")
+
+        # Read current position
+        current_pos = self.bus.read("Present_Position", "gripper", normalize=True)
+        self.gripper_neutral_position = current_pos
+
+        logger.info(f"Gripper neutral position set to: {current_pos:.2f}")
+        logger.info(f"Applying weak torque limit: {weak_torque}/1000 ({weak_torque/10:.1f}%)")
+
+        # Set weak torque limit for gentle return
+        self.bus.write("Torque_Limit", "gripper", weak_torque, normalize=False)
+
+        # Command to neutral position with weak torque
+        self.bus.write("Goal_Position", "gripper", self.gripper_neutral_position, normalize=True)
 
     def disconnect(self) -> None:
         if not self.is_connected:

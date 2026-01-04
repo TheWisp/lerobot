@@ -69,8 +69,16 @@ class BiSO100Leader(Teleoperator):
         return self.left_arm.is_connected and self.right_arm.is_connected
 
     def connect(self, calibrate: bool = True) -> None:
+        """Connect both arms and setup shoulder pan neutral position with weak torque.
+
+        Args:
+            calibrate: Whether to calibrate if needed
+        """
         self.left_arm.connect(calibrate)
         self.right_arm.connect(calibrate)
+
+        # Always setup shoulder pan neutral position
+        self.setup_shoulder_pan_neutral()
 
     @property
     def is_calibrated(self) -> bool:
@@ -115,6 +123,40 @@ class BiSO100Leader(Teleoperator):
             self.left_arm.send_feedback(left_feedback)
         if right_feedback:
             self.right_arm.send_feedback(right_feedback)
+
+    def setup_shoulder_pan_neutral(self) -> None:
+        logger.info("Setting up LEFT arm shoulder_pan neutral position...")
+        self.left_arm.set_shoulder_pan_neutral()
+
+        logger.info("Setting up RIGHT arm shoulder_pan neutral position...")
+        self.right_arm.set_shoulder_pan_neutral()
+
+        logger.info("Setting up LEFT arm wrist_roll neutral position...")
+        self.left_arm.set_wrist_roll_neutral()
+
+        logger.info("Setting up RIGHT arm wrist_roll neutral position...")
+        self.right_arm.set_wrist_roll_neutral()
+
+        logger.info("Setting up LEFT arm gripper neutral position...")
+        self.left_arm.set_gripper_neutral()
+
+        logger.info("Setting up RIGHT arm gripper neutral position...")
+        self.right_arm.set_gripper_neutral()
+
+    def monitor_shoulder_pan(self, arm: str = "both", duration_s: float = 10.0) -> None:
+        """Monitor shoulder pan motor state for debugging.
+
+        Args:
+            arm: Which arm to monitor ("left", "right", or "both")
+            duration_s: How long to monitor in seconds
+        """
+        if arm in ("left", "both"):
+            logger.info("=== LEFT ARM ===")
+            self.left_arm.monitor_shoulder_pan(duration_s)
+
+        if arm in ("right", "both"):
+            logger.info("=== RIGHT ARM ===")
+            self.right_arm.monitor_shoulder_pan(duration_s)
 
     def disconnect(self) -> None:
         self.left_arm.disconnect()
