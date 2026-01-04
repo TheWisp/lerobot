@@ -48,6 +48,10 @@ class BiSO107Follower(Robot):
             disable_torque_on_disconnect=config.left_arm_disable_torque_on_disconnect,
             max_relative_target=config.left_arm_max_relative_target,
             use_degrees=config.left_arm_use_degrees,
+            p_coefficient=config.left_arm_p_coefficient,
+            cw_dead_zone=config.left_arm_cw_dead_zone,
+            ccw_dead_zone=config.left_arm_ccw_dead_zone,
+            minimum_startup_force=config.left_arm_minimum_startup_force,
             cameras={},
         )
 
@@ -58,6 +62,10 @@ class BiSO107Follower(Robot):
             disable_torque_on_disconnect=config.right_arm_disable_torque_on_disconnect,
             max_relative_target=config.right_arm_max_relative_target,
             use_degrees=config.right_arm_use_degrees,
+            p_coefficient=config.right_arm_p_coefficient,
+            cw_dead_zone=config.right_arm_cw_dead_zone,
+            ccw_dead_zone=config.right_arm_ccw_dead_zone,
+            minimum_startup_force=config.right_arm_minimum_startup_force,
             cameras={},
         )
 
