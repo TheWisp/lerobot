@@ -77,6 +77,7 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     omx_follower,
     so_follower,
+    so107_follower,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -89,6 +90,7 @@ from lerobot.teleoperators import (  # noqa: F401
     make_teleoperator_from_config,
     omx_leader,
     so_leader,
+    so107_leader,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
