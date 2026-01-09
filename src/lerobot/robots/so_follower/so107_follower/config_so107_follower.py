@@ -16,13 +16,11 @@
 
 from dataclasses import dataclass
 
-from ..config import TeleoperatorConfig
+from ...config import RobotConfig
+from ..so_follower_config_base import SOFollowerConfigBase
 
 
-@TeleoperatorConfig.register_subclass("so107_leader")
+@RobotConfig.register_subclass("so107_follower")
 @dataclass
-class SO107LeaderConfig(TeleoperatorConfig):
-    # Port to connect to the arm
-    port: str
-
-    use_degrees: bool = False
+class SO107FollowerConfig(SOFollowerConfigBase):
+    pass

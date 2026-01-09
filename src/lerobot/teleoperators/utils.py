@@ -54,7 +54,7 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> Teleoperator:
 
         return SO101Leader(config)
     elif config.type == "so107_leader":
-        from .so107_leader import SO107Leader
+        from .so_leader import SO107Leader
 
         return SO107Leader(config)
     elif config.type == "stretch3":

@@ -19,5 +19,7 @@ from .so100_follower.config_so100_follower import SO100FollowerConfig
 from .so100_follower.so100_follower import SO100Follower
 from .so101_follower.config_so101_follower import SO101FollowerConfig
 from .so101_follower.so101_follower import SO101Follower
+from .so107_follower.config_so107_follower import SO107FollowerConfig
+from .so107_follower.so107_follower import SO107Follower
 from .so_follower_base import SOFollowerBase
 from .so_follower_config_base import SOFollowerConfigBase
