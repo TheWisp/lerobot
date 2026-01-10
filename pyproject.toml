@@ -76,9 +76,10 @@ dependencies = [
     "pyserial>=3.5,<4.0",
     "wandb>=0.20.0,<0.22.0", # TODO: Bumb dependency (compatible with protobuf)
 
-    "torch>=2.2.1,<2.8.0", # TODO: Bumb dependency
-    "torchcodec>=0.2.1,<0.6.0; sys_platform != 'win32' and (sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l')) and (sys_platform != 'darwin' or platform_machine != 'x86_64')", # TODO: Bumb dependency
-    "torchvision>=0.21.0,<0.23.0", # TODO: Bumb dependency
+    "torch>=2.2.1,<2.9.0", # Pin to 2.8.x for RTX 5090 ABI compatibility (2.9+ has bad_alloc issues)
+    "torchcodec>=0.2.1,<0.7.0; sys_platform != 'win32' and (sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l')) and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    "torchvision>=0.21.0,<0.24.0", # Pin to 0.23.x for compatibility with torch 2.8.x
+    "torchaudio>=2.2.1,<2.9.0", # Match torch version for ABI compatibility
 
     "draccus==0.10.0", # TODO: Remove ==
     "gymnasium>=1.1.1,<2.0.0",
@@ -146,7 +147,7 @@ hilserl = ["lerobot[transformers-dep]", "gym-hil>=0.1.13,<0.2.0", "lerobot[grpci
 
 # Features
 async = ["lerobot[grpcio-dep]", "matplotlib>=3.10.3,<4.0.0"]
-peft = ["lerobot[transformers-dep]", "peft>=0.18.0,<1.0.0"]
+peft = ["peft>=0.18.0,<1.0.0"]  # Removed transformers-dep to avoid conflicts with pi/wallx
 
 # Development
 dev = ["pre-commit>=3.7.0,<5.0.0", "debugpy>=1.8.1,<1.9.0", "lerobot[grpcio-dep]", "grpcio-tools==1.73.1", "mypy>=1.19.1"]
