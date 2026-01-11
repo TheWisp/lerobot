@@ -127,8 +127,23 @@ class RealSenseCamera(Camera):
         self.use_depth = config.use_depth
         self.warmup_s = config.warmup_s
 
+        # Depth filter configuration
+        self.enable_decimation = config.enable_decimation
+        self.enable_spatial = config.enable_spatial
+        self.enable_temporal = config.enable_temporal
+        self.enable_hole_filling = config.enable_hole_filling
+
         self.rs_pipeline: rs.pipeline | None = None
         self.rs_profile: rs.pipeline_profile | None = None
+        self.align_to_color: Any | None = None  # rs.align object for depth-to-color alignment
+
+        # RealSense depth post-processing filters (created once, reused every frame)
+        self.decimation_filter: Any | None = None
+        self.spatial_filter: Any | None = None
+        self.temporal_filter: Any | None = None
+        self.hole_filling_filter: Any | None = None
+        self.depth_to_disparity: Any | None = None  # For spatial/temporal filters
+        self.disparity_to_depth: Any | None = None  # For spatial/temporal filters
 
         self.thread: Thread | None = None
         self.stop_event: Event | None = None
@@ -181,6 +196,34 @@ class RealSenseCamera(Camera):
             ) from e
 
         self._configure_capture_settings()
+
+        # Create align object once for reuse (only if depth is enabled)
+        if self.use_depth:
+            self.align_to_color = rs.align(rs.stream.color)
+
+            # Initialize depth post-processing filters (once, reused every frame)
+            if self.enable_decimation:
+                self.decimation_filter = rs.decimation_filter()
+                self.decimation_filter.set_option(rs.option.filter_magnitude, 2)
+
+            if self.enable_spatial:
+                self.spatial_filter = rs.spatial_filter()
+                self.spatial_filter.set_option(rs.option.filter_magnitude, 2)
+                self.spatial_filter.set_option(rs.option.filter_smooth_alpha, 0.5)
+                self.spatial_filter.set_option(rs.option.filter_smooth_delta, 20)
+
+            if self.enable_temporal:
+                self.temporal_filter = rs.temporal_filter()
+                self.temporal_filter.set_option(rs.option.filter_smooth_alpha, 0.4)
+                self.temporal_filter.set_option(rs.option.filter_smooth_delta, 20)
+
+            if self.enable_hole_filling:
+                self.hole_filling_filter = rs.hole_filling_filter()
+
+            # Disparity transforms (needed for spatial/temporal filters)
+            if self.enable_spatial or self.enable_temporal:
+                self.depth_to_disparity = rs.disparity_transform(True)
+                self.disparity_to_depth = rs.disparity_transform(False)
 
         if warmup:
             time.sleep(
@@ -357,6 +400,129 @@ class RealSenseCamera(Camera):
         logger.debug(f"{self} read took: {read_duration_ms:.1f}ms")
 
         return depth_map_processed
+
+    def _apply_depth_filters(self, depth_frame: Any) -> Any:
+        """
+        Apply RealSense post-processing filters to depth frame.
+
+        Filters are applied in the correct order following RealSense SDK best practices:
+        1. Decimation (reduces resolution)
+        2. Depth-to-Disparity (for spatial/temporal filters)
+        3. Spatial filter (edge-preserving smoothing)
+        4. Temporal filter (frame history smoothing)
+        5. Disparity-to-Depth (convert back)
+        6. Hole filling (fill missing depth values)
+
+        Args:
+            depth_frame: RealSense depth frame object
+
+        Returns:
+            Filtered depth frame object
+        """
+        # Apply decimation first (reduces resolution)
+        if self.enable_decimation and self.decimation_filter is not None:
+            depth_frame = self.decimation_filter.process(depth_frame)
+
+        # Spatial and temporal filters work better in disparity space
+        if self.enable_spatial or self.enable_temporal:
+            if self.depth_to_disparity is not None:
+                depth_frame = self.depth_to_disparity.process(depth_frame)
+
+                if self.enable_spatial and self.spatial_filter is not None:
+                    depth_frame = self.spatial_filter.process(depth_frame)
+
+                if self.enable_temporal and self.temporal_filter is not None:
+                    depth_frame = self.temporal_filter.process(depth_frame)
+
+                if self.disparity_to_depth is not None:
+                    depth_frame = self.disparity_to_depth.process(depth_frame)
+
+        # Hole filling last
+        if self.enable_hole_filling and self.hole_filling_filter is not None:
+            depth_frame = self.hole_filling_filter.process(depth_frame)
+
+        return depth_frame
+
+    def read_color_and_aligned_depth(
+        self, color_mode: ColorMode | None = None, timeout_ms: int = 200
+    ) -> tuple[NDArray[Any], NDArray[Any]]:
+        """
+        Reads synchronized and aligned color and depth frames from the camera.
+
+        This method captures both color and depth from the same frameset and aligns
+        the depth frame to the color frame's coordinate system using a pre-created
+        rs.align object. This ensures that depth[y, x] corresponds to the depth at
+        color[y, x].
+
+        The align object is created once during connect() and reused for efficiency.
+        Optional depth post-processing filters (decimation, spatial, temporal, hole filling)
+        are applied if enabled in the configuration.
+
+        Args:
+            color_mode (Optional[ColorMode]): The target color mode (RGB or BGR).
+            timeout_ms (int): Maximum time in milliseconds to wait for frames. Defaults to 200ms.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]:
+                - color_image: The captured color frame (height, width, 3) uint8
+                - depth_image: The aligned depth map (height, width) uint16 in millimeters
+
+        Raises:
+            DeviceNotConnectedError: If the camera is not connected.
+            RuntimeError: If depth is not enabled or reading frames fails.
+        """
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+        if not self.use_depth:
+            raise RuntimeError(f"Depth stream is not enabled for {self}.")
+        if self.align_to_color is None:
+            raise RuntimeError(f"{self}: align_to_color not initialized. This should not happen.")
+
+        start_time = time.perf_counter()
+
+        if self.rs_pipeline is None:
+            raise RuntimeError(f"{self}: rs_pipeline must be initialized before use.")
+
+        # Read frameset
+        ret, frameset = self.rs_pipeline.try_wait_for_frames(timeout_ms=timeout_ms)
+
+        if not ret or frameset is None:
+            raise RuntimeError(f"{self} read_color_and_aligned_depth failed (status={ret}).")
+
+        # Align depth to color using pre-created align object
+        aligned_frameset = self.align_to_color.process(frameset)
+
+        # Get aligned frames
+        color_frame = aligned_frameset.get_color_frame()
+        depth_frame = aligned_frameset.get_depth_frame()
+
+        if not color_frame or not depth_frame:
+            raise RuntimeError(f"{self} failed to get aligned color and depth frames.")
+
+        # Apply depth post-processing filters (if enabled)
+        depth_frame = self._apply_depth_filters(depth_frame)
+
+        # Convert to numpy arrays
+        color_image_raw = np.asanyarray(color_frame.get_data())
+        depth_image_raw = np.asanyarray(depth_frame.get_data())
+
+        # If decimation was applied, resize depth back to match color frame size
+        # This ensures depth and color frames have matching dimensions for alignment
+        if self.enable_decimation and depth_image_raw.shape != color_image_raw.shape[:2]:
+            depth_image_raw = cv2.resize(
+                depth_image_raw,
+                (color_image_raw.shape[1], color_image_raw.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+
+        # Post-process both frames
+        color_image_processed = self._postprocess_image(color_image_raw, color_mode)
+        depth_image_processed = self._postprocess_image(depth_image_raw, depth_frame=True)
+
+        read_duration_ms = (time.perf_counter() - start_time) * 1e3
+        logger.debug(f"{self} read_color_and_aligned_depth took: {read_duration_ms:.1f}ms")
+
+        return color_image_processed, depth_image_processed
 
     def read(self, color_mode: ColorMode | None = None, timeout_ms: int = 200) -> NDArray[Any]:
         """

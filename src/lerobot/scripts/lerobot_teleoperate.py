@@ -213,6 +213,13 @@ def teleoperate(cfg: TeleoperateConfig):
     robot = make_robot_from_config(cfg.robot)
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
+    # Add custom observation processor steps from the robot
+    custom_steps = robot.get_observation_processor_steps()
+    if custom_steps:
+        # Insert custom steps at the beginning of the pipeline
+        robot_observation_processor.steps = custom_steps + robot_observation_processor.steps
+        logging.info(f"Added {len(custom_steps)} custom observation processor step(s) from robot")
+
     teleop.connect()
     robot.connect()
 

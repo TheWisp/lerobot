@@ -183,3 +183,15 @@ class Robot(abc.ABC):
     def disconnect(self) -> None:
         """Disconnect from the robot and perform any necessary cleanup."""
         pass
+
+    def get_observation_processor_steps(self) -> list:
+        """
+        Return a list of observation processor steps to apply to robot observations.
+
+        This method can be overridden by robot subclasses to provide custom observation
+        processing (e.g., image preprocessing, filtering, transformations).
+
+        Returns:
+            list: A list of ObservationProcessorStep instances. Default is empty list (no processing).
+        """
+        return []

@@ -73,9 +73,19 @@ class BiSO107Follower(Robot):
 
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
-        return {
-            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
-        }
+        from lerobot.cameras.realsense import RealSenseCamera
+
+        features = {}
+        for cam_key, cam in self.cameras.items():
+            # RGB frame
+            features[cam_key] = (self.config.cameras[cam_key].height, self.config.cameras[cam_key].width, 3)
+
+            # Depth frame for RealSense cameras with depth enabled
+            if isinstance(cam, RealSenseCamera) and cam.use_depth:
+                depth_key = f"{cam_key}_depth"
+                features[depth_key] = (self.config.cameras[cam_key].height, self.config.cameras[cam_key].width)
+
+        return features
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
@@ -129,9 +139,26 @@ class BiSO107Follower(Robot):
 
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
-            obs_dict[cam_key] = cam.async_read()
-            dt_ms = (time.perf_counter() - start) * 1e3
-            logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+
+            # For RealSense cameras with depth enabled, read aligned color+depth together
+            from lerobot.cameras.realsense import RealSenseCamera
+
+            if isinstance(cam, RealSenseCamera) and cam.use_depth:
+                try:
+                    color_frame, depth_frame = cam.read_color_and_aligned_depth()
+                    obs_dict[cam_key] = color_frame
+                    obs_dict[f"{cam_key}_depth"] = depth_frame
+                    dt_ms = (time.perf_counter() - start) * 1e3
+                    logger.debug(f"{self} read {cam_key} + aligned depth: {dt_ms:.1f}ms")
+                except Exception as e:
+                    logger.warning(f"{self} failed to read aligned frames for {cam_key}: {e}")
+                    # Fallback: try reading color only
+                    obs_dict[cam_key] = cam.async_read()
+            else:
+                # For non-RealSense or depth-disabled cameras, use async_read
+                obs_dict[cam_key] = cam.async_read()
+                dt_ms = (time.perf_counter() - start) * 1e3
+                logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
         return obs_dict
 
@@ -160,3 +187,27 @@ class BiSO107Follower(Robot):
 
         for cam in self.cameras.values():
             cam.disconnect()
+
+    def get_observation_processor_steps(self) -> list:
+        """Return custom observation processor steps for this robot."""
+        from lerobot.cameras.realsense import RealSenseCamera
+        from lerobot.processor import DepthEdgeOverlayProcessorStep
+
+        steps = []
+
+        # Add depth edge detection for RealSense cameras with depth enabled
+        for cam_key, cam in self.cameras.items():
+            if isinstance(cam, RealSenseCamera) and cam.use_depth:
+                steps.append(
+                    DepthEdgeOverlayProcessorStep(
+                        camera_key=cam_key,
+                        threshold_percentile=90,  # Edge sensitivity (85-95, higher = fewer edges)
+                        blur_kernel=3,  # Noise reduction (1, 3, 5, 7)
+                        dilation_kernel=2,  # Edge thickness (0-5)
+                        alpha=0.7,  # Edge opacity (0.0-1.0)
+                        min_depth=0.2,  # Min depth in meters (20cm)
+                        max_depth=0.6,  # Max depth in meters (60cm)
+                    )
+                )
+
+        return steps

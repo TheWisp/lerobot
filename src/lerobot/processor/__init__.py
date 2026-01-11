@@ -15,11 +15,13 @@
 # limitations under the License.
 
 from .batch_processor import AddBatchDimensionProcessorStep
+from .camera_processor import TopCameraProcessorStep
 from .converters import (
     batch_to_transition,
     create_transition,
     transition_to_batch,
 )
+from .depth_edge_processor import DepthEdgeOverlayProcessorStep
 from .core import (
     EnvAction,
     EnvTransition,
@@ -84,7 +86,9 @@ __all__ = [
     "ComplementaryDataProcessorStep",
     "batch_to_transition",
     "create_transition",
+    "DepthEdgeOverlayProcessorStep",
     "DeviceProcessorStep",
+    "TopCameraProcessorStep",
     "DoneProcessorStep",
     "EnvAction",
     "EnvTransition",
