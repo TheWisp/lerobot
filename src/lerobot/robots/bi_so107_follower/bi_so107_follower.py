@@ -73,17 +73,11 @@ class BiSO107Follower(Robot):
 
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
-        from lerobot.cameras.realsense import RealSenseCamera
-
         features = {}
-        for cam_key, cam in self.cameras.items():
-            # RGB frame
+        for cam_key in self.cameras:
+            # Only RGB frames are stored in dataset
+            # Depth frames (if enabled) are used by processors for visualization but not stored
             features[cam_key] = (self.config.cameras[cam_key].height, self.config.cameras[cam_key].width, 3)
-
-            # Depth frame for RealSense cameras with depth enabled
-            if isinstance(cam, RealSenseCamera) and cam.use_depth:
-                depth_key = f"{cam_key}_depth"
-                features[depth_key] = (self.config.cameras[cam_key].height, self.config.cameras[cam_key].width)
 
         return features
 

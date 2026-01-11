@@ -188,6 +188,10 @@ class DepthEdgeOverlayProcessorStep(ObservationProcessorStep):
     and overlays colored edges on the RGB image. Edges are colored by depth
     (red=near, blue=far) within a configurable depth range.
 
+    The processor CONSUMES the depth frame: it takes both RGB and depth as input,
+    produces RGB with overlaid edges as output, and removes the depth frame from
+    observations (depth is only used for visualization, not stored in dataset).
+
     The processor is fail-safe: if the camera is not RealSense or depth is unavailable,
     it passes through the original RGB image unchanged.
 
@@ -210,7 +214,7 @@ class DepthEdgeOverlayProcessorStep(ObservationProcessorStep):
     max_depth: float = 0.9
 
     def observation(self, observation: dict) -> dict:
-        """Process the specified camera feed with depth edge overlay."""
+        """Process the specified camera feed with depth edge overlay and consume depth frame."""
         new_observation = dict(observation)
 
         # Check if both RGB and depth are available
@@ -233,6 +237,10 @@ class DepthEdgeOverlayProcessorStep(ObservationProcessorStep):
         except Exception as e:
             logger.warning(f"DepthEdgeOverlayProcessor failed for {self.camera_key}: {e}. Using original frame.")
             # Fail-safe: return original frame on error
+
+        # Remove depth frame from observations after processing
+        # This processor consumes depth: it uses it for edge detection but doesn't pass it downstream
+        del new_observation[depth_key]
 
         return new_observation
 
