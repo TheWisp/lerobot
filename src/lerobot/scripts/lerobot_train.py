@@ -218,6 +218,8 @@ def wrap_policy_in_peft_model(cfg, policy):
     # PEFT uses this attribute to set adapter_config.base_name_or_path which we use for loading the
     # correct base model in `make_policy` since in a PEFT loading setting we only get the path to the
     # adapter, not the base model.
+    # Note: This function is only called for NEW PEFT training (not resume), so we always use
+    # pretrained_path directly as the base model path
     if policy.config.pretrained_path:
         policy.name_or_path = str(policy.config.pretrained_path)
 
@@ -317,11 +319,25 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         rename_map=cfg.rename_map,
     )
 
-    if cfg.peft is not None:
-        logging.info("Using PEFT! Wrapping model.")
-        policy = wrap_policy_in_peft_model(cfg, policy)
+    # Check if PEFT is involved at all (either new or resumed)
+    is_peft = cfg.peft is not None or cfg.policy.use_peft
+
+    if is_peft:
+        if not cfg.resume:
+            # New PEFT training: wrap the policy with PEFT adapters
+            logging.info("Using PEFT! Wrapping model.")
+            policy = wrap_policy_in_peft_model(cfg, policy)
+        else:
+            # Resuming PEFT training: model is already loaded with adapters
+            # Ensure adapter parameters are trainable (may have been saved as frozen)
+            logging.info("Resuming PEFT training. Ensuring adapter parameters are trainable.")
+            policy.train()  # Set model to training mode
+            # Explicitly enable gradients on adapter parameters
+            for name, param in policy.named_parameters():
+                if "lora" in name.lower() or "adapter" in name.lower():
+                    param.requires_grad = True
     else:
-        # Hack: Apply selective parameter freezing for Pi0.5 to reduce VRAM usage on single GPU
+        # Non-PEFT: Apply selective parameter freezing for Pi0.5 to reduce VRAM usage on single GPU
         if cfg.policy.type == "pi05":
             # Freeze language and leave these unfrozen to reduce VRAM usage
             for name, param in policy.named_parameters():
