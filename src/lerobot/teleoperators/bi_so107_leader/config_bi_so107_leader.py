@@ -24,3 +24,6 @@ from ..config import TeleoperatorConfig
 class BiSO107LeaderConfig(TeleoperatorConfig):
     left_arm_port: str
     right_arm_port: str
+
+    # Gripper bounce back to neutral position (50% open)
+    gripper_bounce: bool = False

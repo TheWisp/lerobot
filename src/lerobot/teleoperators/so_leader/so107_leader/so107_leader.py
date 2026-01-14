@@ -14,11 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+
 from lerobot.motors import Motor, MotorNormMode
 from lerobot.motors.feetech import FeetechMotorsBus
 
 from ..so_leader_base import SOLeaderBase
 from .config_so107_leader import SO107LeaderConfig
+
+logger = logging.getLogger(__name__)
 
 
 class SO107Leader(SOLeaderBase):
@@ -51,3 +55,26 @@ class SO107Leader(SOLeaderBase):
             },
             calibration=self.calibration,
         )
+
+    def connect(self, calibrate: bool = True) -> None:
+        """Connect and optionally setup gripper bounce if configured."""
+        super().connect(calibrate)
+
+        # Setup gripper bounce if configured
+        if self.config.gripper_bounce:
+            logger.info("Setting up gripper bounce to neutral position (50% open)...")
+            self.set_gripper_bounce()
+
+    def set_gripper_bounce(self) -> None:
+        """Set gripper to bounce back to 50% open position with weak torque."""
+        weak_torque = 100
+        neutral_position = 50.0  # 50% open
+
+        logger.info(f"Applying weak torque limit: {weak_torque}/1000 ({weak_torque/10:.0f}%)")
+        logger.info(f"Setting gripper neutral position to: {neutral_position}%")
+
+        # Set weak torque limit for gentle return
+        self.bus.write("Torque_Limit", "gripper", weak_torque, normalize=False)
+
+        # Command to neutral position with weak torque
+        self.bus.write("Goal_Position", "gripper", neutral_position, normalize=True)

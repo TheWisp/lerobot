@@ -23,4 +23,5 @@ from ..so_leader_config_base import SOLeaderConfigBase
 @TeleoperatorConfig.register_subclass("so107_leader")
 @dataclass
 class SO107LeaderConfig(SOLeaderConfigBase):
-    pass
+    # Gripper bounce back to neutral position (50% open)
+    gripper_bounce: bool = False

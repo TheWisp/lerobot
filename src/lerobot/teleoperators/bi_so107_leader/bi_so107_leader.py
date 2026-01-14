@@ -42,12 +42,14 @@ class BiSO107Leader(Teleoperator):
             id=f"{config.id}_left" if config.id else None,
             calibration_dir=config.calibration_dir,
             port=config.left_arm_port,
+            gripper_bounce=config.gripper_bounce,
         )
 
         right_arm_config = SO107LeaderConfig(
             id=f"{config.id}_right" if config.id else None,
             calibration_dir=config.calibration_dir,
             port=config.right_arm_port,
+            gripper_bounce=config.gripper_bounce,
         )
 
         self.left_arm = SO107Leader(left_arm_config)
@@ -114,6 +116,14 @@ class BiSO107Leader(Teleoperator):
             self.left_arm.send_feedback(left_feedback)
         if right_feedback:
             self.right_arm.send_feedback(right_feedback)
+
+    def setup_gripper_bounce(self) -> None:
+        """Setup gripper bounce to neutral (50% open) for both arms with weak torque."""
+        logger.info("Setting up LEFT arm gripper bounce...")
+        self.left_arm.set_gripper_bounce()
+
+        logger.info("Setting up RIGHT arm gripper bounce...")
+        self.right_arm.set_gripper_bounce()
 
     def disconnect(self) -> None:
         self.left_arm.disconnect()
