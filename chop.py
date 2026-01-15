@@ -189,6 +189,8 @@ def display_config():
 def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_episode_time_s,
            dataset_reset_time_s, policy_path, display_data):
     """Record episodes with the robot. Automatically resumes if dataset exists."""
+    import tempfile
+    import shlex
 
     robot_config = load_config(ROBOT_CONFIG_FILE)
     teleop_config = load_config(TELEOP_CONFIG_FILE)
@@ -211,42 +213,80 @@ def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_e
 
     # Build command
     cmd = ["lerobot-record"]
-    cmd.extend(build_cli_args("robot", robot_config))
-    cmd.extend(build_cli_args("teleop", teleop_config))
 
-    # Add dataset parameters (only if provided)
-    import shlex
+    # If cameras are present, use config file (Draccus can't parse nested ChoiceRegistry from CLI)
+    has_cameras = 'cameras' in robot_config and robot_config['cameras']
 
-    cmd.append(f"--dataset.repo_id={dataset_repo_id}")
-    if dataset_num_episodes is not None:
-        cmd.append(f"--dataset.num_episodes={dataset_num_episodes}")
-    if dataset_single_task:
-        cmd.append(f'--dataset.single_task={shlex.quote(dataset_single_task)}')
-    if dataset_episode_time_s is not None:
-        cmd.append(f"--dataset.episode_time_s={dataset_episode_time_s}")
-    if dataset_reset_time_s is not None:
-        cmd.append(f"--dataset.reset_time_s={dataset_reset_time_s}")
+    if has_cameras:
+        # Create temp config file with all configs
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, prefix='chop_record_') as f:
+            config = {
+                "robot": robot_config,
+                "teleop": teleop_config,
+                "dataset": {"repo_id": dataset_repo_id}
+            }
 
-    # Add policy path for testing
-    if policy_path:
-        cmd.append(f"--policy.path={shlex.quote(policy_path)}")
+            if dataset_num_episodes is not None:
+                config["dataset"]["num_episodes"] = dataset_num_episodes
+            if dataset_single_task:
+                config["dataset"]["single_task"] = dataset_single_task
+            if dataset_episode_time_s is not None:
+                config["dataset"]["episode_time_s"] = dataset_episode_time_s
+            if dataset_reset_time_s is not None:
+                config["dataset"]["reset_time_s"] = dataset_reset_time_s
+            if dataset_exists:
+                config["resume"] = True
+            if display_data:
+                config["display_data"] = True
 
-    # Auto-add resume flag if dataset exists
-    if dataset_exists:
-        cmd.append("--resume=true")
+            json.dump(config, f, indent=2)
+            temp_config_path = f.name
 
-    if display_data:
-        cmd.append("--display_data=true")
+        try:
+            cmd.append(f"--config_path={temp_config_path}")
 
-    # Execute command
-    cmd_str = " \\\n  ".join(cmd)
-    click.echo(f"\n🚀 Running command:\n{cmd_str}\n")
+            if policy_path:
+                cmd.append(f"--policy.path={shlex.quote(policy_path)}")
 
-    try:
-        subprocess.run(" ".join(cmd), shell=True, check=True)
-    except subprocess.CalledProcessError as e:
-        click.echo(f"❌ Command failed with exit code {e.returncode}", err=True)
-        sys.exit(e.returncode)
+            # Execute command
+            cmd_str = " \\\n  ".join(cmd)
+            click.echo(f"\n🚀 Running command:\n{cmd_str}\n")
+            subprocess.run(" ".join(cmd), shell=True, check=True)
+        finally:
+            Path(temp_config_path).unlink(missing_ok=True)
+    else:
+        # No cameras, use CLI args
+        cmd.extend(build_cli_args("robot", robot_config))
+        cmd.extend(build_cli_args("teleop", teleop_config))
+
+        cmd.append(f"--dataset.repo_id={dataset_repo_id}")
+        if dataset_num_episodes is not None:
+            cmd.append(f"--dataset.num_episodes={dataset_num_episodes}")
+        if dataset_single_task:
+            cmd.append(f'--dataset.single_task={shlex.quote(dataset_single_task)}')
+        if dataset_episode_time_s is not None:
+            cmd.append(f"--dataset.episode_time_s={dataset_episode_time_s}")
+        if dataset_reset_time_s is not None:
+            cmd.append(f"--dataset.reset_time_s={dataset_reset_time_s}")
+
+        if policy_path:
+            cmd.append(f"--policy.path={shlex.quote(policy_path)}")
+
+        if dataset_exists:
+            cmd.append("--resume=true")
+
+        if display_data:
+            cmd.append("--display_data=true")
+
+        # Execute command
+        cmd_str = " \\\n  ".join(cmd)
+        click.echo(f"\n🚀 Running command:\n{cmd_str}\n")
+
+        try:
+            subprocess.run(" ".join(cmd), shell=True, check=True)
+        except subprocess.CalledProcessError as e:
+            click.echo(f"❌ Command failed with exit code {e.returncode}", err=True)
+            sys.exit(e.returncode)
 
 
 @cli.command()
@@ -255,6 +295,7 @@ def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_e
 @click.option('--teleop_time_s', type=float, help='Teleoperation duration in seconds')
 def teleop(display_data, fps, teleop_time_s):
     """Teleoperate the robot."""
+    import tempfile
 
     robot_config = load_config(ROBOT_CONFIG_FILE)
     teleop_config = load_config(TELEOP_CONFIG_FILE)
@@ -269,34 +310,67 @@ def teleop(display_data, fps, teleop_time_s):
 
     # Build command
     cmd = ["lerobot-teleoperate"]
-    cmd.extend(build_cli_args("robot", robot_config))
-    cmd.extend(build_cli_args("teleop", teleop_config))
 
-    if display_data:
-        cmd.append("--display_data=true")
+    # If cameras are present, use config file (Draccus can't parse nested ChoiceRegistry from CLI)
+    has_cameras = 'cameras' in robot_config and robot_config['cameras']
 
-    if fps is not None:
-        cmd.append(f"--fps={fps}")
+    if has_cameras:
+        # Create temp config file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, prefix='chop_teleop_') as f:
+            config = {
+                "robot": robot_config,
+                "teleop": teleop_config
+            }
 
-    if teleop_time_s is not None:
-        cmd.append(f"--teleop_time_s={teleop_time_s}")
+            if display_data:
+                config["display_data"] = True
+            if fps is not None:
+                config["fps"] = fps
+            if teleop_time_s is not None:
+                config["teleop_time_s"] = teleop_time_s
 
-    # Execute command
-    cmd_str = " \\\n  ".join(cmd)
-    click.echo(f"\n🚀 Running command:\n{cmd_str}\n")
+            json.dump(config, f, indent=2)
+            temp_config_path = f.name
 
-    try:
-        subprocess.run(" ".join(cmd), shell=True, check=True)
-    except subprocess.CalledProcessError as e:
-        click.echo(f"❌ Command failed with exit code {e.returncode}", err=True)
-        sys.exit(e.returncode)
+        try:
+            cmd.append(f"--config_path={temp_config_path}")
+
+            # Execute command
+            cmd_str = " \\\n  ".join(cmd)
+            click.echo(f"\n🚀 Running command:\n{cmd_str}\n")
+            subprocess.run(" ".join(cmd), shell=True, check=True)
+        finally:
+            Path(temp_config_path).unlink(missing_ok=True)
+    else:
+        # No cameras, use CLI args
+        cmd.extend(build_cli_args("robot", robot_config))
+        cmd.extend(build_cli_args("teleop", teleop_config))
+
+        if display_data:
+            cmd.append("--display_data=true")
+
+        if fps is not None:
+            cmd.append(f"--fps={fps}")
+
+        if teleop_time_s is not None:
+            cmd.append(f"--teleop_time_s={teleop_time_s}")
+
+        # Execute command
+        cmd_str = " \\\n  ".join(cmd)
+        click.echo(f"\n🚀 Running command:\n{cmd_str}\n")
+
+        try:
+            subprocess.run(" ".join(cmd), shell=True, check=True)
+        except subprocess.CalledProcessError as e:
+            click.echo(f"❌ Command failed with exit code {e.returncode}", err=True)
+            sys.exit(e.returncode)
 
 
 @cli.command()
 @click.option('--dataset.repo_id', 'dataset_repo_id', required=True, help='Dataset repository ID')
 @click.option('--dataset.episode', 'dataset_episode', type=int, required=True, help='Episode number to replay')
 def replay(dataset_repo_id, dataset_episode):
-    """Replay an episode on the robot."""
+    """Replay an episode on the robot (cameras not needed for replay)."""
 
     robot_config = load_config(ROBOT_CONFIG_FILE)
 
@@ -304,9 +378,18 @@ def replay(dataset_repo_id, dataset_episode):
         click.echo("❌ Robot not configured. Run: chop --set-robot", err=True)
         sys.exit(1)
 
-    # Build command
+    # Build command (exclude cameras - they're not needed for replay)
     cmd = ["lerobot-replay"]
-    cmd.extend(build_cli_args("robot", robot_config))
+
+    # Build robot args excluding cameras
+    # Cameras are optional for replay and can't be passed via CLI due to Draccus ChoiceRegistry limitations
+    for key, value in robot_config.items():
+        if key == 'cameras':
+            continue  # Skip cameras
+        elif isinstance(value, bool):
+            cmd.append(f'--robot.{key}={str(value).lower()}')
+        elif value is not None:
+            cmd.append(f'--robot.{key}={value}')
 
     cmd.append(f"--dataset.repo_id={dataset_repo_id}")
     cmd.append(f"--dataset.episode={dataset_episode}")
