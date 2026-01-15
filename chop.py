@@ -54,12 +54,15 @@ def build_cli_args(prefix: str, config: Dict[str, Any]) -> List[str]:
     Returns:
         List of CLI argument strings
     """
+    import shlex
+
     args = []
     for key, value in config.items():
         if isinstance(value, dict):
             # Handle nested dictionaries (like cameras)
             json_str = json.dumps(value)
-            args.append(f'--{prefix}.{key}={json_str}')
+            # Properly quote the JSON string for shell execution
+            args.append(f'--{prefix}.{key}={shlex.quote(json_str)}')
         elif isinstance(value, bool):
             args.append(f'--{prefix}.{key}={str(value).lower()}')
         elif value is not None:
@@ -405,6 +408,191 @@ def identify_ports():
             }
             click.echo(f"     {arm_name.get(arm_type, arm_type)}: {port}")
         click.echo("\n   Please run the command again to identify all arms.")
+
+    click.echo("=" * 60 + "\n")
+
+
+@cli.command(name="find-cameras")
+def find_cameras():
+    """Detect cameras and interactively assign them to roles (top, left_wrist, right_wrist)."""
+    import tempfile
+    import shutil
+    from PIL import Image
+
+    try:
+        from lerobot.cameras.configs import ColorMode
+        from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
+        from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+        from lerobot.cameras.realsense.camera_realsense import RealSenseCamera
+        from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+    except ImportError:
+        click.echo("❌ Could not import lerobot modules. Make sure you're in the lerobot environment.", err=True)
+        sys.exit(1)
+
+    click.echo("=" * 60)
+    click.echo("LeRobot Camera Detector & Configurator")
+    click.echo("=" * 60)
+    click.echo("\nDetecting cameras...")
+
+    # Detect all cameras
+    all_cameras = []
+
+    # Find OpenCV cameras
+    try:
+        opencv_cameras = OpenCVCamera.find_cameras()
+        all_cameras.extend(opencv_cameras)
+        click.echo(f"Found {len(opencv_cameras)} OpenCV camera(s)")
+    except Exception as e:
+        click.echo(f"⚠️  Error detecting OpenCV cameras: {e}")
+
+    # Find RealSense cameras
+    try:
+        realsense_cameras = RealSenseCamera.find_cameras()
+        all_cameras.extend(realsense_cameras)
+        click.echo(f"Found {len(realsense_cameras)} RealSense camera(s)")
+    except Exception as e:
+        click.echo(f"⚠️  Error detecting RealSense cameras: {e}")
+
+    if not all_cameras:
+        click.echo("\n❌ No cameras detected!")
+        sys.exit(1)
+
+    click.echo(f"\nTotal cameras detected: {len(all_cameras)}")
+    click.echo("=" * 60)
+
+    # Create temp directory for images
+    temp_dir = Path(tempfile.mkdtemp(prefix="chop_cameras_"))
+    click.echo(f"\nImages will be saved to: {temp_dir}")
+
+    camera_mapping = {}
+    available_roles = ["top", "left_wrist", "right_wrist"]
+
+    for i, cam_info in enumerate(all_cameras):
+        cam_type = cam_info.get("type")
+        cam_id = cam_info.get("id")
+        cam_name = cam_info.get("name", f"{cam_type} {cam_id}")
+
+        click.echo(f"\n{'='*60}")
+        click.echo(f"Camera #{i+1}: {cam_name}")
+        click.echo(f"  Type: {cam_type}")
+        click.echo(f"  ID: {cam_id}")
+
+        # Create camera instance and capture image
+        try:
+            click.echo("  Connecting and capturing image...")
+
+            if cam_type == "OpenCV":
+                config = OpenCVCameraConfig(index_or_path=cam_id, color_mode=ColorMode.RGB)
+                camera = OpenCVCamera(config)
+            elif cam_type == "RealSense":
+                config = RealSenseCameraConfig(serial_number_or_name=cam_id, color_mode=ColorMode.RGB)
+                camera = RealSenseCamera(config)
+            else:
+                click.echo(f"  ⚠️  Unknown camera type: {cam_type}, skipping...")
+                continue
+
+            camera.connect(warmup=True)
+            image_array = camera.read()
+            camera.disconnect()
+
+            # Save image
+            img = Image.fromarray(image_array, mode="RGB")
+            safe_id = str(cam_id).replace("/", "_").replace("\\", "_")
+            image_path = temp_dir / f"camera_{i+1}_{cam_type}_{safe_id}.png"
+            img.save(image_path)
+
+            click.echo(f"  ✓ Image saved: {image_path}")
+
+            # Open image in viewer
+            try:
+                subprocess.Popen(['xdg-open', str(image_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                click.echo("  (Image opened in viewer)")
+            except Exception:
+                click.echo("  (Could not auto-open image, please view it manually)")
+
+        except Exception as e:
+            click.echo(f"  ✗ Failed to capture image: {e}")
+            click.echo("  Skipping this camera...")
+            continue
+
+        # Ask user to assign role
+        click.echo(f"\n  Available roles: {', '.join(available_roles)}")
+        while True:
+            response = click.prompt(
+                "  Assign this camera to a role (or 'skip' to skip)",
+                type=str,
+                default=""
+            ).strip().lower()
+
+            if response == "skip" or response == "":
+                click.echo("  Skipped")
+                break
+            elif response in available_roles:
+                # Extract configuration based on camera type
+                if cam_type == "OpenCV":
+                    # Extract index from path if it's /dev/videoX
+                    if isinstance(cam_id, str) and cam_id.startswith("/dev/video"):
+                        index = int(cam_id.replace("/dev/video", ""))
+                    else:
+                        index = cam_id
+
+                    cam_config = {
+                        "type": "opencv",
+                        "index_or_path": index,
+                        "width": cam_info.get("default_stream_profile", {}).get("width", 640),
+                        "height": cam_info.get("default_stream_profile", {}).get("height", 480),
+                        "fps": int(cam_info.get("default_stream_profile", {}).get("fps", 30))
+                    }
+                elif cam_type == "RealSense":
+                    use_depth = click.confirm("  Enable depth for this camera?", default=True)
+                    cam_config = {
+                        "type": "intelrealsense",
+                        "serial_number_or_name": cam_id,
+                        "width": cam_info.get("default_stream_profile", {}).get("width", 640),
+                        "height": cam_info.get("default_stream_profile", {}).get("height", 480),
+                        "fps": cam_info.get("default_stream_profile", {}).get("fps", 30),
+                        "use_depth": use_depth
+                    }
+
+                camera_mapping[response] = cam_config
+                available_roles.remove(response)
+                click.echo(f"  ✓ Assigned to '{response}'")
+                break
+            else:
+                click.echo(f"  Invalid role. Choose from: {', '.join(available_roles)} or 'skip'")
+
+    # Display results
+    click.echo(f"\n{'='*60}")
+    click.echo("CAMERA CONFIGURATION")
+    click.echo("=" * 60)
+
+    if camera_mapping:
+        click.echo("\nAssigned cameras:")
+        for role, config in camera_mapping.items():
+            click.echo(f"  {role}: {config['type']} ({config.get('serial_number_or_name') or config.get('index_or_path')})")
+
+        # Update robot configuration
+        robot_config = load_config(ROBOT_CONFIG_FILE)
+
+        if not robot_config:
+            robot_config = {"type": "bi_so107_follower"}
+
+        robot_config["cameras"] = camera_mapping
+
+        save_config(ROBOT_CONFIG_FILE, robot_config)
+
+        click.echo("\n✅ Robot configuration updated with camera settings!")
+        click.echo(f"   Config file: {ROBOT_CONFIG_FILE}")
+    else:
+        click.echo("\n⚠️  No cameras assigned. Configuration not updated.")
+
+    # Cleanup temp directory
+    click.echo(f"\nCleaning up temporary images in: {temp_dir}")
+    try:
+        shutil.rmtree(temp_dir)
+        click.echo("✓ Cleanup complete")
+    except Exception as e:
+        click.echo(f"⚠️  Could not clean up temp directory: {e}")
 
     click.echo("=" * 60 + "\n")
 
