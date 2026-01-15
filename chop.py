@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+"""
+Chop - A wrapper script for LeRobot commands with centralized configuration management.
+
+This script simplifies running LeRobot commands by storing commonly used configurations
+and providing a clean CLI interface.
+"""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Dict, List
+
+import click
+
+
+# Configuration directory
+CONFIG_DIR = Path.home() / ".config" / "chop"
+ROBOT_CONFIG_FILE = CONFIG_DIR / "robot_config.json"
+TELEOP_CONFIG_FILE = CONFIG_DIR / "teleop_config.json"
+
+
+def ensure_config_dir():
+    """Create config directory if it doesn't exist."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_config(config_file: Path) -> Dict[str, Any]:
+    """Load configuration from JSON file."""
+    if not config_file.exists():
+        return {}
+    with open(config_file) as f:
+        return json.load(f)
+
+
+def save_config(config_file: Path, config: Dict[str, Any]):
+    """Save configuration to JSON file."""
+    ensure_config_dir()
+    with open(config_file, "w") as f:
+        json.dump(config, f, indent=2)
+    click.echo(f"✓ Configuration saved to {config_file}")
+
+
+def build_cli_args(prefix: str, config: Dict[str, Any]) -> List[str]:
+    """
+    Build CLI arguments from a config dictionary.
+
+    Args:
+        prefix: The prefix for arguments (e.g., "robot", "teleop", "dataset")
+        config: Dictionary of configuration values
+
+    Returns:
+        List of CLI argument strings
+    """
+    args = []
+    for key, value in config.items():
+        if isinstance(value, dict):
+            # Handle nested dictionaries (like cameras)
+            json_str = json.dumps(value)
+            args.append(f'--{prefix}.{key}={json_str}')
+        elif isinstance(value, bool):
+            args.append(f'--{prefix}.{key}={str(value).lower()}')
+        elif value is not None:
+            args.append(f'--{prefix}.{key}={value}')
+    return args
+
+
+@click.group(invoke_without_command=True)
+@click.pass_context
+@click.option('--set-robot', is_flag=True, help='Configure robot settings (bi_so107_follower)')
+@click.option('--set-teleop', is_flag=True, help='Configure teleop settings (bi_so107_leader)')
+@click.option('--show-config', is_flag=True, help='Show current configuration')
+def cli(ctx, set_robot, set_teleop, show_config):
+    """Chop - Centralized configuration manager for LeRobot commands."""
+
+    if set_robot:
+        configure_robot()
+    elif set_teleop:
+        configure_teleop()
+    elif show_config:
+        display_config()
+    elif ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+def configure_robot():
+    """Configure bi_so107_follower robot settings."""
+    click.echo("\n🤖 Configuring robot: bi_so107_follower\n")
+
+    config = {"type": "bi_so107_follower"}
+
+    # Port configuration
+    config["left_arm_port"] = click.prompt("Left arm port", default="/dev/ttyACM0")
+    config["right_arm_port"] = click.prompt("Right arm port", default="/dev/ttyACM2")
+    config["id"] = click.prompt("Robot ID", default="white")
+
+    # Camera configuration (optional - can be set later via edit-config)
+    click.echo("\nTo configure cameras, edit the config file with: chop edit-config robot")
+    click.echo(f"Or set them manually in: {ROBOT_CONFIG_FILE}")
+
+    save_config(ROBOT_CONFIG_FILE, config)
+
+
+def configure_teleop():
+    """Configure bi_so107_leader teleoperator settings."""
+    click.echo("\n🎮 Configuring teleoperator: bi_so107_leader\n")
+
+    config = {"type": "bi_so107_leader"}
+
+    # Port configuration
+    config["left_arm_port"] = click.prompt("Left arm port", default="/dev/ttyACM3")
+    config["right_arm_port"] = click.prompt("Right arm port", default="/dev/ttyACM1")
+    config["id"] = click.prompt("Teleop ID", default="blue")
+
+    # Gripper bounce
+    gripper_bounce = click.prompt("Enable gripper bounce? (true/false)", default="true")
+    config["gripper_bounce"] = gripper_bounce.lower() == "true"
+
+    save_config(TELEOP_CONFIG_FILE, config)
+
+
+def display_config():
+    """Display current configuration."""
+    click.echo("\n📋 Current Configuration\n")
+
+    robot_config = load_config(ROBOT_CONFIG_FILE)
+    teleop_config = load_config(TELEOP_CONFIG_FILE)
+
+    if robot_config:
+        click.echo("🤖 Robot Config:")
+        click.echo(json.dumps(robot_config, indent=2))
+        click.echo()
+    else:
+        click.echo("🤖 Robot Config: Not configured")
+        click.echo()
+
+    if teleop_config:
+        click.echo("🎮 Teleop Config:")
+        click.echo(json.dumps(teleop_config, indent=2))
+        click.echo()
+    else:
+        click.echo("🎮 Teleop Config: Not configured")
+        click.echo()
+
+    if not any([robot_config, teleop_config]):
+        click.echo("No configuration found. Use --set-robot or --set-teleop to configure.")
+
+
+@cli.command()
+@click.option('--dataset.repo_id', 'dataset_repo_id', required=True, help='Dataset repository ID')
+@click.option('--dataset.num_episodes', 'dataset_num_episodes', type=int, help='Number of episodes')
+@click.option('--dataset.single_task', 'dataset_single_task', help='Single task description')
+@click.option('--dataset.episode_time_s', 'dataset_episode_time_s', type=int, help='Episode duration in seconds')
+@click.option('--dataset.reset_time_s', 'dataset_reset_time_s', type=int, help='Reset duration in seconds')
+@click.option('--policy.path', 'policy_path', help='Path to pretrained policy for testing')
+@click.option('--resume', is_flag=True, help='Resume recording')
+@click.option('--display_data', is_flag=True, help='Display data during recording')
+def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_episode_time_s,
+           dataset_reset_time_s, policy_path, resume, display_data):
+    """Record episodes with the robot."""
+
+    robot_config = load_config(ROBOT_CONFIG_FILE)
+    teleop_config = load_config(TELEOP_CONFIG_FILE)
+
+    if not robot_config:
+        click.echo("❌ Robot not configured. Run: chop --set-robot", err=True)
+        sys.exit(1)
+
+    if not teleop_config:
+        click.echo("❌ Teleop not configured. Run: chop --set-teleop", err=True)
+        sys.exit(1)
+
+    # Build command
+    cmd = ["lerobot-record"]
+    cmd.extend(build_cli_args("robot", robot_config))
+    cmd.extend(build_cli_args("teleop", teleop_config))
+
+    # Add dataset parameters (only if provided)
+    cmd.append(f"--dataset.repo_id={dataset_repo_id}")
+    if dataset_num_episodes is not None:
+        cmd.append(f"--dataset.num_episodes={dataset_num_episodes}")
+    if dataset_single_task:
+        cmd.append(f'--dataset.single_task={dataset_single_task}')
+    if dataset_episode_time_s is not None:
+        cmd.append(f"--dataset.episode_time_s={dataset_episode_time_s}")
+    if dataset_reset_time_s is not None:
+        cmd.append(f"--dataset.reset_time_s={dataset_reset_time_s}")
+
+    # Add policy path for testing
+    if policy_path:
+        cmd.append(f"--policy.path={policy_path}")
+
+    if resume:
+        cmd.append("--resume=true")
+
+    if display_data:
+        cmd.append("--display_data=true")
+
+    # Execute command
+    cmd_str = " \\\n  ".join(cmd)
+    click.echo(f"\n🚀 Running command:\n{cmd_str}\n")
+
+    try:
+        subprocess.run(" ".join(cmd), shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        click.echo(f"❌ Command failed with exit code {e.returncode}", err=True)
+        sys.exit(e.returncode)
+
+
+@cli.command()
+@click.option('--display_data', is_flag=True, help='Display data during teleoperation')
+@click.option('--fps', type=int, help='Frames per second')
+@click.option('--teleop_time_s', type=float, help='Teleoperation duration in seconds')
+def teleop(display_data, fps, teleop_time_s):
+    """Teleoperate the robot."""
+
+    robot_config = load_config(ROBOT_CONFIG_FILE)
+    teleop_config = load_config(TELEOP_CONFIG_FILE)
+
+    if not robot_config:
+        click.echo("❌ Robot not configured. Run: chop --set-robot", err=True)
+        sys.exit(1)
+
+    if not teleop_config:
+        click.echo("❌ Teleop not configured. Run: chop --set-teleop", err=True)
+        sys.exit(1)
+
+    # Build command
+    cmd = ["lerobot-teleoperate"]
+    cmd.extend(build_cli_args("robot", robot_config))
+    cmd.extend(build_cli_args("teleop", teleop_config))
+
+    if display_data:
+        cmd.append("--display_data=true")
+
+    if fps is not None:
+        cmd.append(f"--fps={fps}")
+
+    if teleop_time_s is not None:
+        cmd.append(f"--teleop_time_s={teleop_time_s}")
+
+    # Execute command
+    cmd_str = " \\\n  ".join(cmd)
+    click.echo(f"\n🚀 Running command:\n{cmd_str}\n")
+
+    try:
+        subprocess.run(" ".join(cmd), shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        click.echo(f"❌ Command failed with exit code {e.returncode}", err=True)
+        sys.exit(e.returncode)
+
+
+@cli.command()
+@click.option('--dataset.repo_id', 'dataset_repo_id', required=True, help='Dataset repository ID')
+@click.option('--dataset.episode', 'dataset_episode', type=int, required=True, help='Episode number to replay')
+def replay(dataset_repo_id, dataset_episode):
+    """Replay an episode on the robot."""
+
+    robot_config = load_config(ROBOT_CONFIG_FILE)
+
+    if not robot_config:
+        click.echo("❌ Robot not configured. Run: chop --set-robot", err=True)
+        sys.exit(1)
+
+    # Build command
+    cmd = ["lerobot-replay"]
+    cmd.extend(build_cli_args("robot", robot_config))
+
+    cmd.append(f"--dataset.repo_id={dataset_repo_id}")
+    cmd.append(f"--dataset.episode={dataset_episode}")
+
+    # Execute command
+    cmd_str = " \\\n  ".join(cmd)
+    click.echo(f"\n🚀 Running command:\n{cmd_str}\n")
+
+    try:
+        subprocess.run(" ".join(cmd), shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        click.echo(f"❌ Command failed with exit code {e.returncode}", err=True)
+        sys.exit(e.returncode)
+
+
+@cli.command(name="identify-ports")
+def identify_ports():
+    """Identify robot ports and automatically update configuration files."""
+    import time
+
+    try:
+        from lerobot.motors import Motor, MotorNormMode
+        from lerobot.motors.feetech import FeetechMotorsBus
+    except ImportError:
+        click.echo("❌ Could not import lerobot modules. Make sure you're in the lerobot environment.", err=True)
+        sys.exit(1)
+
+    def test_port(port: str):
+        """Test if an SO107 robot is connected to the given port by moving its base motor."""
+        motors = {
+            "shoulder_pan": Motor(1, "sts3215", MotorNormMode.RANGE_M100_100),
+            "shoulder_lift": Motor(2, "sts3215", MotorNormMode.RANGE_M100_100),
+            "elbow_flex": Motor(3, "sts3215", MotorNormMode.RANGE_M100_100),
+            "forearm_roll": Motor(4, "sts3215", MotorNormMode.RANGE_M100_100),
+            "wrist_flex": Motor(5, "sts3215", MotorNormMode.RANGE_M100_100),
+            "wrist_roll": Motor(6, "sts3215", MotorNormMode.RANGE_M100_100),
+            "gripper": Motor(7, "sts3215", MotorNormMode.RANGE_0_100),
+        }
+
+        try:
+            click.echo(f"\nTesting {port}...")
+            bus = FeetechMotorsBus(port=port, motors=motors)
+            bus.connect()
+
+            current_pos = bus.read("Present_Position", "shoulder_pan", normalize=False)
+            click.echo("Moving base motor... WATCH YOUR ROBOTS!")
+            movement_ticks = 200
+
+            bus.write("Goal_Position", "shoulder_pan", current_pos + movement_ticks, normalize=False)
+            time.sleep(0.8)
+            bus.write("Goal_Position", "shoulder_pan", current_pos - movement_ticks, normalize=False)
+            time.sleep(0.8)
+            bus.write("Goal_Position", "shoulder_pan", current_pos, normalize=False)
+            time.sleep(0.3)
+
+            bus.disconnect()
+            return True
+
+        except Exception as e:
+            click.echo(f"  ✗ Failed: {e}")
+            return False
+
+    click.echo("=" * 60)
+    click.echo("LeRobot Bimanual SO107 Port Identifier")
+    click.echo("=" * 60)
+    click.echo("\nThis script will test ports /dev/ttyACM0-3")
+    click.echo("Watch which arm moves, then identify it:")
+    click.echo("  LL = Left Leader")
+    click.echo("  RL = Right Leader")
+    click.echo("  LF = Left Follower")
+    click.echo("  RF = Right Follower")
+    click.echo("=" * 60)
+
+    ports = ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyACM2", "/dev/ttyACM3"]
+    port_mapping = {}
+
+    for port in ports:
+        if test_port(port):
+            while True:
+                response = click.prompt(f"\nWhich arm moved? [LL/RL/LF/RF] (or 'skip')",
+                                      type=str, default="").strip().upper()
+                if response in ["LL", "RL", "LF", "RF"]:
+                    port_mapping[response] = port
+                    click.echo(f"  ✓ Recorded: {response} -> {port}")
+                    break
+                elif response == "SKIP":
+                    click.echo("  Skipped")
+                    break
+                else:
+                    click.echo("  Invalid input. Please enter LL, RL, LF, RF, or skip")
+
+    # Display results
+    click.echo("\n" + "=" * 60)
+    click.echo("PORT CONFIGURATION")
+    click.echo("=" * 60)
+
+    if len(port_mapping) == 4:
+        click.echo("\nDetected configuration:")
+        click.echo(f"  Robot Left Arm (LF):   {port_mapping['LF']}")
+        click.echo(f"  Robot Right Arm (RF):  {port_mapping['RF']}")
+        click.echo(f"  Teleop Left Arm (LL):  {port_mapping['LL']}")
+        click.echo(f"  Teleop Right Arm (RL): {port_mapping['RL']}")
+
+        # Update configurations
+        robot_config = load_config(ROBOT_CONFIG_FILE)
+        teleop_config = load_config(TELEOP_CONFIG_FILE)
+
+        # Update robot config
+        if not robot_config:
+            robot_config = {"type": "bi_so107_follower"}
+        robot_config["left_arm_port"] = port_mapping["LF"]
+        robot_config["right_arm_port"] = port_mapping["RF"]
+
+        # Update teleop config
+        if not teleop_config:
+            teleop_config = {"type": "bi_so107_leader"}
+        teleop_config["left_arm_port"] = port_mapping["LL"]
+        teleop_config["right_arm_port"] = port_mapping["RL"]
+
+        # Save configs
+        save_config(ROBOT_CONFIG_FILE, robot_config)
+        save_config(TELEOP_CONFIG_FILE, teleop_config)
+
+        click.echo("\n✅ Configuration files updated successfully!")
+        click.echo(f"   Robot config: {ROBOT_CONFIG_FILE}")
+        click.echo(f"   Teleop config: {TELEOP_CONFIG_FILE}")
+    else:
+        click.echo("\n⚠️  Warning: Not all arms identified. Configuration not updated.")
+        click.echo("   Identified arms:")
+        for arm_type, port in sorted(port_mapping.items()):
+            arm_name = {
+                "LF": "Robot Left Arm (Left Follower)",
+                "RF": "Robot Right Arm (Right Follower)",
+                "LL": "Teleop Left Arm (Left Leader)",
+                "RL": "Teleop Right Arm (Right Leader)",
+            }
+            click.echo(f"     {arm_name.get(arm_type, arm_type)}: {port}")
+        click.echo("\n   Please run the command again to identify all arms.")
+
+    click.echo("=" * 60 + "\n")
+
+
+@cli.command(name="edit-config")
+@click.argument('config_type', type=click.Choice(['robot', 'teleop']))
+def edit_config(config_type):
+    """Edit configuration files directly."""
+
+    config_map = {
+        'robot': ROBOT_CONFIG_FILE,
+        'teleop': TELEOP_CONFIG_FILE,
+    }
+
+    config_file = config_map[config_type]
+
+    if not config_file.exists():
+        click.echo(f"Configuration file does not exist: {config_file}")
+        click.echo("Creating empty configuration file...")
+        save_config(config_file, {})
+
+    # Open in default editor
+    editor = os.environ.get('EDITOR', 'vim')
+    try:
+        subprocess.run([editor, str(config_file)], check=True)
+        click.echo(f"✓ Configuration updated: {config_file}")
+    except subprocess.CalledProcessError:
+        click.echo("❌ Failed to edit configuration", err=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    cli()
