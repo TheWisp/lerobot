@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import click
 
@@ -68,6 +68,33 @@ def build_cli_args(prefix: str, config: Dict[str, Any]) -> List[str]:
         elif value is not None:
             args.append(f'--{prefix}.{key}={value}')
     return args
+
+
+def check_dataset_exists(repo_id: str, root: Optional[str] = None) -> bool:
+    """
+    Check if a dataset already exists at the expected location.
+
+    Mimics the logic from LeRobotDataset to determine the dataset path.
+
+    Args:
+        repo_id: Dataset repository ID (e.g., "username/dataset_name")
+        root: Optional root directory override
+
+    Returns:
+        True if dataset directory exists, False otherwise
+    """
+    # Get HF_LEROBOT_HOME from environment or use default
+    from pathlib import Path
+
+    hf_home = os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")
+    default_lerobot_home = Path(hf_home) / "lerobot"
+    hf_lerobot_home = Path(os.environ.get("HF_LEROBOT_HOME", default_lerobot_home)).expanduser()
+
+    # Calculate dataset path (same logic as LeRobotDataset)
+    dataset_root = Path(root) if root is not None else hf_lerobot_home
+    dataset_path = dataset_root / repo_id
+
+    return dataset_path.exists()
 
 
 @click.group(invoke_without_command=True)
@@ -158,11 +185,10 @@ def display_config():
 @click.option('--dataset.episode_time_s', 'dataset_episode_time_s', type=int, help='Episode duration in seconds')
 @click.option('--dataset.reset_time_s', 'dataset_reset_time_s', type=int, help='Reset duration in seconds')
 @click.option('--policy.path', 'policy_path', help='Path to pretrained policy for testing')
-@click.option('--resume', is_flag=True, help='Resume recording')
 @click.option('--display_data', is_flag=True, help='Display data during recording')
 def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_episode_time_s,
-           dataset_reset_time_s, policy_path, resume, display_data):
-    """Record episodes with the robot."""
+           dataset_reset_time_s, policy_path, display_data):
+    """Record episodes with the robot. Automatically resumes if dataset exists."""
 
     robot_config = load_config(ROBOT_CONFIG_FILE)
     teleop_config = load_config(TELEOP_CONFIG_FILE)
@@ -175,17 +201,27 @@ def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_e
         click.echo("❌ Teleop not configured. Run: chop --set-teleop", err=True)
         sys.exit(1)
 
+    # Auto-detect resume based on dataset existence
+    dataset_exists = check_dataset_exists(dataset_repo_id)
+
+    if dataset_exists:
+        click.echo(f"ℹ️  Found existing dataset, resuming: {dataset_repo_id}")
+    else:
+        click.echo(f"ℹ️  Starting new dataset: {dataset_repo_id}")
+
     # Build command
     cmd = ["lerobot-record"]
     cmd.extend(build_cli_args("robot", robot_config))
     cmd.extend(build_cli_args("teleop", teleop_config))
 
     # Add dataset parameters (only if provided)
+    import shlex
+
     cmd.append(f"--dataset.repo_id={dataset_repo_id}")
     if dataset_num_episodes is not None:
         cmd.append(f"--dataset.num_episodes={dataset_num_episodes}")
     if dataset_single_task:
-        cmd.append(f'--dataset.single_task={dataset_single_task}')
+        cmd.append(f'--dataset.single_task={shlex.quote(dataset_single_task)}')
     if dataset_episode_time_s is not None:
         cmd.append(f"--dataset.episode_time_s={dataset_episode_time_s}")
     if dataset_reset_time_s is not None:
@@ -193,9 +229,10 @@ def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_e
 
     # Add policy path for testing
     if policy_path:
-        cmd.append(f"--policy.path={policy_path}")
+        cmd.append(f"--policy.path={shlex.quote(policy_path)}")
 
-    if resume:
+    # Auto-add resume flag if dataset exists
+    if dataset_exists:
         cmd.append("--resume=true")
 
     if display_data:
@@ -622,6 +659,145 @@ def edit_config(config_type):
     except subprocess.CalledProcessError:
         click.echo("❌ Failed to edit configuration", err=True)
         sys.exit(1)
+
+
+@cli.command()
+@click.option('--dataset.repo_id', 'dataset_repo_id', help='Dataset repository ID (not used when resuming)')
+@click.option('--policy.type', 'policy_type', help='Policy type (e.g., act, pi05, smolvla)')
+@click.option('--policy.repo_id', 'policy_repo_id', help='Policy repository ID for saving')
+@click.option('--output_dir', help='Override output directory (default: outputs/{policy_type}_{dataset_name})')
+@click.option('--batch_size', type=int, help='Training batch size')
+@click.option('--steps', type=int, help='Number of training steps')
+@click.option('--save_freq', type=int, help='Checkpoint save frequency')
+@click.option('--policy.device', 'policy_device', default='cuda', help='Device for training (default: cuda)')
+@click.option('--wandb/--no-wandb', 'wandb_enable', default=True, help='Enable/disable wandb logging (default: enabled)')
+@click.option('--policy.pretrained_path', 'policy_pretrained_path', help='Path to pretrained policy checkpoint')
+@click.argument('extra_args', nargs=-1, type=click.UNPROCESSED)
+def train(dataset_repo_id, policy_type, policy_repo_id, output_dir, batch_size, steps, save_freq,
+          policy_device, wandb_enable, policy_pretrained_path, extra_args):
+    """Train a policy on a dataset. Pass through additional args like --policy.n_obs_steps, --peft.method_type, etc."""
+
+    # Determine output directory first
+    if output_dir:
+        output_path = Path(output_dir).expanduser()
+    elif policy_type and dataset_repo_id:
+        dataset_name = dataset_repo_id.split('/')[-1]
+        output_dir = f"outputs/{policy_type}_{dataset_name}"
+        output_path = Path(output_dir).expanduser()
+    else:
+        # Check if we can infer from output_dir in extra_args
+        output_path = None
+        for arg in extra_args:
+            if arg.startswith('--output_dir='):
+                output_dir = arg.split('=', 1)[1]
+                output_path = Path(output_dir).expanduser()
+                break
+
+        if not output_path:
+            click.echo("❌ Either --output_dir or both --policy.type and --dataset.repo_id are required", err=True)
+            sys.exit(1)
+
+    # Check if output directory exists and has checkpoints
+    resume_mode = False
+    config_path = None
+
+    if output_path.exists():
+        checkpoint_dir = output_path / "checkpoints" / "last" / "pretrained_model"
+        train_config = checkpoint_dir / "train_config.json"
+
+        if train_config.exists():
+            click.echo(f"\n⚠️  Found existing training directory with checkpoint: {output_dir}")
+            click.echo("What would you like to do?")
+            click.echo("  [r] Resume training from last checkpoint")
+            click.echo("  [d] Delete and start fresh")
+
+            while True:
+                choice = click.prompt("\nYour choice", type=str, default="").strip().lower()
+                if choice == "r":
+                    resume_mode = True
+                    config_path = train_config
+                    click.echo(f"✓ Resuming training from checkpoint")
+                    click.echo(f"   Config: {config_path}")
+                    break
+                elif choice == "d":
+                    import shutil
+                    click.echo(f"Deleting directory: {output_path}")
+                    shutil.rmtree(output_path)
+                    click.echo("✓ Directory deleted, starting fresh")
+                    break
+                else:
+                    click.echo("Invalid choice. Please enter 'r' to resume or 'd' to delete.")
+        else:
+            click.echo(f"ℹ️  Found existing output directory (no checkpoint config): {output_dir}")
+            click.echo("   Continuing (will fail if incompatible)")
+
+    # Build command
+    cmd = ["lerobot-train"]
+
+    if resume_mode:
+        # Resume mode: only use config_path, resume flag, and steps
+        # All other parameters are loaded from the saved config
+        click.echo("\n⚠️  Resume mode: Only --steps can be overridden. All other parameters ignored.")
+
+        cmd.append(f"--config_path={config_path}")
+        cmd.append("--resume=true")
+
+        # Only allow overriding steps when resuming
+        if steps is not None:
+            cmd.append(f"--steps={steps}")
+
+        # Ignore all other options and extra args in resume mode
+        if extra_args:
+            click.echo(f"⚠️  Ignoring extra args in resume mode: {' '.join(extra_args)}")
+
+    else:
+        # Fresh training: validate required params and build full command
+        if not dataset_repo_id:
+            click.echo("❌ --dataset.repo_id is required for fresh training", err=True)
+            sys.exit(1)
+        if not policy_type:
+            click.echo("❌ --policy.type is required for fresh training", err=True)
+            sys.exit(1)
+        if not policy_repo_id:
+            click.echo("❌ --policy.repo_id is required for fresh training", err=True)
+            sys.exit(1)
+
+        # Add core options
+        cmd.append(f"--dataset.repo_id={dataset_repo_id}")
+        cmd.append(f"--policy.type={policy_type}")
+        cmd.append(f"--policy.repo_id={policy_repo_id}")
+        cmd.append(f"--output_dir={output_dir}")
+        cmd.append(f"--policy.device={policy_device}")
+
+        if batch_size is not None:
+            cmd.append(f"--batch_size={batch_size}")
+
+        if steps is not None:
+            cmd.append(f"--steps={steps}")
+
+        if save_freq is not None:
+            cmd.append(f"--save_freq={save_freq}")
+
+        # Wandb
+        cmd.append(f"--wandb.enable={str(wandb_enable).lower()}")
+
+        # Pretrained path
+        if policy_pretrained_path:
+            cmd.append(f"--policy.pretrained_path={policy_pretrained_path}")
+
+        # Add extra args
+        if extra_args:
+            cmd.extend(extra_args)
+
+    # Execute command
+    cmd_str = " \\\n  ".join(cmd)
+    click.echo(f"\n🚀 Running command:\n{cmd_str}\n")
+
+    try:
+        subprocess.run(" ".join(cmd), shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        click.echo(f"❌ Command failed with exit code {e.returncode}", err=True)
+        sys.exit(e.returncode)
 
 
 if __name__ == "__main__":
