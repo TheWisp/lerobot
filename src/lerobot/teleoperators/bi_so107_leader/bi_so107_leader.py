@@ -16,10 +16,12 @@
 
 import logging
 from functools import cached_property
+from typing import Any
 
 from lerobot.teleoperators.so_leader import SO107Leader, SO107LeaderConfig
 
 from ..teleoperator import Teleoperator
+from ..utils import TeleopEvents
 from .config_bi_so107_leader import BiSO107LeaderConfig
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,7 @@ class BiSO107Leader(Teleoperator):
             calibration_dir=config.calibration_dir,
             port=config.left_arm_port,
             gripper_bounce=config.gripper_bounce,
+            intervention_enabled=config.intervention_enabled,  # Only left arm has keyboard listener
         )
 
         right_arm_config = SO107LeaderConfig(
@@ -50,6 +53,7 @@ class BiSO107Leader(Teleoperator):
             calibration_dir=config.calibration_dir,
             port=config.right_arm_port,
             gripper_bounce=config.gripper_bounce,
+            intervention_enabled=False,  # No keyboard listener on right arm
         )
 
         self.left_arm = SO107Leader(left_arm_config)
@@ -63,7 +67,9 @@ class BiSO107Leader(Teleoperator):
 
     @cached_property
     def feedback_features(self) -> dict[str, type]:
-        return {}
+        return {f"left_{motor}.pos": float for motor in self.left_arm.bus.motors} | {
+            f"right_{motor}.pos": float for motor in self.right_arm.bus.motors
+        }
 
     @property
     def is_connected(self) -> bool:
@@ -128,3 +134,21 @@ class BiSO107Leader(Teleoperator):
     def disconnect(self) -> None:
         self.left_arm.disconnect()
         self.right_arm.disconnect()
+
+    def get_teleop_events(self) -> dict[str, Any]:
+        """Forward intervention events from left arm (which has the keyboard listener)."""
+        return self.left_arm.get_teleop_events()
+
+    def enable_torque(self) -> None:
+        """Enable torque on both leader arms (for inverse-follow mode)."""
+        self.left_arm.enable_torque()
+        self.right_arm.enable_torque()
+
+    def disable_torque(self) -> None:
+        """Disable torque on both leader arms (for human control)."""
+        self.left_arm.disable_torque()
+        self.right_arm.disable_torque()
+
+    def reset_intervention(self) -> None:
+        """Reset intervention state for new episode."""
+        self.left_arm.reset_intervention()

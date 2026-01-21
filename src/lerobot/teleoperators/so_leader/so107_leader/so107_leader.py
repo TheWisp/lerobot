@@ -15,11 +15,13 @@
 # limitations under the License.
 
 import logging
+from typing import Any
 
 from lerobot.motors import Motor, MotorNormMode
 from lerobot.motors.feetech import FeetechMotorsBus
 
 from ..so_leader_base import SOLeaderBase
+from ...utils import TeleopEvents
 from .config_so107_leader import SO107LeaderConfig
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,10 @@ class SO107Leader(SOLeaderBase):
             calibration=self.calibration,
         )
 
+        # Intervention state (latched - once triggered, stays active until reset)
+        self._intervention_active = False
+        self._keyboard_listener = None
+
     def connect(self, calibrate: bool = True) -> None:
         """Connect and optionally setup gripper bounce if configured."""
         super().connect(calibrate)
@@ -64,6 +70,10 @@ class SO107Leader(SOLeaderBase):
         if self.config.gripper_bounce:
             logger.info("Setting up gripper bounce to neutral position (50% open)...")
             self.set_gripper_bounce()
+
+        # Start keyboard listener if intervention enabled
+        if self.config.intervention_enabled:
+            self._start_keyboard_listener()
 
     def set_gripper_bounce(self) -> None:
         """Set gripper to bounce back to 50% open position with weak torque."""
@@ -78,3 +88,71 @@ class SO107Leader(SOLeaderBase):
 
         # Command to neutral position with weak torque
         self.bus.write("Goal_Position", "gripper", neutral_position, normalize=True)
+
+    @property
+    def feedback_features(self) -> dict[str, type]:
+        """Features that can be sent as feedback (motor positions)."""
+        return {f"{motor}.pos": float for motor in self.bus.motors}
+
+    def send_feedback(self, feedback: dict[str, float]) -> None:
+        """Command leader motors to given positions (for inverse-follow).
+
+        Args:
+            feedback: Dict mapping keys like "shoulder_pan.pos" to target positions.
+        """
+        if not feedback:
+            return
+
+        goal_positions = {}
+        for motor_name in self.bus.motors:
+            pos_key = f"{motor_name}.pos"
+            if pos_key in feedback:
+                goal_positions[motor_name] = feedback[pos_key]
+
+        if goal_positions:
+            self.bus.sync_write("Goal_Position", goal_positions)
+
+    def enable_torque(self) -> None:
+        """Enable torque on leader motors (for inverse-follow mode)."""
+        self.bus.enable_torque()
+
+    def disable_torque(self) -> None:
+        """Disable torque on leader motors (for human control)."""
+        self.bus.disable_torque()
+
+    def _start_keyboard_listener(self) -> None:
+        """Start keyboard listener for intervention detection (space key)."""
+        from pynput import keyboard
+
+        def on_press(key):
+            if key == keyboard.Key.space and not self._intervention_active:
+                self._intervention_active = True
+                logger.info("INTERVENTION ACTIVATED - Switched to teleop mode for this episode")
+
+        self._keyboard_listener = keyboard.Listener(on_press=on_press)
+        self._keyboard_listener.start()
+        logger.info("Intervention enabled: Press SPACE to take control (one-way switch to teleop)")
+
+    def get_teleop_events(self) -> dict[str, Any]:
+        """Return intervention status.
+
+        Returns:
+            Dict with TeleopEvents keys indicating current intervention state.
+        """
+        return {
+            TeleopEvents.IS_INTERVENTION: self._intervention_active if self.config.intervention_enabled else False,
+            TeleopEvents.TERMINATE_EPISODE: False,
+            TeleopEvents.SUCCESS: False,
+            TeleopEvents.RERECORD_EPISODE: False,
+        }
+
+    def reset_intervention(self) -> None:
+        """Reset intervention state for new episode."""
+        self._intervention_active = False
+
+    def disconnect(self) -> None:
+        """Disconnect and clean up keyboard listener."""
+        if self._keyboard_listener is not None:
+            self._keyboard_listener.stop()
+            self._keyboard_listener = None
+        super().disconnect()
