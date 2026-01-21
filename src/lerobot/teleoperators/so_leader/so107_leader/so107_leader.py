@@ -112,9 +112,9 @@ class SO107Leader(SOLeaderBase):
         if goal_positions:
             self.bus.sync_write("Goal_Position", goal_positions)
 
-    def enable_torque(self) -> None:
+    def enable_torque(self, num_retry: int = 5) -> None:
         """Enable torque on leader motors (for inverse-follow mode)."""
-        self.bus.enable_torque()
+        self.bus.enable_torque(num_retry=num_retry)
 
     def disable_torque(self) -> None:
         """Disable torque on leader motors (for human control)."""
@@ -125,13 +125,16 @@ class SO107Leader(SOLeaderBase):
         from pynput import keyboard
 
         def on_press(key):
-            if key == keyboard.Key.space and not self._intervention_active:
-                self._intervention_active = True
-                logger.info("INTERVENTION ACTIVATED - Switched to teleop mode for this episode")
+            if key == keyboard.Key.space:
+                self._intervention_active = not self._intervention_active
+                if self._intervention_active:
+                    logger.info("INTERVENTION ON - Switched to teleop mode")
+                else:
+                    logger.info("INTERVENTION OFF - Returning to policy mode")
 
         self._keyboard_listener = keyboard.Listener(on_press=on_press)
         self._keyboard_listener.start()
-        logger.info("Intervention enabled: Press SPACE to take control (one-way switch to teleop)")
+        logger.info("Intervention enabled: Press SPACE to toggle between policy and teleop")
 
     def get_teleop_events(self) -> dict[str, Any]:
         """Return intervention status.
