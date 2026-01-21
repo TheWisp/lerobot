@@ -360,9 +360,10 @@ def record_loop(
             features = dataset.features if dataset is not None else intervention_dataset.features
             observation_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
 
-        # Check for intervention if teleop supports it
+        # Check for intervention if teleop supports it (only during main recording with policy)
+        # Skip during reset phase (intervention_dataset is None) to avoid confusing behavior
         is_intervention = False
-        if teleop is not None and hasattr(teleop, "get_teleop_events"):
+        if intervention_dataset is not None and teleop is not None and hasattr(teleop, "get_teleop_events"):
             teleop_events = teleop.get_teleop_events()
             is_intervention = teleop_events.get(TeleopEvents.IS_INTERVENTION, False)
 
