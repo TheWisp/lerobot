@@ -367,7 +367,7 @@ def record_loop(
             # Transition: intervention → policy (user pressed SPACE again)
             if was_intervening:
                 # Save intervention episode before resuming policy
-                if intervention_dataset is not None and intervention_dataset.episode_buffer:
+                if intervention_dataset is not None and intervention_dataset.episode_buffer.get("size", 0) > 0:
                     intervention_dataset.save_episode()
                     logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1}")
 
@@ -472,7 +472,7 @@ def record_loop(
         timestamp = time.perf_counter() - start_episode_t
 
     # Save any ongoing intervention episode when main episode ends
-    if intervention_dataset is not None and intervention_dataset.episode_buffer:
+    if intervention_dataset is not None and intervention_dataset.episode_buffer.get("size", 0) > 0:
         intervention_dataset.save_episode()
         logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1} (episode timeout)")
 
