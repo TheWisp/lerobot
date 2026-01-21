@@ -295,7 +295,7 @@ def record_loop(
     display_data: bool = False,
     display_compressed_images: bool = False,
     play_sounds: bool = True,
-):
+) -> list[dict]:
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
 
@@ -478,23 +478,21 @@ def record_loop(
 
         timestamp = time.perf_counter() - start_episode_t
 
-    # Save all deferred intervention episodes at end of main episode
+    # Collect pending intervention episodes to return (saved after main episode)
     if intervention_dataset is not None:
         # Add current buffer to pending if it has frames (intervention was active at episode end)
         if intervention_dataset.episode_buffer.get("size", 0) > 0:
             pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.episode_buffer))
             intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
 
-        # Only save if not re-recording (discard intervention data on re-record)
-        if not events.get("rerecord_episode", False):
-            for ep_buffer in pending_intervention_episodes:
-                intervention_dataset.save_episode(episode_data=ep_buffer)
-                logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1}")
-        else:
-            # Discard and reset buffer with correct episode_index for next attempt
+        # On re-record, discard and reset buffer for next attempt
+        if events.get("rerecord_episode", False):
             if pending_intervention_episodes:
                 logging.info(f"Discarding {len(pending_intervention_episodes)} intervention episode(s) for re-record")
+            pending_intervention_episodes = []
             intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
+
+    return pending_intervention_episodes
 
 
 @parser.wrap()
@@ -639,7 +637,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
                 while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
                     log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
-                    record_loop(
+                    pending_intervention_episodes = record_loop(
                         robot=robot,
                         events=events,
                         fps=cfg.dataset.fps,
@@ -676,9 +674,17 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         events["rerecord_episode"] = False
                         events["exit_early"] = False
                         dataset.clear_episode_buffer()
+                        # pending_intervention_episodes already cleared in record_loop
                         continue
 
                     dataset.save_episode()
+
+                    # Save intervention episodes AFTER main episode (ensures matching)
+                    if intervention_dataset is not None and pending_intervention_episodes:
+                        for ep_buffer in pending_intervention_episodes:
+                            intervention_dataset.save_episode(episode_data=ep_buffer)
+                            logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1}")
+
                     _t_after_save = _time.monotonic()
                     logging.info(
                         f"between-episode timing: reset_phase={_t_after_reset-_t_between:.1f}s, "
