@@ -570,21 +570,35 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 vcodec=cfg.dataset.vcodec,
             )
 
-        # Create intervention dataset if requested (for correction data)
+        # Create or resume intervention dataset if requested (for correction data)
         if cfg.intervention_repo_id is not None:
-            intervention_dataset = LeRobotDataset.create(
-                cfg.intervention_repo_id,
-                cfg.dataset.fps,
-                root=cfg.dataset.root,
-                robot_type=robot.name,
-                features=dataset_features,
-                use_videos=cfg.dataset.video,
-                image_writer_processes=cfg.dataset.num_image_writer_processes,
-                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
-                batch_encoding_size=cfg.dataset.video_encoding_batch_size,
-                vcodec=cfg.dataset.vcodec,
-            )
-            logging.info(f"Created intervention dataset: {cfg.intervention_repo_id}")
+            if cfg.resume:
+                intervention_dataset = LeRobotDataset(
+                    cfg.intervention_repo_id,
+                    root=cfg.dataset.root,
+                    batch_encoding_size=cfg.dataset.video_encoding_batch_size,
+                    vcodec=cfg.dataset.vcodec,
+                )
+                if hasattr(robot, "cameras") and len(robot.cameras) > 0:
+                    intervention_dataset.start_image_writer(
+                        num_processes=cfg.dataset.num_image_writer_processes,
+                        num_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
+                    )
+                logging.info(f"Resumed intervention dataset: {cfg.intervention_repo_id} ({intervention_dataset.num_episodes} episodes)")
+            else:
+                intervention_dataset = LeRobotDataset.create(
+                    cfg.intervention_repo_id,
+                    cfg.dataset.fps,
+                    root=cfg.dataset.root,
+                    robot_type=robot.name,
+                    features=dataset_features,
+                    use_videos=cfg.dataset.video,
+                    image_writer_processes=cfg.dataset.num_image_writer_processes,
+                    image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
+                    batch_encoding_size=cfg.dataset.video_encoding_batch_size,
+                    vcodec=cfg.dataset.vcodec,
+                )
+                logging.info(f"Created intervention dataset: {cfg.intervention_repo_id}")
 
         # Load pretrained policy
         policy = None if cfg.policy is None else make_policy(cfg.policy, ds_meta=dataset.meta)
