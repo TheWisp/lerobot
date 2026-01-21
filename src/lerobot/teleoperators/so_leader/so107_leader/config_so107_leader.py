@@ -25,3 +25,5 @@ from ..so_leader_config_base import SOLeaderConfigBase
 class SO107LeaderConfig(SOLeaderConfigBase):
     # Gripper bounce back to neutral position (50% open)
     gripper_bounce: bool = False
+    # Enable intervention mode (press SPACE to take control during policy execution)
+    intervention_enabled: bool = False
