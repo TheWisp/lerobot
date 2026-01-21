@@ -485,10 +485,13 @@ def record_loop(
             pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.episode_buffer))
             intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
 
-        # Save all pending intervention episodes
-        for ep_buffer in pending_intervention_episodes:
-            intervention_dataset.save_episode(episode_data=ep_buffer)
-            logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1}")
+        # Only save if not re-recording (discard intervention data on re-record)
+        if not events.get("rerecord_episode", False):
+            for ep_buffer in pending_intervention_episodes:
+                intervention_dataset.save_episode(episode_data=ep_buffer)
+                logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1}")
+        elif pending_intervention_episodes:
+            logging.info(f"Discarding {len(pending_intervention_episodes)} intervention episode(s) for re-record")
 
 
 @parser.wrap()
