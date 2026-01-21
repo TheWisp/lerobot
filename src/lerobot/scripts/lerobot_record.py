@@ -107,6 +107,7 @@ from lerobot.robots import (  # noqa: F401
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
+    TeleopEvents,
     bi_so100_leader,
     bi_so107_leader,
     homunculus,
@@ -275,6 +276,7 @@ def record_loop(
     single_task: str | None = None,
     display_data: bool = False,
     display_compressed_images: bool = False,
+    play_sounds: bool = True,
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -310,6 +312,13 @@ def record_loop(
         preprocessor.reset()
         postprocessor.reset()
 
+    # Reset intervention state for new episode
+    if teleop is not None and hasattr(teleop, "reset_intervention"):
+        teleop.reset_intervention()
+
+    # Track if intervention was triggered this episode (to disable torque only once)
+    intervention_triggered = False
+
     timestamp = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
@@ -328,8 +337,15 @@ def record_loop(
         if policy is not None or dataset is not None:
             observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
 
-        # Get action from either policy or teleop
-        if policy is not None and preprocessor is not None and postprocessor is not None:
+        # Check for intervention if teleop supports it
+        is_intervention = False
+        if teleop is not None and hasattr(teleop, "get_teleop_events"):
+            teleop_events = teleop.get_teleop_events()
+            is_intervention = teleop_events.get(TeleopEvents.IS_INTERVENTION, False)
+
+        # Get action from policy, teleop, or intervention
+        if policy is not None and preprocessor is not None and postprocessor is not None and not is_intervention:
+            # Normal policy execution
             action_values = predict_action(
                 observation=observation_frame,
                 policy=policy,
@@ -342,6 +358,23 @@ def record_loop(
             )
 
             act_processed_policy: RobotAction = make_robot_action(action_values, dataset.features)
+
+            # Inverse-follow: send follower position to leader for smooth intervention
+            if teleop is not None and hasattr(teleop, "send_feedback"):
+                follower_pos = {k: v for k, v in obs.items() if k.endswith(".pos")}
+                teleop.send_feedback(follower_pos)
+
+        elif is_intervention and teleop is not None:
+            # Human intervention - switch to teleop mode for rest of episode
+            if not intervention_triggered:
+                # First time intervention triggered - disable torque on leader
+                if hasattr(teleop, "disable_torque"):
+                    teleop.disable_torque()
+                intervention_triggered = True
+                log_say("Intervention", play_sounds)
+
+            act = teleop.get_action()
+            act_processed_teleop = teleop_action_processor((act, obs))
 
         elif policy is None and isinstance(teleop, Teleoperator):
             act = teleop.get_action()
@@ -365,7 +398,7 @@ def record_loop(
             continue
 
         # Applies a pipeline to the action, default is IdentityProcessor
-        if policy is not None and act_processed_policy is not None:
+        if policy is not None and act_processed_policy is not None and not is_intervention:
             action_values = act_processed_policy
             robot_action_to_send = robot_action_processor((act_processed_policy, obs))
         else:
@@ -509,6 +542,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     single_task=cfg.dataset.single_task,
                     display_data=cfg.display_data,
                     display_compressed_images=display_compressed_images,
+                    play_sounds=cfg.play_sounds,
                 )
 
                 # Execute a few seconds without recording to give time to manually reset the environment
@@ -528,6 +562,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         control_time_s=cfg.dataset.reset_time_s,
                         single_task=cfg.dataset.single_task,
                         display_data=cfg.display_data,
+                        play_sounds=cfg.play_sounds,
                     )
 
                 if events["rerecord_episode"]:

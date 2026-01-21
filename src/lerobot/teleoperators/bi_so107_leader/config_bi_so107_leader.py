@@ -27,3 +27,5 @@ class BiSO107LeaderConfig(TeleoperatorConfig):
 
     # Gripper bounce back to neutral position (50% open)
     gripper_bounce: bool = False
+    # Enable intervention mode (hold SPACE to take control during policy execution)
+    intervention_enabled: bool = False
