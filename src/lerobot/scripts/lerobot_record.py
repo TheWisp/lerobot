@@ -490,8 +490,11 @@ def record_loop(
             for ep_buffer in pending_intervention_episodes:
                 intervention_dataset.save_episode(episode_data=ep_buffer)
                 logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1}")
-        elif pending_intervention_episodes:
-            logging.info(f"Discarding {len(pending_intervention_episodes)} intervention episode(s) for re-record")
+        else:
+            # Discard and reset buffer with correct episode_index for next attempt
+            if pending_intervention_episodes:
+                logging.info(f"Discarding {len(pending_intervention_episodes)} intervention episode(s) for re-record")
+            intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
 
 
 @parser.wrap()
