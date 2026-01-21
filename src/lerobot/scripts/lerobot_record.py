@@ -62,6 +62,7 @@ lerobot-record \
 ```
 """
 
+import copy
 import logging
 import time
 from contextlib import nullcontext
@@ -336,6 +337,9 @@ def record_loop(
     # Track intervention state for transition detection
     was_intervening = False
 
+    # Collect intervention episode buffers for deferred saving (avoids mid-episode lag)
+    pending_intervention_episodes: list[dict] = []
+
     timestamp = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
@@ -366,10 +370,13 @@ def record_loop(
         if policy is not None and preprocessor is not None and postprocessor is not None and not is_intervention:
             # Transition: intervention → policy (user pressed SPACE again)
             if was_intervening:
-                # Save intervention episode before resuming policy
+                # Defer saving: copy buffer now, save all at end of main episode (avoids lag)
                 if intervention_dataset is not None and intervention_dataset.episode_buffer.get("size", 0) > 0:
-                    intervention_dataset.save_episode()
-                    logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1}")
+                    pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.episode_buffer))
+                    # Reset buffer for next intervention, pre-assign episode_index to avoid collision
+                    intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
+                    next_ep_idx = intervention_dataset.num_episodes + len(pending_intervention_episodes)
+                    intervention_dataset.episode_buffer["episode_index"] = next_ep_idx
 
                 policy.reset()
                 preprocessor.reset()
@@ -471,10 +478,17 @@ def record_loop(
 
         timestamp = time.perf_counter() - start_episode_t
 
-    # Save any ongoing intervention episode when main episode ends
-    if intervention_dataset is not None and intervention_dataset.episode_buffer.get("size", 0) > 0:
-        intervention_dataset.save_episode()
-        logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1} (episode timeout)")
+    # Save all deferred intervention episodes at end of main episode
+    if intervention_dataset is not None:
+        # Add current buffer to pending if it has frames (intervention was active at episode end)
+        if intervention_dataset.episode_buffer.get("size", 0) > 0:
+            pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.episode_buffer))
+            intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
+
+        # Save all pending intervention episodes
+        for ep_buffer in pending_intervention_episodes:
+            intervention_dataset.save_episode(episode_data=ep_buffer)
+            logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1}")
 
 
 @parser.wrap()
