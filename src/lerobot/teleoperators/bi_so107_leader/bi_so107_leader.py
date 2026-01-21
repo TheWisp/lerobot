@@ -139,10 +139,10 @@ class BiSO107Leader(Teleoperator):
         """Forward intervention events from left arm (which has the keyboard listener)."""
         return self.left_arm.get_teleop_events()
 
-    def enable_torque(self) -> None:
+    def enable_torque(self, num_retry: int = 5) -> None:
         """Enable torque on both leader arms (for inverse-follow mode)."""
-        self.left_arm.enable_torque()
-        self.right_arm.enable_torque()
+        self.left_arm.enable_torque(num_retry=num_retry)
+        self.right_arm.enable_torque(num_retry=num_retry)
 
     def disable_torque(self) -> None:
         """Disable torque on both leader arms (for human control)."""

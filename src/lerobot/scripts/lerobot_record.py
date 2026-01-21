@@ -328,8 +328,8 @@ def record_loop(
     if teleop is not None and hasattr(teleop, "reset_intervention"):
         teleop.reset_intervention()
 
-    # Track if intervention was triggered this episode (to disable torque only once)
-    intervention_triggered = False
+    # Track intervention state for transition detection
+    was_intervening = False
 
     timestamp = 0
     start_episode_t = time.perf_counter()
@@ -357,6 +357,18 @@ def record_loop(
 
         # Get action from policy, teleop, or intervention
         if policy is not None and preprocessor is not None and postprocessor is not None and not is_intervention:
+            # Transition: intervention → policy (user pressed SPACE again)
+            if was_intervening:
+                policy.reset()
+                preprocessor.reset()
+                postprocessor.reset()
+                if teleop is not None and hasattr(teleop, "enable_torque"):
+                    try:
+                        teleop.enable_torque()
+                    except ConnectionError as e:
+                        logging.warning(f"Failed to enable torque on leader: {e}. Release the arm and try again.")
+                log_say("Policy", play_sounds)
+
             # Normal policy execution
             action_values = predict_action(
                 observation=observation_frame,
@@ -377,12 +389,11 @@ def record_loop(
                 teleop.send_feedback(follower_pos)
 
         elif is_intervention and teleop is not None:
-            # Human intervention - switch to teleop mode for rest of episode
-            if not intervention_triggered:
-                # First time intervention triggered - disable torque on leader
+            # Human intervention mode
+            if not was_intervening:
+                # Transition: policy → intervention
                 if hasattr(teleop, "disable_torque"):
                     teleop.disable_torque()
-                intervention_triggered = True
                 log_say("Intervention", play_sounds)
 
             act = teleop.get_action()
@@ -436,6 +447,9 @@ def record_loop(
 
         dt_s = time.perf_counter() - start_loop_t
         precise_sleep(max(1 / fps - dt_s, 0.0))
+
+        # Update intervention tracking for next iteration
+        was_intervening = is_intervention
 
         timestamp = time.perf_counter() - start_episode_t
 
