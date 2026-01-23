@@ -51,7 +51,10 @@ from .hil_processor import (
     RewardClassifierProcessorStep,
     TimeLimitProcessorStep,
 )
-from .joint_observations_processor import JointVelocityProcessorStep, MotorCurrentProcessorStep
+from .joint_observations_processor import (
+    JointVelocityProcessorStep,
+    MotorCurrentProcessorStep,
+)
 from .normalize_processor import NormalizerProcessorStep, UnnormalizerProcessorStep, hotswap_stats
 from .observation_processor import VanillaObservationProcessorStep
 from .pipeline import (

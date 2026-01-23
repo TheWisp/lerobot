@@ -187,7 +187,13 @@ class BiSO107Follower(Robot):
         from lerobot.cameras.realsense import RealSenseCamera
         from lerobot.processor import DepthEdgeOverlayProcessorStep
 
+        from .gripper_load_processor import BiGripperLoadProcessorStep
+
         steps = []
+
+        # Add gripper load processor if configured
+        if self.config.add_gripper_loads:
+            steps.append(BiGripperLoadProcessorStep(robot=self))
 
         # Add depth edge detection for RealSense cameras with depth enabled
         for cam_key, cam in self.cameras.items():

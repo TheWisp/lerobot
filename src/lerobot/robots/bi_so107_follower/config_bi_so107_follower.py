@@ -37,3 +37,6 @@ class BiSO107FollowerConfig(RobotConfig):
 
     # cameras (shared between both arms)
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+
+    # Gripper load (torque) observation
+    add_gripper_loads: bool = False  # Read gripper load into observation state
