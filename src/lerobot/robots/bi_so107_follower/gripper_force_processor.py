@@ -48,15 +48,15 @@ class BiGripperForceProcessorStep(ObservationProcessorStep):
     deadband: float = 3.0  # Minimum change to update output (in raw current units)
 
     # Internal filter state (excluded from init/repr)
-    _filtered_left: float | None = field(default=None, init=False, repr=False)
-    _filtered_right: float | None = field(default=None, init=False, repr=False)
+    _accepted_left: float | None = field(default=None, init=False, repr=False)
+    _accepted_right: float | None = field(default=None, init=False, repr=False)
     _output_left: float | None = field(default=None, init=False, repr=False)
     _output_right: float | None = field(default=None, init=False, repr=False)
 
     def reset(self) -> None:
         """Reset the filter state."""
-        self._filtered_left = None
-        self._filtered_right = None
+        self._accepted_left = None
+        self._accepted_right = None
         self._output_left = None
         self._output_right = None
 
@@ -90,21 +90,23 @@ class BiGripperForceProcessorStep(ObservationProcessorStep):
         left_raw = float(left_current_dict.get("gripper", 0))
         right_raw = float(right_current_dict.get("gripper", 0))
 
-        # Apply EMA filter
-        if self._filtered_left is None:
-            self._filtered_left = left_raw
-            self._filtered_right = right_raw
+        # Apply deadband first: only accept raw values that differ significantly
+        # This prevents noise from entering the EMA filter
+        if self._accepted_left is None:
+            self._accepted_left = left_raw
+            self._accepted_right = right_raw
             self._output_left = left_raw
             self._output_right = right_raw
         else:
-            self._filtered_left = self.filter_alpha * left_raw + (1 - self.filter_alpha) * self._filtered_left
-            self._filtered_right = self.filter_alpha * right_raw + (1 - self.filter_alpha) * self._filtered_right
+            # Only update accepted value if change exceeds deadband
+            if abs(left_raw - self._accepted_left) > self.deadband:
+                self._accepted_left = left_raw
+            if abs(right_raw - self._accepted_right) > self.deadband:
+                self._accepted_right = right_raw
 
-            # Apply deadband: only update output if change exceeds threshold
-            if abs(self._filtered_left - self._output_left) > self.deadband:
-                self._output_left = self._filtered_left
-            if abs(self._filtered_right - self._output_right) > self.deadband:
-                self._output_right = self._filtered_right
+            # Apply EMA filter on deadbanded values
+            self._output_left = self.filter_alpha * self._accepted_left + (1 - self.filter_alpha) * self._output_left
+            self._output_right = self.filter_alpha * self._accepted_right + (1 - self.filter_alpha) * self._output_right
 
         gripper_force = torch.tensor(
             [self._output_left, self._output_right],
