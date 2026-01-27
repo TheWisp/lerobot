@@ -534,10 +534,8 @@ def identify_ports():
 
 @cli.command(name="find-cameras")
 def find_cameras():
-    """Detect cameras and interactively assign them to roles (top, left_wrist, right_wrist)."""
-    import tempfile
-    import shutil
-    from PIL import Image
+    """Detect cameras and interactively assign them to roles with live video feed."""
+    import cv2
 
     try:
         from lerobot.cameras.configs import ColorMode
@@ -580,11 +578,8 @@ def find_cameras():
     click.echo(f"\nTotal cameras detected: {len(all_cameras)}")
     click.echo("=" * 60)
 
-    # Create temp directory for images
-    temp_dir = Path(tempfile.mkdtemp(prefix="chop_cameras_"))
-    click.echo(f"\nImages will be saved to: {temp_dir}")
-
     camera_mapping = {}
+    # Default roles - users can add custom ones
     available_roles = ["top", "left_wrist", "right_wrist"]
 
     for i, cam_info in enumerate(all_cameras):
@@ -597,9 +592,10 @@ def find_cameras():
         click.echo(f"  Type: {cam_type}")
         click.echo(f"  ID: {cam_id}")
 
-        # Create camera instance and capture image
+        # Create camera instance and show video feed
+        camera = None
         try:
-            click.echo("  Connecting and capturing image...")
+            click.echo("  Connecting to camera...")
 
             if cam_type == "OpenCV":
                 config = OpenCVCameraConfig(index_or_path=cam_id, color_mode=ColorMode.RGB)
@@ -612,31 +608,43 @@ def find_cameras():
                 continue
 
             camera.connect(warmup=True)
-            image_array = camera.read()
+
+            # Show live video feed
+            window_name = f"Camera #{i+1}: {cam_name} - Press any key to close"
+            click.echo(f"  ✓ Showing live video feed. Press any key in the video window to close.")
+
+            while True:
+                image_array = camera.read()
+                # Convert RGB to BGR for OpenCV display
+                image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+                # Add text overlay
+                cv2.putText(image_bgr, f"Camera #{i+1}: {cam_name}", (10, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(image_bgr, "Press any key to close", (10, 60),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
+                cv2.imshow(window_name, image_bgr)
+
+                # Check for key press (wait 30ms)
+                if cv2.waitKey(30) != -1:
+                    break
+
+            cv2.destroyWindow(window_name)
             camera.disconnect()
 
-            # Save image
-            img = Image.fromarray(image_array, mode="RGB")
-            safe_id = str(cam_id).replace("/", "_").replace("\\", "_")
-            image_path = temp_dir / f"camera_{i+1}_{cam_type}_{safe_id}.png"
-            img.save(image_path)
-
-            click.echo(f"  ✓ Image saved: {image_path}")
-
-            # Open image in viewer
-            try:
-                subprocess.Popen(['xdg-open', str(image_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                click.echo("  (Image opened in viewer)")
-            except Exception:
-                click.echo("  (Could not auto-open image, please view it manually)")
-
         except Exception as e:
-            click.echo(f"  ✗ Failed to capture image: {e}")
+            click.echo(f"  ✗ Failed to connect to camera: {e}")
             click.echo("  Skipping this camera...")
+            if camera:
+                try:
+                    camera.disconnect()
+                except Exception:
+                    pass
+            cv2.destroyAllWindows()
             continue
 
         # Ask user to assign role
         click.echo(f"\n  Available roles: {', '.join(available_roles)}")
+        click.echo("  (You can also enter a new custom role name)")
         while True:
             response = click.prompt(
                 "  Assign this camera to a role (or 'skip' to skip)",
@@ -647,39 +655,52 @@ def find_cameras():
             if response == "skip" or response == "":
                 click.echo("  Skipped")
                 break
-            elif response in available_roles:
-                # Extract configuration based on camera type
-                if cam_type == "OpenCV":
-                    # Extract index from path if it's /dev/videoX
-                    if isinstance(cam_id, str) and cam_id.startswith("/dev/video"):
-                        index = int(cam_id.replace("/dev/video", ""))
-                    else:
-                        index = cam_id
 
-                    cam_config = {
-                        "type": "opencv",
-                        "index_or_path": index,
-                        "width": cam_info.get("default_stream_profile", {}).get("width", 640),
-                        "height": cam_info.get("default_stream_profile", {}).get("height", 480),
-                        "fps": int(cam_info.get("default_stream_profile", {}).get("fps", 30))
-                    }
-                elif cam_type == "RealSense":
-                    use_depth = click.confirm("  Enable depth for this camera?", default=True)
-                    cam_config = {
-                        "type": "intelrealsense",
-                        "serial_number_or_name": cam_id,
-                        "width": cam_info.get("default_stream_profile", {}).get("width", 640),
-                        "height": cam_info.get("default_stream_profile", {}).get("height", 480),
-                        "fps": cam_info.get("default_stream_profile", {}).get("fps", 30),
-                        "use_depth": use_depth
-                    }
+            # Check if role is already used in this session
+            if response in camera_mapping:
+                click.echo(f"  ⚠️  Role '{response}' already assigned. Choose a different name.")
+                continue
 
-                camera_mapping[response] = cam_config
+            # If it's a new custom role, confirm with the user
+            if response not in available_roles:
+                if click.confirm(f"  Add '{response}' as a new camera role?", default=True):
+                    available_roles.append(response)
+                else:
+                    click.echo(f"  Choose from: {', '.join(available_roles)} or enter a new name")
+                    continue
+
+            # Extract configuration based on camera type
+            if cam_type == "OpenCV":
+                # Extract index from path if it's /dev/videoX
+                if isinstance(cam_id, str) and cam_id.startswith("/dev/video"):
+                    index = int(cam_id.replace("/dev/video", ""))
+                else:
+                    index = cam_id
+
+                cam_config = {
+                    "type": "opencv",
+                    "index_or_path": index,
+                    "width": cam_info.get("default_stream_profile", {}).get("width", 640),
+                    "height": cam_info.get("default_stream_profile", {}).get("height", 480),
+                    "fps": int(cam_info.get("default_stream_profile", {}).get("fps", 30))
+                }
+            elif cam_type == "RealSense":
+                use_depth = click.confirm("  Enable depth for this camera?", default=True)
+                cam_config = {
+                    "type": "intelrealsense",
+                    "serial_number_or_name": cam_id,
+                    "width": cam_info.get("default_stream_profile", {}).get("width", 640),
+                    "height": cam_info.get("default_stream_profile", {}).get("height", 480),
+                    "fps": cam_info.get("default_stream_profile", {}).get("fps", 30),
+                    "use_depth": use_depth
+                }
+
+            camera_mapping[response] = cam_config
+            # Remove from available roles if it was a predefined one
+            if response in available_roles:
                 available_roles.remove(response)
-                click.echo(f"  ✓ Assigned to '{response}'")
-                break
-            else:
-                click.echo(f"  Invalid role. Choose from: {', '.join(available_roles)} or 'skip'")
+            click.echo(f"  ✓ Assigned to '{response}'")
+            break
 
     # Display results
     click.echo(f"\n{'='*60}")
@@ -706,14 +727,7 @@ def find_cameras():
     else:
         click.echo("\n⚠️  No cameras assigned. Configuration not updated.")
 
-    # Cleanup temp directory
-    click.echo(f"\nCleaning up temporary images in: {temp_dir}")
-    try:
-        shutil.rmtree(temp_dir)
-        click.echo("✓ Cleanup complete")
-    except Exception as e:
-        click.echo(f"⚠️  Could not clean up temp directory: {e}")
-
+    cv2.destroyAllWindows()
     click.echo("=" * 60 + "\n")
 
 
