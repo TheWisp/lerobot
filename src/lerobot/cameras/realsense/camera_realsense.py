@@ -318,7 +318,7 @@ class RealSenseCamera(Camera):
             )
             if self.use_depth:
                 rs_config.enable_stream(
-                    rs.stream.depth, self.capture_width, self.capture_height, rs.format.z16, self.fps
+                    rs.stream.depth, 848, 480, rs.format.z16, self.fps
                 )
         else:
             rs_config.enable_stream(rs.stream.color)
@@ -401,9 +401,9 @@ class RealSenseCamera(Camera):
 
         return depth_map_processed
 
-    def _apply_depth_filters(self, depth_frame: Any) -> Any:
+    def _apply_depth_filters(self, frame: Any) -> Any:
         """
-        Apply RealSense post-processing filters to depth frame.
+        Apply RealSense post-processing filters to depth frame or frameset.
 
         Filters are applied in the correct order following RealSense SDK best practices:
         1. Decimation (reduces resolution)
@@ -413,35 +413,38 @@ class RealSenseCamera(Camera):
         5. Disparity-to-Depth (convert back)
         6. Hole filling (fill missing depth values)
 
+        Note: Filters should be applied BEFORE alignment for best results,
+        as they are designed to work on native depth sensor data.
+
         Args:
-            depth_frame: RealSense depth frame object
+            frame: RealSense depth frame or frameset object
 
         Returns:
-            Filtered depth frame object
+            Filtered frame (same type as input)
         """
         # Apply decimation first (reduces resolution)
         if self.enable_decimation and self.decimation_filter is not None:
-            depth_frame = self.decimation_filter.process(depth_frame)
+            frame = self.decimation_filter.process(frame)
 
         # Spatial and temporal filters work better in disparity space
         if self.enable_spatial or self.enable_temporal:
             if self.depth_to_disparity is not None:
-                depth_frame = self.depth_to_disparity.process(depth_frame)
+                frame = self.depth_to_disparity.process(frame)
 
                 if self.enable_spatial and self.spatial_filter is not None:
-                    depth_frame = self.spatial_filter.process(depth_frame)
+                    frame = self.spatial_filter.process(frame)
 
                 if self.enable_temporal and self.temporal_filter is not None:
-                    depth_frame = self.temporal_filter.process(depth_frame)
+                    frame = self.temporal_filter.process(frame)
 
                 if self.disparity_to_depth is not None:
-                    depth_frame = self.disparity_to_depth.process(depth_frame)
+                    frame = self.disparity_to_depth.process(frame)
 
         # Hole filling last
         if self.enable_hole_filling and self.hole_filling_filter is not None:
-            depth_frame = self.hole_filling_filter.process(depth_frame)
+            frame = self.hole_filling_filter.process(frame)
 
-        return depth_frame
+        return frame
 
     def read_color_and_aligned_depth(
         self, color_mode: ColorMode | None = None, timeout_ms: int = 200
@@ -455,8 +458,9 @@ class RealSenseCamera(Camera):
         color[y, x].
 
         The align object is created once during connect() and reused for efficiency.
-        Optional depth post-processing filters (decimation, spatial, temporal, hole filling)
-        are applied if enabled in the configuration.
+        Optional depth post-processing filters (spatial, temporal, hole filling)
+        are applied after alignment. Note: decimation is NOT recommended when using
+        different color/depth resolutions as it causes resize artifacts.
 
         Args:
             color_mode (Optional[ColorMode]): The target color mode (RGB or BGR).
@@ -499,7 +503,9 @@ class RealSenseCamera(Camera):
         if not color_frame or not depth_frame:
             raise RuntimeError(f"{self} failed to get aligned color and depth frames.")
 
-        # Apply depth post-processing filters (if enabled)
+        # Apply depth post-processing filters to aligned depth frame
+        # Note: Filters work on aligned data here. For best results, disable decimation
+        # as it introduces resize artifacts when the depth resolution changes.
         depth_frame = self._apply_depth_filters(depth_frame)
 
         # Convert to numpy arrays
@@ -507,8 +513,7 @@ class RealSenseCamera(Camera):
         depth_image_raw = np.asanyarray(depth_frame.get_data())
 
         # If decimation was applied, resize depth back to match color frame size
-        # This ensures depth and color frames have matching dimensions for alignment
-        if self.enable_decimation and depth_image_raw.shape != color_image_raw.shape[:2]:
+        if depth_image_raw.shape != color_image_raw.shape[:2]:
             depth_image_raw = cv2.resize(
                 depth_image_raw,
                 (color_image_raw.shape[1], color_image_raw.shape[0]),
