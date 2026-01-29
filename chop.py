@@ -221,6 +221,10 @@ def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_e
     # If cameras are present, use config file (Draccus can't parse nested ChoiceRegistry from CLI)
     has_cameras = 'cameras' in robot_config and robot_config['cameras']
 
+    # Enable intervention on teleop if intervention_repo_id is set
+    if intervention_repo_id:
+        teleop_config = {**teleop_config, "intervention_enabled": True}
+
     if has_cameras:
         # Create temp config file with all configs
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, prefix='chop_record_') as f:
