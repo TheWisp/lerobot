@@ -185,10 +185,11 @@ def display_config():
 @click.option('--dataset.episode_time_s', 'dataset_episode_time_s', type=int, help='Episode duration in seconds')
 @click.option('--dataset.reset_time_s', 'dataset_reset_time_s', type=int, help='Reset duration in seconds')
 @click.option('--policy.path', 'policy_path', help='Path to pretrained policy for testing')
+@click.option('--intervention_repo_id', help='Record intervention fragments to a separate dataset')
 @click.option('--display_data', is_flag=True, help='Display data during recording')
 @click.argument('extra_args', nargs=-1, type=click.UNPROCESSED)
 def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_episode_time_s,
-           dataset_reset_time_s, policy_path, display_data, extra_args):
+           dataset_reset_time_s, policy_path, intervention_repo_id, display_data, extra_args):
     """Record episodes with the robot. Automatically resumes if dataset exists.
 
     Pass additional args after -- (e.g., -- --dataset.push_to_hub=false)."""
@@ -241,6 +242,8 @@ def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_e
                 config["resume"] = True
             if display_data:
                 config["display_data"] = True
+            if intervention_repo_id:
+                config["intervention_repo_id"] = intervention_repo_id
 
             json.dump(config, f, indent=2)
             temp_config_path = f.name
@@ -284,6 +287,9 @@ def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_e
 
         if display_data:
             cmd.append("--display_data=true")
+
+        if intervention_repo_id:
+            cmd.append(f"--intervention_repo_id={intervention_repo_id}")
 
         # Add any extra passthrough args
         if extra_args:
