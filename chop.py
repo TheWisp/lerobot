@@ -186,9 +186,12 @@ def display_config():
 @click.option('--dataset.reset_time_s', 'dataset_reset_time_s', type=int, help='Reset duration in seconds')
 @click.option('--policy.path', 'policy_path', help='Path to pretrained policy for testing')
 @click.option('--display_data', is_flag=True, help='Display data during recording')
+@click.argument('extra_args', nargs=-1, type=click.UNPROCESSED)
 def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_episode_time_s,
-           dataset_reset_time_s, policy_path, display_data):
-    """Record episodes with the robot. Automatically resumes if dataset exists."""
+           dataset_reset_time_s, policy_path, display_data, extra_args):
+    """Record episodes with the robot. Automatically resumes if dataset exists.
+
+    Pass additional args after -- (e.g., -- --dataset.push_to_hub=false)."""
     import tempfile
     import shlex
 
@@ -248,6 +251,10 @@ def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_e
             if policy_path:
                 cmd.append(f"--policy.path={shlex.quote(policy_path)}")
 
+            # Add any extra passthrough args
+            if extra_args:
+                cmd.extend(extra_args)
+
             # Execute command
             cmd_str = " \\\n  ".join(cmd)
             click.echo(f"\n🚀 Running command:\n{cmd_str}\n")
@@ -277,6 +284,10 @@ def record(dataset_repo_id, dataset_num_episodes, dataset_single_task, dataset_e
 
         if display_data:
             cmd.append("--display_data=true")
+
+        # Add any extra passthrough args
+        if extra_args:
+            cmd.extend(extra_args)
 
         # Execute command
         cmd_str = " \\\n  ".join(cmd)
