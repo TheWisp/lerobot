@@ -651,6 +651,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     if not events["stop_recording"] and (
                         (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
                     ):
+                        # Always disable torque on leader for reset phase so operator can teleop freely
+                        # (regardless of whether the previous episode ended with intervention or policy)
+                        if teleop is not None and hasattr(teleop, "disable_torque"):
+                            teleop.disable_torque()
                         log_say("Reset the environment", cfg.play_sounds)
 
                         # reset g1 robot
