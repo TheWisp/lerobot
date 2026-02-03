@@ -334,6 +334,11 @@ def record_loop(
     if teleop is not None and hasattr(teleop, "reset_intervention"):
         teleop.reset_intervention()
 
+    # Reset intervention buffer with correct episode_index for this main episode
+    # (buffer created at end of previous record_loop has stale episode_index)
+    if intervention_dataset is not None:
+        intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
+
     # Track intervention state for transition detection
     was_intervening = False
 
