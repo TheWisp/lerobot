@@ -372,7 +372,7 @@ def record_loop(
             # Transition: intervention → policy (user pressed SPACE again)
             if was_intervening:
                 # Defer saving: copy buffer now, save all at end of main episode (avoids lag)
-                if intervention_dataset is not None and intervention_dataset.episode_buffer.get("size", 0) > 0:
+                if intervention_dataset is not None and intervention_dataset.episode_buffer is not None and intervention_dataset.episode_buffer.get("size", 0) > 0:
                     pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.episode_buffer))
                     # Reset buffer for next intervention, pre-assign episode_index to avoid collision
                     intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
@@ -482,7 +482,7 @@ def record_loop(
     # Collect pending intervention episodes to return (saved after main episode)
     if intervention_dataset is not None:
         # Add current buffer to pending if it has frames (intervention was active at episode end)
-        if intervention_dataset.episode_buffer.get("size", 0) > 0:
+        if intervention_dataset.episode_buffer is not None and intervention_dataset.episode_buffer.get("size", 0) > 0:
             pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.episode_buffer))
             intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
 
