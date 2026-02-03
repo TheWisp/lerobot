@@ -623,6 +623,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
         def run_reset_phase():
             """Run a reset phase to allow setting up / resetting the environment."""
+            # Always disable torque on leader for reset phase so operator can teleop freely
+            # (regardless of whether the previous episode ended with intervention or policy)
+            if teleop is not None and hasattr(teleop, "disable_torque"):
+                teleop.disable_torque()
             log_say("Reset the environment", cfg.play_sounds)
 
             if robot.name == "unitree_g1":
