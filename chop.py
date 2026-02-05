@@ -591,7 +591,7 @@ def find_cameras():
 
     camera_mapping = {}
     # Default roles - users can add custom ones
-    available_roles = ["top", "left_wrist", "right_wrist"]
+    available_roles = ["top", "left_wrist", "right_wrist", "front"]
 
     for i, cam_info in enumerate(all_cameras):
         cam_type = cam_info.get("type")
@@ -661,7 +661,9 @@ def find_cameras():
                 "  Assign this camera to a role (or 'skip' to skip)",
                 type=str,
                 default=""
-            ).strip().lower()
+            )
+            # Strip control characters (e.g., ESC from cv2 window) and normalize
+            response = ''.join(c for c in response if c.isprintable()).strip().lower()
 
             if response == "skip" or response == "":
                 click.echo("  Skipped")
@@ -681,6 +683,13 @@ def find_cameras():
                     continue
 
             # Extract configuration based on camera type
+            # Start with detected profile, then overlay existing config to preserve user settings
+            existing_robot_config = load_config(ROBOT_CONFIG_FILE) or {}
+            existing_cam = existing_robot_config.get("cameras", {}).get(response, {})
+            detected = cam_info.get("default_stream_profile", {})
+            # Only use relevant fields from detected (exclude format, stream_type which aren't useful)
+            detected_relevant = {k: v for k, v in detected.items() if k in ("width", "height", "fps", "fourcc")}
+
             if cam_type == "OpenCV":
                 # Extract index from path if it's /dev/videoX
                 if isinstance(cam_id, str) and cam_id.startswith("/dev/video"):
@@ -689,20 +698,18 @@ def find_cameras():
                     index = cam_id
 
                 cam_config = {
+                    **detected_relevant,
+                    **existing_cam,
                     "type": "opencv",
                     "index_or_path": index,
-                    "width": cam_info.get("default_stream_profile", {}).get("width", 640),
-                    "height": cam_info.get("default_stream_profile", {}).get("height", 480),
-                    "fps": int(cam_info.get("default_stream_profile", {}).get("fps", 30))
                 }
             elif cam_type == "RealSense":
-                use_depth = click.confirm("  Enable depth for this camera?", default=True)
+                use_depth = click.confirm("  Enable depth for this camera?", default=existing_cam.get("use_depth", True))
                 cam_config = {
+                    **detected_relevant,
+                    **existing_cam,
                     "type": "intelrealsense",
                     "serial_number_or_name": cam_id,
-                    "width": cam_info.get("default_stream_profile", {}).get("width", 640),
-                    "height": cam_info.get("default_stream_profile", {}).get("height", 480),
-                    "fps": cam_info.get("default_stream_profile", {}).get("fps", 30),
                     "use_depth": use_depth
                 }
 
@@ -729,7 +736,9 @@ def find_cameras():
         if not robot_config:
             robot_config = {"type": "bi_so107_follower"}
 
-        robot_config["cameras"] = camera_mapping
+        if "cameras" not in robot_config:
+            robot_config["cameras"] = {}
+        robot_config["cameras"].update(camera_mapping)
 
         save_config(ROBOT_CONFIG_FILE, robot_config)
 
