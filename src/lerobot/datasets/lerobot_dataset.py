@@ -582,6 +582,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         streaming_encoding: bool | None = None,
         encoder_queue_maxsize: int = 30,
         encoder_threads: int | None = None,
+        record_images: bool = True,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -728,6 +729,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.latest_episode = None
         self._current_file_start_frame = None  # Track the starting frame index of the current parquet file
         self._streaming_encoder = None
+        self._record_images = record_images
 
         self.root.mkdir(exist_ok=True, parents=True)
 
@@ -920,8 +922,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         if not requested_episodes.issubset(available_episodes):
             return False
 
-        # Check if all required video files exist
-        if len(self.meta.video_keys) > 0:
+        # Check if all required video files exist (skip if record_images=False)
+        if len(self.meta.video_keys) > 0 and self._record_images:
             for ep_idx in requested_episodes:
                 for vid_key in self.meta.video_keys:
                     video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
@@ -1163,6 +1165,9 @@ class LeRobotDataset(torch.utils.data.Dataset):
     def _save_image(
         self, image: torch.Tensor | np.ndarray | PIL.Image.Image, fpath: Path, compress_level: int = 1
     ) -> None:
+        # Skip image saving if record_images is False (avoids slow synchronous writes)
+        if not self._record_images:
+            return
         if self.image_writer is None:
             if isinstance(image, torch.Tensor):
                 image = image.cpu().numpy()
@@ -1339,7 +1344,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
                         for k, v in video_stats.items()
                     }
                 ep_metadata.update(self._save_episode_video(video_key, episode_index, temp_path=temp_path))
-        elif has_video_keys and not use_batched_encoding:
+        elif has_video_keys and not use_batched_encoding and self._record_images:
             num_cameras = len(self.meta.video_keys)
             if parallel_encoding and num_cameras > 1:
                 # TODO(Steven): Ideally we would like to control the number of threads per encoding such that:
@@ -1382,7 +1387,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # `meta.save_episode` need to be executed after encoding the videos
         self.meta.save_episode(episode_index, episode_length, episode_tasks, ep_stats, ep_metadata)
 
-        if has_video_keys and use_batched_encoding and not video_temp_paths:
+        if has_video_keys and use_batched_encoding and not video_temp_paths and not skip_images:
             # Check if we should trigger batch encoding
             self.episodes_since_last_encoding += 1
             if self.episodes_since_last_encoding == self.batch_encoding_size:
@@ -1795,6 +1800,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         streaming_encoding: bool | None = None,
         encoder_queue_maxsize: int = 30,
         encoder_threads: int | None = None,
+        record_images: bool = True,
     ) -> "LeRobotDataset":
         """Create a LeRobot Dataset from scratch in order to record data."""
         vcodec = resolve_vcodec(vcodec)
@@ -1817,6 +1823,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         obj.episodes_since_last_encoding = 0
         obj.vcodec = vcodec
         obj._encoder_threads = encoder_threads
+        obj._record_images = record_images
 
         if image_writer_processes or image_writer_threads:
             obj.start_image_writer(image_writer_processes, image_writer_threads)
