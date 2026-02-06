@@ -166,6 +166,8 @@ class DatasetRecordConfig:
     num_episodes: int = 50
     # Encode frames in the dataset into video
     video: bool = True
+    # Record images to the dataset (set False to save parquet only, skipping image/video recording)
+    record_images: bool = True
     # Upload dataset to Hugging Face hub.
     push_to_hub: bool = True
     # Upload on private repository on the Hugging Face hub.
@@ -551,9 +553,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 root=cfg.dataset.root,
                 batch_encoding_size=cfg.dataset.video_encoding_batch_size,
                 vcodec=cfg.dataset.vcodec,
+                record_images=cfg.dataset.record_images,
             )
 
-            if hasattr(robot, "cameras") and len(robot.cameras) > 0:
+            if cfg.dataset.record_images and hasattr(robot, "cameras") and len(robot.cameras) > 0:
                 dataset.start_image_writer(
                     num_processes=cfg.dataset.num_image_writer_processes,
                     num_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
@@ -569,10 +572,11 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 robot_type=robot.name,
                 features=dataset_features,
                 use_videos=cfg.dataset.video,
-                image_writer_processes=cfg.dataset.num_image_writer_processes,
-                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
+                image_writer_processes=cfg.dataset.num_image_writer_processes if cfg.dataset.record_images else 0,
+                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras) if cfg.dataset.record_images else 0,
                 batch_encoding_size=cfg.dataset.video_encoding_batch_size,
                 vcodec=cfg.dataset.vcodec,
+                record_images=cfg.dataset.record_images,
             )
 
         # Create or resume intervention dataset if requested (for correction data)
@@ -650,7 +654,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 display_data=cfg.display_data,
             )
 
-        with VideoEncodingManager(dataset):
+        dataset_ctx = VideoEncodingManager(dataset) if cfg.dataset.record_images else nullcontext()
+        with dataset_ctx:
             # Use nested context manager for intervention dataset if it exists
             intervention_ctx = VideoEncodingManager(intervention_dataset) if intervention_dataset else nullcontext()
             with intervention_ctx:
