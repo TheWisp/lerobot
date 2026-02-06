@@ -117,8 +117,9 @@ def visualize_dataset(
     if mode not in ["local", "distant"]:
         raise ValueError(mode)
 
-    spawn_local_viewer = mode == "local" and not save
-    rr.init(f"{repo_id}/episode_{episode_index}", spawn=spawn_local_viewer)
+    # spawn=True will spawn a new viewer or connect to existing one
+    should_spawn = mode == "local" and not save
+    rr.init(repo_id, recording_id=f"episode_{episode_index}", spawn=should_spawn)
 
     # Manually call python garbage collector after `rr.init` to avoid hanging in a blocking flush
     # when iterating on a dataloader with `num_workers` > 0
@@ -191,8 +192,8 @@ def main():
     parser.add_argument(
         "--episode-index",
         type=int,
-        required=True,
-        help="Episode to visualize.",
+        default=None,
+        help="Episode to visualize. If not specified, all episodes are shown.",
     )
     parser.add_argument(
         "--root",
@@ -277,10 +278,25 @@ def main():
     root = kwargs.pop("root")
     tolerance_s = kwargs.pop("tolerance_s")
 
-    logging.info("Loading dataset")
-    dataset = LeRobotDataset(repo_id, episodes=[args.episode_index], root=root, tolerance_s=tolerance_s)
+    # Determine which episodes to visualize
+    if args.episode_index is not None:
+        episode_indices = [args.episode_index]
+    else:
+        # Load metadata to get total episode count
+        logging.info("Loading dataset metadata")
+        meta_dataset = LeRobotDataset(repo_id, root=root, tolerance_s=tolerance_s, episodes=[0])
+        episode_indices = list(range(meta_dataset.meta.total_episodes))
+        del meta_dataset
 
-    visualize_dataset(dataset, **vars(args))
+    logging.info(f"Visualizing {len(episode_indices)} episode(s)")
+    for ep_idx in episode_indices:
+        logging.info(f"Loading episode {ep_idx}")
+        dataset = LeRobotDataset(repo_id, episodes=[ep_idx], root=root, tolerance_s=tolerance_s)
+        visualize_dataset(
+            dataset,
+            episode_index=ep_idx,
+            **{k: v for k, v in vars(args).items() if k != "episode_index"},
+        )
 
 
 if __name__ == "__main__":
