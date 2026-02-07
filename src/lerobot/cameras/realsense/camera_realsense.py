@@ -611,6 +611,8 @@ class RealSenseCamera(Camera):
             )
 
         if depth_frame:
+            # Depth frames have native resolution (e.g., 848x480) different from color
+            # Skip dimension check for depth - it will be resized when needed
             h, w = image.shape
         else:
             h, w, c = image.shape
@@ -618,10 +620,11 @@ class RealSenseCamera(Camera):
             if c != 3:
                 raise RuntimeError(f"{self} frame channels={c} do not match expected 3 channels (RGB/BGR).")
 
-        if h != self.capture_height or w != self.capture_width:
-            raise RuntimeError(
-                f"{self} frame width={w} or height={h} do not match configured width={self.capture_width} or height={self.capture_height}."
-            )
+            # Only check dimensions for color frames
+            if h != self.capture_height or w != self.capture_width:
+                raise RuntimeError(
+                    f"{self} frame width={w} or height={h} do not match configured width={self.capture_width} or height={self.capture_height}."
+                )
 
         processed_image = image
         if self.color_mode == ColorMode.BGR:
