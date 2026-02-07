@@ -1728,6 +1728,333 @@ def modify_tasks(
     return dataset
 
 
+def trim_episode(
+    dataset: LeRobotDataset,
+    episode_index: int,
+    trim_start_s: float = 0.0,
+    trim_end_s: float = 0.0,
+) -> LeRobotDataset:
+    """Trim an episode in-place by removing frames from the start and/or end.
+
+    This function modifies the dataset in-place, updating:
+    - data/**/*.parquet (frame data)
+    - videos/**/*.mp4 (re-encodes video if needed)
+    - meta/episodes/**/*.parquet (episode metadata)
+    - meta/info.json (total_frames)
+
+    Note: After calling this function, you should reload the dataset to see the changes
+    reflected in hf_dataset and episodes metadata.
+
+    Args:
+        dataset: The LeRobotDataset to modify.
+        episode_index: Index of the episode to trim.
+        trim_start_s: Duration in seconds to remove from the start of the episode.
+        trim_end_s: Duration in seconds to remove from the end of the episode.
+
+    Returns:
+        The modified dataset (same instance, but files are updated on disk).
+
+    Examples:
+        Trim 1.5 seconds from the start:
+            dataset = trim_episode(dataset, episode_index=0, trim_start_s=1.5)
+
+        Trim 2 seconds from the end:
+            dataset = trim_episode(dataset, episode_index=0, trim_end_s=2.0)
+
+        Trim both ends:
+            dataset = trim_episode(dataset, episode_index=0, trim_start_s=0.5, trim_end_s=1.0)
+    """
+    # Validate inputs
+    if trim_start_s < 0 or trim_end_s < 0:
+        raise ValueError("trim_start_s and trim_end_s must be non-negative")
+
+    if trim_start_s == 0 and trim_end_s == 0:
+        logging.info("No trimming requested, returning dataset unchanged")
+        return dataset
+
+    if episode_index < 0 or episode_index >= dataset.meta.total_episodes:
+        raise ValueError(
+            f"Invalid episode_index {episode_index}. "
+            f"Dataset has {dataset.meta.total_episodes} episodes (0-{dataset.meta.total_episodes - 1})"
+        )
+
+    # Ensure episodes metadata is loaded
+    if dataset.meta.episodes is None:
+        dataset.meta.episodes = load_episodes(dataset.meta.root)
+
+    # Get episode info
+    episode_meta = dataset.meta.episodes[episode_index]
+    episode_length = episode_meta["length"]
+
+    # Calculate frames to trim
+    frames_to_trim_start = int(trim_start_s * dataset.fps)
+    frames_to_trim_end = int(trim_end_s * dataset.fps)
+    new_episode_length = episode_length - frames_to_trim_start - frames_to_trim_end
+
+    if new_episode_length < 1:
+        raise ValueError(
+            f"At least one frame must remain after trimming. "
+            f"Episode has {episode_length} frames, trying to trim {frames_to_trim_start + frames_to_trim_end}."
+        )
+
+    logging.info(
+        f"Trimming episode {episode_index}: removing {frames_to_trim_start} frames from start, "
+        f"{frames_to_trim_end} frames from end. New length: {new_episode_length} frames"
+    )
+
+    # Step 1: Update parquet data files
+    _trim_episode_parquet_data(
+        dataset=dataset,
+        episode_index=episode_index,
+        frames_to_trim_start=frames_to_trim_start,
+        frames_to_trim_end=frames_to_trim_end,
+    )
+
+    # Step 2: Update videos if present
+    if dataset.meta.video_keys:
+        _trim_episode_videos(
+            dataset=dataset,
+            episode_index=episode_index,
+            trim_start_s=trim_start_s,
+            trim_end_s=trim_end_s,
+        )
+
+    # Step 3: Update episode metadata and info.json
+    frames_removed = frames_to_trim_start + frames_to_trim_end
+    _trim_episode_metadata(
+        dataset=dataset,
+        episode_index=episode_index,
+        new_length=new_episode_length,
+        frames_removed=frames_removed,
+    )
+
+    logging.info(f"Episode {episode_index} trimmed successfully")
+    return dataset
+
+
+def _trim_episode_parquet_data(
+    dataset: LeRobotDataset,
+    episode_index: int,
+    frames_to_trim_start: int,
+    frames_to_trim_end: int,
+) -> None:
+    """Update parquet data files to trim frames from an episode.
+
+    Also updates global indices for all subsequent frames/episodes.
+    """
+    data_dir = dataset.root / DATA_DIR
+    parquet_files = sorted(data_dir.glob("*/*.parquet"))
+
+    if not parquet_files:
+        raise ValueError(f"No parquet files found in {data_dir}")
+
+    frames_removed = frames_to_trim_start + frames_to_trim_end
+
+    # Get the episode's current data bounds
+    # Note: dataset_to_index is exclusive (one-past-end)
+    episode_meta = dataset.meta.episodes[episode_index]
+    ep_from_idx = episode_meta["dataset_from_index"]
+    ep_to_idx = episode_meta["dataset_to_index"]
+
+    # Calculate which frames to keep (global indices, using exclusive end)
+    keep_from = ep_from_idx + frames_to_trim_start
+    keep_to = ep_to_idx - frames_to_trim_end
+
+    for parquet_path in tqdm(sorted(parquet_files), desc="Updating data files"):
+        df = pd.read_parquet(parquet_path)
+
+        # Check what episodes are in this file
+        episodes_in_file = set(df["episode_index"].unique())
+
+        # Skip files that don't contain target episode or any subsequent episodes
+        # (subsequent episodes need their global indices shifted)
+        if episode_index not in episodes_in_file and all(ep < episode_index for ep in episodes_in_file):
+            continue
+
+        modified = False
+
+        if episode_index in episodes_in_file:
+            # Filter out trimmed frames from target episode
+            # Keep frames where: not in target episode, OR in kept range
+            target_ep_mask = df["episode_index"] == episode_index
+            keep_mask = ~target_ep_mask | ((df["index"] >= keep_from) & (df["index"] < keep_to))
+            df = df[keep_mask].copy()
+
+            # Reset frame_index and timestamps for the trimmed episode
+            ep_rows = df["episode_index"] == episode_index
+            if ep_rows.sum() > 0:
+                df.loc[ep_rows, "frame_index"] = range(ep_rows.sum())
+                df.loc[ep_rows, "timestamp"] = [i / dataset.fps for i in range(ep_rows.sum())]
+                # Recalculate indices for the trimmed episode (starts at same from_index)
+                df.loc[ep_rows, "index"] = range(ep_from_idx, ep_from_idx + ep_rows.sum())
+
+            modified = True
+
+        # Shift global indices for frames in subsequent episodes
+        if frames_removed > 0:
+            subsequent_mask = df["episode_index"] > episode_index
+            if subsequent_mask.any():
+                df.loc[subsequent_mask, "index"] -= frames_removed
+                modified = True
+
+        if modified:
+            df = df.reset_index(drop=True)
+            df.to_parquet(parquet_path, index=False)
+
+
+def _trim_episode_videos(
+    dataset: LeRobotDataset,
+    episode_index: int,
+    trim_start_s: float,
+    trim_end_s: float,
+) -> None:
+    """Re-encode video files to apply trimming to an episode."""
+    import tempfile
+
+    if dataset.meta.episodes is None:
+        dataset.meta.episodes = load_episodes(dataset.meta.root)
+
+    for video_key in dataset.meta.video_keys:
+        logging.info(f"Processing video: {video_key}")
+
+        # Get codec settings from the dataset's video info
+        video_info = dataset.meta.features[video_key].get("info", {})
+        # Map canonical codec names to encoder names
+        codec_map = {"av1": "libsvtav1", "h264": "libx264", "hevc": "libx265"}
+        source_codec = video_info.get("video.codec", "av1")
+        vcodec = codec_map.get(source_codec, "libsvtav1")
+        pix_fmt = video_info.get("video.pix_fmt", "yuv420p")
+
+        # Get video file info for this episode
+        episode_meta = dataset.meta.episodes[episode_index]
+        chunk_idx = episode_meta[f"videos/{video_key}/chunk_index"]
+        file_idx = episode_meta[f"videos/{video_key}/file_index"]
+
+        # Find all episodes in this video file
+        episodes_in_file = []
+        for ep_idx in range(dataset.meta.total_episodes):
+            ep_meta = dataset.meta.episodes[ep_idx]
+            if (
+                ep_meta.get(f"videos/{video_key}/chunk_index") == chunk_idx
+                and ep_meta.get(f"videos/{video_key}/file_index") == file_idx
+            ):
+                episodes_in_file.append(ep_idx)
+
+        # Build time ranges for all episodes in this file
+        time_ranges = []
+        for ep_idx in episodes_in_file:
+            ep_meta = dataset.meta.episodes[ep_idx]
+            from_ts = ep_meta[f"videos/{video_key}/from_timestamp"]
+            to_ts = ep_meta[f"videos/{video_key}/to_timestamp"]
+
+            if ep_idx == episode_index:
+                # Apply trimming to target episode
+                new_from_ts = from_ts + trim_start_s
+                new_to_ts = to_ts - trim_end_s
+                if new_from_ts < new_to_ts:
+                    time_ranges.append((new_from_ts, new_to_ts))
+            else:
+                time_ranges.append((from_ts, to_ts))
+
+        if not time_ranges:
+            continue
+
+        # Re-encode the video with the new time ranges
+        assert dataset.meta.video_path is not None
+        video_path = dataset.root / dataset.meta.video_path.format(
+            video_key=video_key, chunk_index=chunk_idx, file_index=file_idx
+        )
+
+        # Create a temporary file for the new video
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+
+        try:
+            _keep_episodes_from_video_with_av(
+                input_path=video_path,
+                output_path=tmp_path,
+                episodes_to_keep=time_ranges,
+                fps=dataset.fps,
+                vcodec=vcodec,
+                pix_fmt=pix_fmt,
+            )
+
+            # Replace original with new video
+            shutil.move(str(tmp_path), str(video_path))
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+
+def _trim_episode_metadata(
+    dataset: LeRobotDataset,
+    episode_index: int,
+    new_length: int,
+    frames_removed: int,
+) -> None:
+    """Update episode metadata and info.json after trimming."""
+    episodes_dir = dataset.root / "meta" / "episodes"
+
+    for parquet_path in sorted(episodes_dir.rglob("*.parquet")):
+        df = pd.read_parquet(parquet_path)
+
+        modified = False
+
+        # Update length for the trimmed episode
+        if episode_index in df["episode_index"].values:
+            mask = df["episode_index"] == episode_index
+            df.loc[mask, "length"] = new_length
+            modified = True
+
+        # Update dataset_from_index and dataset_to_index for all episodes
+        for i, row in df.iterrows():
+            ep_idx = row["episode_index"]
+            if ep_idx == episode_index:
+                # Trimmed episode: from_index stays same, to_index = from_index + new_length
+                df.at[i, "dataset_to_index"] = row["dataset_from_index"] + new_length
+                modified = True
+            elif ep_idx > episode_index:
+                # Subsequent episodes: shift down by frames_removed
+                df.at[i, "dataset_from_index"] = row["dataset_from_index"] - frames_removed
+                df.at[i, "dataset_to_index"] = row["dataset_to_index"] - frames_removed
+                modified = True
+
+        # Update video timestamps if present
+        for video_key in dataset.meta.video_keys:
+            from_ts_col = f"videos/{video_key}/from_timestamp"
+            to_ts_col = f"videos/{video_key}/to_timestamp"
+
+            if from_ts_col in df.columns:
+                mask = df["episode_index"] == episode_index
+                if mask.any():
+                    # Recalculate timestamps for all episodes in the same video file
+                    chunk_col = f"videos/{video_key}/chunk_index"
+                    file_col = f"videos/{video_key}/file_index"
+
+                    target_chunk = df.loc[mask, chunk_col].iloc[0]
+                    target_file = df.loc[mask, file_col].iloc[0]
+
+                    same_file_mask = (df[chunk_col] == target_chunk) & (df[file_col] == target_file)
+                    cumulative_ts = 0.0
+
+                    for idx in df[same_file_mask].index:
+                        ep_length = df.at[idx, "length"]
+                        ep_duration = ep_length / dataset.fps
+
+                        df.at[idx, from_ts_col] = cumulative_ts
+                        df.at[idx, to_ts_col] = cumulative_ts + ep_duration
+                        cumulative_ts += ep_duration
+
+                    modified = True
+
+        if modified:
+            df.to_parquet(parquet_path, index=False)
+
+    # Update info.json
+    dataset.meta.info["total_frames"] -= frames_removed
+    write_info(dataset.meta.info, dataset.root)
+
+
 def convert_image_to_video_dataset(
     dataset: LeRobotDataset,
     output_dir: Path,
