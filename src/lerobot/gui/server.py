@@ -122,13 +122,21 @@ MINIMAL_HTML = """
         .camera-frame img { max-width: 100%; max-height: 100%; object-fit: contain; }
 
         /* Controls */
-        .controls-bar { background: #16213e; border-top: 1px solid #0f3460; padding: 12px 16px; display: flex; align-items: center; gap: 16px; }
+        .controls-bar { background: #16213e; border-top: 1px solid #0f3460; padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
         .controls-bar button { padding: 8px 16px; border-radius: 4px; border: none; background: #4fc3f7; color: #000; cursor: pointer; font-size: 14px; }
         .controls-bar button:hover { background: #81d4fa; }
-        .timeline { flex: 1; height: 8px; background: #0f3460; border-radius: 4px; cursor: pointer; position: relative; }
+        .speed-select { padding: 6px 8px; border-radius: 4px; border: none; background: #0f3460; color: #fff; font-size: 12px; cursor: pointer; }
+        .timeline-container { flex: 1; position: relative; padding: 8px 0; }
+        .timeline { height: 8px; background: #0f3460; border-radius: 4px; cursor: pointer; position: relative; }
         .timeline-progress { height: 100%; background: #4fc3f7; border-radius: 4px; width: 0%; pointer-events: none; }
-        .frame-info { font-size: 13px; color: #888; min-width: 120px; text-align: right; }
-        .status { font-size: 12px; color: #666; min-width: 200px; }
+        .timeline-scrubber { position: absolute; top: 50%; width: 16px; height: 16px; background: #fff; border-radius: 50%; transform: translate(-50%, -50%); cursor: grab; box-shadow: 0 2px 4px rgba(0,0,0,0.3); pointer-events: auto; }
+        .timeline-scrubber:active { cursor: grabbing; }
+        .timeline-scrubber:hover { transform: translate(-50%, -50%) scale(1.2); }
+        .timeline-hover { position: absolute; bottom: 100%; left: 0; background: #0f3460; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 11px; transform: translateX(-50%); white-space: nowrap; opacity: 0; pointer-events: none; margin-bottom: 8px; }
+        .timeline-container:hover .timeline-hover { opacity: 1; }
+        .frame-info { font-size: 13px; color: #888; min-width: 140px; text-align: right; }
+        .time-info { font-size: 11px; color: #666; }
+        .status { font-size: 12px; color: #666; min-width: 150px; text-align: right; }
 
         /* Empty state */
         .empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: #666; font-size: 14px; }
@@ -156,10 +164,24 @@ MINIMAL_HTML = """
 
             <div class="controls-bar">
                 <button id="play-btn" onclick="togglePlay()">▶ Play</button>
-                <div class="timeline" id="timeline" onclick="seekTimeline(event)">
-                    <div class="timeline-progress" id="timeline-progress"></div>
+                <select class="speed-select" id="speed-select" onchange="changeSpeed(this.value)">
+                    <option value="0.25">0.25x</option>
+                    <option value="0.5">0.5x</option>
+                    <option value="1" selected>1x</option>
+                    <option value="1.5">1.5x</option>
+                    <option value="2">2x</option>
+                </select>
+                <div class="timeline-container" id="timeline-container">
+                    <div class="timeline-hover" id="timeline-hover">0:00 / Frame 0</div>
+                    <div class="timeline" id="timeline">
+                        <div class="timeline-progress" id="timeline-progress"></div>
+                        <div class="timeline-scrubber" id="timeline-scrubber"></div>
+                    </div>
                 </div>
-                <div class="frame-info" id="frame-info">- / -</div>
+                <div class="frame-info">
+                    <span id="frame-info">- / -</span>
+                    <div class="time-info" id="time-info">0:00 / 0:00</div>
+                </div>
                 <div class="status" id="status">Ready</div>
             </div>
         </div>
@@ -176,6 +198,8 @@ MINIMAL_HTML = """
         let isPlaying = false;
         let playInterval = null;
         let fps = 30;
+        let playbackSpeed = 1;
+        let isDragging = false;
 
         async function openDataset() {
             const path = document.getElementById('dataset-path').value.trim();
@@ -333,14 +357,25 @@ MINIMAL_HTML = """
             document.getElementById('frame-info').textContent = `${currentFrame + 1} / ${totalFrames}`;
             const pct = totalFrames > 1 ? (currentFrame / (totalFrames - 1)) * 100 : 0;
             document.getElementById('timeline-progress').style.width = `${pct}%`;
+            document.getElementById('timeline-scrubber').style.left = `${pct}%`;
+
+            // Update time display
+            const currentTime = formatTime(currentFrame / fps);
+            const totalTime = formatTime(totalFrames / fps);
+            document.getElementById('time-info').textContent = `${currentTime} / ${totalTime}`;
 
             return Promise.all(promises);
         }
 
-        async function playLoop() {
-            const frameTime = 1000 / fps;
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
 
+        async function playLoop() {
             while (isPlaying) {
+                const frameTime = 1000 / (fps * playbackSpeed);
                 const startTime = performance.now();
 
                 if (currentFrame >= totalFrames - 1) {
@@ -360,6 +395,10 @@ MINIMAL_HTML = """
             }
         }
 
+        function changeSpeed(speed) {
+            playbackSpeed = parseFloat(speed);
+        }
+
         function togglePlay() {
             if (!currentDataset || currentEpisode === null) return;
 
@@ -371,23 +410,90 @@ MINIMAL_HTML = """
             }
         }
 
-        function seekTimeline(e) {
+        function getFrameFromTimelineEvent(e) {
+            const timeline = document.getElementById('timeline');
+            const rect = timeline.getBoundingClientRect();
+            const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            return Math.floor(pct * (totalFrames - 1));
+        }
+
+        function seekTimeline(frame) {
             if (!currentDataset || currentEpisode === null) return;
-            const rect = e.currentTarget.getBoundingClientRect();
+            loadAllFrames(frame);
+        }
+
+        function updateHoverPreview(e) {
+            if (!currentDataset || currentEpisode === null) return;
+            const frame = getFrameFromTimelineEvent(e);
+            const time = formatTime(frame / fps);
+            const hover = document.getElementById('timeline-hover');
+            const timeline = document.getElementById('timeline');
+            const rect = timeline.getBoundingClientRect();
             const pct = (e.clientX - rect.left) / rect.width;
-            loadAllFrames(Math.floor(pct * totalFrames));
+            hover.style.left = `${pct * 100}%`;
+            hover.textContent = `${time} / Frame ${frame + 1}`;
         }
 
         function setStatus(msg) {
             document.getElementById('status').textContent = msg;
         }
 
+        // Timeline interaction
+        document.addEventListener('DOMContentLoaded', () => {
+            const timelineContainer = document.getElementById('timeline-container');
+            const timeline = document.getElementById('timeline');
+            const scrubber = document.getElementById('timeline-scrubber');
+
+            // Click to seek
+            timeline.addEventListener('click', (e) => {
+                if (!isDragging) {
+                    seekTimeline(getFrameFromTimelineEvent(e));
+                }
+            });
+
+            // Hover preview
+            timelineContainer.addEventListener('mousemove', updateHoverPreview);
+
+            // Drag scrubber
+            scrubber.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                isDragging = true;
+                document.body.style.cursor = 'grabbing';
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (isDragging && currentDataset && currentEpisode !== null) {
+                    seekTimeline(getFrameFromTimelineEvent(e));
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (isDragging) {
+                    isDragging = false;
+                    document.body.style.cursor = '';
+                }
+            });
+        });
+
         // Keyboard controls
         document.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT') return;
-            if (e.key === 'ArrowLeft') loadAllFrames(currentFrame - 1);
-            else if (e.key === 'ArrowRight') loadAllFrames(currentFrame + 1);
-            else if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                loadAllFrames(currentFrame - (e.shiftKey ? 10 : 1));
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                loadAllFrames(currentFrame + (e.shiftKey ? 10 : 1));
+            } else if (e.key === ' ') {
+                e.preventDefault();
+                togglePlay();
+            } else if (e.key === 'Home') {
+                e.preventDefault();
+                loadAllFrames(0);
+            } else if (e.key === 'End') {
+                e.preventDefault();
+                loadAllFrames(totalFrames - 1);
+            }
         });
     </script>
 </body>
