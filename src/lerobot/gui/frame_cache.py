@@ -198,6 +198,22 @@ class FrameCache:
             self.cache.clear()
             self.current_bytes = 0
 
+    def invalidate_dataset(self, dataset_id: str) -> int:
+        """Invalidate all cached frames for a specific dataset.
+
+        Args:
+            dataset_id: The dataset identifier to invalidate
+
+        Returns:
+            Number of entries removed
+        """
+        with self.lock:
+            keys_to_remove = [k for k in self.cache if k[0] == dataset_id]
+            for key in keys_to_remove:
+                self.current_bytes -= len(self.cache[key])
+                del self.cache[key]
+            return len(keys_to_remove)
+
     def stats(self) -> dict:
         """Get cache statistics."""
         with self.lock:

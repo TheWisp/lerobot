@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from lerobot.gui.api import datasets, playback
+from lerobot.gui.api import datasets, edits, playback
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
@@ -65,12 +65,14 @@ async def startup_event():
     _app_state = AppState(frame_cache=FrameCache(max_bytes=cache_size))
     datasets.set_app_state(_app_state)
     playback.set_app_state(_app_state)
+    edits.set_app_state(_app_state)
     logger.info(f"Initialized frame cache with {cache_size / 1_000_000:.0f} MB budget")
 
 
 # Include API routers
 app.include_router(datasets.router)
 app.include_router(playback.router)
+app.include_router(edits.router)
 
 
 # Minimal HTML viewer for testing
@@ -103,6 +105,8 @@ MINIMAL_HTML = """
         .tree-header { display: flex; align-items: center; padding: 6px 12px; cursor: pointer; gap: 6px; }
         .tree-header:hover { background: #0f3460; }
         .tree-header.active { background: #1a4a7a; }
+        .tree-header.deleted { opacity: 0.5; text-decoration: line-through; }
+        .tree-header.trimmed .tree-label::after { content: ' ✂'; color: #f39c12; }
         .tree-toggle { width: 16px; font-size: 10px; color: #888; flex-shrink: 0; }
         .tree-icon { width: 16px; text-align: center; flex-shrink: 0; }
         .tree-label { flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -110,6 +114,25 @@ MINIMAL_HTML = """
         .tree-children { display: none; }
         .tree-children.expanded { display: block; }
         .tree-children .tree-header { padding-left: 28px; }
+
+        /* Context menu */
+        .context-menu { position: fixed; background: #16213e; border: 1px solid #0f3460; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 1000; min-width: 150px; display: none; }
+        .context-menu.visible { display: block; }
+        .context-menu-item { padding: 8px 16px; cursor: pointer; font-size: 13px; }
+        .context-menu-item:hover { background: #0f3460; }
+        .context-menu-item.danger { color: #e74c3c; }
+        .context-menu-item.danger:hover { background: #c0392b; color: #fff; }
+        .context-menu-separator { height: 1px; background: #0f3460; margin: 4px 0; }
+
+        /* Edits panel */
+        .edits-bar { background: #1a3a5c; border-top: 1px solid #0f3460; padding: 8px 16px; display: none; align-items: center; gap: 12px; }
+        .edits-bar.visible { display: flex; }
+        .edits-count { font-size: 13px; color: #f39c12; flex: 1; }
+        .edits-bar button { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; font-size: 12px; }
+        .edits-bar .btn-save { background: #27ae60; color: #fff; }
+        .edits-bar .btn-save:hover { background: #2ecc71; }
+        .edits-bar .btn-discard { background: #e74c3c; color: #fff; }
+        .edits-bar .btn-discard:hover { background: #c0392b; }
 
         /* Main content */
         .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -134,6 +157,21 @@ MINIMAL_HTML = """
         .timeline-scrubber:hover { transform: translate(-50%, -50%) scale(1.2); }
         .timeline-hover { position: absolute; bottom: 100%; left: 0; background: #0f3460; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 11px; transform: translateX(-50%); white-space: nowrap; opacity: 0; pointer-events: none; margin-bottom: 8px; }
         .timeline-container:hover .timeline-hover { opacity: 1; }
+
+        /* Trim handles */
+        .trim-region { position: absolute; top: -4px; bottom: -4px; background: rgba(243, 156, 18, 0.2); border-left: 3px solid #f39c12; border-right: 3px solid #f39c12; pointer-events: none; display: none; z-index: 5; overflow: visible; }
+        .trim-region.visible { display: block; }
+        .trim-handle { position: absolute; top: 50%; width: 20px; height: 28px; cursor: ew-resize; z-index: 20; pointer-events: auto; background: transparent; transform: translateY(-50%); }
+        .trim-handle::before { content: ''; position: absolute; top: 50%; left: 50%; width: 6px; height: 24px; background: #f39c12; border-radius: 3px; transform: translate(-50%, -50%); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+        .trim-handle:hover::before { background: #f1c40f; transform: translate(-50%, -50%) scaleY(1.1); }
+        .trim-handle.left { left: -10px; }
+        .trim-handle.right { right: -10px; }
+        .trim-controls { display: none; align-items: center; gap: 8px; margin-left: 12px; }
+        .trim-controls.visible { display: flex; }
+        .trim-controls button { padding: 4px 10px; border-radius: 4px; border: none; font-size: 11px; cursor: pointer; background: #555; color: #fff; }
+        .trim-controls button:hover { background: #666; }
+        .trim-info { font-size: 11px; color: #f39c12; }
+
         .frame-info { font-size: 13px; color: #888; min-width: 140px; text-align: right; }
         .time-info { font-size: 11px; color: #666; }
         .status { font-size: 12px; color: #666; min-width: 150px; text-align: right; }
@@ -175,8 +213,16 @@ MINIMAL_HTML = """
                     <div class="timeline-hover" id="timeline-hover">0:00 / Frame 0</div>
                     <div class="timeline" id="timeline">
                         <div class="timeline-progress" id="timeline-progress"></div>
+                        <div class="trim-region" id="trim-region">
+                            <div class="trim-handle left" id="trim-handle-left"></div>
+                            <div class="trim-handle right" id="trim-handle-right"></div>
+                        </div>
                         <div class="timeline-scrubber" id="timeline-scrubber"></div>
                     </div>
+                </div>
+                <div class="trim-controls" id="trim-controls">
+                    <span class="trim-info" id="trim-info"></span>
+                    <button class="btn-reset" onclick="resetTrim()">Reset</button>
                 </div>
                 <div class="frame-info">
                     <span id="frame-info">- / -</span>
@@ -184,7 +230,23 @@ MINIMAL_HTML = """
                 </div>
                 <div class="status" id="status">Ready</div>
             </div>
+
+            <div class="edits-bar" id="edits-bar">
+                <span class="edits-count" id="edits-count">0 pending edits</span>
+                <button class="btn-discard" onclick="discardEdits()">Discard</button>
+                <button class="btn-save" onclick="applyEdits()">Save Changes</button>
+            </div>
         </div>
+    </div>
+
+    <!-- Context menu -->
+    <div class="context-menu" id="context-menu">
+        <div class="context-menu-item" onclick="contextAction('view')">View Episode</div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" onclick="contextAction('cleartrim')">Clear Trim</div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" onclick="contextAction('undelete')">Restore Episode</div>
+        <div class="context-menu-item danger" onclick="contextAction('delete')">Delete Episode</div>
     </div>
 
     <script>
@@ -200,6 +262,17 @@ MINIMAL_HTML = """
         let fps = 30;
         let playbackSpeed = 1;
         let isDragging = false;
+
+        // Editing state
+        let pendingEdits = [];
+        let contextMenuTarget = null;  // {datasetId, episodeIndex}
+
+        // Trim state
+        let trimStart = 0;  // Frame index
+        let trimEnd = 0;    // Frame index (exclusive, like end_frame in API)
+        let isDraggingTrimLeft = false;
+        let isDraggingTrimRight = false;
+        let justFinishedTrimDrag = false;
 
         async function openDataset() {
             const path = document.getElementById('dataset-path').value.trim();
@@ -232,6 +305,14 @@ MINIMAL_HTML = """
             }
         }
 
+        function isEpisodeDeleted(datasetId, epIdx) {
+            return pendingEdits.some(e => e.dataset_id === datasetId && e.episode_index === epIdx && e.edit_type === 'delete');
+        }
+
+        function isEpisodeTrimmed(datasetId, epIdx) {
+            return pendingEdits.some(e => e.dataset_id === datasetId && e.episode_index === epIdx && e.edit_type === 'trim');
+        }
+
         function renderTree() {
             const container = document.getElementById('tree-container');
             if (Object.keys(datasets).length === 0) {
@@ -243,6 +324,7 @@ MINIMAL_HTML = """
             for (const [id, ds] of Object.entries(datasets)) {
                 const isExpanded = expandedNodes.has(id);
                 const dsEpisodes = episodes[id] || [];
+                const dsEditCount = pendingEdits.filter(e => e.dataset_id === id).length;
 
                 html += `
                     <div class="tree-node">
@@ -250,17 +332,26 @@ MINIMAL_HTML = """
                             <span class="tree-toggle">${isExpanded ? '▼' : '▶'}</span>
                             <span class="tree-icon">📁</span>
                             <span class="tree-label" title="${ds.repo_id}">${ds.repo_id}</span>
-                            <span class="tree-meta">${ds.total_episodes} ep</span>
+                            <span class="tree-meta">${dsEditCount > 0 ? `${dsEditCount}✎ ` : ''}${ds.total_episodes} ep</span>
                         </div>
                         <div class="tree-children ${isExpanded ? 'expanded' : ''}">
                 `;
 
                 for (const ep of dsEpisodes) {
                     const isActive = currentDataset === id && currentEpisode === ep.episode_index;
+                    const isDeleted = isEpisodeDeleted(id, ep.episode_index);
+                    const isTrimmed = isEpisodeTrimmed(id, ep.episode_index);
+                    const classes = ['tree-header'];
+                    if (isActive) classes.push('active');
+                    if (isDeleted) classes.push('deleted');
+                    if (isTrimmed) classes.push('trimmed');
+
                     html += `
-                        <div class="tree-header ${isActive ? 'active' : ''}" onclick="selectEpisode('${id}', ${ep.episode_index}, ${ep.length})">
+                        <div class="${classes.join(' ')}"
+                             onclick="selectEpisode('${id}', ${ep.episode_index}, ${ep.length})"
+                             oncontextmenu="showContextMenu(event, '${id}', ${ep.episode_index})">
                             <span class="tree-toggle"></span>
-                            <span class="tree-icon">🎬</span>
+                            <span class="tree-icon">${isDeleted ? '🗑️' : '🎬'}</span>
                             <span class="tree-label">Episode ${ep.episode_index}</span>
                             <span class="tree-meta">${ep.length} frames</span>
                         </div>
@@ -270,6 +361,7 @@ MINIMAL_HTML = """
                 html += '</div></div>';
             }
             container.innerHTML = html;
+            updateEditsBar();
         }
 
         function toggleDataset(id) {
@@ -288,6 +380,10 @@ MINIMAL_HTML = """
             currentFrame = 0;
             fps = datasets[datasetId].fps || 30;
 
+            // Initialize trim to full episode
+            trimStart = 0;
+            trimEnd = totalFrames;
+
             // Stop playback
             if (isPlaying) {
                 togglePlay();
@@ -296,6 +392,7 @@ MINIMAL_HTML = """
             renderTree();
             renderCameraGrid();
             loadAllFrames(0);
+            loadTrimForCurrentEpisode();
         }
 
         function renderCameraGrid() {
@@ -378,8 +475,14 @@ MINIMAL_HTML = """
                 const frameTime = 1000 / (fps * playbackSpeed);
                 const startTime = performance.now();
 
-                if (currentFrame >= totalFrames - 1) {
-                    currentFrame = 0;
+                // Constrain playback to trim region
+                const playStart = trimStart;
+                const playEnd = trimEnd - 1;  // trimEnd is exclusive
+
+                if (currentFrame >= playEnd) {
+                    currentFrame = playStart;
+                } else if (currentFrame < playStart) {
+                    currentFrame = playStart;
                 } else {
                     currentFrame++;
                 }
@@ -444,9 +547,11 @@ MINIMAL_HTML = """
             const timeline = document.getElementById('timeline');
             const scrubber = document.getElementById('timeline-scrubber');
 
-            // Click to seek
+            // Click to seek (but not if we were dragging trim handles)
             timeline.addEventListener('click', (e) => {
-                if (!isDragging) {
+                if (!isDragging && !justFinishedTrimDrag) {
+                    // Check if click was on a trim handle
+                    if (e.target.classList.contains('trim-handle')) return;
                     seekTimeline(getFrameFromTimelineEvent(e));
                 }
             });
@@ -472,6 +577,49 @@ MINIMAL_HTML = """
                     isDragging = false;
                     document.body.style.cursor = '';
                 }
+                if (isDraggingTrimLeft || isDraggingTrimRight) {
+                    isDraggingTrimLeft = false;
+                    isDraggingTrimRight = false;
+                    justFinishedTrimDrag = true;
+                    document.body.style.cursor = '';
+                    // Auto-save the trim
+                    saveTrim();
+                    // Reset after a short delay to allow click event to check
+                    setTimeout(() => { justFinishedTrimDrag = false; }, 50);
+                }
+            });
+
+            // Trim handle drag
+            const trimHandleLeft = document.getElementById('trim-handle-left');
+            const trimHandleRight = document.getElementById('trim-handle-right');
+
+            trimHandleLeft.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                isDraggingTrimLeft = true;
+                document.body.style.cursor = 'ew-resize';
+            });
+
+            trimHandleRight.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                isDraggingTrimRight = true;
+                document.body.style.cursor = 'ew-resize';
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!currentDataset || currentEpisode === null) return;
+
+                if (isDraggingTrimLeft) {
+                    const frame = getFrameFromTimelineEvent(e);
+                    trimStart = Math.max(0, Math.min(frame, trimEnd - 1));
+                    updateTrimDisplay();
+                } else if (isDraggingTrimRight) {
+                    const frame = getFrameFromTimelineEvent(e);
+                    // trimEnd is exclusive, so we add 1 to the clicked frame
+                    trimEnd = Math.max(trimStart + 1, Math.min(frame + 1, totalFrames));
+                    updateTrimDisplay();
+                }
             });
         });
 
@@ -493,8 +641,264 @@ MINIMAL_HTML = """
             } else if (e.key === 'End') {
                 e.preventDefault();
                 loadAllFrames(totalFrames - 1);
+            } else if (e.key === 'Delete' && currentDataset && currentEpisode !== null) {
+                e.preventDefault();
+                deleteCurrentEpisode();
+            } else if (e.key === 'r' && currentDataset && currentEpisode !== null) {
+                e.preventDefault();
+                resetTrim();
+            } else if (e.key === 'Escape') {
+                hideContextMenu();
             }
         });
+
+        // Context menu
+        function showContextMenu(e, datasetId, episodeIndex) {
+            e.preventDefault();
+            e.stopPropagation();
+
+            contextMenuTarget = { datasetId, episodeIndex };
+            const menu = document.getElementById('context-menu');
+            const isDeleted = isEpisodeDeleted(datasetId, episodeIndex);
+            const isTrimmed = isEpisodeTrimmed(datasetId, episodeIndex);
+
+            // Show/hide appropriate menu items
+            menu.querySelectorAll('.context-menu-item').forEach(item => {
+                const action = item.getAttribute('onclick').match(/contextAction\\('(\\w+)'\\)/)?.[1];
+                if (action === 'delete') item.style.display = isDeleted ? 'none' : 'block';
+                if (action === 'undelete') item.style.display = isDeleted ? 'block' : 'none';
+                if (action === 'cleartrim') item.style.display = isTrimmed ? 'block' : 'none';
+            });
+
+            menu.style.left = e.clientX + 'px';
+            menu.style.top = e.clientY + 'px';
+            menu.classList.add('visible');
+        }
+
+        function hideContextMenu() {
+            document.getElementById('context-menu').classList.remove('visible');
+            contextMenuTarget = null;
+        }
+
+        document.addEventListener('click', hideContextMenu);
+
+        function contextAction(action) {
+            if (!contextMenuTarget) return;
+            const { datasetId, episodeIndex } = contextMenuTarget;
+
+            if (action === 'view') {
+                const ep = episodes[datasetId]?.find(e => e.episode_index === episodeIndex);
+                if (ep) selectEpisode(datasetId, episodeIndex, ep.length);
+            } else if (action === 'delete') {
+                markEpisodeDeleted(datasetId, episodeIndex);
+            } else if (action === 'undelete') {
+                unmarkEpisodeDeleted(datasetId, episodeIndex);
+            } else if (action === 'cleartrim') {
+                clearEpisodeTrim(datasetId, episodeIndex);
+            }
+
+            hideContextMenu();
+        }
+
+        async function clearEpisodeTrim(datasetId, episodeIndex) {
+            // Find and remove the trim edit
+            const editIndex = pendingEdits.findIndex(
+                e => e.dataset_id === datasetId && e.episode_index === episodeIndex && e.edit_type === 'trim'
+            );
+            if (editIndex >= 0) {
+                try {
+                    const res = await fetch(`/api/edits/${editIndex}`, { method: 'DELETE' });
+                    if (!res.ok) throw new Error(await res.text());
+                    await refreshPendingEdits();
+                    setStatus(`Trim cleared for episode ${episodeIndex}`);
+                } catch (e) {
+                    setStatus('Error: ' + e.message);
+                }
+            }
+        }
+
+        // Edit operations
+        async function markEpisodeDeleted(datasetId, episodeIndex) {
+            try {
+                const res = await fetch('/api/edits/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dataset_id: datasetId, episode_index: episodeIndex })
+                });
+                if (!res.ok) throw new Error(await res.text());
+                await refreshPendingEdits();
+                setStatus(`Episode ${episodeIndex} marked for deletion`);
+            } catch (e) {
+                setStatus('Error: ' + e.message);
+            }
+        }
+
+        async function unmarkEpisodeDeleted(datasetId, episodeIndex) {
+            // Find and remove the delete edit
+            const editIndex = pendingEdits.findIndex(
+                e => e.dataset_id === datasetId && e.episode_index === episodeIndex && e.edit_type === 'delete'
+            );
+            if (editIndex >= 0) {
+                try {
+                    const res = await fetch(`/api/edits/${editIndex}`, { method: 'DELETE' });
+                    if (!res.ok) throw new Error(await res.text());
+                    await refreshPendingEdits();
+                    setStatus(`Episode ${episodeIndex} restored`);
+                } catch (e) {
+                    setStatus('Error: ' + e.message);
+                }
+            }
+        }
+
+        function deleteCurrentEpisode() {
+            if (currentDataset && currentEpisode !== null) {
+                if (isEpisodeDeleted(currentDataset, currentEpisode)) {
+                    unmarkEpisodeDeleted(currentDataset, currentEpisode);
+                } else {
+                    markEpisodeDeleted(currentDataset, currentEpisode);
+                }
+            }
+        }
+
+        async function refreshPendingEdits() {
+            try {
+                const res = await fetch('/api/edits');
+                const data = await res.json();
+                pendingEdits = data.edits;
+                renderTree();
+                loadTrimForCurrentEpisode();
+            } catch (e) {
+                console.error('Failed to refresh edits:', e);
+            }
+        }
+
+        function updateEditsBar() {
+            const bar = document.getElementById('edits-bar');
+            const count = document.getElementById('edits-count');
+            if (pendingEdits.length > 0) {
+                bar.classList.add('visible');
+                count.textContent = `${pendingEdits.length} pending edit${pendingEdits.length > 1 ? 's' : ''}`;
+            } else {
+                bar.classList.remove('visible');
+            }
+        }
+
+        async function discardEdits() {
+            if (!confirm('Discard all pending edits?')) return;
+            try {
+                const res = await fetch('/api/edits/discard', { method: 'POST' });
+                if (!res.ok) throw new Error(await res.text());
+                await refreshPendingEdits();
+                setStatus('All edits discarded');
+            } catch (e) {
+                setStatus('Error: ' + e.message);
+            }
+        }
+
+        async function applyEdits() {
+            if (!currentDataset) {
+                setStatus('No dataset selected');
+                return;
+            }
+            if (!confirm(`Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.`)) return;
+
+            setStatus('Applying edits...');
+            try {
+                const res = await fetch(`/api/edits/apply?dataset_id=${encodeURIComponent(currentDataset)}`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (data.status === 'ok' || data.status === 'partial') {
+                    // Reload dataset episodes
+                    const epRes = await fetch(`/api/datasets/${encodeURIComponent(currentDataset)}/episodes`);
+                    episodes[currentDataset] = await epRes.json();
+                    await refreshPendingEdits();
+                    setStatus(data.message);
+                } else {
+                    throw new Error(data.message);
+                }
+            } catch (e) {
+                setStatus('Error: ' + e.message);
+            }
+        }
+
+        // Trim functions
+        function updateTrimDisplay() {
+            if (!currentDataset || currentEpisode === null || totalFrames === 0) {
+                document.getElementById('trim-region').classList.remove('visible');
+                document.getElementById('trim-controls').classList.remove('visible');
+                return;
+            }
+
+            const region = document.getElementById('trim-region');
+            const leftPct = (trimStart / (totalFrames - 1)) * 100;
+            const rightPct = ((trimEnd - 1) / (totalFrames - 1)) * 100;
+            const widthPct = rightPct - leftPct;
+
+            region.style.left = `${leftPct}%`;
+            region.style.width = `${widthPct}%`;
+            region.classList.add('visible');
+
+            // Show trim controls if trim is different from full range
+            const controls = document.getElementById('trim-controls');
+            const info = document.getElementById('trim-info');
+            if (trimStart > 0 || trimEnd < totalFrames) {
+                const framesKept = trimEnd - trimStart;
+                info.textContent = `Trim: ${trimStart}-${trimEnd - 1} (${framesKept} frames)`;
+                controls.classList.add('visible');
+            } else {
+                controls.classList.remove('visible');
+            }
+        }
+
+        function resetTrim() {
+            trimStart = 0;
+            trimEnd = totalFrames;
+            updateTrimDisplay();
+        }
+
+        async function saveTrim() {
+            if (!currentDataset || currentEpisode === null) return;
+
+            try {
+                const res = await fetch('/api/edits/trim', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        dataset_id: currentDataset,
+                        episode_index: currentEpisode,
+                        start_frame: trimStart,
+                        end_frame: trimEnd
+                    })
+                });
+                if (!res.ok) throw new Error(await res.text());
+                await refreshPendingEdits();
+                setStatus(`Trim set for episode ${currentEpisode}`);
+            } catch (e) {
+                setStatus('Error: ' + e.message);
+            }
+        }
+
+        function loadTrimForCurrentEpisode() {
+            if (!currentDataset || currentEpisode === null) return;
+
+            // Check if there's an existing trim edit for this episode
+            const existingTrim = pendingEdits.find(
+                e => e.dataset_id === currentDataset && e.episode_index === currentEpisode && e.edit_type === 'trim'
+            );
+
+            if (existingTrim) {
+                trimStart = existingTrim.params.start_frame;
+                trimEnd = existingTrim.params.end_frame;
+            } else {
+                trimStart = 0;
+                trimEnd = totalFrames;
+            }
+            updateTrimDisplay();
+        }
+
+        // Initialize by loading pending edits
+        refreshPendingEdits();
     </script>
 </body>
 </html>

@@ -1,0 +1,316 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""REST API endpoints for dataset editing operations."""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from lerobot.gui.state import AppState
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/edits", tags=["edits"])
+
+# Will be set by server.py
+_app_state: "AppState" = None  # type: ignore
+
+
+def set_app_state(state: "AppState") -> None:
+    """Set the application state for edit handlers."""
+    global _app_state
+    _app_state = state
+
+
+class DeleteRequest(BaseModel):
+    """Request to mark an episode for deletion."""
+
+    dataset_id: str
+    episode_index: int
+
+
+class TrimRequest(BaseModel):
+    """Request to trim an episode."""
+
+    dataset_id: str
+    episode_index: int
+    start_frame: int
+    end_frame: int
+
+
+class EditInfo(BaseModel):
+    """Information about a pending edit."""
+
+    index: int
+    edit_type: str
+    dataset_id: str
+    episode_index: int
+    params: dict
+    created_at: str
+
+
+class PendingEditsResponse(BaseModel):
+    """Response containing all pending edits."""
+
+    edits: list[EditInfo]
+    total: int
+
+
+@router.get("", response_model=PendingEditsResponse)
+async def list_pending_edits(dataset_id: str | None = None):
+    """List all pending edits, optionally filtered by dataset."""
+    if dataset_id:
+        edits = _app_state.get_edits_for_dataset(dataset_id)
+    else:
+        edits = _app_state.pending_edits
+
+    return PendingEditsResponse(
+        edits=[
+            EditInfo(
+                index=i,
+                edit_type=e.edit_type,
+                dataset_id=e.dataset_id,
+                episode_index=e.episode_index,
+                params=e.params,
+                created_at=e.created_at.isoformat(),
+            )
+            for i, e in enumerate(_app_state.pending_edits)
+            if dataset_id is None or e.dataset_id == dataset_id
+        ],
+        total=len(edits),
+    )
+
+
+@router.post("/delete")
+async def mark_episode_deleted(request: DeleteRequest):
+    """Mark an episode for deletion."""
+    from lerobot.gui.state import PendingEdit
+
+    if request.dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset_id}")
+
+    dataset = _app_state.datasets[request.dataset_id]
+    if request.episode_index < 0 or request.episode_index >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=400, detail=f"Invalid episode index: {request.episode_index}")
+
+    # Check if already marked for deletion
+    if _app_state.is_episode_deleted(request.dataset_id, request.episode_index):
+        raise HTTPException(status_code=400, detail="Episode already marked for deletion")
+
+    edit = PendingEdit(
+        edit_type="delete",
+        dataset_id=request.dataset_id,
+        episode_index=request.episode_index,
+    )
+    _app_state.add_edit(edit)
+
+    logger.info(f"Marked episode {request.episode_index} for deletion in {request.dataset_id}")
+    return {"status": "ok", "message": f"Episode {request.episode_index} marked for deletion"}
+
+
+@router.post("/trim")
+async def set_episode_trim(request: TrimRequest):
+    """Set trim range for an episode."""
+    from lerobot.gui.state import PendingEdit
+
+    if request.dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset_id}")
+
+    dataset = _app_state.datasets[request.dataset_id]
+    if request.episode_index < 0 or request.episode_index >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=400, detail=f"Invalid episode index: {request.episode_index}")
+
+    # Get episode length
+    episode = dataset.meta.episodes[request.episode_index]
+    episode_length = episode["length"]
+
+    if request.start_frame < 0 or request.end_frame > episode_length:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid trim range: {request.start_frame}-{request.end_frame} (length={episode_length})"
+        )
+
+    if request.start_frame >= request.end_frame:
+        raise HTTPException(status_code=400, detail="Start frame must be less than end frame")
+
+    # Remove existing trim for this episode
+    _app_state.pending_edits = [
+        e
+        for e in _app_state.pending_edits
+        if not (e.dataset_id == request.dataset_id and e.episode_index == request.episode_index and e.edit_type == "trim")
+    ]
+
+    # Only add trim if it's not the full range
+    if request.start_frame > 0 or request.end_frame < episode_length:
+        edit = PendingEdit(
+            edit_type="trim",
+            dataset_id=request.dataset_id,
+            episode_index=request.episode_index,
+            params={"start_frame": request.start_frame, "end_frame": request.end_frame},
+        )
+        _app_state.add_edit(edit)
+        logger.info(f"Set trim for episode {request.episode_index}: frames {request.start_frame}-{request.end_frame}")
+
+    return {
+        "status": "ok",
+        "message": f"Episode {request.episode_index} will be trimmed to frames {request.start_frame}-{request.end_frame}",
+    }
+
+
+@router.delete("/{edit_index}")
+async def remove_edit(edit_index: int):
+    """Remove a pending edit by index."""
+    if edit_index < 0 or edit_index >= len(_app_state.pending_edits):
+        raise HTTPException(status_code=404, detail=f"Edit not found: {edit_index}")
+
+    edit = _app_state.pending_edits[edit_index]
+    _app_state.remove_edit(edit_index)
+
+    logger.info(f"Removed {edit.edit_type} edit for episode {edit.episode_index}")
+    return {"status": "ok", "message": "Edit removed"}
+
+
+@router.post("/discard")
+async def discard_edits(dataset_id: str | None = None):
+    """Discard all pending edits, optionally for a specific dataset."""
+    count = len(_app_state.pending_edits if dataset_id is None else _app_state.get_edits_for_dataset(dataset_id))
+    _app_state.clear_edits(dataset_id)
+
+    logger.info(f"Discarded {count} pending edits")
+    return {"status": "ok", "message": f"Discarded {count} pending edits"}
+
+
+@router.post("/apply")
+async def apply_edits(dataset_id: str):
+    """Apply all pending edits for a dataset to disk."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from lerobot.datasets.dataset_tools import delete_episodes, trim_episode
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.datasets.utils import load_episodes
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    edits = _app_state.get_edits_for_dataset(dataset_id)
+    if not edits:
+        return {"status": "ok", "message": "No edits to apply", "applied": 0}
+
+    dataset = _app_state.datasets[dataset_id]
+    original_root = Path(dataset.root)
+    fps = dataset.fps
+    applied = 0
+    errors = []
+
+    # Sort edits: apply trims first (they modify in place), then deletes
+    trim_edits = [e for e in edits if e.edit_type == "trim"]
+    delete_edits = sorted([e for e in edits if e.edit_type == "delete"], key=lambda e: e.episode_index, reverse=True)
+
+    # Apply trims (these modify in-place)
+    for edit in trim_edits:
+        try:
+            # Get episode length to calculate trim seconds
+            ep = dataset.meta.episodes[edit.episode_index]
+            ep_length = ep["length"]
+            start_frame = edit.params["start_frame"]
+            end_frame = edit.params["end_frame"]
+
+            # Convert frame indices to seconds to trim
+            # trim_start_s = seconds to remove from start
+            # trim_end_s = seconds to remove from end
+            trim_start_s = start_frame / fps
+            trim_end_s = (ep_length - end_frame) / fps
+
+            trim_episode(
+                dataset=dataset,
+                episode_index=edit.episode_index,
+                trim_start_s=trim_start_s,
+                trim_end_s=trim_end_s,
+            )
+            applied += 1
+            logger.info(f"Applied trim to episode {edit.episode_index}: removed {trim_start_s:.2f}s from start, {trim_end_s:.2f}s from end")
+        except Exception as e:
+            errors.append(f"Trim episode {edit.episode_index}: {e}")
+            logger.exception(f"Failed to trim episode {edit.episode_index}")
+
+    # Apply deletes - delete_episodes creates a new dataset, so we need to replace the original
+    if delete_edits:
+        try:
+            episode_indices = [e.episode_index for e in delete_edits]
+
+            # Reload dataset to pick up any trim changes
+            dataset = LeRobotDataset(dataset.repo_id, root=original_root)
+            dataset.meta.episodes = load_episodes(dataset.root)
+
+            # Create new dataset in temp location
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir) / "dataset"
+                new_dataset = delete_episodes(
+                    dataset=dataset,
+                    episode_indices=episode_indices,
+                    output_dir=temp_path,
+                    repo_id=dataset.repo_id,
+                )
+
+                # Replace original with new dataset
+                # First, remove old files
+                shutil.rmtree(original_root)
+
+                # Move new dataset to original location
+                shutil.move(str(temp_path), str(original_root))
+
+                logger.info(f"Deleted episodes {episode_indices} and replaced dataset at {original_root}")
+
+            applied += len(delete_edits)
+        except Exception as e:
+            errors.append(f"Delete episodes: {e}")
+            logger.exception("Failed to delete episodes")
+
+    # Clear applied edits
+    _app_state.clear_edits(dataset_id)
+
+    # Invalidate frame cache for this dataset
+    _app_state.frame_cache.invalidate_dataset(dataset_id)
+
+    # Reload dataset from disk to get updated metadata
+    try:
+        old_dataset = _app_state.datasets[dataset_id]
+        root = old_dataset.root
+        repo_id = old_dataset.repo_id
+
+        # Re-create dataset from disk
+        new_dataset = LeRobotDataset(repo_id, root=root)
+        new_dataset.meta.episodes = load_episodes(new_dataset.root)
+        _app_state.datasets[dataset_id] = new_dataset
+
+        logger.info(f"Reloaded dataset {dataset_id}: now has {new_dataset.meta.total_episodes} episodes")
+    except Exception as e:
+        logger.exception(f"Failed to reload dataset after edits: {e}")
+        errors.append(f"Dataset reload failed: {e}")
+
+    if errors:
+        return {
+            "status": "partial",
+            "message": f"Applied {applied} edits with {len(errors)} errors",
+            "applied": applied,
+            "errors": errors,
+        }
+
+    return {"status": "ok", "message": f"Applied {applied} edits", "applied": applied}
