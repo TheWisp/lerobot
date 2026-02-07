@@ -236,6 +236,7 @@ def wrap_policy_in_peft_model(cfg, policy):
     return policy
 
 
+
 @parser.wrap()
 def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     """
@@ -253,6 +254,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         cfg: A `TrainPipelineConfig` object containing all training configurations.
         accelerator: Optional Accelerator instance. If None, one will be created automatically.
     """
+    cfg.validate()
+
     # Create Accelerator if not provided
     # It will automatically detect if running in distributed mode or single-process mode
     # We set step_scheduler_with_optimizer=False to prevent accelerate from adjusting the lr_scheduler steps based on the num_processes
@@ -261,15 +264,20 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         from accelerate.utils import DistributedDataParallelKwargs
 
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-        accelerator = Accelerator(step_scheduler_with_optimizer=False, kwargs_handlers=[ddp_kwargs])
+        # Accelerate auto-detects the device based on the available hardware and ignores the policy.device setting.
+        # Force the device to be CPU when policy.device is set to CPU.
+        force_cpu = cfg.policy.device == "cpu"
+        accelerator = Accelerator(
+            step_scheduler_with_optimizer=False,
+            kwargs_handlers=[ddp_kwargs],
+            cpu=force_cpu,
+        )
 
     init_logging(accelerator=accelerator)
 
     # Determine if this is the main process (for logging and checkpointing)
     # When using accelerate, only the main process should log to avoid duplicate outputs
     is_main_process = accelerator.is_main_process
-
-    cfg.validate()
 
     # Only log on main process
     if is_main_process:
@@ -306,9 +314,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # On real-world data, no need to create an environment as evaluations are done outside train.py,
     # using the eval.py instead, with gym_dora environment and dora-rs.
     eval_env = None
-    if cfg.eval_freq > 0 and cfg.env is not None:
-        if is_main_process:
-            logging.info("Creating env")
+    if cfg.eval_freq > 0 and cfg.env is not None and is_main_process:
+        logging.info("Creating env")
         eval_env = make_env(cfg.env, n_envs=cfg.eval.batch_size, use_async_envs=cfg.eval.use_async_envs)
 
     if is_main_process:
