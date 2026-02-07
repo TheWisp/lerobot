@@ -202,7 +202,7 @@ async def apply_edits(dataset_id: str):
     import tempfile
     from pathlib import Path
 
-    from lerobot.datasets.dataset_tools import delete_episodes, trim_episode
+    from lerobot.datasets.dataset_tools import delete_episodes, trim_episode_by_frames
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.datasets.utils import load_episodes
 
@@ -215,7 +215,6 @@ async def apply_edits(dataset_id: str):
 
     dataset = _app_state.datasets[dataset_id]
     original_root = Path(dataset.root)
-    fps = dataset.fps
     applied = 0
     errors = []
 
@@ -226,26 +225,17 @@ async def apply_edits(dataset_id: str):
     # Apply trims (these modify in-place)
     for edit in trim_edits:
         try:
-            # Get episode length to calculate trim seconds
-            ep = dataset.meta.episodes[edit.episode_index]
-            ep_length = ep["length"]
             start_frame = edit.params["start_frame"]
             end_frame = edit.params["end_frame"]
 
-            # Convert frame indices to seconds to trim
-            # trim_start_s = seconds to remove from start
-            # trim_end_s = seconds to remove from end
-            trim_start_s = start_frame / fps
-            trim_end_s = (ep_length - end_frame) / fps
-
-            trim_episode(
+            trim_episode_by_frames(
                 dataset=dataset,
                 episode_index=edit.episode_index,
-                trim_start_s=trim_start_s,
-                trim_end_s=trim_end_s,
+                start_frame=start_frame,
+                end_frame=end_frame,
             )
             applied += 1
-            logger.info(f"Applied trim to episode {edit.episode_index}: removed {trim_start_s:.2f}s from start, {trim_end_s:.2f}s from end")
+            logger.info(f"Applied trim to episode {edit.episode_index}: keeping frames {start_frame}-{end_frame}")
         except Exception as e:
             errors.append(f"Trim episode {edit.episode_index}: {e}")
             logger.exception(f"Failed to trim episode {edit.episode_index}")

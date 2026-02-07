@@ -1734,16 +1734,10 @@ def trim_episode(
     trim_start_s: float = 0.0,
     trim_end_s: float = 0.0,
 ) -> LeRobotDataset:
-    """Trim an episode in-place by removing frames from the start and/or end.
+    """Trim an episode in-place by removing seconds from the start and/or end.
 
-    This function modifies the dataset in-place, updating:
-    - data/**/*.parquet (frame data)
-    - videos/**/*.mp4 (re-encodes video if needed)
-    - meta/episodes/**/*.parquet (episode metadata)
-    - meta/info.json (total_frames)
-
-    Note: After calling this function, you should reload the dataset to see the changes
-    reflected in hf_dataset and episodes metadata.
+    This is a convenience wrapper around trim_episode_by_frames for time-based trimming.
+    Use this for CLI/human-friendly interfaces where specifying seconds is natural.
 
     Args:
         dataset: The LeRobotDataset to modify.
@@ -1764,7 +1758,6 @@ def trim_episode(
         Trim both ends:
             dataset = trim_episode(dataset, episode_index=0, trim_start_s=0.5, trim_end_s=1.0)
     """
-    # Validate inputs
     if trim_start_s < 0 or trim_end_s < 0:
         raise ValueError("trim_start_s and trim_end_s must be non-negative")
 
@@ -1772,6 +1765,71 @@ def trim_episode(
         logging.info("No trimming requested, returning dataset unchanged")
         return dataset
 
+    # Validate episode index
+    if episode_index < 0 or episode_index >= dataset.meta.total_episodes:
+        raise ValueError(
+            f"Invalid episode_index {episode_index}. "
+            f"Dataset has {dataset.meta.total_episodes} episodes (0-{dataset.meta.total_episodes - 1})"
+        )
+
+    # Convert seconds to frames
+    frames_to_trim_start = int(trim_start_s * dataset.fps)
+    frames_to_trim_end = int(trim_end_s * dataset.fps)
+
+    # Ensure episodes metadata is loaded for length calculation
+    if dataset.meta.episodes is None:
+        dataset.meta.episodes = load_episodes(dataset.meta.root)
+
+    episode_length = dataset.meta.episodes[episode_index]["length"]
+    start_frame = frames_to_trim_start
+    end_frame = episode_length - frames_to_trim_end
+
+    # Check if trimming too much
+    if start_frame >= end_frame:
+        total_trim_s = trim_start_s + trim_end_s
+        episode_duration_s = episode_length / dataset.fps
+        raise ValueError(
+            f"At least one frame must remain after trimming. "
+            f"Episode has {episode_length} frames ({episode_duration_s:.2f}s), "
+            f"but trying to trim {total_trim_s:.2f}s total."
+        )
+
+    return trim_episode_by_frames(dataset, episode_index, start_frame, end_frame)
+
+
+def trim_episode_by_frames(
+    dataset: LeRobotDataset,
+    episode_index: int,
+    start_frame: int,
+    end_frame: int,
+) -> LeRobotDataset:
+    """Trim an episode in-place by specifying the frame range to keep.
+
+    This function modifies the dataset in-place, updating:
+    - data/**/*.parquet (frame data)
+    - videos/**/*.mp4 (re-encodes video if needed)
+    - meta/episodes/**/*.parquet (episode metadata)
+    - meta/info.json (total_frames)
+
+    Note: After calling this function, you should reload the dataset to see the changes
+    reflected in hf_dataset and episodes metadata.
+
+    Args:
+        dataset: The LeRobotDataset to modify.
+        episode_index: Index of the episode to trim.
+        start_frame: First frame to keep (0-indexed, inclusive).
+        end_frame: Last frame to keep (0-indexed, exclusive).
+
+    Returns:
+        The modified dataset (same instance, but files are updated on disk).
+
+    Examples:
+        Keep only frames 30-90:
+            dataset = trim_episode_by_frames(dataset, episode_index=0, start_frame=30, end_frame=90)
+
+        Remove first 10 frames:
+            dataset = trim_episode_by_frames(dataset, episode_index=0, start_frame=10, end_frame=100)
+    """
     if episode_index < 0 or episode_index >= dataset.meta.total_episodes:
         raise ValueError(
             f"Invalid episode_index {episode_index}. "
@@ -1786,10 +1844,23 @@ def trim_episode(
     episode_meta = dataset.meta.episodes[episode_index]
     episode_length = episode_meta["length"]
 
-    # Calculate frames to trim
-    frames_to_trim_start = int(trim_start_s * dataset.fps)
-    frames_to_trim_end = int(trim_end_s * dataset.fps)
-    new_episode_length = episode_length - frames_to_trim_start - frames_to_trim_end
+    # Validate frame range
+    if start_frame < 0 or end_frame > episode_length:
+        raise ValueError(
+            f"Invalid frame range [{start_frame}, {end_frame}) for episode with {episode_length} frames"
+        )
+    if start_frame >= end_frame:
+        raise ValueError(f"start_frame ({start_frame}) must be less than end_frame ({end_frame})")
+
+    # No trimming needed if keeping full range
+    if start_frame == 0 and end_frame == episode_length:
+        logging.info("No trimming requested, returning dataset unchanged")
+        return dataset
+
+    # Calculate frames to trim from each end
+    frames_to_trim_start = start_frame
+    frames_to_trim_end = episode_length - end_frame
+    new_episode_length = end_frame - start_frame
 
     if new_episode_length < 1:
         raise ValueError(
@@ -1812,6 +1883,9 @@ def trim_episode(
 
     # Step 2: Update videos if present
     if dataset.meta.video_keys:
+        # Convert frames to seconds for video trimming (FFmpeg uses timestamps)
+        trim_start_s = frames_to_trim_start / dataset.fps
+        trim_end_s = frames_to_trim_end / dataset.fps
         _trim_episode_videos(
             dataset=dataset,
             episode_index=episode_index,
