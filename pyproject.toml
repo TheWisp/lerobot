@@ -154,6 +154,7 @@ hilserl = ["lerobot[transformers-dep]", "gym-hil>=0.1.13,<0.2.0", "lerobot[grpci
 # Features
 async = ["lerobot[grpcio-dep]", "matplotlib>=3.10.3,<4.0.0"]
 peft = ["peft>=0.18.0,<1.0.0"]  # Removed transformers-dep to avoid conflicts with pi/wallx
+gui = ["fastapi>=0.115.0,<1.0.0", "uvicorn>=0.30.0,<1.0.0"]
 
 # Development
 dev = ["pre-commit>=3.7.0,<5.0.0", "debugpy>=1.8.1,<1.9.0", "lerobot[grpcio-dep]", "grpcio-tools==1.73.1", "mypy>=1.19.1"]
