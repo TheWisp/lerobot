@@ -97,6 +97,16 @@ MINIMAL_HTML = """
         .open-dataset input { flex: 1; padding: 8px; border-radius: 4px; border: none; background: #0f3460; color: #fff; font-size: 13px; }
         .open-dataset button { padding: 8px 12px; border-radius: 4px; border: none; background: #4fc3f7; color: #000; cursor: pointer; font-size: 13px; }
         .open-dataset button:hover { background: #81d4fa; }
+        .recent-dropdown { position: relative; }
+        .recent-btn { padding: 8px; border-radius: 4px; border: none; background: #0f3460; color: #888; cursor: pointer; font-size: 13px; }
+        .recent-btn:hover { background: #1a4a7a; color: #fff; }
+        .recent-btn:disabled { opacity: 0.5; cursor: default; }
+        .recent-menu { position: absolute; top: 100%; right: 0; margin-top: 4px; background: #16213e; border: 1px solid #0f3460; border-radius: 4px; min-width: 250px; max-width: 350px; z-index: 100; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        .recent-menu.visible { display: block; }
+        .recent-menu-item { padding: 8px 12px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #0f3460; }
+        .recent-menu-item:last-child { border-bottom: none; }
+        .recent-menu-item:hover { background: #0f3460; }
+        .recent-menu-item .recent-path { color: #888; font-size: 11px; display: block; margin-top: 2px; }
 
         .tree-container { flex: 1; overflow-y: auto; padding: 8px 0; }
 
@@ -186,8 +196,12 @@ MINIMAL_HTML = """
             <div class="sidebar-header">
                 <h1>LeRobot Dataset GUI</h1>
                 <div class="open-dataset">
-                    <input type="text" id="dataset-path" placeholder="Path or repo_id">
+                    <input type="text" id="dataset-path" placeholder="Path or repo_id" onkeydown="if(event.key==='Enter')openDataset()">
                     <button onclick="openDataset()">Open</button>
+                    <div class="recent-dropdown">
+                        <button class="recent-btn" id="recent-btn" onclick="toggleRecentMenu()" title="Recent datasets">▾</button>
+                        <div class="recent-menu" id="recent-menu"></div>
+                    </div>
                 </div>
             </div>
             <div class="tree-container" id="tree-container">
@@ -274,6 +288,61 @@ MINIMAL_HTML = """
         let isDraggingTrimRight = false;
         let justFinishedTrimDrag = false;
 
+        // Recent datasets (localStorage)
+        const RECENT_KEY = 'lerobot_recent_datasets';
+        const MAX_RECENT = 10;
+
+        function getRecentDatasets() {
+            try {
+                return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+            } catch { return []; }
+        }
+
+        function addRecentDataset(path, repoId) {
+            const recent = getRecentDatasets().filter(r => r.path !== path);
+            recent.unshift({ path, repoId, timestamp: Date.now() });
+            localStorage.setItem(RECENT_KEY, JSON.stringify(recent.slice(0, MAX_RECENT)));
+            updateRecentButton();
+        }
+
+        function updateRecentButton() {
+            const btn = document.getElementById('recent-btn');
+            const recent = getRecentDatasets();
+            btn.disabled = recent.length === 0;
+        }
+
+        function toggleRecentMenu() {
+            const menu = document.getElementById('recent-menu');
+            if (menu.classList.contains('visible')) {
+                menu.classList.remove('visible');
+                return;
+            }
+
+            const recent = getRecentDatasets();
+            if (recent.length === 0) return;
+
+            menu.innerHTML = recent.map(r => `
+                <div class="recent-menu-item" onclick="openRecentDataset('${r.path.replace(/'/g, "\\'")}')">
+                    ${r.repoId || r.path.split('/').pop()}
+                    <span class="recent-path">${r.path}</span>
+                </div>
+            `).join('');
+            menu.classList.add('visible');
+        }
+
+        function openRecentDataset(path) {
+            document.getElementById('recent-menu').classList.remove('visible');
+            document.getElementById('dataset-path').value = path;
+            openDataset();
+        }
+
+        // Close recent menu when clicking elsewhere
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.recent-dropdown')) {
+                document.getElementById('recent-menu').classList.remove('visible');
+            }
+        });
+
         async function openDataset() {
             const path = document.getElementById('dataset-path').value.trim();
             if (!path) return;
@@ -296,6 +365,9 @@ MINIMAL_HTML = """
 
                 // Expand this dataset by default
                 expandedNodes.add(data.id);
+
+                // Save to recent
+                addRecentDataset(path, data.repo_id);
 
                 renderTree();
                 setStatus(`Opened: ${data.repo_id}`);
@@ -897,8 +969,9 @@ MINIMAL_HTML = """
             updateTrimDisplay();
         }
 
-        // Initialize by loading pending edits
+        // Initialize
         refreshPendingEdits();
+        updateRecentButton();
     </script>
 </body>
 </html>
