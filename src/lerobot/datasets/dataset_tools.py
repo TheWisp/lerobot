@@ -47,6 +47,7 @@ from lerobot.datasets.utils import (
     DEFAULT_EPISODES_PATH,
     get_parquet_file_size_in_mb,
     load_episodes,
+    load_info,
     update_chunk_file_indices,
     write_info,
     write_stats,
@@ -1839,9 +1840,12 @@ def trim_episode_by_frames(
             f"Dataset has {dataset.meta.total_episodes} episodes (0-{dataset.meta.total_episodes - 1})"
         )
 
-    # Ensure episodes metadata is loaded
-    if dataset.meta.episodes is None:
-        dataset.meta.episodes = load_episodes(dataset.meta.root)
+    # Always reload episodes metadata from disk to ensure we have current data.
+    # This is critical when multiple trim operations are applied sequentially,
+    # as each trim modifies the episode indices (dataset_from_index, dataset_to_index)
+    # for all subsequent episodes. Using stale in-memory metadata causes data corruption.
+    dataset.meta.episodes = load_episodes(dataset.meta.root)
+    dataset.meta.info = load_info(dataset.meta.root)
 
     # Get episode info
     episode_meta = dataset.meta.episodes[episode_index]
