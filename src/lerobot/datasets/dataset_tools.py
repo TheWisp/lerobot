@@ -781,6 +781,12 @@ def _keep_episodes_from_video_with_av(
     frame_count = 0
     range_idx = 0
 
+    # Epsilon for floating-point timestamp comparisons.
+    # This accounts for precision differences between calculating timestamps as
+    # frame_idx/fps vs. arithmetic on episode timestamps (e.g., 40/30 != 50/30 - 10/30).
+    # Use half a frame duration to avoid off-by-one errors.
+    eps = 0.5 / fps
+
     # Read through entire video once and filter frames.
     for packet in in_container.demux(v_in):
         for frame in packet.decode():
@@ -792,7 +798,8 @@ def _keep_episodes_from_video_with_av(
 
             # Check if frame is in any of our desired time ranges.
             # Skip ranges that have already passed.
-            while range_idx < len(time_ranges) and frame_time >= time_ranges[range_idx][1]:
+            # Use epsilon to handle floating-point precision issues.
+            while range_idx < len(time_ranges) and frame_time >= time_ranges[range_idx][1] - eps:
                 range_idx += 1
 
             # If we've passed all ranges, stop processing.
@@ -801,7 +808,7 @@ def _keep_episodes_from_video_with_av(
 
             # Check if frame is in current range.
             start_ts, end_ts = time_ranges[range_idx]
-            if frame_time < start_ts:
+            if frame_time < start_ts - eps:
                 continue
 
             # Frame is in range - create a new frame with reset timestamps.
@@ -1999,10 +2006,10 @@ def _trim_episode_videos(
         logging.info(f"Processing video: {video_key}")
 
         # Get codec settings from the dataset's video info
-        video_info = dataset.meta.features[video_key].get("info", {})
+        video_info = dataset.meta.features[video_key].get("info") or {}
         # Map canonical codec names to encoder names
         codec_map = {"av1": "libsvtav1", "h264": "libx264", "hevc": "libx265"}
-        source_codec = video_info.get("video.codec", "av1")
+        source_codec = video_info.get("video.codec", "av1") if video_info else "av1"
         vcodec = codec_map.get(source_codec, "libsvtav1")
         pix_fmt = video_info.get("video.pix_fmt", "yuv420p")
 

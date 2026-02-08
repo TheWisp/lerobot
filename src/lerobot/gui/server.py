@@ -169,11 +169,16 @@ MINIMAL_HTML = """
         .timeline-container:hover .timeline-hover { opacity: 1; }
 
         /* Trim handles */
-        .trim-region { position: absolute; top: -4px; bottom: -4px; background: rgba(243, 156, 18, 0.2); border-left: 3px solid #f39c12; border-right: 3px solid #f39c12; pointer-events: none; display: none; z-index: 5; overflow: visible; }
+        .trim-region { position: absolute; top: -4px; bottom: -4px; background: rgba(76, 175, 80, 0.25); border-left: 3px solid #4caf50; border-right: 3px solid #4caf50; pointer-events: none; display: none; z-index: 5; overflow: visible; }
         .trim-region.visible { display: block; }
+        /* Cut zones - red tint for regions that will be removed */
+        .trim-cut-left, .trim-cut-right { position: absolute; top: -4px; bottom: -4px; background: rgba(244, 67, 54, 0.3); pointer-events: none; display: none; z-index: 4; }
+        .trim-cut-left.visible, .trim-cut-right.visible { display: block; }
+        .trim-cut-left { left: 0; }
+        .trim-cut-right { right: 0; }
         .trim-handle { position: absolute; top: 50%; width: 20px; height: 28px; cursor: ew-resize; z-index: 20; pointer-events: auto; background: transparent; transform: translateY(-50%); }
-        .trim-handle::before { content: ''; position: absolute; top: 50%; left: 50%; width: 6px; height: 24px; background: #f39c12; border-radius: 3px; transform: translate(-50%, -50%); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
-        .trim-handle:hover::before { background: #f1c40f; transform: translate(-50%, -50%) scaleY(1.1); }
+        .trim-handle::before { content: ''; position: absolute; top: 50%; left: 50%; width: 6px; height: 24px; background: #4caf50; border-radius: 3px; transform: translate(-50%, -50%); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+        .trim-handle:hover::before { background: #66bb6a; transform: translate(-50%, -50%) scaleY(1.1); }
         .trim-handle.left { left: -10px; }
         .trim-handle.right { right: -10px; }
         .trim-controls { display: none; align-items: center; gap: 8px; margin-left: 12px; }
@@ -227,6 +232,8 @@ MINIMAL_HTML = """
                     <div class="timeline-hover" id="timeline-hover">0:00 / Frame 0</div>
                     <div class="timeline" id="timeline">
                         <div class="timeline-progress" id="timeline-progress"></div>
+                        <div class="trim-cut-left" id="trim-cut-left"></div>
+                        <div class="trim-cut-right" id="trim-cut-right"></div>
                         <div class="trim-region" id="trim-region">
                             <div class="trim-handle left" id="trim-handle-left"></div>
                             <div class="trim-handle right" id="trim-handle-right"></div>
@@ -896,9 +903,14 @@ MINIMAL_HTML = """
 
         // Trim functions
         function updateTrimDisplay() {
+            const cutLeft = document.getElementById('trim-cut-left');
+            const cutRight = document.getElementById('trim-cut-right');
+
             if (!currentDataset || currentEpisode === null || totalFrames === 0) {
                 document.getElementById('trim-region').classList.remove('visible');
                 document.getElementById('trim-controls').classList.remove('visible');
+                cutLeft.classList.remove('visible');
+                cutRight.classList.remove('visible');
                 return;
             }
 
@@ -911,12 +923,27 @@ MINIMAL_HTML = """
             region.style.width = `${widthPct}%`;
             region.classList.add('visible');
 
+            // Show cut zones (red tint for regions that will be removed)
+            if (trimStart > 0) {
+                cutLeft.style.width = `${leftPct}%`;
+                cutLeft.classList.add('visible');
+            } else {
+                cutLeft.classList.remove('visible');
+            }
+
+            if (trimEnd < totalFrames) {
+                cutRight.style.width = `${100 - rightPct}%`;
+                cutRight.classList.add('visible');
+            } else {
+                cutRight.classList.remove('visible');
+            }
+
             // Show trim controls if trim is different from full range
             const controls = document.getElementById('trim-controls');
             const info = document.getElementById('trim-info');
             if (trimStart > 0 || trimEnd < totalFrames) {
                 const framesKept = trimEnd - trimStart;
-                info.textContent = `Trim: ${trimStart}-${trimEnd - 1} (${framesKept} frames)`;
+                info.textContent = `Keep: frames ${trimStart}-${trimEnd - 1} (${framesKept} of ${totalFrames})`;
                 controls.classList.add('visible');
             } else {
                 controls.classList.remove('visible');
@@ -945,7 +972,7 @@ MINIMAL_HTML = """
                 });
                 if (!res.ok) throw new Error(await res.text());
                 await refreshPendingEdits();
-                setStatus(`Trim set for episode ${currentEpisode}`);
+                setStatus(`Trim set: keeping frames ${trimStart}-${trimEnd - 1} of episode ${currentEpisode}`);
             } catch (e) {
                 setStatus('Error: ' + e.message);
             }

@@ -91,6 +91,8 @@ async def list_datasets() -> list[DatasetInfo]:
 @router.post("")
 async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
     """Open a dataset by repo_id or local path."""
+    import datasets as hf_datasets
+
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.datasets.utils import load_episodes
 
@@ -101,14 +103,56 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             if not local_path.exists():
                 raise HTTPException(status_code=404, detail=f"Path not found: {request.local_path}")
 
+            dataset_id = str(local_path)
+
+            # Check if dataset is already open - return existing instance
+            # This is important after edits: the existing instance has fresh data,
+            # while creating a new instance might load stale cached Arrow files
+            if dataset_id in _app_state.datasets:
+                dataset = _app_state.datasets[dataset_id]
+                logger.info(f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)")
+                return DatasetInfo(
+                    id=dataset_id,
+                    repo_id=dataset.repo_id,
+                    root=str(dataset.root),
+                    total_episodes=dataset.meta.total_episodes,
+                    total_frames=dataset.meta.total_frames,
+                    fps=dataset.fps,
+                    camera_keys=list(dataset.meta.camera_keys),
+                    features=list(dataset.meta.features.keys()),
+                )
+
             # Extract repo_id from path or use path name
             repo_id = request.repo_id or local_path.name
-            dataset = LeRobotDataset(repo_id, root=local_path)
-            dataset_id = str(local_path)
+
+            # Disable HuggingFace caching to ensure fresh data is loaded
+            # This is important for datasets that may have been edited
+            hf_datasets.disable_caching()
+            try:
+                dataset = LeRobotDataset(repo_id, root=local_path)
+            finally:
+                hf_datasets.enable_caching()
+
         elif request.repo_id:
+            dataset_id = request.repo_id
+
+            # Check if dataset is already open
+            if dataset_id in _app_state.datasets:
+                dataset = _app_state.datasets[dataset_id]
+                logger.info(f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)")
+                return DatasetInfo(
+                    id=dataset_id,
+                    repo_id=dataset.repo_id,
+                    root=str(dataset.root),
+                    total_episodes=dataset.meta.total_episodes,
+                    total_frames=dataset.meta.total_frames,
+                    fps=dataset.fps,
+                    camera_keys=list(dataset.meta.camera_keys),
+                    features=list(dataset.meta.features.keys()),
+                )
+
             # Open from HuggingFace Hub
             dataset = LeRobotDataset(request.repo_id)
-            dataset_id = request.repo_id
         else:
             raise HTTPException(status_code=400, detail="Must provide either repo_id or local_path")
 
@@ -236,7 +280,6 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
     # Calculate global index
     global_idx = ep["dataset_from_index"] + frame_idx
 
-    # Try to get from cache
     def decode_frame():
         item = dataset[global_idx]
         return item[camera_key]
@@ -249,7 +292,16 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
         decode_fn=decode_frame,
     )
 
-    return Response(content=jpeg_bytes, media_type="image/jpeg")
+    # Prevent browser caching - frames may change after edits
+    return Response(
+        content=jpeg_bytes,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frames")

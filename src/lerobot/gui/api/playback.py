@@ -64,37 +64,51 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
         await websocket.close()
         return
 
-    dataset = _app_state.datasets[dataset_id]
+    # Get initial dataset state (but always use get_dataset() for actual data access)
+    initial_dataset = _app_state.datasets[dataset_id]
 
     # Playback state
     playing = False
     episode_idx = 0
-    camera_key = list(dataset.meta.camera_keys)[0] if dataset.meta.camera_keys else None
+    camera_key = list(initial_dataset.meta.camera_keys)[0] if initial_dataset.meta.camera_keys else None
     current_frame = 0
-    total_frames = 0
-    target_fps = dataset.fps
+    target_fps = initial_dataset.fps
     play_task = None
 
-    # Load episode info
-    episodes = dataset.meta.episodes
-    if episodes is None:
-        from lerobot.datasets.utils import load_episodes
+    def get_dataset():
+        """Get current dataset (always fresh from app_state, handles dataset replacement after edits)."""
+        return _app_state.datasets.get(dataset_id)
 
-        episodes = load_episodes(dataset.root)
-        dataset.meta.episodes = episodes
+    def get_episodes():
+        """Get current episode metadata (always fresh from dataset.meta)."""
+        ds = get_dataset()
+        if ds is None:
+            return {}
+        if ds.meta.episodes is None:
+            from lerobot.datasets.utils import load_episodes
+            ds.meta.episodes = load_episodes(ds.root)
+        return ds.meta.episodes
+
+    def get_episode_length(ep_idx: int) -> int:
+        """Get current episode length from fresh metadata."""
+        return get_episodes()[ep_idx]["length"]
 
     async def send_frame(frame_idx: int):
         """Send a single frame to the client."""
         nonlocal current_frame
-        if frame_idx < 0 or frame_idx >= total_frames:
+        ep_length = get_episode_length(episode_idx)
+        if frame_idx < 0 or frame_idx >= ep_length:
             return
 
         current_frame = frame_idx
-        ep = episodes[episode_idx]
+        ep = get_episodes()[episode_idx]
         global_idx = ep["dataset_from_index"] + frame_idx
 
         def decode_frame():
-            item = dataset[global_idx]
+            ds = get_dataset()
+            if ds is None:
+                raise RuntimeError(f"Dataset {dataset_id} no longer available")
+            item = ds[global_idx]
             return item[camera_key]
 
         try:
@@ -119,12 +133,14 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
 
     async def send_status():
         """Send current playback status."""
+        # Always get fresh episode length in case metadata was updated
+        ep_length = get_episode_length(episode_idx) if episode_idx >= 0 else 0
         await websocket.send_json(
             {
                 "type": "status",
                 "playing": playing,
                 "frame_idx": current_frame,
-                "total_frames": total_frames,
+                "total_frames": ep_length,
                 "episode_idx": episode_idx,
                 "camera": camera_key,
                 "fps": target_fps,
@@ -139,7 +155,9 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
         while playing:
             start_time = asyncio.get_event_loop().time()
 
-            if current_frame >= total_frames - 1:
+            # Always get fresh episode length in case metadata was updated
+            ep_length = get_episode_length(episode_idx)
+            if current_frame >= ep_length - 1:
                 # Loop back to start
                 current_frame = 0
             else:
@@ -167,21 +185,24 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
 
             if command == "start":
                 # Start or switch playback
+                ds = get_dataset()
+                if ds is None:
+                    await websocket.send_json({"type": "error", "message": f"Dataset {dataset_id} no longer available"})
+                    break
+
                 new_episode = cmd.get("episode", episode_idx)
                 new_camera = cmd.get("camera", camera_key)
-                target_fps = cmd.get("fps", dataset.fps)
+                target_fps = cmd.get("fps", ds.fps)
 
                 if new_episode != episode_idx:
                     episode_idx = new_episode
                     current_frame = 0
 
-                    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+                    if episode_idx < 0 or episode_idx >= ds.meta.total_episodes:
                         await websocket.send_json({"type": "error", "message": f"Invalid episode: {episode_idx}"})
                         continue
 
-                    total_frames = episodes[episode_idx]["length"]
-
-                if new_camera and new_camera in dataset.meta.camera_keys:
+                if new_camera and new_camera in ds.meta.camera_keys:
                     camera_key = new_camera
 
                 playing = True
@@ -208,7 +229,7 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
                 await send_status()
 
             elif command == "resume":
-                if total_frames > 0 and not playing:
+                if get_episode_length(episode_idx) > 0 and not playing:
                     playing = True
                     await send_status()
                     play_task = asyncio.create_task(play_loop())

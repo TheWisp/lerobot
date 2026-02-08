@@ -233,8 +233,11 @@ async def apply_edits(dataset_id: str):
                 start_frame=start_frame,
                 end_frame=end_frame,
             )
+
+            # Reload metadata to see changes
+            dataset.meta.episodes = load_episodes(original_root)
             applied += 1
-            logger.info(f"Applied trim to episode {edit.episode_index}: keeping frames {start_frame}-{end_frame}")
+            logger.info(f"Applied trim to episode {edit.episode_index}: keeping frames {start_frame}-{end_frame - 1}")
         except Exception as e:
             errors.append(f"Trim episode {edit.episode_index}: {e}")
             logger.exception(f"Failed to trim episode {edit.episode_index}")
@@ -257,6 +260,8 @@ async def apply_edits(dataset_id: str):
                 features = get_hf_features_from_features(dataset.meta.features)
                 dataset.hf_dataset = load_nested_dataset(original_root / "data", features=features)
                 dataset.hf_dataset.set_transform(hf_transform_to_torch)
+                # Prevent lazy loading from overwriting with stale cached data
+                dataset._lazy_loading = False
             finally:
                 hf_datasets.enable_caching()
 
@@ -288,37 +293,70 @@ async def apply_edits(dataset_id: str):
     _app_state.clear_edits(dataset_id)
 
     # Invalidate frame cache for this dataset
-    _app_state.frame_cache.invalidate_dataset(dataset_id)
+    logger.info(f"Invalidating frame cache for {dataset_id}...")
+    num_invalidated = _app_state.frame_cache.invalidate_dataset(dataset_id)
+    logger.info(f"Invalidated {num_invalidated} cached frames")
+
+    # Clear video decoder cache to ensure fresh video data is loaded
+    # The video decoder caches file handles which may become stale after edits
+    try:
+        from lerobot.datasets.video_utils import _default_decoder_cache
+
+        cache_size = _default_decoder_cache.size()
+        if cache_size > 0:
+            _default_decoder_cache.clear()
+            logger.info(f"Cleared video decoder cache ({cache_size} entries)")
+    except Exception as e:
+        logger.warning(f"Could not clear video decoder cache: {e}")
 
     # Reload dataset from disk to get updated metadata
-    # We avoid using LeRobotDataset constructor because it tries to access HuggingFace Hub
-    # when the Arrow cache is stale after in-place edits.
+    # We reload in-place to avoid LeRobotDataset constructor trying to access HuggingFace Hub
     try:
-        from lerobot.datasets.utils import load_info, load_stats, load_tasks, load_nested_dataset, get_hf_features_from_features, hf_transform_to_torch
+        from lerobot.datasets.utils import (
+            load_info,
+            load_stats,
+            load_tasks,
+            load_nested_dataset,
+            get_hf_features_from_features,
+            hf_transform_to_torch,
+        )
+        import datasets
 
         old_dataset = _app_state.datasets[dataset_id]
         root = old_dataset.root
 
-        logger.info(f"Reloading dataset metadata from {root}")
+        logger.info(f"Reloading dataset from {root}")
 
-        # Reload metadata from disk
+        # Reload all metadata from disk
         old_dataset.meta.info = load_info(root)
         old_dataset.meta.episodes = load_episodes(root)
         old_dataset.meta.stats = load_stats(root)
         old_dataset.meta.tasks = load_tasks(root)
 
+        # Clean up any existing HuggingFace cache files for this dataset
+        # This ensures we load fresh data, not cached Arrow files
+        if old_dataset.hf_dataset is not None:
+            try:
+                num_cleaned = old_dataset.hf_dataset.cleanup_cache_files()
+                if num_cleaned > 0:
+                    logger.info(f"Cleaned up {num_cleaned} cache files")
+            except Exception as e:
+                logger.warning(f"Could not cleanup cache files: {e}")
+
         # Reload the HuggingFace dataset from parquet files
         # Use disable_caching to ensure fresh data is loaded
-        import datasets
         datasets.disable_caching()
         try:
             features = get_hf_features_from_features(old_dataset.meta.features)
             old_dataset.hf_dataset = load_nested_dataset(root / "data", features=features)
             old_dataset.hf_dataset.set_transform(hf_transform_to_torch)
+            # CRITICAL: Set _lazy_loading to False to prevent _ensure_hf_dataset_loaded
+            # from reloading stale cached data and overwriting our fresh hf_dataset
+            old_dataset._lazy_loading = False
         finally:
             datasets.enable_caching()
 
-        logger.info(f"Reloaded dataset {dataset_id}: now has {old_dataset.meta.total_episodes} episodes, {old_dataset.meta.total_frames} frames")
+        logger.info(f"Reloaded dataset {dataset_id}: {old_dataset.meta.total_episodes} episodes, {old_dataset.meta.total_frames} frames")
 
     except Exception as e:
         logger.exception(f"Failed to reload dataset after edits: {e}")
