@@ -252,7 +252,7 @@ async def apply_edits(dataset_id: str):
             # Create new dataset in temp location
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_path = Path(temp_dir) / "dataset"
-                new_dataset = delete_episodes(
+                _new_dataset = delete_episodes(
                     dataset=dataset,
                     episode_indices=episode_indices,
                     output_dir=temp_path,
@@ -280,17 +280,35 @@ async def apply_edits(dataset_id: str):
     _app_state.frame_cache.invalidate_dataset(dataset_id)
 
     # Reload dataset from disk to get updated metadata
+    # We avoid using LeRobotDataset constructor because it tries to access HuggingFace Hub
+    # when the Arrow cache is stale after in-place edits.
     try:
+        from lerobot.datasets.utils import load_info, load_stats, load_tasks, load_nested_dataset, get_hf_features_from_features, hf_transform_to_torch
+
         old_dataset = _app_state.datasets[dataset_id]
         root = old_dataset.root
-        repo_id = old_dataset.repo_id
 
-        # Re-create dataset from disk
-        new_dataset = LeRobotDataset(repo_id, root=root)
-        new_dataset.meta.episodes = load_episodes(new_dataset.root)
-        _app_state.datasets[dataset_id] = new_dataset
+        logger.info(f"Reloading dataset metadata from {root}")
 
-        logger.info(f"Reloaded dataset {dataset_id}: now has {new_dataset.meta.total_episodes} episodes")
+        # Reload metadata from disk
+        old_dataset.meta.info = load_info(root)
+        old_dataset.meta.episodes = load_episodes(root)
+        old_dataset.meta.stats = load_stats(root)
+        old_dataset.meta.tasks = load_tasks(root)
+
+        # Reload the HuggingFace dataset from parquet files
+        # Use disable_caching to ensure fresh data is loaded
+        import datasets
+        datasets.disable_caching()
+        try:
+            features = get_hf_features_from_features(old_dataset.meta.features)
+            old_dataset.hf_dataset = load_nested_dataset(root / "data", features=features)
+            old_dataset.hf_dataset.set_transform(hf_transform_to_torch)
+        finally:
+            datasets.enable_caching()
+
+        logger.info(f"Reloaded dataset {dataset_id}: now has {old_dataset.meta.total_episodes} episodes, {old_dataset.meta.total_frames} frames")
+
     except Exception as e:
         logger.exception(f"Failed to reload dataset after edits: {e}")
         errors.append(f"Dataset reload failed: {e}")
