@@ -203,7 +203,6 @@ async def apply_edits(dataset_id: str):
     from pathlib import Path
 
     from lerobot.datasets.dataset_tools import delete_episodes, trim_episode_by_frames
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.datasets.utils import load_episodes
 
     if dataset_id not in _app_state.datasets:
@@ -246,8 +245,20 @@ async def apply_edits(dataset_id: str):
             episode_indices = [e.episode_index for e in delete_edits]
 
             # Reload dataset to pick up any trim changes
-            dataset = LeRobotDataset(dataset.repo_id, root=original_root)
-            dataset.meta.episodes = load_episodes(dataset.root)
+            # We avoid LeRobotDataset constructor because Arrow cache is stale after in-place trims
+            from lerobot.datasets.utils import load_info, load_nested_dataset, get_hf_features_from_features, hf_transform_to_torch
+            import datasets as hf_datasets
+
+            dataset.meta.info = load_info(original_root)
+            dataset.meta.episodes = load_episodes(original_root)
+
+            hf_datasets.disable_caching()
+            try:
+                features = get_hf_features_from_features(dataset.meta.features)
+                dataset.hf_dataset = load_nested_dataset(original_root / "data", features=features)
+                dataset.hf_dataset.set_transform(hf_transform_to_torch)
+            finally:
+                hf_datasets.enable_caching()
 
             # Create new dataset in temp location
             with tempfile.TemporaryDirectory() as temp_dir:

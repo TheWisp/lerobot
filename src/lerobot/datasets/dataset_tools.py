@@ -757,7 +757,10 @@ def _keep_episodes_from_video_with_av(
 
     # Convert fps to Fraction for PyAV compatibility.
     fps_fraction = Fraction(fps).limit_denominator(1000)
-    v_out = out.add_stream(vcodec, rate=fps_fraction)
+
+    # Use fast preset for SVT-AV1 to minimize re-encoding time
+    encoder_options = {"preset": "12"} if vcodec == "libsvtav1" else {}
+    v_out = out.add_stream(vcodec, rate=fps_fraction, options=encoder_options)
 
     # PyAV type stubs don't distinguish video streams from audio/subtitle streams.
     v_out.width = v_in.codec_context.width
