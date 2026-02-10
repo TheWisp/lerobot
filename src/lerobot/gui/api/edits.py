@@ -227,6 +227,13 @@ async def apply_edits(dataset_id: str):
             start_frame = edit.params["start_frame"]
             end_frame = edit.params["end_frame"]
 
+            # Log original state before trim
+            original_length = dataset.meta.episodes[edit.episode_index]["length"]
+            logger.info(
+                f"TRIM dataset={original_root} episode={edit.episode_index} "
+                f"original_length={original_length} keep_frames=[{start_frame}, {end_frame})"
+            )
+
             trim_episode_by_frames(
                 dataset=dataset,
                 episode_index=edit.episode_index,
@@ -246,6 +253,11 @@ async def apply_edits(dataset_id: str):
     if delete_edits:
         try:
             episode_indices = [e.episode_index for e in delete_edits]
+
+            # Log episode info before deletion
+            for ep_idx in episode_indices:
+                ep_length = dataset.meta.episodes[ep_idx]["length"]
+                logger.info(f"DELETE dataset={original_root} episode={ep_idx} length={ep_length}")
 
             # Reload dataset to pick up any trim changes
             # We avoid LeRobotDataset constructor because Arrow cache is stale after in-place trims

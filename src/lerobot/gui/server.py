@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -1020,10 +1022,59 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 500_
     uvicorn.run(app, host=host, port=port, access_log=False)
 
 
+def setup_logging(log_dir: Path | None = None) -> Path:
+    """Configure persistent file logging for the GUI server.
+
+    Only configures logging for lerobot.gui.* loggers, not the root logger.
+    Called once at server startup.
+
+    Args:
+        log_dir: Directory for log files. Defaults to ~/.cache/huggingface/lerobot/gui/logs/
+
+    Returns:
+        Path to the log directory.
+    """
+    if log_dir is None:
+        log_dir = Path.home() / ".cache" / "huggingface" / "lerobot" / "gui" / "logs"
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create log file with date in name
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    log_file = log_dir / f"server_{date_str}.log"
+
+    # Configure only the lerobot.gui logger (not root)
+    gui_logger = logging.getLogger("lerobot.gui")
+    gui_logger.setLevel(logging.INFO)
+    gui_logger.propagate = False  # Don't propagate to root logger
+
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    console_handler.setFormatter(console_format)
+
+    # File handler (rotating, max 10MB per file, keep 10 files)
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=10,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(logging.INFO)
+    file_format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(file_format)
+
+    gui_logger.addHandler(console_handler)
+    gui_logger.addHandler(file_handler)
+
+    gui_logger.info(f"Logging to {log_file}")
+
+    return log_dir
+
+
 def main():
     """CLI entry point."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
     parser = argparse.ArgumentParser(description="LeRobot Dataset GUI Server")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to (default: 8000)")
@@ -1034,8 +1085,11 @@ def main():
     )
 
     args = parser.parse_args()
-    cache_bytes = parse_cache_size(args.cache_size)
 
+    # Setup persistent logging before starting server
+    setup_logging()
+
+    cache_bytes = parse_cache_size(args.cache_size)
     run_server(host=args.host, port=args.port, cache_size=cache_bytes)
 
 
