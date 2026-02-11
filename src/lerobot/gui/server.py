@@ -183,8 +183,8 @@ MINIMAL_HTML = """
         .trim-handle:hover::before { background: #66bb6a; transform: translate(-50%, -50%) scaleY(1.1); }
         .trim-handle.left { left: -10px; }
         .trim-handle.right { right: -10px; }
-        .trim-controls { display: none; align-items: center; gap: 8px; margin-left: 12px; }
-        .trim-controls.visible { display: flex; }
+        .trim-controls { display: flex; align-items: center; gap: 8px; margin-left: 12px; visibility: hidden; min-width: 220px; }
+        .trim-controls.visible { visibility: visible; }
         .trim-controls button { padding: 4px 10px; border-radius: 4px; border: none; font-size: 11px; cursor: pointer; background: #555; color: #fff; }
         .trim-controls button:hover { background: #666; }
         .trim-info { font-size: 11px; color: #f39c12; }
