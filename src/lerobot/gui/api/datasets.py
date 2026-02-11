@@ -280,17 +280,28 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
     # Calculate global index
     global_idx = ep["dataset_from_index"] + frame_idx
 
-    def decode_frame():
-        item = dataset[global_idx]
-        return item[camera_key]
+    # Check if this camera is already cached
+    jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key)
 
-    jpeg_bytes = _app_state.frame_cache.get_or_decode(
-        dataset_id=dataset_id,
-        episode_idx=episode_idx,
-        frame_idx=frame_idx,
-        camera_key=camera_key,
-        decode_fn=decode_frame,
-    )
+    if jpeg_bytes is None:
+        # Not cached - decode ALL cameras at once (dataset[idx] decodes all anyway)
+        # This avoids redundant decoding when multiple cameras are requested
+        from lerobot.gui.frame_cache import encode_frame_to_jpeg
+
+        item = dataset[global_idx]
+
+        # Cache all cameras from this single decode
+        for cam in camera_keys:
+            if cam in item:
+                cam_jpeg = encode_frame_to_jpeg(item[cam])
+                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, cam, cam_jpeg)
+                if cam == camera_key:
+                    jpeg_bytes = cam_jpeg
+
+        # Fallback if camera wasn't in camera_keys list
+        if jpeg_bytes is None:
+            jpeg_bytes = encode_frame_to_jpeg(item[camera_key])
+            _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, jpeg_bytes)
 
     # Prevent browser caching - frames may change after edits
     return Response(
@@ -356,21 +367,29 @@ async def get_frames_batch(
         raise HTTPException(status_code=400, detail="No camera available")
 
     # Collect frames
+    from lerobot.gui.frame_cache import encode_frame_to_jpeg
+
     frames = []
     for i in range(start, min(start + count, ep_length)):
         global_idx = ep["dataset_from_index"] + i
 
-        def decode_frame(idx=global_idx):
-            item = dataset[idx]
-            return item[camera_key]
+        # Check cache first
+        jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key)
 
-        jpeg_bytes = _app_state.frame_cache.get_or_decode(
-            dataset_id=dataset_id,
-            episode_idx=episode_idx,
-            frame_idx=i,
-            camera_key=camera_key,
-            decode_fn=decode_frame,
-        )
+        if jpeg_bytes is None:
+            # Decode all cameras at once and cache them
+            item = dataset[global_idx]
+            for cam in camera_keys:
+                if cam in item:
+                    cam_jpeg = encode_frame_to_jpeg(item[cam])
+                    _app_state.frame_cache.put(dataset_id, episode_idx, i, cam, cam_jpeg)
+                    if cam == camera_key:
+                        jpeg_bytes = cam_jpeg
+
+            # Fallback
+            if jpeg_bytes is None:
+                jpeg_bytes = encode_frame_to_jpeg(item[camera_key])
+                _app_state.frame_cache.put(dataset_id, episode_idx, i, camera_key, jpeg_bytes)
 
         frames.append(
             {
@@ -393,3 +412,5 @@ async def get_frames_batch(
 async def get_cache_stats(dataset_id: str) -> dict[str, Any]:
     """Get frame cache statistics."""
     return _app_state.frame_cache.stats()
+
+
