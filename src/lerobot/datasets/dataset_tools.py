@@ -2143,6 +2143,279 @@ def _trim_episode_metadata(
     write_info(dataset.meta.info, dataset.root)
 
 
+def trim_episode_virtual(
+    dataset: LeRobotDataset,
+    episode_index: int,
+    start_frame: int,
+    end_frame: int,
+) -> LeRobotDataset:
+    """Trim an episode WITHOUT re-encoding video files.
+
+    This is a "virtual" trim that only updates metadata and parquet data.
+    Video files remain unchanged - only the from_timestamp/to_timestamp
+    pointers are adjusted.
+
+    Benefits:
+    - Instant (no video processing)
+    - Lossless (no re-encoding quality loss)
+    - Reversible (original video data still exists)
+
+    Trade-off:
+    - Trimmed frames still exist in video files (uses disk space)
+
+    Args:
+        dataset: The LeRobotDataset to modify.
+        episode_index: Index of the episode to trim.
+        start_frame: First frame to keep (0-indexed, inclusive).
+        end_frame: Last frame to keep (0-indexed, exclusive).
+
+    Returns:
+        The modified dataset.
+    """
+    if episode_index < 0 or episode_index >= dataset.meta.total_episodes:
+        raise ValueError(
+            f"Invalid episode_index {episode_index}. "
+            f"Dataset has {dataset.meta.total_episodes} episodes (0-{dataset.meta.total_episodes - 1})"
+        )
+
+    # Always reload metadata from disk
+    dataset.meta.episodes = load_episodes(dataset.meta.root)
+    dataset.meta.info = load_info(dataset.meta.root)
+
+    episode_meta = dataset.meta.episodes[episode_index]
+    episode_length = episode_meta["length"]
+
+    # Validate frame range
+    if start_frame < 0 or end_frame > episode_length:
+        raise ValueError(
+            f"Invalid frame range [{start_frame}, {end_frame}) for episode with {episode_length} frames"
+        )
+    if start_frame >= end_frame:
+        raise ValueError(f"start_frame ({start_frame}) must be less than end_frame ({end_frame})")
+
+    if start_frame == 0 and end_frame == episode_length:
+        logging.info("No trimming requested, returning dataset unchanged")
+        return dataset
+
+    frames_to_trim_start = start_frame
+    frames_to_trim_end = episode_length - end_frame
+    new_episode_length = end_frame - start_frame
+
+    logging.info(
+        f"Virtual trim episode {episode_index}: removing {frames_to_trim_start} frames from start, "
+        f"{frames_to_trim_end} frames from end. New length: {new_episode_length} frames"
+    )
+
+    # Step 1: Update parquet data (same as regular trim)
+    _trim_episode_parquet_data(
+        dataset=dataset,
+        episode_index=episode_index,
+        frames_to_trim_start=frames_to_trim_start,
+        frames_to_trim_end=frames_to_trim_end,
+    )
+
+    # Step 2: Update metadata with adjusted video timestamps (NO video re-encoding)
+    frames_removed = frames_to_trim_start + frames_to_trim_end
+    _trim_episode_metadata_virtual(
+        dataset=dataset,
+        episode_index=episode_index,
+        new_length=new_episode_length,
+        frames_removed=frames_removed,
+        frames_trimmed_from_start=frames_to_trim_start,
+    )
+
+    logging.info(f"Episode {episode_index} virtually trimmed successfully")
+    return dataset
+
+
+def _trim_episode_metadata_virtual(
+    dataset: LeRobotDataset,
+    episode_index: int,
+    new_length: int,
+    frames_removed: int,
+    frames_trimmed_from_start: int,
+) -> None:
+    """Update episode metadata for virtual trim (adjusts video timestamps, no re-encode)."""
+    episodes_dir = dataset.root / "meta" / "episodes"
+    trim_start_s = frames_trimmed_from_start / dataset.fps
+    trim_end_s = (frames_removed - frames_trimmed_from_start) / dataset.fps
+
+    for parquet_path in sorted(episodes_dir.rglob("*.parquet")):
+        df = pd.read_parquet(parquet_path)
+        modified = False
+
+        # Update length for the trimmed episode
+        if episode_index in df["episode_index"].values:
+            mask = df["episode_index"] == episode_index
+            df.loc[mask, "length"] = new_length
+            modified = True
+
+        # Update dataset_from_index and dataset_to_index
+        for i, row in df.iterrows():
+            ep_idx = row["episode_index"]
+            if ep_idx == episode_index:
+                df.at[i, "dataset_to_index"] = row["dataset_from_index"] + new_length
+                modified = True
+            elif ep_idx > episode_index:
+                df.at[i, "dataset_from_index"] = row["dataset_from_index"] - frames_removed
+                df.at[i, "dataset_to_index"] = row["dataset_to_index"] - frames_removed
+                modified = True
+
+        # Update video timestamps for the trimmed episode ONLY
+        # Unlike regular trim, we DON'T recalculate all episodes - just shift this one's boundaries
+        for video_key in dataset.meta.video_keys:
+            from_ts_col = f"videos/{video_key}/from_timestamp"
+            to_ts_col = f"videos/{video_key}/to_timestamp"
+
+            if from_ts_col in df.columns:
+                mask = df["episode_index"] == episode_index
+                if mask.any():
+                    # Shift from_timestamp forward by trim_start_s
+                    # Shift to_timestamp backward by trim_end_s
+                    current_from = df.loc[mask, from_ts_col].iloc[0]
+                    current_to = df.loc[mask, to_ts_col].iloc[0]
+
+                    df.loc[mask, from_ts_col] = current_from + trim_start_s
+                    df.loc[mask, to_ts_col] = current_to - trim_end_s
+                    modified = True
+
+        if modified:
+            df.to_parquet(parquet_path, index=False)
+
+    # Update info.json
+    dataset.meta.info["total_frames"] -= frames_removed
+    write_info(dataset.meta.info, dataset.root)
+
+
+def delete_episodes_virtual(
+    dataset: LeRobotDataset,
+    episode_indices: list[int],
+) -> LeRobotDataset:
+    """Delete episodes WITHOUT re-encoding video files.
+
+    This is a "virtual" delete that only updates metadata and parquet data.
+    Video files remain unchanged - deleted episode data still exists in the
+    video but will not be accessed.
+
+    Benefits:
+    - Instant (no video processing)
+    - Lossless (no re-encoding quality loss)
+
+    Trade-off:
+    - Deleted episode video data still exists in files (uses disk space)
+
+    Args:
+        dataset: The LeRobotDataset to modify in-place.
+        episode_indices: List of episode indices to delete.
+
+    Returns:
+        The modified dataset.
+    """
+    if not episode_indices:
+        raise ValueError("No episodes to delete")
+
+    # Validate indices
+    valid_indices = set(range(dataset.meta.total_episodes))
+    invalid = set(episode_indices) - valid_indices
+    if invalid:
+        raise ValueError(f"Invalid episode indices: {invalid}")
+
+    # Reload metadata
+    dataset.meta.episodes = load_episodes(dataset.meta.root)
+    dataset.meta.info = load_info(dataset.meta.root)
+
+    episodes_to_keep = [i for i in range(dataset.meta.total_episodes) if i not in episode_indices]
+    if not episodes_to_keep:
+        raise ValueError("Cannot delete all episodes")
+
+    logging.info(f"Virtual delete: removing episodes {episode_indices}")
+
+    # Calculate total frames being removed
+    frames_removed = sum(dataset.meta.episodes[i]["length"] for i in episode_indices)
+
+    # Step 1: Update parquet data - remove rows and reindex
+    _delete_episodes_parquet_data_virtual(dataset, episode_indices, episodes_to_keep)
+
+    # Step 2: Update episode metadata
+    _delete_episodes_metadata_virtual(dataset, episode_indices, episodes_to_keep, frames_removed)
+
+    logging.info(f"Virtually deleted {len(episode_indices)} episodes")
+    return dataset
+
+
+def _delete_episodes_parquet_data_virtual(
+    dataset: LeRobotDataset,
+    episode_indices: list[int],
+    episodes_to_keep: list[int],
+) -> None:
+    """Update parquet data files to remove deleted episodes and reindex."""
+    data_dir = dataset.root / "data"
+    episode_mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted(episodes_to_keep))}
+
+    for parquet_path in sorted(data_dir.rglob("*.parquet")):
+        df = pd.read_parquet(parquet_path)
+
+        # Filter out deleted episodes
+        mask = df["episode_index"].isin(episodes_to_keep)
+        df = df[mask].copy()
+
+        if len(df) == 0:
+            # All data in this file was deleted - remove the file
+            parquet_path.unlink()
+            continue
+
+        # Remap episode indices
+        df["episode_index"] = df["episode_index"].map(episode_mapping)
+
+        # Reindex frame_index within each episode (should already be correct)
+        # Reindex global index
+        df = df.sort_values(["episode_index", "frame_index"]).reset_index(drop=True)
+        df["index"] = range(len(df))
+
+        df.to_parquet(parquet_path, index=False)
+
+
+def _delete_episodes_metadata_virtual(
+    dataset: LeRobotDataset,
+    episode_indices: list[int],
+    episodes_to_keep: list[int],
+    frames_removed: int,
+) -> None:
+    """Update episode metadata to remove deleted episodes."""
+    episodes_dir = dataset.root / "meta" / "episodes"
+    episode_mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted(episodes_to_keep))}
+
+    for parquet_path in sorted(episodes_dir.rglob("*.parquet")):
+        df = pd.read_parquet(parquet_path)
+
+        # Filter out deleted episodes
+        mask = df["episode_index"].isin(episodes_to_keep)
+        df = df[mask].copy()
+
+        if len(df) == 0:
+            parquet_path.unlink()
+            continue
+
+        # Remap episode indices
+        df["episode_index"] = df["episode_index"].map(episode_mapping)
+
+        # Recalculate dataset_from_index and dataset_to_index
+        df = df.sort_values("episode_index").reset_index(drop=True)
+        cumulative_idx = 0
+        for i, row in df.iterrows():
+            length = row["length"]
+            df.at[i, "dataset_from_index"] = cumulative_idx
+            df.at[i, "dataset_to_index"] = cumulative_idx + length
+            cumulative_idx += length
+
+        df.to_parquet(parquet_path, index=False)
+
+    # Update info.json
+    dataset.meta.info["total_episodes"] = len(episodes_to_keep)
+    dataset.meta.info["total_frames"] -= frames_removed
+    write_info(dataset.meta.info, dataset.root)
+
+
 def convert_image_to_video_dataset(
     dataset: LeRobotDataset,
     output_dir: Path,

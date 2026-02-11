@@ -198,11 +198,9 @@ async def discard_edits(dataset_id: str | None = None):
 @router.post("/apply")
 async def apply_edits(dataset_id: str):
     """Apply all pending edits for a dataset to disk."""
-    import shutil
-    import tempfile
     from pathlib import Path
 
-    from lerobot.datasets.dataset_tools import delete_episodes, trim_episode_by_frames
+    from lerobot.datasets.dataset_tools import delete_episodes_virtual, trim_episode_virtual
     from lerobot.datasets.utils import load_episodes
 
     if dataset_id not in _app_state.datasets:
@@ -234,7 +232,7 @@ async def apply_edits(dataset_id: str):
                 f"original_length={original_length} keep_frames=[{start_frame}, {end_frame})"
             )
 
-            trim_episode_by_frames(
+            trim_episode_virtual(
                 dataset=dataset,
                 episode_index=edit.episode_index,
                 start_frame=start_frame,
@@ -249,7 +247,7 @@ async def apply_edits(dataset_id: str):
             errors.append(f"Trim episode {edit.episode_index}: {e}")
             logger.exception(f"Failed to trim episode {edit.episode_index}")
 
-    # Apply deletes - delete_episodes creates a new dataset, so we need to replace the original
+    # Apply deletes - virtual delete works in-place (no video re-encoding)
     if delete_edits:
         try:
             episode_indices = [e.episode_index for e in delete_edits]
@@ -259,42 +257,13 @@ async def apply_edits(dataset_id: str):
                 ep_length = dataset.meta.episodes[ep_idx]["length"]
                 logger.info(f"DELETE dataset={original_root} episode={ep_idx} length={ep_length}")
 
-            # Reload dataset to pick up any trim changes
-            # We avoid LeRobotDataset constructor because Arrow cache is stale after in-place trims
-            from lerobot.datasets.utils import load_info, load_nested_dataset, get_hf_features_from_features, hf_transform_to_torch
-            import datasets as hf_datasets
-
-            dataset.meta.info = load_info(original_root)
+            # Reload metadata to pick up any trim changes
             dataset.meta.episodes = load_episodes(original_root)
 
-            hf_datasets.disable_caching()
-            try:
-                features = get_hf_features_from_features(dataset.meta.features)
-                dataset.hf_dataset = load_nested_dataset(original_root / "data", features=features)
-                dataset.hf_dataset.set_transform(hf_transform_to_torch)
-                # Prevent lazy loading from overwriting with stale cached data
-                dataset._lazy_loading = False
-            finally:
-                hf_datasets.enable_caching()
+            # Virtual delete modifies metadata and parquet in-place (no video re-encoding)
+            delete_episodes_virtual(dataset, episode_indices=episode_indices)
 
-            # Create new dataset in temp location
-            with tempfile.TemporaryDirectory() as temp_dir:
-                temp_path = Path(temp_dir) / "dataset"
-                _new_dataset = delete_episodes(
-                    dataset=dataset,
-                    episode_indices=episode_indices,
-                    output_dir=temp_path,
-                    repo_id=dataset.repo_id,
-                )
-
-                # Replace original with new dataset
-                # First, remove old files
-                shutil.rmtree(original_root)
-
-                # Move new dataset to original location
-                shutil.move(str(temp_path), str(original_root))
-
-                logger.info(f"Deleted episodes {episode_indices} and replaced dataset at {original_root}")
+            logger.info(f"Deleted episodes {episode_indices} (virtual - no video re-encoding)")
 
             applied += len(delete_edits)
         except Exception as e:
