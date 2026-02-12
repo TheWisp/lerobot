@@ -11,12 +11,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for the AppState class."""
+"""Tests for the AppState class and persistence functions."""
+
+import json
+from datetime import datetime
 
 import pytest
 
 from lerobot.gui.frame_cache import FrameCache
-from lerobot.gui.state import AppState, PendingEdit
+from lerobot.gui.state import (
+    EDITS_FILENAME,
+    AppState,
+    PendingEdit,
+    clear_edits_file,
+    load_edits_from_file,
+    save_edits_to_file,
+)
 
 
 @pytest.fixture
@@ -203,3 +213,127 @@ class TestEpisodeStatusChecks:
 
         assert app_state.get_episode_trim("ds_a", 0) is None
         assert app_state.get_episode_trim("ds_a", 1) is None
+
+
+class TestEditPersistence:
+    """Tests for saving and loading edits to/from disk."""
+
+    def test_save_edits_creates_file(self, tmp_path):
+        """Verify that save_edits_to_file creates the edits file."""
+        edits = [
+            PendingEdit("trim", "ds_a", 0, {"start_frame": 5, "end_frame": 100}),
+            PendingEdit("delete", "ds_a", 3),
+        ]
+
+        save_edits_to_file(tmp_path, edits)
+
+        edits_file = tmp_path / EDITS_FILENAME
+        assert edits_file.exists()
+
+        # Verify file content structure
+        data = json.loads(edits_file.read_text())
+        assert "version" in data
+        assert "edits" in data
+        assert len(data["edits"]) == 2
+
+    def test_save_empty_edits_removes_file(self, tmp_path):
+        """Verify that saving empty edits removes existing file."""
+        edits_file = tmp_path / EDITS_FILENAME
+        edits_file.write_text('{"version": 1, "edits": []}')
+
+        save_edits_to_file(tmp_path, [])
+
+        assert not edits_file.exists()
+
+    def test_save_empty_edits_no_file_no_error(self, tmp_path):
+        """Verify saving empty edits when no file exists doesn't raise."""
+        save_edits_to_file(tmp_path, [])
+
+        edits_file = tmp_path / EDITS_FILENAME
+        assert not edits_file.exists()
+
+    def test_load_edits_returns_saved_data(self, tmp_path):
+        """Verify that load_edits_from_file returns saved edits."""
+        original_edits = [
+            PendingEdit("trim", "ds_a", 5, {"start_frame": 10, "end_frame": 50}),
+            PendingEdit("delete", "ds_a", 7),
+        ]
+        save_edits_to_file(tmp_path, original_edits)
+
+        loaded_edits = load_edits_from_file(tmp_path, "ds_a")
+
+        assert len(loaded_edits) == 2
+        assert loaded_edits[0].edit_type == "trim"
+        assert loaded_edits[0].episode_index == 5
+        assert loaded_edits[0].params == {"start_frame": 10, "end_frame": 50}
+        assert loaded_edits[1].edit_type == "delete"
+        assert loaded_edits[1].episode_index == 7
+
+    def test_load_edits_sets_dataset_id(self, tmp_path):
+        """Verify that loaded edits have correct dataset_id set."""
+        original_edits = [PendingEdit("delete", "ds_a", 0)]
+        save_edits_to_file(tmp_path, original_edits)
+
+        loaded_edits = load_edits_from_file(tmp_path, "different_ds")
+
+        assert loaded_edits[0].dataset_id == "different_ds"
+
+    def test_load_edits_preserves_created_at(self, tmp_path):
+        """Verify that loaded edits preserve creation timestamp."""
+        original_time = datetime(2026, 1, 15, 10, 30, 0)
+        original_edit = PendingEdit("delete", "ds_a", 0, created_at=original_time)
+        save_edits_to_file(tmp_path, [original_edit])
+
+        loaded_edits = load_edits_from_file(tmp_path, "ds_a")
+
+        assert loaded_edits[0].created_at == original_time
+
+    def test_load_edits_missing_file_returns_empty(self, tmp_path):
+        """Verify that load returns empty list when file doesn't exist."""
+        edits = load_edits_from_file(tmp_path, "ds_a")
+
+        assert edits == []
+
+    def test_load_edits_invalid_json_returns_empty(self, tmp_path):
+        """Verify that load returns empty list for corrupted file."""
+        edits_file = tmp_path / EDITS_FILENAME
+        edits_file.write_text("not valid json {{{")
+
+        edits = load_edits_from_file(tmp_path, "ds_a")
+
+        assert edits == []
+
+    def test_clear_edits_file_removes_file(self, tmp_path):
+        """Verify that clear_edits_file removes the file."""
+        edits_file = tmp_path / EDITS_FILENAME
+        edits_file.write_text('{"version": 1, "edits": []}')
+
+        clear_edits_file(tmp_path)
+
+        assert not edits_file.exists()
+
+    def test_clear_edits_file_missing_file_no_error(self, tmp_path):
+        """Verify clear_edits_file doesn't raise when file doesn't exist."""
+        clear_edits_file(tmp_path)
+
+        # Should not raise
+        edits_file = tmp_path / EDITS_FILENAME
+        assert not edits_file.exists()
+
+    def test_roundtrip_multiple_edits(self, tmp_path):
+        """Verify that multiple edits survive save/load roundtrip."""
+        original_edits = [
+            PendingEdit("trim", "ds_a", 0, {"start_frame": 0, "end_frame": 50}),
+            PendingEdit("delete", "ds_a", 1),
+            PendingEdit("trim", "ds_a", 2, {"start_frame": 10, "end_frame": 20}),
+            PendingEdit("delete", "ds_a", 5),
+        ]
+
+        save_edits_to_file(tmp_path, original_edits)
+        loaded_edits = load_edits_from_file(tmp_path, "ds_a")
+
+        assert len(loaded_edits) == 4
+        for i, (orig, loaded) in enumerate(zip(original_edits, loaded_edits)):
+            assert loaded.edit_type == orig.edit_type, f"Edit {i} type mismatch"
+            assert loaded.episode_index == orig.episode_index, f"Edit {i} episode mismatch"
+            assert loaded.params == orig.params, f"Edit {i} params mismatch"

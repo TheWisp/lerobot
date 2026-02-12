@@ -38,6 +38,18 @@ def set_app_state(state: "AppState") -> None:
     _app_state = state
 
 
+def _save_edits_for_dataset(dataset_id: str) -> None:
+    """Persist pending edits for a dataset to disk."""
+    from lerobot.gui.state import save_edits_to_file
+
+    if dataset_id not in _app_state.datasets:
+        return
+
+    dataset = _app_state.datasets[dataset_id]
+    edits = _app_state.get_edits_for_dataset(dataset_id)
+    save_edits_to_file(dataset.root, edits)
+
+
 class DeleteRequest(BaseModel):
     """Request to mark an episode for deletion."""
 
@@ -119,6 +131,7 @@ async def mark_episode_deleted(request: DeleteRequest):
         episode_index=request.episode_index,
     )
     _app_state.add_edit(edit)
+    _save_edits_for_dataset(request.dataset_id)
 
     logger.info(f"Marked episode {request.episode_index} for deletion in {request.dataset_id}")
     return {"status": "ok", "message": f"Episode {request.episode_index} marked for deletion"}
@@ -166,6 +179,8 @@ async def set_episode_trim(request: TrimRequest):
         _app_state.add_edit(edit)
         logger.info(f"Set trim for episode {request.episode_index}: frames {request.start_frame}-{request.end_frame}")
 
+    _save_edits_for_dataset(request.dataset_id)
+
     return {
         "status": "ok",
         "message": f"Episode {request.episode_index} will be trimmed to frames {request.start_frame}-{request.end_frame}",
@@ -179,7 +194,9 @@ async def remove_edit(edit_index: int):
         raise HTTPException(status_code=404, detail=f"Edit not found: {edit_index}")
 
     edit = _app_state.pending_edits[edit_index]
+    dataset_id = edit.dataset_id
     _app_state.remove_edit(edit_index)
+    _save_edits_for_dataset(dataset_id)
 
     logger.info(f"Removed {edit.edit_type} edit for episode {edit.episode_index}")
     return {"status": "ok", "message": "Edit removed"}
@@ -188,7 +205,19 @@ async def remove_edit(edit_index: int):
 @router.post("/discard")
 async def discard_edits(dataset_id: str | None = None):
     """Discard all pending edits, optionally for a specific dataset."""
+    from lerobot.gui.state import clear_edits_file
+
     count = len(_app_state.pending_edits if dataset_id is None else _app_state.get_edits_for_dataset(dataset_id))
+
+    # Clear the edits file(s)
+    if dataset_id:
+        if dataset_id in _app_state.datasets:
+            clear_edits_file(_app_state.datasets[dataset_id].root)
+    else:
+        # Clear all datasets' edit files
+        for ds_id, dataset in _app_state.datasets.items():
+            clear_edits_file(dataset.root)
+
     _app_state.clear_edits(dataset_id)
 
     logger.info(f"Discarded {count} pending edits")
@@ -270,8 +299,11 @@ async def apply_edits(dataset_id: str):
             errors.append(f"Delete episodes: {e}")
             logger.exception("Failed to delete episodes")
 
-    # Clear applied edits
+    # Clear applied edits (both in memory and on disk)
+    from lerobot.gui.state import clear_edits_file
+
     _app_state.clear_edits(dataset_id)
+    clear_edits_file(original_root)
 
     # Invalidate frame cache for this dataset
     logger.info(f"Invalidating frame cache for {dataset_id}...")

@@ -163,6 +163,15 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
         # Store in app state
         _app_state.datasets[dataset_id] = dataset
 
+        # Load any persisted pending edits from disk
+        from lerobot.gui.state import load_edits_from_file
+
+        persisted_edits = load_edits_from_file(dataset.root, dataset_id)
+        for edit in persisted_edits:
+            _app_state.add_edit(edit)
+        if persisted_edits:
+            logger.info(f"Restored {len(persisted_edits)} pending edits from disk")
+
         logger.info(f"Opened dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)")
 
         return DatasetInfo(
