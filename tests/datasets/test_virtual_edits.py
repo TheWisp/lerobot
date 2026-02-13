@@ -655,3 +655,207 @@ class TestRepairEpisodeIndices:
         video_dataset.meta.episodes = load_episodes(video_dataset.root)
         assert [ep["length"] for ep in video_dataset.meta.episodes] == original_lengths
         assert [ep["episode_index"] for ep in video_dataset.meta.episodes] == original_indices
+
+    def test_repair_fixes_data_parquet_indices(self, video_dataset):
+        """Verify repair also fixes the data parquet's index column.
+
+        This is critical for multi-file datasets where the data index column
+        may have per-file indices that don't match the metadata's global indices.
+        """
+        from lerobot.datasets.dataset_tools import repair_episode_indices
+
+        video_dataset.meta.episodes = load_episodes(video_dataset.root)
+
+        # Get the valid episode indices from metadata
+        valid_episodes = {ep["episode_index"] for ep in video_dataset.meta.episodes}
+
+        # Corrupt both episode metadata AND data parquet indices to be per-file (0-based)
+        episodes_dir = video_dataset.root / "meta" / "episodes"
+        for parquet_path in episodes_dir.rglob("*.parquet"):
+            df = pd.read_parquet(parquet_path)
+            df["dataset_from_index"] = 0
+            df["dataset_to_index"] = df["length"]
+            df.to_parquet(parquet_path, index=False)
+
+        data_dir = video_dataset.root / "data"
+        for data_path in data_dir.rglob("*.parquet"):
+            df = pd.read_parquet(data_path)
+            # Filter to only valid episodes (fixture may have extra data)
+            df = df[df["episode_index"].isin(valid_episodes)].copy()
+            # Reset index to be per-file (0-based within each file)
+            df["index"] = range(len(df))
+            df.to_parquet(data_path, index=False)
+
+        # Run repair
+        repaired = repair_episode_indices(video_dataset.root)
+        assert repaired > 0, "Expected some repairs"
+
+        # Reload and verify data parquet indices are now globally continuous
+        video_dataset.meta.episodes = load_episodes(video_dataset.root)
+
+        # Build expected global index for each (episode_index, frame_index)
+        episode_starts = {}
+        cumulative = 0
+        for ep in video_dataset.meta.episodes:
+            episode_starts[ep["episode_index"]] = cumulative
+            cumulative += ep["length"]
+
+        # Verify data parquet indices match
+        for data_path in data_dir.rglob("*.parquet"):
+            df = pd.read_parquet(data_path)
+            for _, row in df.iterrows():
+                ep_idx = row["episode_index"]
+                if ep_idx not in episode_starts:
+                    continue  # Skip episodes not in metadata
+                expected_index = episode_starts[ep_idx] + row["frame_index"]
+                assert row["index"] == expected_index, (
+                    f"Data index mismatch: episode={ep_idx}, "
+                    f"frame={row['frame_index']}, expected={expected_index}, got={row['index']}"
+                )
+
+
+class TestVerifyDataset:
+    """Tests for the verify_dataset function."""
+
+    def test_verify_valid_dataset(self, tmp_path, lerobot_dataset_factory):
+        """Verify that a valid dataset passes verification."""
+        from lerobot.datasets.dataset_tools import verify_dataset
+
+        # Create a properly structured dataset using the factory
+        dataset = lerobot_dataset_factory(
+            root=tmp_path / "test_verify",
+            repo_id="test/verify_valid",
+            total_episodes=5,
+            total_frames=250,
+        )
+
+        result = verify_dataset(dataset.root, check_videos=False)
+
+        assert result.is_valid, f"Expected valid dataset, got errors: {result.errors}"
+
+    def test_verify_detects_missing_info_json(self, tmp_path, lerobot_dataset_factory):
+        """Verify detection of missing info.json."""
+        from lerobot.datasets.dataset_tools import verify_dataset
+
+        dataset = lerobot_dataset_factory(
+            root=tmp_path / "test_missing_info",
+            repo_id="test/missing_info",
+            total_episodes=3,
+            total_frames=150,
+        )
+
+        # Remove info.json
+        info_path = dataset.root / "meta" / "info.json"
+        info_path.unlink()
+
+        result = verify_dataset(dataset.root, check_videos=False)
+
+        assert not result.is_valid
+        assert any("info.json" in str(e) for e in result.errors)
+
+    def test_verify_detects_episode_count_mismatch(self, tmp_path, lerobot_dataset_factory):
+        """Verify detection of episode count mismatch between info.json and metadata."""
+        import json
+
+        from lerobot.datasets.dataset_tools import verify_dataset
+
+        dataset = lerobot_dataset_factory(
+            root=tmp_path / "test_ep_count",
+            repo_id="test/ep_count",
+            total_episodes=3,
+            total_frames=150,
+        )
+
+        # Corrupt info.json to have wrong episode count
+        info_path = dataset.root / "meta" / "info.json"
+        info = json.loads(info_path.read_text())
+        info["total_episodes"] = 999
+        info_path.write_text(json.dumps(info))
+
+        result = verify_dataset(dataset.root, check_videos=False)
+
+        assert not result.is_valid
+        assert any("Episode count mismatch" in str(e) for e in result.errors)
+
+    def test_verify_detects_broken_indices(self, tmp_path, lerobot_dataset_factory):
+        """Verify detection of non-continuous dataset_from_index values."""
+        from lerobot.datasets.dataset_tools import verify_dataset
+
+        dataset = lerobot_dataset_factory(
+            root=tmp_path / "test_broken_idx",
+            repo_id="test/broken_idx",
+            total_episodes=5,
+            total_frames=250,
+        )
+
+        # Corrupt episode metadata
+        episodes_dir = dataset.root / "meta" / "episodes"
+        for parquet_path in episodes_dir.rglob("*.parquet"):
+            df = pd.read_parquet(parquet_path)
+            df["dataset_from_index"] = 0  # All episodes start at 0 (wrong)
+            df.to_parquet(parquet_path, index=False)
+
+        result = verify_dataset(dataset.root, check_videos=False)
+
+        assert not result.is_valid
+        assert any("dataset_from_index" in str(e) for e in result.errors)
+
+    def test_verify_detects_frame_count_mismatch(self, tmp_path, lerobot_dataset_factory):
+        """Verify detection of frame count mismatch."""
+        import json
+
+        from lerobot.datasets.dataset_tools import verify_dataset
+
+        dataset = lerobot_dataset_factory(
+            root=tmp_path / "test_frame_count",
+            repo_id="test/frame_count",
+            total_episodes=3,
+            total_frames=150,
+        )
+
+        # Corrupt info.json to have wrong frame count
+        info_path = dataset.root / "meta" / "info.json"
+        info = json.loads(info_path.read_text())
+        info["total_frames"] = 999999
+        info_path.write_text(json.dumps(info))
+
+        result = verify_dataset(dataset.root, check_videos=False)
+
+        assert not result.is_valid
+        assert any("frames" in str(e).lower() or "mismatch" in str(e).lower() for e in result.errors)
+
+    def test_verify_quick_returns_bool(self, tmp_path, lerobot_dataset_factory):
+        """Verify that verify_dataset_quick returns a boolean."""
+        from lerobot.datasets.dataset_tools import verify_dataset_quick
+
+        dataset = lerobot_dataset_factory(
+            root=tmp_path / "test_quick",
+            repo_id="test/quick",
+            total_episodes=2,
+            total_frames=100,
+        )
+
+        result = verify_dataset_quick(dataset.root)
+
+        assert isinstance(result, bool)
+        assert result is True
+
+    @pytest.mark.parametrize("repo_id", ["lerobot/pusht"])
+    def test_verify_real_dataset_from_hub(self, repo_id):
+        """Verify that a real dataset from the Hub passes verification.
+
+        This test downloads the actual dataset and verifies its integrity,
+        ensuring the verification function works on real-world data.
+        """
+        from lerobot.datasets.dataset_tools import verify_dataset
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        # Load dataset from Hub (this will download if not cached)
+        dataset = LeRobotDataset(repo_id)
+
+        # Run verification (skip video checks for speed)
+        result = verify_dataset(dataset.root, check_videos=False)
+
+        assert result.is_valid, f"Expected {repo_id} to be valid, got errors: {result.errors}"
+        assert result.stats["actual_episodes"] == result.stats["expected_episodes"]
+        assert result.stats["actual_frames"] == result.stats["expected_frames"]

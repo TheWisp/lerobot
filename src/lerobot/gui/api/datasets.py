@@ -200,7 +200,7 @@ class DatasetInfo(BaseModel):
     fps: int
     camera_keys: list[str]
     features: list[str]
-    repaired_indices: int = 0  # Number of episode indices auto-repaired on open
+    warnings: list[str] = []  # Any warnings (repairs, verification issues) from loading
 
 
 class EpisodeInfo(BaseModel):
@@ -305,13 +305,22 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             dataset.meta.episodes = load_episodes(dataset.root)
 
         # Check and repair episode metadata indices if needed
-        from lerobot.datasets.dataset_tools import repair_episode_indices
+        from lerobot.datasets.dataset_tools import repair_episode_indices, verify_dataset
+
+        warnings: list[str] = []
 
         repaired = repair_episode_indices(dataset.root)
         if repaired > 0:
             logger.info(f"Repaired {repaired} episode indices with incorrect dataset_from_index")
-            # Reload episodes after repair
             dataset.meta.episodes = load_episodes(dataset.root)
+            warnings.append(f"Repaired {repaired} episode indices with incorrect metadata")
+
+        # Verify dataset integrity
+        verification = verify_dataset(dataset.root, check_videos=False, verbose=False)
+        if not verification.is_valid:
+            for err in verification.errors:
+                logger.warning(f"Dataset verification: {err.message}")
+                warnings.append(err.message)
 
         # Store in app state
         _app_state.datasets[dataset_id] = dataset
@@ -341,7 +350,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             fps=dataset.fps,
             camera_keys=list(dataset.meta.camera_keys),
             features=list(dataset.meta.features.keys()),
-            repaired_indices=repaired,
+            warnings=warnings,
         )
 
     except Exception as e:

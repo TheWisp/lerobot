@@ -1939,14 +1939,15 @@ def _trim_episode_parquet_data(
     frames_removed = frames_to_trim_start + frames_to_trim_end
 
     # Get the episode's current data bounds
-    # Note: dataset_to_index is exclusive (one-past-end)
     episode_meta = dataset.meta.episodes[episode_index]
+    episode_length = episode_meta["length"]
     ep_from_idx = episode_meta["dataset_from_index"]
-    ep_to_idx = episode_meta["dataset_to_index"]
 
-    # Calculate which frames to keep (global indices, using exclusive end)
-    keep_from = ep_from_idx + frames_to_trim_start
-    keep_to = ep_to_idx - frames_to_trim_end
+    # Calculate frame_index range to keep (0-based within episode)
+    # Use frame_index for filtering since it's always reliable (0 to length-1),
+    # and works correctly whether the data index is global or per-file
+    keep_frame_from = frames_to_trim_start
+    keep_frame_to = episode_length - frames_to_trim_end
 
     for parquet_path in tqdm(sorted(parquet_files), desc="Updating data files"):
         df = pd.read_parquet(parquet_path)
@@ -1962,10 +1963,12 @@ def _trim_episode_parquet_data(
         modified = False
 
         if episode_index in episodes_in_file:
-            # Filter out trimmed frames from target episode
-            # Keep frames where: not in target episode, OR in kept range
+            # Filter out trimmed frames from target episode using frame_index
+            # Keep frames where: not in target episode, OR in kept frame_index range
             target_ep_mask = df["episode_index"] == episode_index
-            keep_mask = ~target_ep_mask | ((df["index"] >= keep_from) & (df["index"] < keep_to))
+            keep_mask = ~target_ep_mask | (
+                (df["frame_index"] >= keep_frame_from) & (df["frame_index"] < keep_frame_to)
+            )
             df = df[keep_mask].copy()
 
             # Reset frame_index and timestamps for the trimmed episode
@@ -2438,6 +2441,33 @@ def repair_episode_indices(dataset_root: Path) -> int:
         if len(file_df) > 0:
             file_df.to_parquet(parquet_path, index=False)
 
+    # Also repair the data parquet's index column to be globally continuous
+    # Build a mapping from (episode_index, frame_index) -> global_index
+    episode_start_indices = {}
+    cumulative = 0
+    for _, row in combined_df.sort_values("episode_index").iterrows():
+        episode_start_indices[int(row["episode_index"])] = cumulative
+        cumulative += int(row["length"])
+
+    # Update data parquet files
+    data_dir = dataset_root / "data"
+    if data_dir.exists():
+        data_files = sorted(data_dir.rglob("*.parquet"))
+        for data_path in tqdm(data_files, desc="Repairing data indices"):
+            df = pd.read_parquet(data_path)
+            if "index" not in df.columns or "episode_index" not in df.columns or "frame_index" not in df.columns:
+                continue
+
+            # Compute correct global index for each row
+            def compute_global_index(row):
+                ep_start = episode_start_indices.get(row["episode_index"], 0)
+                return ep_start + row["frame_index"]
+
+            new_indices = df.apply(compute_global_index, axis=1)
+            if not df["index"].equals(new_indices):
+                df["index"] = new_indices
+                df.to_parquet(data_path, index=False)
+
     logging.info(f"Repaired {repaired_count} episode indices in {dataset_root}")
     return repaired_count
 
@@ -2732,3 +2762,575 @@ def convert_image_to_video_dataset(
 
     # Return new dataset
     return LeRobotDataset(repo_id=repo_id, root=output_dir)
+
+
+# =============================================================================
+# Dataset Verification (LeRobot v3.0)
+# =============================================================================
+
+
+class DatasetVerificationError:
+    """Represents a single verification error."""
+
+    def __init__(self, category: str, message: str, details: dict | None = None):
+        self.category = category
+        self.message = message
+        self.details = details or {}
+
+    def __repr__(self) -> str:
+        if self.details:
+            return f"{self.category}: {self.message} ({self.details})"
+        return f"{self.category}: {self.message}"
+
+
+class DatasetVerificationResult:
+    """Result of dataset verification containing all errors found."""
+
+    def __init__(self):
+        self.errors: list[DatasetVerificationError] = []
+        self.warnings: list[DatasetVerificationError] = []
+        self.stats: dict = {}
+
+    @property
+    def is_valid(self) -> bool:
+        return len(self.errors) == 0
+
+    def add_error(self, category: str, message: str, details: dict | None = None) -> None:
+        self.errors.append(DatasetVerificationError(category, message, details))
+
+    def add_warning(self, category: str, message: str, details: dict | None = None) -> None:
+        self.warnings.append(DatasetVerificationError(category, message, details))
+
+    def __repr__(self) -> str:
+        if self.is_valid:
+            return f"DatasetVerificationResult(valid=True, warnings={len(self.warnings)})"
+        return f"DatasetVerificationResult(valid=False, errors={len(self.errors)}, warnings={len(self.warnings)})"
+
+    def summary(self) -> str:
+        """Return a human-readable summary of verification results."""
+        lines = []
+        if self.is_valid:
+            lines.append("✓ Dataset verification passed")
+        else:
+            lines.append(f"✗ Dataset verification failed with {len(self.errors)} error(s)")
+
+        if self.warnings:
+            lines.append(f"  {len(self.warnings)} warning(s)")
+
+        if self.stats:
+            lines.append(f"  Stats: {self.stats}")
+
+        if self.errors:
+            lines.append("\nErrors:")
+            for err in self.errors[:10]:  # Limit to first 10
+                lines.append(f"  - {err}")
+            if len(self.errors) > 10:
+                lines.append(f"  ... and {len(self.errors) - 10} more errors")
+
+        if self.warnings:
+            lines.append("\nWarnings:")
+            for warn in self.warnings[:5]:
+                lines.append(f"  - {warn}")
+            if len(self.warnings) > 5:
+                lines.append(f"  ... and {len(self.warnings) - 5} more warnings")
+
+        return "\n".join(lines)
+
+
+def verify_dataset(
+    dataset_root: str | Path,
+    check_videos: bool = True,
+    verbose: bool = False,
+) -> DatasetVerificationResult:
+    """Verify dataset integrity and correctness for LeRobot v3.0 format.
+
+    Performs comprehensive checks on dataset structure, indices, and consistency
+    according to the LeRobot Dataset v3.0 specification.
+
+    **Structure checks**:
+    - `meta/info.json` exists and contains required fields
+    - `meta/episodes/*.parquet` exist with episode metadata
+    - `data/*.parquet` exist with frame data
+    - `meta/stats.json` exists (warning if missing)
+    - `meta/tasks.parquet` exists if total_tasks > 0
+    - `videos/` directory structure matches video keys
+
+    **info.json checks**:
+    - Required fields: codebase_version, total_episodes, total_frames, fps, features
+    - total_episodes matches actual episode count
+    - total_frames matches actual frame count
+    - features dict describes expected data columns
+
+    **Episode metadata checks**:
+    - `episode_index` is sequential (0, 1, 2, ..., N-1)
+    - `length` is positive for all episodes
+    - `dataset_from_index`/`dataset_to_index` are globally continuous
+    - Sum of episode lengths equals total_frames
+    - `data/chunk_index`, `data/file_index` reference valid files
+    - For video datasets:
+      - `videos/*/chunk_index`, `videos/*/file_index` reference valid files
+      - `from_timestamp` < `to_timestamp`
+      - Video duration approximately matches `length / fps`
+
+    **Data parquet checks**:
+    - Row count matches total_frames from info.json
+    - Required columns exist: `index`, `episode_index`, `frame_index`
+    - `index` column is compact (0 to N-1, no gaps, no duplicates)
+    - `index` = `episode_start + frame_index` for each row
+    - `frame_index` within each episode is 0 to length-1
+    - All `episode_index` values are valid
+    - All `task_index` values are valid (< total_tasks)
+
+    **Cross-validation checks**:
+    - Each episode's frame count in data matches metadata length
+    - All data files referenced by episodes exist
+    - All video files referenced by episodes exist (if check_videos=True)
+
+    Args:
+        dataset_root: Path to the dataset root directory
+        check_videos: Whether to verify video files exist and timestamps are correct
+        verbose: Whether to log progress
+
+    Returns:
+        DatasetVerificationResult containing all errors and warnings found
+
+    Example:
+        >>> result = verify_dataset("/path/to/dataset")
+        >>> if result.is_valid:
+        ...     print("Dataset is valid!")
+        >>> else:
+        ...     print(result.summary())
+    """
+    dataset_root = Path(dataset_root)
+    result = DatasetVerificationResult()
+
+    if verbose:
+        logging.info(f"Verifying dataset at {dataset_root}")
+
+    # ==========================================================================
+    # 1. Verify directory structure exists
+    # ==========================================================================
+    if not dataset_root.exists():
+        result.add_error("structure", f"Dataset root does not exist: {dataset_root}")
+        return result
+
+    info_path = dataset_root / "meta" / "info.json"
+    if not info_path.exists():
+        result.add_error("structure", "Missing meta/info.json")
+        return result
+
+    episodes_dir = dataset_root / "meta" / "episodes"
+    if not episodes_dir.exists():
+        result.add_error("structure", "Missing meta/episodes directory")
+        return result
+
+    data_dir = dataset_root / "data"
+    if not data_dir.exists():
+        result.add_error("structure", "Missing data directory")
+        return result
+
+    # Check optional files
+    stats_path = dataset_root / "meta" / "stats.json"
+    if not stats_path.exists():
+        result.add_warning("structure", "Missing meta/stats.json (normalization stats)")
+
+    # ==========================================================================
+    # 2. Load and verify info.json
+    # ==========================================================================
+    try:
+        info = load_info(dataset_root)
+    except Exception as e:
+        result.add_error("info", f"Failed to load info.json: {e}")
+        return result
+
+    # Check required fields
+    required_info_fields = ["total_episodes", "total_frames", "fps", "features"]
+    for field in required_info_fields:
+        if field not in info:
+            result.add_error("info", f"Missing required field in info.json: {field}")
+
+    # Check codebase_version (warning only)
+    if "codebase_version" not in info:
+        result.add_warning("info", "Missing codebase_version in info.json")
+    elif not info["codebase_version"].startswith("v3"):
+        result.add_warning("info", f"Unexpected codebase_version: {info['codebase_version']}")
+
+    expected_total_episodes = info.get("total_episodes", 0)
+    expected_total_frames = info.get("total_frames", 0)
+    expected_total_tasks = info.get("total_tasks", 0)
+    fps = info.get("fps", 30)
+    features = info.get("features", {})
+
+    result.stats["expected_episodes"] = expected_total_episodes
+    result.stats["expected_frames"] = expected_total_frames
+    result.stats["expected_tasks"] = expected_total_tasks
+    result.stats["fps"] = fps
+
+    # Check tasks.parquet exists if needed
+    if expected_total_tasks > 0:
+        tasks_path = dataset_root / "meta" / "tasks.parquet"
+        if not tasks_path.exists():
+            result.add_warning("structure", f"Missing meta/tasks.parquet (expected {expected_total_tasks} tasks)")
+
+    # Identify video keys from features
+    video_keys = [k for k, v in features.items() if v.get("dtype") == "video"]
+    result.stats["video_keys"] = video_keys
+
+    # ==========================================================================
+    # 3. Load and verify episode metadata
+    # ==========================================================================
+    episode_files = sorted(episodes_dir.rglob("*.parquet"))
+    if not episode_files:
+        result.add_error("episodes", "No parquet files found in meta/episodes")
+        return result
+
+    try:
+        episodes = load_episodes(dataset_root)
+    except Exception as e:
+        result.add_error("episodes", f"Failed to load episodes: {e}")
+        return result
+
+    if not episodes:
+        result.add_error("episodes", "No episodes found in metadata")
+        return result
+
+    actual_episode_count = len(episodes)
+    result.stats["actual_episodes"] = actual_episode_count
+
+    # Check episode count matches info.json
+    if actual_episode_count != expected_total_episodes:
+        result.add_error(
+            "episodes",
+            f"Episode count mismatch: metadata has {actual_episode_count}, "
+            f"info.json says {expected_total_episodes}",
+        )
+
+    # Check episode indices are sequential (0, 1, 2, ..., N-1)
+    episode_indices = [ep["episode_index"] for ep in episodes]
+    expected_indices = list(range(actual_episode_count))
+    if episode_indices != expected_indices:
+        missing = set(expected_indices) - set(episode_indices)
+        extra = set(episode_indices) - set(expected_indices)
+        duplicates = len(episode_indices) - len(set(episode_indices))
+        result.add_error(
+            "episodes",
+            "Episode indices are not sequential 0..N-1",
+            {
+                "missing": sorted(list(missing))[:10],
+                "extra": sorted(list(extra))[:10],
+                "duplicates": duplicates,
+            },
+        )
+
+    # Check dataset_from_index / dataset_to_index are globally continuous
+    cumulative = 0
+    total_length_from_episodes = 0
+    referenced_data_files = set()
+
+    for ep in episodes:
+        ep_idx = ep["episode_index"]
+        length = ep["length"]
+        from_idx = ep.get("dataset_from_index", 0)
+        to_idx = ep.get("dataset_to_index", length)
+
+        # Check length is positive
+        if length <= 0:
+            result.add_error("episodes", f"Episode {ep_idx} has invalid length: {length}")
+            continue
+
+        total_length_from_episodes += length
+
+        # Check global indices are continuous
+        if from_idx != cumulative:
+            result.add_error(
+                "episodes",
+                f"Episode {ep_idx}: dataset_from_index={from_idx}, expected {cumulative}",
+            )
+
+        expected_to = cumulative + length
+        if to_idx != expected_to:
+            result.add_error(
+                "episodes",
+                f"Episode {ep_idx}: dataset_to_index={to_idx}, expected {expected_to}",
+            )
+
+        cumulative += length
+
+        # Track referenced data files
+        data_chunk = ep.get("data/chunk_index", 0)
+        data_file = ep.get("data/file_index", 0)
+        referenced_data_files.add((data_chunk, data_file))
+
+    result.stats["total_length_from_episodes"] = total_length_from_episodes
+
+    # Check total frames from episode lengths matches info.json
+    if total_length_from_episodes != expected_total_frames:
+        result.add_error(
+            "episodes",
+            f"Total frames mismatch: sum of episode lengths is {total_length_from_episodes}, "
+            f"info.json says {expected_total_frames}",
+        )
+
+    # ==========================================================================
+    # 4. Load and verify data parquet files
+    # ==========================================================================
+    data_files = sorted(data_dir.rglob("*.parquet"))
+    if not data_files:
+        result.add_error("data", "No parquet files found in data directory")
+        return result
+
+    # Check referenced data files exist
+    data_path_template = info.get("data_path", "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet")
+    for chunk_idx, file_idx in referenced_data_files:
+        data_path = dataset_root / data_path_template.format(chunk_index=chunk_idx, file_index=file_idx)
+        if not data_path.exists():
+            result.add_error(
+                "data",
+                f"Referenced data file missing: chunk-{chunk_idx:03d}/file-{file_idx:03d}.parquet",
+            )
+
+    # Load all data
+    all_data = []
+    for data_path in data_files:
+        try:
+            df = pd.read_parquet(data_path)
+            all_data.append(df)
+        except Exception as e:
+            result.add_error("data", f"Failed to read {data_path.name}: {e}")
+
+    if not all_data:
+        result.add_error("data", "Could not load any data parquet files")
+        return result
+
+    data = pd.concat(all_data, ignore_index=True)
+    actual_frame_count = len(data)
+    result.stats["actual_frames"] = actual_frame_count
+
+    # Check total row count matches info.json
+    if actual_frame_count != expected_total_frames:
+        result.add_error(
+            "data",
+            f"Row count mismatch: data has {actual_frame_count} rows, "
+            f"info.json says {expected_total_frames}",
+        )
+
+    # Check required columns exist
+    required_columns = ["index", "episode_index", "frame_index"]
+    missing_columns = [col for col in required_columns if col not in data.columns]
+    if missing_columns:
+        result.add_error("data", f"Missing required columns: {missing_columns}")
+        return result
+
+    # Check feature columns exist (warning only for non-video features)
+    for feature_name, feature_info in features.items():
+        if feature_info.get("dtype") == "video":
+            continue  # Video features are stored in separate files
+        if feature_name not in data.columns:
+            result.add_warning("data", f"Missing feature column: {feature_name}")
+
+    # Check index column is compact (0 to N-1)
+    indices = data["index"].values
+    sorted_indices = np.sort(indices)
+    expected_index_array = np.arange(len(data))
+
+    if not np.array_equal(sorted_indices, expected_index_array):
+        unique_indices = np.unique(indices)
+        num_duplicates = len(indices) - len(unique_indices)
+
+        if num_duplicates > 0:
+            result.add_error("data", f"Index column has {num_duplicates} duplicate values")
+
+        if len(unique_indices) > 0:
+            if unique_indices[0] != 0:
+                result.add_error("data", f"Index column doesn't start at 0, starts at {unique_indices[0]}")
+            if unique_indices[-1] != len(data) - 1:
+                result.add_error(
+                    "data",
+                    f"Index column doesn't end at {len(data) - 1}, ends at {unique_indices[-1]}",
+                )
+
+            # Check for gaps
+            gaps = np.where(np.diff(sorted_indices) > 1)[0]
+            if len(gaps) > 0:
+                result.add_error("data", f"Index column has {len(gaps)} gap(s)", {"first_gap_at": int(gaps[0])})
+
+    # Check episode_index values are valid
+    data_episode_indices = set(data["episode_index"].unique())
+    valid_episode_set = set(episode_indices)
+    invalid_episodes = data_episode_indices - valid_episode_set
+    if invalid_episodes:
+        result.add_error(
+            "data",
+            f"Data contains invalid episode indices: {sorted(list(invalid_episodes))[:10]}",
+        )
+
+    # Check task_index values are valid
+    if "task_index" in data.columns and expected_total_tasks > 0:
+        max_task_index = data["task_index"].max()
+        if max_task_index >= expected_total_tasks:
+            result.add_error(
+                "data",
+                f"task_index has values >= total_tasks: max={max_task_index}, total_tasks={expected_total_tasks}",
+            )
+
+    # Build episode start index mapping
+    episode_starts = {}
+    episode_lengths = {}
+    cumulative = 0
+    for ep in episodes:
+        episode_starts[ep["episode_index"]] = cumulative
+        episode_lengths[ep["episode_index"]] = ep["length"]
+        cumulative += ep["length"]
+
+    # Check index = episode_start + frame_index for each row
+    # And check frame_index is 0..length-1 for each episode
+    index_errors = 0
+    frame_index_errors = 0
+    length_mismatches = 0
+
+    for ep_idx in episode_indices:
+        if ep_idx not in episode_starts:
+            continue
+
+        ep_start = episode_starts[ep_idx]
+        ep_length = episode_lengths[ep_idx]
+        ep_data = data[data["episode_index"] == ep_idx]
+
+        if len(ep_data) == 0:
+            result.add_error("alignment", f"Episode {ep_idx} has no data rows")
+            continue
+
+        # Check frame count matches metadata length
+        if len(ep_data) != ep_length:
+            length_mismatches += 1
+            if length_mismatches <= 3:
+                result.add_error(
+                    "alignment",
+                    f"Episode {ep_idx}: metadata says {ep_length} frames, data has {len(ep_data)}",
+                )
+
+        # Check frame_index is 0 to length-1
+        frame_indices = np.sort(ep_data["frame_index"].values)
+        expected_frame_indices = np.arange(len(ep_data))
+        if not np.array_equal(frame_indices, expected_frame_indices):
+            frame_index_errors += 1
+            if frame_index_errors <= 3:
+                result.add_error(
+                    "data",
+                    f"Episode {ep_idx}: frame_index not sequential 0..{len(ep_data)-1}",
+                    {"actual_range": f"{frame_indices.min()}-{frame_indices.max()}"},
+                )
+
+        # Check index = episode_start + frame_index
+        for _, row in ep_data.iterrows():
+            expected_index = ep_start + row["frame_index"]
+            if row["index"] != expected_index:
+                index_errors += 1
+                if index_errors <= 3:
+                    result.add_error(
+                        "data",
+                        f"Index mismatch: episode={ep_idx}, frame={row['frame_index']}, "
+                        f"expected index={expected_index}, got {row['index']}",
+                    )
+
+    if length_mismatches > 3:
+        result.add_warning("alignment", f"... and {length_mismatches - 3} more episode length mismatches")
+    if index_errors > 3:
+        result.add_warning("data", f"... and {index_errors - 3} more index mismatches")
+    if frame_index_errors > 3:
+        result.add_warning("data", f"... and {frame_index_errors - 3} more frame_index issues")
+
+    # ==========================================================================
+    # 5. Verify video metadata and files (optional)
+    # ==========================================================================
+    if check_videos and video_keys:
+        videos_dir = dataset_root / "videos"
+        if not videos_dir.exists():
+            result.add_error("videos", "Missing videos directory but dataset has video features")
+        else:
+            video_path_template = info.get("video_path", "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4")
+            video_file_missing = 0
+            video_timestamp_errors = 0
+
+            for video_key in video_keys:
+                for ep in episodes:
+                    ep_idx = ep["episode_index"]
+                    chunk_key = f"videos/{video_key}/chunk_index"
+                    file_key = f"videos/{video_key}/file_index"
+                    from_ts_key = f"videos/{video_key}/from_timestamp"
+                    to_ts_key = f"videos/{video_key}/to_timestamp"
+
+                    # Check metadata fields exist
+                    if chunk_key not in ep or file_key not in ep:
+                        result.add_warning(
+                            "videos",
+                            f"Episode {ep_idx} missing video location for {video_key}",
+                        )
+                        continue
+
+                    # Check video file exists
+                    chunk_idx = ep[chunk_key]
+                    file_idx = ep[file_key]
+                    video_path = dataset_root / video_path_template.format(
+                        video_key=video_key, chunk_index=chunk_idx, file_index=file_idx
+                    )
+
+                    if not video_path.exists():
+                        video_file_missing += 1
+                        if video_file_missing <= 3:
+                            result.add_error(
+                                "videos",
+                                f"Missing video file for episode {ep_idx}, {video_key}: {video_path.name}",
+                            )
+                        continue
+
+                    # Check timestamp consistency
+                    if from_ts_key in ep and to_ts_key in ep:
+                        from_ts = ep[from_ts_key]
+                        to_ts = ep[to_ts_key]
+
+                        if from_ts >= to_ts:
+                            result.add_error(
+                                "videos",
+                                f"Episode {ep_idx}, {video_key}: from_timestamp ({from_ts}) >= to_timestamp ({to_ts})",
+                            )
+                            continue
+
+                        expected_duration = ep["length"] / fps
+                        actual_duration = to_ts - from_ts
+                        # Allow 1.5 frame tolerance
+                        tolerance = 1.5 / fps
+                        if abs(actual_duration - expected_duration) > tolerance:
+                            video_timestamp_errors += 1
+                            if video_timestamp_errors <= 3:
+                                result.add_warning(
+                                    "videos",
+                                    f"Episode {ep_idx}, {video_key}: duration {actual_duration:.3f}s "
+                                    f"doesn't match expected {expected_duration:.3f}s (length={ep['length']}, fps={fps})",
+                                )
+
+            if video_file_missing > 3:
+                result.add_warning("videos", f"... and {video_file_missing - 3} more missing video files")
+            if video_timestamp_errors > 3:
+                result.add_warning("videos", f"... and {video_timestamp_errors - 3} more timestamp mismatches")
+
+    if verbose:
+        logging.info(result.summary())
+
+    return result
+
+
+def verify_dataset_quick(dataset_root: str | Path) -> bool:
+    """Quick verification that returns True if dataset is valid.
+
+    This is a convenience wrapper around verify_dataset() for simple checks.
+    Does not check video files for speed.
+
+    Args:
+        dataset_root: Path to the dataset root directory
+
+    Returns:
+        True if dataset passes all checks, False otherwise
+    """
+    result = verify_dataset(dataset_root, check_videos=False, verbose=False)
+    return result.is_valid

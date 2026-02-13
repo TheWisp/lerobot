@@ -385,11 +385,11 @@ MINIMAL_HTML = """
                 const data = await res.json();
                 datasets[data.id] = data;
 
-                // Show toast if metadata was repaired
-                if (data.repaired_indices > 0) {
+                // Show toast for any warnings
+                if (data.warnings && data.warnings.length > 0) {
                     showToast(
-                        'Dataset Repaired',
-                        `Fixed ${data.repaired_indices} episode indices with incorrect metadata. Changes saved to meta/episodes/*.parquet`,
+                        'Dataset Warning',
+                        data.warnings.join('\\n'),
                         'warning',
                         8000
                     );
