@@ -32,6 +32,50 @@ router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 # Will be set by server.py
 _app_state: "AppState" = None  # type: ignore
 
+# Track metadata file modification times for auto-reload
+_dataset_info_mtime: dict[str, float] = {}
+
+
+def _check_and_reload_metadata(dataset_id: str) -> bool:
+    """Check if dataset metadata changed on disk and reload if needed.
+
+    Returns True if metadata was reloaded.
+    """
+    if dataset_id not in _app_state.datasets:
+        return False
+
+    dataset = _app_state.datasets[dataset_id]
+    info_file = Path(dataset.root) / "meta" / "info.json"
+
+    if not info_file.exists():
+        return False
+
+    current_mtime = info_file.stat().st_mtime
+    cached_mtime = _dataset_info_mtime.get(dataset_id)
+
+    if cached_mtime is not None and current_mtime == cached_mtime:
+        return False
+
+    # Metadata changed - reload
+    from lerobot.datasets.utils import load_episodes, load_info, load_stats
+
+    logger.info(f"Detected metadata change for {dataset_id}, reloading...")
+
+    try:
+        dataset.meta.info = load_info(dataset.root)
+        dataset.meta.episodes = load_episodes(dataset.root)
+        dataset.meta.stats = load_stats(dataset.root)
+        _dataset_info_mtime[dataset_id] = current_mtime
+
+        logger.info(
+            f"Reloaded metadata: {dataset.meta.total_episodes} episodes, "
+            f"{dataset.meta.total_frames} frames"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to reload metadata for {dataset_id}: {e}")
+        return False
+
 
 def set_app_state(state: "AppState") -> None:
     """Set the application state for API handlers."""
@@ -163,6 +207,11 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
         # Store in app state
         _app_state.datasets[dataset_id] = dataset
 
+        # Track metadata mtime for auto-reload detection
+        info_file = Path(dataset.root) / "meta" / "info.json"
+        if info_file.exists():
+            _dataset_info_mtime[dataset_id] = info_file.stat().st_mtime
+
         # Load any persisted pending edits from disk
         from lerobot.gui.state import load_edits_from_file
 
@@ -197,6 +246,7 @@ async def close_dataset(dataset_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
 
     del _app_state.datasets[dataset_id]
+    _dataset_info_mtime.pop(dataset_id, None)
     logger.info(f"Closed dataset: {dataset_id}")
 
     return {"status": "ok", "message": f"Closed dataset: {dataset_id}"}
@@ -207,6 +257,9 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
     """List all episodes in a dataset."""
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    # Check if metadata changed on disk (e.g., new episodes recorded)
+    _check_and_reload_metadata(dataset_id)
 
     dataset = _app_state.datasets[dataset_id]
     episodes = dataset.meta.episodes
