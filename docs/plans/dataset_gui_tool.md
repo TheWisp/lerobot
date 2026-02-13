@@ -44,6 +44,194 @@ A local desktop application for visualizing and editing LeRobot datasets, simila
 
 ---
 
+## Local vs Remote Dataset Philosophy
+
+### Core Principle: Local-First Editing
+
+The GUI operates on a **local-first** model where:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    HuggingFace Hub                       │
+│                   (remote storage)                       │
+└─────────────────────────────────────────────────────────┘
+              ↑ Upload                    ↓ Download
+              │ (explicit,                │ (explicit,
+              │  overwrites remote)       │  overwrites local)
+┌─────────────────────────────────────────────────────────┐
+│                    Local Dataset                         │
+│            (source of truth for editing)                 │
+│                                                          │
+│   • All edits happen here                                │
+│   • Reload = re-read from local disk only                │
+│   • User always knows the local path                     │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Why No Sync/Merge?
+
+1. **No version control** - LeRobot datasets don't have commit history or checksums
+2. **No conflict resolution** - We can't reliably detect what changed or merge edits
+3. **Explicit is better** - User decides direction: "replace local" or "replace remote"
+4. **Simplicity** - No complex sync state to track or debug
+
+### Dataset Opening Modes
+
+| Mode | Input | Behavior |
+|------|-------|----------|
+| **Open Local** | `/path/to/dataset` | Work directly on local files |
+| **Open from Hub** | `user/repo_id` | Download to local path, then work locally |
+
+When opening from Hub:
+- If local cache exists: ask user "Use cached version or download fresh?"
+- If no cache: download to `~/.cache/huggingface/lerobot/{repo_id}/`
+- After download: work entirely on local copy
+
+### Reload Semantics
+
+**"Reload" always means re-read from local disk:**
+- Used after applying edits (parquet/metadata changed on disk)
+- Used when external tool modified the dataset
+- Never fetches from HuggingFace Hub
+
+```python
+def reload_dataset_from_disk(dataset: LeRobotDataset) -> None:
+    """Re-read all data from local disk. No network calls."""
+    root = dataset.root
+    dataset.meta.info = load_info(root)
+    dataset.meta.episodes = load_episodes(root)
+    dataset.meta.stats = load_stats(root)
+    dataset.meta.tasks = load_tasks(root)
+    dataset.hf_dataset = load_nested_dataset(root / "data", ...)
+    # Invalidate caches
+    frame_cache.invalidate_dataset(dataset_id)
+    video_decoder_cache.clear()
+```
+
+### HuggingFace Hub Operations
+
+Both operations are **destructive** and require user confirmation:
+
+#### Download (Pull from Hub)
+```
+User clicks "Download from Hub"
+→ Confirmation: "Replace local dataset with version from HuggingFace Hub?
+                 Local changes will be lost."
+→ Download all files from Hub to local path (overwrite)
+→ Reload dataset from disk
+→ Clear all pending edits
+```
+
+#### Upload (Push to Hub)
+```
+User clicks "Upload to Hub"
+→ Confirmation: "Push local dataset to HuggingFace Hub?
+                 Remote version will be overwritten."
+→ Check HF authentication
+→ Upload all local files to Hub (overwrite)
+→ Show success/failure
+```
+
+### API Endpoints
+
+```
+# Dataset opening (existing, clarified)
+POST /api/datasets
+  body: { local_path: "/path/to/dataset" }           # Open local
+  body: { repo_id: "user/dataset" }                   # Open from Hub (downloads)
+
+# Hub operations (new)
+POST /api/datasets/{id}/hub/download
+  - Requires confirmation token from frontend
+  - Downloads from Hub, overwrites local
+  - Returns: { status, message, episodes_count }
+
+POST /api/datasets/{id}/hub/upload
+  - Requires confirmation token from frontend
+  - Uploads local to Hub, overwrites remote
+  - Returns: { status, message, url }
+
+GET /api/hub/auth-status
+  - Returns: { logged_in: bool, username: str | null }
+
+POST /api/hub/login
+  body: { token: "hf_..." }
+  - Stores token using huggingface_hub.login()
+```
+
+### UI Elements
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Dataset: my_robot_data                                  │
+│ Local: /home/user/datasets/my_robot_data               │
+│ Hub: lerobot/my_robot_data (linked)          [⟳] [↑]   │
+│                                              DL  Upload │
+└─────────────────────────────────────────────────────────┘
+
+# Auth indicator in header:
+│ HF: logged in as @username │  or  │ HF: not logged in [Login] │
+```
+
+### Implementation Details
+
+#### Upload Implementation
+```python
+async def upload_to_hub(dataset_id: str, repo_id: str | None = None):
+    """Push local dataset to HuggingFace Hub."""
+    from huggingface_hub import HfApi, upload_folder
+
+    dataset = _app_state.datasets[dataset_id]
+    repo_id = repo_id or dataset.repo_id
+
+    # Ensure logged in
+    api = HfApi()
+    try:
+        api.whoami()
+    except Exception:
+        raise HTTPException(401, "Not logged in to HuggingFace Hub")
+
+    # Upload entire dataset folder
+    upload_folder(
+        folder_path=str(dataset.root),
+        repo_id=repo_id,
+        repo_type="dataset",
+        commit_message=f"Update from LeRobot GUI",
+    )
+
+    return {"status": "ok", "url": f"https://huggingface.co/datasets/{repo_id}"}
+```
+
+#### Download Implementation
+```python
+async def download_from_hub(dataset_id: str):
+    """Download fresh copy from HuggingFace Hub, replacing local."""
+    from huggingface_hub import snapshot_download
+
+    dataset = _app_state.datasets[dataset_id]
+    repo_id = dataset.repo_id
+    local_path = dataset.root
+
+    # Clear pending edits first
+    _app_state.clear_edits(dataset_id)
+    clear_edits_file(local_path)
+
+    # Download fresh (force re-download)
+    snapshot_download(
+        repo_id=repo_id,
+        repo_type="dataset",
+        local_dir=str(local_path),
+        force_download=True,
+    )
+
+    # Reload from disk
+    reload_dataset_from_disk(dataset)
+
+    return {"status": "ok", "message": f"Downloaded {dataset.meta.total_episodes} episodes"}
+```
+
+---
+
 ## Technical Analysis: LeRobot Dataset Format
 
 ### Dataset Structure
@@ -302,40 +490,43 @@ def hf_login(token: str):
 lerobot/
 ├── src/lerobot/
 │   ├── datasets/
-│   │   └── dataset_tools.py      # Existing edit functions
-│   └── gui/                       # NEW: GUI package
+│   │   └── dataset_tools.py      # Edit functions (trim, delete, verify)
+│   └── gui/                       # GUI package
 │       ├── __init__.py
-│       ├── server.py              # FastAPI app
+│       ├── __main__.py            # Entry point: python -m lerobot.gui
+│       ├── server.py              # FastAPI app + inline HTML/JS frontend
 │       ├── frame_cache.py         # LRU frame cache
-│       ├── prefetch.py            # Background prefetcher
-│       ├── edit_state.py          # Pending edits manager
-│       ├── api/
-│       │   ├── datasets.py        # Dataset endpoints
-│       │   ├── playback.py        # WebSocket handler
-│       │   └── edits.py           # Edit endpoints
-│       └── frontend/              # React app (built artifacts)
-│           ├── index.html
-│           └── assets/
-└── scripts/
-    └── lerobot_gui.py             # Entry point: python -m lerobot.gui
+│       ├── state.py               # AppState + PendingEdit + persistence
+│       └── api/
+│           ├── __init__.py
+│           ├── datasets.py        # Dataset endpoints
+│           ├── playback.py        # WebSocket handler
+│           └── edits.py           # Edit endpoints
+└── tests/gui/                     # GUI tests
+    └── test_episode_indexing.py
 ```
+
+**Note:** Frontend is currently inline in `server.py`. See Refactoring TODOs for extraction + React migration plan.
 
 ---
 
 ## Development Phases
 
 ### Phase 1: Read-Only Viewer
-- [ ] FastAPI server with dataset loading
-- [ ] Frame cache + prefetching
-- [ ] WebSocket playback
-- [ ] React frontend: tree view, video grid, timeline
+- [x] FastAPI server with dataset loading
+- [x] Frame cache + prefetching
+- [x] WebSocket playback
+- [x] Frontend: tree view, video grid, timeline (inline HTML/JS, not React)
 - [ ] Parquet data display (action/state charts)
+- [ ] **(P1) Monitor local dataset changes** - Detect new episodes recorded while GUI is open; auto-refresh UI to show new episodes in tree view
 
 ### Phase 2: Basic Editing
-- [ ] Trim episode (iOS-style handles)
-- [ ] Delete episode
-- [ ] Pending edits model
-- [ ] Save/discard UI
+- [x] Trim episode (iOS-style handles)
+- [x] Delete episode
+- [x] Pending edits model
+- [x] Save/discard UI
+- [x] Pending edits persistence (survives server restart)
+- [ ] **(P0) Dataset locking during operations** - Lock dataset (not editable) while server is processing. For now, lock entire dataset during any operation since all operations are fast. Later can be per-episode granularity.
 
 ### Phase 3: Advanced Editing
 - [ ] Duplicate episode
@@ -345,9 +536,51 @@ lerobot/
 
 ### Phase 4: Polish
 - [ ] Undo/redo
-- [ ] HuggingFace Hub integration (push)
+- [ ] HuggingFace Hub sync (see "Local vs Remote Dataset Philosophy" section):
+  - [ ] `GET /api/hub/auth-status` - check login state
+  - [ ] `POST /api/hub/login` - store HF token
+  - [ ] `POST /api/datasets/{id}/hub/download` - pull from Hub (overwrites local)
+  - [ ] `POST /api/datasets/{id}/hub/upload` - push to Hub (overwrites remote)
+  - [ ] Frontend: auth indicator in header
+  - [ ] Frontend: download/upload buttons per dataset with confirmation dialogs
 - [ ] Drag-drop dataset opening
 - [ ] Optional Tauri wrapper for native feel
+
+---
+
+## Refactoring TODOs
+
+### High Priority
+
+1. **Extract frontend to separate files (then migrate to React)**
+   - Phase A: Move ~1000 lines of inline HTML/CSS/JS from `server.py` to:
+     - `frontend/index.html`
+     - `frontend/styles.css`
+     - `frontend/app.js`
+   - Serve with FastAPI `StaticFiles`
+   - Phase B: Migrate to React for better component structure
+     - Use Vite for build tooling
+     - Split into components: TreeView, Timeline, VideoGrid, EditsBar
+     - Add TypeScript for type safety
+
+2. **Extract `reload_dataset_from_disk()` function**
+   - Currently duplicated in `edits.py:apply_edits()` and `datasets.py:_check_and_reload_metadata()`
+   - Should be single function in `state.py` or new `reload.py`
+   - Handles: clear caches, disable HF caching, reload hf_dataset, reload metadata
+
+3. **Extract episode loading helper**
+   - Pattern `if dataset.meta.episodes is None: load_episodes()` appears 4+ times
+   - Should be `ensure_episodes_loaded(dataset)` helper
+
+### Medium Priority
+
+4. **Use FastAPI dependency injection for AppState**
+   - Replace global `_app_state` with `Depends(get_app_state)`
+   - More testable, cleaner architecture
+
+5. **Consolidate module-level caches**
+   - `_episode_start_indices`, `_dataset_info_mtime` scattered in `datasets.py`
+   - Move into `AppState` or dedicated `CacheManager`
 
 ---
 
@@ -375,6 +608,41 @@ lerobot/
 2. Debug teleop latency issues
 3. Identify dropped frames or sensor glitches
 4. Quality check before training
+
+### Robot Integration (requires local robot setup)
+
+**Prerequisite:** User must configure local robot connection (robot type, IP/port, etc.). This configuration could be stored per-dataset or globally.
+
+**Proposed features:**
+
+1. **Replay episode on robot** (`lerobot-replay`)
+   - Select episode in GUI → "Replay on Robot" button
+   - Robot executes recorded actions in real-time
+   - Live camera feed comparison: recorded vs current
+   - Useful for verifying data quality and robot calibration
+
+2. **Record new episodes**
+   - Start/stop recording from GUI
+   - Live preview of camera streams
+   - Episode appears in tree view after recording completes
+   - Integrates with existing `lerobot-record` functionality
+
+3. **Run inference/policy testing**
+   - Load trained policy checkpoint
+   - Run policy on robot with live visualization
+   - Record inference episodes to dataset
+   - Compare policy behavior to demonstration episodes
+
+**Technical considerations:**
+- Robot configuration: YAML file or GUI settings panel
+- Safety: Emergency stop button, speed limits during replay
+- Network: Robot may be on different machine (SSH tunnel, ROS bridge)
+- Dependencies: Only load robot-related code when features are used
+
+**Implementation approach:**
+- Start with replay (simplest, read-only)
+- Add recording (requires robot config)
+- Add inference (requires policy loading)
 
 ---
 
