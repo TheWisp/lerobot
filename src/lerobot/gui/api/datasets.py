@@ -35,6 +35,43 @@ _app_state: "AppState" = None  # type: ignore
 # Track metadata file modification times for auto-reload
 _dataset_info_mtime: dict[str, float] = {}
 
+# Cache episode start indices (cumulative sum of lengths)
+_episode_start_indices: dict[str, list[int]] = {}
+
+
+def _get_episode_start_index(dataset_id: str, episode_idx: int) -> int:
+    """Get the global HuggingFace dataset index where an episode starts.
+
+    The metadata's dataset_from_index is per-parquet-file, not global.
+    This function computes the cumulative sum of episode lengths to get
+    the correct global index.
+    """
+    if dataset_id not in _app_state.datasets:
+        return 0
+
+    # Check if we have cached start indices
+    if dataset_id not in _episode_start_indices:
+        dataset = _app_state.datasets[dataset_id]
+        episodes = dataset.meta.episodes
+
+        # Compute cumulative sum of episode lengths
+        start_indices = [0]
+        for i in range(len(episodes) - 1):
+            start_indices.append(start_indices[-1] + episodes[i]["length"])
+
+        _episode_start_indices[dataset_id] = start_indices
+        logger.debug(f"Computed episode start indices for {dataset_id}: {len(start_indices)} episodes")
+
+    indices = _episode_start_indices[dataset_id]
+    if episode_idx < len(indices):
+        return indices[episode_idx]
+    return 0
+
+
+def _invalidate_episode_start_indices(dataset_id: str) -> None:
+    """Clear cached episode start indices when metadata changes."""
+    _episode_start_indices.pop(dataset_id, None)
+
 
 def _check_and_reload_metadata(dataset_id: str) -> bool:
     """Check if dataset metadata changed on disk and reload if needed.
@@ -116,6 +153,9 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
         num_invalidated = _app_state.frame_cache.invalidate_dataset(dataset_id)
         if num_invalidated > 0:
             logger.info(f"Invalidated {num_invalidated} cached frames")
+
+        # Invalidate episode start index cache
+        _invalidate_episode_start_indices(dataset_id)
 
         logger.info(
             f"Reloaded dataset: {dataset.meta.total_episodes} episodes, "
@@ -389,8 +429,9 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
     else:
         camera_key = camera_keys[0]
 
-    # Calculate global index
-    global_idx = ep["dataset_from_index"] + frame_idx
+    # Calculate global index (cumulative sum of episode lengths, not per-file offset)
+    episode_start = _get_episode_start_index(dataset_id, episode_idx)
+    global_idx = episode_start + frame_idx
 
     # Check if this camera is already cached
     jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key)
@@ -481,9 +522,12 @@ async def get_frames_batch(
     # Collect frames
     from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
+    # Calculate episode start index (cumulative sum, not per-file offset)
+    episode_start = _get_episode_start_index(dataset_id, episode_idx)
+
     frames = []
     for i in range(start, min(start + count, ep_length)):
-        global_idx = ep["dataset_from_index"] + i
+        global_idx = episode_start + i
 
         # Check cache first
         jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key)
