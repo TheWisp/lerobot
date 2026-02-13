@@ -161,6 +161,8 @@ MINIMAL_HTML = """
         .controls-bar button { padding: 8px 16px; border-radius: 4px; border: none; background: #4fc3f7; color: #000; cursor: pointer; font-size: 14px; }
         .controls-bar button:hover { background: #81d4fa; }
         .speed-select { padding: 6px 8px; border-radius: 4px; border: none; background: #0f3460; color: #fff; font-size: 12px; cursor: pointer; }
+        #rerun-btn { background: #9b59b6; font-size: 12px; padding: 6px 12px; }
+        #rerun-btn:hover { background: #8e44ad; }
         .timeline-container { flex: 1; position: relative; padding: 8px 0; }
         .timeline { height: 8px; background: #0f3460; border-radius: 4px; cursor: pointer; position: relative; }
         .timeline-progress { height: 100%; background: #4fc3f7; border-radius: 4px; width: 0%; pointer-events: none; }
@@ -230,6 +232,7 @@ MINIMAL_HTML = """
                     <option value="1.5">1.5x</option>
                     <option value="2">2x</option>
                 </select>
+                <button id="rerun-btn" onclick="launchRerun()" title="Open in Rerun viewer">🔍 Rerun</button>
                 <div class="timeline-container" id="timeline-container">
                     <div class="timeline-hover" id="timeline-hover">0:00 / Frame 0</div>
                     <div class="timeline" id="timeline">
@@ -591,6 +594,26 @@ MINIMAL_HTML = """
 
             if (isPlaying) {
                 playLoop();
+            }
+        }
+
+        async function launchRerun() {
+            if (!currentDataset || currentEpisode === null) {
+                setStatus('Select an episode first');
+                return;
+            }
+
+            setStatus('Launching Rerun...');
+            try {
+                const res = await fetch(
+                    `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}/visualize`,
+                    { method: 'POST' }
+                );
+                if (!res.ok) throw new Error(await res.text());
+                const data = await res.json();
+                setStatus(data.message);
+            } catch (e) {
+                setStatus('Error: ' + e.message);
             }
         }
 

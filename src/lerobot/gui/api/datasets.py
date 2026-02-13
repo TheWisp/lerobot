@@ -476,3 +476,45 @@ async def get_cache_stats(dataset_id: str) -> dict[str, Any]:
     return _app_state.frame_cache.stats()
 
 
+@router.post("/{dataset_id:path}/episodes/{episode_idx}/visualize")
+async def visualize_episode(dataset_id: str, episode_idx: int) -> dict[str, str]:
+    """Launch Rerun visualization for an episode.
+
+    Starts lerobot-dataset-viz in the background for the specified episode.
+    """
+    import subprocess
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    dataset = _app_state.datasets[dataset_id]
+
+    # Validate episode index
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+
+    # Build the command
+    cmd = [
+        "lerobot-dataset-viz",
+        "--repo-id", dataset.repo_id,
+        "--episode-index", str(episode_idx),
+        "--root", str(dataset.root),
+        "--display-compressed-images", "False",
+    ]
+
+    logger.info(f"Launching Rerun viz: {' '.join(cmd)}")
+
+    # Launch in background (don't wait for it)
+    try:
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to launch visualizer: {e}")
+
+    return {"status": "ok", "message": f"Launched Rerun for episode {episode_idx}"}
+
+
