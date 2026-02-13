@@ -24,6 +24,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -391,3 +392,266 @@ class TestVirtualEditIntegration:
 
         assert reloaded.meta.total_episodes == 2
         assert len(reloaded) == reloaded.meta.total_frames
+
+
+class TestMultiFileDatasetEdits:
+    """Tests for virtual edits on multi-file datasets.
+
+    Multi-file datasets have parquet data split across multiple files (e.g., chunk-000/file-000.parquet,
+    chunk-000/file-001.parquet). In these datasets, the episode metadata's `dataset_from_index` field
+    resets to 0 at each file boundary.
+
+    These tests verify that virtual edits correctly handle this by recomputing indices from
+    cumulative episode lengths rather than relying on per-file `dataset_from_index` values.
+    """
+
+    @pytest.fixture
+    def multifile_dataset(self, tmp_path, lerobot_dataset_factory):
+        """Create a multi-file dataset by aggregating datasets with small file size limits."""
+        from lerobot.datasets.aggregate import aggregate_datasets
+
+        # Create two source datasets
+        ds_0 = lerobot_dataset_factory(
+            root=tmp_path / "src_0",
+            repo_id="test/src_0",
+            total_episodes=5,
+            total_frames=250,
+        )
+        ds_1 = lerobot_dataset_factory(
+            root=tmp_path / "src_1",
+            repo_id="test/src_1",
+            total_episodes=5,
+            total_frames=250,
+        )
+
+        # Aggregate with small file size to force multiple parquet files
+        aggr_root = tmp_path / "multifile"
+        aggregate_datasets(
+            repo_ids=[ds_0.repo_id, ds_1.repo_id],
+            roots=[ds_0.root, ds_1.root],
+            aggr_repo_id="test/multifile",
+            aggr_root=aggr_root,
+            data_files_size_in_mb=0.01,  # Force file rotation
+        )
+
+        # Verify we actually have multiple files
+        data_dir = aggr_root / "data"
+        parquet_files = list(data_dir.rglob("*.parquet"))
+        assert len(parquet_files) > 1, "Test setup failed: expected multiple parquet files"
+
+        # Load the aggregated dataset
+        with (
+            patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+            patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+        ):
+            mock_get_safe_version.return_value = "v3.0"
+            mock_snapshot_download.return_value = str(aggr_root)
+            dataset = LeRobotDataset("test/multifile", root=aggr_root)
+
+        # Ensure episodes are loaded
+        if dataset.meta.episodes is None:
+            dataset.meta.episodes = load_episodes(dataset.root)
+
+        return dataset
+
+    def test_multifile_trim_updates_indices_correctly(self, multifile_dataset):
+        """Verify trim on multi-file dataset updates indices correctly.
+
+        The key assertion is that after trimming, subsequent episodes' dataset_from_index
+        values are shifted by exactly the number of frames removed, regardless of which
+        file they reside in.
+        """
+        from lerobot.datasets.dataset_tools import trim_episode_virtual
+
+        # Get original state - pick an episode that's likely in the second file
+        mid_episode = len(multifile_dataset.meta.episodes) // 2
+        original_subsequent_from = multifile_dataset.meta.episodes[mid_episode + 1]["dataset_from_index"]
+        original_length = multifile_dataset.meta.episodes[mid_episode]["length"]
+
+        # Trim 10 frames from mid episode
+        start_frame = 5
+        end_frame = original_length - 5
+        frames_removed = original_length - (end_frame - start_frame)
+
+        trim_episode_virtual(
+            multifile_dataset,
+            episode_index=mid_episode,
+            start_frame=start_frame,
+            end_frame=end_frame,
+        )
+
+        multifile_dataset.meta.episodes = load_episodes(multifile_dataset.root)
+
+        new_subsequent_from = multifile_dataset.meta.episodes[mid_episode + 1]["dataset_from_index"]
+        assert new_subsequent_from == original_subsequent_from - frames_removed
+
+    def test_multifile_delete_renumbers_correctly(self, multifile_dataset):
+        """Verify delete on multi-file dataset renumbers episodes correctly."""
+        from lerobot.datasets.dataset_tools import delete_episodes_virtual
+
+        original_total_episodes = multifile_dataset.meta.total_episodes
+
+        # Delete an episode from the middle
+        mid_episode = len(multifile_dataset.meta.episodes) // 2
+        delete_episodes_virtual(multifile_dataset, episode_indices=[mid_episode])
+
+        multifile_dataset.meta.episodes = load_episodes(multifile_dataset.root)
+        multifile_dataset.meta.info = load_info(multifile_dataset.root)
+
+        # Check episode count
+        assert multifile_dataset.meta.total_episodes == original_total_episodes - 1
+
+        # Check episode indices are sequential
+        episode_indices = [ep["episode_index"] for ep in multifile_dataset.meta.episodes]
+        assert episode_indices == list(range(original_total_episodes - 1))
+
+    def test_multifile_dataset_reloadable_after_edits(self, multifile_dataset):
+        """Verify multi-file dataset can be reloaded and iterated after edits."""
+        from lerobot.datasets.dataset_tools import delete_episodes_virtual, trim_episode_virtual
+
+        original_total_frames = multifile_dataset.meta.total_frames
+        ep0_length = multifile_dataset.meta.episodes[0]["length"]
+
+        # Trim episode 0
+        trim_episode_virtual(
+            multifile_dataset,
+            episode_index=0,
+            start_frame=5,
+            end_frame=ep0_length - 5,
+        )
+
+        # Delete episode 1
+        multifile_dataset.meta.episodes = load_episodes(multifile_dataset.root)
+        ep1_length = multifile_dataset.meta.episodes[1]["length"]
+        delete_episodes_virtual(multifile_dataset, episode_indices=[1])
+
+        # Reload dataset
+        with (
+            patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+            patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+        ):
+            mock_get_safe_version.return_value = "v3.0"
+            mock_snapshot_download.return_value = str(multifile_dataset.root)
+            reloaded = LeRobotDataset("test/multifile", root=multifile_dataset.root)
+
+        # Verify frame count
+        expected_frames = original_total_frames - 10 - ep1_length  # 10 trimmed + ep1 deleted
+        assert reloaded.meta.total_frames == expected_frames
+        assert len(reloaded) == reloaded.meta.total_frames
+
+        # Verify we can iterate through all frames without errors
+        for i in range(len(reloaded)):
+            _ = reloaded.hf_dataset[i]
+
+    def test_multifile_dataset_indices_are_compact_after_delete(self, multifile_dataset):
+        """Verify dataset indices remain compact after delete."""
+        from lerobot.datasets.dataset_tools import delete_episodes_virtual
+
+        delete_episodes_virtual(multifile_dataset, episode_indices=[2])
+
+        multifile_dataset.hf_dataset = multifile_dataset.load_hf_dataset()
+
+        indices = [item["index"].item() for item in multifile_dataset.hf_dataset]
+        expected_indices = list(range(len(indices)))
+
+        assert indices == expected_indices, "Dataset indices should be compact 0..N-1 with no holes"
+
+    def test_multifile_dataset_indices_are_compact_after_trim(self, multifile_dataset):
+        """Verify dataset indices remain compact after trim only (no delete)."""
+        from lerobot.datasets.dataset_tools import trim_episode_virtual
+
+        # Trim an episode in the middle (likely spans files)
+        mid_episode = len(multifile_dataset.meta.episodes) // 2
+        ep_length = multifile_dataset.meta.episodes[mid_episode]["length"]
+
+        trim_episode_virtual(
+            multifile_dataset,
+            episode_index=mid_episode,
+            start_frame=5,
+            end_frame=ep_length - 5,
+        )
+
+        multifile_dataset.hf_dataset = multifile_dataset.load_hf_dataset()
+
+        indices = [item["index"].item() for item in multifile_dataset.hf_dataset]
+        expected_indices = list(range(len(indices)))
+
+        assert indices == expected_indices, "Dataset indices should be compact 0..N-1 with no holes"
+
+
+class TestRepairEpisodeIndices:
+    """Tests for the repair_episode_indices function."""
+
+    def test_repair_fixes_broken_indices(self, video_dataset):
+        """Verify repair fixes broken dataset_from_index values."""
+        from lerobot.datasets.dataset_tools import repair_episode_indices
+
+        # Manually corrupt the episode metadata by setting wrong indices
+        episodes_dir = video_dataset.root / "meta" / "episodes"
+        parquet_files = list(episodes_dir.rglob("*.parquet"))
+        assert len(parquet_files) > 0
+
+        # Read and corrupt the metadata
+        for parquet_path in parquet_files:
+            df = pd.read_parquet(parquet_path)
+            # Set all dataset_from_index to 0 (simulating per-file reset bug)
+            df["dataset_from_index"] = 0
+            df["dataset_to_index"] = df["length"]
+            df.to_parquet(parquet_path, index=False)
+
+        # Verify corruption
+        video_dataset.meta.episodes = load_episodes(video_dataset.root)
+        for ep in video_dataset.meta.episodes:
+            assert ep["dataset_from_index"] == 0, "Setup failed: indices not corrupted"
+
+        # Run repair
+        repaired = repair_episode_indices(video_dataset.root)
+
+        # Should have repaired all episodes except the first one (which starts at 0)
+        assert repaired >= len(video_dataset.meta.episodes) - 1
+
+        # Reload and verify indices are now cumulative
+        video_dataset.meta.episodes = load_episodes(video_dataset.root)
+        cumulative = 0
+        for ep in video_dataset.meta.episodes:
+            assert ep["dataset_from_index"] == cumulative, (
+                f"Episode {ep['episode_index']}: expected dataset_from_index={cumulative}, "
+                f"got {ep['dataset_from_index']}"
+            )
+            assert ep["dataset_to_index"] == cumulative + ep["length"]
+            cumulative += ep["length"]
+
+    def test_repair_no_op_when_correct(self, video_dataset):
+        """Verify repair returns 0 when indices are already correct."""
+        from lerobot.datasets.dataset_tools import repair_episode_indices
+
+        # First call should return 0 (dataset created correctly)
+        repaired = repair_episode_indices(video_dataset.root)
+        assert repaired == 0, "Expected no repairs on fresh dataset"
+
+        # Second call should also return 0
+        repaired = repair_episode_indices(video_dataset.root)
+        assert repaired == 0, "Expected no repairs on second call"
+
+    def test_repair_preserves_other_fields(self, video_dataset):
+        """Verify repair doesn't modify other episode metadata fields."""
+        from lerobot.datasets.dataset_tools import repair_episode_indices
+
+        # Get original values
+        video_dataset.meta.episodes = load_episodes(video_dataset.root)
+        original_lengths = [ep["length"] for ep in video_dataset.meta.episodes]
+        original_indices = [ep["episode_index"] for ep in video_dataset.meta.episodes]
+
+        # Corrupt and repair
+        episodes_dir = video_dataset.root / "meta" / "episodes"
+        for parquet_path in episodes_dir.rglob("*.parquet"):
+            df = pd.read_parquet(parquet_path)
+            df["dataset_from_index"] = 0
+            df.to_parquet(parquet_path, index=False)
+
+        repair_episode_indices(video_dataset.root)
+
+        # Verify other fields unchanged
+        video_dataset.meta.episodes = load_episodes(video_dataset.root)
+        assert [ep["length"] for ep in video_dataset.meta.episodes] == original_lengths
+        assert [ep["episode_index"] for ep in video_dataset.meta.episodes] == original_indices

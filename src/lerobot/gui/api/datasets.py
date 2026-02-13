@@ -114,6 +114,15 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
         # Reload all metadata
         dataset.meta.info = load_info(root)
         dataset.meta.episodes = load_episodes(root)
+
+        # Check and repair episode metadata indices if needed
+        from lerobot.datasets.dataset_tools import repair_episode_indices
+
+        repaired = repair_episode_indices(root)
+        if repaired > 0:
+            logger.info(f"Repaired {repaired} episode indices with incorrect dataset_from_index")
+            dataset.meta.episodes = load_episodes(root)
+
         dataset.meta.stats = load_stats(root)
         dataset.meta.tasks = load_tasks(root)
         _dataset_info_mtime[dataset_id] = current_mtime
@@ -191,6 +200,7 @@ class DatasetInfo(BaseModel):
     fps: int
     camera_keys: list[str]
     features: list[str]
+    repaired_indices: int = 0  # Number of episode indices auto-repaired on open
 
 
 class EpisodeInfo(BaseModel):
@@ -294,6 +304,15 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
         if dataset.meta.episodes is None:
             dataset.meta.episodes = load_episodes(dataset.root)
 
+        # Check and repair episode metadata indices if needed
+        from lerobot.datasets.dataset_tools import repair_episode_indices
+
+        repaired = repair_episode_indices(dataset.root)
+        if repaired > 0:
+            logger.info(f"Repaired {repaired} episode indices with incorrect dataset_from_index")
+            # Reload episodes after repair
+            dataset.meta.episodes = load_episodes(dataset.root)
+
         # Store in app state
         _app_state.datasets[dataset_id] = dataset
 
@@ -322,6 +341,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             fps=dataset.fps,
             camera_keys=list(dataset.meta.camera_keys),
             features=list(dataset.meta.features.keys()),
+            repaired_indices=repaired,
         )
 
     except Exception as e:

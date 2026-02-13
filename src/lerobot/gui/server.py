@@ -146,6 +146,17 @@ MINIMAL_HTML = """
         .edits-bar .btn-discard { background: #e74c3c; color: #fff; }
         .edits-bar .btn-discard:hover { background: #c0392b; }
 
+        /* Toast notifications */
+        .toast-container { position: fixed; top: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+        .toast { background: #1a3a5c; border: 1px solid #0f3460; border-radius: 8px; padding: 12px 16px; color: #fff; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); animation: toast-in 0.3s ease-out; max-width: 350px; }
+        .toast.warning { border-left: 4px solid #f39c12; }
+        .toast.info { border-left: 4px solid #4fc3f7; }
+        .toast.success { border-left: 4px solid #27ae60; }
+        .toast-title { font-weight: 600; margin-bottom: 4px; }
+        .toast-message { color: #aaa; font-size: 12px; }
+        @keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes toast-out { from { opacity: 1; } to { opacity: 0; } }
+
         /* Main content */
         .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
@@ -275,6 +286,9 @@ MINIMAL_HTML = """
         <div class="context-menu-item danger" onclick="contextAction('delete')">Delete Episode</div>
     </div>
 
+    <!-- Toast notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
     <script>
         let datasets = {};
         let episodes = {};
@@ -370,6 +384,16 @@ MINIMAL_HTML = """
                 if (!res.ok) throw new Error(await res.text());
                 const data = await res.json();
                 datasets[data.id] = data;
+
+                // Show toast if metadata was repaired
+                if (data.repaired_indices > 0) {
+                    showToast(
+                        'Dataset Repaired',
+                        `Fixed ${data.repaired_indices} episode indices with incorrect metadata. Changes saved to meta/episodes/*.parquet`,
+                        'warning',
+                        8000
+                    );
+                }
 
                 // Load episodes
                 const epRes = await fetch(`/api/datasets/${encodeURIComponent(data.id)}/episodes`);
@@ -643,6 +667,18 @@ MINIMAL_HTML = """
 
         function setStatus(msg) {
             document.getElementById('status').textContent = msg;
+        }
+
+        function showToast(title, message, type = 'info', duration = 5000) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `<div class="toast-title">${title}</div><div class="toast-message">${message}</div>`;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.animation = 'toast-out 0.3s ease-out forwards';
+                setTimeout(() => toast.remove(), 300);
+            }, duration);
         }
 
         // Timeline interaction

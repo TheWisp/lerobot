@@ -2352,6 +2352,9 @@ def _delete_episodes_parquet_data_virtual(
     data_dir = dataset.root / "data"
     episode_mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted(episodes_to_keep))}
 
+    # Track cumulative offset across files for global reindexing
+    global_index_offset = 0
+
     for parquet_path in sorted(data_dir.rglob("*.parquet")):
         df = pd.read_parquet(parquet_path)
 
@@ -2368,11 +2371,75 @@ def _delete_episodes_parquet_data_virtual(
         df["episode_index"] = df["episode_index"].map(episode_mapping)
 
         # Reindex frame_index within each episode (should already be correct)
-        # Reindex global index
+        # Reindex global index with cumulative offset across files
         df = df.sort_values(["episode_index", "frame_index"]).reset_index(drop=True)
-        df["index"] = range(len(df))
+        df["index"] = range(global_index_offset, global_index_offset + len(df))
+        global_index_offset += len(df)
 
         df.to_parquet(parquet_path, index=False)
+
+
+def repair_episode_indices(dataset_root: Path) -> int:
+    """Check and repair episode metadata dataset_from_index values.
+
+    Some datasets have broken metadata where dataset_from_index resets to 0
+    at file boundaries instead of being globally continuous. This function
+    recomputes correct cumulative indices from episode lengths.
+
+    WARNING: This function MODIFIES the dataset on disk if repair is needed.
+    Specifically, it rewrites: meta/episodes/*.parquet files with corrected
+    dataset_from_index and dataset_to_index values.
+
+    Args:
+        dataset_root: Path to the dataset root directory.
+
+    Returns:
+        Number of episodes that were repaired (0 if already correct).
+    """
+    episodes_dir = dataset_root / "meta" / "episodes"
+    if not episodes_dir.exists():
+        return 0
+
+    # Load all episode metadata into a single dataframe
+    all_dfs = []
+    parquet_files = sorted(episodes_dir.rglob("*.parquet"))
+    for parquet_path in parquet_files:
+        df = pd.read_parquet(parquet_path)
+        df["_source_file"] = str(parquet_path)
+        all_dfs.append(df)
+
+    if not all_dfs:
+        return 0
+
+    combined_df = pd.concat(all_dfs, ignore_index=True)
+    combined_df = combined_df.sort_values("episode_index").reset_index(drop=True)
+
+    # Check if repair is needed by computing expected indices
+    repaired_count = 0
+    cumulative_idx = 0
+    for i, row in combined_df.iterrows():
+        expected_from = cumulative_idx
+        expected_to = cumulative_idx + row["length"]
+
+        if row["dataset_from_index"] != expected_from or row["dataset_to_index"] != expected_to:
+            combined_df.at[i, "dataset_from_index"] = expected_from
+            combined_df.at[i, "dataset_to_index"] = expected_to
+            repaired_count += 1
+
+        cumulative_idx = expected_to
+
+    if repaired_count == 0:
+        return 0
+
+    # Write back to original files, preserving file structure
+    for parquet_path in parquet_files:
+        file_mask = combined_df["_source_file"] == str(parquet_path)
+        file_df = combined_df[file_mask].drop(columns=["_source_file"]).copy()
+        if len(file_df) > 0:
+            file_df.to_parquet(parquet_path, index=False)
+
+    logging.info(f"Repaired {repaired_count} episode indices in {dataset_root}")
+    return repaired_count
 
 
 def _delete_episodes_metadata_virtual(
@@ -2384,6 +2451,9 @@ def _delete_episodes_metadata_virtual(
     """Update episode metadata to remove deleted episodes."""
     episodes_dir = dataset.root / "meta" / "episodes"
     episode_mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted(episodes_to_keep))}
+
+    # Track cumulative index ACROSS all files (not reset per-file)
+    cumulative_idx = 0
 
     for parquet_path in sorted(episodes_dir.rglob("*.parquet")):
         df = pd.read_parquet(parquet_path)
@@ -2401,7 +2471,6 @@ def _delete_episodes_metadata_virtual(
 
         # Recalculate dataset_from_index and dataset_to_index
         df = df.sort_values("episode_index").reset_index(drop=True)
-        cumulative_idx = 0
         for i, row in df.iterrows():
             length = row["length"]
             df.at[i, "dataset_from_index"] = cumulative_idx
