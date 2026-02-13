@@ -56,24 +56,74 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
     if cached_mtime is not None and current_mtime == cached_mtime:
         return False
 
-    # Metadata changed - reload
-    from lerobot.datasets.utils import load_episodes, load_info, load_stats
+    # Metadata changed - reload metadata AND HuggingFace dataset
+    import datasets as hf_datasets
+
+    from lerobot.datasets.utils import (
+        get_hf_features_from_features,
+        hf_transform_to_torch,
+        load_episodes,
+        load_info,
+        load_nested_dataset,
+        load_stats,
+        load_tasks,
+    )
 
     logger.info(f"Detected metadata change for {dataset_id}, reloading...")
 
     try:
-        dataset.meta.info = load_info(dataset.root)
-        dataset.meta.episodes = load_episodes(dataset.root)
-        dataset.meta.stats = load_stats(dataset.root)
+        root = dataset.root
+
+        # Reload all metadata
+        dataset.meta.info = load_info(root)
+        dataset.meta.episodes = load_episodes(root)
+        dataset.meta.stats = load_stats(root)
+        dataset.meta.tasks = load_tasks(root)
         _dataset_info_mtime[dataset_id] = current_mtime
 
+        # CRITICAL: Also reload the HuggingFace dataset
+        # Otherwise frame indices will be misaligned with the new metadata
+        if dataset.hf_dataset is not None:
+            try:
+                num_cleaned = dataset.hf_dataset.cleanup_cache_files()
+                if num_cleaned > 0:
+                    logger.info(f"Cleaned up {num_cleaned} HF cache files")
+            except Exception as e:
+                logger.warning(f"Could not cleanup cache files: {e}")
+
+        # Clear video decoder cache
+        try:
+            from lerobot.datasets.video_utils import _default_decoder_cache
+
+            cache_size = _default_decoder_cache.size()
+            if cache_size > 0:
+                _default_decoder_cache.clear()
+                logger.info(f"Cleared video decoder cache ({cache_size} entries)")
+        except Exception as e:
+            logger.warning(f"Could not clear video decoder cache: {e}")
+
+        # Reload HF dataset with caching disabled
+        hf_datasets.disable_caching()
+        try:
+            features = get_hf_features_from_features(dataset.meta.features)
+            dataset.hf_dataset = load_nested_dataset(root / "data", features=features)
+            dataset.hf_dataset.set_transform(hf_transform_to_torch)
+            dataset._lazy_loading = False
+        finally:
+            hf_datasets.enable_caching()
+
+        # Invalidate frame cache for this dataset
+        num_invalidated = _app_state.frame_cache.invalidate_dataset(dataset_id)
+        if num_invalidated > 0:
+            logger.info(f"Invalidated {num_invalidated} cached frames")
+
         logger.info(
-            f"Reloaded metadata: {dataset.meta.total_episodes} episodes, "
+            f"Reloaded dataset: {dataset.meta.total_episodes} episodes, "
             f"{dataset.meta.total_frames} frames"
         )
         return True
     except Exception as e:
-        logger.error(f"Failed to reload metadata for {dataset_id}: {e}")
+        logger.error(f"Failed to reload dataset for {dataset_id}: {e}")
         return False
 
 
