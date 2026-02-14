@@ -172,8 +172,6 @@ MINIMAL_HTML = """
         .controls-bar button { padding: 8px 16px; border-radius: 4px; border: none; background: #4fc3f7; color: #000; cursor: pointer; font-size: 14px; }
         .controls-bar button:hover { background: #81d4fa; }
         .speed-select { padding: 6px 8px; border-radius: 4px; border: none; background: #0f3460; color: #fff; font-size: 12px; cursor: pointer; }
-        #rerun-btn { background: #9b59b6; font-size: 12px; padding: 6px 12px; }
-        #rerun-btn:hover { background: #8e44ad; }
         .timeline-container { flex: 1; position: relative; padding: 8px 0; }
         .timeline { height: 8px; background: #0f3460; border-radius: 4px; cursor: pointer; position: relative; }
         .timeline-progress { height: 100%; background: #4fc3f7; border-radius: 4px; width: 0%; pointer-events: none; }
@@ -243,7 +241,6 @@ MINIMAL_HTML = """
                     <option value="1.5">1.5x</option>
                     <option value="2">2x</option>
                 </select>
-                <button id="rerun-btn" onclick="launchRerun()" title="Open in Rerun viewer"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" style="vertical-align: middle; margin-right: 4px;"><rect width="16" height="16" rx="8" fill="black"/><path d="M3.59701 5.89534L9.54291 2.52359L8.87886 2.14705L2.933 5.51875L2.93295 11.29L3.59642 11.6662L3.59701 5.89534ZM5.01129 6.69754L9.54575 4.12609L9.54584 4.97707L5.76143 7.12299V12.8938H7.08936L6.42551 12.5173V11.666L8.59068 12.8938H9.91795L6.42541 10.9133V10.0621L11.4192 12.8938H12.7463L10.5849 11.6682L13.0383 10.2767V4.50559L12.3748 4.12944L12.3743 9.90028L9.92092 11.2915L9.1704 10.8659L11.624 9.47454V3.70369L10.9602 3.32724L10.9601 9.09806L8.5063 10.4894L7.75601 10.064L10.2098 8.67252V2.99656L4.34723 6.32109L4.34717 12.092L5.01094 12.4683L5.01129 6.69754ZM9.54579 5.73341L9.54584 8.29206L7.08886 9.68564L6.42541 9.30942V7.5034C6.79032 7.29649 9.54588 5.72714 9.54579 5.73341Z" fill="white"/></svg>Rerun</button>
                 <div class="timeline-container" id="timeline-container">
                     <div class="timeline-hover" id="timeline-hover">0:00 / Frame 0</div>
                     <div class="timeline" id="timeline">
@@ -279,6 +276,7 @@ MINIMAL_HTML = """
     <!-- Context menu -->
     <div class="context-menu" id="context-menu">
         <div class="context-menu-item" onclick="contextAction('view')">View Episode</div>
+        <div class="context-menu-item" onclick="contextAction('rerun')">Open in Rerun</div>
         <div class="context-menu-separator"></div>
         <div class="context-menu-item" onclick="contextAction('cleartrim')">Clear Trim</div>
         <div class="context-menu-separator"></div>
@@ -433,13 +431,15 @@ MINIMAL_HTML = """
                 const isExpanded = expandedNodes.has(id);
                 const dsEpisodes = episodes[id] || [];
                 const dsEditCount = pendingEdits.filter(e => e.dataset_id === id).length;
+                const totalFrames = dsEpisodes.reduce((sum, ep) => sum + ep.length, 0);
+                const tooltip = `${ds.repo_id}\\n${ds.total_episodes} episodes, ${totalFrames.toLocaleString()} frames\\nPath: ${ds.root}`;
 
                 html += `
                     <div class="tree-node">
-                        <div class="tree-header" onclick="toggleDataset('${id}')">
+                        <div class="tree-header" onclick="toggleDataset('${id}')" title="${tooltip}">
                             <span class="tree-toggle">${isExpanded ? '▼' : '▶'}</span>
                             <span class="tree-icon">📁</span>
-                            <span class="tree-label" title="${ds.repo_id}">${ds.repo_id}</span>
+                            <span class="tree-label">${ds.repo_id}</span>
                             <span class="tree-meta">${dsEditCount > 0 ? `${dsEditCount}✎ ` : ''}${ds.total_episodes} ep</span>
                         </div>
                         <div class="tree-children ${isExpanded ? 'expanded' : ''}">
@@ -772,6 +772,12 @@ MINIMAL_HTML = """
             } else if (e.key === 'ArrowRight') {
                 e.preventDefault();
                 loadAllFrames(currentFrame + (e.shiftKey ? 10 : 1));
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                navigateEpisode(-1);
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                navigateEpisode(1);
             } else if (e.key === ' ') {
                 e.preventDefault();
                 togglePlay();
@@ -791,6 +797,16 @@ MINIMAL_HTML = """
                 hideContextMenu();
             }
         });
+
+        function navigateEpisode(direction) {
+            if (!currentDataset || currentEpisode === null) return;
+            const dsEpisodes = episodes[currentDataset] || [];
+            const newIndex = currentEpisode + direction;
+            if (newIndex >= 0 && newIndex < dsEpisodes.length) {
+                const ep = dsEpisodes.find(e => e.episode_index === newIndex);
+                if (ep) selectEpisode(currentDataset, newIndex, ep.length);
+            }
+        }
 
         // Context menu
         function showContextMenu(e, datasetId, episodeIndex) {
@@ -829,6 +845,12 @@ MINIMAL_HTML = """
             if (action === 'view') {
                 const ep = episodes[datasetId]?.find(e => e.episode_index === episodeIndex);
                 if (ep) selectEpisode(datasetId, episodeIndex, ep.length);
+            } else if (action === 'rerun') {
+                const ep = episodes[datasetId]?.find(e => e.episode_index === episodeIndex);
+                if (ep) {
+                    selectEpisode(datasetId, episodeIndex, ep.length);
+                    launchRerun();
+                }
             } else if (action === 'delete') {
                 markEpisodeDeleted(datasetId, episodeIndex);
             } else if (action === 'undelete') {
