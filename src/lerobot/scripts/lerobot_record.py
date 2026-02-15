@@ -212,6 +212,8 @@ class RecordConfig:
     play_sounds: bool = True
     # Resume recording on an existing dataset.
     resume: bool = False
+    # Start with a reset phase before the first episode to allow setting up the environment.
+    start_with_reset: bool = True
 
     def __post_init__(self):
         # HACK: We parse again the cli args here to get the pretrained path if there was one.
@@ -499,8 +501,32 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
         listener, events = init_keyboard_listener()
 
+        def run_reset_phase():
+            """Run a reset phase to allow setting up / resetting the environment."""
+            log_say("Reset the environment", cfg.play_sounds)
+
+            if robot.name == "unitree_g1":
+                robot.reset()
+
+            record_loop(
+                robot=robot,
+                events=events,
+                fps=cfg.dataset.fps,
+                teleop_action_processor=teleop_action_processor,
+                robot_action_processor=robot_action_processor,
+                robot_observation_processor=robot_observation_processor,
+                teleop=teleop,
+                control_time_s=cfg.dataset.reset_time_s,
+                single_task=cfg.dataset.single_task,
+                display_data=cfg.display_data,
+            )
+
         with VideoEncodingManager(dataset):
             recorded_episodes = 0
+
+            if cfg.start_with_reset and not events["stop_recording"]:
+                run_reset_phase()
+
             while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
                 log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
                 record_loop(
@@ -526,24 +552,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 if not events["stop_recording"] and (
                     (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
                 ):
-                    log_say("Reset the environment", cfg.play_sounds)
-
-                    # reset g1 robot
-                    if robot.name == "unitree_g1":
-                        robot.reset()
-
-                    record_loop(
-                        robot=robot,
-                        events=events,
-                        fps=cfg.dataset.fps,
-                        teleop_action_processor=teleop_action_processor,
-                        robot_action_processor=robot_action_processor,
-                        robot_observation_processor=robot_observation_processor,
-                        teleop=teleop,
-                        control_time_s=cfg.dataset.reset_time_s,
-                        single_task=cfg.dataset.single_task,
-                        display_data=cfg.display_data,
-                    )
+                    run_reset_phase()
 
                 if events["rerecord_episode"]:
                     log_say("Re-record episode", cfg.play_sounds)
