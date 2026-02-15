@@ -201,9 +201,9 @@ class RealSenseCamera(Camera):
             ) from e
 
         self._configure_capture_settings()
-        self._start_read_thread()
 
-        # Create align object once for reuse (only if depth is enabled)
+        # Create align object and depth filters BEFORE starting the read thread,
+        # so the background thread can perform alignment + filtering per frame.
         if self.use_depth:
             self.align_to_color = rs.align(rs.stream.color)
 
@@ -230,6 +230,8 @@ class RealSenseCamera(Camera):
             if self.enable_spatial or self.enable_temporal:
                 self.depth_to_disparity = rs.disparity_transform(True)
                 self.disparity_to_depth = rs.disparity_transform(False)
+
+        self._start_read_thread()
 
         # NOTE(Steven/Caroline): Enforcing at least one second of warmup as RS cameras need a bit of time before the first read. If we don't wait, the first read from the warmup will raise.
         self.warmup_s = max(self.warmup_s, 1)
@@ -466,21 +468,16 @@ class RealSenseCamera(Camera):
         self, color_mode: ColorMode | None = None, timeout_ms: int = 200
     ) -> tuple[NDArray[Any], NDArray[Any]]:
         """
-        Reads synchronized and aligned color and depth frames from the camera.
+        Returns the latest aligned color and depth frames from the background thread.
 
-        This method captures both color and depth from the same frameset and aligns
-        the depth frame to the color frame's coordinate system using a pre-created
-        rs.align object. This ensures that depth[y, x] corresponds to the depth at
-        color[y, x].
-
-        The align object is created once during connect() and reused for efficiency.
-        Optional depth post-processing filters (spatial, temporal, hole filling)
-        are applied after alignment. Note: decimation is NOT recommended when using
-        different color/depth resolutions as it causes resize artifacts.
+        The background thread continuously reads synchronized framesets from the
+        pipeline, aligns depth to color coordinates, and applies post-processing
+        filters. This method simply returns the latest cached result.
 
         Args:
-            color_mode (Optional[ColorMode]): The target color mode (RGB or BGR).
-            timeout_ms (int): Maximum time in milliseconds to wait for frames. Defaults to 200ms.
+            color_mode (Optional[ColorMode]): Unused, kept for API compatibility.
+            timeout_ms (int): Maximum time in milliseconds to wait for a frame
+                to become available. Defaults to 200ms.
 
         Returns:
             tuple[np.ndarray, np.ndarray]:
@@ -489,61 +486,30 @@ class RealSenseCamera(Camera):
 
         Raises:
             DeviceNotConnectedError: If the camera is not connected.
-            RuntimeError: If depth is not enabled or reading frames fails.
+            RuntimeError: If depth is not enabled or no frames are available.
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
         if not self.use_depth:
             raise RuntimeError(f"Depth stream is not enabled for {self}.")
-        if self.align_to_color is None:
-            raise RuntimeError(f"{self}: align_to_color not initialized. This should not happen.")
 
-        start_time = time.perf_counter()
+        if self.thread is None or not self.thread.is_alive():
+            raise RuntimeError(f"{self} read thread is not running.")
 
-        if self.rs_pipeline is None:
-            raise RuntimeError(f"{self}: rs_pipeline must be initialized before use.")
-
-        # Read frameset
-        ret, frameset = self.rs_pipeline.try_wait_for_frames(timeout_ms=timeout_ms)
-
-        if not ret or frameset is None:
-            raise RuntimeError(f"{self} read_color_and_aligned_depth failed (status={ret}).")
-
-        # Align depth to color using pre-created align object
-        aligned_frameset = self.align_to_color.process(frameset)
-
-        # Get aligned frames
-        color_frame = aligned_frameset.get_color_frame()
-        depth_frame = aligned_frameset.get_depth_frame()
-
-        if not color_frame or not depth_frame:
-            raise RuntimeError(f"{self} failed to get aligned color and depth frames.")
-
-        # Apply depth post-processing filters to aligned depth frame
-        # Note: Filters work on aligned data here. For best results, disable decimation
-        # as it introduces resize artifacts when the depth resolution changes.
-        depth_frame = self._apply_depth_filters(depth_frame)
-
-        # Convert to numpy arrays
-        color_image_raw = np.asanyarray(color_frame.get_data())
-        depth_image_raw = np.asanyarray(depth_frame.get_data())
-
-        # If decimation was applied, resize depth back to match color frame size
-        if depth_image_raw.shape != color_image_raw.shape[:2]:
-            depth_image_raw = cv2.resize(
-                depth_image_raw,
-                (color_image_raw.shape[1], color_image_raw.shape[0]),
-                interpolation=cv2.INTER_NEAREST,
+        if not self.new_frame_event.wait(timeout=timeout_ms / 1000.0):
+            raise TimeoutError(
+                f"Timed out waiting for frame from {self} after {timeout_ms} ms."
             )
 
-        # Post-process both frames
-        color_image_processed = self._postprocess_image(color_image_raw, color_mode)
-        depth_image_processed = self._postprocess_image(depth_image_raw, depth_frame=True)
+        with self.frame_lock:
+            color_frame = self.latest_color_frame
+            depth_frame = self.latest_depth_frame
+            self.new_frame_event.clear()
 
-        read_duration_ms = (time.perf_counter() - start_time) * 1e3
-        logger.debug(f"{self} read_color_and_aligned_depth took: {read_duration_ms:.1f}ms")
+        if color_frame is None or depth_frame is None:
+            raise RuntimeError(f"No aligned frames available for {self}.")
 
-        return color_image_processed, depth_image_processed
+        return color_frame, depth_frame
 
     def read(self, color_mode: ColorMode | None = None, timeout_ms: int = 0) -> NDArray[Any]:
         """
@@ -652,21 +618,42 @@ class RealSenseCamera(Camera):
         failure_count = 0
         while not self.stop_event.is_set():
             try:
-                frame = self._read_from_hardware()
-                color_frame_raw = frame.get_color_frame()
-                color_frame = np.asanyarray(color_frame_raw.get_data())
-                processed_color_frame = self._postprocess_image(color_frame)
+                frameset = self._read_from_hardware()
 
-                if self.use_depth:
-                    depth_frame_raw = frame.get_depth_frame()
+                if self.use_depth and self.align_to_color is not None:
+                    # Align depth to color coordinate system (single frameset,
+                    # so color and depth are synchronized).
+                    aligned = self.align_to_color.process(frameset)
+                    color_frame_raw = aligned.get_color_frame()
+                    depth_frame_raw = aligned.get_depth_frame()
+
+                    # Apply depth post-processing filters
+                    depth_frame_raw = self._apply_depth_filters(depth_frame_raw)
+
+                    color_frame = np.asanyarray(color_frame_raw.get_data())
                     depth_frame = np.asanyarray(depth_frame_raw.get_data())
+
+                    # Resize depth back to color dimensions if decimation changed it
+                    if depth_frame.shape != color_frame.shape[:2]:
+                        depth_frame = cv2.resize(
+                            depth_frame,
+                            (color_frame.shape[1], color_frame.shape[0]),
+                            interpolation=cv2.INTER_NEAREST,
+                        )
+
+                    processed_color_frame = self._postprocess_image(color_frame)
                     processed_depth_frame = self._postprocess_image(depth_frame, depth_frame=True)
+                else:
+                    color_frame_raw = frameset.get_color_frame()
+                    color_frame = np.asanyarray(color_frame_raw.get_data())
+                    processed_color_frame = self._postprocess_image(color_frame)
+                    processed_depth_frame = None
 
                 capture_time = time.perf_counter()
 
                 with self.frame_lock:
                     self.latest_color_frame = processed_color_frame
-                    if self.use_depth:
+                    if processed_depth_frame is not None:
                         self.latest_depth_frame = processed_depth_frame
                     self.latest_timestamp = capture_time
                 self.new_frame_event.set()
