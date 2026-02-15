@@ -64,7 +64,10 @@ lerobot-record \
 
 import copy
 import logging
+import subprocess
 import time
+
+import numpy as np
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -343,6 +346,8 @@ def record_loop(
 
     # Track intervention state for transition detection
     was_intervening = False
+    # Track last follower position sent to leader (for servo compensation on intervention)
+    last_follower_pos_sent: dict[str, float] = {}
 
     # Collect intervention episode buffers for deferred saving (avoids mid-episode lag)
     pending_intervention_episodes: list[dict] = []
@@ -410,17 +415,98 @@ def record_loop(
 
             act_processed_policy: RobotAction = make_robot_action(action_values, dataset.features)
 
-            # Inverse-follow: send follower position to leader for smooth intervention
+            # Inverse-follow: send follower position to leader, compensating for
+            # servo tracking error so the leader is always close to the follower.
             if teleop is not None and hasattr(teleop, "send_feedback"):
                 follower_pos = {k: v for k, v in obs.items() if k.endswith(".pos")}
-                teleop.send_feedback(follower_pos)
+                leader_actual = teleop.get_action()
+                compensated = {}
+                correction_gain = 0.3  # 0-1: lower = smoother but slower convergence
+                for k, target in follower_pos.items():
+                    error = leader_actual.get(k, target) - target
+                    compensated[k] = target - correction_gain * error
+                teleop.send_feedback(compensated)
+                last_follower_pos_sent = follower_pos
 
         elif is_intervention and teleop is not None:
             # Human intervention mode
             if not was_intervening:
                 # Transition: policy → intervention
+                # Compensate servo tracking error before releasing torque:
+                # The leader servo can't perfectly reach its goal under load.
+                # Measure the error, overshoot the goal by that amount, wait for
+                # the servo to settle at the correct position, then release.
+                if last_follower_pos_sent and hasattr(teleop, "send_feedback"):
+                    target = last_follower_pos_sent
+                    # Start with current goal, iteratively adjust
+                    goal = dict(target)
+
+                    # Iterative compensation loop with audio feedback.
+                    # Each iteration: measure where the servo actually is,
+                    # adjust the goal to push it closer to target.
+                    settle_tolerance = 1.0  # normalized units
+                    beep_proc = None
+                    while True:
+                        pos = teleop.get_action()
+                        max_err = max(
+                            abs(pos.get(k, 0) - target[k])
+                            for k in target
+                        )
+                        if max_err < settle_tolerance:
+                            if beep_proc is not None:
+                                beep_proc.terminate()
+                            break
+
+                        # Adjust goal: for each joint, nudge goal by remaining error
+                        for k in target:
+                            error = pos.get(k, 0) - target[k]
+                            goal[k] = goal[k] - error
+                        teleop.send_feedback(goal)
+
+                        # Audio feedback: beeps when far, continuous tone when close
+                        almost_ready = max_err < settle_tolerance * 2
+                        if almost_ready:
+                            # Continuous high tone = "hold steady, almost there!"
+                            # Only start if not already playing
+                            if beep_proc is None or beep_proc.poll() is not None:
+                                sr = 8000
+                                dur = 1.0  # long tone, will be killed on convergence
+                                t = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
+                                tone = (np.sin(2 * np.pi * 1000 * t) * 16000).astype(np.int16)
+                                beep_proc = subprocess.Popen(
+                                    ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+                                    stdin=subprocess.PIPE,
+                                )
+                                beep_proc.stdin.write(tone.tobytes())
+                                beep_proc.stdin.close()
+                            time.sleep(0.05)
+                        else:
+                            # Kill continuous tone if we regressed
+                            if beep_proc is not None and beep_proc.poll() is None:
+                                beep_proc.terminate()
+                                beep_proc = None
+                            # Intermittent beeps: large error → fast, small error → slow
+                            interval = min(0.5, max(0.05, 0.05 + 0.45 * (1 - max_err / 50)))
+                            if beep_proc is None or beep_proc.poll() is not None:
+                                sr = 8000
+                                dur = min(interval * 0.6, 0.08)
+                                t = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
+                                freq = 600 + min(max_err, 50) * 8  # 600-1000Hz
+                                tone = (np.sin(2 * np.pi * freq * t) * 16000).astype(np.int16)
+                                beep_proc = subprocess.Popen(
+                                    ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+                                    stdin=subprocess.PIPE,
+                                )
+                                beep_proc.stdin.write(tone.tobytes())
+                                beep_proc.stdin.close()
+                            time.sleep(interval)
+
+                    settle_ms = (time.perf_counter() - start_loop_t) * 1e3
+                    logging.info(f"Servo compensation converged in {settle_ms:.0f}ms (max_err={max_err:.2f})")
+
                 if hasattr(teleop, "disable_torque"):
                     teleop.disable_torque()
+
                 log_say("Intervention", play_sounds)
 
             act = teleop.get_action()
