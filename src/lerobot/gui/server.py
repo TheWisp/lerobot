@@ -152,6 +152,7 @@ MINIMAL_HTML = """
         .toast.warning { border-left: 4px solid #f39c12; }
         .toast.info { border-left: 4px solid #4fc3f7; }
         .toast.success { border-left: 4px solid #27ae60; }
+        .toast.error { border-left: 4px solid #e74c3c; }
         .toast-title { font-weight: 600; margin-bottom: 4px; }
         .toast-message { color: #aaa; font-size: 12px; }
         @keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
@@ -407,7 +408,13 @@ MINIMAL_HTML = """
                 setStatus(`Opened: ${data.repo_id}`);
                 document.getElementById('dataset-path').value = '';
             } catch (e) {
-                setStatus('Error: ' + e.message);
+                let errorMsg = e.message;
+                try {
+                    const parsed = JSON.parse(errorMsg);
+                    if (parsed.detail) errorMsg = parsed.detail;
+                } catch (_) {}
+                setStatus('Error: ' + errorMsg);
+                showToast('Failed to open dataset', errorMsg, 'error', 10000);
             }
         }
 
