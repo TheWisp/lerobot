@@ -547,12 +547,17 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     display_compressed_images=display_compressed_images,
                 )
 
+                import time as _time
+                _t_between = _time.monotonic()
+
                 # Execute a few seconds without recording to give time to manually reset the environment
                 # Skip reset for the last episode to be recorded
                 if not events["stop_recording"] and (
                     (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
                 ):
                     run_reset_phase()
+
+                _t_after_reset = _time.monotonic()
 
                 if events["rerecord_episode"]:
                     log_say("Re-record episode", cfg.play_sounds)
@@ -562,6 +567,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     continue
 
                 dataset.save_episode()
+                _t_after_save = _time.monotonic()
+                logging.info(
+                    f"between-episode timing: reset_phase={_t_after_reset-_t_between:.1f}s, "
+                    f"save_episode={_t_after_save-_t_after_reset:.1f}s, "
+                    f"total={_t_after_save-_t_between:.1f}s"
+                )
                 recorded_episodes += 1
     finally:
         log_say("Stop recording", cfg.play_sounds, blocking=True)
