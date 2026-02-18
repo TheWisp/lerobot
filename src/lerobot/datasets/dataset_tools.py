@@ -37,7 +37,7 @@ import torch
 from tqdm import tqdm
 
 from lerobot.datasets.aggregate import aggregate_datasets
-from lerobot.datasets.compute_stats import aggregate_stats
+from lerobot.datasets.compute_stats import aggregate_stats, compute_episode_stats
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import (
     DATA_DIR,
@@ -48,6 +48,7 @@ from lerobot.datasets.utils import (
     get_parquet_file_size_in_mb,
     load_episodes,
     load_info,
+    load_stats,
     update_chunk_file_indices,
     write_info,
     write_stats,
@@ -77,6 +78,187 @@ def _load_episode_with_stats(src_dataset: LeRobotDataset, episode_idx: int) -> d
     episode_row = df[df["episode_index"] == episode_idx].iloc[0]
 
     return episode_row.to_dict()
+
+
+def _extract_episode_stats_from_parquet(episode_row: dict, features: dict) -> dict:
+    """Extract per-episode stats from a parquet row, handling nested numpy array deserialization.
+
+    When pandas/pyarrow serializes numpy arrays with shape (3, 1, 1) to parquet,
+    they can be deserialized as nested object arrays. This function flattens them back.
+
+    Args:
+        episode_row: Dictionary from a single episode's parquet row
+        features: The dataset's features dict (to detect image/video dtypes)
+
+    Returns:
+        Dictionary mapping feature names to their stats dicts
+    """
+    episode_stats = {}
+    for key in episode_row:
+        if not key.startswith("stats/"):
+            continue
+        stat_key = key.replace("stats/", "")
+        parts = stat_key.split("/")
+        if len(parts) != 2:
+            continue
+
+        feature_name, stat_name = parts
+        if feature_name not in episode_stats:
+            episode_stats[feature_name] = {}
+
+        value = episode_row[key]
+
+        if feature_name in features:
+            feature_dtype = features[feature_name].get("dtype", "")
+            if feature_dtype in ["image", "video"] and stat_name != "count":
+                if isinstance(value, np.ndarray) and value.dtype == object:
+                    flat_values = []
+                    for item in value:
+                        while isinstance(item, np.ndarray):
+                            item = item.flatten()[0]
+                        flat_values.append(item)
+                    value = np.array(flat_values, dtype=np.float64).reshape(3, 1, 1)
+                elif isinstance(value, np.ndarray) and value.shape == (3,):
+                    value = value.reshape(3, 1, 1)
+
+        episode_stats[feature_name][stat_name] = value
+
+    return episode_stats
+
+
+def _reaggregate_and_write_stats(local_dir: Path, features: dict) -> None:
+    """Re-aggregate stats from all per-episode parquet files and write stats.json.
+
+    Reads stats/* columns from all episode parquet files, aggregates them
+    using the parallel variance algorithm, and writes the result to meta/stats.json.
+
+    Args:
+        local_dir: Root directory of the dataset
+        features: The dataset's features dict
+    """
+    episodes_dir = local_dir / "meta" / "episodes"
+    all_stats = []
+
+    for parquet_path in sorted(episodes_dir.rglob("*.parquet")):
+        df = pd.read_parquet(parquet_path)
+        for _, row in df.iterrows():
+            episode_stats = _extract_episode_stats_from_parquet(row.to_dict(), features)
+            if episode_stats:
+                all_stats.append(episode_stats)
+
+    if not all_stats:
+        logging.warning("No per-episode statistics found to aggregate")
+        return
+
+    aggregated_stats = aggregate_stats(all_stats)
+    filtered_stats = {k: v for k, v in aggregated_stats.items() if k in features}
+    write_stats(filtered_stats, local_dir)
+
+
+def reaggregate_dataset_stats(dataset: LeRobotDataset) -> None:
+    """Re-aggregate stats.json from per-episode parquet stats.
+
+    Call this once after batching multiple trim/delete operations with
+    ``recompute_stats=False`` to avoid O(N*E) re-aggregation overhead.
+
+    Args:
+        dataset: The dataset whose stats.json should be rebuilt.
+    """
+    _reaggregate_and_write_stats(dataset.root, dataset.meta.features)
+
+
+def _recompute_episode_stats_from_data(
+    local_dir: Path,
+    episode_index: int,
+    features: dict,
+) -> None:
+    """Recompute per-episode stats from data parquet and update episode metadata.
+
+    Loads the episode's data rows, computes stats for non-video features,
+    and updates the stats/* columns in the episode parquet file.
+
+    For video features, stats are not recomputed (virtual trim doesn't modify
+    video pixels, and VISUAL normalization typically uses IDENTITY mode).
+    Only the count is updated to reflect the new frame count.
+
+    Args:
+        local_dir: Root directory of the dataset
+        episode_index: Index of the episode to recompute stats for
+        features: The dataset's features dict
+    """
+    from lerobot.datasets.utils import flatten_dict
+
+    # Load the episode's data from data parquet
+    data_dir = local_dir / DATA_DIR
+    all_data = []
+    for parquet_path in sorted(data_dir.rglob("*.parquet")):
+        df = pd.read_parquet(parquet_path)
+        ep_data = df[df["episode_index"] == episode_index]
+        if len(ep_data) > 0:
+            all_data.append(ep_data)
+
+    if not all_data:
+        logging.warning(f"No data found for episode {episode_index}")
+        return
+
+    ep_df = pd.concat(all_data)
+    new_frame_count = len(ep_df)
+
+    # Build episode_data dict for compute_episode_stats (non-video features only)
+    episode_data = {}
+    for key, feat_info in features.items():
+        if feat_info["dtype"] in ["image", "video", "string"]:
+            continue
+        if key not in ep_df.columns:
+            continue
+        col_data = ep_df[key].values
+        # Convert list-of-arrays to 2D numpy array
+        if isinstance(col_data[0], (list, np.ndarray)):
+            episode_data[key] = np.stack(col_data)
+        else:
+            episode_data[key] = col_data
+
+    # Compute stats for non-video features
+    non_video_features = {k: v for k, v in features.items() if v["dtype"] not in ["image", "video"]}
+    new_stats = compute_episode_stats(episode_data, non_video_features, skip_images=True)
+
+    # Update the episode parquet file
+    episodes_dir = local_dir / "meta" / "episodes"
+    for parquet_path in sorted(episodes_dir.rglob("*.parquet")):
+        df = pd.read_parquet(parquet_path)
+        if episode_index not in df["episode_index"].values:
+            continue
+
+        row_idx = df.index[df["episode_index"] == episode_index][0]
+
+        # Build a new stats dict for this row, preserving existing video stats
+        flat_new_stats = flatten_dict({"stats": new_stats})
+
+        # Update the row as a dict, then reconstruct the DataFrame row
+        row_dict = df.loc[row_idx].to_dict()
+        for col_name, value in flat_new_stats.items():
+            if col_name in row_dict:
+                # Match dtype of existing column to avoid pyarrow mixed-dtype errors
+                existing = row_dict[col_name]
+                if isinstance(existing, np.ndarray) and isinstance(value, np.ndarray):
+                    value = value.astype(existing.dtype)
+                row_dict[col_name] = value
+
+        # Update video feature counts to match new frame count
+        for key, feat_info in features.items():
+            if feat_info["dtype"] in ["image", "video"]:
+                count_col = f"stats/{key}/count"
+                if count_col in row_dict:
+                    row_dict[count_col] = np.array([new_frame_count])
+
+        # Drop the old row and append the updated one
+        df = df.drop(index=row_idx)
+        new_row_df = pd.DataFrame([row_dict])
+        df = pd.concat([df, new_row_df], ignore_index=True)
+        df = df.sort_values("episode_index").reset_index(drop=True)
+
+        df.to_parquet(parquet_path, index=False)
+        break  # Episode only exists in one file
 
 
 def delete_episodes(
@@ -1813,6 +1995,7 @@ def trim_episode_by_frames(
     episode_index: int,
     start_frame: int,
     end_frame: int,
+    recompute_stats: bool = True,
 ) -> LeRobotDataset:
     """Trim an episode in-place by specifying the frame range to keep.
 
@@ -1915,6 +2098,13 @@ def trim_episode_by_frames(
         new_length=new_episode_length,
         frames_removed=frames_removed,
     )
+
+    # Step 4: Recompute per-episode stats and re-aggregate stats.json
+    if recompute_stats:
+        _recompute_episode_stats_from_data(dataset.root, episode_index, dataset.meta.features)
+        _reaggregate_and_write_stats(dataset.root, dataset.meta.features)
+    else:
+        _recompute_episode_stats_from_data(dataset.root, episode_index, dataset.meta.features)
 
     logging.info(f"Episode {episode_index} trimmed successfully")
     return dataset
@@ -2151,6 +2341,7 @@ def trim_episode_virtual(
     episode_index: int,
     start_frame: int,
     end_frame: int,
+    recompute_stats: bool = True,
 ) -> LeRobotDataset:
     """Trim an episode WITHOUT re-encoding video files.
 
@@ -2171,6 +2362,9 @@ def trim_episode_virtual(
         episode_index: Index of the episode to trim.
         start_frame: First frame to keep (0-indexed, inclusive).
         end_frame: Last frame to keep (0-indexed, exclusive).
+        recompute_stats: If True (default), recompute per-episode stats and
+            re-aggregate stats.json. Set to False when batching multiple trims,
+            then call ``reaggregate_dataset_stats()`` once at the end.
 
     Returns:
         The modified dataset.
@@ -2226,6 +2420,15 @@ def trim_episode_virtual(
         frames_removed=frames_removed,
         frames_trimmed_from_start=frames_to_trim_start,
     )
+
+    # Step 3: Recompute per-episode stats and re-aggregate stats.json
+    if recompute_stats:
+        _recompute_episode_stats_from_data(dataset.root, episode_index, dataset.meta.features)
+        _reaggregate_and_write_stats(dataset.root, dataset.meta.features)
+    else:
+        # Always recompute the individual episode's stats (cheap, O(episode_data)),
+        # but skip the O(total_episodes) re-aggregation for the caller to do once.
+        _recompute_episode_stats_from_data(dataset.root, episode_index, dataset.meta.features)
 
     logging.info(f"Episode {episode_index} virtually trimmed successfully")
     return dataset
@@ -2293,6 +2496,7 @@ def _trim_episode_metadata_virtual(
 def delete_episodes_virtual(
     dataset: LeRobotDataset,
     episode_indices: list[int],
+    recompute_stats: bool = True,
 ) -> LeRobotDataset:
     """Delete episodes WITHOUT re-encoding video files.
 
@@ -2310,6 +2514,9 @@ def delete_episodes_virtual(
     Args:
         dataset: The LeRobotDataset to modify in-place.
         episode_indices: List of episode indices to delete.
+        recompute_stats: If True (default), re-aggregate stats.json from
+            remaining episodes. Set to False when batching with other edits,
+            then call ``reaggregate_dataset_stats()`` once at the end.
 
     Returns:
         The modified dataset.
@@ -2341,6 +2548,10 @@ def delete_episodes_virtual(
 
     # Step 2: Update episode metadata
     _delete_episodes_metadata_virtual(dataset, episode_indices, episodes_to_keep, frames_removed)
+
+    # Step 3: Re-aggregate stats from remaining episodes
+    if recompute_stats:
+        _reaggregate_and_write_stats(dataset.root, dataset.meta.features)
 
     logging.info(f"Virtually deleted {len(episode_indices)} episodes")
     return dataset
@@ -3313,6 +3524,42 @@ def verify_dataset(
                 result.add_warning("videos", f"... and {video_file_missing - 3} more missing video files")
             if video_timestamp_errors > 3:
                 result.add_warning("videos", f"... and {video_timestamp_errors - 3} more timestamp mismatches")
+
+    # ==========================================================================
+    # 6. Verify stats.json consistency with per-episode stats
+    # ==========================================================================
+    stats_path = dataset_root / "meta" / "stats.json"
+    if stats_path.exists():
+        try:
+            stored_stats = load_stats(dataset_root)
+            if stored_stats is not None:
+                # Re-aggregate from per-episode parquet files
+                all_ep_stats = []
+                for ep_file in sorted(episodes_dir.rglob("*.parquet")):
+                    ep_df = pd.read_parquet(ep_file)
+                    for _, row in ep_df.iterrows():
+                        ep_stats = _extract_episode_stats_from_parquet(row.to_dict(), features)
+                        if ep_stats:
+                            all_ep_stats.append(ep_stats)
+
+                if all_ep_stats:
+                    recomputed_stats = aggregate_stats(all_ep_stats)
+                    for feature_key in stored_stats:
+                        if feature_key not in recomputed_stats:
+                            continue
+                        for stat_key in stored_stats[feature_key]:
+                            if stat_key not in recomputed_stats[feature_key]:
+                                continue
+                            stored_val = np.asarray(stored_stats[feature_key][stat_key], dtype=np.float64)
+                            recomp_val = np.asarray(recomputed_stats[feature_key][stat_key], dtype=np.float64)
+                            if not np.allclose(stored_val, recomp_val, atol=1e-4, equal_nan=True):
+                                result.add_warning(
+                                    "stats",
+                                    f"stats.json mismatch for {feature_key}/{stat_key}: "
+                                    f"stored={stored_val.tolist()}, recomputed={recomp_val.tolist()}",
+                                )
+        except Exception as e:
+            result.add_warning("stats", f"Failed to verify stats consistency: {e}")
 
     if verbose:
         logging.info(result.summary())

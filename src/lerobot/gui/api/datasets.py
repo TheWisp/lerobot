@@ -166,6 +166,16 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
         # Invalidate episode start index cache
         _invalidate_episode_start_indices(dataset_id)
 
+        # Verify dataset integrity after reload
+        from lerobot.datasets.dataset_tools import verify_dataset
+
+        verification = verify_dataset(root, check_videos=False, verbose=False)
+        if not verification.is_valid:
+            for err in verification.errors:
+                logger.warning(f"Post-reload verification: {err.message}")
+        for warn in verification.warnings:
+            logger.warning(f"Post-reload verification warning: {warn.message}")
+
         logger.info(
             f"Reloaded dataset: {dataset.meta.total_episodes} episodes, "
             f"{dataset.meta.total_frames} frames"
@@ -321,6 +331,11 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             for err in verification.errors:
                 logger.warning(f"Dataset verification: {err.message}")
                 warnings.append(err.message)
+        for warn in verification.warnings:
+            logger.warning(f"Dataset verification warning: {warn.message}")
+            warnings.append(warn.message)
+        if verification.is_valid and not verification.warnings:
+            logger.info("Dataset verification passed with no errors")
 
         # Store in app state
         _app_state.datasets[dataset_id] = dataset

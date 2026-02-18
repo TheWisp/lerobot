@@ -229,7 +229,11 @@ async def apply_edits(dataset_id: str):
     """Apply all pending edits for a dataset to disk."""
     from pathlib import Path
 
-    from lerobot.datasets.dataset_tools import delete_episodes_virtual, trim_episode_virtual
+    from lerobot.datasets.dataset_tools import (
+        delete_episodes_virtual,
+        reaggregate_dataset_stats,
+        trim_episode_virtual,
+    )
     from lerobot.datasets.utils import load_episodes
 
     if dataset_id not in _app_state.datasets:
@@ -266,6 +270,7 @@ async def apply_edits(dataset_id: str):
                 episode_index=edit.episode_index,
                 start_frame=start_frame,
                 end_frame=end_frame,
+                recompute_stats=False,
             )
 
             # Reload metadata to see changes
@@ -290,7 +295,7 @@ async def apply_edits(dataset_id: str):
             dataset.meta.episodes = load_episodes(original_root)
 
             # Virtual delete modifies metadata and parquet in-place (no video re-encoding)
-            delete_episodes_virtual(dataset, episode_indices=episode_indices)
+            delete_episodes_virtual(dataset, episode_indices=episode_indices, recompute_stats=False)
 
             logger.info(f"Deleted episodes {episode_indices} (virtual - no video re-encoding)")
 
@@ -298,6 +303,15 @@ async def apply_edits(dataset_id: str):
         except Exception as e:
             errors.append(f"Delete episodes: {e}")
             logger.exception("Failed to delete episodes")
+
+    # Re-aggregate stats once after all edits (O(E) instead of O(N*E))
+    if applied > 0:
+        try:
+            reaggregate_dataset_stats(dataset)
+            logger.info("Re-aggregated dataset stats after all edits")
+        except Exception as e:
+            logger.exception(f"Failed to re-aggregate stats: {e}")
+            errors.append(f"Stats re-aggregation failed: {e}")
 
     # Clear applied edits (both in memory and on disk)
     from lerobot.gui.state import clear_edits_file
@@ -375,12 +389,29 @@ async def apply_edits(dataset_id: str):
         logger.exception(f"Failed to reload dataset after edits: {e}")
         errors.append(f"Dataset reload failed: {e}")
 
+    # Verify dataset integrity after edits
+    warnings = []
+    try:
+        from lerobot.datasets.dataset_tools import verify_dataset
+
+        verification = verify_dataset(old_dataset.root, check_videos=False, verbose=False)
+        if not verification.is_valid:
+            for err in verification.errors:
+                logger.warning(f"Post-edit verification: {err.message}")
+                warnings.append(err.message)
+        for warn in verification.warnings:
+            logger.warning(f"Post-edit verification warning: {warn.message}")
+            warnings.append(warn.message)
+    except Exception as e:
+        logger.warning(f"Post-edit verification failed: {e}")
+
     if errors:
         return {
             "status": "partial",
             "message": f"Applied {applied} edits with {len(errors)} errors",
             "applied": applied,
             "errors": errors,
+            "warnings": warnings,
         }
 
-    return {"status": "ok", "message": f"Applied {applied} edits", "applied": applied}
+    return {"status": "ok", "message": f"Applied {applied} edits", "applied": applied, "warnings": warnings}
