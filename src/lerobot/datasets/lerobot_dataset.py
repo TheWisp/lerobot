@@ -1625,7 +1625,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         if not self.meta.video_keys:
             return
         # Don't encode video when image/video recording is disabled
-        if not self._record_images:
+        if not getattr(self, "_record_images", True):
             return
         # Streaming encoders replace the PNG-then-encode pipeline only for immediate encoding.
         # When batch_encoding_size > 1, keep the old deferred PNG path.

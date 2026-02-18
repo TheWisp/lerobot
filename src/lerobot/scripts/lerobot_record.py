@@ -647,6 +647,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     num_processes=cfg.dataset.num_image_writer_processes,
                     num_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
                 )
+            # Initialize episode buffer and streaming video encoders for recording
+            # (create() does this automatically, but __init__ used for resume does not)
+            dataset.episode_buffer = dataset.create_episode_buffer()
+            dataset._init_video_encoders()
             sanity_check_dataset_robot_compatibility(dataset, robot, cfg.dataset.fps, dataset_features)
         else:
             # Create empty dataset or load existing saved episodes
@@ -679,6 +683,9 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         num_processes=cfg.dataset.num_image_writer_processes,
                         num_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
                     )
+                # Initialize episode buffer and streaming video encoders for recording
+                intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
+                intervention_dataset._init_video_encoders()
                 logging.info(f"Resumed intervention dataset: {cfg.intervention_repo_id} ({intervention_dataset.num_episodes} episodes)")
             else:
                 intervention_dataset = LeRobotDataset.create(
@@ -799,6 +806,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         for ep_buffer in pending_intervention_episodes:
                             intervention_dataset.save_episode(episode_data=ep_buffer)
                             logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1}")
+                        # Restart video encoders for the next intervention episode.
+                        # save_episode(episode_data=...) skips clear_episode_buffer(),
+                        # so encoders are left in a finished state.
+                        if intervention_dataset.video_encoders:
+                            intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
+                            intervention_dataset._start_video_encoders()
 
                     _t_after_save = _time.monotonic()
                     logging.info(
