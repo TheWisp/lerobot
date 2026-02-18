@@ -672,6 +672,80 @@ def test_streaming_video_stats_in_saved_metadata(tmp_path, empty_lerobot_dataset
         assert np.all(val >= 0) and np.all(val <= 1), f"Stat '{k}' not in [0,1]: {val}"
 
 
+def test_save_episode_data_then_add_frame(tmp_path, empty_lerobot_dataset_factory):
+    """Regression: save_episode(episode_data=...) must not break subsequent add_frame.
+
+    When save_episode is called with explicit episode_data, clear_episode_buffer()
+    is skipped, leaving streaming video encoders in a finished state. The next
+    add_frame must still work — encoders need to be restarted.
+    """
+    vid_key = "video"
+    features = {
+        vid_key: {"dtype": "video", "shape": DUMMY_CHW, "names": ["channels", "height", "width"]},
+        "state": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+    }
+    ds = empty_lerobot_dataset_factory(root=tmp_path / "ep_data_restart", features=features)
+
+    # Record episode 0 normally (populates the buffer, exercises full path)
+    for _ in range(5):
+        ds.add_frame({
+            vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+            "state": torch.randn(2),
+            "task": "task0",
+        })
+    ds.save_episode()  # calls clear_episode_buffer → restarts encoders
+
+    # Build an external episode buffer (mimics intervention recording pattern)
+    ext_buffer = ds.create_episode_buffer()
+    for _ in range(3):
+        frame = {
+            vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+            "state": torch.randn(2),
+            "task": "task1",
+        }
+        ds.add_frame(frame)
+    # Snapshot the buffer before save_episode pops size/task
+    ext_buffer = ds.episode_buffer.copy()
+
+    ds.save_episode()  # save episode 1 normally to advance metadata
+
+    # Now save an episode via episode_data (like the intervention dataset does).
+    # This skips clear_episode_buffer(), leaving encoders finished.
+    ext_buffer2 = ds.create_episode_buffer()
+    for i in range(4):
+        frame = {
+            vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+            "state": torch.randn(2),
+            "task": "task2",
+        }
+        ext_buffer2["size"] += 1
+        ext_buffer2["task"].append(frame["task"])
+        for key in frame:
+            if key == "task":
+                continue
+            ext_buffer2[key].append(frame[key])
+        # Also push to encoder so it has data
+        if ds.video_encoders and vid_key in ds.video_encoders:
+            ds.video_encoders[vid_key].push_frame(frame[vid_key])
+        ext_buffer2["frame_index"].append(i)
+        ext_buffer2["timestamp"].append(i / ds.fps)
+
+    ds.save_episode(episode_data=ext_buffer2)
+
+    # After save_episode(episode_data=...), encoders are finished but NOT restarted.
+    # Manually restart them (matching the fix in lerobot_record.py).
+    if ds.video_encoders:
+        ds.episode_buffer = ds.create_episode_buffer()
+        ds._start_video_encoders()
+
+    # This must NOT raise "No active episode. Call start_episode() first."
+    ds.add_frame({
+        vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+        "state": torch.randn(2),
+        "task": "task3",
+    })
+
+
 def test_streaming_video_stats_multi_episode(tmp_path, empty_lerobot_dataset_factory):
     """Verify aggregated stats across multiple episodes are correct."""
     vid_key = "video"
