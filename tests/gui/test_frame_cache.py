@@ -200,3 +200,35 @@ class TestFrameCacheBasics:
         assert decode_count[0] == 1  # Not called again
 
         assert result1 == result2
+
+
+class TestFrameCacheContains:
+    """Tests for the contains() method."""
+
+    def test_contains_returns_true_for_cached_entry(self):
+        cache = FrameCache(max_bytes=1_000_000)
+        cache.put("ds", 0, 5, "cam", b"test_frame")
+
+        assert cache.contains("ds", 0, 5, "cam") is True
+
+    def test_contains_returns_false_for_missing_entry(self):
+        cache = FrameCache(max_bytes=1_000_000)
+
+        assert cache.contains("ds", 0, 0, "cam") is False
+
+    def test_contains_does_not_affect_lru_order(self):
+        """Verify that contains() does not move the entry to the end of LRU."""
+        cache = FrameCache(max_bytes=100)
+
+        cache.put("ds", 0, 0, "cam", b"A" * 30)
+        cache.put("ds", 0, 1, "cam", b"B" * 30)
+        cache.put("ds", 0, 2, "cam", b"C" * 30)  # total 90
+
+        # contains() on the oldest entry should NOT protect it from eviction
+        assert cache.contains("ds", 0, 0, "cam") is True
+
+        # Add new entry — should evict entry 0 (oldest, not moved by contains)
+        cache.put("ds", 0, 3, "cam", b"D" * 30)
+
+        assert cache.get("ds", 0, 0, "cam") is None  # Evicted
+        assert cache.get("ds", 0, 1, "cam") is not None

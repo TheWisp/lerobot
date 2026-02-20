@@ -17,13 +17,10 @@ Frame cache with LRU eviction based on memory budget.
 
 from __future__ import annotations
 
-import io
 import logging
 import threading
 from collections import OrderedDict
 from typing import TYPE_CHECKING
-
-from PIL import Image
 
 if TYPE_CHECKING:
     import torch
@@ -34,6 +31,9 @@ logger = logging.getLogger(__name__)
 def encode_frame_to_jpeg(frame: "torch.Tensor", quality: int = 85) -> bytes:
     """Convert a torch tensor frame to JPEG bytes.
 
+    Uses torchvision.io.encode_jpeg for fast encoding (libjpeg-turbo),
+    avoiding the numpy/PIL conversion overhead.
+
     Args:
         frame: Tensor of shape (C, H, W) or (H, W, C) with values in [0, 255] or [0, 1]
         quality: JPEG quality (1-100)
@@ -42,36 +42,23 @@ def encode_frame_to_jpeg(frame: "torch.Tensor", quality: int = 85) -> bytes:
         JPEG encoded bytes
     """
     import torch
+    from torchvision.io import encode_jpeg
 
-    # Handle different tensor formats
-    if frame.dim() == 3:
-        if frame.shape[0] in (1, 3, 4):  # C, H, W format
-            frame = frame.permute(1, 2, 0)  # -> H, W, C
+    # Ensure C, H, W format (encode_jpeg requires CHW)
+    if frame.dim() == 3 and frame.shape[0] not in (1, 3, 4):
+        frame = frame.permute(2, 0, 1)  # H, W, C -> C, H, W
+    elif frame.dim() == 2:
+        frame = frame.unsqueeze(0)  # H, W -> 1, H, W
 
     # Convert to uint8 if needed
-    if frame.dtype == torch.float32 or frame.dtype == torch.float64:
-        if frame.max() <= 1.0:
-            frame = (frame * 255).to(torch.uint8)
-        else:
-            frame = frame.to(torch.uint8)
+    if frame.is_floating_point():
+        frame = (frame * 255).clamp(0, 255).to(torch.uint8)
     elif frame.dtype != torch.uint8:
         frame = frame.to(torch.uint8)
 
-    # Convert to numpy and then PIL
-    np_frame = frame.cpu().numpy()
+    frame = frame.cpu().contiguous()
 
-    # Handle grayscale
-    if np_frame.ndim == 2 or (np_frame.ndim == 3 and np_frame.shape[2] == 1):
-        if np_frame.ndim == 3:
-            np_frame = np_frame.squeeze(2)
-        img = Image.fromarray(np_frame, mode="L")
-    else:
-        img = Image.fromarray(np_frame, mode="RGB")
-
-    # Encode to JPEG
-    buffer = io.BytesIO()
-    img.save(buffer, format="JPEG", quality=quality)
-    return buffer.getvalue()
+    return encode_jpeg(frame, quality=quality).numpy().tobytes()
 
 
 class FrameCache:
@@ -97,6 +84,22 @@ class FrameCache:
     def _make_key(self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str) -> tuple:
         """Create a cache key from frame identifiers."""
         return (dataset_id, episode_idx, frame_idx, camera_key)
+
+    def contains(self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str) -> bool:
+        """Check if a frame is cached without affecting LRU order.
+
+        Args:
+            dataset_id: Unique identifier for the dataset
+            episode_idx: Episode index
+            frame_idx: Frame index within the episode
+            camera_key: Camera/image key
+
+        Returns:
+            True if the frame is cached, False otherwise
+        """
+        key = self._make_key(dataset_id, episode_idx, frame_idx, camera_key)
+        with self.lock:
+            return key in self.cache
 
     def get(self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str) -> bytes | None:
         """Get a cached frame if available.

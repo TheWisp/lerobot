@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +39,21 @@ _dataset_info_mtime: dict[str, float] = {}
 
 # Cache episode start indices (cumulative sum of lengths)
 _episode_start_indices: dict[str, list[int]] = {}
+
+# Background prefetch state
+# Single worker: sequential frame access is optimal for video decoding.
+# The prefetch thread uses its own VideoDecoderCache, so it does NOT
+# contend with the main thread's decoder — no lock needed.
+_prefetch_executor = ThreadPoolExecutor(max_workers=1)
+_prefetch_generation: int = 0
+_prefetch_current: tuple[str, int] | None = None  # (dataset_id, episode_idx)
+_prefetch_last_frame: int = 0  # Last frame requested by _maybe_start_prefetch
+_prefetch_lock = threading.Lock()
+
+# Threshold for detecting seeks vs. normal sequential playback.
+# If the frame delta between consecutive _maybe_start_prefetch calls
+# exceeds this, we cancel the current prefetch and restart from the new position.
+_PREFETCH_SEEK_THRESHOLD = 5
 
 
 def _get_episode_start_index(dataset_id: str, episode_idx: int) -> int:
@@ -184,6 +201,151 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to reload dataset for {dataset_id}: {e}")
         return False
+
+
+_PREFETCH_BATCH_SIZE = 30  # Frames per batch (~1 second at 30 fps)
+
+
+def _prefetch_episode(
+    dataset_id: str, episode_idx: int, ep_length: int, generation: int, start_frame: int = 0
+) -> None:
+    """Decode and cache all frames of an episode in a background thread.
+
+    Starts from start_frame and wraps around to cover the entire episode.
+    Stops early if _prefetch_generation changes (meaning a different episode was selected).
+
+    Uses batch decoding (multiple timestamps per decode call) for efficiency —
+    the video decoder can read sequential frames without re-seeking. Also uses
+    its own VideoDecoderCache so it never contends with the main thread.
+    """
+    import time
+
+    from lerobot.datasets.video_utils import VideoDecoderCache, decode_video_frames_torchcodec
+    from lerobot.gui.frame_cache import encode_frame_to_jpeg
+
+    if dataset_id not in _app_state.datasets:
+        return
+
+    dataset = _app_state.datasets[dataset_id]
+    video_keys = list(dataset.meta.video_keys)
+    first_camera = list(dataset.meta.camera_keys)[0] if dataset.meta.camera_keys else None
+    ep = dataset.meta.episodes[episode_idx]
+    fps = dataset.fps
+    tolerance_s = 1 / fps * 0.7
+
+    # Own decoder cache — completely independent from the main thread's decoders
+    prefetch_decoder_cache = VideoDecoderCache()
+
+    cached_count = 0
+    decoded_count = 0
+    total_decode_ms = 0.0
+    total_encode_ms = 0.0
+    prefetch_start = time.perf_counter()
+
+    # Build two contiguous ranges: [start_frame, ep_length) then [0, start_frame)
+    # Keeping frame indices sequential within each range lets the decoder
+    # read forward without seeking backward.
+    contiguous_ranges = [range(start_frame, ep_length)]
+    if start_frame > 0:
+        contiguous_ranges.append(range(0, start_frame))
+
+    try:
+        for frame_range in contiguous_ranges:
+            for batch_start in range(frame_range.start, frame_range.stop, _PREFETCH_BATCH_SIZE):
+                # Check cancellation between batches
+                if _prefetch_generation != generation:
+                    logger.info(
+                        f"Prefetch cancelled for episode {episode_idx} at frame {batch_start}/{ep_length} "
+                        f"(decoded {decoded_count}, skipped {cached_count} cached)"
+                    )
+                    return
+
+                batch_end = min(batch_start + _PREFETCH_BATCH_SIZE, frame_range.stop)
+
+                # Filter out already-cached frames
+                uncached_frames = []
+                for fi in range(batch_start, batch_end):
+                    if first_camera and _app_state.frame_cache.contains(
+                        dataset_id, episode_idx, fi, first_camera
+                    ):
+                        cached_count += 1
+                    else:
+                        uncached_frames.append(fi)
+
+                if not uncached_frames:
+                    continue
+
+                # Batch-decode all uncached frames for each camera
+                try:
+                    for vid_key in video_keys:
+                        from_timestamp = ep[f"videos/{vid_key}/from_timestamp"]
+                        timestamps = [from_timestamp + fi / fps for fi in uncached_frames]
+                        video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, vid_key)
+
+                        t1 = time.perf_counter()
+                        frames = decode_video_frames_torchcodec(
+                            video_path, timestamps, tolerance_s,
+                            decoder_cache=prefetch_decoder_cache,
+                        )
+                        t2 = time.perf_counter()
+                        total_decode_ms += (t2 - t1) * 1000
+
+                        # JPEG-encode each frame and cache it
+                        for k, fi in enumerate(uncached_frames):
+                            cam_jpeg = encode_frame_to_jpeg(frames[k])
+                            _app_state.frame_cache.put(dataset_id, episode_idx, fi, vid_key, cam_jpeg)
+
+                        t3 = time.perf_counter()
+                        total_encode_ms += (t3 - t2) * 1000
+
+                    decoded_count += len(uncached_frames)
+                except Exception:
+                    logger.warning(
+                        f"Prefetch failed for batch {batch_start}-{batch_end} of episode {episode_idx}",
+                        exc_info=True,
+                    )
+
+        elapsed = (time.perf_counter() - prefetch_start) * 1000
+        avg_decode = total_decode_ms / decoded_count if decoded_count else 0
+        avg_encode = total_encode_ms / decoded_count if decoded_count else 0
+        logger.info(
+            f"Prefetch complete for episode {episode_idx}: "
+            f"decoded {decoded_count}, skipped {cached_count} cached, {ep_length} total in {elapsed:.0f}ms "
+            f"(avg decode={avg_decode:.1f}ms, encode={avg_encode:.1f}ms)"
+        )
+    finally:
+        prefetch_decoder_cache.clear()
+
+
+def _maybe_start_prefetch(dataset_id: str, episode_idx: int, ep_length: int, start_frame: int = 0) -> None:
+    """Start background prefetching for an episode if not already in progress.
+
+    Deduplicates by (dataset_id, episode_idx) for sequential playback.
+    Detects seeks (frame jumps > _PREFETCH_SEEK_THRESHOLD) and restarts
+    the prefetch from the new position.
+    """
+    global _prefetch_generation, _prefetch_current, _prefetch_last_frame
+
+    with _prefetch_lock:
+        if _prefetch_current == (dataset_id, episode_idx):
+            # Same episode — only restart on significant seek
+            frame_delta = abs(start_frame - _prefetch_last_frame)
+            _prefetch_last_frame = start_frame
+            if frame_delta <= _PREFETCH_SEEK_THRESHOLD:
+                return  # Normal sequential advance, let current prefetch continue
+            # Big jump detected — cancel old prefetch and restart from new position
+            logger.info(
+                f"Seek detected (delta={frame_delta}), restarting prefetch "
+                f"for episode {episode_idx} from frame {start_frame}"
+            )
+
+        _prefetch_generation += 1
+        generation = _prefetch_generation
+        _prefetch_current = (dataset_id, episode_idx)
+        _prefetch_last_frame = start_frame
+
+    logger.info(f"Starting prefetch for episode {episode_idx} from frame {start_frame} ({ep_length} frames)")
+    _prefetch_executor.submit(_prefetch_episode, dataset_id, episode_idx, ep_length, generation, start_frame)
 
 
 def set_app_state(state: "AppState") -> None:
@@ -477,6 +639,8 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
     episode_start = _get_episode_start_index(dataset_id, episode_idx)
     global_idx = episode_start + frame_idx
 
+    import time
+
     # Check if this camera is already cached
     jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key)
 
@@ -485,7 +649,9 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
         # This avoids redundant decoding when multiple cameras are requested
         from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
+        t0 = time.perf_counter()
         item = dataset[global_idx]
+        t1 = time.perf_counter()
 
         # Cache all cameras from this single decode
         for cam in camera_keys:
@@ -494,11 +660,24 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
                 _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, cam, cam_jpeg)
                 if cam == camera_key:
                     jpeg_bytes = cam_jpeg
+        t2 = time.perf_counter()
 
         # Fallback if camera wasn't in camera_keys list
         if jpeg_bytes is None:
             jpeg_bytes = encode_frame_to_jpeg(item[camera_key])
             _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, jpeg_bytes)
+
+        decode_ms = (t1 - t0) * 1000
+        encode_ms = (t2 - t1) * 1000
+        logger.info(
+            f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: "
+            f"decode={decode_ms:.1f}ms encode={encode_ms:.1f}ms"
+        )
+    else:
+        logger.debug(f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache hit")
+
+    # Trigger background prefetching for this episode, starting from the current frame
+    _maybe_start_prefetch(dataset_id, episode_idx, ep_length, start_frame=frame_idx)
 
     # Prevent browser caching - frames may change after edits
     return Response(
