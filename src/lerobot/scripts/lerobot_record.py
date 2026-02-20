@@ -445,6 +445,8 @@ def record_loop(
                     # Each iteration: measure where the servo actually is,
                     # adjust the goal to push it closer to target.
                     settle_tolerance = 1.0  # normalized units
+                    sync_timeout = 5.0  # seconds - avoid infinite beep loop if servo can't converge
+                    sync_start = time.perf_counter()
                     beep_proc = None
                     while True:
                         pos = teleop.get_action()
@@ -453,6 +455,15 @@ def record_loop(
                             for k in target
                         )
                         if max_err < settle_tolerance:
+                            if beep_proc is not None:
+                                beep_proc.terminate()
+                            break
+
+                        if time.perf_counter() - sync_start > sync_timeout:
+                            logging.warning(
+                                f"Servo sync timed out after {sync_timeout}s (max_err={max_err:.2f}), "
+                                "releasing torque anyway"
+                            )
                             if beep_proc is not None:
                                 beep_proc.terminate()
                             break
@@ -476,6 +487,7 @@ def record_loop(
                                 beep_proc = subprocess.Popen(
                                     ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
                                     stdin=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL,
                                 )
                                 beep_proc.stdin.write(tone.tobytes())
                                 beep_proc.stdin.close()
@@ -496,6 +508,7 @@ def record_loop(
                                 beep_proc = subprocess.Popen(
                                     ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
                                     stdin=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL,
                                 )
                                 beep_proc.stdin.write(tone.tobytes())
                                 beep_proc.stdin.close()
