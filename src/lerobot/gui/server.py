@@ -404,6 +404,9 @@ MINIMAL_HTML = """
                 // Save to recent
                 addRecentDataset(path, data.repo_id);
 
+                // Refresh pending edits (backend restores persisted edits on open)
+                await refreshPendingEdits();
+
                 renderTree();
                 setStatus(`Opened: ${data.repo_id}`);
                 document.getElementById('dataset-path').value = '';
