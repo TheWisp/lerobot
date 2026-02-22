@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LeRobot Dataset GUI</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="layout">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h1>LeRobot Dataset GUI</h1>
+                <div class="open-dataset">
+                    <input type="text" id="dataset-path" placeholder="Path or repo_id" onkeydown="if(event.key==='Enter')openDataset()">
+                    <button onclick="openDataset()">Open</button>
+                    <div class="recent-dropdown">
+                        <button class="recent-btn" id="recent-btn" onclick="toggleRecentMenu()" title="Recent datasets">&#9662;</button>
+                        <div class="recent-menu" id="recent-menu"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="tree-container" id="tree-container">
+                <div style="padding: 16px; color: #666; font-size: 13px;">No datasets loaded</div>
+            </div>
+        </div>
+
+        <div class="main">
+            <div class="camera-grid" id="camera-grid">
+                <div class="empty-state">Select an episode to view</div>
+            </div>
+
+            <div class="controls-bar">
+                <button id="play-btn" onclick="togglePlay()">&#9654; Play</button>
+                <select class="speed-select" id="speed-select" onchange="changeSpeed(this.value)">
+                    <option value="0.25">0.25x</option>
+                    <option value="0.5">0.5x</option>
+                    <option value="1" selected>1x</option>
+                    <option value="1.5">1.5x</option>
+                    <option value="2">2x</option>
+                </select>
+                <div class="timeline-container" id="timeline-container">
+                    <div class="timeline-hover" id="timeline-hover">0:00 / Frame 0</div>
+                    <div class="timeline" id="timeline">
+                        <div class="timeline-progress" id="timeline-progress"></div>
+                        <div class="trim-cut-left" id="trim-cut-left"></div>
+                        <div class="trim-cut-right" id="trim-cut-right"></div>
+                        <div class="trim-region" id="trim-region">
+                            <div class="trim-handle left" id="trim-handle-left"></div>
+                            <div class="trim-handle right" id="trim-handle-right"></div>
+                        </div>
+                        <div class="timeline-scrubber" id="timeline-scrubber"></div>
+                    </div>
+                </div>
+                <div class="trim-controls" id="trim-controls">
+                    <span class="trim-info" id="trim-info"></span>
+                    <button class="btn-reset" onclick="resetTrim()">Reset</button>
+                </div>
+                <div class="frame-info">
+                    <span id="frame-info">- / -</span>
+                    <div class="time-info" id="time-info">0:00 / 0:00</div>
+                </div>
+                <div class="status" id="status">Ready</div>
+            </div>
+
+            <div class="edits-bar" id="edits-bar">
+                <span class="edits-count" id="edits-count">0 pending edits</span>
+                <button class="btn-discard" onclick="discardEdits()">Discard</button>
+                <button class="btn-save" onclick="applyEdits()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Context menu -->
+    <div class="context-menu" id="context-menu">
+        <div class="context-menu-item" onclick="contextAction('view')">View Episode</div>
+        <div class="context-menu-item" onclick="contextAction('rerun')">Open in Rerun</div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" onclick="contextAction('cleartrim')">Clear Trim</div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" onclick="contextAction('undelete')">Restore Episode</div>
+        <div class="context-menu-item danger" onclick="contextAction('delete')">Delete Episode</div>
+    </div>
+
+    <!-- Toast notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
