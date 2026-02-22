@@ -112,6 +112,11 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
             return item[camera_key]
 
         try:
+            # If dataset is locked (apply in progress), notify client instead of decoding
+            if _app_state.is_locked(dataset_id):
+                await websocket.send_json({"type": "locked", "message": "Dataset is being modified"})
+                return
+
             jpeg_bytes = _app_state.frame_cache.get_or_decode(
                 dataset_id=dataset_id,
                 episode_idx=episode_idx,
@@ -128,8 +133,11 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
                 }
             )
         except Exception as e:
-            logger.exception(f"Error sending frame {frame_idx}: {e}")
-            await websocket.send_json({"type": "error", "message": str(e)})
+            if _app_state.is_locked(dataset_id):
+                await websocket.send_json({"type": "locked", "message": "Dataset is being modified"})
+            else:
+                logger.exception(f"Error sending frame {frame_idx}: {e}")
+                await websocket.send_json({"type": "error", "message": str(e)})
 
     async def send_status():
         """Send current playback status."""

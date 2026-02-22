@@ -145,6 +145,7 @@ MINIMAL_HTML = """
         .edits-bar .btn-save:hover { background: #2ecc71; }
         .edits-bar .btn-discard { background: #e74c3c; color: #fff; }
         .edits-bar .btn-discard:hover { background: #c0392b; }
+        .edits-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
 
         /* Toast notifications */
         .toast-container { position: fixed; top: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
@@ -891,12 +892,14 @@ MINIMAL_HTML = """
 
         // Edit operations
         async function markEpisodeDeleted(datasetId, episodeIndex) {
+            if (datasetBusy) { setStatus('Dataset is busy, please wait'); return; }
             try {
                 const res = await fetch('/api/edits/delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ dataset_id: datasetId, episode_index: episodeIndex })
                 });
+                if (res.status === 423) { setStatus('Dataset is busy, please wait'); return; }
                 if (!res.ok) throw new Error(await res.text());
                 await refreshPendingEdits();
                 setStatus(`Episode ${episodeIndex} marked for deletion`);
@@ -906,6 +909,7 @@ MINIMAL_HTML = """
         }
 
         async function unmarkEpisodeDeleted(datasetId, episodeIndex) {
+            if (datasetBusy) { setStatus('Dataset is busy, please wait'); return; }
             // Find and remove the delete edit
             const editIndex = pendingEdits.findIndex(
                 e => e.dataset_id === datasetId && e.episode_index === episodeIndex && e.edit_type === 'delete'
@@ -913,6 +917,7 @@ MINIMAL_HTML = """
             if (editIndex >= 0) {
                 try {
                     const res = await fetch(`/api/edits/${editIndex}`, { method: 'DELETE' });
+                    if (res.status === 423) { setStatus('Dataset is busy, please wait'); return; }
                     if (!res.ok) throw new Error(await res.text());
                     await refreshPendingEdits();
                     setStatus(`Episode ${episodeIndex} restored`);
@@ -955,15 +960,32 @@ MINIMAL_HTML = """
             }
         }
 
+        let datasetBusy = false;
+
+        function setEditingEnabled(enabled) {
+            datasetBusy = !enabled;
+            const bar = document.getElementById('edits-bar');
+            if (bar) {
+                bar.querySelectorAll('button').forEach(btn => btn.disabled = !enabled);
+            }
+        }
+
         async function discardEdits() {
             if (!confirm('Discard all pending edits?')) return;
+            setEditingEnabled(false);
             try {
                 const res = await fetch('/api/edits/discard', { method: 'POST' });
+                if (res.status === 423) {
+                    setStatus('Dataset is busy, please wait');
+                    return;
+                }
                 if (!res.ok) throw new Error(await res.text());
                 await refreshPendingEdits();
                 setStatus('All edits discarded');
             } catch (e) {
                 setStatus('Error: ' + e.message);
+            } finally {
+                setEditingEnabled(true);
             }
         }
 
@@ -974,11 +996,16 @@ MINIMAL_HTML = """
             }
             if (!confirm(`Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.`)) return;
 
+            setEditingEnabled(false);
             setStatus('Applying edits...');
             try {
                 const res = await fetch(`/api/edits/apply?dataset_id=${encodeURIComponent(currentDataset)}`, {
                     method: 'POST'
                 });
+                if (res.status === 423) {
+                    setStatus('Dataset is busy, please wait');
+                    return;
+                }
                 const data = await res.json();
                 if (data.status === 'ok' || data.status === 'partial') {
                     // Reload dataset episodes
@@ -991,6 +1018,8 @@ MINIMAL_HTML = """
                 }
             } catch (e) {
                 setStatus('Error: ' + e.message);
+            } finally {
+                setEditingEnabled(true);
             }
         }
 
@@ -1051,6 +1080,7 @@ MINIMAL_HTML = """
 
         async function saveTrim() {
             if (!currentDataset || currentEpisode === null) return;
+            if (datasetBusy) { setStatus('Dataset is busy, please wait'); return; }
 
             try {
                 const res = await fetch('/api/edits/trim', {
@@ -1063,6 +1093,7 @@ MINIMAL_HTML = """
                         end_frame: trimEnd
                     })
                 });
+                if (res.status === 423) { setStatus('Dataset is busy, please wait'); return; }
                 if (!res.ok) throw new Error(await res.text());
                 await refreshPendingEdits();
                 setStatus(`Trim set: keeping frames ${trimStart}-${trimEnd - 1} of episode ${currentEpisode}`);

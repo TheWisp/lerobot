@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -54,6 +55,7 @@ class AppState:
     frame_cache: "FrameCache"
     datasets: dict[str, "LeRobotDataset"] = field(default_factory=dict)
     pending_edits: list[PendingEdit] = field(default_factory=list)
+    _dataset_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
 
     def add_edit(self, edit: PendingEdit) -> None:
         """Add a pending edit."""
@@ -88,6 +90,17 @@ class AppState:
             if e.dataset_id == dataset_id and e.episode_index == episode_index and e.edit_type == "trim":
                 return (e.params.get("start_frame", 0), e.params.get("end_frame", 0))
         return None
+
+    def get_lock(self, dataset_id: str) -> asyncio.Lock:
+        """Get or create an asyncio.Lock for a dataset."""
+        if dataset_id not in self._dataset_locks:
+            self._dataset_locks[dataset_id] = asyncio.Lock()
+        return self._dataset_locks[dataset_id]
+
+    def is_locked(self, dataset_id: str) -> bool:
+        """Check if a dataset is currently locked."""
+        lock = self._dataset_locks.get(dataset_id)
+        return lock is not None and lock.locked()
 
 
 # ============================================================================

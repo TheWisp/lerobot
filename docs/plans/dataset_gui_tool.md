@@ -526,7 +526,7 @@ lerobot/
 - [x] Pending edits model
 - [x] Save/discard UI
 - [x] Pending edits persistence (survives server restart)
-- [ ] **(P0) Dataset locking during operations** - Lock dataset (not editable) while server is processing. For now, lock entire dataset during any operation since all operations are fast. Later can be per-episode granularity.
+- [x] **(P0) Dataset locking during operations** - Lock dataset (not editable) while server is processing. For now, lock entire dataset during any operation since all operations are fast. Later can be per-episode granularity.
 
 ### Phase 3: Advanced Editing
 - [ ] Duplicate episode

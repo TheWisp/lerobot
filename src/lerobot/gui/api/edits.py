@@ -38,6 +38,12 @@ def set_app_state(state: "AppState") -> None:
     _app_state = state
 
 
+def _require_unlocked(dataset_id: str) -> None:
+    """Raise HTTP 423 if the dataset is locked by an in-progress operation."""
+    if _app_state.is_locked(dataset_id):
+        raise HTTPException(status_code=423, detail="Dataset is busy (operation in progress)")
+
+
 def _save_edits_for_dataset(dataset_id: str) -> None:
     """Persist pending edits for a dataset to disk."""
     from lerobot.gui.state import save_edits_to_file
@@ -114,6 +120,8 @@ async def mark_episode_deleted(request: DeleteRequest):
     """Mark an episode for deletion."""
     from lerobot.gui.state import PendingEdit
 
+    _require_unlocked(request.dataset_id)
+
     if request.dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset_id}")
 
@@ -141,6 +149,8 @@ async def mark_episode_deleted(request: DeleteRequest):
 async def set_episode_trim(request: TrimRequest):
     """Set trim range for an episode."""
     from lerobot.gui.state import PendingEdit
+
+    _require_unlocked(request.dataset_id)
 
     if request.dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset_id}")
@@ -195,6 +205,7 @@ async def remove_edit(edit_index: int):
 
     edit = _app_state.pending_edits[edit_index]
     dataset_id = edit.dataset_id
+    _require_unlocked(dataset_id)
     _app_state.remove_edit(edit_index)
     _save_edits_for_dataset(dataset_id)
 
@@ -206,6 +217,13 @@ async def remove_edit(edit_index: int):
 async def discard_edits(dataset_id: str | None = None):
     """Discard all pending edits, optionally for a specific dataset."""
     from lerobot.gui.state import clear_edits_file
+
+    if dataset_id:
+        _require_unlocked(dataset_id)
+    else:
+        # Discarding all — check no dataset is locked
+        for ds_id in _app_state.datasets:
+            _require_unlocked(ds_id)
 
     count = len(_app_state.pending_edits if dataset_id is None else _app_state.get_edits_for_dataset(dataset_id))
 
@@ -238,6 +256,25 @@ async def apply_edits(dataset_id: str):
 
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    lock = _app_state.get_lock(dataset_id)
+    if lock.locked():
+        raise HTTPException(status_code=423, detail="Dataset is busy (operation in progress)")
+
+    async with lock:
+        return await _apply_edits_locked(dataset_id)
+
+
+async def _apply_edits_locked(dataset_id: str):
+    """Apply edits while holding the dataset lock."""
+    from pathlib import Path
+
+    from lerobot.datasets.dataset_tools import (
+        delete_episodes_virtual,
+        reaggregate_dataset_stats,
+        trim_episode_virtual,
+    )
+    from lerobot.datasets.utils import load_episodes
 
     edits = _app_state.get_edits_for_dataset(dataset_id)
     if not edits:

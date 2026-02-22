@@ -541,6 +541,9 @@ async def close_dataset(dataset_id: str) -> dict[str, str]:
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
 
+    if _app_state.is_locked(dataset_id):
+        raise HTTPException(status_code=423, detail="Dataset is busy (operation in progress)")
+
     del _app_state.datasets[dataset_id]
     _dataset_info_mtime.pop(dataset_id, None)
     logger.info(f"Closed dataset: {dataset_id}")

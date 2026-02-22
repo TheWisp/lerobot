@@ -13,11 +13,16 @@
 # limitations under the License.
 """Tests for the AppState class and persistence functions."""
 
+import asyncio
 import json
 from datetime import datetime
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from fastapi import FastAPI
 
+from lerobot.gui.api import edits as edits_module
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import (
     EDITS_FILENAME,
@@ -215,6 +220,53 @@ class TestEpisodeStatusChecks:
         assert app_state.get_episode_trim("ds_a", 1) is None
 
 
+class TestDatasetLocking:
+    """Tests for per-dataset locking."""
+
+    def test_is_locked_false_by_default(self, app_state):
+        """Verify that datasets are unlocked by default."""
+        assert app_state.is_locked("ds_a") is False
+
+    def test_get_lock_returns_asyncio_lock(self, app_state):
+        """Verify that get_lock returns an asyncio.Lock."""
+        lock = app_state.get_lock("ds_a")
+        assert isinstance(lock, asyncio.Lock)
+
+    def test_get_lock_returns_same_instance(self, app_state):
+        """Verify that get_lock returns the same lock for the same dataset."""
+        lock1 = app_state.get_lock("ds_a")
+        lock2 = app_state.get_lock("ds_a")
+        assert lock1 is lock2
+
+    def test_get_lock_different_datasets(self, app_state):
+        """Verify that different datasets get different locks."""
+        lock_a = app_state.get_lock("ds_a")
+        lock_b = app_state.get_lock("ds_b")
+        assert lock_a is not lock_b
+
+    def test_is_locked_true_when_acquired(self, app_state):
+        """Verify that is_locked returns True when the lock is held."""
+        lock = app_state.get_lock("ds_a")
+
+        async def check():
+            async with lock:
+                assert app_state.is_locked("ds_a") is True
+            assert app_state.is_locked("ds_a") is False
+
+        asyncio.run(check())
+
+    def test_is_locked_independent_per_dataset(self, app_state):
+        """Verify that locking one dataset doesn't affect another."""
+        lock_a = app_state.get_lock("ds_a")
+
+        async def check():
+            async with lock_a:
+                assert app_state.is_locked("ds_a") is True
+                assert app_state.is_locked("ds_b") is False
+
+        asyncio.run(check())
+
+
 class TestEditPersistence:
     """Tests for saving and loading edits to/from disk."""
 
@@ -337,3 +389,89 @@ class TestEditPersistence:
             assert loaded.edit_type == orig.edit_type, f"Edit {i} type mismatch"
             assert loaded.episode_index == orig.episode_index, f"Edit {i} episode mismatch"
             assert loaded.params == orig.params, f"Edit {i} params mismatch"
+
+
+# ============================================================================
+# Dataset Locking - API Integration Tests
+# ============================================================================
+
+
+@pytest.fixture
+def locked_app():
+    """Create a FastAPI app with edits router and a pre-created lock.
+
+    No real dataset needed: _require_unlocked runs before dataset existence
+    checks, so a locked dataset_id is enough to trigger 423.
+    """
+    app = FastAPI()
+    app.include_router(edits_module.router)
+
+    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    edits_module.set_app_state(state)
+
+    lock = state.get_lock("ds_locked")
+    return app, state, lock
+
+
+class TestLockingEndpoints:
+    """Verify that write endpoints return 423 when locked and pass when unlocked."""
+
+    @pytest.mark.parametrize(
+        "path,json_body",
+        [
+            ("/api/edits/delete", {"dataset_id": "ds_locked", "episode_index": 0}),
+            ("/api/edits/trim", {"dataset_id": "ds_locked", "episode_index": 0, "start_frame": 0, "end_frame": 10}),
+            ("/api/edits/discard", None),
+        ],
+        ids=["delete", "trim", "discard"],
+    )
+    def test_returns_423_when_locked(self, locked_app, path, json_body):
+        app, _state, lock = locked_app
+
+        async def run():
+            async with lock:
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                    params = {"dataset_id": "ds_locked"} if path == "/api/edits/discard" else None
+                    resp = await client.post(path, json=json_body, params=params)
+                    assert resp.status_code == 423
+
+        asyncio.run(run())
+
+    def test_apply_returns_423_when_locked(self, locked_app):
+        """Apply checks dataset existence first, so we need a fake entry."""
+        app, state, lock = locked_app
+        state.datasets["ds_locked"] = MagicMock()
+
+        async def run():
+            async with lock:
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                    resp = await client.post("/api/edits/apply", params={"dataset_id": "ds_locked"})
+                    assert resp.status_code == 423
+
+        asyncio.run(run())
+
+    def test_remove_edit_returns_423_when_locked(self, locked_app):
+        app, state, lock = locked_app
+        state.add_edit(PendingEdit("delete", "ds_locked", 0))
+
+        async def run():
+            async with lock:
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                    resp = await client.delete("/api/edits/0")
+                    assert resp.status_code == 423
+
+        asyncio.run(run())
+
+    def test_passes_lock_check_when_unlocked(self, locked_app):
+        """Without the lock held, request passes the guard and hits 404 (dataset not found)."""
+        app, _state, _lock = locked_app
+
+        async def run():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/api/edits/delete",
+                    json={"dataset_id": "ds_locked", "episode_index": 0},
+                )
+                assert resp.status_code == 404
+
+        asyncio.run(run())
