@@ -52,7 +52,7 @@ except ImportError:
 # --------------- Constants ---------------
 
 FPS = 30
-ACTION_HORIZON = 10
+ACTION_HORIZON = 25
 
 # Joint names in the order matching training data (left arm first, then right).
 # From bi_so107_follower._motors_ft and so_follower.py motor definitions.
@@ -218,9 +218,15 @@ async def control_loop(robot, events, args):
                 actions = response.get("actions")
                 timing = response.get("timing", {})
 
+                # Log timing breakdown
+                t_parts = []
+                for k in ("decode_images_ms", "normalize_state_ms", "subtask_ms", "action_ms", "unnormalize_ms"):
+                    v = timing.get(k)
+                    if v is not None and v > 0:
+                        t_parts.append(f"{k.replace('_ms','')}={v:.0f}ms")
                 logging.info(
                     f"[Query {query_count}] subtask=\"{subtask}\" | "
-                    f"server: {timing.get('total_ms', 0):.0f}ms | "
+                    f"server: {timing.get('total_ms', 0):.0f}ms ({', '.join(t_parts)}) | "
                     f"roundtrip: {query_ms:.0f}ms"
                 )
 
