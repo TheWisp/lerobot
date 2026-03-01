@@ -46,13 +46,13 @@ STAGES = [
     {
         "name": "Pick up the socket",
         "task": "Pick up the socket",
-        "policy_path": "/home/feit/Documents/lerobot/outputs/act_training_pickup_socket_feb_22/checkpoints/last/pretrained_model",
+        "policy_path": "/home/feit/Documents/lerobot/outputs/act_training_pickup_socket_mar_01/checkpoints/last/pretrained_model",
         "time_limit_s": 120,  # max seconds before auto-advancing (set high, press -> when done)
     },
     {
         "name": "Pick up the cylinder",
         "task": "Pick up the cylinder",
-        "policy_path": "/home/feit/Documents/lerobot/outputs/act_training_pickup_cylinder_feb_23/checkpoints/last/pretrained_model",
+        "policy_path": "/home/feit/Documents/lerobot/outputs/act_training_pickup_cylinder_mar_01/checkpoints/last/pretrained_model",
         "time_limit_s": 120,
     },
     {
