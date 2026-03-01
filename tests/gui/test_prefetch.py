@@ -174,11 +174,70 @@ class TestPrefetchEpisode:
         # Should not raise
         ds_mod._prefetch_episode("nonexistent_ds", 0, 5, generation=1)
 
+    @patch("lerobot.datasets.video_utils.VideoDecoderCache")
+    @patch("lerobot.datasets.video_utils.decode_video_frames_torchcodec")
+    def test_prefetch_lookahead_caches_multiple_short_episodes(self, mock_decode, _mock_cache_cls):
+        """Short episodes should trigger lookahead prefetching of subsequent episodes."""
+        cameras = ["cam_a"]
+        # 10 episodes of 50 frames each — well under the 1000-frame lookahead
+        ep_length = 50
+        num_episodes = 10
+        app_state, _ = _make_mock_app_state(cameras, ep_length, num_episodes=num_episodes)
+        ds_mod = _setup_prefetch_module(app_state)
+
+        mock_decode.side_effect = _mock_decode_fn
+
+        ds_mod._prefetch_generation = 1
+        ds_mod._prefetch_episode("test_ds", 0, ep_length, generation=1)
+
+        # Episode 0 (50 frames) is cached, then lookahead should prefetch
+        # episodes 1-9 (450 more frames) until 1000-frame budget is met.
+        # 50 * 10 = 500 total, all episodes should be cached since total < 1000 + ep0.
+        for ep_idx in range(num_episodes):
+            assert app_state.frame_cache.contains("test_ds", ep_idx, 0, "cam_a"), \
+                f"Episode {ep_idx} frame 0 should be cached"
+            assert app_state.frame_cache.contains("test_ds", ep_idx, ep_length - 1, "cam_a"), \
+                f"Episode {ep_idx} last frame should be cached"
+
+    @patch("lerobot.datasets.video_utils.VideoDecoderCache")
+    @patch("lerobot.datasets.video_utils.decode_video_frames_torchcodec")
+    def test_prefetch_lookahead_stops_after_budget(self, mock_decode, _mock_cache_cls):
+        """Lookahead should stop once the frame budget is exhausted."""
+        cameras = ["cam_a"]
+        # 5 episodes of 400 frames each = 2000 total
+        # Lookahead is 1000 frames, so after ep 0 (400), should prefetch
+        # ep 1 (400, remaining=600) and ep 2 (400, remaining=200) and
+        # ep 3 (400, remaining=-200 -> stop after this one)
+        ep_length = 400
+        num_episodes = 5
+        app_state, _ = _make_mock_app_state(cameras, ep_length, num_episodes=num_episodes)
+        ds_mod = _setup_prefetch_module(app_state)
+
+        mock_decode.side_effect = _mock_decode_fn
+
+        ds_mod._prefetch_generation = 1
+        ds_mod._prefetch_episode("test_ds", 0, ep_length, generation=1)
+
+        # Episodes 0-3 should be cached (ep0 + 1000 lookahead covers 3 more episodes)
+        for ep_idx in range(4):
+            assert app_state.frame_cache.contains("test_ds", ep_idx, 0, "cam_a"), \
+                f"Episode {ep_idx} should be cached"
+
+        # Episode 4 should NOT be cached (budget exhausted after ep 3)
+        assert not app_state.frame_cache.contains("test_ds", 4, 0, "cam_a"), \
+            "Episode 4 should not be cached (beyond lookahead budget)"
+
 
 class TestMaybeStartPrefetch:
-    """Tests for _maybe_start_prefetch."""
+    """Tests for _maybe_start_prefetch.
 
-    def test_deduplicates_sequential_playback(self):
+    These tests only verify the deduplication and generation-counter logic.
+    We patch the executor to prevent actual background prefetch work (which
+    would fail because the mock dataset has no real video files).
+    """
+
+    @patch("lerobot.gui.api.datasets._prefetch_executor")
+    def test_deduplicates_sequential_playback(self, _mock_executor):
         """Sequential frame advances should not restart prefetch."""
         cameras = ["cam_a"]
         app_state, _ = _make_mock_app_state(cameras, 100)
@@ -194,7 +253,8 @@ class TestMaybeStartPrefetch:
         # Generation should not have incremented (all within threshold)
         assert ds_mod._prefetch_generation == gen_after_first
 
-    def test_seek_restarts_prefetch(self):
+    @patch("lerobot.gui.api.datasets._prefetch_executor")
+    def test_seek_restarts_prefetch(self, _mock_executor):
         """Seeking far within the same episode should restart prefetch."""
         cameras = ["cam_a"]
         app_state, _ = _make_mock_app_state(cameras, 300)
@@ -210,7 +270,8 @@ class TestMaybeStartPrefetch:
         # Generation should have incremented (seek detected)
         assert gen_after_seek > gen_after_first
 
-    def test_new_episode_increments_generation(self):
+    @patch("lerobot.gui.api.datasets._prefetch_executor")
+    def test_new_episode_increments_generation(self, _mock_executor):
         """Switching episodes should increment the generation counter."""
         cameras = ["cam_a"]
         app_state, _ = _make_mock_app_state(cameras, 5, num_episodes=2)
@@ -225,7 +286,8 @@ class TestMaybeStartPrefetch:
         assert gen_second > gen_first
         assert ds_mod._prefetch_current == ("test_ds", 1)
 
-    def test_loop_wrap_around_does_not_restart_prefetch(self):
+    @patch("lerobot.gui.api.datasets._prefetch_executor")
+    def test_loop_wrap_around_does_not_restart_prefetch(self, _mock_executor):
         """Playback looping (last frame -> frame 0) should not restart prefetch."""
         cameras = ["cam_a"]
         ep_length = 138
@@ -243,7 +305,8 @@ class TestMaybeStartPrefetch:
         # Generation should NOT have incremented (wrap-around detected)
         assert ds_mod._prefetch_generation == gen_before_wrap
 
-    def test_mid_episode_seek_still_restarts(self):
+    @patch("lerobot.gui.api.datasets._prefetch_executor")
+    def test_mid_episode_seek_still_restarts(self, _mock_executor):
         """A real mid-episode seek should still restart prefetch despite wrap-around logic."""
         cameras = ["cam_a"]
         ep_length = 300

@@ -205,6 +205,12 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
 
 _PREFETCH_BATCH_SIZE = 30  # Frames per batch (~1 second at 30 fps)
 
+# After caching the current episode, keep prefetching subsequent episodes
+# until at least this many frames ahead have been cached. This provides
+# a comfortable buffer even at 2x playback speed with short episodes.
+# 1000 frames ≈ 33s at 30fps, using ~100-240MB depending on resolution/cameras.
+_PREFETCH_LOOKAHEAD_FRAMES = 1000
+
 
 def _prefetch_episode(
     dataset_id: str, episode_idx: int, ep_length: int, generation: int, start_frame: int = 0
@@ -214,8 +220,9 @@ def _prefetch_episode(
     Starts from start_frame and wraps around to cover the entire episode.
     Stops early if _prefetch_generation changes (meaning a different episode was selected).
 
-    After completing the current episode, automatically prefetches the next
-    episode if one exists and the generation hasn't changed.
+    After completing the current episode, continues prefetching subsequent
+    episodes until at least _PREFETCH_LOOKAHEAD_FRAMES have been cached
+    ahead, or there are no more episodes.
 
     Uses batch decoding (multiple timestamps per decode call) for efficiency —
     the video decoder can read sequential frames without re-seeking. Also uses
@@ -241,20 +248,38 @@ def _prefetch_episode(
             video_keys, first_camera, fps, tolerance_s, prefetch_decoder_cache,
         )
 
-        # After completing the current episode, prefetch the next one if it exists
-        if _prefetch_generation != generation:
-            return
+        # Keep prefetching subsequent episodes until we have enough lookahead
+        lookahead_remaining = _PREFETCH_LOOKAHEAD_FRAMES
         next_idx = episode_idx + 1
-        if next_idx < dataset.meta.total_episodes:
+        while next_idx < dataset.meta.total_episodes and lookahead_remaining > 0:
+            if _prefetch_generation != generation:
+                return
             next_ep = dataset.meta.episodes[next_idx]
             next_length = next_ep["length"]
-            logger.info(f"Auto-prefetching next episode {next_idx} ({next_length} frames)")
+
+            # Skip episodes already fully cached
+            if first_camera and _app_state.frame_cache.is_episode_cached(
+                dataset_id, next_idx, next_length, first_camera
+            ):
+                logger.debug(
+                    f"Lookahead: episode {next_idx} already cached, skipping"
+                )
+                lookahead_remaining -= next_length
+                next_idx += 1
+                continue
+
+            logger.info(
+                f"Auto-prefetching episode {next_idx} ({next_length} frames, "
+                f"{lookahead_remaining} lookahead remaining)"
+            )
             # Clear decoder cache between episodes (different video files)
             prefetch_decoder_cache.clear()
             _prefetch_single_episode(
                 dataset_id, dataset, next_idx, next_length, generation, 0,
                 video_keys, first_camera, fps, tolerance_s, prefetch_decoder_cache,
             )
+            lookahead_remaining -= next_length
+            next_idx += 1
     finally:
         prefetch_decoder_cache.clear()
 

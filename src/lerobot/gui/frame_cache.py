@@ -101,6 +101,19 @@ class FrameCache:
         with self.lock:
             return key in self.cache
 
+    def is_episode_cached(
+        self, dataset_id: str, episode_idx: int, ep_length: int, camera_key: str
+    ) -> bool:
+        """Check if all frames of an episode are cached for a given camera.
+
+        Uses a single lock acquisition to check all frames efficiently.
+        """
+        with self.lock:
+            return all(
+                (dataset_id, episode_idx, fi, camera_key) in self.cache
+                for fi in range(ep_length)
+            )
+
     def get(self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str) -> bytes | None:
         """Get a cached frame if available.
 
