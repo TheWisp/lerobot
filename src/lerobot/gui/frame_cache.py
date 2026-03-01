@@ -68,11 +68,11 @@ class FrameCache:
     entries when the memory budget is exceeded.
     """
 
-    def __init__(self, max_bytes: int = 500_000_000):
+    def __init__(self, max_bytes: int = 1_000_000_000):
         """Initialize the frame cache.
 
         Args:
-            max_bytes: Maximum memory budget in bytes (default 500 MB)
+            max_bytes: Maximum memory budget in bytes (default 1 GB)
         """
         self.max_bytes = max_bytes
         self.current_bytes = 0

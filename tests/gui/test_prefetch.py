@@ -224,3 +224,36 @@ class TestMaybeStartPrefetch:
 
         assert gen_second > gen_first
         assert ds_mod._prefetch_current == ("test_ds", 1)
+
+    def test_loop_wrap_around_does_not_restart_prefetch(self):
+        """Playback looping (last frame -> frame 0) should not restart prefetch."""
+        cameras = ["cam_a"]
+        ep_length = 138
+        app_state, _ = _make_mock_app_state(cameras, ep_length)
+        ds_mod = _setup_prefetch_module(app_state)
+
+        # Start prefetch and advance to near end of episode
+        ds_mod._maybe_start_prefetch("test_ds", 0, ep_length, start_frame=0)
+        ds_mod._prefetch_last_frame = ep_length - 1  # Simulate being at last frame
+        gen_before_wrap = ds_mod._prefetch_generation
+
+        # Loop back to frame 0 — delta equals ep_length - 1, should be treated as wrap
+        ds_mod._maybe_start_prefetch("test_ds", 0, ep_length, start_frame=0)
+
+        # Generation should NOT have incremented (wrap-around detected)
+        assert ds_mod._prefetch_generation == gen_before_wrap
+
+    def test_mid_episode_seek_still_restarts(self):
+        """A real mid-episode seek should still restart prefetch despite wrap-around logic."""
+        cameras = ["cam_a"]
+        ep_length = 300
+        app_state, _ = _make_mock_app_state(cameras, ep_length)
+        ds_mod = _setup_prefetch_module(app_state)
+
+        ds_mod._maybe_start_prefetch("test_ds", 0, ep_length, start_frame=10)
+        gen_before = ds_mod._prefetch_generation
+
+        # Jump from frame 10 to frame 200 — clearly a seek, not a wrap-around
+        ds_mod._maybe_start_prefetch("test_ds", 0, ep_length, start_frame=200)
+
+        assert ds_mod._prefetch_generation > gen_before

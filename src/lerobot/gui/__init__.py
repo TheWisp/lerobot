@@ -15,5 +15,5 @@
 LeRobot Dataset GUI - A web-based visualization and editing tool.
 
 Usage:
-    python -m lerobot.gui [--port 8000] [--host 127.0.0.1] [--cache-size 500MB]
+    python -m lerobot.gui [--port 8000] [--host 127.0.0.1] [--cache-size 1GB]
 """

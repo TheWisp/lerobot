@@ -63,7 +63,7 @@ async def startup_event():
     """Initialize app state on startup."""
     global _app_state
     # Default cache size, can be overridden via CLI
-    cache_size = getattr(app.state, "cache_size", 500_000_000)
+    cache_size = getattr(app.state, "cache_size", 1_000_000_000)
     _app_state = AppState(frame_cache=FrameCache(max_bytes=cache_size))
     datasets.set_app_state(_app_state)
     playback.set_app_state(_app_state)
@@ -87,7 +87,7 @@ async def root():
     return FileResponse(_static_dir / "index.html", media_type="text/html")
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 500_000_000):
+def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_000_000_000):
     """Run the GUI server."""
     import uvicorn
 
@@ -154,8 +154,8 @@ def main():
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to (default: 8000)")
     parser.add_argument(
         "--cache-size",
-        default="500MB",
-        help="Frame cache size (default: 500MB). Examples: 500MB, 1GB, 2GB",
+        default="1GB",
+        help="Frame cache size (default: 1GB). Examples: 500MB, 1GB, 2GB",
     )
 
     args = parser.parse_args()

@@ -29,7 +29,7 @@ python -m lerobot.gui [--host HOST] [--port PORT] [--cache-size SIZE]
 |---|---|---|
 | `--host` | `127.0.0.1` | Bind address. Use `0.0.0.0` for network access. |
 | `--port` | `8000` | TCP port. |
-| `--cache-size` | `500MB` | In-memory frame cache budget (`500MB`, `1GB`, etc.). |
+| `--cache-size` | `1GB` | In-memory frame cache budget (`500MB`, `1GB`, etc.). |
 
 ## Dataset Playback
 

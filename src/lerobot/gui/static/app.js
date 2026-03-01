@@ -109,6 +109,9 @@ async function openDataset() {
         const epRes = await fetch(`/api/datasets/${encodeURIComponent(data.id)}/episodes`);
         episodes[data.id] = await epRes.json();
 
+        // Sync episode count (backend may have reloaded metadata with new episodes)
+        datasets[data.id].total_episodes = episodes[data.id].length;
+
         // Expand this dataset by default
         expandedNodes.add(data.id);
 
@@ -721,6 +724,10 @@ async function applyEdits() {
             // Reload dataset episodes
             const epRes = await fetch(`/api/datasets/${encodeURIComponent(currentDataset)}/episodes`);
             episodes[currentDataset] = await epRes.json();
+            // Sync episode count after edits may have changed it
+            if (datasets[currentDataset]) {
+                datasets[currentDataset].total_episodes = episodes[currentDataset].length;
+            }
             await refreshPendingEdits();
             setStatus(data.message);
         } else {
