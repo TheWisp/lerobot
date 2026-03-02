@@ -173,19 +173,32 @@ function renderTree() {
             const isActive = currentDataset === id && currentEpisode === ep.episode_index;
             const isDeleted = isEpisodeDeleted(id, ep.episode_index);
             const isTrimmed = isEpisodeTrimmed(id, ep.episode_index);
+            const hasQualityWarning = ep.video_extra_frames !== 0;
             const classes = ['tree-header'];
             if (isActive) classes.push('active');
             if (isDeleted) classes.push('deleted');
             if (isTrimmed) classes.push('trimmed');
+            if (hasQualityWarning) classes.push('quality-warning');
+
+            let icon = '🎬';
+            if (isDeleted) icon = '🗑️';
+            else if (hasQualityWarning) icon = '⚠️';
+
+            let meta = `${ep.length} frames`;
+            if (hasQualityWarning) {
+                const sign = ep.video_extra_frames > 0 ? '+' : '';
+                meta += ` (${sign}${ep.video_extra_frames})`;
+            }
 
             html += `
                 <div class="${classes.join(' ')}"
-                     onclick="selectEpisode('${id}', ${ep.episode_index}, ${ep.length})"
-                     oncontextmenu="showContextMenu(event, '${id}', ${ep.episode_index})">
+                     onclick="selectEpisode('${id}', ${ep.episode_index}, ${ep.video_length || ep.length})"
+                     oncontextmenu="showContextMenu(event, '${id}', ${ep.episode_index})"
+                     ${hasQualityWarning ? `title="Video-data mismatch: ${ep.video_extra_frames > 0 ? ep.video_extra_frames + ' extra frames (re-recording artifact)' : Math.abs(ep.video_extra_frames) + ' missing frames (truncated video)'}"` : ''}>
                     <span class="tree-toggle"></span>
-                    <span class="tree-icon">${isDeleted ? '🗑️' : '🎬'}</span>
+                    <span class="tree-icon">${icon}</span>
                     <span class="tree-label">Episode ${ep.episode_index}</span>
-                    <span class="tree-meta">${ep.length} frames</span>
+                    <span class="tree-meta">${meta}</span>
                 </div>
             `;
         }
@@ -528,7 +541,7 @@ function navigateEpisode(direction) {
     const newIndex = currentEpisode + direction;
     if (newIndex >= 0 && newIndex < dsEpisodes.length) {
         const ep = dsEpisodes.find(e => e.episode_index === newIndex);
-        if (ep) selectEpisode(currentDataset, newIndex, ep.length);
+        if (ep) selectEpisode(currentDataset, newIndex, ep.video_length || ep.length);
     }
 }
 
@@ -568,11 +581,11 @@ function contextAction(action) {
 
     if (action === 'view') {
         const ep = episodes[datasetId]?.find(e => e.episode_index === episodeIndex);
-        if (ep) selectEpisode(datasetId, episodeIndex, ep.length);
+        if (ep) selectEpisode(datasetId, episodeIndex, ep.video_length || ep.length);
     } else if (action === 'rerun') {
         const ep = episodes[datasetId]?.find(e => e.episode_index === episodeIndex);
         if (ep) {
-            selectEpisode(datasetId, episodeIndex, ep.length);
+            selectEpisode(datasetId, episodeIndex, ep.video_length || ep.length);
             launchRerun();
         }
     } else if (action === 'delete') {

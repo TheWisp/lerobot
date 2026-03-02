@@ -2593,6 +2593,48 @@ def _delete_episodes_parquet_data_virtual(
         df.to_parquet(parquet_path, index=False)
 
 
+def check_episode_video_duration(ep: dict, fps: float) -> dict[str, int]:
+    """Check if an episode's video timestamps match its data length.
+
+    Detects video-data duration mismatches such as re-recording artifacts
+    (video too long) or truncated recordings (video too short).
+
+    Args:
+        ep: Episode metadata dict (from dataset.meta.episodes[i]).
+        fps: Dataset frame rate.
+
+    Returns:
+        Dict mapping video_key -> frame count difference (video - expected).
+        Positive = extra frames (e.g. re-recording artifact),
+        negative = missing frames (e.g. truncated video).
+        Zero = OK.  Returns ``{}`` for non-video episodes.
+    """
+    result: dict[str, int] = {}
+    length = ep.get("length", 0)
+    if length <= 0 or fps <= 0:
+        return result
+
+    expected_s = length / fps
+
+    for key in ep:
+        if not key.endswith("/from_timestamp"):
+            continue
+        video_key = key.rsplit("/from_timestamp", 1)[0].removeprefix("videos/")
+        to_key = f"videos/{video_key}/to_timestamp"
+        if to_key not in ep:
+            continue
+        from_ts = ep[key]
+        to_ts = ep[to_key]
+        if to_ts <= from_ts:
+            continue
+        video_span = to_ts - from_ts
+        diff = round((video_span - expected_s) * fps)
+        # 1-frame rounding is normal for video encoding
+        result[video_key] = diff if abs(diff) > 1 else 0
+
+    return result
+
+
 def repair_episode_indices(dataset_root: Path) -> int:
     """Check and repair episode metadata dataset_from_index values.
 
@@ -3507,17 +3549,23 @@ def verify_dataset(
                             )
                             continue
 
-                        expected_duration = ep["length"] / fps
-                        actual_duration = to_ts - from_ts
-                        # Allow 1.5 frame tolerance
-                        tolerance = 1.5 / fps
-                        if abs(actual_duration - expected_duration) > tolerance:
+                        frame_diff = check_episode_video_duration(ep, fps)
+                        diff = frame_diff.get(video_key, 0)
+                        if diff != 0:
                             video_timestamp_errors += 1
+                            actual_duration = to_ts - from_ts
+                            expected_duration = ep["length"] / fps
+                            detail = (
+                                f"+{diff} extra frames, possible re-recording artifact"
+                                if diff > 0
+                                else f"{diff} missing frames, possible truncation"
+                            )
                             if video_timestamp_errors <= 3:
                                 result.add_warning(
                                     "videos",
                                     f"Episode {ep_idx}, {video_key}: duration {actual_duration:.3f}s "
-                                    f"doesn't match expected {expected_duration:.3f}s (length={ep['length']}, fps={fps})",
+                                    f"doesn't match expected {expected_duration:.3f}s "
+                                    f"({detail})",
                                 )
 
             if video_file_missing > 3:

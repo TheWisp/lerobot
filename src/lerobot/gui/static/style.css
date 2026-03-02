@@ -33,6 +33,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .tree-header.active { background: #1a4a7a; }
 .tree-header.deleted { opacity: 0.5; text-decoration: line-through; }
 .tree-header.trimmed .tree-label::after { content: ' ✂'; color: #f39c12; }
+.tree-header.quality-warning { color: #f39c12; }
 .tree-toggle { width: 16px; font-size: 10px; color: #888; flex-shrink: 0; }
 .tree-icon { width: 16px; text-align: center; flex-shrink: 0; }
 .tree-label { flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

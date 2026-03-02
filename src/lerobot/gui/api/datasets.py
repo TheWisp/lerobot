@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
+from lerobot.datasets.dataset_tools import check_episode_video_duration
+
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
 
@@ -456,6 +458,8 @@ class EpisodeInfo(BaseModel):
     length: int
     duration_s: float
     task: str | None = None
+    video_extra_frames: int = 0  # Frame count difference (positive=extra, negative=missing)
+    video_length: int = 0  # Total video frame count (0 = same as length)
 
 
 @router.get("")
@@ -657,12 +661,21 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
         if "tasks" in ep and ep["tasks"]:
             task = ep["tasks"][0] if len(ep["tasks"]) > 0 else None
 
+        # Check for video-data duration mismatch (re-recording artifact or truncation)
+        diff_per_cam = check_episode_video_duration(ep, dataset.fps)
+        video_extra_frames = max(diff_per_cam.values(), key=abs) if diff_per_cam else 0
+
+        # Total video frame count (matches length when no mismatch)
+        video_length = length + max(0, video_extra_frames)
+
         result.append(
             EpisodeInfo(
                 episode_index=i,
                 length=length,
                 duration_s=duration_s,
                 task=task,
+                video_extra_frames=video_extra_frames,
+                video_length=video_length,
             )
         )
 
@@ -699,9 +712,17 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
     ep = episodes[episode_idx]
     ep_length = ep["length"]
 
-    # Validate frame index
-    if frame_idx < 0 or frame_idx >= ep_length:
-        raise HTTPException(status_code=404, detail=f"Frame not found: {frame_idx} (episode has {ep_length} frames)")
+    # Compute video length for episodes with extra video frames
+    diff_per_cam = check_episode_video_duration(ep, dataset.fps)
+    video_extra = max(diff_per_cam.values(), key=abs) if diff_per_cam else 0
+    video_length = ep_length + video_extra if video_extra > 0 else ep_length
+
+    # Validate frame index (allow up to video_length for flagged episodes)
+    if frame_idx < 0 or frame_idx >= video_length:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Frame not found: {frame_idx} (episode has {ep_length} data frames, {video_length} video frames)",
+        )
 
     # Determine camera key
     camera_keys = list(dataset.meta.camera_keys)
@@ -715,37 +736,54 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
     else:
         camera_key = camera_keys[0]
 
-    # Calculate global index (cumulative sum of episode lengths, not per-file offset)
-    episode_start = _get_episode_start_index(dataset_id, episode_idx)
-    global_idx = episode_start + frame_idx
-
     import time
 
     # Check if this camera is already cached
     jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key)
 
     if jpeg_bytes is None:
-        # Not cached - decode ALL cameras at once (dataset[idx] decodes all anyway)
-        # This avoids redundant decoding when multiple cameras are requested
         from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
-        t0 = time.perf_counter()
-        item = dataset[global_idx]
-        t1 = time.perf_counter()
+        if frame_idx < ep_length:
+            # Normal frame — decode via dataset[global_idx] (gets all cameras at once)
+            episode_start = _get_episode_start_index(dataset_id, episode_idx)
+            global_idx = episode_start + frame_idx
 
-        # Cache all cameras from this single decode
-        for cam in camera_keys:
-            if cam in item:
-                cam_jpeg = encode_frame_to_jpeg(item[cam])
-                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, cam, cam_jpeg)
-                if cam == camera_key:
-                    jpeg_bytes = cam_jpeg
-        t2 = time.perf_counter()
+            t0 = time.perf_counter()
+            item = dataset[global_idx]
+            t1 = time.perf_counter()
 
-        # Fallback if camera wasn't in camera_keys list
-        if jpeg_bytes is None:
-            jpeg_bytes = encode_frame_to_jpeg(item[camera_key])
+            # Cache all cameras from this single decode
+            for cam in camera_keys:
+                if cam in item:
+                    cam_jpeg = encode_frame_to_jpeg(item[cam])
+                    _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, cam, cam_jpeg)
+                    if cam == camera_key:
+                        jpeg_bytes = cam_jpeg
+            t2 = time.perf_counter()
+
+            # Fallback if camera wasn't in camera_keys list
+            if jpeg_bytes is None:
+                jpeg_bytes = encode_frame_to_jpeg(item[camera_key])
+                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, jpeg_bytes)
+        else:
+            # Extra video frame beyond data length — decode directly from video file
+            from lerobot.datasets.video_utils import decode_video_frames_torchcodec
+
+            fps = dataset.fps
+            from_ts = ep.get(f"videos/{camera_key}/from_timestamp", 0.0)
+            timestamp = from_ts + frame_idx / fps
+            tolerance_s = 1 / fps * 0.7
+
+            video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, camera_key)
+
+            t0 = time.perf_counter()
+            frames = decode_video_frames_torchcodec(video_path, [timestamp], tolerance_s)
+            t1 = time.perf_counter()
+
+            jpeg_bytes = encode_frame_to_jpeg(frames[0])
             _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, jpeg_bytes)
+            t2 = time.perf_counter()
 
         decode_ms = (t1 - t0) * 1000
         encode_ms = (t2 - t1) * 1000
@@ -757,7 +795,7 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
         logger.debug(f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache hit")
 
     # Trigger background prefetching for this episode, starting from the current frame
-    _maybe_start_prefetch(dataset_id, episode_idx, ep_length, start_frame=frame_idx)
+    _maybe_start_prefetch(dataset_id, episode_idx, ep_length, start_frame=min(frame_idx, ep_length - 1))
 
     # Prevent browser caching - frames may change after edits
     return Response(
