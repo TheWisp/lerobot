@@ -501,8 +501,27 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Keyboard controls
+// Tab switching
+function switchTab(tabName) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
+    document.getElementById(`tab-${tabName}`).classList.add('active');
+    // Notify robot tab
+    if (tabName === 'robot' && typeof robotTabInit === 'function') {
+        robotTabInit();
+    }
+    // Stop camera preview when leaving robot tab
+    if (tabName !== 'robot' && typeof stopCameraPreview === 'function') {
+        stopCameraPreview();
+    }
+}
+
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    // Only handle data-tab shortcuts when data tab is active
+    const activeTab = document.querySelector('.tab.active')?.dataset.tab;
+    if (activeTab !== 'data') return;
     if (e.key === 'ArrowLeft') {
         e.preventDefault();
         loadAllFrames(currentFrame - (e.shiftKey ? 10 : 1));

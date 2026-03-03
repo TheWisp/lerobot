@@ -3,70 +3,123 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LeRobot Dataset GUI</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <title>LeRobot GUI</title>
+    <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
-    <div class="layout">
-        <div class="sidebar">
-            <div class="sidebar-header">
-                <h1>LeRobot Dataset GUI</h1>
-                <div class="open-dataset">
-                    <input type="text" id="dataset-path" placeholder="Path or repo_id" onkeydown="if(event.key==='Enter')openDataset()">
-                    <button onclick="openDataset()">Open</button>
-                    <div class="recent-dropdown">
-                        <button class="recent-btn" id="recent-btn" onclick="toggleRecentMenu()" title="Recent datasets">&#9662;</button>
-                        <div class="recent-menu" id="recent-menu"></div>
+    <div class="tab-bar">
+        <button class="tab active" data-tab="data" onclick="switchTab('data')">Data</button>
+        <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
+        <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
+        <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
+    </div>
+
+    <!-- Data tab (existing) -->
+    <div class="tab-content active" id="tab-data">
+        <div class="layout">
+            <div class="sidebar">
+                <div class="sidebar-header">
+                    <h1>Datasets</h1>
+                    <div class="open-dataset">
+                        <input type="text" id="dataset-path" placeholder="Path or repo_id" onkeydown="if(event.key==='Enter')openDataset()">
+                        <button onclick="openDataset()">Open</button>
+                        <div class="recent-dropdown">
+                            <button class="recent-btn" id="recent-btn" onclick="toggleRecentMenu()" title="Recent datasets">&#9662;</button>
+                            <div class="recent-menu" id="recent-menu"></div>
+                        </div>
                     </div>
                 </div>
+                <div class="tree-container" id="tree-container">
+                    <div style="padding: 16px; color: #666; font-size: 13px;">No datasets loaded</div>
+                </div>
             </div>
-            <div class="tree-container" id="tree-container">
-                <div style="padding: 16px; color: #666; font-size: 13px;">No datasets loaded</div>
+
+            <div class="main">
+                <div class="camera-grid" id="camera-grid">
+                    <div class="empty-state">Select an episode to view</div>
+                </div>
+
+                <div class="controls-bar">
+                    <button id="play-btn" onclick="togglePlay()">&#9654; Play</button>
+                    <select class="speed-select" id="speed-select" onchange="changeSpeed(this.value)">
+                        <option value="0.25">0.25x</option>
+                        <option value="0.5">0.5x</option>
+                        <option value="1" selected>1x</option>
+                        <option value="1.5">1.5x</option>
+                        <option value="2">2x</option>
+                    </select>
+                    <div class="timeline-container" id="timeline-container">
+                        <div class="timeline-hover" id="timeline-hover">0:00 / Frame 0</div>
+                        <div class="timeline" id="timeline">
+                            <div class="timeline-progress" id="timeline-progress"></div>
+                            <div class="trim-cut-left" id="trim-cut-left"></div>
+                            <div class="trim-cut-right" id="trim-cut-right"></div>
+                            <div class="trim-region" id="trim-region">
+                                <div class="trim-handle left" id="trim-handle-left"></div>
+                                <div class="trim-handle right" id="trim-handle-right"></div>
+                            </div>
+                            <div class="timeline-scrubber" id="timeline-scrubber"></div>
+                        </div>
+                    </div>
+                    <div class="trim-controls" id="trim-controls">
+                        <span class="trim-info" id="trim-info"></span>
+                        <button class="btn-reset" onclick="resetTrim()">Reset</button>
+                    </div>
+                    <div class="frame-info">
+                        <span id="frame-info">- / -</span>
+                        <div class="time-info" id="time-info">0:00 / 0:00</div>
+                    </div>
+                    <div class="status" id="status">Ready</div>
+                </div>
+
+                <div class="edits-bar" id="edits-bar">
+                    <span class="edits-count" id="edits-count">0 pending edits</span>
+                    <button class="btn-discard" onclick="discardEdits()">Discard</button>
+                    <button class="btn-save" onclick="applyEdits()">Save Changes</button>
+                </div>
             </div>
         </div>
+    </div>
 
-        <div class="main">
-            <div class="camera-grid" id="camera-grid">
-                <div class="empty-state">Select an episode to view</div>
-            </div>
+    <!-- Model tab (placeholder) -->
+    <div class="tab-content" id="tab-model">
+        <div class="empty-state">Model management coming soon</div>
+    </div>
 
-            <div class="controls-bar">
-                <button id="play-btn" onclick="togglePlay()">&#9654; Play</button>
-                <select class="speed-select" id="speed-select" onchange="changeSpeed(this.value)">
-                    <option value="0.25">0.25x</option>
-                    <option value="0.5">0.5x</option>
-                    <option value="1" selected>1x</option>
-                    <option value="1.5">1.5x</option>
-                    <option value="2">2x</option>
-                </select>
-                <div class="timeline-container" id="timeline-container">
-                    <div class="timeline-hover" id="timeline-hover">0:00 / Frame 0</div>
-                    <div class="timeline" id="timeline">
-                        <div class="timeline-progress" id="timeline-progress"></div>
-                        <div class="trim-cut-left" id="trim-cut-left"></div>
-                        <div class="trim-cut-right" id="trim-cut-right"></div>
-                        <div class="trim-region" id="trim-region">
-                            <div class="trim-handle left" id="trim-handle-left"></div>
-                            <div class="trim-handle right" id="trim-handle-right"></div>
-                        </div>
-                        <div class="timeline-scrubber" id="timeline-scrubber"></div>
+    <!-- Run tab (placeholder) -->
+    <div class="tab-content" id="tab-run">
+        <div class="empty-state">Run configuration coming soon</div>
+    </div>
+
+    <!-- Robot tab -->
+    <div class="tab-content" id="tab-robot">
+        <div class="layout">
+            <div class="sidebar" id="robot-sidebar">
+                <div class="sidebar-header">
+                    <h1>Robot Setup</h1>
+                </div>
+                <div class="robot-section">
+                    <div class="section-header">
+                        <span>Robot Profiles</span>
+                        <button class="btn-small" onclick="newRobotProfile()">+ New</button>
+                    </div>
+                    <div class="profile-list" id="robot-profile-list">
+                        <div style="padding: 8px 12px; color: #666; font-size: 12px;">No profiles</div>
                     </div>
                 </div>
-                <div class="trim-controls" id="trim-controls">
-                    <span class="trim-info" id="trim-info"></span>
-                    <button class="btn-reset" onclick="resetTrim()">Reset</button>
+                <div class="robot-section">
+                    <div class="section-header">
+                        <span>Teleop Profiles</span>
+                        <button class="btn-small" onclick="newTeleopProfile()">+ New</button>
+                    </div>
+                    <div class="profile-list" id="teleop-profile-list">
+                        <div style="padding: 8px 12px; color: #666; font-size: 12px;">No profiles</div>
+                    </div>
                 </div>
-                <div class="frame-info">
-                    <span id="frame-info">- / -</span>
-                    <div class="time-info" id="time-info">0:00 / 0:00</div>
-                </div>
-                <div class="status" id="status">Ready</div>
             </div>
-
-            <div class="edits-bar" id="edits-bar">
-                <span class="edits-count" id="edits-count">0 pending edits</span>
-                <button class="btn-discard" onclick="discardEdits()">Discard</button>
-                <button class="btn-save" onclick="applyEdits()">Save Changes</button>
+            <div class="main" id="robot-main">
+                <div class="empty-state" id="robot-empty">Select or create a profile</div>
+                <div class="robot-editor" id="robot-editor" style="display:none;"></div>
             </div>
         </div>
     </div>
@@ -85,6 +138,7 @@
     <!-- Toast notifications -->
     <div class="toast-container" id="toast-container"></div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=7"></script>
+    <script src="/static/robot.js?v=7"></script>
 </body>
 </html>

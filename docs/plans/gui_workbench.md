@@ -29,11 +29,11 @@ Manage local and HuggingFace robotics models.
 
 ### 3. Run
 
-Operate a robot in real time. The Run tab is where you **choose** which robot, model, and dataset to use (those are configured/managed in their respective tabs). Mode depends on what is selected:
+Operate a robot in real time. The Run tab is where you **choose** which robot, teleop, model, and dataset to use (those are configured/managed in their respective tabs). Mode depends on what is selected:
 
 | Selection         | Mode              | Description |
 |-------------------|-------------------|-------------|
-| Robot only        | Teleoperation     | Manual control, optional recording to a dataset |
+| Robot + Teleop    | Teleoperation     | Manual control, optional recording to a dataset |
 | Robot + Policy    | Policy evaluation | Run inference, optional recording |
 | Robot + Dataset   | Replay            | Replay recorded actions on hardware |
 
@@ -42,16 +42,34 @@ Operate a robot in real time. The Run tab is where you **choose** which robot, m
 
 ### 4. Robot
 
-Robot hardware setup and calibration.
+Robot and teleop hardware setup. Replaces `chop.py`'s `--set-robot`, `--set-teleop`, `identify-ports`, and `find-cameras` commands.
 
-- **Profiles**: create / edit / delete robot configs (currently `robot_config.json`)
-  - Robot type, arm ports, camera definitions
-  - One robot at a time is sufficient
-  - A dual-arm robot (with leader for teleop) is still one robot profile
-- **Camera wizard**: detect available cameras (OpenCV indices, RealSense serials), preview, assign names
-- **Port scanner**: detect serial ports, identify arms
-- **Calibration**: guided calibration flow per arm, store/load calibration data
-- **Live diagnostics**: real-time joint positions, camera feeds, latency indicators
+Robots and teleop devices are **separate profiles** — a leader arm, game controller, or keyboard are all teleop devices, and any teleop can be paired with any robot at run time (in the Run tab).
+
+#### Robot Profiles
+- List of saved robot profiles (from `~/.config/lerobot/robots/`)
+- Editable form per profile: robot type (dropdown of registered Draccus types like `so100_follower`, `bi_so107_follower`, etc.), robot ID, arm port(s)
+- Cameras belong to the robot profile (they're mounted on the robot)
+- Create / delete profiles
+
+#### Teleop Profiles
+- List of saved teleop profiles (from `~/.config/lerobot/teleops/`)
+- Editable form: teleop type (`so100_leader`, `bi_so107_leader`, game controller, keyboard, etc.), ID, port(s), options (e.g. gripper bounce)
+- Create / delete profiles
+
+#### Camera Detection
+- "Detect cameras" button → calls `OpenCVCamera.find_cameras()` + `RealSenseCamera.find_cameras()`
+- Shows all detected cameras as cards (type, id/serial, resolution)
+- Opens live preview of all cameras simultaneously (MJPEG stream from backend, reusing camera grid UI from Data tab)
+- Assign each camera a role name (front, left_wrist, right_wrist, top, or custom) → saves into the selected robot profile
+
+#### Port Identification
+- "Scan ports" → lists `/dev/ttyACM*` devices
+- "Identify arms" → the wiggle test from `chop.py identify-ports`, but with GUI buttons ("Which arm just moved?" → click Left Leader / Right Leader / Left Follower / Right Follower) instead of typing in a terminal
+- Writes identified ports into the selected robot and teleop profiles
+
+#### Calibration
+- TODO: guided calibration wizard (currently `robot.calibrate()` is interactive via stdin prompts — needs to be adapted for GUI-driven step-by-step flow)
 
 ---
 
@@ -63,18 +81,24 @@ Currently `chop.py` stores one robot config at `~/.config/chop/robot_config.json
 ~/.config/lerobot/
   settings.json          # app-level prefs (theme, default dirs, HF token ref, etc.)
   robots/
-    white.json           # one file per robot profile (migrated from chop's robot_config.json)
+    white.json           # one file per robot profile
     black.json
+  teleops/
+    blue.json            # leader arm
+    gamepad.json         # game controller
+    keyboard.json        # keyboard teleop
   training/
     defaults.json        # default training config
   cloud/
     nebius.json          # cloud provider credentials / project refs
 ```
 
-- One-file-per-robot lets users manage multiple robot profiles cleanly (current `chop.py` only supports one)
-- App settings separated from robot hardware configs
+- Robots and teleops are separate — any teleop can pair with any robot (chosen in Run tab)
+- One-file-per-device lets users manage multiple profiles cleanly (current `chop.py` only supports one of each)
+- App settings separated from hardware configs
 - Secrets (HF token, cloud creds) stored as references to env vars or keyring, not plaintext
-- Migration path: on first launch, detect `~/.config/chop/robot_config.json` and offer to import
+- Calibration data stays where LeRobot already stores it: `~/.cache/huggingface/lerobot/calibration/{robots,teleoperators}/` — the GUI reads from there, doesn't duplicate it
+
 
 ---
 
