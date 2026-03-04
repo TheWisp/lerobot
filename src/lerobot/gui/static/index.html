@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
-    <link rel="stylesheet" href="/static/style.css?v=15">
+    <link rel="stylesheet" href="/static/style.css?v=16">
 </head>
 <body>
     <div class="tab-bar">
@@ -20,17 +20,25 @@
             <div class="sidebar">
                 <div class="sidebar-header">
                     <h1>Datasets</h1>
-                    <div class="open-dataset">
-                        <input type="text" id="dataset-path" placeholder="Path or repo_id" onkeydown="if(event.key==='Enter')openDataset()">
-                        <button onclick="openDataset()">Open</button>
-                        <div class="recent-dropdown">
-                            <button class="recent-btn" id="recent-btn" onclick="toggleRecentMenu()" title="Recent datasets">&#9662;</button>
-                            <div class="recent-menu" id="recent-menu"></div>
+                </div>
+                <div class="sidebar-section sources-section">
+                    <div class="section-label">
+                        <span>Sources</span>
+                        <button class="btn-small" onclick="addSource()" title="Add source folder">+</button>
+                    </div>
+                    <div id="sources-container"></div>
+                </div>
+                <div class="sidebar-section opened-section">
+                    <div class="section-label">
+                        <span>Opened</span>
+                        <div class="open-dataset-inline">
+                            <input type="text" id="dataset-path" placeholder="Path or repo_id" onkeydown="if(event.key==='Enter')openDataset()">
+                            <button onclick="openDataset()" title="Open">Open</button>
                         </div>
                     </div>
-                </div>
-                <div class="tree-container" id="tree-container">
-                    <div style="padding: 16px; color: #666; font-size: 13px;">No datasets loaded</div>
+                    <div class="tree-container" id="tree-container">
+                        <div style="padding: 8px 12px; color: #666; font-size: 12px;">No datasets opened</div>
+                    </div>
                 </div>
             </div>
 
@@ -171,7 +179,7 @@
     <!-- Toast notifications -->
     <div class="toast-container" id="toast-container"></div>
 
-    <script src="/static/app.js?v=14"></script>
+    <script src="/static/app.js?v=15"></script>
     <script src="/static/robot.js?v=17"></script>
     <script src="/static/run.js?v=14"></script>
 </body>

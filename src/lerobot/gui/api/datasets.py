@@ -15,16 +15,19 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from lerobot.datasets.dataset_tools import check_episode_video_duration
+from lerobot.utils.constants import HF_LEROBOT_HOME
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
@@ -428,6 +431,187 @@ def set_app_state(state: "AppState") -> None:
     """Set the application state for API handlers."""
     global _app_state
     _app_state = state
+
+
+# ---------------------------------------------------------------------------
+# Dataset sources (folder browser)
+# ---------------------------------------------------------------------------
+
+SOURCES_FILE = Path.home() / ".config" / "lerobot" / "dataset_sources.json"
+
+
+def _read_sources() -> list[dict]:
+    """Read source folders from config. Returns default source if file missing."""
+    default_source = {
+        "path": str(HF_LEROBOT_HOME),
+        "removable": False,
+        "expanded": True,
+    }
+    if not SOURCES_FILE.exists():
+        return [default_source]
+    try:
+        data = json.loads(SOURCES_FILE.read_text())
+        sources = data.get("sources", [])
+        # Ensure default source is always present
+        default_paths = {str(HF_LEROBOT_HOME)}
+        has_default = any(s["path"] in default_paths for s in sources)
+        if not has_default:
+            sources.insert(0, default_source)
+        return sources
+    except Exception:
+        logger.warning("Failed to read dataset sources, using defaults", exc_info=True)
+        return [default_source]
+
+
+def _write_sources(sources: list[dict]) -> None:
+    """Persist source folders to config."""
+    SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = {"version": 1, "sources": sources}
+    SOURCES_FILE.write_text(json.dumps(data, indent=2))
+
+
+def _scan_source(source_path: str, max_depth: int = 3) -> list[dict]:
+    """Scan a directory for datasets (subdirs containing meta/info.json).
+
+    Returns lightweight metadata for each found dataset.
+    """
+    root = Path(source_path)
+    if not root.is_dir():
+        return []
+
+    found = []
+    _scan_recursive(root, root, found, max_depth, 0)
+    # Sort by name
+    found.sort(key=lambda d: d["name"])
+    return found
+
+
+def _scan_recursive(
+    base: Path, current: Path, found: list[dict], max_depth: int, depth: int
+) -> None:
+    """Recursively scan for datasets up to max_depth."""
+    if depth > max_depth:
+        return
+    try:
+        info_file = current / "meta" / "info.json"
+        if info_file.is_file():
+            # This directory is a dataset
+            try:
+                info = json.loads(info_file.read_text())
+                rel = current.relative_to(base)
+                found.append({
+                    "name": str(rel),
+                    "root": str(current),
+                    "total_episodes": info.get("total_episodes", 0),
+                    "total_frames": info.get("total_frames", 0),
+                    "fps": info.get("fps", 0),
+                    "robot_type": info.get("robot_type") or "",
+                })
+            except Exception:
+                logger.debug(f"Failed to read info.json in {current}", exc_info=True)
+            return  # Don't recurse into dataset subdirs
+
+        # Not a dataset — recurse into subdirectories
+        if depth < max_depth:
+            try:
+                for child in sorted(current.iterdir()):
+                    if child.is_dir() and not child.name.startswith("."):
+                        _scan_recursive(base, child, found, max_depth, depth + 1)
+            except PermissionError:
+                pass
+    except Exception:
+        pass
+
+
+class SourceRequest(BaseModel):
+    path: str
+
+
+class SourceInfo(BaseModel):
+    path: str
+    removable: bool
+    expanded: bool
+
+
+class SourceDatasetInfo(BaseModel):
+    name: str
+    root: str
+    total_episodes: int
+    total_frames: int
+    fps: int
+    robot_type: str = ""
+
+
+@router.get("/sources")
+async def list_sources() -> list[SourceInfo]:
+    """List dataset source folders."""
+    return [SourceInfo(**s) for s in _read_sources()]
+
+
+@router.post("/sources")
+async def add_source(req: SourceRequest) -> SourceInfo:
+    """Add a dataset source folder."""
+    path = str(Path(req.path).expanduser().resolve())
+    if not Path(path).is_dir():
+        raise HTTPException(status_code=400, detail=f"Directory not found: {path}")
+
+    sources = _read_sources()
+    # Check if already exists
+    if any(s["path"] == path for s in sources):
+        raise HTTPException(status_code=409, detail="Source already exists")
+
+    new_source = {"path": path, "removable": True, "expanded": True}
+    sources.append(new_source)
+    _write_sources(sources)
+    logger.info(f"Added dataset source: {path}")
+    return SourceInfo(**new_source)
+
+
+@router.delete("/sources/{encoded_path:path}")
+async def remove_source(encoded_path: str) -> dict[str, str]:
+    """Remove a dataset source folder."""
+    path = unquote(encoded_path)
+    sources = _read_sources()
+    source = next((s for s in sources if s["path"] == path), None)
+    if not source:
+        raise HTTPException(status_code=404, detail=f"Source not found: {path}")
+    if not source.get("removable", True):
+        raise HTTPException(status_code=400, detail="Cannot remove default source")
+
+    sources = [s for s in sources if s["path"] != path]
+    _write_sources(sources)
+    logger.info(f"Removed dataset source: {path}")
+    return {"status": "ok"}
+
+
+@router.put("/sources/{encoded_path:path}/expanded")
+async def set_source_expanded(encoded_path: str, expanded: bool = True) -> dict[str, str]:
+    """Toggle source folder expansion state."""
+    path = unquote(encoded_path)
+    sources = _read_sources()
+    source = next((s for s in sources if s["path"] == path), None)
+    if not source:
+        raise HTTPException(status_code=404, detail=f"Source not found: {path}")
+
+    source["expanded"] = expanded
+    _write_sources(sources)
+    return {"status": "ok"}
+
+
+@router.get("/sources/{encoded_path:path}/datasets")
+async def scan_source(encoded_path: str) -> list[SourceDatasetInfo]:
+    """Scan a source folder for datasets."""
+    import asyncio
+
+    path = unquote(encoded_path)
+    sources = _read_sources()
+    if not any(s["path"] == path for s in sources):
+        raise HTTPException(status_code=404, detail=f"Source not found: {path}")
+
+    # Run scan in executor to avoid blocking
+    loop = asyncio.get_event_loop()
+    datasets = await loop.run_in_executor(None, _scan_source, path)
+    return [SourceDatasetInfo(**d) for d in datasets]
 
 
 class OpenDatasetRequest(BaseModel):

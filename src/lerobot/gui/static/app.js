@@ -24,60 +24,159 @@ let isDraggingTrimLeft = false;
 let isDraggingTrimRight = false;
 let justFinishedTrimDrag = false;
 
-// Recent datasets (localStorage)
-const RECENT_KEY = 'lerobot_recent_datasets';
-const MAX_RECENT = 10;
+// Dataset sources (folder browser)
+let sources = [];
+let sourceDatasets = {};  // {sourcePath: [{name, root, total_episodes, ...}]}
+let expandedSources = new Set();
+let _sourcesLoaded = false;
 
-function getRecentDatasets() {
+async function loadSources() {
     try {
-        return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
-    } catch { return []; }
-}
-
-function addRecentDataset(path, repoId) {
-    const recent = getRecentDatasets().filter(r => r.path !== path);
-    recent.unshift({ path, repoId, timestamp: Date.now() });
-    localStorage.setItem(RECENT_KEY, JSON.stringify(recent.slice(0, MAX_RECENT)));
-    updateRecentButton();
-}
-
-function updateRecentButton() {
-    const btn = document.getElementById('recent-btn');
-    const recent = getRecentDatasets();
-    btn.disabled = recent.length === 0;
-}
-
-function toggleRecentMenu() {
-    const menu = document.getElementById('recent-menu');
-    if (menu.classList.contains('visible')) {
-        menu.classList.remove('visible');
-        return;
+        const res = await fetch('/api/datasets/sources');
+        if (!res.ok) return;
+        sources = await res.json();
+        // Restore expansion state
+        expandedSources.clear();
+        for (const s of sources) {
+            if (s.expanded) expandedSources.add(s.path);
+        }
+        renderSources();
+        // Scan expanded sources
+        for (const s of sources) {
+            if (s.expanded) {
+                scanSource(s.path);
+            }
+        }
+        _sourcesLoaded = true;
+    } catch (e) {
+        console.error('Failed to load sources:', e);
     }
-
-    const recent = getRecentDatasets();
-    if (recent.length === 0) return;
-
-    menu.innerHTML = recent.map(r => `
-        <div class="recent-menu-item" onclick="openRecentDataset('${r.path.replace(/'/g, "\\'")}')">
-            ${r.repoId || r.path.split('/').pop()}
-            <span class="recent-path">${r.path}</span>
-        </div>
-    `).join('');
-    menu.classList.add('visible');
 }
 
-function openRecentDataset(path) {
-    document.getElementById('recent-menu').classList.remove('visible');
-    document.getElementById('dataset-path').value = path;
+async function scanSource(sourcePath) {
+    const container = document.getElementById(`source-children-${_sourceId(sourcePath)}`);
+    if (container) container.innerHTML = '<div class="source-loading">Scanning...</div>';
+    try {
+        const res = await fetch(`/api/datasets/sources/${encodeURIComponent(sourcePath)}/datasets`);
+        if (!res.ok) throw new Error(await res.text());
+        sourceDatasets[sourcePath] = await res.json();
+        renderSources();
+    } catch (e) {
+        console.error(`Failed to scan source ${sourcePath}:`, e);
+        if (container) container.innerHTML = '<div class="source-empty">Scan failed</div>';
+    }
+}
+
+function _sourceId(path) {
+    // Create a safe DOM id from a path
+    return path.replace(/[^a-zA-Z0-9]/g, '_');
+}
+
+async function toggleSource(sourcePath) {
+    if (expandedSources.has(sourcePath)) {
+        expandedSources.delete(sourcePath);
+    } else {
+        expandedSources.add(sourcePath);
+        // Scan if not yet loaded
+        if (!sourceDatasets[sourcePath]) {
+            scanSource(sourcePath);
+        }
+    }
+    // Persist expansion state
+    fetch(`/api/datasets/sources/${encodeURIComponent(sourcePath)}/expanded?expanded=${expandedSources.has(sourcePath)}`, { method: 'PUT' });
+    renderSources();
+}
+
+async function addSource() {
+    const path = prompt('Enter folder path to scan for datasets:');
+    if (!path) return;
+    try {
+        const res = await fetch('/api/datasets/sources', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({ detail: 'Failed to add source' }));
+            throw new Error(data.detail || 'Failed to add source');
+        }
+        await loadSources();
+    } catch (e) {
+        showToast('Error', e.message, 'error');
+    }
+}
+
+async function removeSource(sourcePath, e) {
+    e.stopPropagation();
+    if (!confirm(`Remove source folder?\n${sourcePath}`)) return;
+    try {
+        const res = await fetch(`/api/datasets/sources/${encodeURIComponent(sourcePath)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Failed to remove source');
+        delete sourceDatasets[sourcePath];
+        expandedSources.delete(sourcePath);
+        await loadSources();
+    } catch (e) {
+        showToast('Error', e.message, 'error');
+    }
+}
+
+function openDatasetFromSource(root) {
+    document.getElementById('dataset-path').value = root;
     openDataset();
 }
 
-// Close recent menu when clicking elsewhere
-document.addEventListener('click', (e) => {
-    if (!e.target.closest('.recent-dropdown')) {
-        document.getElementById('recent-menu').classList.remove('visible');
+function renderSources() {
+    const container = document.getElementById('sources-container');
+    if (!container) return;
+
+    if (sources.length === 0) {
+        container.innerHTML = '<div class="source-empty">No sources configured</div>';
+        return;
     }
-});
+
+    let html = '';
+    for (const source of sources) {
+        const isExpanded = expandedSources.has(source.path);
+        const sid = _sourceId(source.path);
+        const datasets = sourceDatasets[source.path] || [];
+        const countText = datasets.length > 0 ? `${datasets.length}` : '';
+        // Show last two path segments for readability
+        const parts = source.path.split('/').filter(Boolean);
+        const displayPath = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : source.path;
+
+        html += `<div class="source-folder">`;
+        html += `<div class="source-folder-header" onclick="toggleSource('${source.path.replace(/'/g, "\\'")}')" title="${source.path}">`;
+        html += `<span class="source-folder-toggle">${isExpanded ? '▼' : '▶'}</span>`;
+        html += `<span class="source-folder-path">${displayPath}</span>`;
+        html += `<span class="source-folder-count">${countText}</span>`;
+        if (source.removable) {
+            html += `<span class="source-folder-remove" onclick="removeSource('${source.path.replace(/'/g, "\\'")}', event)" title="Remove source">&times;</span>`;
+        }
+        html += `</div>`;
+
+        html += `<div class="source-folder-children ${isExpanded ? 'expanded' : ''}" id="source-children-${sid}">`;
+        if (isExpanded) {
+            if (datasets.length === 0 && !sourceDatasets[source.path]) {
+                html += '<div class="source-loading">Scanning...</div>';
+            } else if (datasets.length === 0) {
+                html += '<div class="source-empty">No datasets found</div>';
+            } else {
+                for (const ds of datasets) {
+                    const isOpen = Object.keys(window.datasets || {}).some(id => {
+                        const d = window.datasets[id];
+                        return d && d.root === ds.root;
+                    });
+                    html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames">`;
+                    html += `<span class="source-dataset-name">${ds.name}</span>`;
+                    html += `<span class="source-dataset-meta">${ds.total_episodes} ep</span>`;
+                    html += `</div>`;
+                }
+            }
+        }
+        html += `</div></div>`;
+    }
+    container.innerHTML = html;
+}
 
 async function openDataset() {
     const path = document.getElementById('dataset-path').value.trim();
@@ -115,13 +214,11 @@ async function openDataset() {
         // Expand this dataset by default
         expandedNodes.add(data.id);
 
-        // Save to recent
-        addRecentDataset(path, data.repo_id);
-
         // Refresh pending edits (backend restores persisted edits on open)
         await refreshPendingEdits();
 
         renderTree();
+        renderSources();  // Update source list to show open state
         setStatus(`Opened: ${data.repo_id}`);
         document.getElementById('dataset-path').value = '';
     } catch (e) {
@@ -146,7 +243,7 @@ function isEpisodeTrimmed(datasetId, epIdx) {
 function renderTree() {
     const container = document.getElementById('tree-container');
     if (Object.keys(datasets).length === 0) {
-        container.innerHTML = '<div style="padding: 16px; color: #666; font-size: 13px;">No datasets loaded</div>';
+        container.innerHTML = '<div style="padding: 8px 12px; color: #666; font-size: 12px;">No datasets opened</div>';
         return;
     }
 
@@ -165,6 +262,7 @@ function renderTree() {
                     <span class="tree-icon">📁</span>
                     <span class="tree-label">${ds.repo_id}</span>
                     <span class="tree-meta">${dsEditCount > 0 ? `${dsEditCount}✎ ` : ''}${ds.total_episodes} ep</span>
+                    <span class="tree-close" onclick="closeDataset('${id}', event)" title="Close">&times;</span>
                 </div>
                 <div class="tree-children ${isExpanded ? 'expanded' : ''}">
         `;
@@ -216,6 +314,25 @@ function toggleDataset(id) {
         expandedNodes.add(id);
     }
     renderTree();
+}
+
+async function closeDataset(id, e) {
+    e.stopPropagation();
+    try {
+        await fetch(`/api/datasets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        delete datasets[id];
+        delete episodes[id];
+        expandedNodes.delete(id);
+        if (currentDataset === id) {
+            currentDataset = null;
+            currentEpisode = null;
+            document.getElementById('camera-grid').innerHTML = '<div class="empty-state">Select an episode to view</div>';
+        }
+        renderTree();
+        renderSources();
+    } catch (err) {
+        showToast('Error', 'Failed to close dataset: ' + err.message, 'error');
+    }
 }
 
 function selectEpisode(datasetId, epIdx, length) {
@@ -877,6 +994,9 @@ function loadTrimForCurrentEpisode() {
     updateTrimDisplay();
 }
 
+// Make datasets accessible for source rendering
+window.datasets = datasets;
+
 // Initialize
 refreshPendingEdits();
-updateRecentButton();
+loadSources();
