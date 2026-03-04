@@ -606,30 +606,23 @@ def _make_robot_from_profile(profile: dict):
     from lerobot.robots.utils import make_robot_from_config
     _ensure_configs_loaded()
 
-    # Build the flat config dict that draccus expects
     config_dict = {"type": profile["type"]}
     config_dict.update(profile.get("fields", {}))
 
-    # Decode into the correct RobotConfig subclass
     import draccus
     config = draccus.decode(RobotConfig, config_dict)
-
     return make_robot_from_config(config)
 
 
-def _disable_torque(robot) -> None:
-    """Disable torque on all motors regardless of robot type.
-
-    Works for single-arm (SOFollower with self.bus) and bimanual
-    (BiSO107Follower with self.left_arm / self.right_arm sub-robots).
-    """
-    if hasattr(robot, "bus"):
-        robot.bus.disable_torque()
-    elif hasattr(robot, "left_arm") and hasattr(robot, "right_arm"):
-        robot.left_arm.bus.disable_torque()
-        robot.right_arm.bus.disable_torque()
+def _disable_torque(device) -> None:
+    """Disable torque on all motors regardless of device type."""
+    if hasattr(device, "bus"):
+        device.bus.disable_torque()
+    elif hasattr(device, "left_arm") and hasattr(device, "right_arm"):
+        device.left_arm.bus.disable_torque()
+        device.right_arm.bus.disable_torque()
     else:
-        raise RuntimeError(f"Cannot disable torque: unsupported robot type {type(robot).__name__}")
+        raise RuntimeError(f"Cannot disable torque: unsupported device type {type(device).__name__}")
 
 
 def _do_start_rest_recording(profile: dict) -> dict:
@@ -703,6 +696,7 @@ def _do_move_to_rest_position(profile: dict, rest_position: dict, duration_s: fl
     try:
         robot.connect()
         move_to_rest_position(robot, rest_position, duration_s=duration_s)
+        _disable_torque(robot)
         return {"status": "ok"}
     except Exception as e:
         logger.exception("Failed to move to rest position")

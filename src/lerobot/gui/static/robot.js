@@ -231,6 +231,8 @@ function changeProfileType(newType) {
     if (!currentProfile) return;
     currentProfile.data.type = newType;
     currentProfile.data.fields = {};
+    currentProfile.data.cameras = {};
+    currentProfile.data.rest_position = {};
     _rerender();
     _updateDirtyState();
 }
@@ -807,7 +809,7 @@ function renderRestPositionSection() {
 }
 
 async function startRestRecording() {
-    if (!currentProfile || currentProfile.kind !== 'robot') return;
+    if (!currentProfile) return;
 
     const btn = document.getElementById('record-rest-btn');
     const statusEl = document.getElementById('rest-position-status');
@@ -872,7 +874,7 @@ async function cancelRestRecording() {
 }
 
 async function moveToRestPosition() {
-    if (!currentProfile || currentProfile.kind !== 'robot') return;
+    if (!currentProfile) return;
     const restPos = currentProfile.data.rest_position;
     if (!restPos || Object.keys(restPos).length === 0) return;
 
@@ -920,9 +922,8 @@ async function _saveRestPositionToProfile() {
         name: currentProfile.name,
         fields: _collectFormFields(),
     };
-    const endpoint = '/api/robot/profiles';
     try {
-        const res = await fetch(`${endpoint}/${encodeURIComponent(currentProfile.name)}`, {
+        const res = await fetch(`/api/robot/profiles/${encodeURIComponent(currentProfile.name)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
