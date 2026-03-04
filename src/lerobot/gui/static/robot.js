@@ -5,8 +5,10 @@ let teleopSchemas = null;
 let robotProfiles = [];
 let teleopProfiles = [];
 let currentProfile = null; // {kind: 'robot'|'teleop', name, data}
+let savedProfileData = null; // deep copy of data at last save/load — for dirty detection
 let detectedCameras = [];
 let previewInterval = null;
+let scannedPorts = null; // {ports, allAssignments} from last scan
 let robotTabInitialized = false;
 
 // ============================================================================
@@ -111,6 +113,7 @@ async function selectProfile(kind, name) {
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         currentProfile = { kind, name, data };
+        savedProfileData = JSON.parse(JSON.stringify(data));
         renderEditor();
         renderRobotProfileList();
         renderTeleopProfileList();
@@ -135,10 +138,18 @@ function renderEditor() {
 
     let html = '';
 
-    // Header with type selector
+    // Header: name + actions
     html += '<div class="editor-header">';
+    html += '<div class="editor-header-row">';
     html += `<h2>${esc(currentProfile.name)}</h2>`;
     html += `<button class="btn-small secondary" onclick="renameProfile()" title="Rename profile">Rename</button>`;
+    html += `<button class="btn-small danger" onclick="deleteProfile('${esc(currentProfile.kind)}', '${esc(currentProfile.name)}')" title="Delete profile">Delete</button>`;
+    html += '</div>';
+    html += '</div>';
+
+    // Form fields (type selector as first row)
+    html += '<div class="editor-form" id="editor-form">';
+    html += `<label>Type</label>`;
     html += `<select onchange="changeProfileType(this.value)">`;
     if (schemas) {
         for (const s of schemas) {
@@ -147,10 +158,6 @@ function renderEditor() {
         }
     }
     html += '</select>';
-    html += '</div>';
-
-    // Form fields
-    html += '<div class="editor-form">';
     if (schema) {
         for (const field of schema.fields) {
             const value = currentProfile.data.fields?.[field.name] ?? field.default ?? '';
@@ -169,13 +176,20 @@ function renderEditor() {
         html += renderPortsSection();
     }
 
-    // Actions
-    html += '<div class="editor-actions">';
-    html += `<button class="btn-save" onclick="saveProfile()">Save Profile</button>`;
-    html += `<button class="btn-delete" onclick="deleteProfile('${esc(currentProfile.kind)}', '${esc(currentProfile.name)}')">Delete Profile</button>`;
+    // Save/discard bar (hidden until dirty)
+    html += '<div class="editor-actions" id="editor-actions" style="display:none">';
+    html += `<button class="btn-save" onclick="saveProfile()">Save Changes</button>`;
+    html += `<button class="btn-discard" onclick="discardProfileChanges()">Discard</button>`;
     html += '</div>';
 
     editorEl.innerHTML = html;
+
+    // Listen for input changes to track dirty state
+    const form = document.getElementById('editor-form');
+    if (form) {
+        form.addEventListener('input', _updateDirtyState);
+        form.addEventListener('change', _updateDirtyState);
+    }
 }
 
 function renderFormField(field, value) {
@@ -212,7 +226,56 @@ function changeProfileType(newType) {
     if (!currentProfile) return;
     currentProfile.data.type = newType;
     currentProfile.data.fields = {};
-    renderEditor();
+    _rerender();
+    _updateDirtyState();
+}
+
+// ============================================================================
+// Dirty tracking
+// ============================================================================
+
+function _serializeProfile(data) {
+    return JSON.stringify({
+        type: data.type,
+        name: data.name,
+        fields: data.fields || {},
+        cameras: data.cameras || {},
+    });
+}
+
+function _collectFormFields() {
+    const schemas = currentProfile.kind === 'robot' ? robotSchemas : teleopSchemas;
+    const schema = schemas?.find(s => s.type_name === currentProfile.data.type);
+    const fields = {};
+    if (schema) {
+        for (const field of schema.fields) {
+            const input = document.getElementById(`field-${field.name}`);
+            if (!input) continue;
+            fields[field.name] = parseFieldValue(field, input.value);
+        }
+    }
+    return fields;
+}
+
+function _isDirty() {
+    if (!currentProfile || !savedProfileData) return false;
+    const current = _serializeProfile({
+        ...currentProfile.data,
+        name: currentProfile.name,
+        fields: _collectFormFields(),
+    });
+    return current !== _serializeProfile(savedProfileData);
+}
+
+function _updateDirtyState() {
+    const bar = document.getElementById('editor-actions');
+    if (bar) bar.style.display = _isDirty() ? 'flex' : 'none';
+}
+
+function discardProfileChanges() {
+    if (!currentProfile || !savedProfileData) return;
+    currentProfile.data = JSON.parse(JSON.stringify(savedProfileData));
+    _rerender();
 }
 
 // ============================================================================
@@ -260,27 +323,10 @@ async function newTeleopProfile() {
 async function saveProfile() {
     if (!currentProfile) return;
 
-    const schemas = currentProfile.kind === 'robot' ? robotSchemas : teleopSchemas;
-    const schema = schemas?.find(s => s.type_name === currentProfile.data.type);
-
-    // Collect field values
-    const fields = {};
-    if (schema) {
-        for (const field of schema.fields) {
-            const input = document.getElementById(`field-${field.name}`);
-            if (!input) continue;
-            fields[field.name] = parseFieldValue(field, input.value);
-        }
-    }
-
-    // Collect camera assignments from the current profile data
-    const cameras = currentProfile.data.cameras || {};
-
     const payload = {
-        type: currentProfile.data.type,
+        ...currentProfile.data,
         name: currentProfile.name,
-        fields,
-        cameras,
+        fields: _collectFormFields(),
     };
 
     const endpoint = currentProfile.kind === 'robot' ? '/api/robot/profiles' : '/api/robot/teleop-profiles';
@@ -292,6 +338,8 @@ async function saveProfile() {
         });
         if (!res.ok) throw new Error(await res.text());
         currentProfile.data = payload;
+        savedProfileData = JSON.parse(JSON.stringify(payload));
+        _updateDirtyState();
         showToast('Saved', `Profile "${currentProfile.name}" saved`, 'success');
         // Reload lists in case type changed
         if (currentProfile.kind === 'robot') await loadRobotProfiles();
@@ -319,7 +367,7 @@ async function renameProfile() {
         currentProfile.data.name = newName.trim();
         if (currentProfile.kind === 'robot') await loadRobotProfiles();
         else await loadTeleopProfiles();
-        renderEditor();
+        _rerender();
         showToast('Renamed', `"${oldName}" renamed to "${newName.trim()}"`, 'success');
     } catch (e) {
         showToast('Error', e.message, 'error');
@@ -373,15 +421,33 @@ function renderCamerasSection() {
 
     let html = '<div class="camera-detect-section"><h3>Cameras</h3>';
 
-    // Show assigned cameras
+    // Show assigned cameras with editable config
     if (cameraEntries.length > 0) {
         for (const [role, cam] of cameraEntries) {
             const camType = cam.type || 'unknown';
             const camId = cam.index_or_path ?? cam.serial_number_or_name ?? '?';
+            const isRealsense = camType === 'intelrealsense';
             html += `<div class="camera-assigned">
-                <span class="cam-role">${esc(role)}</span>
-                <span class="cam-info">${esc(camType)} - ${esc(String(camId))}</span>
-                <span class="cam-remove" onclick="removeCameraRole('${esc(role)}')">&times;</span>
+                <div class="cam-header">
+                    <span class="cam-role">${esc(role)}</span>
+                    <span class="cam-info">${esc(camType)} - ${esc(String(camId))}</span>
+                    <span class="cam-remove" onclick="removeCameraRole('${esc(role)}')" title="Remove">&times;</span>
+                </div>
+                <div class="cam-config">
+                    <label>Width<input type="number" value="${cam.width || ''}" placeholder="auto" onchange="updateCameraConfig('${esc(role)}', 'width', this.value)"></label>
+                    <label>Height<input type="number" value="${cam.height || ''}" placeholder="auto" onchange="updateCameraConfig('${esc(role)}', 'height', this.value)"></label>
+                    <label>FPS<input type="number" value="${cam.fps || ''}" placeholder="auto" onchange="updateCameraConfig('${esc(role)}', 'fps', this.value)"></label>
+                    ${!isRealsense ? `<label>Format<select onchange="updateCameraConfig('${esc(role)}', 'fourcc', this.value)">
+                        <option value="" ${!cam.fourcc ? 'selected' : ''}>auto</option>
+                        <option value="MJPG" ${cam.fourcc === 'MJPG' ? 'selected' : ''}>MJPG</option>
+                        <option value="YUYV" ${cam.fourcc === 'YUYV' ? 'selected' : ''}>YUYV</option>
+                        <option value="H264" ${cam.fourcc === 'H264' ? 'selected' : ''}>H264</option>
+                    </select></label>` : ''}
+                    ${isRealsense ? `<label>Depth<select onchange="updateCameraConfig('${esc(role)}', 'use_depth', this.value)">
+                        <option value="false" ${!cam.use_depth ? 'selected' : ''}>off</option>
+                        <option value="true" ${cam.use_depth ? 'selected' : ''}>on</option>
+                    </select></label>` : ''}
+                </div>
             </div>`;
         }
     }
@@ -519,13 +585,40 @@ function assignCameraRole(cameraIndex, role) {
 
     if (!currentProfile.data.cameras) currentProfile.data.cameras = {};
     currentProfile.data.cameras[role] = camConfig;
+    _rerender();
+    _updateDirtyState();
     showToast('Camera assigned', `${cam.name || 'Camera'} assigned as "${role}"`, 'success');
+}
+
+// Re-render the entire editor from currentProfile state.
+// Re-populates camera preview and port list from cached scan data.
+function _rerender() {
+    renderEditor();
+    if (detectedCameras.length > 0) renderCameraPreview();
+    if (scannedPorts) renderPortList(scannedPorts.ports, scannedPorts.allAssignments);
 }
 
 function removeCameraRole(role) {
     if (!currentProfile?.data?.cameras) return;
     delete currentProfile.data.cameras[role];
-    renderEditor();
+    _rerender();
+    _updateDirtyState();
+}
+
+function updateCameraConfig(role, key, value) {
+    if (!currentProfile?.data?.cameras?.[role]) return;
+    if (key === 'use_depth') {
+        currentProfile.data.cameras[role][key] = value === 'true';
+    } else if (key === 'fourcc') {
+        if (value) currentProfile.data.cameras[role][key] = value;
+        else delete currentProfile.data.cameras[role][key];
+    } else {
+        // width, height, fps — numeric
+        const n = parseInt(value, 10);
+        if (isNaN(n) || n <= 0) delete currentProfile.data.cameras[role][key];
+        else currentProfile.data.cameras[role][key] = n;
+    }
+    _updateDirtyState();
 }
 
 // ============================================================================
@@ -553,6 +646,7 @@ async function scanPorts() {
         ]);
         const ports = await portsRes.json();
         const allAssignments = await assignRes.json();
+        scannedPorts = { ports, allAssignments };
         renderPortList(ports, allAssignments);
     } catch (e) {
         showToast('Error', `Port scan failed: ${e.message}`, 'error');
@@ -632,11 +726,11 @@ function renderPortList(ports, allAssignments) {
 
 function assignPort(port, fieldName) {
     if (!fieldName) return;
-    const input = document.getElementById(`field-${fieldName}`);
-    if (input) {
-        input.value = port;
-        showToast('Port set', `${fieldName} = ${port}`, 'info');
-    }
+    if (!currentProfile.data.fields) currentProfile.data.fields = {};
+    currentProfile.data.fields[fieldName] = port;
+    _rerender();
+    _updateDirtyState();
+    showToast('Port set', `${fieldName} = ${port}`, 'info');
 }
 
 async function identifyArm(port, btn) {
