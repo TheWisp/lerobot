@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
-    <link rel="stylesheet" href="/static/style.css?v=16">
+    <link rel="stylesheet" href="/static/style.css?v=17">
 </head>
 <body>
     <div class="tab-bar">
@@ -169,6 +169,7 @@
     <div class="context-menu" id="context-menu">
         <div class="context-menu-item" onclick="contextAction('view')">View Episode</div>
         <div class="context-menu-item" onclick="contextAction('rerun')">Open in Rerun</div>
+        <div class="context-menu-item" onclick="contextAction('replay')">Replay on Robot</div>
         <div class="context-menu-separator"></div>
         <div class="context-menu-item" onclick="contextAction('cleartrim')">Clear Trim</div>
         <div class="context-menu-separator"></div>
@@ -179,8 +180,8 @@
     <!-- Toast notifications -->
     <div class="toast-container" id="toast-container"></div>
 
-    <script src="/static/app.js?v=15"></script>
+    <script src="/static/app.js?v=16"></script>
     <script src="/static/robot.js?v=17"></script>
-    <script src="/static/run.js?v=14"></script>
+    <script src="/static/run.js?v=15"></script>
 </body>
 </html>

@@ -168,13 +168,13 @@ class RecordRequest(BaseModel):
     robot: dict[str, Any]
     teleop: dict[str, Any]
     repo_id: str
+    root: str | None = None
     single_task: str
     fps: int = 30
     episode_time_s: float = 60
     reset_time_s: float = 60
     num_episodes: int = 50
     video: bool = True
-    push_to_hub: bool = False
     vcodec: str = "libsvtav1"
     play_sounds: bool = True
     resume: bool = False
@@ -183,6 +183,7 @@ class RecordRequest(BaseModel):
 class ReplayRequest(BaseModel):
     robot: dict[str, Any]
     repo_id: str
+    root: str | None = None
     episode: int
     fps: int = 30
 
@@ -318,13 +319,15 @@ async def start_record(req: RecordRequest) -> dict:
     args.extend(_profile_to_cli_args(req.robot, "robot"))
     args.extend(_profile_to_cli_args(req.teleop, "teleop"))
     args.append(f"--dataset.repo_id={req.repo_id}")
+    if req.root:
+        args.append(f"--dataset.root={req.root}")
     args.append(f"--dataset.single_task={req.single_task}")
     args.append(f"--dataset.fps={req.fps}")
     args.append(f"--dataset.episode_time_s={req.episode_time_s}")
     args.append(f"--dataset.reset_time_s={req.reset_time_s}")
     args.append(f"--dataset.num_episodes={req.num_episodes}")
     args.append(f"--dataset.video={'true' if req.video else 'false'}")
-    args.append(f"--dataset.push_to_hub={'true' if req.push_to_hub else 'false'}")
+    args.append("--dataset.push_to_hub=false")
     args.append(f"--dataset.vcodec={req.vcodec}")
     args.append(f"--play_sounds={'true' if req.play_sounds else 'false'}")
     if req.resume:
@@ -342,6 +345,8 @@ async def start_replay(req: ReplayRequest) -> dict:
     args = ["lerobot-replay"]
     args.extend(_profile_to_cli_args(req.robot, "robot", include_cameras=False))
     args.append(f"--dataset.repo_id={req.repo_id}")
+    if req.root:
+        args.append(f"--dataset.root={req.root}")
     args.append(f"--dataset.episode={req.episode}")
     args.append(f"--dataset.fps={req.fps}")
 

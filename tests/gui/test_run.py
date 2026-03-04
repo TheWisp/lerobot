@@ -258,7 +258,6 @@ class TestRecordEndpoint:
                 reset_time_s=30,
                 num_episodes=10,
                 video=True,
-                push_to_hub=False,
                 vcodec="libsvtav1",
                 play_sounds=False,
                 resume=False,
@@ -287,6 +286,32 @@ class TestRecordEndpoint:
         assert "--play_sounds=false" in captured_args
         # resume=False should not add --resume
         assert "--resume=true" not in captured_args
+        # No root provided — should not have --dataset.root
+        assert not any("--dataset.root" in a for a in captured_args)
+
+    def test_record_with_root(self):
+        captured_args = []
+
+        async def run():
+            req = RecordRequest(
+                robot=_ROBOT,
+                teleop=_TELEOP,
+                repo_id="user/my_dataset",
+                root="/home/user/.cache/huggingface/lerobot/user/my_dataset",
+                single_task="pick up the cube",
+                resume=True,
+            )
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+                patch("lerobot.gui.api.run._rerun_started", False),
+            ):
+                await start_record(req)
+
+        asyncio.run(run())
+
+        assert "--dataset.root=/home/user/.cache/huggingface/lerobot/user/my_dataset" in captured_args
+        assert "--resume=true" in captured_args
 
     def test_record_resume_flag(self):
         captured_args = []
@@ -364,3 +389,29 @@ class TestReplayEndpoint:
         # Replay should not have teleop args or cameras
         assert not any("teleop" in a for a in captured_args)
         assert not any("cameras" in a for a in captured_args)
+        # No root provided
+        assert not any("--dataset.root" in a for a in captured_args)
+
+    def test_replay_with_root(self):
+        captured_args = []
+
+        async def run():
+            req = ReplayRequest(
+                robot=_ROBOT,
+                repo_id="user/my_dataset",
+                root="/tmp/datasets/user/my_dataset",
+                episode=3,
+                fps=30,
+            )
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+                patch("lerobot.gui.api.run._rerun_started", False),
+            ):
+                await start_replay(req)
+
+        asyncio.run(run())
+
+        assert "--dataset.root=/tmp/datasets/user/my_dataset" in captured_args
+        assert "--dataset.repo_id=user/my_dataset" in captured_args
+        assert "--dataset.episode=3" in captured_args

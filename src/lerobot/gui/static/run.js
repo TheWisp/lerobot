@@ -85,6 +85,111 @@ function _teleopProfileOptions() {
     ).join('');
 }
 
+// ---- Dataset / episode option helpers ----
+
+function _episodeOptions() {
+    // Build <optgroup> per opened dataset, with episodes as options
+    const ds = window.datasets || {};
+    const ep = window.episodes || {};
+    const ids = Object.keys(ds);
+    if (!ids.length) {
+        return '<option value="" disabled selected>Open a dataset in the Data tab first</option>';
+    }
+    let html = '<option value="" disabled selected>Select episode</option>';
+    for (const id of ids) {
+        const d = ds[id];
+        const epList = ep[id] || [];
+        const label = _esc(d.repo_id || id);
+        html += `<optgroup label="${label} (${epList.length} ep)">`;
+        for (const e of epList) {
+            const val = `${id}:${e.episode_index}`;
+            html += `<option value="${_esc(val)}">${label} / Episode ${e.episode_index} (${e.length} frames)</option>`;
+        }
+        html += '</optgroup>';
+    }
+    return html;
+}
+
+function _recordDatasetOptions() {
+    // None (pure teleop) + opened datasets (resume) + New dataset
+    const ds = window.datasets || {};
+    let html = '<option value="" selected>None (pure teleop)</option>';
+    for (const id of Object.keys(ds)) {
+        const d = ds[id];
+        const label = d.repo_id || id;
+        html += `<option value="existing:${_esc(id)}">${_esc(label)} (${d.total_episodes} ep)</option>`;
+    }
+    html += '<option value="__new__">+ New dataset...</option>';
+    return html;
+}
+
+function _onRecordDatasetChange() {
+    const sel = document.getElementById('run-record-dataset');
+    if (!sel) return;
+    const val = sel.value;
+
+    const newNameRow = document.getElementById('run-new-dataset-row');
+    const recordFields = document.getElementById('run-record-fields');
+
+    if (val === '') {
+        // None — pure teleop
+        if (newNameRow) newNameRow.style.display = 'none';
+        if (recordFields) recordFields.style.display = 'none';
+    } else if (val === '__new__') {
+        // New dataset
+        if (newNameRow) newNameRow.style.display = '';
+        if (recordFields) recordFields.style.display = '';
+        _checkNewDatasetConflict();
+    } else {
+        // Existing dataset — resume
+        if (newNameRow) newNameRow.style.display = 'none';
+        if (recordFields) recordFields.style.display = '';
+        // Pre-fill FPS from dataset metadata
+        const dsId = val.replace('existing:', '');
+        const d = (window.datasets || {})[dsId];
+        if (d) {
+            const fpsInput = document.getElementById('run-record-fps');
+            if (fpsInput) fpsInput.value = d.fps;
+        }
+    }
+}
+
+function _checkNewDatasetConflict() {
+    const nameInput = document.getElementById('run-new-dataset-name');
+    const warning = document.getElementById('run-dataset-conflict');
+    if (!nameInput || !warning) return;
+
+    const name = nameInput.value.trim();
+    if (!name) { warning.style.display = 'none'; return; }
+
+    // Check across all sources
+    const sd = window.sourceDatasets || {};
+    for (const datasets of Object.values(sd)) {
+        for (const ds of datasets) {
+            if (ds.name === name) {
+                warning.textContent = `"${name}" already exists in a source folder`;
+                warning.style.display = '';
+                return;
+            }
+        }
+    }
+    warning.style.display = 'none';
+}
+
+function _onReplayEpisodeChange() {
+    const sel = document.getElementById('run-replay-episode');
+    if (!sel || !sel.value) return;
+    // Parse "datasetId:episodeIndex" and auto-fill FPS
+    const [dsId] = sel.value.split(':');
+    const d = (window.datasets || {})[dsId];
+    if (d) {
+        const fpsInput = document.getElementById('run-replay-fps');
+        if (fpsInput) fpsInput.value = d.fps;
+    }
+}
+
+// ---- Form rendering ----
+
 function renderRunForm() {
     const form = document.getElementById('run-form');
     if (!form) return;
@@ -102,13 +207,22 @@ function renderRunForm() {
         html += `<label>FPS</label>`;
         html += `<input type="number" id="run-fps" value="60" min="1" max="200">`;
 
-        // Output dataset section (optional recording)
+        // Dataset selector (optional recording)
         html += '</div>';
         html += '<div class="form-section">';
-        html += '<div class="form-section-title">Record dataset (optional)</div>';
+        html += '<div class="form-section-title">Record dataset</div>';
         html += '<div class="form-grid">';
-        html += `<label>Repo ID</label>`;
-        html += `<input type="text" id="run-repo-id" placeholder="user/dataset_name">`;
+        html += `<label>Dataset</label>`;
+        html += `<select id="run-record-dataset" onchange="_onRecordDatasetChange()">${_recordDatasetOptions()}</select>`;
+        // New dataset name (hidden by default)
+        html += `</div>`;
+        html += `<div id="run-new-dataset-row" class="form-grid" style="display:none;">`;
+        html += `<label>Name</label>`;
+        html += `<div><input type="text" id="run-new-dataset-name" placeholder="my_new_dataset" oninput="_checkNewDatasetConflict()">`;
+        html += `<div class="dataset-conflict-warning" id="run-dataset-conflict" style="display:none;"></div></div>`;
+        html += `</div>`;
+        // Record fields (hidden when None selected)
+        html += `<div id="run-record-fields" class="form-grid" style="display:none;">`;
         html += `<label>Task</label>`;
         html += `<input type="text" id="run-single-task" placeholder="Pick up the cube">`;
         html += `<label>Episodes</label>`;
@@ -123,11 +237,9 @@ function renderRunForm() {
         html += '</div>';
 
     } else if (selectedWorkflow === 'replay') {
-        // Replay: dataset + episode
-        html += `<label>Repo ID</label>`;
-        html += `<input type="text" id="run-replay-repo-id" placeholder="user/dataset_name">`;
+        // Replay: single episode selector
         html += `<label>Episode</label>`;
-        html += `<input type="number" id="run-replay-episode" value="0" min="0">`;
+        html += `<select id="run-replay-episode" onchange="_onReplayEpisodeChange()">${_episodeOptions()}</select>`;
         html += `<label>FPS</label>`;
         html += `<input type="number" id="run-replay-fps" value="30" min="1" max="200">`;
 
@@ -187,56 +299,84 @@ async function launchRun() {
 
     if (selectedWorkflow === 'teleop') {
         const teleopSelect = document.getElementById('run-teleop-profile');
-        const repoId = document.getElementById('run-repo-id')?.value?.trim();
+        const teleopData = await _getProfileData('teleop', teleopSelect?.value);
+        if (!teleopData) {
+            showToast('Error', 'Select a teleop profile', 'error');
+            return;
+        }
 
-        if (repoId) {
-            // Record mode
-            const teleopData = await _getProfileData('teleop', teleopSelect?.value);
-            if (!teleopData) {
-                showToast('Error', 'Select a teleop profile', 'error');
-                return;
-            }
-            const singleTask = document.getElementById('run-single-task')?.value?.trim();
-            if (!singleTask) {
-                showToast('Error', 'Task description is required for recording', 'error');
-                return;
-            }
-            endpoint = '/api/run/record';
-            body = {
-                robot: robotData,
-                teleop: teleopData,
-                repo_id: repoId,
-                single_task: singleTask,
-                fps: parseInt(document.getElementById('run-record-fps')?.value) || 30,
-                episode_time_s: parseFloat(document.getElementById('run-episode-time')?.value) || 60,
-                reset_time_s: parseFloat(document.getElementById('run-reset-time')?.value) || 60,
-                num_episodes: parseInt(document.getElementById('run-num-episodes')?.value) || 50,
-            };
-        } else {
-            // Pure teleoperate
-            const teleopData = await _getProfileData('teleop', teleopSelect?.value);
-            if (!teleopData) {
-                showToast('Error', 'Select a teleop profile', 'error');
-                return;
-            }
+        const datasetSel = document.getElementById('run-record-dataset');
+        const datasetVal = datasetSel?.value || '';
+
+        if (datasetVal === '') {
+            // Pure teleoperate — no recording
             endpoint = '/api/run/teleoperate';
             body = {
                 robot: robotData,
                 teleop: teleopData,
                 fps: parseInt(document.getElementById('run-fps')?.value) || 60,
             };
+        } else {
+            // Record mode — existing or new dataset
+            const singleTask = document.getElementById('run-single-task')?.value?.trim();
+            if (!singleTask) {
+                showToast('Error', 'Task description is required for recording', 'error');
+                return;
+            }
+
+            let repoId, root = null, resume = false;
+            if (datasetVal === '__new__') {
+                const name = document.getElementById('run-new-dataset-name')?.value?.trim();
+                if (!name) {
+                    showToast('Error', 'Enter a name for the new dataset', 'error');
+                    return;
+                }
+                repoId = name;
+            } else {
+                // existing:{datasetId}
+                const dsId = datasetVal.replace('existing:', '');
+                const d = (window.datasets || {})[dsId];
+                if (!d) {
+                    showToast('Error', 'Selected dataset not found — was it closed?', 'error');
+                    return;
+                }
+                repoId = d.repo_id;
+                root = d.root;
+                resume = true;
+            }
+
+            endpoint = '/api/run/record';
+            body = {
+                robot: robotData,
+                teleop: teleopData,
+                repo_id: repoId,
+                root: root,
+                single_task: singleTask,
+                fps: parseInt(document.getElementById('run-record-fps')?.value) || 30,
+                episode_time_s: parseFloat(document.getElementById('run-episode-time')?.value) || 60,
+                reset_time_s: parseFloat(document.getElementById('run-reset-time')?.value) || 60,
+                num_episodes: parseInt(document.getElementById('run-num-episodes')?.value) || 50,
+                resume: resume,
+            };
         }
     } else if (selectedWorkflow === 'replay') {
-        const repoId = document.getElementById('run-replay-repo-id')?.value?.trim();
-        if (!repoId) {
-            showToast('Error', 'Repo ID is required for replay', 'error');
+        const episodeSel = document.getElementById('run-replay-episode');
+        if (!episodeSel?.value) {
+            showToast('Error', 'Select an episode to replay', 'error');
+            return;
+        }
+        const [dsId, epIdx] = episodeSel.value.split(':');
+        const d = (window.datasets || {})[dsId];
+        if (!d) {
+            showToast('Error', 'Selected dataset not found — was it closed?', 'error');
             return;
         }
         endpoint = '/api/run/replay';
         body = {
             robot: robotData,
-            repo_id: repoId,
-            episode: parseInt(document.getElementById('run-replay-episode')?.value) || 0,
+            repo_id: d.repo_id,
+            root: d.root,
+            episode: parseInt(epIdx),
             fps: parseInt(document.getElementById('run-replay-fps')?.value) || 30,
         };
     } else {

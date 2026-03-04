@@ -732,6 +732,19 @@ function contextAction(action) {
             selectEpisode(datasetId, episodeIndex, ep.video_length || ep.length);
             launchRerun();
         }
+    } else if (action === 'replay') {
+        // Switch to Run tab → Replay workflow with this episode pre-selected
+        if (typeof selectWorkflow === 'function') selectWorkflow('replay');
+        switchTab('run');
+        // After tab init renders the form, select the right episode
+        setTimeout(() => {
+            const sel = document.getElementById('run-replay-episode');
+            if (sel) {
+                const val = `${datasetId}:${episodeIndex}`;
+                sel.value = val;
+                if (typeof _onReplayEpisodeChange === 'function') _onReplayEpisodeChange();
+            }
+        }, 50);
     } else if (action === 'delete') {
         markEpisodeDeleted(datasetId, episodeIndex);
     } else if (action === 'undelete') {
@@ -994,8 +1007,10 @@ function loadTrimForCurrentEpisode() {
     updateTrimDisplay();
 }
 
-// Make datasets accessible for source rendering
+// Make state accessible for other scripts (run.js, etc.)
 window.datasets = datasets;
+window.episodes = episodes;
+window.sourceDatasets = sourceDatasets;
 
 // Initialize
 refreshPendingEdits();
