@@ -123,6 +123,58 @@ function _recordDatasetOptions() {
     return html;
 }
 
+function _getDatasetTasks(dsId) {
+    // Collect unique tasks from episodes
+    const epList = (window.episodes || {})[dsId] || [];
+    const tasks = [];
+    const seen = new Set();
+    for (const e of epList) {
+        if (e.task && !seen.has(e.task)) {
+            seen.add(e.task);
+            tasks.push(e.task);
+        }
+    }
+    return tasks;
+}
+
+function _updateTaskSelect(dsId) {
+    const sel = document.getElementById('run-task-select');
+    const customInput = document.getElementById('run-task-custom');
+    if (!sel) return;
+
+    const tasks = dsId ? _getDatasetTasks(dsId) : [];
+    let html = '';
+    if (tasks.length) {
+        for (const t of tasks) {
+            html += `<option value="${_esc(t)}">${_esc(t)}</option>`;
+        }
+        html += '<option value="__new_task__">+ New task...</option>';
+    } else {
+        // No existing tasks — show placeholder, user types freely
+        html = '<option value="__new_task__" selected>+ New task...</option>';
+    }
+    sel.innerHTML = html;
+
+    // Show/hide custom input based on selection
+    if (sel.value === '__new_task__') {
+        if (customInput) { customInput.style.display = ''; customInput.value = ''; }
+    } else {
+        if (customInput) customInput.style.display = 'none';
+    }
+}
+
+function _onTaskSelectChange() {
+    const sel = document.getElementById('run-task-select');
+    const customInput = document.getElementById('run-task-custom');
+    if (!sel || !customInput) return;
+    if (sel.value === '__new_task__') {
+        customInput.style.display = '';
+        customInput.focus();
+    } else {
+        customInput.style.display = 'none';
+    }
+}
+
 function _onRecordDatasetChange() {
     const sel = document.getElementById('run-record-dataset');
     if (!sel) return;
@@ -139,18 +191,21 @@ function _onRecordDatasetChange() {
         // New dataset
         if (newNameRow) newNameRow.style.display = '';
         if (recordFields) recordFields.style.display = '';
+        _updateTaskSelect(null);
         _checkNewDatasetConflict();
     } else {
         // Existing dataset — resume
         if (newNameRow) newNameRow.style.display = 'none';
         if (recordFields) recordFields.style.display = '';
-        // Pre-fill FPS from dataset metadata
         const dsId = val.replace('existing:', '');
+        // Pre-fill FPS from dataset metadata
         const d = (window.datasets || {})[dsId];
         if (d) {
             const fpsInput = document.getElementById('run-record-fps');
             if (fpsInput) fpsInput.value = d.fps;
         }
+        // Populate task selector from existing episodes
+        _updateTaskSelect(dsId);
     }
 }
 
@@ -224,7 +279,10 @@ function renderRunForm() {
         // Record fields (hidden when None selected)
         html += `<div id="run-record-fields" class="form-grid" style="display:none;">`;
         html += `<label>Task</label>`;
-        html += `<input type="text" id="run-single-task" placeholder="Pick up the cube">`;
+        html += `<div>`;
+        html += `<select id="run-task-select" onchange="_onTaskSelectChange()"><option value="" selected>Pick up the cube</option></select>`;
+        html += `<input type="text" id="run-task-custom" placeholder="Describe the task" style="display:none; margin-top:4px;">`;
+        html += `</div>`;
         html += `<label>Episodes</label>`;
         html += `<input type="number" id="run-num-episodes" value="50" min="1">`;
         html += `<label>Episode (s)</label>`;
@@ -318,7 +376,11 @@ async function launchRun() {
             };
         } else {
             // Record mode — existing or new dataset
-            const singleTask = document.getElementById('run-single-task')?.value?.trim();
+            const taskSel = document.getElementById('run-task-select');
+            const taskCustom = document.getElementById('run-task-custom');
+            const singleTask = (taskSel?.value === '__new_task__')
+                ? taskCustom?.value?.trim()
+                : taskSel?.value?.trim();
             if (!singleTask) {
                 showToast('Error', 'Task description is required for recording', 'error');
                 return;
