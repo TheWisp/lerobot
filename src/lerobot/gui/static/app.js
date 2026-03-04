@@ -511,9 +511,17 @@ function switchTab(tabName) {
     if (tabName === 'robot' && typeof robotTabInit === 'function') {
         robotTabInit();
     }
+    // Notify run tab
+    if (tabName === 'run' && typeof runTabInit === 'function') {
+        runTabInit();
+    }
     // Stop camera preview when leaving robot tab
     if (tabName !== 'robot' && typeof stopCameraPreview === 'function') {
         stopCameraPreview();
+    }
+    // Disconnect SSE when leaving run tab (but don't kill process)
+    if (tabName !== 'run' && typeof disconnectOutputSSE === 'function') {
+        disconnectOutputSSE();
     }
 }
 

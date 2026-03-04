@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
-    <link rel="stylesheet" href="/static/style.css?v=11">
+    <link rel="stylesheet" href="/static/style.css?v=13">
 </head>
 <body>
     <div class="tab-bar">
@@ -86,9 +86,42 @@
         <div class="empty-state">Model management coming soon</div>
     </div>
 
-    <!-- Run tab (placeholder) -->
+    <!-- Run tab -->
     <div class="tab-content" id="tab-run">
-        <div class="empty-state">Run configuration coming soon</div>
+        <div class="layout">
+            <div class="sidebar" id="run-sidebar">
+                <div class="sidebar-header">
+                    <h1>Run</h1>
+                </div>
+                <div class="run-workflow-selector">
+                    <button class="workflow-btn active" data-workflow="teleop" onclick="selectWorkflow('teleop')">Teleop</button>
+                    <button class="workflow-btn" data-workflow="replay" onclick="selectWorkflow('replay')">Replay</button>
+                    <button class="workflow-btn" data-workflow="policy" onclick="selectWorkflow('policy')">Policy</button>
+                </div>
+                <div class="run-form" id="run-form">
+                    <!-- Populated by run.js -->
+                </div>
+                <div class="run-actions">
+                    <button class="btn-launch" id="run-launch-btn" onclick="launchRun()">Launch</button>
+                    <button class="btn-stop" id="run-stop-btn" onclick="stopRun()" disabled>Stop</button>
+                </div>
+            </div>
+            <div class="main run-main-split" id="run-main">
+                <div class="rerun-viewer" id="rerun-viewer">
+                    <div class="rerun-placeholder" id="rerun-placeholder">Rerun viewer will appear here when a process is running</div>
+                </div>
+                <div class="run-split-handle" id="run-split-handle"></div>
+                <div class="run-terminal-container" id="run-terminal-container">
+                    <div class="run-terminal-header">
+                        <span>Output</span>
+                        <span class="run-status idle" id="run-status-indicator">Idle</span>
+                    </div>
+                    <div class="run-terminal" id="run-terminal">
+                        <div class="terminal-line" style="color: #666;">Select a workflow and press Launch</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Robot tab -->
@@ -138,7 +171,8 @@
     <!-- Toast notifications -->
     <div class="toast-container" id="toast-container"></div>
 
-    <script src="/static/app.js?v=11"></script>
-    <script src="/static/robot.js?v=11"></script>
+    <script src="/static/app.js?v=14"></script>
+    <script src="/static/robot.js?v=14"></script>
+    <script src="/static/run.js?v=14"></script>
 </body>
 </html>
