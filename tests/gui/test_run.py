@@ -113,6 +113,13 @@ class TestProfileToCliArgs:
         assert not any("unused" in a for a in args)
         assert any("cameras" in a for a in args)
 
+    def test_include_cameras_false(self):
+        cameras = {"cam_0": {"type": "opencv", "index": 0}}
+        profile = {"type": "t", "fields": {"port": "/dev/ttyACM0"}, "cameras": cameras}
+        args = _profile_to_cli_args(profile, "robot", include_cameras=False)
+        assert "--robot.port=/dev/ttyACM0" in args
+        assert not any("cameras" in a for a in args)
+
 
 # ============================================================================
 # _display_args
@@ -171,7 +178,11 @@ class TestEnsureNoActiveProcess:
 # Endpoint arg assembly
 # ============================================================================
 
-_ROBOT = {"type": "bi_so107_follower", "fields": {"port": "/dev/ttyACM0"}}
+_ROBOT = {
+    "type": "bi_so107_follower",
+    "fields": {"port": "/dev/ttyACM0"},
+    "cameras": {"cam_0": {"type": "opencv", "index_or_path": "/dev/video0"}},
+}
 _TELEOP = {"type": "so_leader", "fields": {"port": "/dev/ttyACM1"}}
 
 
@@ -350,5 +361,6 @@ class TestReplayEndpoint:
         assert "--dataset.repo_id=user/my_dataset" in captured_args
         assert "--dataset.episode=5" in captured_args
         assert "--dataset.fps=60" in captured_args
-        # Replay should not have teleop args
+        # Replay should not have teleop args or cameras
         assert not any("teleop" in a for a in captured_args)
+        assert not any("cameras" in a for a in captured_args)

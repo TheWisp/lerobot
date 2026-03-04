@@ -123,12 +123,14 @@ async def get_rerun_ports() -> dict:
 # ============================================================================
 
 
-def _profile_to_cli_args(profile_data: dict, prefix: str) -> list[str]:
+def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bool = True) -> list[str]:
     """Convert a profile data dict to draccus CLI arguments.
 
     Args:
         profile_data: {type, fields, cameras} from the frontend.
         prefix: "robot" or "teleop".
+        include_cameras: Whether to include camera args (False for replay,
+            which doesn't import camera config modules).
 
     Returns:
         List of CLI arg strings like ["--robot.type=bi_so107_follower", ...].
@@ -143,9 +145,10 @@ def _profile_to_cli_args(profile_data: dict, prefix: str) -> list[str]:
         else:
             args.append(f"--{prefix}.{key}={value}")
 
-    cameras = profile_data.get("cameras", {})
-    if cameras:
-        args.append(f"--{prefix}.cameras={json.dumps(cameras)}")
+    if include_cameras:
+        cameras = profile_data.get("cameras", {})
+        if cameras:
+            args.append(f"--{prefix}.cameras={json.dumps(cameras)}")
 
     return args
 
@@ -223,6 +226,9 @@ async def _read_stream(stream: asyncio.StreamReader, prefix: str = "") -> None:
         _append_output(f"{prefix}{text}")
 
 
+_stream_tasks: list[asyncio.Task] = []
+
+
 async def _wait_for_exit() -> None:
     """Wait for the subprocess to finish, log the exit, and clean up."""
     global _active_process, _active_command, _active_config
@@ -230,6 +236,10 @@ async def _wait_for_exit() -> None:
         return
     proc = _active_process  # capture reference before clearing
     await proc.wait()
+    # Wait for stream readers to finish draining pipes before clearing state,
+    # otherwise the SSE sends "done" before error output is captured.
+    if _stream_tasks:
+        await asyncio.gather(*_stream_tasks, return_exceptions=True)
     rc = proc.returncode
     _append_output(f"\n--- Process exited with code {rc} ---")
     # Only clear if this is still the same process (not replaced by a new launch)
@@ -243,7 +253,7 @@ async def _wait_for_exit() -> None:
 
 async def _launch_subprocess(args: list[str], command: str, config: dict) -> None:
     """Launch a subprocess and start reading its output."""
-    global _active_process, _active_command, _active_config, _output_lines
+    global _active_process, _active_command, _active_config, _output_lines, _stream_tasks
 
     _output_lines = []
     _active_command = command
@@ -260,8 +270,10 @@ async def _launch_subprocess(args: list[str], command: str, config: dict) -> Non
         stderr=asyncio.subprocess.PIPE,
     )
 
-    asyncio.create_task(_read_stream(_active_process.stdout))
-    asyncio.create_task(_read_stream(_active_process.stderr, prefix="[stderr] "))
+    _stream_tasks = [
+        asyncio.create_task(_read_stream(_active_process.stdout)),
+        asyncio.create_task(_read_stream(_active_process.stderr, prefix="[stderr] ")),
+    ]
     asyncio.create_task(_wait_for_exit())
 
 
@@ -328,7 +340,7 @@ async def start_replay(req: ReplayRequest) -> dict:
     _ensure_no_active_process()
 
     args = ["lerobot-replay"]
-    args.extend(_profile_to_cli_args(req.robot, "robot"))
+    args.extend(_profile_to_cli_args(req.robot, "robot", include_cameras=False))
     args.append(f"--dataset.repo_id={req.repo_id}")
     args.append(f"--dataset.episode={req.episode}")
     args.append(f"--dataset.fps={req.fps}")
