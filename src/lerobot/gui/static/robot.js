@@ -176,6 +176,11 @@ function renderEditor() {
         html += renderPortsSection();
     }
 
+    // Rest position section (robot profiles only)
+    if (currentProfile.kind === 'robot') {
+        html += renderRestPositionSection();
+    }
+
     // Save/discard bar (hidden until dirty)
     html += '<div class="editor-actions" id="editor-actions" style="display:none">';
     html += `<button class="btn-save" onclick="saveProfile()">Save Changes</button>`;
@@ -240,6 +245,7 @@ function _serializeProfile(data) {
         name: data.name,
         fields: data.fields || {},
         cameras: data.cameras || {},
+        rest_position: data.rest_position || {},
     });
 }
 
@@ -759,6 +765,174 @@ async function identifyArm(port, btn) {
             btn.classList.remove('wiggling');
             btn.disabled = false;
         }
+    }
+}
+
+// ============================================================================
+// Rest position
+// ============================================================================
+
+let _restRecordingActive = false;
+
+function renderRestPositionSection() {
+    const restPos = currentProfile?.data?.rest_position || {};
+    const hasRest = Object.keys(restPos).length > 0;
+
+    let html = '<div class="rest-position-section"><h3>Rest Position</h3>';
+
+    if (hasRest) {
+        html += '<div class="rest-position-values">';
+        for (const [key, val] of Object.entries(restPos)) {
+            const label = key.replace('.pos', '');
+            html += `<span class="rest-pos-entry"><span class="rest-pos-label">${esc(label)}</span><span class="rest-pos-value">${Number(val).toFixed(1)}</span></span>`;
+        }
+        html += '</div>';
+    } else {
+        html += '<div class="rest-position-empty">No rest position recorded. Click Record to start.</div>';
+    }
+
+    html += '<div class="rest-position-actions">';
+    if (_restRecordingActive) {
+        html += '<button class="btn-small" id="finish-rest-btn" onclick="finishRestRecording()">Done</button>';
+        html += '<button class="btn-small secondary" id="cancel-rest-btn" onclick="cancelRestRecording()">Cancel</button>';
+    } else {
+        html += '<button class="btn-small" id="record-rest-btn" onclick="startRestRecording()">Record Rest Position</button>';
+        html += `<button class="btn-small secondary" id="move-rest-btn" onclick="moveToRestPosition()" ${hasRest ? '' : 'disabled'}>Move to Rest</button>`;
+        html += '<button class="btn-small danger" id="clear-rest-btn" onclick="clearRestPosition()" ' + (hasRest ? '' : 'disabled') + '>Clear</button>';
+    }
+    html += '</div>';
+    html += '<div id="rest-position-status" class="rest-position-status"></div>';
+    html += '</div>';
+    return html;
+}
+
+async function startRestRecording() {
+    if (!currentProfile || currentProfile.kind !== 'robot') return;
+
+    const btn = document.getElementById('record-rest-btn');
+    const statusEl = document.getElementById('rest-position-status');
+    if (btn) { btn.textContent = 'Connecting...'; btn.disabled = true; }
+    if (statusEl) statusEl.textContent = 'Connecting and disabling torque...';
+
+    try {
+        const res = await fetch('/api/robot/start-rest-recording', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ robot: currentProfile.data }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || 'Failed to start recording');
+        }
+
+        _restRecordingActive = true;
+        _rerender();
+        const newStatus = document.getElementById('rest-position-status');
+        if (newStatus) newStatus.textContent = 'Torque disabled — move the robot to the desired rest pose, then click Done.';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '';
+        showToast('Error', e.message, 'error');
+        if (btn) { btn.textContent = 'Record Rest Position'; btn.disabled = false; }
+    }
+}
+
+async function finishRestRecording() {
+    const btn = document.getElementById('finish-rest-btn');
+    const statusEl = document.getElementById('rest-position-status');
+    if (btn) { btn.textContent = 'Reading...'; btn.disabled = true; }
+    if (statusEl) statusEl.textContent = 'Reading positions...';
+
+    try {
+        const res = await fetch('/api/robot/finish-rest-recording', { method: 'POST' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || 'Failed to finish recording');
+        }
+        const result = await res.json();
+
+        currentProfile.data.rest_position = result.rest_position;
+        await _saveRestPositionToProfile();
+
+        _restRecordingActive = false;
+        _rerender();
+        showToast('Recorded', 'Rest position saved to profile', 'success');
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Error reading positions. You can retry or cancel.';
+        showToast('Error', e.message, 'error');
+        if (btn) { btn.textContent = 'Done'; btn.disabled = false; }
+    }
+}
+
+async function cancelRestRecording() {
+    try {
+        await fetch('/api/robot/cancel-rest-recording', { method: 'POST' });
+    } catch (e) { /* ignore */ }
+    _restRecordingActive = false;
+    _rerender();
+}
+
+async function moveToRestPosition() {
+    if (!currentProfile || currentProfile.kind !== 'robot') return;
+    const restPos = currentProfile.data.rest_position;
+    if (!restPos || Object.keys(restPos).length === 0) return;
+
+    const btn = document.getElementById('move-rest-btn');
+    const statusEl = document.getElementById('rest-position-status');
+    if (btn) { btn.textContent = 'Moving...'; btn.disabled = true; }
+    if (statusEl) statusEl.textContent = 'Connecting and moving to rest position...';
+
+    try {
+        const res = await fetch('/api/robot/move-to-rest-position', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                robot: currentProfile.data,
+                rest_position: restPos,
+            }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || 'Failed to move to rest position');
+        }
+        if (statusEl) statusEl.textContent = '';
+        showToast('Done', 'Robot is at rest position', 'success');
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '';
+        showToast('Error', e.message, 'error');
+    } finally {
+        if (btn) { btn.textContent = 'Move to Rest'; btn.disabled = false; }
+    }
+}
+
+function clearRestPosition() {
+    if (!currentProfile) return;
+    if (!confirm('Clear the saved rest position?')) return;
+    currentProfile.data.rest_position = {};
+    _rerender();
+    _updateDirtyState();
+}
+
+async function _saveRestPositionToProfile() {
+    /* Persist the current rest_position to the profile JSON on disk. */
+    if (!currentProfile) return;
+    const payload = {
+        ...currentProfile.data,
+        name: currentProfile.name,
+        fields: _collectFormFields(),
+    };
+    const endpoint = '/api/robot/profiles';
+    try {
+        const res = await fetch(`${endpoint}/${encodeURIComponent(currentProfile.name)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        currentProfile.data = payload;
+        savedProfileData = JSON.parse(JSON.stringify(payload));
+        _updateDirtyState();
+    } catch (e) {
+        console.error('Failed to auto-save rest position:', e);
     }
 }
 

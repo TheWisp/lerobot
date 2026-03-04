@@ -34,6 +34,9 @@ TELEOP_PROFILES_DIR = Path.home() / ".config" / "lerobot" / "teleops"
 _preview_cameras: list = []
 _preview_camera_info: list[dict] = []
 
+# Rest-position recording state (holds robot connection between start/finish)
+_rest_recording_robot = None
+
 
 def set_app_state(state: "AppState") -> None:
     global _app_state
@@ -180,6 +183,7 @@ class ProfileData(BaseModel):
     name: str
     fields: dict[str, Any] = {}
     cameras: dict[str, dict[str, Any]] = {}
+    rest_position: dict[str, float] = {}
 
 
 class RenameRequest(BaseModel):
@@ -584,4 +588,180 @@ async def identify_arm(request: IdentifyArmRequest) -> dict:
     """Wiggle the shoulder motor on the given port to identify which arm it is."""
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, _wiggle_shoulder, request.port)
+    return result
+
+
+# ============================================================================
+# Rest position
+# ============================================================================
+
+
+def _make_robot_from_profile(profile: dict):
+    """Instantiate a Robot from GUI profile data (no subprocess).
+
+    Builds the correct RobotConfig via draccus type dispatch, skipping cameras
+    (not needed for motor-only operations like rest position).
+    """
+    from lerobot.robots.config import RobotConfig
+    from lerobot.robots.utils import make_robot_from_config
+    _ensure_configs_loaded()
+
+    # Build the flat config dict that draccus expects
+    config_dict = {"type": profile["type"]}
+    config_dict.update(profile.get("fields", {}))
+
+    # Decode into the correct RobotConfig subclass
+    import draccus
+    config = draccus.decode(RobotConfig, config_dict)
+
+    return make_robot_from_config(config)
+
+
+def _disable_torque(robot) -> None:
+    """Disable torque on all motors regardless of robot type.
+
+    Works for single-arm (SOFollower with self.bus) and bimanual
+    (BiSO107Follower with self.left_arm / self.right_arm sub-robots).
+    """
+    if hasattr(robot, "bus"):
+        robot.bus.disable_torque()
+    elif hasattr(robot, "left_arm") and hasattr(robot, "right_arm"):
+        robot.left_arm.bus.disable_torque()
+        robot.right_arm.bus.disable_torque()
+    else:
+        raise RuntimeError(f"Cannot disable torque: unsupported robot type {type(robot).__name__}")
+
+
+def _do_start_rest_recording(profile: dict) -> dict:
+    """Connect to robot and disable torque so user can move it. Runs in thread pool."""
+    global _rest_recording_robot
+
+    # Clean up any previous recording session
+    _do_cancel_rest_recording()
+
+    robot = _make_robot_from_profile(profile)
+    try:
+        robot.connect()
+        _disable_torque(robot)
+        _rest_recording_robot = robot
+        return {"status": "ok"}
+    except Exception as e:
+        logger.exception("Failed to start rest position recording")
+        try:
+            if robot.is_connected:
+                robot.disconnect()
+        except Exception:
+            pass
+        return {"status": "error", "message": str(e)}
+
+
+def _do_finish_rest_recording() -> dict:
+    """Read current positions from the held robot, then disconnect. Runs in thread pool."""
+    global _rest_recording_robot
+    from lerobot.robots.rest_position import record_rest_position
+
+    robot = _rest_recording_robot
+    if robot is None:
+        return {"status": "error", "message": "No recording session active"}
+
+    try:
+        rest_pos = record_rest_position(robot)
+        return {"status": "ok", "rest_position": rest_pos}
+    except Exception as e:
+        logger.exception("Failed to finish rest position recording")
+        return {"status": "error", "message": str(e)}
+    finally:
+        _rest_recording_robot = None
+        try:
+            if robot.is_connected:
+                robot.disconnect()
+        except Exception:
+            pass
+
+
+def _do_cancel_rest_recording() -> dict:
+    """Disconnect the held robot without reading positions. Runs in thread pool."""
+    global _rest_recording_robot
+
+    robot = _rest_recording_robot
+    _rest_recording_robot = None
+    if robot is None:
+        return {"status": "ok"}
+    try:
+        if robot.is_connected:
+            robot.disconnect()
+    except Exception:
+        pass
+    return {"status": "ok"}
+
+
+def _do_move_to_rest_position(profile: dict, rest_position: dict, duration_s: float) -> dict:
+    """Connect to robot, interpolate to rest, disconnect. Runs in thread pool."""
+    from lerobot.robots.rest_position import move_to_rest_position
+
+    robot = _make_robot_from_profile(profile)
+    try:
+        robot.connect()
+        move_to_rest_position(robot, rest_position, duration_s=duration_s)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.exception("Failed to move to rest position")
+        return {"status": "error", "message": str(e)}
+    finally:
+        try:
+            if robot.is_connected:
+                robot.disconnect()
+        except Exception:
+            pass
+
+
+class RestPositionRecordRequest(BaseModel):
+    robot: dict[str, Any]
+
+
+class RestPositionMoveRequest(BaseModel):
+    robot: dict[str, Any]
+    rest_position: dict[str, float]
+    duration_s: float = 3.0
+
+
+@router.post("/start-rest-recording")
+async def start_rest_recording_endpoint(req: RestPositionRecordRequest) -> dict:
+    """Connect to robot and disable torque so user can move it to rest pose."""
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _do_start_rest_recording, req.robot)
+    if result["status"] == "error":
+        raise HTTPException(500, result["message"])
+    return result
+
+
+@router.post("/finish-rest-recording")
+async def finish_rest_recording_endpoint() -> dict:
+    """Read positions from the held robot connection and disconnect."""
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _do_finish_rest_recording)
+    if result["status"] == "error":
+        raise HTTPException(500, result["message"])
+    return result
+
+
+@router.post("/cancel-rest-recording")
+async def cancel_rest_recording_endpoint() -> dict:
+    """Cancel recording session — disconnect without reading."""
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _do_cancel_rest_recording)
+    return result
+
+
+@router.post("/move-to-rest-position")
+async def move_to_rest_position_endpoint(req: RestPositionMoveRequest) -> dict:
+    """Connect to robot, smoothly move to rest position, disconnect."""
+    if not req.rest_position:
+        raise HTTPException(400, "rest_position is empty")
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, _do_move_to_rest_position, req.robot, req.rest_position, req.duration_s
+    )
+    if result["status"] == "error":
+        raise HTTPException(500, result["message"])
     return result

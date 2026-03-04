@@ -201,6 +201,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .port-claimed a { color: #4fc3f7; cursor: pointer; text-decoration: underline; }
 .port-claimed a:hover { color: #81d4fa; }
 
+/* Rest position section */
+.rest-position-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid #0f3460; max-width: 700px; }
+.rest-position-section h3 { color: #4fc3f7; font-size: 14px; margin-bottom: 8px; }
+.rest-position-empty { color: #666; font-size: 13px; padding: 8px 0; }
+.rest-position-values { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.rest-pos-entry { display: inline-flex; align-items: center; gap: 4px; background: #0f3460; border-radius: 4px; padding: 4px 8px; font-size: 12px; }
+.rest-pos-label { color: #888; }
+.rest-pos-value { color: #4fc3f7; font-variant-numeric: tabular-nums; }
+.rest-position-actions { display: flex; gap: 8px; margin-top: 8px; }
+.rest-position-status { color: #888; font-size: 12px; margin-top: 6px; min-height: 18px; }
+
 /* Editor actions (save/discard bar — only visible when dirty) */
 .editor-actions { margin-top: 24px; padding: 12px 16px; border-top: 1px solid #0f3460; display: flex; gap: 12px; align-items: center; background: rgba(39,174,96,0.08); border-radius: 4px; }
 .btn-save { padding: 8px 20px; border-radius: 4px; border: none; background: #27ae60; color: #fff; cursor: pointer; font-size: 13px; }
