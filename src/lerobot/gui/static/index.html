@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
-    <link rel="stylesheet" href="/static/style.css?v=17">
+    <link rel="stylesheet" href="/static/style.css?v=18">
 </head>
 <body>
     <div class="tab-bar">
@@ -31,10 +31,6 @@
                 <div class="sidebar-section opened-section">
                     <div class="section-label">
                         <span>Opened</span>
-                        <div class="open-dataset-inline">
-                            <input type="text" id="dataset-path" placeholder="Path or repo_id" onkeydown="if(event.key==='Enter')openDataset()">
-                            <button onclick="openDataset()" title="Open">Open</button>
-                        </div>
                     </div>
                     <div class="tree-container" id="tree-container">
                         <div style="padding: 8px 12px; color: #666; font-size: 12px;">No datasets opened</div>
@@ -165,7 +161,7 @@
         </div>
     </div>
 
-    <!-- Context menu -->
+    <!-- Episode context menu -->
     <div class="context-menu" id="context-menu">
         <div class="context-menu-item" onclick="contextAction('view')">View Episode</div>
         <div class="context-menu-item" onclick="contextAction('rerun')">Open in Rerun</div>
@@ -176,11 +172,15 @@
         <div class="context-menu-item" onclick="contextAction('undelete')">Restore Episode</div>
         <div class="context-menu-item danger" onclick="contextAction('delete')">Delete Episode</div>
     </div>
+    <!-- Folder context menu -->
+    <div class="context-menu" id="folder-context-menu">
+        <div class="context-menu-item" onclick="folderContextAction('open-in-files')">Open in File Manager</div>
+    </div>
 
     <!-- Toast notifications -->
     <div class="toast-container" id="toast-container"></div>
 
-    <script src="/static/app.js?v=18"></script>
+    <script src="/static/app.js?v=19"></script>
     <script src="/static/robot.js?v=17"></script>
     <script src="/static/run.js?v=17"></script>
 </body>

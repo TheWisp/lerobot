@@ -598,6 +598,23 @@ async def set_source_expanded(encoded_path: str, expanded: bool = True) -> dict[
     return {"status": "ok"}
 
 
+@router.post("/open-in-files")
+async def open_in_file_manager(body: dict) -> dict:
+    """Open a directory in the system file manager."""
+    import subprocess as _subprocess
+
+    path = body.get("path", "")
+    if not path or not Path(path).is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a valid directory: {path}")
+
+    try:
+        _subprocess.Popen(["xdg-open", path])
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="xdg-open not found")
+
+    return {"status": "ok"}
+
+
 @router.get("/sources/{encoded_path:path}/datasets")
 async def scan_source(encoded_path: str) -> list[SourceDatasetInfo]:
     """Scan a source folder for datasets."""

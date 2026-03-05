@@ -121,8 +121,7 @@ async function removeSource(sourcePath, e) {
 }
 
 function openDatasetFromSource(root) {
-    document.getElementById('dataset-path').value = root;
-    openDataset();
+    openDataset(root);
 }
 
 function renderSources() {
@@ -145,7 +144,7 @@ function renderSources() {
         const displayPath = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : source.path;
 
         html += `<div class="source-folder">`;
-        html += `<div class="source-folder-header" onclick="toggleSource('${source.path.replace(/'/g, "\\'")}')" title="${source.path}">`;
+        html += `<div class="source-folder-header" onclick="toggleSource('${source.path.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${source.path.replace(/'/g, "\\'")}')" title="${source.path}">`;
         html += `<span class="source-folder-toggle">${isExpanded ? '▼' : '▶'}</span>`;
         html += `<span class="source-folder-path">${displayPath}</span>`;
         html += `<span class="source-folder-count">${countText}</span>`;
@@ -166,7 +165,7 @@ function renderSources() {
                         const d = window.datasets[id];
                         return d && d.root === ds.root;
                     });
-                    html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames">`;
+                    html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}')" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames">`;
                     html += `<span class="source-dataset-name">${ds.name}</span>`;
                     html += `<span class="source-dataset-meta">${ds.total_episodes} ep</span>`;
                     html += `</div>`;
@@ -178,8 +177,7 @@ function renderSources() {
     container.innerHTML = html;
 }
 
-async function openDataset() {
-    const path = document.getElementById('dataset-path').value.trim();
+async function openDataset(path) {
     if (!path) return;
 
     setStatus('Opening dataset...');
@@ -220,7 +218,6 @@ async function openDataset() {
         renderTree();
         renderSources();  // Update source list to show open state
         setStatus(`Opened: ${data.repo_id}`);
-        document.getElementById('dataset-path').value = '';
     } catch (e) {
         let errorMsg = e.message;
         try {
@@ -257,7 +254,7 @@ function renderTree() {
 
         html += `
             <div class="tree-node">
-                <div class="tree-header" onclick="toggleDataset('${id}')" title="${tooltip}">
+                <div class="tree-header" onclick="toggleDataset('${id}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}')" title="${tooltip}">
                     <span class="tree-toggle">${isExpanded ? '▼' : '▶'}</span>
                     <span class="tree-icon">📁</span>
                     <span class="tree-label">${ds.repo_id}</span>
@@ -718,10 +715,37 @@ function showContextMenu(e, datasetId, episodeIndex) {
 
 function hideContextMenu() {
     document.getElementById('context-menu').classList.remove('visible');
+    document.getElementById('folder-context-menu').classList.remove('visible');
     contextMenuTarget = null;
+    _folderContextPath = null;
 }
 
 document.addEventListener('click', hideContextMenu);
+
+// Folder context menu (source folders + datasets)
+let _folderContextPath = null;
+
+function showFolderContextMenu(e, path) {
+    e.preventDefault();
+    e.stopPropagation();
+    _folderContextPath = path;
+    const menu = document.getElementById('folder-context-menu');
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    menu.classList.add('visible');
+}
+
+function folderContextAction(action) {
+    if (!_folderContextPath) return;
+    if (action === 'open-in-files') {
+        fetch('/api/datasets/open-in-files', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: _folderContextPath })
+        }).catch(e => console.error('Failed to open file manager:', e));
+    }
+    hideContextMenu();
+}
 
 function contextAction(action) {
     if (!contextMenuTarget) return;
