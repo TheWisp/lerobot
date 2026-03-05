@@ -201,7 +201,7 @@ function _onRecordDatasetChange() {
         // Pre-fill FPS from dataset metadata
         const d = (window.datasets || {})[dsId];
         if (d) {
-            const fpsInput = document.getElementById('run-record-fps');
+            const fpsInput = document.getElementById('run-fps');
             if (fpsInput) fpsInput.value = d.fps;
         }
         // Populate task selector from existing episodes
@@ -289,8 +289,6 @@ function renderRunForm() {
         html += `<input type="number" id="run-episode-time" value="60" min="1">`;
         html += `<label>Reset Duration</label>`;
         html += `<input type="number" id="run-reset-time" value="60" min="0">`;
-        html += `<label>FPS</label>`;
-        html += `<input type="number" id="run-record-fps" value="30" min="1" max="200">`;
         html += '</div>';
         html += '</div>';
 
@@ -414,7 +412,7 @@ async function launchRun() {
                 repo_id: repoId,
                 root: root,
                 single_task: singleTask,
-                fps: parseInt(document.getElementById('run-record-fps')?.value) || 30,
+                fps: parseInt(document.getElementById('run-fps')?.value) || 30,
                 episode_time_s: parseFloat(document.getElementById('run-episode-time')?.value) || 60,
                 reset_time_s: parseFloat(document.getElementById('run-reset-time')?.value) || 60,
                 num_episodes: parseInt(document.getElementById('run-num-episodes')?.value) || 50,

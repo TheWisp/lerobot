@@ -358,6 +358,51 @@ class TestRecordEndpoint:
         assert "--dataset.video=false" in captured_args
 
 
+class TestUnifiedFps:
+    """The GUI uses a single FPS field for both teleop-only and record modes.
+
+    Verify that the same fps value routes to --fps (teleoperate) or
+    --dataset.fps (record) depending on the endpoint.
+    """
+
+    def test_teleop_uses_fps_flag(self):
+        captured_args = []
+
+        async def run():
+            req = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP, fps=25)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+                patch("lerobot.gui.api.run._rerun_started", False),
+            ):
+                await start_teleoperate(req)
+
+        asyncio.run(run())
+
+        assert "--fps=25" in captured_args
+        assert not any("--dataset.fps" in a for a in captured_args)
+
+    def test_record_uses_dataset_fps_flag(self):
+        captured_args = []
+
+        async def run():
+            req = RecordRequest(
+                robot=_ROBOT, teleop=_TELEOP,
+                repo_id="user/ds", single_task="task", fps=25,
+            )
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+                patch("lerobot.gui.api.run._rerun_started", False),
+            ):
+                await start_record(req)
+
+        asyncio.run(run())
+
+        assert "--dataset.fps=25" in captured_args
+        assert not any(a == "--fps=25" for a in captured_args)
+
+
 class TestReplayEndpoint:
     """Tests for the replay endpoint's CLI arg assembly."""
 
