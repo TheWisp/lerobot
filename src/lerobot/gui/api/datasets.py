@@ -438,6 +438,33 @@ def set_app_state(state: "AppState") -> None:
 # ---------------------------------------------------------------------------
 
 SOURCES_FILE = Path.home() / ".config" / "lerobot" / "dataset_sources.json"
+OPENED_FILE = Path.home() / ".config" / "lerobot" / "opened_datasets.json"
+
+
+def _read_opened() -> list[dict]:
+    """Read persisted list of opened datasets."""
+    if not OPENED_FILE.exists():
+        return []
+    try:
+        data = json.loads(OPENED_FILE.read_text())
+        return data.get("datasets", [])
+    except Exception:
+        logger.warning("Failed to read opened datasets", exc_info=True)
+        return []
+
+
+def _write_opened(opened: list[dict]) -> None:
+    """Persist the list of opened datasets."""
+    OPENED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    OPENED_FILE.write_text(json.dumps({"version": 1, "datasets": opened}, indent=2))
+
+
+def _save_opened_state() -> None:
+    """Save the current set of opened datasets from app state."""
+    entries = []
+    for dataset_id, ds in _app_state.datasets.items():
+        entries.append({"root": str(ds.root)})
+    _write_opened(entries)
 
 
 def _read_sources() -> list[dict]:
@@ -540,6 +567,12 @@ class SourceDatasetInfo(BaseModel):
     total_frames: int
     fps: int
     robot_type: str = ""
+
+
+@router.get("/previously-opened")
+async def get_previously_opened() -> list[dict]:
+    """Return the list of datasets that were open in the previous session."""
+    return _read_opened()
 
 
 @router.get("/sources")
@@ -799,6 +832,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             logger.info(f"Restored {len(persisted_edits)} pending edits from disk")
 
         logger.info(f"Opened dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)")
+        _save_opened_state()
 
         return DatasetInfo(
             id=dataset_id,
@@ -828,6 +862,7 @@ async def close_dataset(dataset_id: str) -> dict[str, str]:
 
     del _app_state.datasets[dataset_id]
     _dataset_info_mtime.pop(dataset_id, None)
+    _save_opened_state()
     logger.info(f"Closed dataset: {dataset_id}")
 
     return {"status": "ok", "message": f"Closed dataset: {dataset_id}"}

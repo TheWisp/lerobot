@@ -1046,6 +1046,25 @@ window.refreshExpandedSources = async function() {
 };
 
 
+// Restore previously opened datasets
+async function restoreOpenedDatasets() {
+    try {
+        const res = await fetch('/api/datasets/previously-opened');
+        if (!res.ok) return;
+        const items = await res.json();
+        for (const item of items) {
+            try {
+                await openDataset(item.root);
+            } catch (e) {
+                console.warn(`Failed to restore dataset ${item.root}:`, e);
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to restore opened datasets:', e);
+    }
+}
+
 // Initialize
 refreshPendingEdits();
 loadSources();
+restoreOpenedDatasets();
