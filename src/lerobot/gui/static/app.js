@@ -624,6 +624,10 @@ function switchTab(tabName) {
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
     document.getElementById(`tab-${tabName}`).classList.add('active');
+    // Re-scan sources when switching to data tab (picks up newly recorded datasets)
+    if (tabName === 'data' && typeof window.refreshExpandedSources === 'function') {
+        window.refreshExpandedSources();
+    }
     // Notify robot tab
     if (tabName === 'robot' && typeof robotTabInit === 'function') {
         robotTabInit();
@@ -1011,6 +1015,12 @@ function loadTrimForCurrentEpisode() {
 window.datasets = datasets;
 window.episodes = episodes;
 window.sourceDatasets = sourceDatasets;
+window.refreshExpandedSources = async function() {
+    for (const sourcePath of expandedSources) {
+        scanSource(sourcePath);
+    }
+};
+
 
 // Initialize
 refreshPendingEdits();

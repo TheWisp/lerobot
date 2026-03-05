@@ -285,9 +285,9 @@ function renderRunForm() {
         html += `</div>`;
         html += `<label>Episodes</label>`;
         html += `<input type="number" id="run-num-episodes" value="50" min="1">`;
-        html += `<label>Episode (s)</label>`;
+        html += `<label>Episode Duration</label>`;
         html += `<input type="number" id="run-episode-time" value="60" min="1">`;
-        html += `<label>Reset (s)</label>`;
+        html += `<label>Reset Duration</label>`;
         html += `<input type="number" id="run-reset-time" value="60" min="0">`;
         html += `<label>FPS</label>`;
         html += `<input type="number" id="run-record-fps" value="30" min="1" max="200">`;
@@ -503,6 +503,10 @@ function connectOutputSSE() {
         if (data.done) {
             disconnectOutputSSE();
             pollRunStatus();
+            // Re-scan dataset sources to pick up newly created datasets
+            if (typeof window.refreshExpandedSources === 'function') {
+                window.refreshExpandedSources();
+            }
             return;
         }
         if (data.line !== undefined) {
