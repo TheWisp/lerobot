@@ -25,7 +25,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from lerobot.gui.api import datasets, edits, playback, robot, run
+from lerobot.gui.api import datasets, edits, models, playback, robot, run
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
@@ -70,6 +70,7 @@ async def startup_event():
     edits.set_app_state(_app_state)
     robot.set_app_state(_app_state)
     run.set_app_state(_app_state)
+    models.set_app_state(_app_state)
     run.init_rerun_server()
     logger.info(f"Initialized frame cache with {cache_size / 1_000_000:.0f} MB budget")
 
@@ -80,6 +81,7 @@ app.include_router(playback.router)
 app.include_router(edits.router)
 app.include_router(robot.router)
 app.include_router(run.router)
+app.include_router(models.router)
 
 # Serve static files (CSS, JS)
 _static_dir = Path(__file__).parent / "static"

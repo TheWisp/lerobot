@@ -633,6 +633,10 @@ function switchTab(tabName) {
     if (tabName === 'run' && typeof runTabInit === 'function') {
         runTabInit();
     }
+    // Notify model tab
+    if (tabName === 'model' && typeof modelTabInit === 'function') {
+        modelTabInit();
+    }
     // Stop camera preview when leaving robot tab
     if (tabName !== 'robot' && typeof stopCameraPreview === 'function') {
         stopCameraPreview();
@@ -738,6 +742,7 @@ function showFolderContextMenu(e, path) {
 function folderContextAction(action) {
     if (!_folderContextPath) return;
     if (action === 'open-in-files') {
+        // Use whichever open-in-files endpoint is available (both do the same thing)
         fetch('/api/datasets/open-in-files', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

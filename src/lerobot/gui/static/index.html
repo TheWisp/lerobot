@@ -85,9 +85,26 @@
         </div>
     </div>
 
-    <!-- Model tab (placeholder) -->
+    <!-- Model tab -->
     <div class="tab-content" id="tab-model">
-        <div class="empty-state">Model management coming soon</div>
+        <div class="layout">
+            <div class="sidebar" id="model-sidebar">
+                <div class="sidebar-header">
+                    <h1>Models</h1>
+                </div>
+                <div class="sidebar-section sources-section">
+                    <div class="section-label">
+                        <span>Sources</span>
+                        <button class="btn-small" onclick="addModelSource()" title="Add model source folder">+</button>
+                    </div>
+                    <div id="model-sources-container"></div>
+                </div>
+            </div>
+            <div class="main" id="model-main">
+                <div class="empty-state" id="model-empty">Select a training run to inspect</div>
+                <div class="model-detail" id="model-detail" style="display:none;"></div>
+            </div>
+        </div>
     </div>
 
     <!-- Run tab -->
@@ -182,6 +199,7 @@
 
     <script src="/static/app.js?v=21"></script>
     <script src="/static/robot.js?v=17"></script>
-    <script src="/static/run.js?v=18"></script>">
+    <script src="/static/run.js?v=18"></script>
+    <script src="/static/model.js?v=1"></script>
 </body>
 </html>
