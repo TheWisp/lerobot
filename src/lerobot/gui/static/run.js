@@ -351,6 +351,20 @@ async function launchRun() {
         return;
     }
 
+    // Cap FPS to the slowest camera's capability
+    const fpsInput = document.getElementById('run-fps');
+    let userFps = parseInt(fpsInput?.value) || 30;
+    const cams = robotData.cameras || {};
+    const camFpsList = Object.values(cams).map(c => c.fps).filter(Boolean);
+    if (camFpsList.length > 0) {
+        const minCamFps = Math.min(...camFpsList);
+        if (userFps > minCamFps) {
+            fpsInput.value = minCamFps;
+            userFps = minCamFps;
+            showToast('FPS adjusted', `FPS capped to ${minCamFps} (camera limit)`, 'warning');
+        }
+    }
+
     let endpoint, body;
 
     if (selectedWorkflow === 'teleop') {
