@@ -431,6 +431,15 @@ async function launchRun() {
             showToast('Error', 'Selected dataset not found — was it closed?', 'error');
             return;
         }
+        // Warn if robot type doesn't match dataset
+        if (d.robot_type && robotData.type && d.robot_type !== robotData.type) {
+            const ok = confirm(
+                `Robot mismatch: dataset was recorded with "${d.robot_type}" ` +
+                `but selected robot is "${robotData.type}".\n\n` +
+                `Replaying on the wrong robot can send incorrect motor commands.\n\nContinue anyway?`
+            );
+            if (!ok) return;
+        }
         endpoint = '/api/run/replay';
         body = {
             robot: robotData,

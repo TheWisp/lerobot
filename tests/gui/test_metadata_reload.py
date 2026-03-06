@@ -35,6 +35,7 @@ def _make_mock_dataset(total_episodes: int, ep_length: int = 100):
     ds.fps = 30
     ds.meta.total_episodes = total_episodes
     ds.meta.total_frames = total_episodes * ep_length
+    ds.meta.robot_type = "test_robot"
     ds.meta.camera_keys = ["observation.images.front"]
     ds.meta.video_keys = ["observation.images.front"]
     ds.meta.features = {"observation.images.front": {}, "action": {}}

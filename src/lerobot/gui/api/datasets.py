@@ -680,6 +680,7 @@ class DatasetInfo(BaseModel):
     total_episodes: int
     total_frames: int
     fps: int
+    robot_type: str = ""
     camera_keys: list[str]
     features: list[str]
     warnings: list[str] = []  # Any warnings (repairs, verification issues) from loading
@@ -709,6 +710,7 @@ async def list_datasets() -> list[DatasetInfo]:
                 total_episodes=ds.meta.total_episodes,
                 total_frames=ds.meta.total_frames,
                 fps=ds.fps,
+                robot_type=getattr(ds.meta, "robot_type", "") or "",
                 camera_keys=list(ds.meta.camera_keys),
                 features=list(ds.meta.features.keys()),
             )
@@ -748,6 +750,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                     total_episodes=dataset.meta.total_episodes,
                     total_frames=dataset.meta.total_frames,
                     fps=dataset.fps,
+                    robot_type=getattr(dataset.meta, "robot_type", "") or "",
                     camera_keys=list(dataset.meta.camera_keys),
                     features=list(dataset.meta.features.keys()),
                 )
@@ -778,6 +781,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                     total_episodes=dataset.meta.total_episodes,
                     total_frames=dataset.meta.total_frames,
                     fps=dataset.fps,
+                    robot_type=getattr(dataset.meta, "robot_type", "") or "",
                     camera_keys=list(dataset.meta.camera_keys),
                     features=list(dataset.meta.features.keys()),
                 )
@@ -841,6 +845,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             total_episodes=dataset.meta.total_episodes,
             total_frames=dataset.meta.total_frames,
             fps=dataset.fps,
+            robot_type=getattr(dataset.meta, "robot_type", "") or "",
             camera_keys=list(dataset.meta.camera_keys),
             features=list(dataset.meta.features.keys()),
             warnings=warnings,
