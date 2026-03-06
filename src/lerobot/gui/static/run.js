@@ -403,6 +403,28 @@ async function launchRun() {
                 repoId = d.repo_id;
                 root = d.root;
                 resume = true;
+
+                // Warn on FPS mismatch — dataset FPS is immutable across episodes
+                const userFps = parseInt(document.getElementById('run-fps')?.value) || 30;
+                if (d.fps && userFps !== d.fps) {
+                    const ok = confirm(
+                        `FPS mismatch: dataset "${d.repo_id}" uses ${d.fps} FPS ` +
+                        `but you selected ${userFps} FPS.\n\n` +
+                        `A dataset cannot have different FPS across episodes. ` +
+                        `The recording will use ${d.fps} FPS.\n\nContinue?`
+                    );
+                    if (!ok) return;
+                }
+
+                // Warn on robot type mismatch
+                if (d.robot_type && robotData.type && d.robot_type !== robotData.type) {
+                    const ok = confirm(
+                        `Robot mismatch: dataset was recorded with "${d.robot_type}" ` +
+                        `but selected robot is "${robotData.type}".\n\n` +
+                        `Recording with a different robot may produce incompatible data.\n\nContinue anyway?`
+                    );
+                    if (!ok) return;
+                }
             }
 
             endpoint = '/api/run/record';
