@@ -935,6 +935,26 @@ async function applyEdits() {
             }
             await refreshPendingEdits();
             if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
+
+            // Re-select current episode (or nearest neighbour if deleted)
+            if (currentDataset && currentEpisode !== null) {
+                const epList = episodes[currentDataset] || [];
+                const stillExists = epList.find(e => e.episode_index === currentEpisode);
+                if (stillExists) {
+                    // Re-select to refresh view (e.g. after trim changed length)
+                    selectEpisode(currentDataset, currentEpisode, stillExists.video_length || stillExists.length);
+                } else if (epList.length > 0) {
+                    // Select nearest neighbour
+                    const nearest = epList.reduce((best, e) =>
+                        Math.abs(e.episode_index - currentEpisode) < Math.abs(best.episode_index - currentEpisode) ? e : best
+                    );
+                    selectEpisode(currentDataset, nearest.episode_index, nearest.video_length || nearest.length);
+                } else {
+                    currentEpisode = null;
+                    renderCameraGrid();
+                }
+            }
+
             setStatus(data.message);
         } else {
             throw new Error(data.message);
