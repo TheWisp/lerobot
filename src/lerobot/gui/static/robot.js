@@ -56,6 +56,7 @@ async function loadRobotProfiles() {
         robotProfiles = [];
     }
     renderRobotProfileList();
+    if (typeof refreshRunProfileSelects === 'function') refreshRunProfileSelects();
 }
 
 async function loadTeleopProfiles() {
@@ -66,6 +67,7 @@ async function loadTeleopProfiles() {
         teleopProfiles = [];
     }
     renderTeleopProfileList();
+    if (typeof refreshRunProfileSelects === 'function') refreshRunProfileSelects();
 }
 
 function renderRobotProfileList() {

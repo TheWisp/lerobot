@@ -217,6 +217,7 @@ async function openDataset(path) {
 
         renderTree();
         renderSources();  // Update source list to show open state
+        if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
         setStatus(`Opened: ${data.repo_id}`);
     } catch (e) {
         let errorMsg = e.message;
@@ -326,6 +327,7 @@ async function closeDataset(id, e) {
             document.getElementById('camera-grid').innerHTML = '<div class="empty-state">Select an episode to view</div>';
         }
         renderTree();
+        if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
         renderSources();
     } catch (err) {
         showToast('Error', 'Failed to close dataset: ' + err.message, 'error');
@@ -932,6 +934,7 @@ async function applyEdits() {
                 datasets[currentDataset].total_episodes = episodes[currentDataset].length;
             }
             await refreshPendingEdits();
+            if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
             setStatus(data.message);
         } else {
             throw new Error(data.message);

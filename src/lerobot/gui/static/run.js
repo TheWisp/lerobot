@@ -292,6 +292,36 @@ async function _ensureModelDataLoaded() {
     }
 }
 
+// ---- Refresh helpers (called from other tabs when data changes) ----
+
+function refreshRunProfileSelects() {
+    if (!_runFormRendered) return;
+    const robotOpts = _robotProfileOptions();
+    const teleopOpts = _teleopProfileOptions();
+    for (const id of ['run-teleop-robot', 'run-replay-robot', 'run-policy-robot']) {
+        const sel = document.getElementById(id);
+        if (sel) { const prev = sel.value; sel.innerHTML = robotOpts; sel.value = prev; }
+    }
+    const teleopSel = document.getElementById('run-teleop-teleop');
+    if (teleopSel) { const prev = teleopSel.value; teleopSel.innerHTML = teleopOpts; teleopSel.value = prev; }
+    const policyTeleopSel = document.getElementById('run-policy-teleop');
+    if (policyTeleopSel) {
+        const prev = policyTeleopSel.value;
+        policyTeleopSel.innerHTML = '<option value="">None (policy only)</option>' + teleopOpts;
+        policyTeleopSel.value = prev;
+    }
+}
+
+function refreshRunDatasetSelects() {
+    if (!_runFormRendered) return;
+    // Refresh replay episode selector
+    const replaySel = document.getElementById('run-replay-episode');
+    if (replaySel) { const prev = replaySel.value; replaySel.innerHTML = _episodeOptions(); replaySel.value = prev; }
+    // Refresh teleop record dataset selector
+    const recordSel = document.getElementById('run-teleop-record-dataset');
+    if (recordSel) { const prev = recordSel.value; recordSel.innerHTML = _recordDatasetOptions(); recordSel.value = prev; }
+}
+
 // ---- Form rendering ----
 
 function renderRunForm() {

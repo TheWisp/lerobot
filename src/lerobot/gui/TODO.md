@@ -7,7 +7,7 @@
 - [Low] Text output freezes after a while — teleoperate uses ANSI cursor-up in piped stdout
 - [Low] Rerun web viewer has ~200ms visual lag (Rerun 0.26 limitation)
 - [Low] Replay FPS setting doesn't seem to affect playback speed — remove if not useful (needs investigation)
-- [Mid] Run tab robot/teleop profile dropdowns don't update when profiles are added or deleted in the Robot tab
+- [Done] ~~Run tab robot/teleop profile dropdowns don't update when profiles are added or deleted in the Robot tab~~
 
 ## Robot Tab
 
@@ -16,8 +16,8 @@
 ## Data Tab
 
 - [Mid] Opened datasets don't refresh after recording new episodes — need to close and reopen to see changes
-- [Mid] Run tab replay/record dataset options don't update when datasets are opened or closed in the Data tab — need to switch workflow and back
-- [Mid] Run tab replay episode list doesn't update when episodes are deleted in the Data tab
+- [Done] ~~Run tab replay/record dataset options don't update when datasets are opened or closed in the Data tab~~
+- [Done] ~~Run tab replay episode list doesn't update when episodes are deleted in the Data tab~~
 - [Mid] After recording a new dataset, the record UI still shows "new dataset" form instead of switching to the now-existing dataset
 - [Mid] After deleting an episode, selection moves to neighbour but playback view still shows the deleted episode
 - [Mid] After trimming an episode and saving, playback still shows the old duration
