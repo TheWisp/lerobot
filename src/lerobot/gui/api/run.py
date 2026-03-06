@@ -137,9 +137,10 @@ class TeleoperateRequest(BaseModel):
 
 class RecordRequest(BaseModel):
     robot: dict[str, Any]
-    teleop: dict[str, Any]
+    teleop: dict[str, Any] | None = None
     repo_id: str
     root: str | None = None
+    policy_path: str | None = None
     single_task: str
     fps: int = 30
     episode_time_s: float = 60
@@ -304,9 +305,15 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
 async def start_record(req: RecordRequest) -> dict:
     _ensure_no_active_process()
 
+    if req.teleop is None and req.policy_path is None:
+        raise HTTPException(400, "Either teleop or policy_path must be provided")
+
     args = ["lerobot-record"]
     args.extend(_profile_to_cli_args(req.robot, "robot"))
-    args.extend(_profile_to_cli_args(req.teleop, "teleop"))
+    if req.teleop is not None:
+        args.extend(_profile_to_cli_args(req.teleop, "teleop"))
+    if req.policy_path:
+        args.append(f"--policy.path={req.policy_path}")
     args.append(f"--dataset.repo_id={req.repo_id}")
     if req.root:
         args.append(f"--dataset.root={req.root}")

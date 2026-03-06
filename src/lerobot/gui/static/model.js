@@ -31,9 +31,11 @@ async function loadModelSources() {
             if (s.expanded) expandedModelSources.add(s.path);
         }
         renderModelSources();
+        const scanPromises = [];
         for (const s of modelSources) {
-            if (s.expanded) scanModelSource(s.path);
+            if (s.expanded) scanPromises.push(scanModelSource(s.path));
         }
+        await Promise.all(scanPromises);
     } catch (e) {
         console.error('Failed to load model sources:', e);
     }
@@ -226,6 +228,7 @@ function renderModelDetail(run, checkpoints, config) {
     html += `<div class="model-detail-header">`;
     html += `<h2>${_esc(run.name)}</h2>`;
     html += `<button class="btn-tiny" onclick="openModelFolder('${run.path.replace(/'/g, "\\'")}')">Open Folder</button>`;
+    html += `<button class="btn-tiny btn-accent" onclick="testModelOnRobot('${run.path.replace(/'/g, "\\'")}')">Test on Robot</button>`;
     html += `</div>`;
 
     // Tabs
@@ -387,5 +390,46 @@ async function openModelFolder(path) {
         }
     } catch (e) {
         showToast('Error', e.message, 'error');
+    }
+}
+
+function testModelOnRobot(runPath) {
+    const ckptPath = runPath + '/checkpoints/last/pretrained_model';
+    // Switch to Run tab → Policy workflow
+    switchTab('run');
+    selectWorkflow('policy');
+    // Pre-select the checkpoint and fill fields once the selector is populated
+    const trySelect = () => {
+        const sel = document.getElementById('run-policy-checkpoint');
+        if (!sel) return false;
+        for (const opt of sel.options) {
+            if (opt.value === ckptPath) {
+                sel.value = ckptPath;
+                _prefillPolicyFields(runPath);
+                return true;
+            }
+        }
+        return false;
+    };
+    // Model data might still be loading; retry briefly
+    if (!trySelect()) {
+        setTimeout(trySelect, 500);
+        setTimeout(trySelect, 2000);
+    }
+}
+
+function _prefillPolicyFields(runPath) {
+    // Find the run data from the model tab's cached scans
+    const data = (typeof modelSourceData !== 'undefined') ? modelSourceData : {};
+    for (const models of Object.values(data)) {
+        const m = models.find(m => m.path === runPath);
+        if (!m) continue;
+        // Pre-fill dataset repo_id with eval_ prefix
+        const repoInput = document.getElementById('run-policy-repo-id');
+        if (repoInput) {
+            const runName = m.name.split('/').pop() || 'policy';
+            repoInput.value = `eval/eval_${runName}`;
+        }
+        break;
     }
 }

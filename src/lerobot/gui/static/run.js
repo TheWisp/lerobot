@@ -54,6 +54,9 @@ function selectWorkflow(workflow) {
         b.classList.toggle('active', b.dataset.workflow === workflow);
     });
     renderRunForm();
+    if (workflow === 'policy') {
+        _ensureModelDataLoaded();
+    }
 }
 
 // ============================================================================
@@ -243,6 +246,47 @@ function _onReplayEpisodeChange() {
     }
 }
 
+// ---- Model / checkpoint option helpers ----
+
+function _modelCheckpointOptions() {
+    // Build options from the Model tab's cached scan data
+    const data = (typeof modelSourceData !== 'undefined') ? modelSourceData : {};
+    const entries = Object.values(data).flat();
+    if (!entries.length) {
+        return '<option value="" disabled selected>Loading models...</option>';
+    }
+    let html = '<option value="" disabled selected>Select checkpoint</option>';
+    for (const m of entries) {
+        // Use the last checkpoint's pretrained_model path
+        const ckptPath = m.path + '/checkpoints/last/pretrained_model';
+        const stepText = m.current_step != null ? ` (step ${m.current_step.toLocaleString()})` : '';
+        html += `<option value="${_esc(ckptPath)}" title="${_esc(m.path)}">${_esc(m.name)} — ${_esc(m.policy_type)}${stepText}</option>`;
+    }
+    return html;
+}
+
+function _onPolicyCheckpointChange() {
+    const sel = document.getElementById('run-policy-checkpoint');
+    if (!sel?.value) return;
+    // Extract the run path from the checkpoint path (strip /checkpoints/last/pretrained_model)
+    const runPath = sel.value.replace(/\/checkpoints\/last\/pretrained_model$/, '');
+    if (typeof _prefillPolicyFields === 'function') {
+        _prefillPolicyFields(runPath);
+    }
+}
+
+async function _ensureModelDataLoaded() {
+    // If Model tab hasn't been visited, load model sources and scan them
+    if (typeof modelSourceData === 'undefined' || !Object.keys(modelSourceData).length) {
+        if (typeof modelTabInit === 'function') {
+            await modelTabInit();
+        }
+        // Re-render the checkpoint selector after data is loaded
+        const sel = document.getElementById('run-policy-checkpoint');
+        if (sel) sel.innerHTML = _modelCheckpointOptions();
+    }
+}
+
 // ---- Form rendering ----
 
 function renderRunForm() {
@@ -300,9 +344,39 @@ function renderRunForm() {
         html += `<input type="number" id="run-replay-fps" value="30" min="1" max="200">`;
 
     } else if (selectedWorkflow === 'policy') {
-        // Policy: placeholder
-        html += `<label>Policy</label>`;
-        html += `<select disabled><option>Coming with Model tab</option></select>`;
+        // Policy checkpoint selector
+        html += `<label>Checkpoint</label>`;
+        html += `<select id="run-policy-checkpoint" onchange="_onPolicyCheckpointChange()">${_modelCheckpointOptions()}</select>`;
+
+        // Teleop profile (optional — for manual resets between episodes)
+        html += `<label>Teleop</label>`;
+        html += `<div><select id="run-teleop-profile">`;
+        html += `<option value="">None (policy only)</option>`;
+        html += _teleopProfileOptions();
+        html += `</select>`;
+        html += `<div class="form-hint">Optional: for manual resets between episodes</div></div>`;
+
+        html += `<label>FPS</label>`;
+        html += `<input type="number" id="run-fps" value="30" min="1" max="200">`;
+
+        // Recording settings
+        html += '</div>';
+        html += '<div class="form-section">';
+        html += '<div class="form-section-title">Record evaluation</div>';
+        html += '<div class="form-grid">';
+
+        html += `<label>Dataset</label>`;
+        html += `<input type="text" id="run-policy-repo-id" placeholder="user/eval_my_policy" value="eval/eval_policy">`;
+
+        html += `<label>Task</label>`;
+        html += `<input type="text" id="run-policy-task" placeholder="Describe the task" value="">`;
+
+        html += `<label>Episodes</label>`;
+        html += `<input type="number" id="run-policy-episodes" value="10" min="1">`;
+        html += `<label>Episode Duration</label>`;
+        html += `<input type="number" id="run-policy-episode-time" value="60" min="1">`;
+        html += `<label>Reset Duration</label>`;
+        html += `<input type="number" id="run-policy-reset-time" value="60" min="0">`;
     }
 
     if (!html.endsWith('</div>')) html += '</div>';
@@ -484,8 +558,46 @@ async function launchRun() {
             episode: parseInt(epIdx),
             fps: parseInt(document.getElementById('run-replay-fps')?.value) || 30,
         };
+    } else if (selectedWorkflow === 'policy') {
+        const checkpointSel = document.getElementById('run-policy-checkpoint');
+        if (!checkpointSel?.value) {
+            showToast('Error', 'Select a model checkpoint', 'error');
+            return;
+        }
+
+        const repoId = document.getElementById('run-policy-repo-id')?.value?.trim();
+        if (!repoId) {
+            showToast('Error', 'Enter a dataset name for evaluation recordings', 'error');
+            return;
+        }
+
+        const task = document.getElementById('run-policy-task')?.value?.trim();
+        if (!task) {
+            showToast('Error', 'Task description is required', 'error');
+            return;
+        }
+
+        // Optional teleop for manual resets
+        const teleopSelect = document.getElementById('run-teleop-profile');
+        let teleopData = null;
+        if (teleopSelect?.value) {
+            teleopData = await _getProfileData('teleop', teleopSelect.value);
+        }
+
+        endpoint = '/api/run/record';
+        body = {
+            robot: robotData,
+            teleop: teleopData,
+            policy_path: checkpointSel.value,
+            repo_id: repoId,
+            single_task: task,
+            fps: parseInt(document.getElementById('run-fps')?.value) || 30,
+            episode_time_s: parseFloat(document.getElementById('run-policy-episode-time')?.value) || 60,
+            reset_time_s: parseFloat(document.getElementById('run-policy-reset-time')?.value) || 60,
+            num_episodes: parseInt(document.getElementById('run-policy-episodes')?.value) || 10,
+        };
     } else {
-        showToast('Error', 'Policy workflow not yet implemented', 'error');
+        showToast('Error', 'Unknown workflow', 'error');
         return;
     }
 

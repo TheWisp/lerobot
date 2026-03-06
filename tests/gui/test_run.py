@@ -367,6 +367,70 @@ class TestRecordEndpoint:
 
         assert "--dataset.video=false" in captured_args
 
+    def test_record_with_policy_path(self):
+        captured_args = []
+
+        async def run():
+            req = RecordRequest(
+                robot=_ROBOT,
+                teleop=_TELEOP,
+                repo_id="eval/eval_my_policy",
+                single_task="pick up socket",
+                policy_path="/home/user/outputs/act/checkpoints/last/pretrained_model",
+            )
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+                patch("lerobot.gui.api.run._rerun_started", False),
+            ):
+                await start_record(req)
+
+        asyncio.run(run())
+
+        assert "--policy.path=/home/user/outputs/act/checkpoints/last/pretrained_model" in captured_args
+        assert "--teleop.type=so_leader" in captured_args
+
+    def test_record_policy_only_no_teleop(self):
+        captured_args = []
+
+        async def run():
+            req = RecordRequest(
+                robot=_ROBOT,
+                teleop=None,
+                repo_id="eval/eval_my_policy",
+                single_task="pick up socket",
+                policy_path="/home/user/outputs/act/checkpoints/last/pretrained_model",
+            )
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+                patch("lerobot.gui.api.run._rerun_started", False),
+            ):
+                await start_record(req)
+
+        asyncio.run(run())
+
+        assert "--policy.path=/home/user/outputs/act/checkpoints/last/pretrained_model" in captured_args
+        assert not any("--teleop." in a for a in captured_args)
+
+    def test_record_no_teleop_no_policy_raises(self):
+        async def run():
+            req = RecordRequest(
+                robot=_ROBOT,
+                teleop=None,
+                repo_id="eval/eval_my_policy",
+                single_task="task",
+            )
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._rerun_started", False),
+            ):
+                await start_record(req)
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(run())
+        assert exc_info.value.status_code == 400
+
 
 class TestUnifiedFps:
     """The GUI uses a single FPS field for both teleop-only and record modes.
