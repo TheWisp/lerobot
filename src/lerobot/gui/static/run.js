@@ -707,9 +707,12 @@ function connectOutputSSE() {
         if (data.done) {
             disconnectOutputSSE();
             pollRunStatus();
-            // Re-scan dataset sources to pick up newly created datasets
+            // Re-scan dataset sources and refresh opened datasets
             if (typeof window.refreshExpandedSources === 'function') {
                 window.refreshExpandedSources();
+            }
+            if (typeof window.refreshOpenedDatasets === 'function') {
+                window.refreshOpenedDatasets();
             }
             return;
         }

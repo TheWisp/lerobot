@@ -1052,6 +1052,19 @@ window.refreshExpandedSources = async function() {
         scanSource(sourcePath);
     }
 };
+window.refreshOpenedDatasets = async function() {
+    for (const id of Object.keys(datasets)) {
+        try {
+            const epRes = await fetch(`/api/datasets/${encodeURIComponent(id)}/episodes`);
+            if (epRes.ok) {
+                episodes[id] = await epRes.json();
+                datasets[id].total_episodes = episodes[id].length;
+            }
+        } catch (e) { /* ignore per-dataset errors */ }
+    }
+    renderTree();
+    if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
+};
 
 
 // Restore previously opened datasets
