@@ -124,6 +124,14 @@ function _formatBytes(bytes) {
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 }
 
+function _formatParams(n) {
+    if (n == null) return '?';
+    if (n < 1000) return n.toString();
+    if (n < 1e6) return (n / 1e3).toFixed(1) + 'K';
+    if (n < 1e9) return (n / 1e6).toFixed(1) + 'M';
+    return (n / 1e9).toFixed(2) + 'B';
+}
+
 function _policyBadge(type) {
     if (!type) return '';
     const colors = {
@@ -273,7 +281,7 @@ function renderOverview(run, config) {
     }
 
     if (run.batch_size) html += _infoRow('Batch size', run.batch_size);
-    html += _infoRow('Model size', _formatBytes(run.model_size_bytes));
+    html += _infoRow('Parameters', _formatParams(run.num_parameters));
     html += _infoRow('Checkpoints', run.num_checkpoints);
 
     // Config-derived fields
@@ -345,7 +353,7 @@ function renderCheckpoints(checkpoints, run) {
 
     let html = '<div class="model-checkpoints">';
     html += '<table class="model-ckpt-table">';
-    html += '<thead><tr><th>Step</th><th>Model Size</th><th>Resumable</th><th>Actions</th></tr></thead>';
+    html += '<thead><tr><th>Step</th><th>Parameters</th><th>Resumable</th><th>Actions</th></tr></thead>';
     html += '<tbody>';
 
     for (const ckpt of checkpoints) {
@@ -353,7 +361,7 @@ function renderCheckpoints(checkpoints, run) {
         const lastBadge = ckpt.is_last ? ' <span class="model-last-badge">latest</span>' : '';
         html += `<tr>`;
         html += `<td>${stepText}${lastBadge}</td>`;
-        html += `<td>${_formatBytes(ckpt.model_size_bytes)}</td>`;
+        html += `<td>${_formatParams(ckpt.num_parameters)}</td>`;
         html += `<td>${ckpt.has_training_state ? 'Yes' : 'No'}</td>`;
         html += `<td class="model-ckpt-actions">`;
         html += `<button class="btn-tiny" onclick="openModelFolder('${ckpt.path.replace(/'/g, "\\'")}')">Open</button>`;

@@ -61,6 +61,27 @@ def _write_sources(sources: list[dict]) -> None:
 # ============================================================================
 
 
+def _count_safetensor_params(filepath: Path) -> int | None:
+    """Count total parameters from a safetensors file header (no weight loading)."""
+    import struct
+
+    try:
+        with open(filepath, "rb") as f:
+            header_len = struct.unpack("<Q", f.read(8))[0]
+            header = json.loads(f.read(header_len))
+        total = 0
+        for name, info in header.items():
+            if name == "__metadata__":
+                continue
+            params = 1
+            for s in info["shape"]:
+                params *= s
+            total += params
+        return total
+    except Exception:
+        return None
+
+
 def _read_checkpoint_meta(ckpt_dir: Path) -> dict | None:
     """Read metadata from a single checkpoint directory."""
     pretrained = ckpt_dir / "pretrained_model"
@@ -82,15 +103,17 @@ def _read_checkpoint_meta(ckpt_dir: Path) -> dict | None:
         except Exception:
             pass
 
-    # Model file size
+    # Model file size and parameter count
     model_file = pretrained / "model.safetensors"
     model_size = model_file.stat().st_size if model_file.is_file() else 0
+    num_params = _count_safetensor_params(model_file) if model_file.is_file() else None
 
     has_training_state = (ckpt_dir / "training_state").is_dir()
 
     return {
         "step": step,
         "model_size_bytes": model_size,
+        "num_parameters": num_params,
         "has_training_state": has_training_state,
         "policy_type": config.get("type", ""),
     }
@@ -142,6 +165,7 @@ def _scan_training_run(run_dir: Path) -> dict | None:
         "total_steps": train_config.get("steps") if train_config else None,
         "batch_size": train_config.get("batch_size") if train_config else None,
         "model_size_bytes": latest["model_size_bytes"],
+        "num_parameters": latest.get("num_parameters"),
         "num_checkpoints": len(checkpoints),
         "checkpoints": checkpoints,
         "wandb_run_id": (train_config.get("wandb", {}) or {}).get("run_id") if train_config else None,
@@ -225,6 +249,7 @@ class ModelSourceEntry(BaseModel):
     total_steps: int | None
     batch_size: int | None
     model_size_bytes: int
+    num_parameters: int | None = None
     num_checkpoints: int
     wandb_run_id: str | None = None
     wandb_project: str | None = None
@@ -235,6 +260,7 @@ class CheckpointInfo(BaseModel):
     path: str
     step: int | None
     model_size_bytes: int
+    num_parameters: int | None = None
     has_training_state: bool
     is_last: bool
     policy_type: str
