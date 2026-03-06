@@ -2,7 +2,7 @@
 
 ## Run Tab
 
-- [High] Form state (FPS, profiles, episode count, etc.) lost when switching workflow tabs (e.g. teleop → policy → teleop) and on page refresh
+- [Done] ~~Form state (FPS, profiles, episode count, etc.) lost when switching workflow tabs (e.g. teleop → policy → teleop)~~
 - [High] Policy workflow task field has no auto-fill — user must manually type every time. Task info isn't stored in train_config.json and can't be reliably derived from run/dataset names
 - [Low] Text output freezes after a while — teleoperate uses ANSI cursor-up in piped stdout
 - [Low] Rerun web viewer has ~200ms visual lag (Rerun 0.26 limitation)

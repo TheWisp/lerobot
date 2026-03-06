@@ -4,6 +4,7 @@ let runTabInitialized = false;
 let runEventSource = null;
 let selectedWorkflow = 'teleop'; // 'teleop' | 'replay' | 'policy'
 let rerunPorts = null; // {available, web_port, grpc_port}
+let _runFormRendered = false; // true once all three workflow sections are in the DOM
 
 // ============================================================================
 // Initialization
@@ -53,7 +54,11 @@ function selectWorkflow(workflow) {
     document.querySelectorAll('.workflow-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.workflow === workflow);
     });
-    renderRunForm();
+    // Toggle visibility of workflow sections (no re-render)
+    for (const wf of ['teleop', 'replay', 'policy']) {
+        const section = document.getElementById(`run-section-${wf}`);
+        if (section) section.style.display = (wf === workflow) ? '' : 'none';
+    }
     if (workflow === 'policy') {
         _ensureModelDataLoaded();
     }
@@ -141,8 +146,8 @@ function _getDatasetTasks(dsId) {
 }
 
 function _updateTaskSelect(dsId) {
-    const sel = document.getElementById('run-task-select');
-    const customInput = document.getElementById('run-task-custom');
+    const sel = document.getElementById('run-teleop-task-select');
+    const customInput = document.getElementById('run-teleop-task-custom');
     if (!sel) return;
 
     const tasks = dsId ? _getDatasetTasks(dsId) : [];
@@ -167,8 +172,8 @@ function _updateTaskSelect(dsId) {
 }
 
 function _onTaskSelectChange() {
-    const sel = document.getElementById('run-task-select');
-    const customInput = document.getElementById('run-task-custom');
+    const sel = document.getElementById('run-teleop-task-select');
+    const customInput = document.getElementById('run-teleop-task-custom');
     if (!sel || !customInput) return;
     if (sel.value === '__new_task__') {
         customInput.style.display = '';
@@ -179,12 +184,12 @@ function _onTaskSelectChange() {
 }
 
 function _onRecordDatasetChange() {
-    const sel = document.getElementById('run-record-dataset');
+    const sel = document.getElementById('run-teleop-record-dataset');
     if (!sel) return;
     const val = sel.value;
 
-    const newNameRow = document.getElementById('run-new-dataset-row');
-    const recordFields = document.getElementById('run-record-fields');
+    const newNameRow = document.getElementById('run-teleop-new-dataset-row');
+    const recordFields = document.getElementById('run-teleop-record-fields');
 
     if (val === '') {
         // None — pure teleop
@@ -204,7 +209,7 @@ function _onRecordDatasetChange() {
         // Pre-fill FPS from dataset metadata
         const d = (window.datasets || {})[dsId];
         if (d) {
-            const fpsInput = document.getElementById('run-fps');
+            const fpsInput = document.getElementById('run-teleop-fps');
             if (fpsInput) fpsInput.value = d.fps;
         }
         // Populate task selector from existing episodes
@@ -213,8 +218,8 @@ function _onRecordDatasetChange() {
 }
 
 function _checkNewDatasetConflict() {
-    const nameInput = document.getElementById('run-new-dataset-name');
-    const warning = document.getElementById('run-dataset-conflict');
+    const nameInput = document.getElementById('run-teleop-new-dataset-name');
+    const warning = document.getElementById('run-teleop-dataset-conflict');
     if (!nameInput || !warning) return;
 
     const name = nameInput.value.trim();
@@ -290,96 +295,101 @@ async function _ensureModelDataLoaded() {
 // ---- Form rendering ----
 
 function renderRunForm() {
+    if (_runFormRendered) return; // Only build once
+    _runFormRendered = true;
+
     const form = document.getElementById('run-form');
     if (!form) return;
 
-    let html = '<div class="form-grid">';
+    let html = '';
 
-    // Robot profile (always shown)
+    // ---- Teleop workflow section ----
+    html += `<div id="run-section-teleop" style="${selectedWorkflow === 'teleop' ? '' : 'display:none'}">`;
+    html += '<div class="form-grid">';
     html += `<label>Robot</label>`;
-    html += `<select id="run-robot-profile">${_robotProfileOptions()}</select>`;
+    html += `<select id="run-teleop-robot">${_robotProfileOptions()}</select>`;
+    html += `<label>Teleop</label>`;
+    html += `<select id="run-teleop-teleop">${_teleopProfileOptions()}</select>`;
+    html += `<label>FPS</label>`;
+    html += `<input type="number" id="run-teleop-fps" value="60" min="1" max="200">`;
+    html += '</div>';
+    // Dataset selector (optional recording)
+    html += '<div class="form-section">';
+    html += '<div class="form-section-title">Record dataset</div>';
+    html += '<div class="form-grid">';
+    html += `<label>Dataset</label>`;
+    html += `<select id="run-teleop-record-dataset" onchange="_onRecordDatasetChange()">${_recordDatasetOptions()}</select>`;
+    html += `</div>`;
+    // New dataset name (hidden by default)
+    html += `<div id="run-teleop-new-dataset-row" class="form-grid" style="display:none;">`;
+    html += `<label>Name</label>`;
+    html += `<div><input type="text" id="run-teleop-new-dataset-name" placeholder="my_new_dataset" oninput="_checkNewDatasetConflict()">`;
+    html += `<div class="dataset-conflict-warning" id="run-teleop-dataset-conflict" style="display:none;"></div></div>`;
+    html += `</div>`;
+    // Record fields (hidden when None selected)
+    html += `<div id="run-teleop-record-fields" class="form-grid" style="display:none;">`;
+    html += `<label>Task</label>`;
+    html += `<div>`;
+    html += `<select id="run-teleop-task-select" onchange="_onTaskSelectChange()"><option value="" selected>Pick up the cube</option></select>`;
+    html += `<input type="text" id="run-teleop-task-custom" placeholder="Describe the task" style="display:none; margin-top:4px;">`;
+    html += `</div>`;
+    html += `<label>Episodes</label>`;
+    html += `<input type="number" id="run-teleop-num-episodes" value="50" min="1">`;
+    html += `<label>Episode Duration</label>`;
+    html += `<input type="number" id="run-teleop-episode-time" value="60" min="1">`;
+    html += `<label>Reset Duration</label>`;
+    html += `<input type="number" id="run-teleop-reset-time" value="60" min="0">`;
+    html += '</div>';
+    html += '</div>';
+    html += '</div>'; // end teleop section
 
-    if (selectedWorkflow === 'teleop') {
-        // Teleop profile
-        html += `<label>Teleop</label>`;
-        html += `<select id="run-teleop-profile">${_teleopProfileOptions()}</select>`;
-        html += `<label>FPS</label>`;
-        html += `<input type="number" id="run-fps" value="60" min="1" max="200">`;
+    // ---- Replay workflow section ----
+    html += `<div id="run-section-replay" style="${selectedWorkflow === 'replay' ? '' : 'display:none'}">`;
+    html += '<div class="form-grid">';
+    html += `<label>Robot</label>`;
+    html += `<select id="run-replay-robot">${_robotProfileOptions()}</select>`;
+    html += `<label>Episode</label>`;
+    html += `<select id="run-replay-episode" onchange="_onReplayEpisodeChange()">${_episodeOptions()}</select>`;
+    html += `<label>FPS</label>`;
+    html += `<input type="number" id="run-replay-fps" value="30" min="1" max="200">`;
+    html += '</div>';
+    html += '</div>'; // end replay section
 
-        // Dataset selector (optional recording)
-        html += '</div>';
-        html += '<div class="form-section">';
-        html += '<div class="form-section-title">Record dataset</div>';
-        html += '<div class="form-grid">';
-        html += `<label>Dataset</label>`;
-        html += `<select id="run-record-dataset" onchange="_onRecordDatasetChange()">${_recordDatasetOptions()}</select>`;
-        // New dataset name (hidden by default)
-        html += `</div>`;
-        html += `<div id="run-new-dataset-row" class="form-grid" style="display:none;">`;
-        html += `<label>Name</label>`;
-        html += `<div><input type="text" id="run-new-dataset-name" placeholder="my_new_dataset" oninput="_checkNewDatasetConflict()">`;
-        html += `<div class="dataset-conflict-warning" id="run-dataset-conflict" style="display:none;"></div></div>`;
-        html += `</div>`;
-        // Record fields (hidden when None selected)
-        html += `<div id="run-record-fields" class="form-grid" style="display:none;">`;
-        html += `<label>Task</label>`;
-        html += `<div>`;
-        html += `<select id="run-task-select" onchange="_onTaskSelectChange()"><option value="" selected>Pick up the cube</option></select>`;
-        html += `<input type="text" id="run-task-custom" placeholder="Describe the task" style="display:none; margin-top:4px;">`;
-        html += `</div>`;
-        html += `<label>Episodes</label>`;
-        html += `<input type="number" id="run-num-episodes" value="50" min="1">`;
-        html += `<label>Episode Duration</label>`;
-        html += `<input type="number" id="run-episode-time" value="60" min="1">`;
-        html += `<label>Reset Duration</label>`;
-        html += `<input type="number" id="run-reset-time" value="60" min="0">`;
-        html += '</div>';
-        html += '</div>';
+    // ---- Policy workflow section ----
+    html += `<div id="run-section-policy" style="${selectedWorkflow === 'policy' ? '' : 'display:none'}">`;
+    html += '<div class="form-grid">';
+    html += `<label>Robot</label>`;
+    html += `<select id="run-policy-robot">${_robotProfileOptions()}</select>`;
+    html += `<label>Checkpoint</label>`;
+    html += `<select id="run-policy-checkpoint" onchange="_onPolicyCheckpointChange()">${_modelCheckpointOptions()}</select>`;
+    // Teleop profile (optional — for manual resets between episodes)
+    html += `<label>Teleop</label>`;
+    html += `<div><select id="run-policy-teleop">`;
+    html += `<option value="">None (policy only)</option>`;
+    html += _teleopProfileOptions();
+    html += `</select>`;
+    html += `<div class="form-hint">Optional: for manual resets between episodes</div></div>`;
+    html += `<label>FPS</label>`;
+    html += `<input type="number" id="run-policy-fps" value="30" min="1" max="200">`;
+    html += '</div>';
+    // Recording settings
+    html += '<div class="form-section">';
+    html += '<div class="form-section-title">Record evaluation</div>';
+    html += '<div class="form-grid">';
+    html += `<label>Dataset</label>`;
+    html += `<input type="text" id="run-policy-repo-id" placeholder="user/eval_my_policy" value="eval/eval_policy">`;
+    html += `<label>Task</label>`;
+    html += `<input type="text" id="run-policy-task" placeholder="Describe the task" value="">`;
+    html += `<label>Episodes</label>`;
+    html += `<input type="number" id="run-policy-episodes" value="10" min="1">`;
+    html += `<label>Episode Duration</label>`;
+    html += `<input type="number" id="run-policy-episode-time" value="60" min="1">`;
+    html += `<label>Reset Duration</label>`;
+    html += `<input type="number" id="run-policy-reset-time" value="60" min="0">`;
+    html += '</div>';
+    html += '</div>';
+    html += '</div>'; // end policy section
 
-    } else if (selectedWorkflow === 'replay') {
-        // Replay: single episode selector
-        html += `<label>Episode</label>`;
-        html += `<select id="run-replay-episode" onchange="_onReplayEpisodeChange()">${_episodeOptions()}</select>`;
-        html += `<label>FPS</label>`;
-        html += `<input type="number" id="run-replay-fps" value="30" min="1" max="200">`;
-
-    } else if (selectedWorkflow === 'policy') {
-        // Policy checkpoint selector
-        html += `<label>Checkpoint</label>`;
-        html += `<select id="run-policy-checkpoint" onchange="_onPolicyCheckpointChange()">${_modelCheckpointOptions()}</select>`;
-
-        // Teleop profile (optional — for manual resets between episodes)
-        html += `<label>Teleop</label>`;
-        html += `<div><select id="run-teleop-profile">`;
-        html += `<option value="">None (policy only)</option>`;
-        html += _teleopProfileOptions();
-        html += `</select>`;
-        html += `<div class="form-hint">Optional: for manual resets between episodes</div></div>`;
-
-        html += `<label>FPS</label>`;
-        html += `<input type="number" id="run-fps" value="30" min="1" max="200">`;
-
-        // Recording settings
-        html += '</div>';
-        html += '<div class="form-section">';
-        html += '<div class="form-section-title">Record evaluation</div>';
-        html += '<div class="form-grid">';
-
-        html += `<label>Dataset</label>`;
-        html += `<input type="text" id="run-policy-repo-id" placeholder="user/eval_my_policy" value="eval/eval_policy">`;
-
-        html += `<label>Task</label>`;
-        html += `<input type="text" id="run-policy-task" placeholder="Describe the task" value="">`;
-
-        html += `<label>Episodes</label>`;
-        html += `<input type="number" id="run-policy-episodes" value="10" min="1">`;
-        html += `<label>Episode Duration</label>`;
-        html += `<input type="number" id="run-policy-episode-time" value="60" min="1">`;
-        html += `<label>Reset Duration</label>`;
-        html += `<input type="number" id="run-policy-reset-time" value="60" min="0">`;
-    }
-
-    if (!html.endsWith('</div>')) html += '</div>';
     form.innerHTML = html;
 }
 
@@ -412,8 +422,16 @@ async function _getProfileData(kind, selectedName) {
 // Launch / Stop
 // ============================================================================
 
+function _getActiveRobotSelectId() {
+    return `run-${selectedWorkflow}-robot`;
+}
+
+function _getActiveFpsInputId() {
+    return `run-${selectedWorkflow}-fps`;
+}
+
 async function launchRun() {
-    const robotSelect = document.getElementById('run-robot-profile');
+    const robotSelect = document.getElementById(_getActiveRobotSelectId());
     if (!robotSelect || !robotSelect.value) {
         showToast('Error', 'Select a robot profile', 'error');
         return;
@@ -426,7 +444,7 @@ async function launchRun() {
     }
 
     // Cap FPS to the slowest camera's capability
-    const fpsInput = document.getElementById('run-fps');
+    const fpsInput = document.getElementById(_getActiveFpsInputId());
     let userFps = parseInt(fpsInput?.value) || 30;
     const cams = robotData.cameras || {};
     const camFpsList = Object.values(cams).map(c => c.fps).filter(Boolean);
@@ -442,14 +460,14 @@ async function launchRun() {
     let endpoint, body;
 
     if (selectedWorkflow === 'teleop') {
-        const teleopSelect = document.getElementById('run-teleop-profile');
+        const teleopSelect = document.getElementById('run-teleop-teleop');
         const teleopData = await _getProfileData('teleop', teleopSelect?.value);
         if (!teleopData) {
             showToast('Error', 'Select a teleop profile', 'error');
             return;
         }
 
-        const datasetSel = document.getElementById('run-record-dataset');
+        const datasetSel = document.getElementById('run-teleop-record-dataset');
         const datasetVal = datasetSel?.value || '';
 
         if (datasetVal === '') {
@@ -458,12 +476,12 @@ async function launchRun() {
             body = {
                 robot: robotData,
                 teleop: teleopData,
-                fps: parseInt(document.getElementById('run-fps')?.value) || 60,
+                fps: parseInt(document.getElementById('run-teleop-fps')?.value) || 60,
             };
         } else {
             // Record mode — existing or new dataset
-            const taskSel = document.getElementById('run-task-select');
-            const taskCustom = document.getElementById('run-task-custom');
+            const taskSel = document.getElementById('run-teleop-task-select');
+            const taskCustom = document.getElementById('run-teleop-task-custom');
             const singleTask = (taskSel?.value === '__new_task__')
                 ? taskCustom?.value?.trim()
                 : taskSel?.value?.trim();
@@ -474,7 +492,7 @@ async function launchRun() {
 
             let repoId, root = null, resume = false;
             if (datasetVal === '__new__') {
-                const name = document.getElementById('run-new-dataset-name')?.value?.trim();
+                const name = document.getElementById('run-teleop-new-dataset-name')?.value?.trim();
                 if (!name) {
                     showToast('Error', 'Enter a name for the new dataset', 'error');
                     return;
@@ -493,11 +511,11 @@ async function launchRun() {
                 resume = true;
 
                 // Warn on FPS mismatch — dataset FPS is immutable across episodes
-                const userFps = parseInt(document.getElementById('run-fps')?.value) || 30;
-                if (d.fps && userFps !== d.fps) {
+                const currentFps = parseInt(document.getElementById('run-teleop-fps')?.value) || 30;
+                if (d.fps && currentFps !== d.fps) {
                     const ok = confirm(
                         `FPS mismatch: dataset "${d.repo_id}" uses ${d.fps} FPS ` +
-                        `but you selected ${userFps} FPS.\n\n` +
+                        `but you selected ${currentFps} FPS.\n\n` +
                         `A dataset cannot have different FPS across episodes. ` +
                         `The recording will use ${d.fps} FPS.\n\nContinue?`
                     );
@@ -522,10 +540,10 @@ async function launchRun() {
                 repo_id: repoId,
                 root: root,
                 single_task: singleTask,
-                fps: parseInt(document.getElementById('run-fps')?.value) || 30,
-                episode_time_s: parseFloat(document.getElementById('run-episode-time')?.value) || 60,
-                reset_time_s: parseFloat(document.getElementById('run-reset-time')?.value) || 60,
-                num_episodes: parseInt(document.getElementById('run-num-episodes')?.value) || 50,
+                fps: parseInt(document.getElementById('run-teleop-fps')?.value) || 30,
+                episode_time_s: parseFloat(document.getElementById('run-teleop-episode-time')?.value) || 60,
+                reset_time_s: parseFloat(document.getElementById('run-teleop-reset-time')?.value) || 60,
+                num_episodes: parseInt(document.getElementById('run-teleop-num-episodes')?.value) || 50,
                 resume: resume,
             };
         }
@@ -578,7 +596,7 @@ async function launchRun() {
         }
 
         // Optional teleop for manual resets
-        const teleopSelect = document.getElementById('run-teleop-profile');
+        const teleopSelect = document.getElementById('run-policy-teleop');
         let teleopData = null;
         if (teleopSelect?.value) {
             teleopData = await _getProfileData('teleop', teleopSelect.value);
@@ -591,7 +609,7 @@ async function launchRun() {
             policy_path: checkpointSel.value,
             repo_id: repoId,
             single_task: task,
-            fps: parseInt(document.getElementById('run-fps')?.value) || 30,
+            fps: parseInt(document.getElementById('run-policy-fps')?.value) || 30,
             episode_time_s: parseFloat(document.getElementById('run-policy-episode-time')?.value) || 60,
             reset_time_s: parseFloat(document.getElementById('run-policy-reset-time')?.value) || 60,
             num_episodes: parseInt(document.getElementById('run-policy-episodes')?.value) || 10,
