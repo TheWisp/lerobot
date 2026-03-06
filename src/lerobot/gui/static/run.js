@@ -459,7 +459,8 @@ async function launchRun() {
         showToast('Started', `${data.command} started (PID ${data.pid})`, 'success');
         updateRunUI(true);
         connectOutputSSE();
-        showRerunViewer();
+        // Delay so the subprocess has time to start its gRPC server
+        setTimeout(showRerunViewer, 5000);
     } catch (e) {
         showToast('Error', e.message, 'error');
     }
@@ -696,15 +697,17 @@ function showRerunViewer() {
     const placeholder = document.getElementById('rerun-placeholder');
     if (placeholder) placeholder.style.display = 'none';
 
-    // Only create iframe if not already there
-    if (!container.querySelector('iframe')) {
-        const iframe = document.createElement('iframe');
-        // The ?url= param tells the Rerun WASM viewer where to connect for data
-        const grpcUrl = encodeURIComponent(`rerun+http://localhost:${rerunPorts.grpc_port}/proxy`);
-        iframe.src = `http://localhost:${rerunPorts.web_port}?url=${grpcUrl}&hide_welcome_screen`;
+    const grpcUrl = encodeURIComponent(`rerun+http://localhost:${rerunPorts.grpc_port}/proxy`);
+    const src = `http://localhost:${rerunPorts.web_port}?url=${grpcUrl}&hide_welcome_screen`;
+
+    let iframe = container.querySelector('iframe');
+    if (!iframe) {
+        iframe = document.createElement('iframe');
         iframe.style.width = '100%';
         iframe.style.height = '100%';
         iframe.style.border = 'none';
         container.appendChild(iframe);
     }
+    // Always (re)set src so the viewer reconnects to the subprocess gRPC server
+    iframe.src = src;
 }

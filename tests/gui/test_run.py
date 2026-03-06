@@ -15,6 +15,7 @@ from lerobot.gui.api.run import (
     _display_args,
     _ensure_no_active_process,
     _profile_to_cli_args,
+    _rerun_env,
     start_record,
     start_replay,
     start_teleoperate,
@@ -133,13 +134,22 @@ class TestDisplayArgs:
         with patch("lerobot.gui.api.run._rerun_started", True):
             args = _display_args()
         assert "--display_data=true" in args
-        assert "--display_ip=127.0.0.1" in args
-        assert f"--display_port={RERUN_GRPC_PORT}" in args
+        assert "--display_compressed_images=true" in args
 
     def test_returns_empty_when_rerun_not_started(self):
         with patch("lerobot.gui.api.run._rerun_started", False):
             args = _display_args()
         assert args == []
+
+    def test_rerun_env_when_started(self):
+        with patch("lerobot.gui.api.run._rerun_started", True):
+            env = _rerun_env()
+        assert env == {"LEROBOT_RERUN_SERVE_PORT": str(RERUN_GRPC_PORT)}
+
+    def test_rerun_env_when_not_started(self):
+        with patch("lerobot.gui.api.run._rerun_started", False):
+            env = _rerun_env()
+        assert env == {}
 
 
 # ============================================================================

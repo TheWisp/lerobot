@@ -33,7 +33,6 @@ def set_app_state(state: "AppState") -> None:
 # ============================================================================
 
 _rerun_started = False
-_rerun_process: subprocess.Popen | None = None
 RERUN_GRPC_PORT = 9876
 RERUN_WEB_PORT = 9090
 
@@ -46,73 +45,45 @@ def _is_port_in_use(port: int) -> bool:
 
 
 def init_rerun_server() -> None:
-    """Start a standalone Rerun server process (gRPC + web viewer)."""
-    global _rerun_started, _rerun_process
+    """Serve the Rerun web viewer (static files only).
+
+    The subprocess itself hosts a gRPC server via LEROBOT_RERUN_SERVE_PORT,
+    and the web viewer connects to it via the ?url= query parameter in the
+    iframe src.
+    """
+    global _rerun_started
     if _rerun_started:
         return
     try:
-        import shutil
-        import time
+        import rerun as rr
 
-        rerun_bin = shutil.which("rerun")
-        if not rerun_bin:
-            logger.warning("'rerun' CLI not found in PATH — Rerun viewer disabled")
-            return
+        # Kill anything on the web viewer port so we own it
+        if _is_port_in_use(RERUN_WEB_PORT):
+            logger.info(f"Killing stale process on web viewer port {RERUN_WEB_PORT}")
+            try:
+                subprocess.run(["fuser", "-k", f"{RERUN_WEB_PORT}/tcp"], capture_output=True, timeout=5)
+            except Exception as e:
+                logger.warning(f"fuser -k {RERUN_WEB_PORT}/tcp failed: {e}")
+            import time
+            for i in range(10):
+                if not _is_port_in_use(RERUN_WEB_PORT):
+                    break
+                time.sleep(0.2)
 
-        # If ports are already in use (stale process), treat as already running
-        grpc_used = _is_port_in_use(RERUN_GRPC_PORT)
-        web_used = _is_port_in_use(RERUN_WEB_PORT)
-        logger.info(f"Rerun port check: gRPC={RERUN_GRPC_PORT} {'IN USE' if grpc_used else 'free'}, web={RERUN_WEB_PORT} {'IN USE' if web_used else 'free'}")
-        if grpc_used and web_used:
-            logger.info("Rerun ports already in use — reusing existing server")
-            _rerun_started = True
-            return
-
-        cmd = [
-            rerun_bin,
-            "--serve-web",
-            "--port", str(RERUN_GRPC_PORT),
-            "--web-viewer-port", str(RERUN_WEB_PORT),
-            "--server-memory-limit", "25%",
-        ]
-        logger.info(f"Starting Rerun server: {' '.join(cmd)}")
-        _rerun_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-
-        # Give it a moment to start (or fail)
-        time.sleep(1)
-        if _rerun_process.poll() is not None:
-            stderr = _rerun_process.stderr.read().decode() if _rerun_process.stderr else ""
-            logger.warning(f"Rerun server exited immediately (rc={_rerun_process.returncode}): {stderr.strip()}")
-            _rerun_process = None
-            return
-
-        # Verify ports are actually open
-        grpc_ok = _is_port_in_use(RERUN_GRPC_PORT)
-        web_ok = _is_port_in_use(RERUN_WEB_PORT)
-        logger.info(f"Rerun server PID {_rerun_process.pid}: gRPC={RERUN_GRPC_PORT} {'OK' if grpc_ok else 'FAILED'}, web={RERUN_WEB_PORT} {'OK' if web_ok else 'FAILED'}")
-
-        if not grpc_ok or not web_ok:
-            logger.warning("Rerun server started but ports are not listening — viewer may not work")
-
+        rr.serve_web_viewer(web_port=RERUN_WEB_PORT, open_browser=False)
+        logger.info(f"Rerun web viewer serving on port {RERUN_WEB_PORT}")
         _rerun_started = True
     except Exception as e:
-        logger.warning(f"Failed to start Rerun server: {e}")
+        logger.warning(f"Failed to start Rerun web viewer: {e}")
 
 
 @router.get("/rerun-ports")
 async def get_rerun_ports() -> dict:
     """Return Rerun server ports for the frontend iframe."""
-    # Live-check if the rerun process is still alive
-    process_alive = _rerun_process is not None and _rerun_process.poll() is None
-    grpc_ok = _is_port_in_use(RERUN_GRPC_PORT)
     web_ok = _is_port_in_use(RERUN_WEB_PORT)
-    logger.info(f"Rerun health: started={_rerun_started}, process_alive={process_alive}, gRPC={grpc_ok}, web={web_ok}")
+    logger.info(f"Rerun health: started={_rerun_started}, web={web_ok}")
     return {
-        "available": _rerun_started and (grpc_ok or web_ok),
+        "available": _rerun_started and web_ok,
         "web_port": RERUN_WEB_PORT if _rerun_started else None,
         "grpc_port": RERUN_GRPC_PORT if _rerun_started else None,
     }
@@ -252,16 +223,30 @@ async def _wait_for_exit() -> None:
     _output_event.set()
 
 
+
+
 async def _launch_subprocess(args: list[str], command: str, config: dict) -> None:
     """Launch a subprocess and start reading its output."""
     global _active_process, _active_command, _active_config, _output_lines, _stream_tasks
+
+    # Kill any leftover gRPC server on the port from a previous run
+    if _is_port_in_use(RERUN_GRPC_PORT):
+        logger.info(f"Killing stale process on gRPC port {RERUN_GRPC_PORT}")
+        try:
+            subprocess.run(["fuser", "-k", f"{RERUN_GRPC_PORT}/tcp"], capture_output=True, timeout=5)
+        except Exception as e:
+            logger.warning(f"fuser -k {RERUN_GRPC_PORT}/tcp failed: {e}")
 
     _output_lines = []
     _active_command = command
     _active_config = config
 
+    rerun_extra = _rerun_env()
+    env = {**__import__("os").environ, **rerun_extra}
     cmd_str = " ".join(args)
     logger.info(f"Launching: {cmd_str}")
+    if rerun_extra:
+        logger.info(f"Rerun env vars: {rerun_extra}")
     _append_output(f"--- Starting {command} ---")
     _append_output(f"$ {cmd_str}\n")
 
@@ -269,6 +254,7 @@ async def _launch_subprocess(args: list[str], command: str, config: dict) -> Non
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
 
     _stream_tasks = [
@@ -279,17 +265,20 @@ async def _launch_subprocess(args: list[str], command: str, config: dict) -> Non
 
 
 def _display_args() -> list[str]:
-    """CLI args to connect subprocess to our Rerun server."""
+    """CLI args to enable Rerun display in the subprocess."""
     if not _rerun_started:
         logger.info("Rerun not started — skipping display args")
         return []
-    args = [
-        "--display_data=true",
-        f"--display_ip=127.0.0.1",
-        f"--display_port={RERUN_GRPC_PORT}",
-    ]
+    args = ["--display_data=true", "--display_compressed_images=true"]
     logger.info(f"Rerun display args: {args}")
     return args
+
+
+def _rerun_env() -> dict[str, str]:
+    """Extra env vars for the subprocess to self-host a gRPC server."""
+    if not _rerun_started:
+        return {}
+    return {"LEROBOT_RERUN_SERVE_PORT": str(RERUN_GRPC_PORT)}
 
 
 # ============================================================================
