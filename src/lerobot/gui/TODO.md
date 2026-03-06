@@ -18,6 +18,6 @@
 - [Done] ~~Opened datasets don't refresh after recording new episodes — need to close and reopen to see changes~~
 - [Done] ~~Run tab replay/record dataset options don't update when datasets are opened or closed in the Data tab~~
 - [Done] ~~Run tab replay episode list doesn't update when episodes are deleted in the Data tab~~
-- [Mid] After recording a new dataset, the record UI still shows "new dataset" form instead of switching to the now-existing dataset
+- [Done] ~~After recording a new dataset, the record UI still shows "new dataset" form instead of switching to the now-existing dataset~~
 - [Done] ~~After deleting an episode, selection moves to neighbour but playback view still shows the deleted episode~~
 - [Done] ~~After trimming an episode and saving, playback still shows the old duration~~

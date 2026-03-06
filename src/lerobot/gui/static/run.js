@@ -319,7 +319,32 @@ function refreshRunDatasetSelects() {
     if (replaySel) { const prev = replaySel.value; replaySel.innerHTML = _episodeOptions(); replaySel.value = prev; }
     // Refresh teleop record dataset selector
     const recordSel = document.getElementById('run-teleop-record-dataset');
-    if (recordSel) { const prev = recordSel.value; recordSel.innerHTML = _recordDatasetOptions(); recordSel.value = prev; }
+    if (recordSel) {
+        const prev = recordSel.value;
+        recordSel.innerHTML = _recordDatasetOptions();
+        // If user was creating a new dataset, the recording is done — check if it
+        // now exists as an opened dataset, otherwise reset to "None"
+        if (prev === '__new__') {
+            const newName = document.getElementById('run-teleop-new-dataset-name')?.value?.trim();
+            let matched = false;
+            if (newName) {
+                const ds = window.datasets || {};
+                for (const id of Object.keys(ds)) {
+                    if (ds[id].repo_id === newName || ds[id].repo_id?.endsWith('/' + newName)) {
+                        recordSel.value = `existing:${id}`;
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            if (!matched) {
+                recordSel.value = '';  // Reset to "None (pure teleop)"
+            }
+            _onRecordDatasetChange();
+            return;
+        }
+        recordSel.value = prev;
+    }
 }
 
 // ---- Form rendering ----
