@@ -4,7 +4,7 @@
 
 - [Done] ~~Form state (FPS, profiles, episode count, etc.) lost when switching workflow tabs (e.g. teleop → policy → teleop)~~
 - [High] Policy workflow task field has no auto-fill — user must manually type every time. Task info isn't stored in train_config.json and can't be reliably derived from run/dataset names
-- [Mid] Policy workflow "Record evaluation" only supports typing a new dataset name — should support choosing an existing dataset via dropdown. First check whether eval can bypass the dataset entirely (users often don't care about eval recordings). Complicated by the fact that new eval datasets aren't opened in the Data tab, and datasets can't be opened during recording, so a live dropdown may not be feasible without solving that limitation first
+- [Done] ~~Policy workflow "Record evaluation" only supports typing a new dataset name — now has dropdown to choose existing opened datasets (with resume) or create new~~
 - [Low] Text output freezes after a while — teleoperate uses ANSI cursor-up in piped stdout
 - [Low] Rerun web viewer has ~200ms visual lag (Rerun 0.26 limitation)
 - [Low] Replay FPS setting doesn't seem to affect playback speed — remove if not useful (needs investigation)

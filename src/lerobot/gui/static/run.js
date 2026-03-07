@@ -251,6 +251,45 @@ function _onReplayEpisodeChange() {
     }
 }
 
+// ---- Policy dataset helpers ----
+
+function _policyDatasetOptions() {
+    const ds = window.datasets || {};
+    let html = '<option value="__new__" selected>+ New dataset...</option>';
+    for (const id of Object.keys(ds)) {
+        const d = ds[id];
+        const label = d.repo_id || id;
+        html += `<option value="existing:${_esc(id)}">${_esc(label)} (${d.total_episodes} ep)</option>`;
+    }
+    return html;
+}
+
+function _onPolicyDatasetChange() {
+    const sel = document.getElementById('run-policy-dataset');
+    if (!sel) return;
+    const val = sel.value;
+    const newNameRow = document.getElementById('run-policy-new-dataset-row');
+
+    if (val === '__new__') {
+        if (newNameRow) newNameRow.style.display = '';
+    } else {
+        if (newNameRow) newNameRow.style.display = 'none';
+        // Pre-fill FPS and task from existing dataset
+        const dsId = val.replace('existing:', '');
+        const d = (window.datasets || {})[dsId];
+        if (d) {
+            const fpsInput = document.getElementById('run-policy-fps');
+            if (fpsInput) fpsInput.value = d.fps;
+        }
+        // Pre-fill task from existing episodes
+        const tasks = _getDatasetTasks(dsId);
+        const taskInput = document.getElementById('run-policy-task');
+        if (taskInput && tasks.length && !taskInput.value) {
+            taskInput.value = tasks[0];
+        }
+    }
+}
+
 // ---- Model / checkpoint option helpers ----
 
 function _modelCheckpointOptions() {
@@ -345,6 +384,9 @@ function refreshRunDatasetSelects() {
         }
         recordSel.value = prev;
     }
+    // Refresh policy dataset selector
+    const policySel = document.getElementById('run-policy-dataset');
+    if (policySel) { const prev = policySel.value; policySel.innerHTML = _policyDatasetOptions(); policySel.value = prev; }
 }
 
 // ---- Form rendering ----
@@ -432,7 +474,14 @@ function renderRunForm() {
     html += '<div class="form-section-title">Record evaluation</div>';
     html += '<div class="form-grid">';
     html += `<label>Dataset</label>`;
+    html += `<select id="run-policy-dataset" onchange="_onPolicyDatasetChange()">${_policyDatasetOptions()}</select>`;
+    html += `</div>`;
+    // New dataset name (shown by default since __new__ is default)
+    html += `<div id="run-policy-new-dataset-row" class="form-grid">`;
+    html += `<label>Name</label>`;
     html += `<input type="text" id="run-policy-repo-id" placeholder="user/eval_my_policy" value="eval/eval_policy">`;
+    html += `</div>`;
+    html += `<div class="form-grid">`;
     html += `<label>Task</label>`;
     html += `<input type="text" id="run-policy-task" placeholder="Describe the task" value="">`;
     html += `<label>Episodes</label>`;
@@ -638,16 +687,33 @@ async function launchRun() {
             return;
         }
 
-        const repoId = document.getElementById('run-policy-repo-id')?.value?.trim();
-        if (!repoId) {
-            showToast('Error', 'Enter a dataset name for evaluation recordings', 'error');
-            return;
-        }
-
         const task = document.getElementById('run-policy-task')?.value?.trim();
         if (!task) {
             showToast('Error', 'Task description is required', 'error');
             return;
+        }
+
+        // Resolve dataset: new or existing
+        const datasetSel = document.getElementById('run-policy-dataset');
+        const datasetVal = datasetSel?.value || '__new__';
+        let repoId, root = null, resume = false;
+
+        if (datasetVal === '__new__') {
+            repoId = document.getElementById('run-policy-repo-id')?.value?.trim();
+            if (!repoId) {
+                showToast('Error', 'Enter a dataset name for evaluation recordings', 'error');
+                return;
+            }
+        } else {
+            const dsId = datasetVal.replace('existing:', '');
+            const d = (window.datasets || {})[dsId];
+            if (!d) {
+                showToast('Error', 'Selected dataset not found — was it closed?', 'error');
+                return;
+            }
+            repoId = d.repo_id;
+            root = d.root;
+            resume = true;
         }
 
         // Optional teleop for manual resets
@@ -663,11 +729,13 @@ async function launchRun() {
             teleop: teleopData,
             policy_path: checkpointSel.value,
             repo_id: repoId,
+            root: root,
             single_task: task,
             fps: parseInt(document.getElementById('run-policy-fps')?.value) || 30,
             episode_time_s: parseFloat(document.getElementById('run-policy-episode-time')?.value) || 60,
             reset_time_s: parseFloat(document.getElementById('run-policy-reset-time')?.value) || 60,
             num_episodes: parseInt(document.getElementById('run-policy-episodes')?.value) || 10,
+            resume: resume,
         };
     } else {
         showToast('Error', 'Unknown workflow', 'error');

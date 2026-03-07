@@ -432,6 +432,10 @@ function _prefillPolicyFields(runPath) {
     for (const models of Object.values(data)) {
         const m = models.find(m => m.path === runPath);
         if (!m) continue;
+        // Ensure dataset selector is on "New dataset" and show the name input
+        const datasetSel = document.getElementById('run-policy-dataset');
+        if (datasetSel) { datasetSel.value = '__new__'; }
+        if (typeof _onPolicyDatasetChange === 'function') _onPolicyDatasetChange();
         // Pre-fill dataset repo_id with eval_ prefix
         const repoInput = document.getElementById('run-policy-repo-id');
         if (repoInput) {
