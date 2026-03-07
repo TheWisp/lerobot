@@ -137,6 +137,7 @@ class RecordRequest(BaseModel):
     play_sounds: bool = True
     resume: bool = False
     debug_model: DebugModelConfig | None = None
+    intervention_repo_id: str | None = None
 
 
 class ReplayRequest(BaseModel):
@@ -516,6 +517,9 @@ async def start_record(req: RecordRequest) -> dict:
     args.append(f"--play_sounds={'true' if req.play_sounds else 'false'}")
     if req.resume:
         args.append("--resume=true")
+    if req.intervention_repo_id:
+        args.append(f"--intervention_repo_id={req.intervention_repo_id}")
+    args.extend(_display_args())
 
     extra_env = None
     if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
