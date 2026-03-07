@@ -150,6 +150,7 @@ class RecordRequest(BaseModel):
     vcodec: str = "libsvtav1"
     play_sounds: bool = True
     resume: bool = False
+    intervention_repo_id: str | None = None
 
 
 class ReplayRequest(BaseModel):
@@ -328,6 +329,8 @@ async def start_record(req: RecordRequest) -> dict:
     args.append(f"--play_sounds={'true' if req.play_sounds else 'false'}")
     if req.resume:
         args.append("--resume=true")
+    if req.intervention_repo_id:
+        args.append(f"--intervention_repo_id={req.intervention_repo_id}")
     args.extend(_display_args())
 
     await _launch_subprocess(args, command="record", config=req.model_dump())
