@@ -379,6 +379,7 @@ function _onPolicyDatasetChange() {
     if (!sel) return;
     const val = sel.value;
     const newNameRow = document.getElementById('run-policy-new-dataset-row');
+    const mainIsExisting = val.startsWith('existing:');
 
     if (val === '__new__') {
         if (newNameRow) newNameRow.style.display = '';
@@ -391,6 +392,78 @@ function _onPolicyDatasetChange() {
             const fpsInput = document.getElementById('run-policy-fps');
             if (fpsInput) fpsInput.value = d.fps;
         }
+    }
+
+    // Update intervention dataset options: existing intervention datasets only available
+    // when main dataset is also existing (both share the resume flag in the CLI)
+    const intSel = document.getElementById('run-policy-intervention-dataset');
+    if (intSel) {
+        const prev = intSel.value;
+        intSel.innerHTML = _interventionDatasetOptions(mainIsExisting);
+        intSel.value = prev;
+        // If previous selection is no longer valid, reset to None
+        if (intSel.value !== prev) {
+            intSel.value = '';
+            _onInterventionDatasetChange();
+        }
+    }
+}
+
+async function _onPolicyTeleopChange() {
+    const sel = document.getElementById('run-policy-teleop');
+    const section = document.getElementById('run-policy-intervention-section');
+    if (!section) return;
+
+    if (!sel?.value) {
+        section.style.display = 'none';
+        return;
+    }
+
+    // Show the section but check if intervention_enabled is set in the profile
+    section.style.display = '';
+    const profileData = await _getProfileData('teleop', sel.value);
+    const interventionEnabled = profileData?.fields?.intervention_enabled === true;
+    const datasetSel = document.getElementById('run-policy-intervention-dataset');
+    const nameInput = document.getElementById('run-policy-intervention-repo-id');
+    if (datasetSel) {
+        datasetSel.disabled = !interventionEnabled;
+        if (!interventionEnabled) {
+            datasetSel.value = '';
+            _onInterventionDatasetChange();
+        }
+    }
+    if (nameInput) nameInput.disabled = !interventionEnabled;
+    // Show warning when intervention is not enabled
+    const warning = document.getElementById('run-policy-intervention-warning');
+    if (warning) warning.style.display = interventionEnabled ? 'none' : '';
+}
+
+function _interventionDatasetOptions(mainIsExisting) {
+    const ds = window.datasets || {};
+    let html = '<option value="" selected>None</option>';
+    // Intervention resume is tied to the main dataset's resume flag in the CLI,
+    // so existing intervention requires existing main, new intervention requires new main.
+    if (mainIsExisting) {
+        for (const id of Object.keys(ds)) {
+            const d = ds[id];
+            const label = d.repo_id || id;
+            html += `<option value="existing:${_esc(id)}">${_esc(label)} (${d.total_episodes} ep)</option>`;
+        }
+    } else {
+        html += '<option value="__new__">+ New dataset...</option>';
+    }
+    return html;
+}
+
+function _onInterventionDatasetChange() {
+    const sel = document.getElementById('run-policy-intervention-dataset');
+    if (!sel) return;
+    const val = sel.value;
+    const newNameRow = document.getElementById('run-policy-intervention-new-row');
+    if (val === '__new__') {
+        if (newNameRow) newNameRow.style.display = '';
+    } else {
+        if (newNameRow) newNameRow.style.display = 'none';
     }
 }
 
@@ -643,6 +716,14 @@ function refreshRunDatasetSelects() {
     if (policySel) { const prev = policySel.value; policySel.innerHTML = _policyDatasetOptions(); policySel.value = prev; }
     // Refresh task selector (training dataset may have been opened/closed)
     _updatePolicyTaskSelector();
+    // Refresh intervention dataset selector
+    const intSel = document.getElementById('run-policy-intervention-dataset');
+    if (intSel) {
+        const mainVal = document.getElementById('run-policy-dataset')?.value || '__new__';
+        const prev = intSel.value;
+        intSel.innerHTML = _interventionDatasetOptions(mainVal.startsWith('existing:'));
+        intSel.value = prev;
+    }
 }
 
 // ---- Form rendering ----
@@ -741,11 +822,11 @@ function renderRunForm() {
     html += `<select id="run-policy-checkpoint" onchange="_onPolicyCheckpointChange()">${_modelCheckpointOptions()}</select>`;
     // Teleop profile (optional — for manual resets between episodes)
     html += `<label>Teleop</label>`;
-    html += `<div><select id="run-policy-teleop">`;
+    html += `<div><select id="run-policy-teleop" onchange="_onPolicyTeleopChange()">`;
     html += `<option value="">None (policy only)</option>`;
     html += _teleopProfileOptions();
     html += `</select>`;
-    html += `<div class="form-hint">Optional: for manual resets between episodes</div></div>`;
+    html += `<div class="form-hint">For leader inverse following and manual resets between episodes</div></div>`;
     html += `<label>FPS</label>`;
     html += `<input type="number" id="run-policy-fps" value="30" min="1" max="200">`;
     html += '</div>';
@@ -798,6 +879,20 @@ function renderRunForm() {
     html += `<input type="number" id="run-policy-episode-time" value="60" min="1">`;
     html += `<label>Reset Duration</label>`;
     html += `<input type="number" id="run-policy-reset-time" value="60" min="0">`;
+    html += '</div>';
+    html += '</div>';
+    // Intervention dataset (for leader inverse following — human correction fragments)
+    html += '<div class="form-section" id="run-policy-intervention-section" style="display:none;">';
+    html += '<div class="form-section-title">Intervention dataset</div>';
+    html += '<div class="form-hint" style="margin-bottom:8px;">When the human takes over the leader arm during policy evaluation, intervention fragments are saved to a separate dataset.</div>';
+    html += '<div class="form-hint dataset-conflict-warning" id="run-policy-intervention-warning" style="display:none; margin-bottom:8px;">Enable intervention_enabled in the teleop profile to use this feature.</div>';
+    html += '<div class="form-grid">';
+    html += `<label>Dataset</label>`;
+    html += `<select id="run-policy-intervention-dataset" onchange="_onInterventionDatasetChange()">${_interventionDatasetOptions()}</select>`;
+    html += '</div>';
+    html += '<div id="run-policy-intervention-new-row" class="form-grid" style="display:none;">';
+    html += `<label>Name</label>`;
+    html += `<input type="text" id="run-policy-intervention-repo-id" placeholder="e.g. eval/interventions" value="">`;
     html += '</div>';
     html += '</div>';
     html += '</div>'; // end standard fields
@@ -1076,6 +1171,22 @@ async function launchRun() {
                 teleopData = await _getProfileData('teleop', teleopSelect.value);
             }
 
+            // Intervention dataset (for leader inverse following correction data)
+            let interventionRepoId = null;
+            const interventionSel = document.getElementById('run-policy-intervention-dataset');
+            const interventionVal = interventionSel?.value || '';
+            if (interventionVal === '__new__') {
+                interventionRepoId = document.getElementById('run-policy-intervention-repo-id')?.value?.trim() || null;
+                if (!interventionRepoId) {
+                    showToast('Error', 'Enter a name for the intervention dataset', 'error');
+                    return;
+                }
+            } else if (interventionVal.startsWith('existing:')) {
+                const intDsId = interventionVal.replace('existing:', '');
+                const intDs = (window.datasets || {})[intDsId];
+                if (intDs) interventionRepoId = _resolveDatasetRepoId(intDs);
+            }
+
             endpoint = '/api/run/record';
             body = {
                 robot: robotData,
@@ -1089,6 +1200,7 @@ async function launchRun() {
                 reset_time_s: parseFloat(document.getElementById('run-policy-reset-time')?.value) || 60,
                 num_episodes: parseInt(document.getElementById('run-policy-episodes')?.value) || 10,
                 resume: resume,
+                intervention_repo_id: interventionRepoId,
             };
         }
     } else {
