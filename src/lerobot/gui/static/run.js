@@ -93,6 +93,23 @@ function _teleopProfileOptions() {
     ).join('');
 }
 
+// ---- Dataset name resolution ----
+
+/**
+ * Resolve a dataset's correct repo_id by looking up its root path in sourceDatasets.
+ * The source scanner's `name` field is the relative path from the source root (e.g., "thewisp/aaa"),
+ * which is what the CLI expects. Falls back to the dataset's own repo_id if not found in sources.
+ */
+function _resolveDatasetRepoId(dataset) {
+    const sd = window.sourceDatasets || {};
+    for (const datasets of Object.values(sd)) {
+        for (const ds of datasets) {
+            if (ds.root === dataset.root) return ds.name;
+        }
+    }
+    return dataset.repo_id;
+}
+
 // ---- Dataset / episode option helpers ----
 
 function _episodeOptions() {
@@ -610,7 +627,7 @@ async function launchRun() {
                     showToast('Error', 'Selected dataset not found — was it closed?', 'error');
                     return;
                 }
-                repoId = d.repo_id;
+                repoId = _resolveDatasetRepoId(d);
                 root = d.root;
                 resume = true;
 
@@ -675,7 +692,7 @@ async function launchRun() {
         endpoint = '/api/run/replay';
         body = {
             robot: robotData,
-            repo_id: d.repo_id,
+            repo_id: _resolveDatasetRepoId(d),
             root: d.root,
             episode: parseInt(epIdx),
             fps: parseInt(document.getElementById('run-replay-fps')?.value) || 30,
@@ -711,7 +728,7 @@ async function launchRun() {
                 showToast('Error', 'Selected dataset not found — was it closed?', 'error');
                 return;
             }
-            repoId = d.repo_id;
+            repoId = _resolveDatasetRepoId(d);
             root = d.root;
             resume = true;
         }
