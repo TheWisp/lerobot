@@ -39,7 +39,7 @@ from collections.abc import Callable, Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Generic, TypeAlias, TypedDict, TypeVar, cast
+from typing import Any, Generic, TypedDict, TypeVar, cast
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -251,7 +251,7 @@ class ProcessorMigrationError(Exception):
 
 
 @dataclass
-class DataProcessorPipeline(HubMixin, Generic[TInput, TOutput]):
+class DataProcessorPipeline(Generic[TInput, TOutput], HubMixin):
     """A sequential pipeline for processing data, integrated with the Hugging Face Hub.
 
     This class chains together multiple `ProcessorStep` instances to form a complete
@@ -413,7 +413,7 @@ class DataProcessorPipeline(HubMixin, Generic[TInput, TOutput]):
         Args:
             save_directory: The directory where the pipeline will be saved. If None, saves to
                 HF_LEROBOT_HOME/processors/{sanitized_pipeline_name}.
-            repo_id: ID of your repository on the Hub. Used only if `push_to_hub=True`.
+            repo_id: ID of your repository on the Hub. Used only if `push_to_hub=true`.
             push_to_hub: Whether or not to push your object to the Hugging Face Hub after saving it.
             card_kwargs: Additional arguments passed to the card template to customize the card.
             config_filename: The name of the JSON configuration file. If None, a name is
@@ -1432,8 +1432,8 @@ class DataProcessorPipeline(HubMixin, Generic[TInput, TOutput]):
 
 
 # Type aliases for semantic clarity.
-RobotProcessorPipeline: TypeAlias = DataProcessorPipeline[TInput, TOutput]
-PolicyProcessorPipeline: TypeAlias = DataProcessorPipeline[TInput, TOutput]
+RobotProcessorPipeline = DataProcessorPipeline[TInput, TOutput]
+PolicyProcessorPipeline = DataProcessorPipeline[TInput, TOutput]
 
 
 class ObservationProcessorStep(ProcessorStep, ABC):

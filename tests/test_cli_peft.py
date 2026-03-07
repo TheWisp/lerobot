@@ -170,6 +170,9 @@ class DummyRobot:
     def disconnect(self):
         pass
 
+    def get_observation_processor_steps(self) -> list:
+        return []
+
 
 def dummy_make_robot_from_config(*args, **kwargs):
     return DummyRobot()

@@ -19,9 +19,9 @@ from __future__ import annotations
 import importlib
 import logging
 from typing import Any, TypedDict
+from typing_extensions import Unpack
 
 import torch
-from typing_extensions import Unpack
 
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType

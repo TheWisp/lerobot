@@ -220,7 +220,7 @@ def _recompute_episode_stats_from_data(
 
     # Compute stats for non-video features
     non_video_features = {k: v for k, v in features.items() if v["dtype"] not in ["image", "video"]}
-    new_stats = compute_episode_stats(episode_data, non_video_features, skip_images=True)
+    new_stats = compute_episode_stats(episode_data, non_video_features)
 
     # Update the episode parquet file
     episodes_dir = local_dir / "meta" / "episodes"
@@ -272,8 +272,8 @@ def delete_episodes(
     Args:
         dataset: The source LeRobotDataset.
         episode_indices: List of episode indices to delete.
-        output_dir: Directory to save the new dataset. If None, uses default location.
-        repo_id: Repository ID for the new dataset. If None, appends "_modified" to original.
+        output_dir: Root directory where the edited dataset will be stored. If not specified, defaults to $HF_LEROBOT_HOME/repo_id. Equivalent to new_root in EditDatasetConfig.
+        repo_id: Edited dataset identifier. Equivalent to new_repo_id in EditDatasetConfig.
     """
     if not episode_indices:
         raise ValueError("No episodes to delete")
@@ -335,7 +335,7 @@ def split_dataset(
         dataset: The source LeRobotDataset to split.
         splits: Either a dict mapping split names to episode indices, or a dict mapping
                 split names to fractions (must sum to <= 1.0).
-        output_dir: Base directory for output datasets. If None, uses default location.
+        output_dir: Root directory where the split datasets will be stored. If not specified, defaults to $HF_LEROBOT_HOME/repo_id.
 
     Examples:
       Split by specific episodes
@@ -426,8 +426,8 @@ def merge_datasets(
 
     Args:
         datasets: List of LeRobotDatasets to merge.
-        output_repo_id: Repository ID for the merged dataset.
-        output_dir: Directory to save the merged dataset. If None, uses default location.
+        output_repo_id: Merged dataset identifier.
+        output_dir: Root directory where the merged dataset will be stored. If not specified, defaults to $HF_LEROBOT_HOME/output_repo_id.
     """
     if not datasets:
         raise ValueError("No datasets to merge")
@@ -471,8 +471,8 @@ def modify_features(
         dataset: The source LeRobotDataset.
         add_features: Optional dict mapping feature names to (feature_values, feature_info) tuples.
         remove_features: Optional feature name(s) to remove. Can be a single string or list.
-        output_dir: Directory to save the new dataset. If None, uses default location.
-        repo_id: Repository ID for the new dataset. If None, appends "_modified" to original.
+        output_dir: Root directory where the edited dataset will be stored. If not specified, defaults to $HF_LEROBOT_HOME/repo_id. Equivalent to new_root in EditDatasetConfig.
+        repo_id: Edited dataset identifier. Equivalent to new_repo_id in EditDatasetConfig.
 
     Returns:
         New dataset with features modified.
@@ -573,8 +573,8 @@ def add_features(
     Args:
         dataset: The source LeRobotDataset.
         features: Dictionary mapping feature names to (feature_values, feature_info) tuples.
-        output_dir: Directory to save the new dataset. If None, uses default location.
-        repo_id: Repository ID for the new dataset. If None, appends "_modified" to original.
+        output_dir: Root directory where the edited dataset will be stored. If not specified, defaults to $HF_LEROBOT_HOME/repo_id. Equivalent to new_root in EditDatasetConfig.
+        repo_id: Edited dataset identifier. Equivalent to new_repo_id in EditDatasetConfig.
 
     Returns:
         New dataset with all features added.
@@ -610,8 +610,8 @@ def remove_feature(
     Args:
         dataset: The source LeRobotDataset.
         feature_names: Name(s) of features to remove. Can be a single string or list.
-        output_dir: Directory to save the new dataset. If None, uses default location.
-        repo_id: Repository ID for the new dataset. If None, appends "_modified" to original.
+        output_dir: Root directory where the edited dataset will be stored. If not specified, defaults to $HF_LEROBOT_HOME/repo_id. Equivalent to new_root in EditDatasetConfig.
+        repo_id: Edited dataset identifier. Equivalent to new_repo_id in EditDatasetConfig.
 
     Returns:
         New dataset with features removed.
@@ -899,20 +899,22 @@ def _copy_and_reindex_data(
 def _keep_episodes_from_video_with_av(
     input_path: Path,
     output_path: Path,
-    episodes_to_keep: list[tuple[float, float]],
+    episodes_to_keep: list[tuple[int, int]],
     fps: float,
     vcodec: str = "libsvtav1",
     pix_fmt: str = "yuv420p",
 ) -> None:
     """Keep only specified episodes from a video file using PyAV.
 
-    This function decodes frames from specified time ranges and re-encodes them with
+    This function decodes frames from specified frame ranges and re-encodes them with
     properly reset timestamps to ensure monotonic progression.
 
     Args:
         input_path: Source video file path.
         output_path: Destination video file path.
-        episodes_to_keep: List of (start_time, end_time) tuples for episodes to keep.
+        episodes_to_keep: List of (start_frame, end_frame) tuples for episodes to keep.
+            Ranges are half-open intervals: [start_frame, end_frame), where start_frame
+            is inclusive and end_frame is exclusive.
         fps: Frame rate of the video.
         vcodec: Video codec to use for encoding.
         pix_fmt: Pixel format for output video.
@@ -940,10 +942,7 @@ def _keep_episodes_from_video_with_av(
 
     # Convert fps to Fraction for PyAV compatibility.
     fps_fraction = Fraction(fps).limit_denominator(1000)
-
-    # Use fast preset for SVT-AV1 to minimize re-encoding time
-    encoder_options = {"preset": "12"} if vcodec == "libsvtav1" else {}
-    v_out = out.add_stream(vcodec, rate=fps_fraction, options=encoder_options)
+    v_out = out.add_stream(vcodec, rate=fps_fraction)
 
     # PyAV type stubs don't distinguish video streams from audio/subtitle streams.
     v_out.width = v_in.codec_context.width
@@ -957,17 +956,12 @@ def _keep_episodes_from_video_with_av(
 
     # Create set of (start, end) ranges for fast lookup.
     # Convert to a sorted list for efficient checking.
-    time_ranges = sorted(episodes_to_keep)
+    frame_ranges = sorted(episodes_to_keep)
 
     # Track frame index for setting PTS and current range being processed.
+    src_frame_count = 0
     frame_count = 0
     range_idx = 0
-
-    # Epsilon for floating-point timestamp comparisons.
-    # This accounts for precision differences between calculating timestamps as
-    # frame_idx/fps vs. arithmetic on episode timestamps (e.g., 40/30 != 50/30 - 10/30).
-    # Use half a frame duration to avoid off-by-one errors.
-    eps = 0.5 / fps
 
     # Read through entire video once and filter frames.
     for packet in in_container.demux(v_in):
@@ -975,22 +969,20 @@ def _keep_episodes_from_video_with_av(
             if frame is None:
                 continue
 
-            # Get frame timestamp.
-            frame_time = float(frame.pts * frame.time_base) if frame.pts is not None else 0.0
-
-            # Check if frame is in any of our desired time ranges.
+            # Check if frame is in any of our desired frame ranges.
             # Skip ranges that have already passed.
-            # Use epsilon to handle floating-point precision issues.
-            while range_idx < len(time_ranges) and frame_time >= time_ranges[range_idx][1] - eps:
+            while range_idx < len(frame_ranges) and src_frame_count >= frame_ranges[range_idx][1]:
                 range_idx += 1
 
             # If we've passed all ranges, stop processing.
-            if range_idx >= len(time_ranges):
+            if range_idx >= len(frame_ranges):
                 break
 
             # Check if frame is in current range.
-            start_ts, end_ts = time_ranges[range_idx]
-            if frame_time < start_ts - eps:
+            start_frame = frame_ranges[range_idx][0]
+
+            if src_frame_count < start_frame:
+                src_frame_count += 1
                 continue
 
             # Frame is in range - create a new frame with reset timestamps.
@@ -1003,9 +995,107 @@ def _keep_episodes_from_video_with_av(
             for pkt in v_out.encode(new_frame):
                 out.mux(pkt)
 
+            src_frame_count += 1
             frame_count += 1
 
     # Flush encoder.
+    for pkt in v_out.encode():
+        out.mux(pkt)
+
+    out.close()
+    in_container.close()
+
+
+# TODO: Consolidate with _keep_episodes_from_video_with_av (frame-based) once
+# our time-based trim callers are migrated to frame indices.
+def _keep_episodes_from_video_by_time(
+    input_path: Path,
+    output_path: Path,
+    episodes_to_keep: list[tuple[float, float]],
+    fps: float,
+    vcodec: str = "libsvtav1",
+    pix_fmt: str = "yuv420p",
+) -> None:
+    """Keep only specified episodes from a video file using PyAV (time-based).
+
+    Like _keep_episodes_from_video_with_av but uses timestamp ranges instead of
+    frame index ranges. Used by trim_episode and related GUI editing functions.
+
+    Args:
+        input_path: Source video file path.
+        output_path: Destination video file path.
+        episodes_to_keep: List of (start_time, end_time) tuples in seconds.
+        fps: Frame rate of the video.
+        vcodec: Video codec to use for encoding.
+        pix_fmt: Pixel format for output video.
+    """
+    from fractions import Fraction
+
+    import av
+
+    if not episodes_to_keep:
+        raise ValueError("No episodes to keep")
+
+    in_container = av.open(str(input_path))
+
+    if not in_container.streams.video:
+        raise ValueError(
+            f"No video streams found in {input_path}. "
+            "The video file may be corrupted or empty. "
+            "Try re-downloading the dataset or checking the video file."
+        )
+
+    v_in = in_container.streams.video[0]
+
+    out = av.open(str(output_path), mode="w")
+
+    fps_fraction = Fraction(fps).limit_denominator(1000)
+
+    encoder_options = {"preset": "12"} if vcodec == "libsvtav1" else {}
+    v_out = out.add_stream(vcodec, rate=fps_fraction, options=encoder_options)
+
+    v_out.width = v_in.codec_context.width
+    v_out.height = v_in.codec_context.height
+    v_out.pix_fmt = pix_fmt
+
+    v_out.time_base = Fraction(1, int(fps))
+
+    out.start_encoding()
+
+    time_ranges = sorted(episodes_to_keep)
+
+    frame_count = 0
+    range_idx = 0
+
+    # Half a frame duration epsilon for floating-point timestamp comparisons.
+    eps = 0.5 / fps
+
+    for packet in in_container.demux(v_in):
+        for frame in packet.decode():
+            if frame is None:
+                continue
+
+            frame_time = float(frame.pts * frame.time_base) if frame.pts is not None else 0.0
+
+            while range_idx < len(time_ranges) and frame_time >= time_ranges[range_idx][1] - eps:
+                range_idx += 1
+
+            if range_idx >= len(time_ranges):
+                break
+
+            start_ts, end_ts = time_ranges[range_idx]
+            if frame_time < start_ts - eps:
+                continue
+
+            new_frame = frame.reformat(width=v_out.width, height=v_out.height, format=v_out.pix_fmt)
+            new_frame.pts = frame_count
+            new_frame.time_base = Fraction(1, int(fps))
+
+            for pkt in v_out.encode(new_frame):
+                out.mux(pkt)
+
+            frame_count += 1
+
     for pkt in v_out.encode():
         out.mux(pkt)
 
@@ -1091,15 +1181,17 @@ def _copy_and_reindex_videos(
                         f"videos/{video_key}/to_timestamp"
                     ]
             else:
-                # Build list of time ranges to keep, in sorted order.
+                # Build list of frame ranges to keep, in sorted order.
                 sorted_keep_episodes = sorted(episodes_in_file, key=lambda x: episode_mapping[x])
-                episodes_to_keep_ranges: list[tuple[float, float]] = []
-
+                episodes_to_keep_ranges: list[tuple[int, int]] = []
                 for old_idx in sorted_keep_episodes:
                     src_ep = src_dataset.meta.episodes[old_idx]
-                    from_ts = src_ep[f"videos/{video_key}/from_timestamp"]
-                    to_ts = src_ep[f"videos/{video_key}/to_timestamp"]
-                    episodes_to_keep_ranges.append((from_ts, to_ts))
+                    from_frame = round(src_ep[f"videos/{video_key}/from_timestamp"] * src_dataset.meta.fps)
+                    to_frame = round(src_ep[f"videos/{video_key}/to_timestamp"] * src_dataset.meta.fps)
+                    assert src_ep["length"] == to_frame - from_frame, (
+                        f"Episode length mismatch: {src_ep['length']} vs {to_frame - from_frame}"
+                    )
+                    episodes_to_keep_ranges.append((from_frame, to_frame))
 
                 # Use PyAV filters to efficiently re-encode only the desired segments.
                 assert src_dataset.meta.video_path is not None
@@ -1869,7 +1961,9 @@ def modify_tasks(
 
     # Collect all unique tasks and create new task mapping
     unique_tasks = sorted(set(episode_to_task.values()))
-    new_task_df = pd.DataFrame({"task_index": list(range(len(unique_tasks)))}, index=unique_tasks)
+    new_task_df = pd.DataFrame(
+        {"task_index": list(range(len(unique_tasks)))}, index=pd.Index(unique_tasks, name="task")
+    )
     task_to_index = {task: idx for idx, task in enumerate(unique_tasks)}
 
     logging.info(f"Modifying tasks in {dataset.repo_id}")
@@ -2251,7 +2345,7 @@ def _trim_episode_videos(
             tmp_path = Path(tmp_file.name)
 
         try:
-            _keep_episodes_from_video_with_av(
+            _keep_episodes_from_video_by_time(
                 input_path=video_path,
                 output_path=tmp_path,
                 episodes_to_keep=time_ranges,
@@ -2770,7 +2864,7 @@ def _delete_episodes_metadata_virtual(
 
 def convert_image_to_video_dataset(
     dataset: LeRobotDataset,
-    output_dir: Path,
+    output_dir: Path | None = None,
     repo_id: str | None = None,
     vcodec: str = "libsvtav1",
     pix_fmt: str = "yuv420p",
@@ -2789,8 +2883,8 @@ def convert_image_to_video_dataset(
 
     Args:
         dataset: The source LeRobot dataset with images
-        output_dir: Directory to save the new video dataset
-        repo_id: Repository ID for the new dataset (default: original_id + "_video")
+        output_dir: Root directory where the edited dataset will be stored. If not specified, defaults to $HF_LEROBOT_HOME/repo_id. Equivalent to new_root in EditDatasetConfig.
+        repo_id: Edited dataset identifier. Equivalent to new_repo_id in EditDatasetConfig.
         vcodec: Video codec (default: libsvtav1)
         pix_fmt: Pixel format (default: yuv420p)
         g: Group of pictures size (default: 2)
@@ -2841,6 +2935,7 @@ def convert_image_to_video_dataset(
             # Video info will be updated after episodes are encoded
 
     # Create new metadata for video dataset
+    output_dir = Path(output_dir) if output_dir is not None else HF_LEROBOT_HOME / repo_id
     new_meta = LeRobotDatasetMetadata.create(
         repo_id=repo_id,
         fps=dataset.meta.fps,

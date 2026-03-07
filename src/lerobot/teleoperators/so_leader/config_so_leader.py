@@ -15,7 +15,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import TypeAlias
 
 from ..config import TeleoperatorConfig
 
@@ -28,7 +27,7 @@ class SOLeaderConfig:
     port: str
 
     # Whether to use degrees for angles
-    use_degrees: bool = False
+    use_degrees: bool = True
 
 
 @TeleoperatorConfig.register_subclass("so101_leader")
@@ -47,5 +46,5 @@ class SO107LeaderConfig(TeleoperatorConfig, SOLeaderConfig):
     gripper_bounce: bool = False
 
 
-SO100LeaderConfig: TypeAlias = SOLeaderTeleopConfig
-SO101LeaderConfig: TypeAlias = SOLeaderTeleopConfig
+SO100LeaderConfig = SOLeaderTeleopConfig
+SO101LeaderConfig = SOLeaderTeleopConfig
