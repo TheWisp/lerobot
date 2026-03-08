@@ -94,6 +94,36 @@ async def get_rerun_ports() -> dict:
 # ============================================================================
 
 
+def _get_known_fields(profile_type: str, prefix: str) -> set[str] | None:
+    """Return the set of valid field names for a config type, or None if unknown.
+
+    Imports all robot/teleoperator modules to ensure config subclasses are registered.
+    """
+    import dataclasses
+    import importlib
+    import pkgutil
+
+    import lerobot.robots
+    import lerobot.teleoperators
+    from lerobot.robots.config import RobotConfig
+    from lerobot.teleoperators.config import TeleoperatorConfig
+
+    # Trigger registration of all config subclasses
+    pkg = lerobot.robots if prefix == "robot" else lerobot.teleoperators
+    for _importer, modname, _ispkg in pkgutil.walk_packages(pkg.__path__, prefix=pkg.__name__ + "."):
+        try:
+            importlib.import_module(modname)
+        except Exception:
+            pass
+
+    base_cls = RobotConfig if prefix == "robot" else TeleoperatorConfig
+    choices = base_cls.get_known_choices()
+    config_cls = choices.get(profile_type)
+    if config_cls is None:
+        return None
+    return {f.name for f in dataclasses.fields(config_cls)}
+
+
 def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bool = True) -> list[str]:
     """Convert a profile data dict to draccus CLI arguments.
 
@@ -107,9 +137,16 @@ def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bo
         List of CLI arg strings like ["--robot.type=bi_so107_follower", ...].
     """
     args = [f"--{prefix}.type={profile_data['type']}"]
+    known_fields = _get_known_fields(profile_data["type"], prefix)
 
     for key, value in profile_data.get("fields", {}).items():
         if value is None:
+            continue
+        if known_fields is not None and key not in known_fields:
+            logger.warning(
+                f"Ignoring unknown {prefix} field '{key}' (not in {profile_data['type']} config). "
+                f"It may belong to a different branch or have been removed."
+            )
             continue
         if isinstance(value, bool):
             args.append(f"--{prefix}.{key}={str(value).lower()}")

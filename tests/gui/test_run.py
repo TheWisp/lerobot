@@ -99,20 +99,33 @@ class TestProfileToCliArgs:
         profile = {
             "type": "bi_so107_follower",
             "fields": {
-                "port": "/dev/ttyACM0",
-                "baudrate": 1000000,
-                "gripper_bounce": True,
+                "left_arm_port": "/dev/ttyACM0",
+                "right_arm_port": "/dev/ttyACM1",
+                "left_arm_disable_torque_on_disconnect": True,
                 "unused": None,
             },
             "cameras": {"cam_0": {"type": "opencv", "index": 0}},
         }
         args = _profile_to_cli_args(profile, "robot")
         assert "--robot.type=bi_so107_follower" in args
-        assert "--robot.port=/dev/ttyACM0" in args
-        assert "--robot.baudrate=1000000" in args
-        assert "--robot.gripper_bounce=true" in args
+        assert "--robot.left_arm_port=/dev/ttyACM0" in args
+        assert "--robot.right_arm_port=/dev/ttyACM1" in args
+        assert "--robot.left_arm_disable_torque_on_disconnect=true" in args
         assert not any("unused" in a for a in args)
         assert any("cameras" in a for a in args)
+
+    def test_unknown_fields_filtered_with_warning(self):
+        """Fields not in the config class are silently skipped."""
+        profile = {
+            "type": "bi_so107_follower",
+            "fields": {
+                "left_arm_port": "/dev/ttyACM0",
+                "this_field_will_never_exist_xyz": True,
+            },
+        }
+        args = _profile_to_cli_args(profile, "robot")
+        assert "--robot.left_arm_port=/dev/ttyACM0" in args
+        assert not any("this_field_will_never_exist_xyz" in a for a in args)
 
     def test_include_cameras_false(self):
         cameras = {"cam_0": {"type": "opencv", "index": 0}}
@@ -189,11 +202,11 @@ class TestEnsureNoActiveProcess:
 # ============================================================================
 
 _ROBOT = {
-    "type": "bi_so107_follower",
+    "type": "so107_follower",
     "fields": {"port": "/dev/ttyACM0"},
     "cameras": {"cam_0": {"type": "opencv", "index_or_path": "/dev/video0"}},
 }
-_TELEOP = {"type": "so_leader", "fields": {"port": "/dev/ttyACM1"}}
+_TELEOP = {"type": "so107_leader", "fields": {"port": "/dev/ttyACM1"}}
 
 
 def _make_fake_launch(captured_args):
@@ -228,9 +241,9 @@ class TestTeleoperateEndpoint:
         asyncio.run(run())
 
         assert captured_args[0] == "lerobot-teleoperate"
-        assert "--robot.type=bi_so107_follower" in captured_args
+        assert "--robot.type=so107_follower" in captured_args
         assert "--robot.port=/dev/ttyACM0" in captured_args
-        assert "--teleop.type=so_leader" in captured_args
+        assert "--teleop.type=so107_leader" in captured_args
         assert "--teleop.port=/dev/ttyACM1" in captured_args
         assert "--fps=45" in captured_args
 
@@ -282,8 +295,8 @@ class TestRecordEndpoint:
         asyncio.run(run())
 
         assert captured_args[0] == "lerobot-record"
-        assert "--robot.type=bi_so107_follower" in captured_args
-        assert "--teleop.type=so_leader" in captured_args
+        assert "--robot.type=so107_follower" in captured_args
+        assert "--teleop.type=so107_leader" in captured_args
         assert "--dataset.repo_id=user/my_dataset" in captured_args
         assert "--dataset.single_task=pick up the cube" in captured_args
         assert "--dataset.fps=30" in captured_args
@@ -388,7 +401,7 @@ class TestRecordEndpoint:
         asyncio.run(run())
 
         assert "--policy.path=/home/user/outputs/act/checkpoints/last/pretrained_model" in captured_args
-        assert "--teleop.type=so_leader" in captured_args
+        assert "--teleop.type=so107_leader" in captured_args
 
     def test_record_policy_only_no_teleop(self):
         captured_args = []
@@ -500,7 +513,7 @@ class TestReplayEndpoint:
         asyncio.run(run())
 
         assert captured_args[0] == "lerobot-replay"
-        assert "--robot.type=bi_so107_follower" in captured_args
+        assert "--robot.type=so107_follower" in captured_args
         assert "--robot.port=/dev/ttyACM0" in captured_args
         assert "--dataset.repo_id=user/my_dataset" in captured_args
         assert "--dataset.episode=5" in captured_args
