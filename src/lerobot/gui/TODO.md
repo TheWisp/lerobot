@@ -34,6 +34,10 @@
 - [Mid] Consolidate `_keep_episodes_from_video_by_time` (time-based) with `_keep_episodes_from_video_with_av` (frame-based, upstream) in `dataset_tools.py`. Migrate trim callers to frame indices so only one video filtering function is needed.
 - [Mid] Consolidate streaming video encoders: our `video_encoder.py` (`OurStreamingVideoEncoder`, per-camera, unbounded queue, reservoir stats) vs upstream's `video_utils.py` (`StreamingVideoEncoder`, multi-camera manager, bounded queue, HW encoder support). Currently both coexist in `lerobot_dataset.py`. Upstream's is more mature (HW encoders, frame dropping). Consider migrating to upstream's and removing `video_encoder.py`.
 
+## Hardware
+
+- [Low] Use stable Linux device paths (`/dev/serial/by-id/`, `/dev/v4l/by-id/`, `/dev/v4l/by-path/`) instead of volatile `/dev/ttyACM*` and `/dev/video*` in robot/teleop/camera profiles. Benefits: configs survive reboots and USB re-plugging. The GUI Robot tab could auto-detect `by-id` paths and offer them in port selection. For identical cameras (no unique serial), fall back to `by-path` (stable per USB port).
+
 ## Python 3.12+ Compatibility
 
 - [Mid] Remove Python < 3.12 workarounds once we drop 3.10/3.11 support. Upstream lerobot now requires 3.12+. Our fork pins 3.10 compatibility via these changes:
