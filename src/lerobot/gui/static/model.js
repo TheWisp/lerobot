@@ -442,6 +442,17 @@ function _prefillPolicyFields(runPath) {
             const runName = m.name.split('/').pop() || 'policy';
             repoInput.value = `eval/eval_${runName}`;
         }
+        // Auto-fill task from the model's training dataset if it's opened
+        if (m.dataset && typeof _findDatasetByRepoId === 'function') {
+            const dsId = _findDatasetByRepoId(m.dataset);
+            if (dsId && typeof _getDatasetTasks === 'function') {
+                const tasks = _getDatasetTasks(dsId);
+                const taskInput = document.getElementById('run-policy-task');
+                if (taskInput && tasks.length) {
+                    taskInput.value = tasks[0];
+                }
+            }
+        }
         break;
     }
 }

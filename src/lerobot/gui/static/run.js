@@ -162,6 +162,42 @@ function _getDatasetTasks(dsId) {
     return tasks;
 }
 
+function _getAllKnownTasks() {
+    // Collect unique tasks from all opened datasets for auto-complete suggestions
+    const allEpisodes = window.episodes || {};
+    const seen = new Set();
+    const tasks = [];
+    for (const epList of Object.values(allEpisodes)) {
+        for (const e of epList) {
+            if (e.task && !seen.has(e.task)) {
+                seen.add(e.task);
+                tasks.push(e.task);
+            }
+        }
+    }
+    return tasks;
+}
+
+function _updatePolicyTaskDatalist() {
+    const datalist = document.getElementById('run-policy-task-suggestions');
+    if (!datalist) return;
+    const tasks = _getAllKnownTasks();
+    datalist.innerHTML = tasks.map(t => `<option value="${_esc(t)}">`).join('');
+}
+
+function _findDatasetByRepoId(repoId) {
+    // Find an opened dataset matching a repo_id (e.g. from train_config)
+    if (!repoId) return null;
+    const ds = window.datasets || {};
+    for (const id of Object.keys(ds)) {
+        const d = ds[id];
+        if (d.repo_id === repoId || d.repo_id?.endsWith('/' + repoId)) {
+            return id;
+        }
+    }
+    return null;
+}
+
 function _updateTaskSelect(dsId) {
     const sel = document.getElementById('run-teleop-task-select');
     const customInput = document.getElementById('run-teleop-task-custom');
@@ -404,6 +440,8 @@ function refreshRunDatasetSelects() {
     // Refresh policy dataset selector
     const policySel = document.getElementById('run-policy-dataset');
     if (policySel) { const prev = policySel.value; policySel.innerHTML = _policyDatasetOptions(); policySel.value = prev; }
+    // Refresh task auto-complete suggestions
+    _updatePolicyTaskDatalist();
 }
 
 // ---- Form rendering ----
@@ -500,7 +538,8 @@ function renderRunForm() {
     html += `</div>`;
     html += `<div class="form-grid">`;
     html += `<label>Task</label>`;
-    html += `<input type="text" id="run-policy-task" placeholder="Describe the task" value="">`;
+    html += `<input type="text" id="run-policy-task" list="run-policy-task-suggestions" placeholder="Describe the task" value="">`;
+    html += `<datalist id="run-policy-task-suggestions"></datalist>`;
     html += `<label>Episodes</label>`;
     html += `<input type="number" id="run-policy-episodes" value="10" min="1">`;
     html += `<label>Episode Duration</label>`;
@@ -512,6 +551,9 @@ function renderRunForm() {
     html += '</div>'; // end policy section
 
     form.innerHTML = html;
+
+    // Populate task auto-complete suggestions from all opened datasets
+    _updatePolicyTaskDatalist();
 }
 
 // ============================================================================

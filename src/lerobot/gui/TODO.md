@@ -3,7 +3,7 @@
 ## Run Tab
 
 - [Done] ~~Form state (FPS, profiles, episode count, etc.) lost when switching workflow tabs (e.g. teleop → policy → teleop)~~
-- [High] Policy workflow task field has no auto-fill — user must manually type every time. Task info isn't stored in train_config.json and can't be reliably derived from run/dataset names
+- [Done] ~~Policy workflow task field has no auto-fill — now auto-fills from the model's training dataset when selecting a checkpoint (if that dataset is opened), and provides auto-complete suggestions from all opened datasets via datalist~~
 - [Done] ~~Policy workflow "Record evaluation" only supports typing a new dataset name — now has dropdown to choose existing opened datasets (with resume) or create new~~
 - [Low] Text output freezes after a while — teleoperate uses ANSI cursor-up in piped stdout
 - [Low] Rerun web viewer has ~200ms visual lag (Rerun 0.26 limitation)
