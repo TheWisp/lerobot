@@ -22,7 +22,6 @@ Usage:
 
 import argparse
 import asyncio
-import base64
 import json
 import logging
 import signal
@@ -86,16 +85,14 @@ def build_request(robot_obs: dict, task: str) -> dict:
     # Extract 14-dim state vector in correct joint order
     state = [float(robot_obs[name]) for name in JOINT_NAMES]
 
-    # Extract camera images as base64-encoded raw bytes (much smaller than nested JSON lists)
+    # Write images to /dev/shm (RAM-backed tmpfs) and send paths — zero serialization cost on localhost
     images = {}
     for key in IMAGE_KEYS:
         if key in robot_obs:
             img = np.asarray(robot_obs[key], dtype=np.uint8)
-            images[key] = {
-                "base64": base64.b64encode(img.tobytes()).decode("ascii"),
-                "shape": list(img.shape),
-                "dtype": "uint8",
-            }
+            shm_path = f"/dev/shm/openpi_{key}.npy"
+            np.save(shm_path, img)
+            images[key] = {"shm_path": shm_path}
 
     return {
         "images": images,
