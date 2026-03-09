@@ -162,29 +162,6 @@ function _getDatasetTasks(dsId) {
     return tasks;
 }
 
-function _getAllKnownTasks() {
-    // Collect unique tasks from all opened datasets for auto-complete suggestions
-    const allEpisodes = window.episodes || {};
-    const seen = new Set();
-    const tasks = [];
-    for (const epList of Object.values(allEpisodes)) {
-        for (const e of epList) {
-            if (e.task && !seen.has(e.task)) {
-                seen.add(e.task);
-                tasks.push(e.task);
-            }
-        }
-    }
-    return tasks;
-}
-
-function _updatePolicyTaskDatalist() {
-    const datalist = document.getElementById('run-policy-task-suggestions');
-    if (!datalist) return;
-    const tasks = _getAllKnownTasks();
-    datalist.innerHTML = tasks.map(t => `<option value="${_esc(t)}">`).join('');
-}
-
 function _findDatasetByRepoId(repoId) {
     // Find an opened dataset matching a repo_id (e.g. from train_config)
     if (!repoId) return null;
@@ -196,6 +173,73 @@ function _findDatasetByRepoId(repoId) {
         }
     }
     return null;
+}
+
+// Track the currently selected model's training dataset info
+let _policyTrainingDataset = null;  // { repo_id, root }
+
+function _updatePolicyTaskSelector() {
+    const container = document.getElementById('run-policy-task-container');
+    if (!container) return;
+
+    const info = _policyTrainingDataset;
+    if (!info || !info.repo_id) {
+        // No model selected or no training dataset — plain text input
+        container.innerHTML = `<input type="text" id="run-policy-task" placeholder="Select a checkpoint first" value="">`;
+        return;
+    }
+
+    const dsId = _findDatasetByRepoId(info.repo_id);
+    if (!dsId) {
+        // Training dataset not opened — show prompt to open it
+        const displayName = info.repo_id.length > 40 ? '...' + info.repo_id.slice(-37) : info.repo_id;
+        container.innerHTML =
+            `<div class="policy-task-open-prompt">` +
+            `<span class="form-hint">Training dataset not opened</span>` +
+            `<button class="btn-tiny btn-accent" onclick="_openTrainingDataset()">Open ${_esc(displayName)}</button>` +
+            `</div>` +
+            `<input type="text" id="run-policy-task" placeholder="Or type task manually" value="">`;
+        return;
+    }
+
+    // Training dataset is opened — show task dropdown + custom option
+    const tasks = _getDatasetTasks(dsId);
+    let html = '<select id="run-policy-task-select" onchange="_onPolicyTaskSelectChange()">';
+    if (tasks.length) {
+        for (const t of tasks) {
+            html += `<option value="${_esc(t)}">${_esc(t)}</option>`;
+        }
+        html += '<option value="__new_task__">+ New task...</option>';
+    } else {
+        html += '<option value="__new_task__" selected>+ New task...</option>';
+    }
+    html += '</select>';
+    html += `<input type="text" id="run-policy-task-custom" placeholder="Describe the task" style="${tasks.length ? 'display:none' : ''}" value="">`;
+    container.innerHTML = html;
+}
+
+function _onPolicyTaskSelectChange() {
+    const sel = document.getElementById('run-policy-task-select');
+    const customInput = document.getElementById('run-policy-task-custom');
+    if (!sel || !customInput) return;
+    if (sel.value === '__new_task__') {
+        customInput.style.display = '';
+        customInput.focus();
+    } else {
+        customInput.style.display = 'none';
+    }
+}
+
+async function _openTrainingDataset() {
+    const info = _policyTrainingDataset;
+    if (!info) return;
+    // Open by root path if available, otherwise by repo_id
+    const openPath = info.root || info.repo_id;
+    if (typeof openDataset === 'function') {
+        await openDataset(openPath);
+        // After opening, refresh the task selector
+        _updatePolicyTaskSelector();
+    }
 }
 
 function _updateTaskSelect(dsId) {
@@ -327,18 +371,12 @@ function _onPolicyDatasetChange() {
         if (newNameRow) newNameRow.style.display = '';
     } else {
         if (newNameRow) newNameRow.style.display = 'none';
-        // Pre-fill FPS and task from existing dataset
+        // Pre-fill FPS from existing dataset
         const dsId = val.replace('existing:', '');
         const d = (window.datasets || {})[dsId];
         if (d) {
             const fpsInput = document.getElementById('run-policy-fps');
             if (fpsInput) fpsInput.value = d.fps;
-        }
-        // Pre-fill task from existing episodes
-        const tasks = _getDatasetTasks(dsId);
-        const taskInput = document.getElementById('run-policy-task');
-        if (taskInput && tasks.length && !taskInput.value) {
-            taskInput.value = tasks[0];
         }
     }
 }
@@ -440,8 +478,8 @@ function refreshRunDatasetSelects() {
     // Refresh policy dataset selector
     const policySel = document.getElementById('run-policy-dataset');
     if (policySel) { const prev = policySel.value; policySel.innerHTML = _policyDatasetOptions(); policySel.value = prev; }
-    // Refresh task auto-complete suggestions
-    _updatePolicyTaskDatalist();
+    // Refresh task selector (training dataset may have been opened/closed)
+    _updatePolicyTaskSelector();
 }
 
 // ---- Form rendering ----
@@ -538,8 +576,7 @@ function renderRunForm() {
     html += `</div>`;
     html += `<div class="form-grid">`;
     html += `<label>Task</label>`;
-    html += `<input type="text" id="run-policy-task" list="run-policy-task-suggestions" placeholder="Describe the task" value="">`;
-    html += `<datalist id="run-policy-task-suggestions"></datalist>`;
+    html += `<div id="run-policy-task-container"><input type="text" id="run-policy-task" placeholder="Select a checkpoint first" value=""></div>`;
     html += `<label>Episodes</label>`;
     html += `<input type="number" id="run-policy-episodes" value="10" min="1">`;
     html += `<label>Episode Duration</label>`;
@@ -551,9 +588,6 @@ function renderRunForm() {
     html += '</div>'; // end policy section
 
     form.innerHTML = html;
-
-    // Populate task auto-complete suggestions from all opened datasets
-    _updatePolicyTaskDatalist();
 }
 
 // ============================================================================
@@ -746,7 +780,18 @@ async function launchRun() {
             return;
         }
 
-        const task = document.getElementById('run-policy-task')?.value?.trim();
+        // Get task from dropdown or custom input
+        const taskSel = document.getElementById('run-policy-task-select');
+        const taskCustom = document.getElementById('run-policy-task-custom');
+        const taskPlain = document.getElementById('run-policy-task');
+        let task;
+        if (taskSel) {
+            task = (taskSel.value === '__new_task__')
+                ? taskCustom?.value?.trim()
+                : taskSel.value?.trim();
+        } else {
+            task = taskPlain?.value?.trim();
+        }
         if (!task) {
             showToast('Error', 'Task description is required', 'error');
             return;

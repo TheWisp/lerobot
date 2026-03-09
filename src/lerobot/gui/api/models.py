@@ -161,6 +161,7 @@ def _scan_training_run(run_dir: Path) -> dict | None:
         "path": str(run_dir),
         "policy_type": latest["policy_type"],
         "dataset": train_config.get("dataset", {}).get("repo_id", "") if train_config else "",
+        "dataset_root": train_config.get("dataset", {}).get("root") if train_config else None,
         "current_step": latest.get("step"),
         "total_steps": train_config.get("steps") if train_config else None,
         "batch_size": train_config.get("batch_size") if train_config else None,

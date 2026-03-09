@@ -3,7 +3,7 @@
 ## Run Tab
 
 - [Done] ~~Form state (FPS, profiles, episode count, etc.) lost when switching workflow tabs (e.g. teleop → policy → teleop)~~
-- [Done] ~~Policy workflow task field has no auto-fill — now auto-fills from the model's training dataset when selecting a checkpoint (if that dataset is opened), and provides auto-complete suggestions from all opened datasets via datalist~~
+- [Done] ~~Policy workflow task field has no auto-fill — now shows a dropdown of tasks from the model's training dataset (if opened), with an "Open Dataset" button shortcut if not opened, plus a "+ New task" custom entry option~~
 - [Done] ~~Policy workflow "Record evaluation" only supports typing a new dataset name — now has dropdown to choose existing opened datasets (with resume) or create new~~
 - [Low] Text output freezes after a while — teleoperate uses ANSI cursor-up in piped stdout
 - [Low] Rerun web viewer has ~200ms visual lag (Rerun 0.26 limitation)
@@ -13,6 +13,10 @@
 ## Architecture
 
 - [Mid] Cross-tab data synchronization is fragile and not scalable — current approach (refreshRunProfileSelects, refreshRunDatasetSelects, refreshExpandedSources, refreshOpenedDatasets) hardcodes specific refresh calls between tabs. Any data source update should notify all dependent UI components efficiently, e.g. via a pub/sub event bus, rather than point-to-point wiring
+
+## UX
+
+- [Mid] Cross-reference navigation: when a field displays a dataset, model, or robot profile reference (e.g. "thewisp/pickup_socket_merged_head"), provide a clickable link/button to jump to that entity in its tab. Should be a generic utility (e.g. a reusable component or helper function) rather than one-off per instance. Applies to: model detail → training dataset, run form → selected dataset, config views → dataset repo_id, etc.
 
 ## Robot Tab
 
