@@ -728,14 +728,21 @@ function hideContextMenu() {
 
 document.addEventListener('click', hideContextMenu);
 
-// Folder context menu (source folders + datasets)
+// Folder context menu (source folders + datasets + model runs)
 let _folderContextPath = null;
+let _folderContextIsModelRun = false;
 
-function showFolderContextMenu(e, path) {
+function showFolderContextMenu(e, path, isModelRun) {
     e.preventDefault();
     e.stopPropagation();
     _folderContextPath = path;
+    _folderContextIsModelRun = !!isModelRun;
     const menu = document.getElementById('folder-context-menu');
+    // Show/hide model-run-specific items
+    const testItem = document.getElementById('folder-ctx-test-on-robot');
+    const testSep = document.getElementById('folder-ctx-test-separator');
+    if (testItem) testItem.style.display = _folderContextIsModelRun ? '' : 'none';
+    if (testSep) testSep.style.display = _folderContextIsModelRun ? '' : 'none';
     menu.style.left = e.clientX + 'px';
     menu.style.top = e.clientY + 'px';
     menu.classList.add('visible');
@@ -744,12 +751,15 @@ function showFolderContextMenu(e, path) {
 function folderContextAction(action) {
     if (!_folderContextPath) return;
     if (action === 'open-in-files') {
-        // Use whichever open-in-files endpoint is available (both do the same thing)
         fetch('/api/datasets/open-in-files', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: _folderContextPath })
         }).catch(e => console.error('Failed to open file manager:', e));
+    } else if (action === 'test-on-robot') {
+        if (typeof testModelOnRobot === 'function') {
+            testModelOnRobot(_folderContextPath);
+        }
     }
     hideContextMenu();
 }

@@ -182,7 +182,7 @@ function renderModelSources() {
                     const progress = (m.current_step && m.total_steps)
                         ? `${m.current_step.toLocaleString()}/${m.total_steps.toLocaleString()}`
                         : (m.current_step ? `${m.current_step.toLocaleString()} steps` : '');
-                    html += `<div class="source-dataset${isSelected ? ' active' : ''}" onclick="selectModelRun('${m.path.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${m.path.replace(/'/g, "\\'")}')" title="${m.path}\n${m.policy_type} | ${progress}">`;
+                    html += `<div class="source-dataset${isSelected ? ' active' : ''}" onclick="selectModelRun('${m.path.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${m.path.replace(/'/g, "\\'")}', true)" title="${m.path}\n${m.policy_type} | ${progress}">`;
                     html += `<span class="source-dataset-name">${_esc(m.name)}</span>`;
                     html += `<span class="source-dataset-meta">${_esc(m.policy_type)}</span>`;
                     html += `</div>`;
