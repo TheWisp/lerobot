@@ -39,7 +39,7 @@ from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraCon
 from lerobot.robots import make_robot_from_config
 from lerobot.robots.config import RobotConfig
 from lerobot.utils.control_utils import init_keyboard_listener
-from lerobot.utils.robot_utils import precise_sleep
+
 from lerobot.utils.utils import init_logging, log_say
 
 try:
@@ -51,7 +51,8 @@ except ImportError:
 # --------------- Constants ---------------
 
 FPS = 30
-ACTION_HORIZON = 25
+ACTION_HORIZON = 40
+PREFETCH_AT = 25
 
 # Joint names in the order matching training data (left arm first, then right).
 # From bi_so107_follower._motors_ft and so_follower.py motor definitions.
@@ -186,6 +187,23 @@ async def control_loop(robot, events, args):
         action_buffer = []
         step_count = 0
         query_count = 0
+        chunk_step = 0  # steps executed within current chunk
+        pending_task: asyncio.Task | None = None
+        # How many steps into a chunk before firing the next prefetch query.
+        # With prefetch_at=25 and horizon=40 at 30fps, the query fires at
+        # ~833ms into execution, giving ~830ms of inference time that overlaps
+        # with the remaining 15 actions (~500ms). Result should be ready
+        # just as the buffer empties.
+        prefetch_at = args.prefetch_at
+
+        async def _send_query(ws_conn, task_str, robot_ref):
+            """Capture observation, send request, return parsed response."""
+            obs = robot_ref.get_observation()
+            req = build_request(obs, task_str)
+            t0 = time.perf_counter()
+            await ws_conn.send(json.dumps(req))
+            resp = json.loads(await ws_conn.recv())
+            return resp, (time.perf_counter() - t0) * 1000
 
         while True:
             loop_start = time.perf_counter()
@@ -195,16 +213,15 @@ async def control_loop(robot, events, args):
                 logging.info("Escape pressed — aborting")
                 break
 
-            # Query model when action buffer is empty
+            # Buffer empty — need a new prediction
             if not action_buffer:
-                obs = robot.get_observation()
-                request = build_request(obs, args.task)
-
-                query_start = time.perf_counter()
-                await ws.send(json.dumps(request))
-                response_msg = await ws.recv()
-                query_ms = (time.perf_counter() - query_start) * 1000
-                response = json.loads(response_msg)
+                if pending_task is not None:
+                    # Prefetch in flight — await it
+                    response, query_ms = await pending_task
+                    pending_task = None
+                else:
+                    # No prefetch (first iteration or fallback) — blocking query
+                    response, query_ms = await _send_query(ws, args.task, robot)
 
                 if response.get("status") == "error":
                     logging.error(f"Server error: {response.get('error')}")
@@ -215,7 +232,6 @@ async def control_loop(robot, events, args):
                 actions = response.get("actions")
                 timing = response.get("timing", {})
 
-                # Log timing breakdown
                 t_parts = []
                 for k in ("decode_images_ms", "normalize_state_ms", "subtask_ms", "action_ms", "unnormalize_ms"):
                     v = timing.get(k)
@@ -232,20 +248,25 @@ async def control_loop(robot, events, args):
                     continue
 
                 action_buffer = actions_to_dicts(actions)[:args.action_horizon]
+                chunk_step = 0
 
-                # Log first action of chunk for debugging
                 if query_count <= 3:
                     first = actions[0] if actions else []
                     logging.info(f"  First action: {[f'{v:.1f}' for v in first[:14]]}")
+
+            # Fire prefetch query partway through the chunk
+            if chunk_step == prefetch_at and pending_task is None:
+                pending_task = asyncio.create_task(_send_query(ws, args.task, robot))
 
             # Execute next action
             action = action_buffer.pop(0)
             robot.send_action(action)
             step_count += 1
+            chunk_step += 1
 
-            # FPS control
+            # FPS control — asyncio.sleep yields to event loop for prefetch
             dt = time.perf_counter() - loop_start
-            precise_sleep(max(1.0 / args.fps - dt, 0.0))
+            await asyncio.sleep(max(1.0 / args.fps - dt, 0.0))
 
         logging.info(f"Done. {step_count} steps executed, {query_count} queries made.")
 
@@ -256,8 +277,10 @@ def main():
     parser.add_argument("--port", type=int, default=8765, help="OpenPI server port")
     parser.add_argument("--task", required=True, help="High-level task prompt")
     parser.add_argument("--action-horizon", type=int, default=ACTION_HORIZON,
-                        help="Steps to execute per action chunk (default: 10)")
+                        help="Steps to execute per action chunk (default: 40)")
     parser.add_argument("--fps", type=int, default=FPS, help="Control loop FPS (default: 30)")
+    parser.add_argument("--prefetch-at", type=int, default=PREFETCH_AT,
+                        help="Fire prefetch query at this step within a chunk (default: 25)")
     parser.add_argument("--robot-config", type=str, default=str(ROBOT_CONFIG_FILE),
                         help="Path to robot config JSON")
     args = parser.parse_args()
