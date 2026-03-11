@@ -132,9 +132,58 @@ The controller manages:
 
 All other ACT config parameters (chunk_size, dim_model, n_heads, use_vae, etc.) are inherited and work as before.
 
+## TODO
+
+- **Batch extraction**: `extract_s2_latents.py` currently sends one frame at a time (batch_size=1), making extraction ~40× slower than Pi0.5 training. Add batch support to both the extraction script and the `"mode": "extract_latent"` server endpoint — send N frames per request, get N latents back. Should reduce ~34h extraction to ~1-2h.
+- **Image resize to 480×640**: Training at native 720×1280 gives ResNet18 880 spatial tokens/camera (stride 32), vs 300 tokens at 480×640. The extra tokens don't improve feature quality (same per-patch receptive field) but cost ~3-4× more compute in the transformer's O(n²) attention. Adding a resize in `LeRobotDatasetWithLatents.__getitem__` and `obs_to_s1_batch()` (inference) would cut training from ~7h to ~2h per 100k steps with negligible accuracy loss. Would also make S1 inference more comfortably real-time at 30Hz.
+
 ## Design decisions
 
 - **Token concatenation** over cross-attention or FiLM: matches ACT's existing latent injection pattern, no architectural surgery needed
 - **Mean pooling** over last-N tokens: simpler, works well per OpenHelix findings; can upgrade to multi-token if needed
 - **Precomputed latents**: avoids needing Pi0.5 during training; pin the checkpoint and re-extract if weights change
 - **Optional DINOv2**: for when ResNet18 features aren't enough; frozen by default to keep training fast
+
+
+## Commands
+
+Run server
+
+```
+cd ~/Documents/openpi_subtask && XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run python -u scripts/async_pi05/async_pi05_websocket_server.py   --config soarm_pi05_flow_lora   --checkpoint ~/.cache/openpi/checkpoints/soarm-pi05-state-11997   --gpu-id 0 --port 8765
+```
+
+Extract latents from the trained pi05
+
+```
+python scripts/extract_s2_latents.py \
+    --dataset-path thewisp/cylinder_ring_assembly \
+    --server-uri ws://localhost:8765 \
+    --high-level-prompt "assemble cylinder into ring" \
+    --output-path ~/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly/s2_latents.npy \
+    --image-keys observation.images.front,observation.images.top,observation.images.left_wrist,observation.images.right_wrist \
+    --state-key observation.state
+```
+
+Training
+```
+python scripts/train_act_vlm.py \
+    --dataset-repo-id thewisp/cylinder_ring_assembly \
+    --s2-latent-path ~/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly/s2_latents.npy \
+    --output-dir outputs/act_vlm_cylinder_ring \
+    --steps 100000 \
+    --batch-size 4 \
+    --chunk-size 100 \
+    --n-action-steps 100 \
+    --num-workers 4 \
+    --log-freq 50 \
+    --save-freq 20000
+```
+
+Inference
+```
+python dual_system_infer.py \
+    --s1-checkpoint outputs/act_vlm_cylinder_ring/checkpoint-20000 \
+    --task "assemble cylinder into ring" \
+    --s2-host localhost --s2-port 8765
+```

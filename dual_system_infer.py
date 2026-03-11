@@ -1,36 +1,93 @@
 #!/usr/bin/env python
 """Dual-System VLA Inference: S2 (Pi0.5) + S1 (ACTWithVLM)
 
-S2 thread: Async coroutine queries Pi0.5 at ~1Hz for scene-understanding latent.
-S1 loop: Synchronous main loop runs ACTWithVLM at ~30-140Hz for reactive control.
+S2 coroutine: Async WebSocket query to Pi0.5 at ~1Hz for scene-understanding latent.
+S1 loop: Synchronous ACTWithVLM at ~30Hz for reactive action chunking.
 
-The S2 latent is injected into S1 via a thread-safe shared cache.
-If S2 disconnects, S1 continues with the last cached latent (graceful degradation).
+The S2 latent is shared via a thread-safe cache. If S2 disconnects or is slow,
+S1 continues with the last cached latent (graceful degradation).
+
+Controls:
+  Escape  ->  abort (soft landing)
 
 Usage:
-    python dual_system_infer.py \
-        --s1-checkpoint /path/to/act_vlm_checkpoint \
-        --s2-server ws://localhost:8765 \
-        --high-level-prompt "pick up the cup" \
-        --robot-port /dev/ttyUSB0
+  # Terminal 1: Start Pi0.5 server
+  cd ~/Documents/openpi_subtask && XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run python -u \
+    scripts/async_pi05/async_pi05_websocket_server.py \
+    --config soarm_pi05_flow_lora \
+    --checkpoint ~/.cache/openpi/checkpoints/soarm-pi05-state-11997 \
+    --gpu-id 0 --port 8765
+
+  # Terminal 2: Run dual-system inference
+  python dual_system_infer.py \
+    --s1-checkpoint outputs/act_vlm_cylinder_ring \
+    --task "assemble cylinder into ring" \
+    --s2-server ws://localhost:8765
 """
 
 import argparse
 import asyncio
-import base64
 import json
 import logging
+import signal
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
+import draccus
 import numpy as np
 import torch
-import websockets
+
+# Register draccus ChoiceRegistry subclasses before any decode calls
+from lerobot.robots import bi_so107_follower  # noqa: F401
+from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
+from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
+
+from lerobot.robots import make_robot_from_config
+from lerobot.robots.config import RobotConfig
+from lerobot.utils.control_utils import init_keyboard_listener
+from lerobot.utils.utils import init_logging, log_say
+
+try:
+    import websockets
+except ImportError:
+    raise ImportError("websockets is required: pip install websockets")
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("dual_system")
 
+
+# --------------- Constants ---------------
+
+FPS = 30
+
+JOINT_NAMES = [
+    "left_shoulder_pan.pos",
+    "left_shoulder_lift.pos",
+    "left_elbow_flex.pos",
+    "left_forearm_roll.pos",
+    "left_wrist_flex.pos",
+    "left_wrist_roll.pos",
+    "left_gripper.pos",
+    "right_shoulder_pan.pos",
+    "right_shoulder_lift.pos",
+    "right_elbow_flex.pos",
+    "right_forearm_roll.pos",
+    "right_wrist_flex.pos",
+    "right_wrist_roll.pos",
+    "right_gripper.pos",
+]
+
+# S2 uses all 4 cameras (full scene understanding)
+S2_IMAGE_KEYS = ["front", "top", "left_wrist", "right_wrist"]
+
+CONFIG_DIR = Path.home() / ".config" / "chop"
+ROBOT_CONFIG_FILE = CONFIG_DIR / "robot_config.json"
+
+
+# --------------- S2 Latent Cache ---------------
 
 @dataclass
 class S2LatentCache:
@@ -58,271 +115,345 @@ class S2LatentCache:
             return (time.time() - self.timestamp) * 1000
 
 
-class S2Worker:
-    """Async S2 worker that queries Pi0.5 for latent extraction."""
+# --------------- Helpers ---------------
 
-    def __init__(
-        self,
-        server_uri: str,
-        cache: S2LatentCache,
-        high_level_prompt: str,
-        image_keys: list[str],
-    ):
-        self.server_uri = server_uri
-        self.cache = cache
-        self.high_level_prompt = high_level_prompt
-        self.image_keys = image_keys
-        self._running = False
+def soft_land(robot, duration_s=4.0, steps=20):
+    """Gradually reduce torque so the robot lowers gently instead of dropping."""
+    if not robot.is_connected:
+        return
 
-    async def run(self, get_observation_fn):
-        """Main S2 loop. Runs until stopped.
+    buses = []
+    if hasattr(robot, "left_arm"):
+        buses.append(robot.left_arm.bus)
+    if hasattr(robot, "right_arm"):
+        buses.append(robot.right_arm.bus)
+    if not buses:
+        return
 
-        Args:
-            get_observation_fn: Callable that returns (images_dict, state_array).
-                images_dict maps model keys to numpy uint8 HWC arrays.
-        """
-        self._running = True
-        retry_delay = 1.0
+    try:
+        obs = robot.get_observation()
+        hold_action = {k: v for k, v in obs.items() if k.endswith(".pos")}
+        if hold_action:
+            robot.send_action(hold_action)
 
-        while self._running:
-            try:
-                async with websockets.connect(
-                    self.server_uri, max_size=50 * 1024 * 1024
-                ) as ws:
-                    # Read metadata
-                    metadata = json.loads(await ws.recv())
-                    logger.info("S2 connected to %s (%s)", self.server_uri, metadata.get("model", "?"))
-                    retry_delay = 1.0
+        step_delay = duration_s / steps
+        for i in range(steps):
+            torque_value = int(1000 * (1.0 - (i + 1) / steps))
+            for bus in buses:
+                for motor_name in bus.motors:
+                    try:
+                        bus.write("Torque_Limit", motor_name, torque_value, normalize=False)
+                    except Exception:
+                        pass
+            time.sleep(step_delay)
 
-                    while self._running:
-                        start = time.time()
-
-                        # Get current observation
-                        images, state = get_observation_fn()
-
-                        # Encode images
-                        images_data = {}
-                        for key, img in images.items():
-                            raw = img.tobytes()
-                            images_data[key] = {
-                                "base64": base64.b64encode(raw).decode("ascii"),
-                                "shape": list(img.shape),
-                            }
-
-                        request = {
-                            "mode": "extract_latent",
-                            "images": images_data,
-                            "high_level_prompt": self.high_level_prompt,
-                        }
-                        if state is not None:
-                            request["state"] = state.tolist()
-
-                        await ws.send(json.dumps(request))
-                        response = json.loads(await ws.recv())
-
-                        if response.get("status") == "success":
-                            latent = np.array(response["s2_latent"], dtype=np.float32)
-                            self.cache.update(latent)
-                            elapsed_ms = (time.time() - start) * 1000
-                            logger.debug(
-                                "S2 update #%d: %.0fms (prefix: %.0fms)",
-                                self.cache.update_count,
-                                elapsed_ms,
-                                response["timing"].get("prefix_ms", 0),
-                            )
-                        else:
-                            logger.warning("S2 error: %s", response.get("error"))
-
-            except (websockets.exceptions.ConnectionClosed, OSError) as e:
-                if self._running:
-                    logger.warning("S2 disconnected (%s), retrying in %.0fs...", e, retry_delay)
-                    await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, 30.0)
-
-    def stop(self):
-        self._running = False
+        logger.info("Soft landing complete")
+    except Exception as e:
+        logger.warning(f"Error during soft landing: {e}")
 
 
-class DualSystemController:
-    """Orchestrates S1 (ACTWithVLM) + S2 (Pi0.5) for real-time robot control."""
+def restore_torque(robot):
+    """Restore full torque (in case a previous soft_land left it at 0)."""
+    for arm_name in ("left_arm", "right_arm"):
+        arm = getattr(robot, arm_name, None)
+        if arm is not None:
+            for motor_name in arm.bus.motors:
+                try:
+                    arm.bus.write("Torque_Limit", motor_name, 1000, normalize=False)
+                except Exception:
+                    pass
 
-    def __init__(
-        self,
-        s1_checkpoint: str,
-        s2_server_uri: str,
-        high_level_prompt: str,
-        s1_device: str = "cuda",
-        n_action_steps: int | None = None,
-    ):
-        self.s2_server_uri = s2_server_uri
-        self.high_level_prompt = high_level_prompt
-        self.s1_device = s1_device
-        self.s2_cache = S2LatentCache()
 
-        # Load S1 policy
-        logger.info("Loading S1 policy from %s...", s1_checkpoint)
-        from lerobot.policies.act_vlm.configuration_act_vlm import ACTWithVLMConfig
-        from lerobot.policies.act_vlm.modeling_act_vlm import ACTWithVLMPolicy, S2_LATENT_KEY
+def build_s2_request(robot_obs: dict, task: str) -> dict:
+    """Build extract_latent request for S2 (Pi0.5), using shared memory."""
+    state = [float(robot_obs[name]) for name in JOINT_NAMES]
 
-        self.S2_LATENT_KEY = S2_LATENT_KEY
-        self.s1_policy = ACTWithVLMPolicy.from_pretrained(pretrained_name_or_path=s1_checkpoint)
-        self.s1_policy.to(s1_device)
-        self.s1_policy.eval()
-        logger.info("S1 loaded. Device: %s", s1_device)
+    images = {}
+    for key in S2_IMAGE_KEYS:
+        if key in robot_obs:
+            img = np.asarray(robot_obs[key], dtype=np.uint8)
+            shm_path = f"/dev/shm/dual_s2_{key}.npy"
+            np.save(shm_path, img)
+            images[key] = {"shm_path": shm_path}
 
-        if n_action_steps is not None:
-            self.s1_policy.config.n_action_steps = n_action_steps
+    return {
+        "mode": "extract_latent",
+        "images": images,
+        "high_level_prompt": task,
+        "state": state,
+    }
 
-    def run_s1_step(self, images: list[torch.Tensor], state: torch.Tensor) -> np.ndarray:
-        """Run one S1 inference step.
 
-        Args:
-            images: List of [1, C, H, W] image tensors (one per camera)
-            state: [1, state_dim] state tensor
+def obs_to_s1_batch(
+    robot_obs: dict,
+    s1_image_keys: list[str],
+    s2_cache: S2LatentCache,
+    s2_latent_key: str,
+    device: torch.device,
+) -> dict:
+    """Convert robot observation to S1 input batch.
 
-        Returns:
-            action: [action_dim] numpy array
-        """
-        batch = {}
+    Images are converted to [1, C, H, W] float tensors normalized to [0, 1].
+    State is [1, 14] float tensor.
+    S2 latent is pulled from cache (or omitted for zero fallback).
+    """
+    batch = {}
 
-        # Add images
-        for i, (key, _) in enumerate(self.s1_policy.config.image_features.items()):
-            batch[key] = images[i].to(self.s1_device)
-        batch["observation.state"] = state.to(self.s1_device)
+    # Images → [1, C, H, W] float tensors
+    for key in s1_image_keys:
+        # key is like "observation.images.front" → extract camera name
+        cam_name = key.split(".")[-1]
+        if cam_name in robot_obs:
+            img = np.asarray(robot_obs[cam_name], dtype=np.uint8)  # HWC
+            img_tensor = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0  # CHW
+            batch[key] = img_tensor.unsqueeze(0).to(device)
 
-        # Add S2 latent from cache
-        latent, ts = self.s2_cache.get()
-        if latent is not None:
-            batch[self.S2_LATENT_KEY] = torch.from_numpy(latent).unsqueeze(0).to(self.s1_device)
-        # If no latent yet, the model handles it with zeros
+    # State → [1, 14]
+    state = [float(robot_obs[name]) for name in JOINT_NAMES]
+    batch["observation.state"] = torch.tensor([state], dtype=torch.float32, device=device)
 
-        with torch.no_grad():
-            action = self.s1_policy.select_action(batch)
+    # S2 latent from cache
+    latent, _ = s2_cache.get()
+    if latent is not None:
+        batch[s2_latent_key] = torch.from_numpy(latent).unsqueeze(0).to(device)
 
-        return action.squeeze(0).cpu().numpy()
+    return batch
 
-    async def run(self, robot, get_observation_fn, duration_s: float = 60.0):
-        """Main dual-system control loop.
 
-        Args:
-            robot: Robot interface with send_action(action) method.
-            get_observation_fn: Returns (images_dict_for_s2, state_np,
-                                         images_tensors_for_s1, state_tensor_for_s1)
-            duration_s: Max duration in seconds.
-        """
-        # Start S2 worker
-        s2_worker = S2Worker(
-            server_uri=self.s2_server_uri,
-            cache=self.s2_cache,
-            high_level_prompt=self.high_level_prompt,
-            image_keys=[],
-        )
+# --------------- S2 Async Worker ---------------
 
-        def s2_obs_fn():
-            """Observation getter for S2 (returns raw images + state)."""
-            obs = get_observation_fn()
-            return obs[0], obs[1]  # images_dict, state_np
+async def s2_worker(
+    robot,
+    cache: S2LatentCache,
+    server_uri: str,
+    task: str,
+    running: threading.Event,
+    robot_lock: threading.Lock,
+):
+    """Async S2 loop: queries Pi0.5 for latent extraction at ~1Hz."""
+    retry_delay = 1.0
 
-        s2_task = asyncio.create_task(s2_worker.run(s2_obs_fn))
-
-        # Wait for first S2 latent (with timeout)
-        logger.info("Waiting for first S2 latent...")
-        wait_start = time.time()
-        while self.s2_cache.latent is None and (time.time() - wait_start) < 10.0:
-            await asyncio.sleep(0.1)
-        if self.s2_cache.latent is not None:
-            logger.info("Got first S2 latent (dim=%d)", self.s2_cache.latent.shape[0])
-        else:
-            logger.warning("No S2 latent after 10s, starting S1 with zero latent")
-
-        # Main S1 loop
-        logger.info("Starting S1 control loop (target: ~%.0fHz)", 1000 / 15)
-        self.s1_policy.reset()
-        start_time = time.time()
-        step_count = 0
-        s1_times = []
-
+    while running.is_set():
         try:
-            while (time.time() - start_time) < duration_s:
-                step_start = time.time()
+            async with websockets.connect(
+                server_uri,
+                ping_interval=60,
+                ping_timeout=60,
+                max_size=50 * 1024 * 1024,
+            ) as ws:
+                metadata = json.loads(await ws.recv())
+                logger.info("S2 connected to %s (%s)", server_uri, metadata.get("model", "?"))
+                retry_delay = 1.0
 
-                # Get observation for S1
-                obs = get_observation_fn()
-                images_s1 = obs[2]  # list of [1, C, H, W] tensors
-                state_s1 = obs[3]  # [1, state_dim] tensor
+                while running.is_set():
+                    start = time.perf_counter()
 
-                # S1 inference
-                action = self.run_s1_step(images_s1, state_s1)
+                    with robot_lock:
+                        obs = robot.get_observation()
+                    request = build_s2_request(obs, task)
 
-                # Send to robot
+                    await ws.send(json.dumps(request))
+                    response = json.loads(await ws.recv())
+
+                    if response.get("status") == "success":
+                        latent = np.array(response["s2_latent"], dtype=np.float32)
+                        cache.update(latent)
+                        elapsed_ms = (time.perf_counter() - start) * 1000
+                        timing = response.get("timing", {})
+                        logger.info(
+                            "S2 #%d: %.0fms (prefix: %.0fms) | latent dim: %d",
+                            cache.update_count,
+                            elapsed_ms,
+                            timing.get("prefix_ms", 0),
+                            latent.shape[0],
+                        )
+                    else:
+                        logger.warning("S2 error: %s", response.get("error"))
+
+        except (websockets.exceptions.ConnectionClosed, OSError) as e:
+            if running.is_set():
+                logger.warning("S2 disconnected (%s), retrying in %.0fs...", e, retry_delay)
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 30.0)
+
+
+def run_s2_thread(robot, cache, server_uri, task, running, robot_lock):
+    """Run S2 worker in a dedicated thread with its own event loop."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(s2_worker(robot, cache, server_uri, task, running, robot_lock))
+    except Exception as e:
+        logger.error("S2 thread crashed: %s", e)
+    finally:
+        loop.close()
+
+
+# --------------- Main ---------------
+
+def control_loop(robot, events, args):
+    """S1 control loop running at target FPS with cached S2 latent."""
+    from lerobot.policies.act_vlm.modeling_act_vlm import ACTWithVLMPolicy, S2_LATENT_KEY
+    from lerobot.policies.factory import make_pre_post_processors
+
+    device = torch.device(args.device)
+
+    # Load S1 policy
+    logger.info("Loading S1 policy from %s...", args.s1_checkpoint)
+    policy = ACTWithVLMPolicy.from_pretrained(pretrained_name_or_path=args.s1_checkpoint)
+    policy.to(device)
+    policy.eval()
+    policy.reset()
+
+    s1_image_keys = list(policy.config.image_features.keys())
+    logger.info("S1 loaded. Image keys: %s | Device: %s", s1_image_keys, device)
+
+    # Load preprocessor (normalization) and postprocessor (unnormalization)
+    preprocessor, postprocessor = make_pre_post_processors(
+        policy_cfg=policy.config,
+        pretrained_path=args.s1_checkpoint,
+    )
+
+    # Shared lock to prevent S1 and S2 from calling robot.get_observation() simultaneously
+    robot_lock = threading.Lock()
+
+    # Start S2 thread
+    s2_cache = S2LatentCache()
+    s2_running = threading.Event()
+    s2_running.set()
+    s2_thread = threading.Thread(
+        target=run_s2_thread,
+        args=(robot, s2_cache, f"ws://{args.s2_host}:{args.s2_port}", args.task, s2_running, robot_lock),
+        daemon=True,
+    )
+    s2_thread.start()
+
+    # Wait for first S2 latent
+    logger.info("Waiting for first S2 latent...")
+    wait_start = time.time()
+    while s2_cache.latent is None and (time.time() - wait_start) < 15.0:
+        time.sleep(0.1)
+    if s2_cache.latent is not None:
+        logger.info("Got first S2 latent (dim=%d)", s2_cache.latent.shape[0])
+    else:
+        logger.warning("No S2 latent after 15s, starting S1 with zero latent")
+
+    # S1 control loop
+    logger.info("Starting S1 loop at %d FPS", args.fps)
+    step_count = 0
+    action_queue = []
+    s1_times = []
+
+    try:
+        while True:
+            loop_start = time.perf_counter()
+
+            # Check abort
+            if events.get("stop_recording"):
+                logger.info("Escape pressed — aborting")
+                break
+
+            # Refill action queue when empty
+            if not action_queue:
+                with robot_lock:
+                    obs = robot.get_observation()
+                batch = obs_to_s1_batch(obs, s1_image_keys, s2_cache, S2_LATENT_KEY, device)
+
+                # Preprocess (normalization)
+                batch = preprocessor(batch)
+
+                with torch.no_grad():
+                    actions = policy.select_action(batch)  # [1, action_dim], normalized
+                    actions = postprocessor(actions)        # [1, action_dim], unnormalized
+
+                # Convert to list of joint-name dicts
+                actions_np = actions.cpu().numpy()
+                for a in actions_np:
+                    action_dict = {}
+                    for i, name in enumerate(JOINT_NAMES):
+                        if i < len(a):
+                            action_dict[name] = float(a[i])
+                    action_queue.append(action_dict)
+
+                infer_ms = (time.perf_counter() - loop_start) * 1000
+                s1_times.append(infer_ms)
+
+            # Execute next action
+            action = action_queue.pop(0)
+            with robot_lock:
                 robot.send_action(action)
+            step_count += 1
 
-                step_count += 1
-                s1_ms = (time.time() - step_start) * 1000
-                s1_times.append(s1_ms)
-
-                if step_count % 100 == 0:
-                    avg_s1 = np.mean(s1_times[-100:])
-                    logger.info(
-                        "Step %d | S1: %.1fms (%.0fHz) | S2 age: %.0fms | S2 updates: %d",
-                        step_count,
-                        avg_s1,
-                        1000 / max(avg_s1, 1),
-                        self.s2_cache.age_ms,
-                        self.s2_cache.update_count,
-                    )
-
-        except KeyboardInterrupt:
-            logger.info("Interrupted by user")
-        finally:
-            s2_worker.stop()
-            s2_task.cancel()
-            try:
-                await s2_task
-            except asyncio.CancelledError:
-                pass
-
-            total_time = time.time() - start_time
-            if s1_times:
+            if step_count % 100 == 0 and s1_times:
+                avg_s1 = np.mean(s1_times[-20:])
                 logger.info(
-                    "Done. %d steps in %.1fs (avg %.1fHz). S2 updates: %d",
+                    "Step %d | S1 infer: %.1fms | S2 age: %.0fms | S2 updates: %d | queue: %d",
                     step_count,
-                    total_time,
-                    step_count / total_time,
-                    self.s2_cache.update_count,
+                    avg_s1,
+                    s2_cache.age_ms,
+                    s2_cache.update_count,
+                    len(action_queue),
                 )
+
+            # FPS control
+            dt = time.perf_counter() - loop_start
+            sleep_s = max(1.0 / args.fps - dt, 0.0)
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+    finally:
+        s2_running.clear()
+
+        if s1_times:
+            logger.info(
+                "Done. %d steps | S1 avg infer: %.1fms | S2 updates: %d",
+                step_count,
+                np.mean(s1_times),
+                s2_cache.update_count,
+            )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Dual-System VLA Inference")
-    parser.add_argument("--s1-checkpoint", required=True, help="Path to ACTWithVLM checkpoint")
-    parser.add_argument("--s2-server", default="ws://localhost:8765", help="Pi0.5 WebSocket server URI")
-    parser.add_argument("--high-level-prompt", default="do the task", help="Task prompt for S2")
+    parser = argparse.ArgumentParser(description="Dual-System VLA Inference (S2: Pi0.5 + S1: ACTWithVLM)")
+    parser.add_argument("--s1-checkpoint", required=True, help="Path to trained ACTWithVLM checkpoint")
+    parser.add_argument("--task", required=True, help="High-level task prompt (for S2)")
+    parser.add_argument("--s2-host", default="localhost", help="Pi0.5 server host")
+    parser.add_argument("--s2-port", type=int, default=8765, help="Pi0.5 server port")
+    parser.add_argument("--fps", type=int, default=FPS, help="S1 control loop FPS (default: 30)")
     parser.add_argument("--device", default="cuda", help="S1 device")
-    parser.add_argument("--duration", type=float, default=60.0, help="Max duration in seconds")
-    parser.add_argument("--n-action-steps", type=int, default=None, help="Override n_action_steps")
+    parser.add_argument("--robot-config", type=str, default=str(ROBOT_CONFIG_FILE),
+                        help="Path to robot config JSON")
     args = parser.parse_args()
 
-    controller = DualSystemController(
-        s1_checkpoint=args.s1_checkpoint,
-        s2_server_uri=args.s2_server,
-        high_level_prompt=args.high_level_prompt,
-        s1_device=args.device,
-        n_action_steps=args.n_action_steps,
-    )
+    init_logging()
 
-    # Placeholder: real robot and observation function would be injected here.
-    # For now, print usage instructions.
-    print(
-        "\nDualSystemController initialized.\n"
-        "To use with a real robot, call:\n"
-        "  asyncio.run(controller.run(robot, get_observation_fn, duration_s=60))\n"
-        "\n"
-        "get_observation_fn should return:\n"
-        "  (images_dict_s2, state_np, images_tensors_s1, state_tensor_s1)\n"
-        "\n"
-        "See the DualSystemController.run() docstring for details.\n"
-    )
+    # Load robot (same as openpi_infer.py)
+    logger.info("Loading robot config from %s", args.robot_config)
+    with open(args.robot_config) as f:
+        robot_raw = json.load(f)
+    robot_cfg = draccus.decode(RobotConfig, robot_raw)
+    robot = make_robot_from_config(robot_cfg)
+    robot.connect()
+    restore_torque(robot)
+
+    listener, events = init_keyboard_listener()
+
+    try:
+        control_loop(robot, events, args)
+    finally:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        log_say("Stopping", True)
+        soft_land(robot)
+        try:
+            if robot.is_connected:
+                robot.disconnect()
+        except Exception as e:
+            logger.warning("Error disconnecting robot: %s", e)
+        if listener:
+            listener.stop()
+        log_say("Done", True)
 
 
 if __name__ == "__main__":
