@@ -257,15 +257,24 @@ async def s2_worker(
 
                     if response.get("status") == "success":
                         latent = np.array(response["s2_latent"], dtype=np.float32)
+                        prev_latent, _ = cache.get()
                         cache.update(latent)
                         elapsed_ms = (time.perf_counter() - start) * 1000
                         timing = response.get("timing", {})
+                        latent_norm = float(np.linalg.norm(latent))
+                        if prev_latent is not None:
+                            latent_diff = float(np.linalg.norm(latent - prev_latent))
+                            diff_str = f" | Δlatent={latent_diff:.3f}"
+                        else:
+                            diff_str = ""
                         logger.info(
-                            "S2 #%d: %.0fms (prefix: %.0fms) | latent dim: %d",
+                            "S2 #%d: %.0fms (prefix: %.0fms) | norm=%.2f%s | first5=%s",
                             cache.update_count,
                             elapsed_ms,
                             timing.get("prefix_ms", 0),
-                            latent.shape[0],
+                            latent_norm,
+                            diff_str,
+                            np.round(latent[:5], 3).tolist(),
                         )
                     else:
                         logger.warning("S2 error: %s", response.get("error"))
@@ -343,6 +352,7 @@ def control_loop(robot, events, args):
     step_count = 0
     action_queue = []
     s1_times = []
+    prev_action_np = None  # for computing action diff
 
     try:
         while True:
@@ -374,6 +384,21 @@ def control_loop(robot, events, args):
                         if i < len(a):
                             action_dict[name] = float(a[i])
                     action_queue.append(action_dict)
+
+                # Log action values and diff from previous chunk
+                a = actions_np[0]
+                if prev_action_np is not None:
+                    action_diff = float(np.linalg.norm(a - prev_action_np))
+                    diff_str = f" | Δaction={action_diff:.4f}"
+                else:
+                    diff_str = ""
+                logger.info(
+                    "S1 action (step %d)%s | %s",
+                    step_count,
+                    diff_str,
+                    " ".join(f"{n.split('.')[0][:3]}={v:.3f}" for n, v in zip(JOINT_NAMES, a)),
+                )
+                prev_action_np = a
 
                 infer_ms = (time.perf_counter() - loop_start) * 1000
                 s1_times.append(infer_ms)
