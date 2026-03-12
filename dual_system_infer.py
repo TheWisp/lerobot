@@ -164,7 +164,7 @@ def restore_torque(robot):
                     pass
 
 
-def build_s2_request(robot_obs: dict, task: str) -> dict:
+def build_s2_request(robot_obs: dict, task: str, decode_subtask: bool = False) -> dict:
     """Build extract_latent request for S2 (Pi0.5), using shared memory."""
     state = [float(robot_obs[name]) for name in JOINT_NAMES]
 
@@ -181,6 +181,7 @@ def build_s2_request(robot_obs: dict, task: str) -> dict:
         "images": images,
         "high_level_prompt": task,
         "state": state,
+        "with_subtask": decode_subtask,
     }
 
 
@@ -229,6 +230,7 @@ async def s2_worker(
     task: str,
     running: threading.Event,
     robot_lock: threading.Lock,
+    decode_subtask: bool = False,
 ):
     """Async S2 loop: queries Pi0.5 for latent extraction at ~1Hz."""
     retry_delay = 1.0
@@ -250,7 +252,7 @@ async def s2_worker(
 
                     with robot_lock:
                         obs = robot.get_observation()
-                    request = build_s2_request(obs, task)
+                    request = build_s2_request(obs, task, decode_subtask=decode_subtask)
 
                     await ws.send(json.dumps(request))
                     response = json.loads(await ws.recv())
@@ -267,14 +269,17 @@ async def s2_worker(
                             diff_str = f" | Δlatent={latent_diff:.3f}"
                         else:
                             diff_str = ""
+                        subtask_str = ""
+                        if "subtask" in response:
+                            subtask_str = f" | subtask=\"{response['subtask']}\""
                         logger.info(
-                            "S2 #%d: %.0fms (prefix: %.0fms) | norm=%.2f%s | first5=%s",
+                            "S2 #%d: %.0fms (prefix: %.0fms) | norm=%.2f%s%s",
                             cache.update_count,
                             elapsed_ms,
                             timing.get("prefix_ms", 0),
                             latent_norm,
                             diff_str,
-                            np.round(latent[:5], 3).tolist(),
+                            subtask_str,
                         )
                     else:
                         logger.warning("S2 error: %s", response.get("error"))
@@ -286,12 +291,12 @@ async def s2_worker(
                 retry_delay = min(retry_delay * 2, 30.0)
 
 
-def run_s2_thread(robot, cache, server_uri, task, running, robot_lock):
+def run_s2_thread(robot, cache, server_uri, task, running, robot_lock, decode_subtask=False):
     """Run S2 worker in a dedicated thread with its own event loop."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(s2_worker(robot, cache, server_uri, task, running, robot_lock))
+        loop.run_until_complete(s2_worker(robot, cache, server_uri, task, running, robot_lock, decode_subtask=decode_subtask))
     except Exception as e:
         logger.error("S2 thread crashed: %s", e)
     finally:
@@ -333,6 +338,7 @@ def control_loop(robot, events, args):
     s2_thread = threading.Thread(
         target=run_s2_thread,
         args=(robot, s2_cache, f"ws://{args.s2_host}:{args.s2_port}", args.task, s2_running, robot_lock),
+        kwargs={"decode_subtask": args.decode_subtask},
         daemon=True,
     )
     s2_thread.start()
@@ -437,6 +443,8 @@ def main():
     parser.add_argument("--device", default="cuda", help="S1 device")
     parser.add_argument("--robot-config", type=str, default=str(ROBOT_CONFIG_FILE),
                         help="Path to robot config JSON")
+    parser.add_argument("--decode-subtask", action="store_true",
+                        help="Also AR-decode subtask text from S2 for debugging (adds ~AR latency per S2 query)")
     args = parser.parse_args()
 
     init_logging()
