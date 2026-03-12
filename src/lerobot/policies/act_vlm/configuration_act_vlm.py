@@ -27,13 +27,13 @@ class ACTWithVLMConfig(ACTConfig):
     use_dino_backbone: bool = False
     dino_model: str = "dinov2_vits14"
     dino_output_dim: int = 384
-    freeze_vision_backbone: bool = True
+    freeze_vision_backbone: bool = False
 
     # Override default vision backbone to allow non-resnet when using dino
     vision_backbone: str = "resnet18"
 
-    # Training defaults (slightly higher LR for frozen backbone training)
-    optimizer_lr: float = 1e-4
+    # Training defaults matching vanilla ACT
+    optimizer_lr: float = 1e-5
     optimizer_weight_decay: float = 1e-4
     optimizer_lr_backbone: float = 1e-5
 
