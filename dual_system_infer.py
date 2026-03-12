@@ -331,20 +331,28 @@ def control_loop(robot, events, args):
     # Shared lock to prevent S1 and S2 from calling robot.get_observation() simultaneously
     robot_lock = threading.Lock()
 
-    # Start S2 thread
+    # S2 setup: either zero-stub (ablation) or live server
     s2_cache = S2LatentCache()
     s2_running = threading.Event()
-    s2_running.set()
-    s2_thread = threading.Thread(
-        target=run_s2_thread,
-        args=(robot, s2_cache, f"ws://{args.s2_host}:{args.s2_port}", args.task, s2_running, robot_lock),
-        kwargs={"decode_subtask": args.decode_subtask},
-        daemon=True,
-    )
-    s2_thread.start()
+    s2_thread = None
 
-    # Wait for first S2 latent
-    logger.info("Waiting for first S2 latent...")
+    if args.zero_s2:
+        logger.info("--zero-s2: S2 disabled, using zero latent (ablation mode)")
+        zero_latent = np.zeros(policy.config.s2_latent_dim, dtype=np.float32)
+        s2_cache.update(zero_latent)
+    else:
+        s2_running.set()
+        s2_thread = threading.Thread(
+            target=run_s2_thread,
+            args=(robot, s2_cache, f"ws://{args.s2_host}:{args.s2_port}", args.task, s2_running, robot_lock),
+            kwargs={"decode_subtask": args.decode_subtask},
+            daemon=True,
+        )
+        s2_thread.start()
+
+    # Wait for first S2 latent (skip if zero-stub already populated)
+    if not args.zero_s2:
+        logger.info("Waiting for first S2 latent...")
     wait_start = time.time()
     while s2_cache.latent is None and (time.time() - wait_start) < 15.0:
         time.sleep(0.1)
@@ -422,7 +430,8 @@ def control_loop(robot, events, args):
         logger.info("Interrupted by user")
     finally:
         s2_running.clear()
-        s2_thread.join(timeout=5.0)  # wait for S2 to finish its current request before robot disconnects
+        if s2_thread is not None:
+            s2_thread.join(timeout=5.0)  # wait for S2 to finish its current request before robot disconnects
 
         if s1_times:
             logger.info(
@@ -445,6 +454,8 @@ def main():
                         help="Path to robot config JSON")
     parser.add_argument("--decode-subtask", action="store_true",
                         help="Also AR-decode subtask text from S2 for debugging (adds ~AR latency per S2 query)")
+    parser.add_argument("--zero-s2", action="store_true",
+                        help="Ablation: disable S2 server and feed zero latent to S1")
     args = parser.parse_args()
 
     init_logging()
