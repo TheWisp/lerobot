@@ -139,7 +139,7 @@ def main():
     parser.add_argument("--output-dir", default="outputs/act_vlm", help="Output directory")
     parser.add_argument("--steps", type=int, default=100_000, help="Training steps")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
     parser.add_argument("--lr-backbone", type=float, default=1e-5, help="Backbone learning rate")
     parser.add_argument("--grad-clip-norm", type=float, default=10.0, help="Gradient clip norm")
     parser.add_argument("--num-workers", type=int, default=4, help="DataLoader workers")

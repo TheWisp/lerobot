@@ -168,22 +168,18 @@ python scripts/extract_s2_latents.py \
 Training
 ```
 python scripts/train_act_vlm.py \
-    --dataset-repo-id thewisp/cylinder_ring_assembly \
-    --s2-latent-path ~/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly/s2_latents.npy \
-    --output-dir outputs/act_vlm_cylinder_ring \
-    --steps 100000 \
-    --batch-size 4 \
-    --chunk-size 100 \
-    --n-action-steps 100 \
-    --num-workers 4 \
-    --log-freq 50 \
-    --save-freq 20000
-```
+  --dataset-repo-id thewisp/cylinder_ring_assembly \
+  --s2-latent-path ~/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly/s2_latents.npy \
+  --output-dir outputs/act_vlm_cylinder_ring_v2 \
+  --steps 100000 \
+  --batch-size 4 \
+  --save-freq 2000
+  ```
 
 Inference
 ```
 python dual_system_infer.py \
-    --s1-checkpoint outputs/act_vlm_cylinder_ring/checkpoint-20000 \
+    --s1-checkpoint outputs/act_vlm_cylinder_ring_v2/checkpoint-100000 \
     --task "assemble cylinder into ring" \
     --s2-host localhost --s2-port 8765
 ```

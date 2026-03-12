@@ -385,23 +385,9 @@ def control_loop(robot, events, args):
                             action_dict[name] = float(a[i])
                     action_queue.append(action_dict)
 
-                # Log action values and diff from previous chunk
-                a = actions_np[0]
-                if prev_action_np is not None:
-                    action_diff = float(np.linalg.norm(a - prev_action_np))
-                    diff_str = f" | Δaction={action_diff:.4f}"
-                else:
-                    diff_str = ""
-                logger.info(
-                    "S1 action (step %d)%s | %s",
-                    step_count,
-                    diff_str,
-                    " ".join(f"{n.split('.')[0][:3]}={v:.3f}" for n, v in zip(JOINT_NAMES, a)),
-                )
-                prev_action_np = a
-
                 infer_ms = (time.perf_counter() - loop_start) * 1000
                 s1_times.append(infer_ms)
+                prev_action_np = actions_np[0]
 
             # Execute next action
             action = action_queue.pop(0)
@@ -430,6 +416,7 @@ def control_loop(robot, events, args):
         logger.info("Interrupted by user")
     finally:
         s2_running.clear()
+        s2_thread.join(timeout=5.0)  # wait for S2 to finish its current request before robot disconnects
 
         if s1_times:
             logger.info(
