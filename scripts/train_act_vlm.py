@@ -351,7 +351,8 @@ def main():
 
             # --- Forward ---
             t0 = _t()
-            loss, loss_dict = policy.forward(batch)
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
+                loss, loss_dict = policy.forward(batch)
             if device.type == "cuda":
                 torch.cuda.synchronize()
             t_fwd = (_t() - t0) * 1000
