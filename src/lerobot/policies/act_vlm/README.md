@@ -134,8 +134,9 @@ All other ACT config parameters (chunk_size, dim_model, n_heads, use_vae, etc.) 
 
 ## TODO
 
-- **Batch extraction**: `extract_s2_latents.py` currently sends one frame at a time (batch_size=1), making extraction ~40× slower than Pi0.5 training. Add batch support to both the extraction script and the `"mode": "extract_latent"` server endpoint — send N frames per request, get N latents back. Should reduce ~34h extraction to ~1-2h.
-- **Image resize to 480×640**: Training at native 720×1280 gives ResNet18 880 spatial tokens/camera (stride 32), vs 300 tokens at 480×640. The extra tokens don't improve feature quality (same per-patch receptive field) but cost ~3-4× more compute in the transformer's O(n²) attention. Adding a resize in `LeRobotDatasetWithLatents.__getitem__` and `obs_to_s1_batch()` (inference) would cut training from ~7h to ~2h per 100k steps with negligible accuracy loss. Would also make S1 inference more comfortably real-time at 30Hz.
+- ~~**Batch extraction**: `extract_s2_latents.py` currently sends one frame at a time (batch_size=1)~~ ✅ Done — direct PyTorch batched inference, ~41ms/frame at B=8
+- ~~**Image resize to 480×640**~~ ✅ Done — GPU-side `F.interpolate` to 224×224, DINOv2 unfrozen selected as best config
+- **Pre-decode video frames to JPEG**: Data loading is the bottleneck (~175ms/step vs 195ms compute). pyav random-access video decode is ~100ms/frame due to keyframe seeking. Pre-decoding to 224×224 JPEGs would drop per-frame load to ~3-5ms, cutting total step time from ~370ms to ~210ms (~1.75× speedup). Estimated disk cost: ~15GB for 186k×4 frames at 224×224 JPEG q=95.
 
 ## Design decisions
 
@@ -151,6 +152,15 @@ Run server
 
 ```
 cd ~/Documents/openpi_subtask && XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run python -u scripts/async_pi05/async_pi05_websocket_server.py   --config soarm_pi05_flow_lora   --checkpoint ~/.cache/openpi/checkpoints/soarm-pi05-state-11997   --gpu-id 0 --port 8765
+
+# new flow:
+
+cd ~/Documents/openpi_subtask && .venv/bin/python scripts/async_pi05/pytorch_pi05_server.py \
+  --checkpoint ~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch \
+  --norm-stats ~/.cache/openpi/checkpoints/soarm-pi05-state-11997/assets/thewisp/cylinder_ring_assembly/norm_stats.json \
+  --port 8765 \
+  --device cuda:0
+
 ```
 
 Extract latents from the trained pi05
@@ -187,5 +197,6 @@ Inference
 python dual_system_infer.py \
     --s1-checkpoint outputs/act_vlm_cylinder_ring_v4/checkpoint-100000 \
     --task "assemble cylinder into ring" \
-    --s2-host localhost --s2-port 8765
+    --s2-host localhost --s2-port 8765 \
+    --resize-images 224x224
 ```

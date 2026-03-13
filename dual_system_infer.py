@@ -38,6 +38,7 @@ from pathlib import Path
 import draccus
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 # Register draccus ChoiceRegistry subclasses before any decode calls
 from lerobot.robots import bi_so107_follower  # noqa: F401
@@ -191,6 +192,7 @@ def obs_to_s1_batch(
     s2_cache: S2LatentCache,
     s2_latent_key: str,
     device: torch.device,
+    resize_to: tuple[int, int] | None = None,
 ) -> dict:
     """Convert robot observation to S1 input batch.
 
@@ -207,7 +209,10 @@ def obs_to_s1_batch(
         if cam_name in robot_obs:
             img = np.asarray(robot_obs[cam_name], dtype=np.uint8)  # HWC
             img_tensor = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0  # CHW
-            batch[key] = img_tensor.unsqueeze(0).to(device)
+            img_tensor = img_tensor.unsqueeze(0).to(device)
+            if resize_to is not None:
+                img_tensor = F.interpolate(img_tensor, size=resize_to, mode="bilinear", align_corners=False)
+            batch[key] = img_tensor
 
     # State → [1, 14]
     state = [float(robot_obs[name]) for name in JOINT_NAMES]
@@ -312,6 +317,13 @@ def control_loop(robot, events, args):
 
     device = torch.device(args.device)
 
+    # Parse resize
+    resize_to = None
+    if args.resize_images:
+        h, w = args.resize_images.lower().split("x")
+        resize_to = (int(h), int(w))
+        logger.info("Will resize S1 images to %s", resize_to)
+
     # Load S1 policy
     logger.info("Loading S1 policy from %s...", args.s1_checkpoint)
     policy = ACTWithVLMPolicy.from_pretrained(pretrained_name_or_path=args.s1_checkpoint)
@@ -381,7 +393,7 @@ def control_loop(robot, events, args):
             if not action_queue:
                 with robot_lock:
                     obs = robot.get_observation()
-                batch = obs_to_s1_batch(obs, s1_image_keys, s2_cache, S2_LATENT_KEY, device)
+                batch = obs_to_s1_batch(obs, s1_image_keys, s2_cache, S2_LATENT_KEY, device, resize_to=resize_to)
 
                 # Preprocess (normalization)
                 batch = preprocessor(batch)
@@ -456,6 +468,8 @@ def main():
                         help="Also AR-decode subtask text from S2 for debugging (adds ~AR latency per S2 query)")
     parser.add_argument("--zero-s2", action="store_true",
                         help="Ablation: disable S2 server and feed zero latent to S1")
+    parser.add_argument("--resize-images", type=str, default=None,
+                        help="Resize images to HxW (e.g. 224x224). Must match training config.")
     args = parser.parse_args()
 
     init_logging()
