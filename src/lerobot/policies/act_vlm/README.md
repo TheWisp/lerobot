@@ -156,30 +156,36 @@ cd ~/Documents/openpi_subtask && XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run pytho
 Extract latents from the trained pi05
 
 ```
-python scripts/extract_s2_latents.py \
-    --dataset-path thewisp/cylinder_ring_assembly \
-    --server-uri ws://localhost:8765 \
-    --high-level-prompt "assemble cylinder into ring" \
-    --output-path ~/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly/s2_latents.npy \
-    --image-keys observation.images.front,observation.images.top,observation.images.left_wrist,observation.images.right_wrist \
-    --state-key observation.state
+cd ~/Documents/openpi_subtask && source .venv/bin/activate
+# prompt should change to (.venv)
+
+python ~/Documents/lerobot/scripts/extract_s2_latents.py \
+  --checkpoint-path ~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch \
+  --dataset-path thewisp/cylinder_ring_assembly \
+  --high-level-prompt "assemble cylinder into ring" \
+  --output-path ~/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly/s2_latents_pt_11997.npy \
+  --image-keys observation.images.front,observation.images.top,observation.images.left_wrist,observation.images.right_wrist \
+  --batch-size 8
 ```
 
 Training
 ```
 python scripts/train_act_vlm.py \
   --dataset-repo-id thewisp/cylinder_ring_assembly \
-  --s2-latent-path ~/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly/s2_latents.npy \
-  --output-dir outputs/act_vlm_cylinder_ring_v2 \
+  --s2-latent-path ~/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly/s2_latents_pt_11997.npy \
+  --output-dir outputs/act_vlm_cylinder_ring_v4 \
   --steps 100000 \
-  --batch-size 4 \
-  --save-freq 2000
-  ```
+  --batch-size 16 \
+  --save-freq 20000 \
+  --use-dino-backbone \
+  --resize-images 224x224 \
+  --num-workers 8
+```
 
 Inference
 ```
 python dual_system_infer.py \
-    --s1-checkpoint outputs/act_vlm_cylinder_ring_v2/checkpoint-100000 \
+    --s1-checkpoint outputs/act_vlm_cylinder_ring_v4/checkpoint-100000 \
     --task "assemble cylinder into ring" \
     --s2-host localhost --s2-port 8765
 ```
