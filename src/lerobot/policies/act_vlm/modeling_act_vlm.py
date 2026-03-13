@@ -171,6 +171,16 @@ class ACTWithVLM(nn.Module):
                     for p in self.dino_backbone.parameters():
                         p.requires_grad = False
                     self.dino_backbone.eval()
+                else:
+                    # Wrap each ViT block with gradient checkpointing to reduce
+                    # activation memory during backward (~40% savings).
+                    from torch.utils.checkpoint import checkpoint
+                    for block in self.dino_backbone.blocks:
+                        original_forward = block.forward
+                        block.forward = (
+                            lambda x, _fwd=original_forward:
+                            checkpoint(_fwd, x, use_reentrant=False)
+                        )
                 self.dino_proj = nn.Linear(config.dino_output_dim, config.dim_model)
                 # Learnable position embedding for DINOv2 patch tokens
                 # For 224×224 with patch_size=14: 16×16 = 256 patches
