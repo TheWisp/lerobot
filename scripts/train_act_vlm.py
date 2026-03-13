@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from lerobot.configs.types import FeatureType, PolicyFeature
@@ -129,6 +130,8 @@ def main():
     # Model
     parser.add_argument("--s2-latent-dim", type=int, default=2048, help="S2 latent dimension")
     parser.add_argument("--use-dino-backbone", action="store_true", help="Use DINOv2-S instead of ResNet18")
+    parser.add_argument("--freeze-vision-backbone", action="store_true", help="Freeze vision backbone during training")
+    parser.add_argument("--resize-images", default=None, help="Resize images to HxW before forward (e.g. '224x224')")
     parser.add_argument("--use-vae", action="store_true", default=True, help="Use VAE (default: true)")
     parser.add_argument("--no-vae", dest="use_vae", action="store_false")
     parser.add_argument("--chunk-size", type=int, default=100, help="Action chunk size")
@@ -186,11 +189,19 @@ def main():
     logger.info(f"  Output features: {list(output_features.keys())}")
 
     # --- Create config ---
+    # Parse optional resize target
+    resize_to = None
+    if args.resize_images:
+        h, w = args.resize_images.lower().split("x")
+        resize_to = (int(h), int(w))
+        logger.info(f"  Image resize: {resize_to}")
+
     cfg = ACTWithVLMConfig(
         input_features=input_features,
         output_features=output_features,
         s2_latent_dim=args.s2_latent_dim,
         use_dino_backbone=args.use_dino_backbone,
+        freeze_vision_backbone=args.freeze_vision_backbone,
         use_vae=args.use_vae,
         chunk_size=args.chunk_size,
         n_action_steps=args.n_action_steps,
@@ -325,9 +336,17 @@ def main():
         while True:
             loop_start = _t()
 
-            # --- Preprocess ---
+            # --- Preprocess + optional resize ---
+            # Note: preprocessor's DeviceProcessorStep already moves batch to device.
             t0 = _t()
             batch = preprocessor(batch)
+            if resize_to is not None:
+                for key in list(batch.keys()):
+                    v = batch[key]
+                    if isinstance(v, torch.Tensor) and v.dim() == 4 and v.shape[1] == 3:
+                        batch[key] = F.interpolate(
+                            v, size=resize_to, mode="bilinear", align_corners=False
+                        )
             t_pre = (_t() - t0) * 1000
 
             # --- Forward ---
