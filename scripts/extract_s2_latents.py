@@ -1,66 +1,39 @@
 #!/usr/bin/env python
-"""Batch extraction of S2 latents from Pi0.5 for dual-system VLA training.
+"""Batch extraction of S2 latents from Pi0.5 (PyTorch) for dual-system VLA training.
 
-Iterates over a LeRobot dataset, sends each frame to the Pi0.5 WebSocket server
-with mode="extract_latent", and saves all latents as a .npy file.
-
-Uses /dev/shm for zero-copy image transfer when running on localhost (same as
-the real-time inference client), falling back to base64 with --no-shm.
+Calls the PyTorch model directly — no WebSocket server needed — and batches
+multiple frames per GPU forward pass for maximum throughput.
 
 Usage:
     python scripts/extract_s2_latents.py \
+        --checkpoint-path /path/to/pi05_checkpoint \
         --dataset-path /path/to/lerobot/dataset \
-        --server-uri ws://localhost:8765 \
         --high-level-prompt "do the task" \
         --output-path s2_latents.npy \
-        --image-keys observation.images.front,observation.images.wrist_left,observation.images.wrist_right
+        --image-keys observation.images.front,observation.images.wrist_left,observation.images.wrist_right \
+        --batch-size 8
+
+Output .npy has shape [N_frames, 2048], index-aligned with the dataset.
 """
 
 import argparse
-import asyncio
-import base64
-import json
 import os
+import sys
 import time
 
 import numpy as np
-import websockets
+import torch
 
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+# Ensure openpi_subtask is importable
+_OPENPI_SRC = os.path.expanduser("~/Documents/openpi_subtask/src")
+_OPENPI_ROOT = os.path.expanduser("~/Documents/openpi_subtask")
+for _p in (_OPENPI_SRC, _OPENPI_ROOT):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
+from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
 
-SHM_DIR = "/dev/shm/s2_extract"
-
-
-def encode_image_base64(image_tensor) -> dict:
-    """Convert a CHW float tensor [0,1] or uint8 to base64-encoded dict."""
-    if image_tensor.dtype != np.uint8:
-        img = (image_tensor.numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
-    else:
-        img = image_tensor.numpy()
-        if img.ndim == 3 and img.shape[0] in (1, 3):
-            img = img.transpose(1, 2, 0)
-    raw = img.tobytes()
-    return {
-        "base64": base64.b64encode(raw).decode("ascii"),
-        "shape": list(img.shape),
-    }
-
-
-def encode_image_shm(image_tensor, model_key: str) -> dict:
-    """Save image to /dev/shm and return shm_path reference."""
-    if image_tensor.dtype != np.uint8:
-        img = (image_tensor.numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
-    else:
-        img = image_tensor.numpy()
-        if img.ndim == 3 and img.shape[0] in (1, 3):
-            img = img.transpose(1, 2, 0)
-    shm_path = os.path.join(SHM_DIR, f"{model_key}.npy")
-    np.save(shm_path, img)
-    return {"shm_path": shm_path}
-
-
-# Map LeRobot image keys to Pi0.5 model keys
+# Map LeRobot image keys → Pi0.5 model keys
 IMAGE_KEY_MAP = {
     "observation.images.front": "base_0_rgb",
     "observation.images.top": "base_1_rgb",
@@ -71,145 +44,161 @@ IMAGE_KEY_MAP = {
 }
 
 
-async def extract_latents(
+def lerobot_img_to_uint8_hwc(img_tensor) -> np.ndarray:
+    """Convert LeRobot float32 CHW [0,1] tensor to uint8 HWC numpy array."""
+    arr = img_tensor.numpy()
+    if arr.ndim == 3 and arr.shape[0] in (1, 3):
+        arr = arr.transpose(1, 2, 0)
+    return (arr * 255).clip(0, 255).astype(np.uint8)
+
+
+def load_engine(checkpoint_path: str, device: str, model_image_keys: list[str]):
+    """Instantiate and initialize PyTorchPi05Inference directly (no server)."""
+    from scripts.async_pi05.pytorch_pi05_inference import PyTorchPi05Inference
+
+    engine = PyTorchPi05Inference(
+        checkpoint_path=checkpoint_path,
+        device=device,
+        image_keys=model_image_keys,
+    )
+    engine._initialize_blocking()
+    print(f"Model loaded on {device}")
+    return engine
+
+
+def prepare_batch(engine, frames: list[dict], lerobot_image_keys: list[str], high_level_prompt: str):
+    """Build a batched SimpleObservation by catting B individual B=1 observations."""
+    from scripts.async_pi05.pytorch_pi05_inference import SimpleObservation
+
+    obs_list = []
+    for item in frames:
+        images_np = {}
+        for lr_key in lerobot_image_keys:
+            model_key = IMAGE_KEY_MAP.get(lr_key, lr_key.split(".")[-1])
+            if lr_key in item:
+                images_np[model_key] = lerobot_img_to_uint8_hwc(item[lr_key])
+
+        state_tensor = item.get("observation.state")
+        state = state_tensor.numpy() if state_tensor is not None else None
+
+        obs = engine._prepare_observation(images_np, high_level_prompt, "", state)
+        obs_list.append(obs)
+
+    if len(obs_list) == 1:
+        return obs_list[0]
+
+    return SimpleObservation(
+        images={
+            k: torch.cat([o.images[k] for o in obs_list], dim=0)
+            for k in obs_list[0].images
+        },
+        image_masks={
+            k: torch.cat([o.image_masks[k] for o in obs_list], dim=0)
+            for k in obs_list[0].image_masks
+        },
+        state=torch.cat([o.state for o in obs_list], dim=0),
+        tokenized_prompt=torch.cat([o.tokenized_prompt for o in obs_list], dim=0),
+        tokenized_prompt_mask=torch.cat([o.tokenized_prompt_mask for o in obs_list], dim=0),
+        token_ar_mask=torch.cat([o.token_ar_mask for o in obs_list], dim=0),
+        token_loss_mask=torch.cat([o.token_loss_mask for o in obs_list], dim=0),
+    )
+
+
+def extract_latents(
+    checkpoint_path: str,
     dataset_path: str,
-    server_uri: str,
     high_level_prompt: str,
     output_path: str,
-    image_keys: list[str],
-    state_key: str | None = "observation.state",
-    use_shm: bool = True,
+    lerobot_image_keys: list[str],
+    device: str,
+    batch_size: int,
 ):
-    """Extract S2 latents for all frames in a dataset."""
+    model_image_keys = [IMAGE_KEY_MAP.get(k, k.split(".")[-1]) for k in lerobot_image_keys]
+    engine = load_engine(checkpoint_path, device, model_image_keys)
+
     print(f"Loading dataset from {dataset_path}...")
-    dataset = LeRobotDataset(dataset_path)
+    dataset = LeRobotDataset(dataset_path, video_backend="pyav")
     n_frames = len(dataset)
-    print(f"Dataset has {n_frames} frames")
+    print(f"Dataset: {n_frames} frames")
 
-    # Set up shared memory directory
-    if use_shm:
-        os.makedirs(SHM_DIR, exist_ok=True)
-        print(f"Using shared memory at {SHM_DIR}")
-        encode_fn = encode_image_shm
-    else:
-        print("Using base64 encoding")
-        encode_fn = None  # will use encode_image_base64
-
-    # Resume support: auto-detect from existing output file
+    # Resume support
+    output_path = os.path.expanduser(output_path)
     latents = []
-    timings = []
     resume_from = 0
-    output_path_expanded = os.path.expanduser(output_path)
-    if os.path.exists(output_path_expanded):
-        existing = np.load(output_path_expanded)
+    if os.path.exists(output_path):
+        existing = np.load(output_path)
         if existing.shape[0] >= n_frames:
-            print(f"Output file already complete ({n_frames} frames), nothing to do")
+            print(f"Already complete ({n_frames} frames). Nothing to do.")
             return existing
         resume_from = existing.shape[0]
         latents = list(existing)
-        print(f"Found existing {output_path} with {resume_from}/{n_frames} frames, resuming")
+        print(f"Resuming from frame {resume_from}/{n_frames}")
 
-    async with websockets.connect(server_uri, max_size=50 * 1024 * 1024) as ws:
-        # Read server metadata
-        metadata = json.loads(await ws.recv())
-        print(f"Connected to server: {metadata.get('model', 'unknown')}")
+    timings = []
+    idx = resume_from
+    while idx < n_frames:
+        batch_end = min(idx + batch_size, n_frames)
+        frames = [dataset[i] for i in range(idx, batch_end)]
+        actual_batch = len(frames)
 
-        for idx in range(resume_from, n_frames):
-            item = dataset[idx]
+        t0 = time.time()
+        batched_obs = prepare_batch(engine, frames, lerobot_image_keys, high_level_prompt)
+        with torch.no_grad():
+            latent_batch = engine.model.extract_prefix_latent(
+                engine.device, batched_obs, image_keys=engine.image_keys
+            )  # [B, 2048]
+        latent_np = latent_batch.float().cpu().numpy()
 
-            # Prepare images
-            images_data = {}
-            for key in image_keys:
-                if key in item:
-                    model_key = IMAGE_KEY_MAP.get(key, key.split(".")[-1])
-                    if use_shm:
-                        images_data[model_key] = encode_image_shm(item[key], model_key)
-                    else:
-                        images_data[model_key] = encode_image_base64(item[key])
+        elapsed_ms = (time.time() - t0) * 1000
+        ms_per_frame = elapsed_ms / actual_batch
+        timings.append(ms_per_frame)
 
-            if not images_data:
-                raise ValueError(f"No images found for keys {image_keys} at index {idx}")
+        for b in range(actual_batch):
+            latents.append(latent_np[b])
+        idx = batch_end
 
-            # Prepare state
-            state = None
-            if state_key and state_key in item:
-                state = item[state_key].numpy().tolist()
+        if idx % 100 == 0 or idx == n_frames:
+            avg_ms = np.mean(timings[-20:])
+            eta_s = avg_ms * (n_frames - idx) / 1000
+            print(f"  [{idx}/{n_frames}] {avg_ms:.1f}ms/frame | ETA: {eta_s/60:.1f}min")
 
-            # Build request
-            request = {
-                "mode": "extract_latent",
-                "images": images_data,
-                "high_level_prompt": high_level_prompt,
-            }
-            if state is not None:
-                request["state"] = state
+        if idx % 5000 == 0:
+            partial = np.stack(latents, axis=0)
+            np.save(output_path, partial)
+            print(f"  Checkpoint: {partial.shape}")
 
-            # Send and receive
-            await ws.send(json.dumps(request))
-            response = json.loads(await ws.recv())
-
-            if response.get("status") != "success":
-                raise RuntimeError(f"Server error at frame {idx}: {response.get('error')}")
-
-            latent = np.array(response["s2_latent"], dtype=np.float32)
-            latents.append(latent)
-            timings.append(response["timing"]["total_ms"])
-
-            if (idx + 1) % 100 == 0 or idx == n_frames - 1:
-                avg_ms = np.mean(timings[-100:])
-                eta_s = avg_ms * (n_frames - idx - 1) / 1000
-                eta_h = eta_s / 3600
-                print(f"  [{idx+1}/{n_frames}] avg: {avg_ms:.1f}ms | ETA: {eta_h:.1f}h")
-
-            # Periodic save every 10000 frames
-            if (idx + 1) % 10000 == 0:
-                partial = np.stack(latents, axis=0)
-                np.save(output_path, partial)
-                print(f"  Checkpoint saved: {partial.shape}")
-
-    # Clean up shared memory
-    if use_shm:
-        for f in os.listdir(SHM_DIR):
-            os.remove(os.path.join(SHM_DIR, f))
-        os.rmdir(SHM_DIR)
-
-    # Stack and save
-    latents_array = np.stack(latents, axis=0)  # [N_frames, 2048]
-    print(f"Saving latents with shape {latents_array.shape} to {output_path}")
+    latents_array = np.stack(latents, axis=0)
     np.save(output_path, latents_array)
-
-    print(f"Done. Mean extraction time: {np.mean(timings):.1f}ms")
+    print(f"Saved {latents_array.shape} → {output_path}")
+    print(f"Mean: {np.mean(timings):.1f}ms/frame  (batch_size={batch_size})")
     return latents_array
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract S2 latents from Pi0.5 for dual-system VLA")
-    parser.add_argument("--dataset-path", required=True, help="Path or repo_id of LeRobot dataset")
-    parser.add_argument("--server-uri", default="ws://localhost:8765", help="Pi0.5 WebSocket server URI")
-    parser.add_argument("--high-level-prompt", default="do the task", help="High-level task prompt")
-    parser.add_argument("--output-path", default="s2_latents.npy", help="Output .npy file path")
+    parser = argparse.ArgumentParser(description="Extract S2 latents directly from PyTorch Pi0.5")
+    parser.add_argument("--checkpoint-path", required=True, help="Pi0.5 PyTorch checkpoint directory")
+    parser.add_argument("--dataset-path", required=True, help="LeRobot dataset path or repo_id")
+    parser.add_argument("--high-level-prompt", default="do the task")
+    parser.add_argument("--output-path", default="s2_latents.npy")
     parser.add_argument(
         "--image-keys",
-        default="observation.images.front,observation.images.wrist_left,observation.images.right_wrist",
-        help="Comma-separated LeRobot image keys",
+        default="observation.images.front,observation.images.wrist_left,observation.images.wrist_right",
     )
-    parser.add_argument("--state-key", default="observation.state", help="State key (empty to skip)")
-    parser.add_argument("--no-shm", action="store_true", help="Disable shared memory, use base64 instead")
+    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--batch-size", type=int, default=8,
+        help="Frames per GPU forward pass. Increase if VRAM allows (16+ on 24GB).",
+    )
     args = parser.parse_args()
 
-    image_keys = [k.strip() for k in args.image_keys.split(",")]
-    state_key = args.state_key if args.state_key else None
-
-    asyncio.run(
-        extract_latents(
-            dataset_path=args.dataset_path,
-            server_uri=args.server_uri,
-            high_level_prompt=args.high_level_prompt,
-            output_path=args.output_path,
-            image_keys=image_keys,
-            state_key=state_key,
-            use_shm=not args.no_shm,
-        )
+    extract_latents(
+        checkpoint_path=args.checkpoint_path,
+        dataset_path=args.dataset_path,
+        high_level_prompt=args.high_level_prompt,
+        output_path=args.output_path,
+        lerobot_image_keys=[k.strip() for k in args.image_keys.split(",")],
+        device=args.device,
+        batch_size=args.batch_size,
     )
 
 
