@@ -195,8 +195,9 @@ python scripts/train_act_vlm.py \
 Inference
 ```
 python dual_system_infer.py \
-    --s1-checkpoint outputs/act_vlm_cylinder_ring_v4/checkpoint-100000 \
+    --s1-checkpoint outputs/act_vlm_cylinder_ring_v4/checkpoint-80000 \
     --task "assemble cylinder into ring" \
     --s2-host localhost --s2-port 8765 \
-    --resize-images 224x224
+    --resize-images 224x224 \
+    --temporal-ensemble-coeff 0.01
 ```
