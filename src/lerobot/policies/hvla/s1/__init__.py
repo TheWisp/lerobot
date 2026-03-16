@@ -1,11 +1,38 @@
 # S1 action policy for Hierarchical VLA.
 #
-# Currently uses ACTWithVLM from policies/act_vlm/.
-# Swappable — can be replaced with diffusion/flow-matching policy later.
-# The only contract is: S1 accepts "observation.s2_latent" [B, 2048]
-# and "observation.s2_latent_age" [B, 1] in the input batch.
+# Two implementations:
+#   1. ACTWithVLM (CVAE) — default, needs temporal ensembling
+#   2. FlowMatchingS1 — RTC prefix conditioning, no ensembling needed
+#
+# The contract is defined in protocol.py. Both implementations accept
+# S2 latent + age in the input batch.
 
-from lerobot.policies.act_vlm.modeling_act_vlm import ACTWithVLMPolicy, S2_LATENT_KEY, S2_AGE_KEY
-from lerobot.policies.act_vlm.configuration_act_vlm import ACTWithVLMConfig
+from lerobot.policies.hvla.s1.protocol import (
+    S1Policy,
+    S2_LATENT_KEY,
+    S2_AGE_KEY,
+    ACTION_PREFIX_KEY,
+)
 
-__all__ = ["ACTWithVLMPolicy", "ACTWithVLMConfig", "S2_LATENT_KEY", "S2_AGE_KEY"]
+# Lazy imports to avoid loading unnecessary dependencies
+def load_act_policy(checkpoint_path: str):
+    """Load ACTWithVLM policy (default S1)."""
+    from lerobot.policies.act_vlm.modeling_act_vlm import ACTWithVLMPolicy
+    return ACTWithVLMPolicy.from_pretrained(pretrained_name_or_path=checkpoint_path)
+
+
+def load_flow_matching_policy(checkpoint_path: str, config_overrides: dict | None = None):
+    """Load Flow Matching S1 policy."""
+    from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Policy, FlowMatchingS1Config
+    config = FlowMatchingS1Config(**(config_overrides or {}))
+    return FlowMatchingS1Policy.from_pretrained(checkpoint_path, config=config)
+
+
+__all__ = [
+    "S1Policy",
+    "S2_LATENT_KEY",
+    "S2_AGE_KEY",
+    "ACTION_PREFIX_KEY",
+    "load_act_policy",
+    "load_flow_matching_policy",
+]

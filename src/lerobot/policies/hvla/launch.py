@@ -42,6 +42,8 @@ def main():
     parser.add_argument("--zero-s2", action="store_true")
     parser.add_argument("--compile-s1", action="store_true",
                         help="torch.compile S1 model (experimental, may not work with DINOv2)")
+    parser.add_argument("--s1-type", choices=["act", "flow"], default="act",
+                        help="S1 policy type: 'act' (ACTWithVLM, default) or 'flow' (flow matching with RTC)")
     args = parser.parse_args()
 
     setup_process_logging()
@@ -115,6 +117,7 @@ def main():
             temporal_ensemble_coeff=args.temporal_ensemble_coeff,
             n_action_steps=args.n_action_steps,
             compile_s1=args.compile_s1,
+            s1_type=args.s1_type,
             stop_event=stop_event,
         )
     finally:

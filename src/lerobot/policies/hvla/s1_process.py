@@ -107,6 +107,7 @@ def run_s1(
     temporal_ensemble_coeff: float | None = None,
     n_action_steps: int | None = None,
     compile_s1: bool = False,
+    s1_type: str = "act",
     stop_event=None,
 ):
     """S1 control loop with robot. Runs in main process."""
@@ -118,11 +119,10 @@ def run_s1(
 
     import json
     import draccus
-    from lerobot.policies.act_vlm.modeling_act_vlm import ACTWithVLMPolicy, S2_LATENT_KEY
-    from lerobot.policies.factory import make_pre_post_processors
+    from lerobot.policies.hvla.s1.protocol import S2_LATENT_KEY
     from lerobot.robots import make_robot_from_config
     from lerobot.robots.config import RobotConfig
-    from lerobot.utils.control_utils import init_keyboard_listener
+    # keyboard listener removed — Ctrl+C via stop_event is sufficient
 
     # Register robot/camera types for draccus
     from lerobot.robots import bi_so107_follower  # noqa: F401
@@ -131,30 +131,41 @@ def run_s1(
 
     device = torch.device(device)
 
-    # Load S1 policy
-    logger.info("S1: Loading policy from %s", s1_checkpoint)
-    policy = ACTWithVLMPolicy.from_pretrained(pretrained_name_or_path=s1_checkpoint)
+    # Load S1 policy based on type
+    logger.info("S1: Loading %s policy from %s", s1_type, s1_checkpoint)
 
-    if temporal_ensemble_coeff is not None:
-        policy.config.temporal_ensemble_coeff = temporal_ensemble_coeff
-        policy.config.n_action_steps = 1
-        from lerobot.policies.act.modeling_act import ACTTemporalEnsembler
-        policy.temporal_ensembler = ACTTemporalEnsembler(temporal_ensemble_coeff, policy.config.chunk_size)
-        logger.info("S1: Temporal ensembling (coeff=%.3f)", temporal_ensemble_coeff)
-    elif n_action_steps is not None:
-        policy.config.n_action_steps = n_action_steps
-        logger.info("S1: n_action_steps=%d", n_action_steps)
+    if s1_type == "flow":
+        from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Policy, FlowMatchingS1Config
+        config = FlowMatchingS1Config()
+        policy = FlowMatchingS1Policy.from_pretrained(s1_checkpoint, config=config)
+        preprocessor = lambda batch: batch  # flow matching handles its own normalization
+        postprocessor = lambda actions: actions
+        s1_image_keys = list(config.image_features.keys())
+    else:
+        from lerobot.policies.act_vlm.modeling_act_vlm import ACTWithVLMPolicy
+        from lerobot.policies.factory import make_pre_post_processors
+        policy = ACTWithVLMPolicy.from_pretrained(pretrained_name_or_path=s1_checkpoint)
+
+        if temporal_ensemble_coeff is not None:
+            policy.config.temporal_ensemble_coeff = temporal_ensemble_coeff
+            policy.config.n_action_steps = 1
+            from lerobot.policies.act.modeling_act import ACTTemporalEnsembler
+            policy.temporal_ensembler = ACTTemporalEnsembler(temporal_ensemble_coeff, policy.config.chunk_size)
+            logger.info("S1: Temporal ensembling (coeff=%.3f)", temporal_ensemble_coeff)
+        elif n_action_steps is not None:
+            policy.config.n_action_steps = n_action_steps
+            logger.info("S1: n_action_steps=%d", n_action_steps)
+
+        s1_image_keys = list(policy.config.image_features.keys())
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy_cfg=policy.config, pretrained_path=s1_checkpoint,
+        )
 
     policy.to(device)
     policy.eval()
     policy.reset()
 
-    s1_image_keys = list(policy.config.image_features.keys())
-    logger.info("S1: Policy loaded. Image keys: %s", s1_image_keys)
-
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg=policy.config, pretrained_path=s1_checkpoint,
-    )
+    logger.info("S1: Policy loaded (%s). Image keys: %s", s1_type, s1_image_keys)
 
     # torch.compile is opt-in via --compile-s1 flag.
     # DINOv2 attention layers are not compatible with torch.compile out of the box.
@@ -177,8 +188,8 @@ def run_s1(
     robot.connect()
     logger.info("S1: Robot connected")
 
-    # Keyboard listener for abort
-    listener, events = init_keyboard_listener()
+    # No keyboard listener — use Ctrl+C (SIGINT) via stop_event from launch.py
+    listener = None
 
     # Note: S2 wait happens after inference thread starts (below),
     # because the inference thread publishes images that S2 needs.
@@ -205,6 +216,7 @@ def run_s1(
 
     _chunk_data = None       # np.ndarray [chunk_size, action_dim]
     _chunk_t_obs = 0.0       # perf_counter when obs was captured for current chunk
+    _chunk_prefix_len = 0    # how many prefix actions were inpainted (RTC)
     _chunk_lock = threading.Lock()
     _chunk_ready = threading.Event()
 
@@ -225,9 +237,25 @@ def run_s1(
     loop_intervals = []
     last_send_time = None
 
+    # RTC: previous chunk predictions used as prefix (arXiv:2512.05964, Ψ₀)
+    from lerobot.policies.hvla.s1.protocol import ACTION_PREFIX_KEY
+    _supports_rtc = getattr(policy, "supports_rtc", False)
+    _rtc_max_delay = getattr(policy, "rtc_prefix_length", 5) if _supports_rtc else 0
+    _needs_ensemble = getattr(policy, "needs_temporal_ensemble", True)
+
+    # Track which index in the current chunk the main loop is executing from
+    # so the inference thread can extract the overlap region as prefix.
+    _main_loop_chunk_idx = 0  # current execution index into _chunk_data
+    _main_loop_chunk_idx_lock = threading.Lock()
+
+    if _supports_rtc:
+        logger.info("S1: RTC enabled (max_delay=%d, dynamic prefix from prev chunk)", _rtc_max_delay)
+    elif _needs_ensemble:
+        logger.info("S1: Using temporal ensembling (no RTC)")
+
     def _inference_thread():
         """Reads obs from buffer → preps → infers → publishes chunk. No robot access."""
-        nonlocal _chunk_data, _chunk_t_obs
+        nonlocal _chunk_data, _chunk_t_obs, _chunk_prefix_len
 
         while _infer_running.is_set():
             if not _obs_ready.wait(timeout=0.5):
@@ -246,6 +274,28 @@ def run_s1(
                                     resize_to=resize_images)
             batch = preprocessor(batch)
 
+            # Add RTC prefix from previous chunk's predictions (arXiv:2512.05964, Ψ₀)
+            # The prefix = overlap region of the old chunk that was being executed
+            # during this inference cycle. Length d = actual inference delay in frames.
+            current_prefix_len = 0
+            if _supports_rtc:
+                with _chunk_lock:
+                    prev_chunk = _chunk_data  # previous chunk's predictions
+                with _main_loop_chunk_idx_lock:
+                    exec_idx = _main_loop_chunk_idx  # where main loop was executing from
+
+                if prev_chunk is not None and exec_idx > 0:
+                    # d = how many frames elapsed since this inference started
+                    # (will be measured after inference, but we can estimate from
+                    # the main loop's current position in the old chunk)
+                    d = min(exec_idx, _rtc_max_delay, len(prev_chunk) - 1)
+                    if d > 0:
+                        # Overlap: prev_chunk[exec_idx-d : exec_idx]
+                        start = max(exec_idx - d, 0)
+                        prefix = prev_chunk[start:exec_idx]
+                        batch[ACTION_PREFIX_KEY] = torch.from_numpy(prefix).unsqueeze(0).to(device)
+                        current_prefix_len = prefix.shape[0]
+
             # Inference
             t_infer = time.perf_counter()
             with torch.no_grad():
@@ -257,9 +307,38 @@ def run_s1(
 
             chunk_np = actions.cpu().numpy()[0]
 
+            # Diagnostic: slide new chunk against old to find best alignment
+            with _chunk_lock:
+                old_chunk = _chunk_data
+                old_t_obs = _chunk_t_obs
+
+            if old_chunk is not None and old_t_obs is not None:
+                dt_frames = round((t_obs - old_t_obs) * fps)
+                if dt_frames > 0 and dt_frames < len(chunk_np):
+                    # Test offsets around expected alignment
+                    best_offset = 0
+                    best_err = float("inf")
+                    errors = []
+                    for offset in range(max(0, dt_frames - 5), min(len(chunk_np) - 1, dt_frames + 6)):
+                        # Compare new[0:N] vs old[offset:offset+N]
+                        n = min(10, len(chunk_np) - offset, len(old_chunk) - offset)
+                        if n <= 0:
+                            continue
+                        err = np.mean(np.abs(chunk_np[:n] - old_chunk[offset:offset + n]))
+                        errors.append(f"{offset}={err:.1f}")
+                        if err < best_err:
+                            best_err = err
+                            best_offset = offset
+                    if len(errors) > 0 and (len(s1_infer_times) <= 5 or len(s1_infer_times) % 50 == 0):
+                        logger.info(
+                            "S1 alignment | dt=%d frames | expected=%d | best=%d (err=%.1f) | %s",
+                            dt_frames, dt_frames, best_offset, best_err, " ".join(errors),
+                        )
+
             with _chunk_lock:
                 _chunk_data = chunk_np
                 _chunk_t_obs = t_obs
+                _chunk_prefix_len = current_prefix_len
                 _chunk_ready.set()
 
     # Start inference thread (no robot access — only GPU)
@@ -297,8 +376,8 @@ def run_s1(
         while stop_event is None or not stop_event.is_set():
             loop_start = time.perf_counter()
 
-            if events.get("stop_recording"):
-                logger.info("S1: Escape pressed — aborting")
+            if stop_event is not None and stop_event.is_set():
+                logger.info("S1: Stop signal received")
                 break
 
             # 1. Capture observation (main loop owns robot)
@@ -316,27 +395,42 @@ def run_s1(
             with _chunk_lock:
                 chunk = _chunk_data
                 t_obs = _chunk_t_obs
+                prefix_len = _chunk_prefix_len
 
             if chunk is None:
                 time.sleep(1.0 / fps)
                 continue
 
-            # 4. Index chunk and send action — computed RIGHT BEFORE send for minimum staleness.
-            # t_obs = when the inference thread captured the obs that produced this chunk.
-            # elapsed = total time from that obs capture to now (includes: inference thread
-            # waiting for obs, prep, model inference, chunk publish, AND main loop's own
-            # obs capture + S2 publish overhead in this iteration).
-            # The chunk predicts action[i] for time t_obs + i/fps. We want the action
-            # for "right now", so idx = ceil(elapsed * fps).
+            # 4. Index chunk and send action.
+            #
+            # For ACT (no RTC):
+            #   chunk[0] = prediction for t_obs. Skip by elapsed time.
+            #   idx = round(elapsed * fps)
+            #
+            # For flow matching with RTC:
+            #   chunk[0:D] = inpainted prefix (actions from prev chunk executed
+            #                during inference — these cover the delay period)
+            #   chunk[D]   = first NEW prediction = "right now"
+            #   No additional time-skip — the prefix already absorbs the delay.
+            #   (arXiv:2512.05964: "d actions from the previous chunk that overlap")
             t_before_send = time.perf_counter()
             elapsed = t_before_send - t_obs
-            idx = math.ceil(elapsed * fps)
+
+            if _supports_rtc:
+                idx = prefix_len  # prefix absorbed the delay, start from first prediction
+            else:
+                idx = round(elapsed * fps)  # ACT: skip by measured latency
             idx = max(0, min(idx, len(chunk) - 1))
             action_np = chunk[idx]
 
             action_dict = {name: float(action_np[i]) for i, name in enumerate(JOINT_NAMES) if i < len(action_np)}
             robot.send_action(action_dict)
             t_after_send = time.perf_counter()
+
+            # Track chunk execution index for RTC prefix extraction
+            if _supports_rtc:
+                with _main_loop_chunk_idx_lock:
+                    _main_loop_chunk_idx = idx + 1  # next index to execute
 
             # Smoothness tracking (after send, not on critical path)
             if prev_action_np is not None:
@@ -386,8 +480,6 @@ def run_s1(
             robot.disconnect()
         except Exception as e:
             logger.warning("Robot disconnect error (non-fatal): %s", e)
-        if listener is not None:
-            listener.stop()
 
 
 def _soft_land(robot, duration_s=4.0, steps=20):
