@@ -38,7 +38,7 @@ from pathlib import Path
 import draccus
 import numpy as np
 import torch
-import torch.nn.functional as F
+import torchvision.transforms.functional as TF
 
 # Register draccus ChoiceRegistry subclasses before any decode calls
 from lerobot.robots import bi_so107_follower  # noqa: F401
@@ -217,6 +217,7 @@ def obs_to_s1_batch(
     s2_latent_key: str,
     device: torch.device,
     resize_to: tuple[int, int] | None = None,
+    _profile: bool = False,
 ) -> dict:
     """Convert robot observation to S1 input batch.
 
@@ -225,27 +226,64 @@ def obs_to_s1_batch(
     S2 latent is pulled from cache (or omitted for zero fallback).
     """
     batch = {}
+    profile_parts = {} if _profile else None
 
     # Images → [1, C, H, W] float tensors
+    # Resize on CPU first to minimize CPU→GPU transfer (0.6MB vs 10.5MB per image)
     for key in s1_image_keys:
         # key is like "observation.images.front" → extract camera name
         cam_name = key.split(".")[-1]
         if cam_name in robot_obs:
+            if _profile:
+                t0 = time.perf_counter()
             img = np.asarray(robot_obs[cam_name], dtype=np.uint8)  # HWC
-            img_tensor = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0  # CHW
-            img_tensor = img_tensor.unsqueeze(0).to(device)
+            img_tensor = torch.from_numpy(img).permute(2, 0, 1)  # CHW, uint8
+            if _profile:
+                t1 = time.perf_counter()
             if resize_to is not None:
-                img_tensor = F.interpolate(img_tensor, size=resize_to, mode="bilinear", align_corners=False)
+                img_tensor = TF.resize(img_tensor, list(resize_to),
+                                       interpolation=TF.InterpolationMode.BILINEAR, antialias=True)
+            if _profile:
+                t2 = time.perf_counter()
+            img_tensor = img_tensor.unsqueeze(0).float().div_(255.0)
+            if _profile:
+                t3 = time.perf_counter()
+            img_tensor = img_tensor.to(device)
+            if _profile:
+                torch.cuda.synchronize()
+                t4 = time.perf_counter()
+                profile_parts[cam_name] = {
+                    "np_permute": (t1 - t0) * 1000,
+                    "resize": (t2 - t1) * 1000,
+                    "float_div": (t3 - t2) * 1000,
+                    "to_gpu": (t4 - t3) * 1000,
+                }
             batch[key] = img_tensor
 
     # State → [1, 14]
+    if _profile:
+        t0 = time.perf_counter()
     state = [float(robot_obs[name]) for name in JOINT_NAMES]
     batch["observation.state"] = torch.tensor([state], dtype=torch.float32, device=device)
+    if _profile:
+        t1 = time.perf_counter()
+        profile_parts["state"] = (t1 - t0) * 1000
 
     # S2 latent from cache
-    latent, _ = s2_cache.get()
+    if _profile:
+        t0 = time.perf_counter()
+    latent, ts = s2_cache.get()
     if latent is not None:
         batch[s2_latent_key] = torch.from_numpy(latent).unsqueeze(0).to(device)
+        age_seconds = (time.time() - ts) if ts > 0 else 0.0
+        batch["observation.s2_latent_age"] = torch.tensor([[age_seconds]], dtype=torch.float32, device=device)
+    if _profile:
+        torch.cuda.synchronize()
+        t1 = time.perf_counter()
+        profile_parts["s2_latent"] = (t1 - t0) * 1000
+
+    if _profile:
+        batch["_profile"] = profile_parts
 
     return batch
 
@@ -454,9 +492,24 @@ def control_loop(robot, events, args):
             obs_cache.update(obs)
 
             t_prep = time.perf_counter()
-            batch = obs_to_s1_batch(obs, s1_image_keys, s2_cache, S2_LATENT_KEY, device, resize_to=resize_to)
+            do_profile = (step_count < 3 or step_count % 500 == 0)
+            batch = obs_to_s1_batch(obs, s1_image_keys, s2_cache, S2_LATENT_KEY, device,
+                                    resize_to=resize_to, _profile=do_profile)
+            prep_profile = batch.pop("_profile", None)
+            t_preproc = time.perf_counter()
             batch = preprocessor(batch)
+            preproc_ms = (time.perf_counter() - t_preproc) * 1000
             prep_ms = (time.perf_counter() - t_prep) * 1000
+            if prep_profile is not None:
+                parts = []
+                for cam, timings in prep_profile.items():
+                    if isinstance(timings, dict):
+                        parts.append(f"{cam}: np={timings['np_permute']:.1f} resize={timings['resize']:.1f} "
+                                     f"float={timings['float_div']:.1f} gpu={timings['to_gpu']:.1f}ms")
+                    else:
+                        parts.append(f"{cam}: {timings:.1f}ms")
+                logger.info("Step %d prep profile (%.1fms total, preproc=%.1fms): %s",
+                            step_count, prep_ms, preproc_ms, " | ".join(parts))
 
             t_infer = time.perf_counter()
             with torch.no_grad():

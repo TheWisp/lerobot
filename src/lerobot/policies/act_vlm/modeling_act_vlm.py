@@ -33,6 +33,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
 
 S2_LATENT_KEY = "observation.s2_latent"
+S2_AGE_KEY = "observation.s2_latent_age"  # age in seconds (scalar per batch item)
 
 
 class ACTWithVLMPolicy(PreTrainedPolicy):
@@ -74,17 +75,37 @@ class ACTWithVLMPolicy(PreTrainedPolicy):
             self._action_queue = deque([], maxlen=self.config.n_action_steps)
 
     @torch.no_grad()
-    def select_action(self, batch: dict[str, Tensor]) -> Tensor:
+    def select_action(self, batch: dict[str, Tensor], action_offset: int = 0) -> Tensor:
+        """Return one action to execute.
+
+        Args:
+            batch: Observation batch.
+            action_offset: Number of actions to skip into the chunk to compensate
+                for inference delay. E.g., if inference took 40ms at 30fps,
+                action_offset=1 skips the first (stale) action.
+                With temporal ensembling, shifts the ensembler output index.
+        """
         self.eval()
 
         if self.config.temporal_ensemble_coeff is not None:
-            actions = self.predict_action_chunk(batch)
+            actions = self.predict_action_chunk(batch)  # [B, chunk_size, action_dim]
+            # Time-shift: drop first `action_offset` actions so the ensembler
+            # blends over actions that correspond to "now" instead of "40ms ago".
+            # Pad the end with the last action to keep chunk_size consistent.
+            if action_offset > 0 and actions.shape[1] > action_offset:
+                shifted = actions[:, action_offset:]
+                pad = actions[:, -1:].expand(-1, action_offset, -1)
+                actions = torch.cat([shifted, pad], dim=1)
             action = self.temporal_ensembler.update(actions)
             return action
 
         if len(self._action_queue) == 0:
-            actions = self.predict_action_chunk(batch)[:, : self.config.n_action_steps]
-            self._action_queue.extend(actions.transpose(0, 1))
+            actions = self.predict_action_chunk(batch)
+            # Skip first `action_offset` actions, then take n_action_steps
+            start = min(action_offset, actions.shape[1] - self.config.n_action_steps)
+            start = max(start, 0)
+            end = start + self.config.n_action_steps
+            self._action_queue.extend(actions[:, start:end].transpose(0, 1))
         return self._action_queue.popleft()
 
     @torch.no_grad()
@@ -139,6 +160,17 @@ class ACTWithVLM(nn.Module):
             nn.Linear(config.s2_latent_dim, config.s2_projector_hidden_dim),
             nn.GELU(),
             nn.Linear(config.s2_projector_hidden_dim, config.dim_model),
+        )
+        # Age embedding: encodes latent staleness (seconds) → added to projected s2 token.
+        # Output layer is zero-initialized so age_embedding(0.0) = zeros,
+        # preserving backward compatibility with checkpoints that lack these weights.
+        age_out_layer = nn.Linear(config.s2_age_embedding_dim, config.dim_model)
+        nn.init.zeros_(age_out_layer.weight)
+        nn.init.zeros_(age_out_layer.bias)
+        self.s2_age_embedding = nn.Sequential(
+            nn.Linear(1, config.s2_age_embedding_dim),
+            nn.GELU(),
+            age_out_layer,
         )
 
         # --- VAE encoder (same as ACT) ---
@@ -286,6 +318,13 @@ class ACTWithVLM(nn.Module):
             )
 
         s2_token = self.s2_projector(s2_latent)  # [B, dim_model]
+
+        # --- S2 latent age embedding (additive) ---
+        if S2_AGE_KEY in batch:
+            age_seconds = batch[S2_AGE_KEY]  # [B, 1] or [B]
+            if age_seconds.ndim == 1:
+                age_seconds = age_seconds.unsqueeze(-1)  # [B, 1]
+            s2_token = s2_token + self.s2_age_embedding(age_seconds)  # [B, dim_model]
 
         # --- VAE encoder (same as ACT) ---
         if self.config.use_vae and ACTION in batch and self.training:

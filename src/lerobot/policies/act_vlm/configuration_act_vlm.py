@@ -22,6 +22,7 @@ class ACTWithVLMConfig(ACTConfig):
     # S2 (VLM) latent conditioning
     s2_latent_dim: int = 2048
     s2_projector_hidden_dim: int = 1024
+    s2_age_embedding_dim: int = 64  # intermediate dim for age MLP (1 → 64 → dim_model)
 
     # DINOv2 backbone option
     use_dino_backbone: bool = False

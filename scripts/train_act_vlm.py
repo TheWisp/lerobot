@@ -28,7 +28,7 @@ from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.policies.act_vlm.configuration_act_vlm import ACTWithVLMConfig
-from lerobot.policies.act_vlm.modeling_act_vlm import ACTWithVLMPolicy, S2_LATENT_KEY
+from lerobot.policies.act_vlm.modeling_act_vlm import ACTWithVLMPolicy, S2_LATENT_KEY, S2_AGE_KEY
 from lerobot.policies.factory import make_pre_post_processors
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
@@ -45,10 +45,29 @@ class LeRobotDatasetWithLatents(Dataset):
 
     The latents .npy file must have shape [N_frames, latent_dim] where N_frames
     matches the dataset length exactly.
+
+    Supports delay augmentation: randomly shifts the latent index backward by
+    k frames (within the same episode) to simulate S2 staleness during inference.
+    The age (k / fps) is injected as S2_AGE_KEY for the age embedding.
     """
 
-    def __init__(self, dataset: LeRobotDataset, latent_path: str):
+    def __init__(
+        self,
+        dataset: LeRobotDataset,
+        latent_path: str,
+        max_delay_seconds: float = 0.0,
+        fps: int = 30,
+    ):
+        """
+        Args:
+            dataset: Base LeRobot dataset.
+            latent_path: Path to .npy file with shape [N_frames, latent_dim].
+            max_delay_seconds: Maximum simulated S2 delay in seconds. 0 = no augmentation.
+            fps: Dataset recording FPS (for converting delay to frames).
+        """
         self.dataset = dataset
+        self.fps = fps
+        self.max_delay_frames = int(max_delay_seconds * fps)
         latent_path = os.path.expanduser(latent_path)
 
         if not os.path.exists(latent_path):
@@ -69,7 +88,38 @@ class LeRobotDatasetWithLatents(Dataset):
                 f"Re-run extract_s2_latents.py to generate latents for all frames."
             )
 
+        # Build episode start index lookup for delay clipping.
+        # episode_starts[i] = first frame index of the episode containing frame i.
+        self._episode_starts = self._build_episode_starts()
+
+        if self.max_delay_frames > 0:
+            logger.info(
+                f"[INIT] Delay augmentation enabled: max_delay={max_delay_seconds}s "
+                f"= {self.max_delay_frames} frames at {fps}fps"
+            )
+
         self._getitem_calls = 0
+
+    def _build_episode_starts(self) -> np.ndarray:
+        """Build array mapping frame_idx → episode start frame."""
+        n = len(self.dataset)
+        ep_starts = np.zeros(n, dtype=np.int64)
+
+        # Load the hf_dataset to read episode_index per frame
+        self.dataset._ensure_hf_dataset_loaded()
+        ep_indices = self.dataset.hf_dataset["episode_index"]
+
+        current_ep = -1
+        current_start = 0
+        for i, ep_idx in enumerate(ep_indices):
+            if isinstance(ep_idx, torch.Tensor):
+                ep_idx = ep_idx.item()
+            if ep_idx != current_ep:
+                current_ep = ep_idx
+                current_start = i
+            ep_starts[i] = current_start
+
+        return ep_starts
 
     def __len__(self):
         return len(self.dataset)
@@ -79,20 +129,37 @@ class LeRobotDatasetWithLatents(Dataset):
         item = self.dataset[idx]
         inner_ms = (_t() - t0) * 1000
 
-        item[S2_LATENT_KEY] = torch.from_numpy(self.latents[idx]).float()
+        # Delay augmentation: shift latent index backward within episode
+        if self.max_delay_frames > 0 and self.training_mode:
+            k = np.random.randint(0, self.max_delay_frames + 1)
+            ep_start = self._episode_starts[idx]
+            delayed_idx = max(idx - k, ep_start)
+            age_seconds = k / self.fps
+        else:
+            delayed_idx = idx
+            age_seconds = 0.0
+
+        item[S2_LATENT_KEY] = torch.from_numpy(self.latents[delayed_idx]).float()
+        item[S2_AGE_KEY] = torch.tensor([age_seconds], dtype=torch.float32)
+
         total_ms = (_t() - t0) * 1000
 
         self._getitem_calls += 1
-        # Log first 5 calls and every 1000th call
         if self._getitem_calls <= 5 or self._getitem_calls % 1000 == 0:
             shapes = {k: tuple(v.shape) if hasattr(v, "shape") else type(v).__name__
                       for k, v in item.items()}
+            delay_info = f" delay={idx - delayed_idx}frames age={age_seconds:.2f}s" if self.max_delay_frames > 0 else ""
             logger.info(
-                f"[GETITEM #{self._getitem_calls}] idx={idx} "
+                f"[GETITEM #{self._getitem_calls}] idx={idx}{delay_info} "
                 f"inner={inner_ms:.1f}ms total={total_ms:.1f}ms | shapes={shapes}"
             )
 
         return item
+
+    @property
+    def training_mode(self):
+        """Check if we should apply augmentation (only during training)."""
+        return True  # DataLoader workers always in training mode
 
     # Expose attributes that the training loop may need
     @property
@@ -126,6 +193,9 @@ def main():
     parser.add_argument("--dataset-root", default=None, help="Local root override for dataset")
     parser.add_argument("--s2-latent-path", required=True, help="Path to precomputed S2 latents .npy file")
     parser.add_argument("--episodes", default=None, help="Comma-separated episode indices (default: all)")
+    parser.add_argument("--max-delay", type=float, default=0.5,
+                        help="Max S2 delay augmentation in seconds (0=disabled, default=0.5)")
+    parser.add_argument("--dataset-fps", type=int, default=30, help="Dataset recording FPS")
 
     # Model
     parser.add_argument("--s2-latent-dim", type=int, default=2048, help="S2 latent dimension")
@@ -268,7 +338,11 @@ def main():
     # Wrap with S2 latents (np.load happens inside constructor)
     t0 = _t()
     logger.info("[INIT 6/7] Wrapping dataset with S2 latents...")
-    dataset_with_latents = LeRobotDatasetWithLatents(dataset, args.s2_latent_path)
+    dataset_with_latents = LeRobotDatasetWithLatents(
+        dataset, args.s2_latent_path,
+        max_delay_seconds=args.max_delay,
+        fps=args.dataset_fps,
+    )
     logger.info(f"[INIT 6/7] Wrap done in {(_t()-t0)*1000:.0f}ms | {dataset_with_latents.num_frames} frames")
 
     # --- Dataloader ---
