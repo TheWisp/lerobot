@@ -144,6 +144,7 @@ function renderEditor() {
     html += '<div class="editor-header">';
     html += '<div class="editor-header-row">';
     html += `<h2>${esc(currentProfile.name)}</h2>`;
+    html += `<button class="btn-small secondary" onclick="openProfileFolder()" title="Open in file manager">Open Folder</button>`;
     html += `<button class="btn-small secondary" onclick="renameProfile()" title="Rename profile">Rename</button>`;
     html += `<button class="btn-small danger" onclick="deleteProfile('${esc(currentProfile.kind)}', '${esc(currentProfile.name)}')" title="Delete profile">Delete</button>`;
     html += '</div>';
@@ -354,6 +355,23 @@ async function saveProfile() {
         // Reload lists in case type changed
         if (currentProfile.kind === 'robot') await loadRobotProfiles();
         else await loadTeleopProfiles();
+    } catch (e) {
+        showToast('Error', e.message, 'error');
+    }
+}
+
+async function openProfileFolder() {
+    if (!currentProfile) return;
+    try {
+        const res = await fetch('/api/robot/open-in-files', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind: currentProfile.kind })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: 'Failed' }));
+            showToast('Error', err.detail, 'error');
+        }
     } catch (e) {
         showToast('Error', e.message, 'error');
     }

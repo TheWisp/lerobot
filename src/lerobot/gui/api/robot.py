@@ -583,6 +583,23 @@ class IdentifyArmRequest(BaseModel):
     port: str
 
 
+@router.post("/open-in-files")
+async def open_in_file_manager(body: dict) -> dict:
+    """Open a profile directory in the system file manager."""
+    import subprocess as _subprocess
+
+    kind = body.get("kind", "robot")
+    profiles_dir = ROBOT_PROFILES_DIR if kind == "robot" else TELEOP_PROFILES_DIR
+    _ensure_dir(profiles_dir)
+
+    try:
+        _subprocess.Popen(["xdg-open", str(profiles_dir)])
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="xdg-open not found")
+
+    return {"status": "ok"}
+
+
 @router.post("/identify-arm")
 async def identify_arm(request: IdentifyArmRequest) -> dict:
     """Wiggle the shoulder motor on the given port to identify which arm it is."""
