@@ -92,7 +92,7 @@ python -m lerobot.policies.hvla.launch \
 ```bash
 python -m lerobot.policies.hvla.launch \
     --s1-type flow \
-    --s1-checkpoint outputs/flow_s1_hvla/checkpoint-25000/model.safetensors \
+    --s1-checkpoint outputs/flow_s1_hvla_v3/checkpoint-50000/model.safetensors \
     --s2-checkpoint ~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch/model.safetensors \
     --task "assemble cylinder into ring" \
     --resize-images 224x224
@@ -100,7 +100,28 @@ python -m lerobot.policies.hvla.launch \
 
 No `--temporal-ensemble-coeff` needed — RTC provides chunk continuity natively.
 
-Spawns S2 as a separate process communicating via CPU shared memory (0.04ms latency). S1 runs in the main process with robot access.
+S2 auto-discovery: the launcher first tries to attach to an existing S2 process via shared memory. If found, S1 starts instantly (no 45s cold start). If not found, spawns S2 from `--s2-checkpoint`.
+
+### 3c. Persistent S2 (recommended for iteration)
+
+Start S2 once in a separate terminal — it stays hot between S1 restarts:
+```bash
+# Terminal 1: start S2 (one-time, stays running)
+python -m lerobot.policies.hvla.s2_standalone \
+    --checkpoint ~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch/model.safetensors \
+    --task "assemble cylinder into ring"
+```
+
+```bash
+# Terminal 2: start/restart S1 freely (connects to S2 instantly)
+python -m lerobot.policies.hvla.launch \
+    --s1-type flow \
+    --s1-checkpoint outputs/flow_s1_hvla_v3/checkpoint-50000/model.safetensors \
+    --task "assemble cylinder into ring" \
+    --resize-images 224x224
+```
+
+S1 auto-discovers the running S2 via well-known shared memory names. No `--s2-checkpoint` needed when S2 is already running.
 
 ### 3b. Inference (legacy WebSocket — compatible with OpenPI server)
 

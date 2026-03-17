@@ -43,7 +43,17 @@ class SharedBlock:
         self._total_size = _HEADER_SIZE + self._data_size
 
         if create:
-            self._shm = multiprocessing.shared_memory.SharedMemory(create=True, size=self._total_size)
+            # Clean up stale shared memory from previous runs if name is specified
+            if name is not None:
+                try:
+                    old = multiprocessing.shared_memory.SharedMemory(name=name)
+                    old.close()
+                    old.unlink()
+                except FileNotFoundError:
+                    pass
+            self._shm = multiprocessing.shared_memory.SharedMemory(
+                name=name, create=True, size=self._total_size,
+            )
             self._shm.buf[:_HEADER_SIZE] = struct.pack(_HEADER_FMT, 0, 0, 0.0)
             self._shm.buf[_HEADER_SIZE:] = b'\x00' * self._data_size
         else:
@@ -131,11 +141,19 @@ class SharedLatentCache:
 
     S2 calls write(latent_tensor). S1 calls read() or read_with_age().
     Torn-read protected via sequence counters in SharedBlock.
+
+    Args:
+        latent_dim: size of the latent vector.
+        create: True to create new shared memory (S2 side), False to attach (S1 side).
+        name: well-known name for persistent S2. If None, auto-generated.
     """
 
-    def __init__(self, latent_dim: int = 2048):
+    SHM_NAME = "hvla_s2_latent"
+
+    def __init__(self, latent_dim: int = 2048, create: bool = True, name: str | None = None):
         self.latent_dim = latent_dim
-        self._block = SharedBlock(name=None, shape=(latent_dim,), dtype=np.float32, create=True)
+        shm_name = name or self.SHM_NAME
+        self._block = SharedBlock(name=shm_name, shape=(latent_dim,), dtype=np.float32, create=create)
 
     def write(self, latent: Tensor) -> None:
         self._block.write(latent.detach().cpu().to(torch.float32).numpy())
@@ -176,9 +194,15 @@ class SharedImageBuffer:
 
     One SharedBlock per camera + one for joint state.
     S1 calls write_images(), S2 calls read_images().
+
+    Args:
+        create: True to create (S1/launcher side), False to attach (S2 standalone).
     """
 
-    def __init__(self, camera_keys: tuple[str, ...], height: int = 720, width: int = 1280, channels: int = 3):
+    SHM_PREFIX = "hvla_img_"
+
+    def __init__(self, camera_keys: tuple[str, ...], height: int = 720, width: int = 1280, channels: int = 3,
+                 create: bool = True):
         self.camera_keys = camera_keys
         self.height = height
         self.width = width
@@ -186,11 +210,14 @@ class SharedImageBuffer:
 
         self._cam_blocks: dict[str, SharedBlock] = {}
         for key in camera_keys:
+            shm_name = f"{self.SHM_PREFIX}{key}"
             self._cam_blocks[key] = SharedBlock(
-                name=None, shape=(height, width, channels), dtype=np.uint8, create=True,
+                name=shm_name, shape=(height, width, channels), dtype=np.uint8, create=create,
             )
 
-        self._state_block = SharedBlock(name=None, shape=(32,), dtype=np.float32, create=True)
+        self._state_block = SharedBlock(
+            name=f"{self.SHM_PREFIX}_state", shape=(32,), dtype=np.float32, create=create,
+        )
 
     def write_images(self, robot_obs: dict, cam_key_map: dict[str, str], joint_names: list[str]):
         for s1_name, s2_name in cam_key_map.items():

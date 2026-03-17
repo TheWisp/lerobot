@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 def main():
     parser = argparse.ArgumentParser(description="HVLA dual-system inference (local, no server)")
     parser.add_argument("--s1-checkpoint", required=True)
-    parser.add_argument("--s2-checkpoint", required=True)
+    parser.add_argument("--s2-checkpoint", default=None,
+                        help="Path to S2 checkpoint (not needed with --attach-s2 or --zero-s2)")
     parser.add_argument("--task", required=True)
     parser.add_argument("--robot-config", default=None)
     parser.add_argument("--fps", type=int, default=30)
@@ -48,6 +49,9 @@ def main():
                         help="Sleep ms after each S2 query to yield GPU to S1 (0=no throttle)")
     args = parser.parse_args()
 
+    # s2-checkpoint only needed if no existing S2 process is found
+    # (validated later, after attempting to attach)
+
     setup_process_logging()
 
     resize = tuple(int(x) for x in args.resize_images.split("x")) if args.resize_images else None
@@ -56,9 +60,31 @@ def main():
     # Use 'spawn' context — child process gets fresh CUDA context
     ctx = multiprocessing.get_context("spawn")
 
-    # Shared memory IPC (named blocks, survive spawn/pickle)
-    shared_cache = SharedLatentCache(latent_dim=2048)
-    shared_images = SharedImageBuffer(camera_keys=s2_image_keys)
+    # Shared memory IPC — try to attach to existing S2, fall back to spawning
+    s2_attached = False
+    if not args.zero_s2:
+        # Try to attach to an existing S2 process (started by s2_standalone.py)
+        try:
+            shared_cache = SharedLatentCache(create=False, name=SharedLatentCache.SHM_NAME)
+            shared_images = SharedImageBuffer(camera_keys=s2_image_keys, create=False)
+            s2_attached = True
+            logger.info("Attached to existing S2 (latent count=%d, age=%.0fms)",
+                        shared_cache.count, shared_cache.age_ms)
+        except FileNotFoundError:
+            # No existing S2 — need to spawn one
+            if args.s2_checkpoint is None:
+                logger.error("No S2 process found and no --s2-checkpoint provided.\n"
+                             "Either start S2 first:\n"
+                             "  python -m lerobot.policies.hvla.s2_standalone --checkpoint ... --task ...\n"
+                             "Or provide --s2-checkpoint to spawn one.")
+                return
+            logger.info("No existing S2 found, will spawn from checkpoint")
+            shared_cache = SharedLatentCache(create=True)
+            shared_images = SharedImageBuffer(camera_keys=s2_image_keys, create=True)
+    else:
+        shared_cache = SharedLatentCache(create=True)
+        shared_images = SharedImageBuffer(camera_keys=s2_image_keys, create=True)
+
     stop_event = ctx.Event()
 
     # Ctrl+C handling: first = graceful, second = force quit
@@ -76,9 +102,11 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Start S2 process
+    # Start S2 process (unless already attached or using zero stub)
     s2_proc = None
-    if args.zero_s2:
+    if s2_attached:
+        logger.info("Using existing S2 process (no spawn)")
+    elif args.zero_s2:
         import torch
         logger.info("--zero-s2: S2 disabled, using zero latent (ablation mode)")
         shared_cache.write(torch.zeros(2048))
