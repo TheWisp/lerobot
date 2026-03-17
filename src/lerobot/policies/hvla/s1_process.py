@@ -61,6 +61,10 @@ def obs_to_s1_batch(
     batch["observation.state"] = torch.tensor([state], dtype=torch.float32, device=device)
 
     latent, age_seconds = shared_cache.read_with_age()
+    # Clamp age to training range — model was trained with max_delay_seconds
+    # (e.g., 0.15s). Ages beyond that are out-of-distribution.
+    max_train_age = 0.15  # must match --max-delay used during training
+    age_seconds = min(age_seconds, max_train_age)
     batch[s2_latent_key] = latent.unsqueeze(0).to(device)
     batch["observation.s2_latent_age"] = torch.tensor([[age_seconds]], dtype=torch.float32, device=device)
 
@@ -216,6 +220,7 @@ def run_s1(
 
     _chunk_data = None       # np.ndarray [chunk_size, action_dim]
     _chunk_t_obs = 0.0       # perf_counter when obs was captured for current chunk
+    _chunk_t_origin = 0.0    # perf_counter: chunk[0] corresponds to this wall-clock time
     _chunk_prefix_len = 0    # how many prefix actions were inpainted (RTC)
     _chunk_lock = threading.Lock()
     _chunk_ready = threading.Event()
@@ -255,7 +260,7 @@ def run_s1(
 
     def _inference_thread():
         """Reads obs from buffer → preps → infers → publishes chunk. No robot access."""
-        nonlocal _chunk_data, _chunk_t_obs, _chunk_prefix_len
+        nonlocal _chunk_data, _chunk_t_obs, _chunk_t_origin, _chunk_prefix_len
 
         while _infer_running.is_set():
             if not _obs_ready.wait(timeout=0.5):
@@ -283,11 +288,15 @@ def run_s1(
             # become the prefix. The model inpaints them at positions [0:d]
             # and predicts the continuation at [d:].
             current_prefix_len = 0
+            exec_idx = None
+            expected_d = 0
+            prefix = None
             if _supports_rtc:
                 with _chunk_lock:
                     old_chunk = _chunk_data
                 with _main_loop_chunk_idx_lock:
                     exec_idx = _main_loop_chunk_idx
+                    t_exec_idx = time.perf_counter()  # when this exec_idx was current
 
                 if old_chunk is not None and exec_idx < len(old_chunk):
                     # Estimate frames that will elapse during inference
@@ -304,47 +313,78 @@ def run_s1(
                     current_prefix_len = prefix.shape[0]
 
             # Inference
-            t_infer = time.perf_counter()
+            t_infer_start = time.perf_counter()
             with torch.no_grad():
                 actions = policy.predict_action_chunk(batch)  # [1, chunk_size, action_dim]
                 actions = postprocessor(actions)
-            infer_ms = (time.perf_counter() - t_infer) * 1000
+            t_infer_end = time.perf_counter()
+            infer_ms = (t_infer_end - t_infer_start) * 1000
             s1_infer_times.append(infer_ms)
-            inference_delays.append(time.perf_counter() - t_obs)
+            total_delay = t_infer_end - t_obs  # obs capture → chunk ready
+            inference_delays.append(total_delay)
 
             chunk_np = actions.cpu().numpy()[0]
 
-            # Diagnostic: slide new chunk against old to find best alignment
-            with _chunk_lock:
-                old_chunk = _chunk_data
-                old_t_obs = _chunk_t_obs
+            # Measure actual delay in frames (time-based, not index-based,
+            # because main loop index resets when a new chunk is published).
+            actual_d_frames = round((t_infer_end - t_infer_start) * fps) if _supports_rtc else 0
 
-            if old_chunk is not None and old_t_obs is not None:
-                dt_frames = round((t_obs - old_t_obs) * fps)
-                if dt_frames > 0 and dt_frames < len(chunk_np):
-                    # Test offsets around expected alignment
-                    best_offset = 0
-                    best_err = float("inf")
-                    errors = []
-                    for offset in range(max(0, dt_frames - 5), min(len(chunk_np) - 1, dt_frames + 6)):
-                        # Compare new[0:N] vs old[offset:offset+N]
-                        n = min(10, len(chunk_np) - offset, len(old_chunk) - offset)
-                        if n <= 0:
-                            continue
-                        err = np.mean(np.abs(chunk_np[:n] - old_chunk[offset:offset + n]))
-                        errors.append(f"{offset}={err:.1f}")
-                        if err < best_err:
-                            best_err = err
-                            best_offset = offset
-                    if len(errors) > 0 and (len(s1_infer_times) <= 5 or len(s1_infer_times) % 50 == 0):
-                        logger.info(
-                            "S1 alignment | dt=%d frames | expected=%d | best=%d (err=%.1f) | %s",
-                            dt_frames, dt_frames, best_offset, best_err, " ".join(errors),
-                        )
+            # RTC diagnostic: compare sent prefix vs returned chunk's first d positions
+            prefix_match_err = None
+            if _supports_rtc and current_prefix_len > 0 and prefix is not None:
+                # prefix = what we sent (from old chunk)
+                # chunk_np[:current_prefix_len] = what the model returned (inpainted)
+                prefix_returned = chunk_np[:current_prefix_len]
+                prefix_match_err = np.mean(np.abs(prefix - prefix_returned))
+
+            # Log RTC diagnostics periodically
+            if _supports_rtc and (len(s1_infer_times) <= 5 or len(s1_infer_times) % 50 == 0):
+                obs_to_infer_ms = (t_infer_start - t_obs) * 1000
+                logger.info(
+                    "S1 RTC diag | expected_d=%d actual_d=%d prefix_len=%d "
+                    "| obs→infer=%.0fms infer=%.0fms total=%.0fms "
+                    "| prefix_match_err=%s exec_idx=%s",
+                    expected_d, actual_d_frames, current_prefix_len,
+                    obs_to_infer_ms, infer_ms, total_delay * 1000,
+                    f"{prefix_match_err:.3f}" if prefix_match_err is not None else "N/A",
+                    exec_idx,
+                )
+
+            # RTC alignment: slide new_chunk against old_chunk anchored at exec_idx
+            # new_chunk[0] should match old_chunk[exec_idx] (the prefix start).
+            # We scan offsets around exec_idx to verify alignment.
+            with _chunk_lock:
+                old_chunk_for_align = _chunk_data
+
+            if _supports_rtc and old_chunk_for_align is not None and exec_idx is not None:
+                scan_center = exec_idx
+                best_offset = 0
+                best_err = float("inf")
+                errors = []
+                for offset in range(max(0, scan_center - 3), min(len(old_chunk_for_align) - 1, scan_center + 8)):
+                    n = min(8, len(chunk_np), len(old_chunk_for_align) - offset)
+                    if n <= 0:
+                        continue
+                    err = np.mean(np.abs(chunk_np[:n] - old_chunk_for_align[offset:offset + n]))
+                    errors.append(f"{offset}={err:.1f}")
+                    if err < best_err:
+                        best_err = err
+                        best_offset = offset
+                if len(errors) > 0 and (len(s1_infer_times) <= 5 or len(s1_infer_times) % 50 == 0):
+                    logger.info(
+                        "S1 RTC align | exec_idx=%d best=%d (err=%.2f) | %s",
+                        exec_idx, best_offset, best_err, " ".join(errors),
+                    )
 
             with _chunk_lock:
                 _chunk_data = chunk_np
                 _chunk_t_obs = t_obs
+                # chunk[0] = old_chunk[exec_idx], which was current at t_exec_idx.
+                # For non-RTC (no prefix), chunk[0] = prediction for t_obs.
+                if _supports_rtc and exec_idx is not None and 't_exec_idx' in dir():
+                    _chunk_t_origin = t_exec_idx
+                else:
+                    _chunk_t_origin = t_obs
                 _chunk_prefix_len = current_prefix_len
                 _chunk_ready.set()
 
@@ -401,8 +441,8 @@ def run_s1(
             # 3. Read latest chunk
             with _chunk_lock:
                 chunk = _chunk_data
-                t_obs = _chunk_t_obs
-                pass  # _chunk_prefix_len available if needed for diagnostics
+                t_origin = _chunk_t_origin
+                t_obs = _chunk_t_obs  # kept for logging
 
             if chunk is None:
                 time.sleep(1.0 / fps)
@@ -410,18 +450,15 @@ def run_s1(
 
             # 4. Index chunk and send action — computed right before send.
             #
-            # elapsed = total frames since the obs that produced this chunk.
-            # This is the SAME for both ACT and flow matching:
-            #   chunk[0] corresponds to t_obs (the observation time)
-            #   chunk[k] corresponds to t_obs + k/fps
-            #   We want the action for "now" = chunk[round(elapsed * fps)]
+            # chunk[0] corresponds to t_origin:
+            #   - ACT (no RTC): t_origin = t_obs (observation time)
+            #   - Flow + RTC:   t_origin = t_exec_idx (when old_chunk[exec_idx]
+            #                   was being sent — the start of the prefix)
             #
-            # For RTC, positions [0:D] are inpainted (old chunk predictions).
-            # Positions [D:] are new predictions. But the indexing is the same
-            # because the inpainted prefix IS the correct trajectory for those
-            # timesteps — the model ensured continuity. We just index by time.
+            # chunk[k] = action for t_origin + k/fps.
+            # We want the action for "now" = chunk[round((now - t_origin) * fps)]
             t_before_send = time.perf_counter()
-            elapsed = t_before_send - t_obs
+            elapsed = t_before_send - t_origin
             idx = round(elapsed * fps)
             idx = max(0, min(idx, len(chunk) - 1))
             action_np = chunk[idx]

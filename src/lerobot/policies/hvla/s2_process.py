@@ -30,6 +30,7 @@ def run_s2(
     decode_subtask: bool = False,
     norm_stats_path: str | None = None,
     stop_event=None,
+    throttle_ms: int = 100,
 ):
     """S2 extraction loop entry point. Runs in a spawned process."""
     # Spawned process needs its own logging config
@@ -43,13 +44,15 @@ def run_s2(
 
     try:
         _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
-                      device, image_keys, decode_subtask, norm_stats_path, stop_event)
+                      device, image_keys, decode_subtask, norm_stats_path, stop_event,
+                      throttle_ms=throttle_ms)
     except Exception:
         logger.exception("S2 process crashed")
 
 
 def _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
-                  device, image_keys, decode_subtask, norm_stats_path, stop_event):
+                  device, image_keys, decode_subtask, norm_stats_path, stop_event,
+                  throttle_ms=100):
     # Load model
     logger.info("S2: Loading VLM from %s...", checkpoint_path)
     model = S2VLMModel.from_pretrained(checkpoint_path, config)
@@ -147,5 +150,11 @@ def _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
                         query_count, elapsed_ms, latent_norm, delta, subtask_str)
             prev_latent_norm = latent_norm
             last_log_time = time.time()
+
+        # Yield GPU time to S1 — sleep between queries to reduce contention.
+        # S2 at 130ms/query + 100ms sleep = ~4Hz (sufficient for scene understanding).
+        # Without this, S1 inference doubles from 29ms to 80ms due to GPU contention.
+        if throttle_ms > 0:
+            time.sleep(throttle_ms / 1000.0)
 
     logger.info("S2: Shutdown after %d queries", query_count)

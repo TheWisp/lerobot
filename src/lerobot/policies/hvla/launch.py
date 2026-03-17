@@ -44,6 +44,8 @@ def main():
                         help="torch.compile S1 model (experimental, may not work with DINOv2)")
     parser.add_argument("--s1-type", choices=["act", "flow"], default="act",
                         help="S1 policy type: 'act' (ACTWithVLM, default) or 'flow' (flow matching with RTC)")
+    parser.add_argument("--s2-throttle-ms", type=int, default=100,
+                        help="Sleep ms after each S2 query to yield GPU to S1 (0=no throttle)")
     args = parser.parse_args()
 
     setup_process_logging()
@@ -95,6 +97,7 @@ def main():
                 "decode_subtask": args.decode_subtask,
                 "norm_stats_path": args.norm_stats,
                 "stop_event": stop_event,
+                "throttle_ms": args.s2_throttle_ms,
             },
             daemon=True,
         )
