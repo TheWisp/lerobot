@@ -351,6 +351,7 @@ class FlowMatchingS1Model(nn.Module):
 
         # Euler integration: t goes from 1.0 to 0.0
         dt = -1.0 / num_steps
+        prefix_drift = None
         for i in range(num_steps):
             t_val = 1.0 + i * dt
 
@@ -362,9 +363,16 @@ class FlowMatchingS1Model(nn.Module):
             v = self.denoise_step(x_t, context, per_pos_t)
             x_t = x_t + dt * v
 
-            # Re-inject prefix after each step (inpainting)
+            # Measure prefix drift BEFORE re-inject (how much the model
+            # perturbed the prefix positions). If training-time RTC is
+            # working well, the model should predict v≈0 at t=0 positions,
+            # so drift should be near zero.
             if action_prefix is not None and prefix_len > 0:
+                prefix_drift = (x_t[:, :D] - action_prefix[:, :D]).abs().mean().item()
                 x_t[:, :D] = action_prefix[:, :D]
+
+        # Store drift on the instance for external access
+        self._last_prefix_drift = prefix_drift
 
         return x_t
 

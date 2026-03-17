@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing.shared_memory
+from multiprocessing import resource_tracker
 import struct
 import time
 
@@ -39,11 +40,12 @@ class SharedBlock:
     def __init__(self, name: str | None, shape: tuple[int, ...], dtype: np.dtype, create: bool = False):
         self.shape = shape
         self.dtype = np.dtype(dtype)
+        self._owner = create  # only the owner should unlink on cleanup
         self._data_size = int(np.prod(shape)) * self.dtype.itemsize
         self._total_size = _HEADER_SIZE + self._data_size
 
         if create:
-            # Clean up stale shared memory from previous runs if name is specified
+            # Clean up stale shared memory from previous crashed runs
             if name is not None:
                 try:
                     old = multiprocessing.shared_memory.SharedMemory(name=name)
@@ -61,6 +63,14 @@ class SharedBlock:
 
         self.shm_name = self._shm.name
         self._view: np.ndarray | None = None
+
+        # Unregister from Python's resource tracker — we manage lifecycle explicitly.
+        # Without this, the resource tracker auto-unlinks shared memory on process exit,
+        # which destroys persistent S2's memory when S1 exits.
+        try:
+            resource_tracker.unregister(f"/{self.shm_name}", "shared_memory")
+        except Exception:
+            pass
 
     def _ensure_view(self):
         if self._view is None:
@@ -186,7 +196,8 @@ class SharedLatentCache:
 
     def cleanup(self):
         self._block.close()
-        self._block.unlink()
+        if self._block._owner:
+            self._block.unlink()
 
 
 class SharedImageBuffer:
@@ -250,6 +261,8 @@ class SharedImageBuffer:
     def cleanup(self):
         for block in self._cam_blocks.values():
             block.close()
-            block.unlink()
+            if block._owner:
+                block.unlink()
         self._state_block.close()
-        self._state_block.unlink()
+        if self._state_block._owner:
+            self._state_block.unlink()

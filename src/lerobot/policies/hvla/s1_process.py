@@ -329,13 +329,13 @@ def run_s1(
             # because main loop index resets when a new chunk is published).
             actual_d_frames = round((t_infer_end - t_infer_start) * fps) if _supports_rtc else 0
 
-            # RTC diagnostic: compare sent prefix vs returned chunk's first d positions
-            prefix_match_err = None
-            if _supports_rtc and current_prefix_len > 0 and prefix is not None:
-                # prefix = what we sent (from old chunk)
-                # chunk_np[:current_prefix_len] = what the model returned (inpainted)
-                prefix_returned = chunk_np[:current_prefix_len]
-                prefix_match_err = np.mean(np.abs(prefix - prefix_returned))
+            # RTC diagnostic: how much did the model perturb the prefix positions
+            # BEFORE we re-injected the clean values? If the model learned t=0 → v≈0,
+            # this should be near zero. High drift means the model is "fighting" the prefix.
+            prefix_drift = None
+            if _supports_rtc and current_prefix_len > 0:
+                inner_model = policy.model if hasattr(policy, 'model') else policy
+                prefix_drift = getattr(inner_model, '_last_prefix_drift', None)
 
             # Log RTC diagnostics periodically
             if _supports_rtc and (len(s1_infer_times) <= 5 or len(s1_infer_times) % 50 == 0):
@@ -343,10 +343,10 @@ def run_s1(
                 logger.info(
                     "S1 RTC diag | expected_d=%d actual_d=%d prefix_len=%d "
                     "| obs→infer=%.0fms infer=%.0fms total=%.0fms "
-                    "| prefix_match_err=%s exec_idx=%s",
+                    "| prefix_drift=%s exec_idx=%s",
                     expected_d, actual_d_frames, current_prefix_len,
                     obs_to_infer_ms, infer_ms, total_delay * 1000,
-                    f"{prefix_match_err:.3f}" if prefix_match_err is not None else "N/A",
+                    f"{prefix_drift:.4f}" if prefix_drift is not None else "N/A",
                     exec_idx,
                 )
 
