@@ -9,9 +9,9 @@ import math
 import time
 from pathlib import Path
 
+import cv2
 import numpy as np
 import torch
-import torchvision.transforms.functional as TF
 
 from lerobot.policies.hvla.ipc import SharedLatentCache, SharedImageBuffer
 
@@ -51,11 +51,10 @@ def obs_to_s1_batch(
         cam_name = key.split(".")[-1]
         if cam_name in robot_obs:
             img = np.asarray(robot_obs[cam_name], dtype=np.uint8)
-            img_tensor = torch.from_numpy(img).permute(2, 0, 1)  # CHW uint8
             if resize_to is not None:
-                img_tensor = TF.resize(img_tensor, list(resize_to),
-                                       interpolation=TF.InterpolationMode.BILINEAR, antialias=True)
-            batch[key] = img_tensor.unsqueeze(0).float().div_(255.0).to(device)
+                img = cv2.resize(img, (resize_to[1], resize_to[0]), interpolation=cv2.INTER_LINEAR)
+            img_tensor = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float().div_(255.0).to(device)
+            batch[key] = img_tensor
 
     state = [float(robot_obs[name]) for name in JOINT_NAMES]
     batch["observation.state"] = torch.tensor([state], dtype=torch.float32, device=device)
