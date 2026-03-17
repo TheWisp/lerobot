@@ -182,27 +182,27 @@ Typical S1 loop: 30-40ms/step (~25-33Hz). S2 runs at 4-15Hz depending on GPU sch
 
 ## TODO
 
+### Critical
+- [ ] **Fix Corrupt JPEG data** — frequent "Corrupt JPEG data: premature end of data segment" from OpenCV cameras during inference. Likely cause: USB bandwidth saturation with 4 cameras at 720p30 + camera buffer contention. This corrupts images fed to S1, potentially causing bad action predictions and contributing to jitter. Investigate: (1) reduce camera resolution or fps, (2) stagger camera reads, (3) use V4L2 direct instead of OpenCV, (4) deep-copy camera frames in main loop before sharing.
+
 ### High priority
-- [ ] **Exclude RTC prefix from loss** — both arXiv:2512.05964 and Ψ₀ (arXiv:2603.12263) exclude masked prefix tokens from loss computation. Our current implementation includes them (velocity target ≈ 0 for clean positions), wasting model capacity. One-line fix in `model.py:forward()`.
-- [ ] **Fix RTC prefix source at inference** — both papers use the **previous chunk's predicted actions** (the overlap portion still being executed) as the prefix, NOT actually-executed robot actions. The previous chunk's predictions are in the model's own output space and are more consistent. Currently we pass `_executed_actions` from the ring buffer; should instead pass `prev_chunk[current_idx : current_idx+d]`. Implementation: inference thread keeps previous chunk + the index it was executing from when new inference started. The overlap region `prev_chunk[start_idx : start_idx + d]` becomes the prefix for the new chunk.
-- [ ] **Use dynamic prefix length at inference** — `d` should equal the **actual measured inference delay** in frames, not a fixed `--rtc-prefix-len`. We already compute `elapsed = t_before_send - t_obs` for the time-shift; the same value gives `d = round(elapsed * fps)`. This means prefix length varies per chunk (typically 2-3 at 30Hz with 75-80ms inference). The model handles variable `d` because it trained with `d ~ Uniform(0, d_max)`. The `elapsed` is measured as wall-clock time from when the inference thread captured its observation to when the main loop is about to send the action — same measurement we use for time-shift indexing.
-- [ ] **Match training delay distribution to actual inference** — currently `d ~ Uniform(0, 10)` but our actual delay is centered at 2-3 frames (66-100ms). Uniform wastes training signal on unlikely delays. Better: `d ~ Uniform(1, 5)` for 80% of samples, `d=0` for 20% (prefix dropout / episode start). Precedented by the original RTC paper which used "exponentially decreasing weights" in simulation. Also reduce d_max from 10 to 5-6.
-- [ ] Evaluate flow matching S1 with RTC on robot (training in progress)
-- [ ] Training speed: use `--num-workers 16` (GPU idle 50% at 8 workers due to video decode bottleneck)
-- [ ] Pre-decode and cache training images to avoid repeated video decode (main training bottleneck)
+- [ ] **S1 inference thread latency** — obs→infer gap is 3-45ms (avg ~20ms) due to `threading.Event.wait()` OS scheduler latency. The inference thread sleeps up to 33ms waiting for the next main loop tick. Options: (1) busy-wait with CPU yield, (2) double-buffered obs with atomic swap, (3) redesign so inference thread owns obs capture. This adds 0-33ms to chunk_age, reducing action freshness.
+- [ ] **S1 GPU priority over S2** — S1 inference doubles from 21ms to 50ms due to GPU contention with S2. S2 throttle (100ms sleep) helps but doesn't eliminate contention. Options: (1) CUDA MPS for proper time-slicing, (2) increase S2 throttle (trade S2 freshness for S1 speed), (3) Triton kernel optimization ([realtime-vla](https://github.com/Dexmal/realtime-vla), arXiv:2510.26742).
+- [ ] **Image resize optimization** — switched to cv2.resize (0.7ms/4 images), but consider: GPU resize (1.2ms, avoids CPU→GPU transfer of full-res), or cameras outputting 224x224 directly.
 - [ ] Persistent S2 process (avoid 45s cold start on every launch)
 - [ ] Generic SharedMemoryStore to replace per-type IPC classes
+- [ ] Pre-decode and cache training images to avoid repeated video decode (main training bottleneck)
 
 ### Medium priority
 - [ ] `torch.compile` for S1 training (mode=default, skip DINOv2 — needs investigation)
 - [ ] Separate backbone LR (lower for DINOv2 pretrained weights, matching ACT's approach)
 - [ ] wandb integration for training monitoring
 - [ ] Inference-time RTC guidance (LeRobot's `RTCProcessor`) on top of training-time RTC for extra smoothness
-- [ ] Action time-shift: verify `round()` vs `ceil()` with flow matching + RTC on real robot
 - [ ] Soft landing: fix occasional motor overload error on disconnect
 
 ### Future
 - [ ] S2 LoRA training (rank 32 on SigLIP + Gemma 2B) — lower priority since Pi0.5 checkpoint works
 - [ ] Co-training S1 + S2 (currently sequential: extract latents → train S1)
 - [ ] Adaptive action horizon (short chunks for precision, long for transit)
-- [ ] CUDA MPS for reduced GPU contention between S1 and S2 on same GPU
+- [ ] Switch S1 to using Pi0-style action expert architecture (proven at scale, matches Ψ₀)
+- [ ] ONNX/TensorRT export for S1 (potential 2× inference speedup)

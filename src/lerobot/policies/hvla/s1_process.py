@@ -262,6 +262,7 @@ def run_s1(
         nonlocal _chunk_data, _chunk_t_obs, _chunk_t_origin, _chunk_prefix_len
 
         while _infer_running.is_set():
+            # Wait for fresh obs from main loop (publishes at 30Hz).
             if not _obs_ready.wait(timeout=0.5):
                 continue
             _obs_ready.clear()
@@ -430,9 +431,20 @@ def run_s1(
             obs = robot.get_observation()
             t_now = time.perf_counter()
 
-            # 2. Publish to inference thread + S2
+            # 2. Deep-copy image arrays before publishing. Camera background
+            # threads continuously overwrite their frame buffers; without a
+            # copy, the inference thread may read a partially-updated frame
+            # (causing "Corrupt JPEG" artifacts and bad action predictions).
+            obs_copy = {}
+            for k, v in obs.items():
+                if isinstance(v, np.ndarray) and v.ndim == 3:  # image: HWC
+                    obs_copy[k] = v.copy()
+                else:
+                    obs_copy[k] = v  # scalars/strings are immutable, no copy needed
+
+            # Publish to inference thread + S2
             with _obs_lock:
-                _obs_data = obs
+                _obs_data = obs_copy
                 _obs_time = t_now
             _obs_ready.set()
             shared_images.write_images(obs, S2_CAM_KEY_MAP, JOINT_NAMES)
