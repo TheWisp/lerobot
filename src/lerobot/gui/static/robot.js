@@ -707,18 +707,22 @@ function renderPortList(ports, allAssignments) {
         let assignHtml = '<span></span>';
         let claimedHtml = '<span></span>';
         if (portFields.length > 0) {
+            const currentField = portFields.find(f => {
+                const input = document.getElementById(`field-${f.name}`);
+                return input && input.value === p.path;
+            })?.name || '';
             if (claimedBy) {
-                assignHtml = `<select class="port-assign-select" disabled>
-                    <option>${esc(claimedBy.field_name)}</option>
+                // Port is used by another profile — still allow reassign, but with confirmation
+                assignHtml = `<select class="port-assign-select port-assign-claimed" onchange="assignPort('${esc(p.path)}', this.value, '${esc(claimedBy.profile_name)}', '${esc(claimedBy.profile_kind)}')">
+                    <option value="">${esc(claimedBy.field_name)}</option>
+                    ${portFields.map(f => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join('')}
                 </select>`;
                 claimedHtml = `<span class="port-claimed">in use by <a onclick="selectProfile('${esc(claimedBy.profile_kind)}', '${esc(claimedBy.profile_name)}')">${esc(claimedBy.profile_name)}</a></span>`;
             } else {
-                const currentField = portFields.find(f => {
-                    const input = document.getElementById(`field-${f.name}`);
-                    return input && input.value === p.path;
-                })?.name || '';
-                assignHtml = `<select class="port-assign-select" onchange="assignPort('${esc(p.path)}', this.value)">
+                const unassignOpt = currentField ? `<option value="__unassign__">-- clear --</option>` : '';
+                assignHtml = `<select class="port-assign-select" onchange="if(this.value==='__unassign__'){unassignPort('${esc(p.path)}')}else{assignPort('${esc(p.path)}', this.value)}">
                     <option value="">-- assign --</option>
+                    ${unassignOpt}
                     ${portFields.map(f => `<option value="${esc(f.name)}" ${currentField === f.name ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}
                 </select>`;
             }
@@ -734,13 +738,34 @@ function renderPortList(ports, allAssignments) {
     }).join('');
 }
 
-function assignPort(port, fieldName) {
+function assignPort(port, fieldName, claimedByProfile, claimedByKind) {
+    // If port is claimed by another profile, confirm before reassigning
+    if (claimedByProfile) {
+        if (!confirm(`This port is currently in use by "${claimedByProfile}" (${claimedByKind}). Reassign it anyway?`)) {
+            // Reset the dropdown to show the claimed field
+            if (scannedPorts) renderPortList(scannedPorts.ports, scannedPorts.allAssignments);
+            return;
+        }
+    }
     if (!fieldName) return;
     if (!currentProfile.data.fields) currentProfile.data.fields = {};
     currentProfile.data.fields[fieldName] = port;
     _rerender();
     _updateDirtyState();
     showToast('Port set', `${fieldName} = ${port}`, 'info');
+}
+
+function unassignPort(port) {
+    if (!currentProfile || !currentProfile.data.fields) return;
+    const portFields = _getPortFields();
+    for (const f of portFields) {
+        if (currentProfile.data.fields[f.name] === port) {
+            delete currentProfile.data.fields[f.name];
+        }
+    }
+    _rerender();
+    _updateDirtyState();
+    showToast('Port cleared', `${port} unassigned`, 'info');
 }
 
 async function identifyArm(port, btn) {
