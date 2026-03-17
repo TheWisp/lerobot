@@ -274,27 +274,34 @@ def run_s1(
                                     resize_to=resize_images)
             batch = preprocessor(batch)
 
-            # Add RTC prefix from previous chunk's predictions (arXiv:2512.05964, Ψ₀)
-            # The prefix = overlap region of the old chunk that was being executed
-            # during this inference cycle. Length d = actual inference delay in frames.
+            # RTC prefix: the UPCOMING actions from the old chunk that the main
+            # loop WILL execute during this inference cycle (arXiv:2512.05964, Ψ₀).
+            #
+            # The main loop is currently at exec_idx in the old chunk.
+            # During inference (~80ms ≈ 2-3 frames), it will advance to
+            # exec_idx + d. Those predicted-but-not-yet-executed actions
+            # become the prefix. The model inpaints them at positions [0:d]
+            # and predicts the continuation at [d:].
             current_prefix_len = 0
             if _supports_rtc:
                 with _chunk_lock:
-                    prev_chunk = _chunk_data  # previous chunk's predictions
+                    old_chunk = _chunk_data
                 with _main_loop_chunk_idx_lock:
-                    exec_idx = _main_loop_chunk_idx  # where main loop was executing from
+                    exec_idx = _main_loop_chunk_idx
 
-                if prev_chunk is not None and exec_idx > 0:
-                    # d = how many frames elapsed since this inference started
-                    # (will be measured after inference, but we can estimate from
-                    # the main loop's current position in the old chunk)
-                    d = min(exec_idx, _rtc_max_delay, len(prev_chunk) - 1)
-                    if d > 0:
-                        # Overlap: prev_chunk[exec_idx-d : exec_idx]
-                        start = max(exec_idx - d, 0)
-                        prefix = prev_chunk[start:exec_idx]
-                        batch[ACTION_PREFIX_KEY] = torch.from_numpy(prefix).unsqueeze(0).to(device)
-                        current_prefix_len = prefix.shape[0]
+                if old_chunk is not None and exec_idx < len(old_chunk):
+                    # Estimate frames that will elapse during inference
+                    if inference_delays:
+                        expected_d = round(np.mean(inference_delays[-10:]) * fps)
+                    else:
+                        expected_d = 3  # ~100ms at 30fps initial estimate
+                    # Clamp: at least 1, at most d_max, don't exceed remaining chunk
+                    expected_d = max(1, min(expected_d, _rtc_max_delay,
+                                           len(old_chunk) - exec_idx))
+
+                    prefix = old_chunk[exec_idx : exec_idx + expected_d]
+                    batch[ACTION_PREFIX_KEY] = torch.from_numpy(prefix).unsqueeze(0).to(device)
+                    current_prefix_len = prefix.shape[0]
 
             # Inference
             t_infer = time.perf_counter()
@@ -395,31 +402,27 @@ def run_s1(
             with _chunk_lock:
                 chunk = _chunk_data
                 t_obs = _chunk_t_obs
-                prefix_len = _chunk_prefix_len
+                pass  # _chunk_prefix_len available if needed for diagnostics
 
             if chunk is None:
                 time.sleep(1.0 / fps)
                 continue
 
-            # 4. Index chunk and send action.
+            # 4. Index chunk and send action — computed right before send.
             #
-            # For ACT (no RTC):
-            #   chunk[0] = prediction for t_obs. Skip by elapsed time.
-            #   idx = round(elapsed * fps)
+            # elapsed = total frames since the obs that produced this chunk.
+            # This is the SAME for both ACT and flow matching:
+            #   chunk[0] corresponds to t_obs (the observation time)
+            #   chunk[k] corresponds to t_obs + k/fps
+            #   We want the action for "now" = chunk[round(elapsed * fps)]
             #
-            # For flow matching with RTC:
-            #   chunk[0:D] = inpainted prefix (actions from prev chunk executed
-            #                during inference — these cover the delay period)
-            #   chunk[D]   = first NEW prediction = "right now"
-            #   No additional time-skip — the prefix already absorbs the delay.
-            #   (arXiv:2512.05964: "d actions from the previous chunk that overlap")
+            # For RTC, positions [0:D] are inpainted (old chunk predictions).
+            # Positions [D:] are new predictions. But the indexing is the same
+            # because the inpainted prefix IS the correct trajectory for those
+            # timesteps — the model ensured continuity. We just index by time.
             t_before_send = time.perf_counter()
             elapsed = t_before_send - t_obs
-
-            if _supports_rtc:
-                idx = prefix_len  # prefix absorbed the delay, start from first prediction
-            else:
-                idx = round(elapsed * fps)  # ACT: skip by measured latency
+            idx = round(elapsed * fps)
             idx = max(0, min(idx, len(chunk) - 1))
             action_np = chunk[idx]
 
