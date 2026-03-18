@@ -50,6 +50,10 @@ def main():
     parser.add_argument("--osc-skip", action="store_true",
                         help="Enable both-arms oscillation skip: when both arms are flat, "
                              "jump ahead in chunk to where movement starts")
+    parser.add_argument("--s1-query-interval", type=int, default=5,
+                        help="Number of action steps to wait before re-querying S1. "
+                             "E.g. 20 = execute 20 actions (~660ms at 30fps) from current "
+                             "chunk before next inference. 0 = query as fast as possible (default).")
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -154,6 +158,7 @@ def main():
             s1_type=args.s1_type,
             stop_event=stop_event,
             osc_skip=args.osc_skip,
+            query_interval_steps=args.s1_query_interval,
         )
     finally:
         stop_event.set()

@@ -113,6 +113,7 @@ def run_s1(
     s1_type: str = "act",
     stop_event=None,
     osc_skip: bool = False,
+    query_interval_steps: int = 0,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -253,10 +254,17 @@ def run_s1(
     _main_loop_chunk_idx = 0  # current execution index into _chunk_data
     _main_loop_chunk_idx_lock = threading.Lock()
 
+    # Query interval: sleep N frames worth of time after publishing a chunk
+    # before starting the next inference. This lets the main loop execute more
+    # of the current chunk before re-querying (reduces GPU contention too).
+    _query_interval_s = query_interval_steps / fps if query_interval_steps > 0 else 0.0
+
     if _supports_rtc:
         logger.info("S1: RTC enabled (max_delay=%d, dynamic prefix from prev chunk)", _rtc_max_delay)
     elif _needs_ensemble:
         logger.info("S1: Using temporal ensembling (no RTC)")
+    if query_interval_steps > 0:
+        logger.info("S1: Query interval = %d steps (%.0fms)", query_interval_steps, _query_interval_s * 1000)
 
     def _inference_thread():
         """Reads obs from buffer → preps → infers → publishes chunk. No robot access."""
@@ -389,6 +397,10 @@ def run_s1(
                 _chunk_prefix_len = current_prefix_len
                 _chunk_ready.set()
 
+            # Query interval: let main loop execute more of this chunk before re-querying
+            if _query_interval_s > 0 and _infer_running.is_set():
+                time.sleep(_query_interval_s)
+
     # Start inference thread (no robot access — only GPU)
     infer_thread = threading.Thread(target=_inference_thread, daemon=True)
     infer_thread.start()
@@ -496,7 +508,7 @@ def run_s1(
                             break
                     idx = max(0, min(idx, len(chunk) - 1))
 
-            action_np = chunk[idx]
+            action_np = chunk[idx].copy()
 
             action_dict = {name: float(action_np[i]) for i, name in enumerate(JOINT_NAMES) if i < len(action_np)}
             robot.send_action(action_dict)
@@ -523,6 +535,8 @@ def run_s1(
                 if action_deltas:
                     r = action_deltas[-20:]
                     smooth_str += f" | Δaction: {np.mean(r):.3f}/{np.max(r):.3f}"
+                # Per-joint gripper values
+                smooth_str += f" | grip L={action_np[6]:.1f} R={action_np[13]:.1f}"
                 if loop_intervals:
                     r = loop_intervals[-20:]
                     smooth_str += f" | interval: {np.mean(r):.1f}±{np.std(r):.1f}ms"
