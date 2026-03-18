@@ -101,8 +101,12 @@ def _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
             if len(state_norm) < 32:
                 state_norm = np.pad(state_norm, (0, 32 - len(state_norm)))
 
-        # Tokenize
-        token_ids, token_mask = tokenizer.tokenize_prompt(task, low_prompt="", state=state_norm)
+        # Tokenize — when decoding subtask, use truncated prompt (stops at "Subtask: ")
+        # so the model AR-decodes subtask text instead of FAST action tokens.
+        # The latent from the truncated prompt is slightly different but functional.
+        token_ids, token_mask = tokenizer.tokenize_prompt(
+            task, low_prompt="", state=state_norm, subtask_only=decode_subtask,
+        )
         lang_tokens = torch.from_numpy(token_ids).unsqueeze(0).long().to(device)
         lang_masks = torch.from_numpy(token_mask).unsqueeze(0).bool().to(device)
 
@@ -125,8 +129,6 @@ def _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
             if subtask_tokens:
                 try:
                     subtask_text = tokenizer.detokenize(np.array(subtask_tokens))
-                    if ";" in subtask_text:
-                        subtask_text = subtask_text.split(";")[0].strip()
                 except Exception:
                     subtask_text = f"<{len(subtask_tokens)} tokens>"
         else:

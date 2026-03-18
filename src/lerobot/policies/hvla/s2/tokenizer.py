@@ -37,6 +37,7 @@ class PaligemmaTokenizer:
         high_prompt: str,
         low_prompt: str = "",
         state: np.ndarray | None = None,
+        subtask_only: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Tokenize task prompt for S2 VLM.
 
@@ -69,7 +70,12 @@ class PaligemmaTokenizer:
         sub_prompt_2 = cleaned_low + ";\nAction: "
         tokens_2 = self._sp.encode(sub_prompt_2) + [1]  # EOS
 
-        tokens = tokens_1 + tokens_2
+        if subtask_only:
+            # For subtask decoding: stop at "Subtask: " so the model
+            # AR-decodes subtask text, not FAST action tokens.
+            tokens = tokens_1
+        else:
+            tokens = tokens_1 + tokens_2
 
         # Pad / truncate
         n = len(tokens)
