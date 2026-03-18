@@ -20,9 +20,10 @@ Usage:
 
   # Terminal 2: Run dual-system inference
   python dual_system_infer.py \
-    --s1-checkpoint outputs/act_vlm_cylinder_ring \
+    --s1-checkpoint outputs/act_vlm_cylinder_ring_v4/checkpoint-80000 \
     --task "assemble cylinder into ring" \
-    --s2-server ws://localhost:8765
+    --s2-host localhost --s2-port 8765 \
+    --resize-images 224x224
 """
 
 import argparse
