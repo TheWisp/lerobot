@@ -47,6 +47,9 @@ def main():
                         help="S1 policy type: 'act' (ACTWithVLM, default) or 'flow' (flow matching with RTC)")
     parser.add_argument("--s2-throttle-ms", type=int, default=100,
                         help="Sleep ms after each S2 query to yield GPU to S1 (0=no throttle)")
+    parser.add_argument("--osc-skip", action="store_true",
+                        help="Enable both-arms oscillation skip: when both arms are flat, "
+                             "jump ahead in chunk to where movement starts")
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -150,6 +153,7 @@ def main():
             compile_s1=args.compile_s1,
             s1_type=args.s1_type,
             stop_event=stop_event,
+            osc_skip=args.osc_skip,
         )
     finally:
         stop_event.set()

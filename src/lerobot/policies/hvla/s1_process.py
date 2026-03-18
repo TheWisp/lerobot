@@ -112,6 +112,7 @@ def run_s1(
     compile_s1: bool = False,
     s1_type: str = "act",
     stop_event=None,
+    osc_skip: bool = False,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -472,6 +473,29 @@ def run_s1(
             elapsed = t_before_send - t_origin
             idx = round(elapsed * fps)
             idx = max(0, min(idx, len(chunk) - 1))
+
+            # Both-arms oscillation skip (--osc-skip): if BOTH left AND right
+            # arms have low cumulative displacement in the next 5 frames, scan
+            # ahead to where at least one arm starts making net progress.
+            # Safe because neither arm is doing useful work in the flat region.
+            if osc_skip and idx < len(chunk) - 10:
+                origin = chunk[idx]
+                check_at = min(idx + 5, len(chunk) - 1)
+                left_cumul = np.linalg.norm(chunk[check_at, :7] - origin[:7])
+                right_cumul = np.linalg.norm(chunk[check_at, 7:] - origin[7:])
+                if left_cumul < 2.0 and right_cumul < 2.0:
+                    # Both arms flat — scan ahead for any arm's net movement
+                    for k in range(idx + 5, min(idx + 30, len(chunk))):
+                        l_c = np.linalg.norm(chunk[k, :7] - origin[:7])
+                        r_c = np.linalg.norm(chunk[k, 7:] - origin[7:])
+                        if l_c > 3.0 or r_c > 3.0:
+                            if step_count % 50 == 0:
+                                logger.info("S1 osc-skip: both arms flat [%d]→[%d] (L=%.1f R=%.1f)",
+                                            idx, k, l_c, r_c)
+                            idx = k
+                            break
+                    idx = max(0, min(idx, len(chunk) - 1))
+
             action_np = chunk[idx]
 
             action_dict = {name: float(action_np[i]) for i, name in enumerate(JOINT_NAMES) if i < len(action_np)}
