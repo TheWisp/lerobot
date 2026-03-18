@@ -366,10 +366,10 @@ def main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--chunk-size", type=int, default=50,
                         help="Action horizon (50 at 30Hz = 1.67s)")
-    parser.add_argument("--num-inference-steps", type=int, default=5,
-                        help="Denoising steps (5 per RTC paper)")
-    parser.add_argument("--rtc-max-delay", type=int, default=5,
-                        help="Max simulated delay in frames for training-time RTC (Ψ₀ uses 6)")
+    parser.add_argument("--num-inference-steps", type=int, default=15,
+                        help="Denoising steps at inference (15 → ~130ms, expected_d≈4 at 30fps)")
+    parser.add_argument("--rtc-max-delay", type=int, default=6,
+                        help="Max simulated delay in frames for training-time RTC (15 denoise steps ≈ 5 frames delay)")
     parser.add_argument("--rtc-drop-prob", type=float, default=0.2,
                         help="Probability of no prefix (simulates first chunk)")
     parser.add_argument("--max-delay", type=float, default=0.15,

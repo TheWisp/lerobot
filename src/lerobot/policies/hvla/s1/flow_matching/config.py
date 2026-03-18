@@ -67,7 +67,7 @@ class FlowMatchingS1Config:
     use_s2_age_embedding: bool = True     # age-aware S2 conditioning
 
     # --- Flow matching ---
-    num_inference_steps: int = 5          # denoising steps at inference (5 per RTC paper)
+    num_inference_steps: int = 15         # denoising steps at inference (15 → ~130ms, cleaner ODE)
     time_sampling_beta_alpha: float = 1.5 # Beta distribution for training time sampling
     time_sampling_beta_beta: float = 1.0
     time_min: float = 0.001              # minimum timestep
@@ -79,7 +79,7 @@ class FlowMatchingS1Config:
     # timestep to t=0 (clean). Prefix positions excluded from loss.
     # At inference, overlap actions from the previous chunk serve as prefix.
     # d sampled as Uniform(1, rtc_max_delay) with rtc_drop_prob chance of d=0.
-    rtc_max_delay: int = 5                # max simulated delay in frames (Ψ₀ uses 6)
+    rtc_max_delay: int = 6                # max simulated delay in frames (15 denoise steps ≈ 5 frames)
     rtc_drop_prob: float = 0.2            # probability of no prefix (simulates first chunk)
 
     # --- Robot state ---
