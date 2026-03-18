@@ -412,7 +412,7 @@ class FlowMatchingS1Policy(nn.Module):
         self._action_queue.clear()
 
     @torch.no_grad()
-    def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
+    def predict_action_chunk(self, batch: dict[str, Tensor], num_steps: int | None = None) -> Tensor:
         """Predict action chunk via flow matching with RTC inpainting.
 
         RTC prefix (ACTION_PREFIX_KEY) should contain actions from the PREVIOUS
@@ -443,6 +443,7 @@ class FlowMatchingS1Policy(nn.Module):
         # Model predicts in normalized space
         actions_norm = self.model.sample_actions(
             batch,
+            num_steps=num_steps,
             action_prefix=action_prefix,
             prefix_len=prefix_len,
         )

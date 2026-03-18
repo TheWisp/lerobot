@@ -114,6 +114,7 @@ def run_s1(
     stop_event=None,
     osc_skip: bool = False,
     query_interval_steps: int = 0,
+    num_denoise_steps: int | None = None,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -324,7 +325,7 @@ def run_s1(
             # Inference
             t_infer_start = time.perf_counter()
             with torch.no_grad():
-                actions = policy.predict_action_chunk(batch)  # [1, chunk_size, action_dim]
+                actions = policy.predict_action_chunk(batch, num_steps=num_denoise_steps)  # [1, chunk_size, action_dim]
                 actions = postprocessor(actions)
             t_infer_end = time.perf_counter()
             infer_ms = (t_infer_end - t_infer_start) * 1000

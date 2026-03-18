@@ -50,6 +50,8 @@ def main():
     parser.add_argument("--osc-skip", action="store_true",
                         help="Enable both-arms oscillation skip: when both arms are flat, "
                              "jump ahead in chunk to where movement starts")
+    parser.add_argument("--denoise-steps", type=int, default=None,
+                        help="Number of flow matching denoising steps (default: 5 from config)")
     parser.add_argument("--s1-query-interval", type=int, default=5,
                         help="Number of action steps to wait before re-querying S1. "
                              "E.g. 20 = execute 20 actions (~660ms at 30fps) from current "
@@ -159,6 +161,7 @@ def main():
             stop_event=stop_event,
             osc_skip=args.osc_skip,
             query_interval_steps=args.s1_query_interval,
+            num_denoise_steps=args.denoise_steps,
         )
     finally:
         stop_event.set()
