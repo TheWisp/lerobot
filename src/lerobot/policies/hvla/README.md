@@ -73,8 +73,7 @@ Flow matching S1 implements [Training-Time Action Conditioning for Efficient Rea
 - bf16 autocast + TF32 matmul
 - 15 denoising steps (Euler integration), rtc_max_delay=6
 - No S2 latent delay augmentation or age embedding (matching old ACT setup that worked)
-- ~870ms/step at bs=64 → **~12 hours** for 50k steps on RTX 5090
-- ~54ms inference latency (15 steps)
+- ~54ms inference latency (15 denoise steps)
 
 ### 3a. Inference — ACT (default)
 
@@ -203,6 +202,7 @@ Typical S1 loop: 30-40ms/step (~25-33Hz). S2 runs at 4-15Hz depending on GPU sch
 - [ ] **Fix Corrupt JPEG data** — frequent "Corrupt JPEG data: premature end of data segment" from OpenCV cameras during inference. Likely cause: USB bandwidth saturation with 4 cameras at 720p30 + camera buffer contention. This corrupts images fed to S1, potentially causing bad action predictions and contributing to jitter. Investigate: (1) reduce camera resolution or fps, (2) stagger camera reads, (3) use V4L2 direct instead of OpenCV, (4) deep-copy camera frames in main loop before sharing.
 
 ### High priority
+- [ ] **Bidirectional action attention** — Current action decoder uses causal self-attention (each position only sees previous). Pi0's action expert uses bidirectional, allowing all positions to "negotiate" and commit to one mode. Our chunks show within-chunk gripper oscillation (e.g., `R: 28 28 28 14 14 13 10 9 5`) which bidirectional attention could fix. One-line change (`tgt_mask=None`), requires retraining. ~5-10% slower training/inference.
 - [ ] **S1 inference thread latency** — obs→infer gap is 3-45ms (avg ~20ms) due to `threading.Event.wait()` OS scheduler latency. The inference thread sleeps up to 33ms waiting for the next main loop tick. Options: (1) busy-wait with CPU yield, (2) double-buffered obs with atomic swap, (3) redesign so inference thread owns obs capture. This adds 0-33ms to chunk_age, reducing action freshness.
 - [ ] **S1 GPU priority over S2** — S1 inference doubles from 21ms to 50ms due to GPU contention with S2. S2 throttle (100ms sleep) helps but doesn't eliminate contention. Options: (1) CUDA MPS for proper time-slicing, (2) increase S2 throttle (trade S2 freshness for S1 speed), (3) Triton kernel optimization ([realtime-vla](https://github.com/Dexmal/realtime-vla), arXiv:2510.26742).
 - [ ] **Image resize optimization** — switched to cv2.resize (0.7ms/4 images), but consider: GPU resize (1.2ms, avoids CPU→GPU transfer of full-res), or cameras outputting 224x224 directly.

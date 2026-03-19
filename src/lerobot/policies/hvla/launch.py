@@ -56,6 +56,8 @@ def main():
                         help="Number of action steps to wait before re-querying S1. "
                              "E.g. 20 = execute 20 actions (~660ms at 30fps) from current "
                              "chunk before next inference. 0 = query as fast as possible (default).")
+    parser.add_argument("--max-step-delta", type=float, default=None,
+                        help="Max degrees any joint can change per frame (e.g. 10). Prevents sudden jumps.")
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -162,6 +164,7 @@ def main():
             osc_skip=args.osc_skip,
             query_interval_steps=args.s1_query_interval,
             num_denoise_steps=args.denoise_steps,
+            max_step_delta=args.max_step_delta,
         )
     finally:
         stop_event.set()

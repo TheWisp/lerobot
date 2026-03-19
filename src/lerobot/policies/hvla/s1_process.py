@@ -33,6 +33,72 @@ S2_CAM_KEY_MAP = {
 }
 
 
+def _compute_chunk_index(t_now: float, t_origin: float, fps: int, chunk_len: int) -> int:
+    """Time-based index into current action chunk."""
+    elapsed = t_now - t_origin
+    idx = round(elapsed * fps)
+    return max(0, min(idx, chunk_len - 1))
+
+
+def _osc_skip(chunk: np.ndarray, idx: int, step_count: int) -> int:
+    """Both-arms oscillation skip: if BOTH arms have low displacement
+    in the next 5 frames, scan ahead to where movement starts."""
+    if idx >= len(chunk) - 10:
+        return idx
+    origin = chunk[idx]
+    check_at = min(idx + 5, len(chunk) - 1)
+    left_cumul = np.linalg.norm(chunk[check_at, :7] - origin[:7])
+    right_cumul = np.linalg.norm(chunk[check_at, 7:] - origin[7:])
+    if left_cumul >= 2.0 or right_cumul >= 2.0:
+        return idx
+    for k in range(idx + 5, min(idx + 30, len(chunk))):
+        l_c = np.linalg.norm(chunk[k, :7] - origin[:7])
+        r_c = np.linalg.norm(chunk[k, 7:] - origin[7:])
+        if l_c > 3.0 or r_c > 3.0:
+            if step_count % 50 == 0:
+                logger.info("S1 osc-skip: both arms flat [%d]→[%d] (L=%.1f R=%.1f)",
+                            idx, k, l_c, r_c)
+            return max(0, min(k, len(chunk) - 1))
+    return idx
+
+
+def _apply_delta_filter(action_np: np.ndarray, prev_action_np: np.ndarray,
+                        max_step_delta: float) -> np.ndarray:
+    """Per-joint delta filter: hold joints that jump > max_step_delta."""
+    diff = np.abs(action_np - prev_action_np)
+    bad_mask = diff > max_step_delta
+    if bad_mask.any():
+        action_np[bad_mask] = prev_action_np[bad_mask]
+    return action_np
+
+
+def _log_grip_diagnostics(
+    action_np: np.ndarray, prev_action_np: np.ndarray,
+    step_count: int, idx: int, chunk_data: np.ndarray | None,
+):
+    """Log gripper drops with chunk trajectory dump."""
+    grip_l_delta = abs(action_np[6] - prev_action_np[6])
+    grip_r_delta = abs(action_np[13] - prev_action_np[13])
+    if grip_l_delta <= 10 and grip_r_delta <= 10:
+        return
+    if chunk_data is None:
+        return
+    delta = np.linalg.norm(action_np - prev_action_np)
+    l_traj = [f"{chunk_data[i, 6]:.0f}" for i in range(min(20, len(chunk_data)))]
+    r_traj = [f"{chunk_data[i, 13]:.0f}" for i in range(min(20, len(chunk_data)))]
+    logger.info(
+        "S1 GRIP DROP step %d idx=%d | L: %.1f→%.1f (Δ%.1f) R: %.1f→%.1f (Δ%.1f) | Δaction=%.1f\n"
+        "  chunk L[0:20]: %s\n"
+        "  chunk R[0:20]: %s",
+        step_count, idx,
+        prev_action_np[6], action_np[6], grip_l_delta,
+        prev_action_np[13], action_np[13], grip_r_delta,
+        delta,
+        " ".join(l_traj),
+        " ".join(r_traj),
+    )
+
+
 def obs_to_s1_batch(
     robot_obs: dict,
     s1_image_keys: list[str],
@@ -115,6 +181,7 @@ def run_s1(
     osc_skip: bool = False,
     query_interval_steps: int = 0,
     num_denoise_steps: int | None = None,
+    max_step_delta: float | None = None,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -473,43 +540,15 @@ def run_s1(
                 time.sleep(1.0 / fps)
                 continue
 
-            # 4. Index chunk and send action — computed right before send.
-            #
-            # chunk[0] corresponds to t_origin:
-            #   - ACT (no RTC): t_origin = t_obs (observation time)
-            #   - Flow + RTC:   t_origin = t_exec_idx (when old_chunk[exec_idx]
-            #                   was being sent — the start of the prefix)
-            #
-            # chunk[k] = action for t_origin + k/fps.
-            # We want the action for "now" = chunk[round((now - t_origin) * fps)]
+            # 4. Index chunk and send action
             t_before_send = time.perf_counter()
-            elapsed = t_before_send - t_origin
-            idx = round(elapsed * fps)
-            idx = max(0, min(idx, len(chunk) - 1))
-
-            # Both-arms oscillation skip (--osc-skip): if BOTH left AND right
-            # arms have low cumulative displacement in the next 5 frames, scan
-            # ahead to where at least one arm starts making net progress.
-            # Safe because neither arm is doing useful work in the flat region.
-            if osc_skip and idx < len(chunk) - 10:
-                origin = chunk[idx]
-                check_at = min(idx + 5, len(chunk) - 1)
-                left_cumul = np.linalg.norm(chunk[check_at, :7] - origin[:7])
-                right_cumul = np.linalg.norm(chunk[check_at, 7:] - origin[7:])
-                if left_cumul < 2.0 and right_cumul < 2.0:
-                    # Both arms flat — scan ahead for any arm's net movement
-                    for k in range(idx + 5, min(idx + 30, len(chunk))):
-                        l_c = np.linalg.norm(chunk[k, :7] - origin[:7])
-                        r_c = np.linalg.norm(chunk[k, 7:] - origin[7:])
-                        if l_c > 3.0 or r_c > 3.0:
-                            if step_count % 50 == 0:
-                                logger.info("S1 osc-skip: both arms flat [%d]→[%d] (L=%.1f R=%.1f)",
-                                            idx, k, l_c, r_c)
-                            idx = k
-                            break
-                    idx = max(0, min(idx, len(chunk) - 1))
+            idx = _compute_chunk_index(t_before_send, t_origin, fps, len(chunk))
+            if osc_skip:
+                idx = _osc_skip(chunk, idx, step_count)
 
             action_np = chunk[idx].copy()
+            if max_step_delta is not None and prev_action_np is not None:
+                action_np = _apply_delta_filter(action_np, prev_action_np, max_step_delta)
 
             action_dict = {name: float(action_np[i]) for i, name in enumerate(JOINT_NAMES) if i < len(action_np)}
             robot.send_action(action_dict)
@@ -523,6 +562,9 @@ def run_s1(
             # Smoothness tracking (after send, not on critical path)
             if prev_action_np is not None:
                 action_deltas.append(np.linalg.norm(action_np - prev_action_np))
+                with _chunk_lock:
+                    diag_chunk = _chunk_data
+                _log_grip_diagnostics(action_np, prev_action_np, step_count, idx, diag_chunk)
             prev_action_np = action_np.copy()
 
             if last_send_time is not None:
@@ -543,7 +585,7 @@ def run_s1(
                     smooth_str += f" | interval: {np.mean(r):.1f}±{np.std(r):.1f}ms"
                 if s1_infer_times:
                     smooth_str += f" | infer: {np.mean(s1_infer_times[-10:]):.0f}ms"
-                smooth_str += f" | chunk_age: {elapsed*1000:.0f}ms"
+                smooth_str += f" | chunk_age: {(t_before_send - t_origin)*1000:.0f}ms"
 
                 logger.info(
                     "S1 step %d | chunk[%d/%d] | S2 age: %.0fms | S2 #%d%s",
