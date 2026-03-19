@@ -64,7 +64,7 @@ class FlowMatchingS1Config:
     # --- S2 conditioning ---
     s2_latent_dim: int = 2048             # S2 prefix latent dimension
     s2_proj_hidden: int = 1024            # S2 projection MLP intermediate
-    use_s2_age_embedding: bool = True     # age-aware S2 conditioning
+    use_s2_age_embedding: bool = False    # disabled — old ACT worked without it
 
     # --- Flow matching ---
     num_inference_steps: int = 15         # denoising steps at inference (15 → ~130ms, cleaner ODE)

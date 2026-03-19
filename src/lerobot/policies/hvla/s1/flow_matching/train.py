@@ -372,8 +372,8 @@ def main():
                         help="Max simulated delay in frames for training-time RTC (15 denoise steps ≈ 5 frames delay)")
     parser.add_argument("--rtc-drop-prob", type=float, default=0.2,
                         help="Probability of no prefix (simulates first chunk)")
-    parser.add_argument("--max-delay", type=float, default=0.15,
-                        help="Max S2 latent delay in seconds for delay augmentation")
+    parser.add_argument("--max-delay", type=float, default=0.0,
+                        help="Max S2 latent delay in seconds (0 = always use aligned latent)")
     parser.add_argument("--resize-images", type=str, default="224x224")
     parser.add_argument("--hidden-dim", type=int, default=768)
     parser.add_argument("--num-decoder-layers", type=int, default=6)
