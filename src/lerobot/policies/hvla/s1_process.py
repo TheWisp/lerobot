@@ -72,11 +72,34 @@ def _apply_delta_filter(action_np: np.ndarray, prev_action_np: np.ndarray,
     return action_np
 
 
+def _save_infer_drop(chunk_np: np.ndarray, obs: dict, infer_count: int, save_dir: str):
+    """Detect gripper jumps in predicted chunk and save inference-time obs for OOD analysis."""
+    r_diff = np.max(np.abs(np.diff(chunk_np[:20, 13])))
+    l_diff = np.max(np.abs(np.diff(chunk_np[:20, 6])))
+    if r_diff <= 10 and l_diff <= 10:
+        return
+    import os, cv2
+    drop_dir = os.path.join(save_dir, f"infer_drop_{infer_count}")
+    os.makedirs(drop_dir, exist_ok=True)
+    for k, v in obs.items():
+        if isinstance(v, np.ndarray) and v.ndim == 3:
+            safe = k.replace("/", "_").replace(".", "_")
+            cv2.imwrite(os.path.join(drop_dir, f"{safe}.jpg"), v[:, :, ::-1])
+    state_arr = np.array([float(obs.get(j, 0)) for j in JOINT_NAMES])
+    np.save(os.path.join(drop_dir, "state.npy"), state_arr)
+    np.save(os.path.join(drop_dir, "chunk.npy"), chunk_np)
+    logger.info("S1 INFER DROP infer#%d | R_jump=%.1f L_jump=%.1f | saved to %s",
+                infer_count, r_diff, l_diff, drop_dir)
+
+
 def _log_grip_diagnostics(
     action_np: np.ndarray, prev_action_np: np.ndarray,
     step_count: int, idx: int, chunk_data: np.ndarray | None,
+    robot_state: np.ndarray | None = None,
+    save_dir: str | None = None,
+    obs_images: dict | None = None,
 ):
-    """Log gripper drops with chunk trajectory dump."""
+    """Log gripper drops with chunk trajectory dump and optional obs saving."""
     grip_l_delta = abs(action_np[6] - prev_action_np[6])
     grip_r_delta = abs(action_np[13] - prev_action_np[13])
     if grip_l_delta <= 10 and grip_r_delta <= 10:
@@ -86,17 +109,34 @@ def _log_grip_diagnostics(
     delta = np.linalg.norm(action_np - prev_action_np)
     l_traj = [f"{chunk_data[i, 6]:.0f}" for i in range(min(20, len(chunk_data)))]
     r_traj = [f"{chunk_data[i, 13]:.0f}" for i in range(min(20, len(chunk_data)))]
+    state_str = ""
+    if robot_state is not None:
+        state_str = "\n  state: " + " ".join(f"{v:6.1f}" for v in robot_state)
     logger.info(
         "S1 GRIP DROP step %d idx=%d | L: %.1f→%.1f (Δ%.1f) R: %.1f→%.1f (Δ%.1f) | Δaction=%.1f\n"
         "  chunk L[0:20]: %s\n"
-        "  chunk R[0:20]: %s",
+        "  chunk R[0:20]: %s%s",
         step_count, idx,
         prev_action_np[6], action_np[6], grip_l_delta,
         prev_action_np[13], action_np[13], grip_r_delta,
         delta,
         " ".join(l_traj),
         " ".join(r_traj),
+        state_str,
     )
+    # Save observation snapshot for offline distribution shift analysis
+    if save_dir and obs_images:
+        import os, cv2
+        drop_dir = os.path.join(save_dir, f"grip_drop_{step_count}")
+        os.makedirs(drop_dir, exist_ok=True)
+        for cam_name, img_np in obs_images.items():
+            # img_np is HWC uint8 (BGR or RGB depending on camera)
+            safe_name = cam_name.replace("/", "_").replace(".", "_")
+            cv2.imwrite(os.path.join(drop_dir, f"{safe_name}.jpg"), img_np[:, :, ::-1])
+        if robot_state is not None:
+            np.save(os.path.join(drop_dir, "state.npy"), robot_state)
+        if chunk_data is not None:
+            np.save(os.path.join(drop_dir, "chunk.npy"), chunk_data)
 
 
 def obs_to_s1_batch(
@@ -182,6 +222,7 @@ def run_s1(
     query_interval_steps: int = 0,
     num_denoise_steps: int | None = None,
     max_step_delta: float | None = None,
+    grip_drop_save_dir: str | None = None,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -453,6 +494,9 @@ def run_s1(
                         exec_idx, best_offset, best_err, " ".join(errors),
                     )
 
+            if grip_drop_save_dir:
+                _save_infer_drop(chunk_np, obs, len(s1_infer_times), grip_drop_save_dir)
+
             with _chunk_lock:
                 _chunk_data = chunk_np
                 _chunk_t_obs = t_obs
@@ -564,7 +608,16 @@ def run_s1(
                 action_deltas.append(np.linalg.norm(action_np - prev_action_np))
                 with _chunk_lock:
                     diag_chunk = _chunk_data
-                _log_grip_diagnostics(action_np, prev_action_np, step_count, idx, diag_chunk)
+                # Build state array from robot obs (individual joint floats)
+                _state = np.array([float(obs.get(j, 0)) for j in JOINT_NAMES])
+                # Collect raw images (numpy HWC uint8)
+                _imgs = {k: v for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
+                _log_grip_diagnostics(
+                    action_np, prev_action_np, step_count, idx, diag_chunk,
+                    robot_state=_state,
+                    save_dir=grip_drop_save_dir,
+                    obs_images=_imgs,
+                )
             prev_action_np = action_np.copy()
 
             if last_send_time is not None:

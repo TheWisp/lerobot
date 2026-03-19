@@ -58,6 +58,8 @@ def main():
                              "chunk before next inference. 0 = query as fast as possible (default).")
     parser.add_argument("--max-step-delta", type=float, default=None,
                         help="Max degrees any joint can change per frame (e.g. 10). Prevents sudden jumps.")
+    parser.add_argument("--save-grip-drops", type=str, default=None,
+                        help="Directory to save observations when grip drops are detected (for offline analysis)")
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -165,6 +167,7 @@ def main():
             query_interval_steps=args.s1_query_interval,
             num_denoise_steps=args.denoise_steps,
             max_step_delta=args.max_step_delta,
+            grip_drop_save_dir=args.save_grip_drops,
         )
     finally:
         stop_event.set()
