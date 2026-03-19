@@ -207,16 +207,13 @@ class FlowMatchingS1Model(nn.Module):
         pos_ids = torch.arange(T, device=x_t.device)
         action_time = action_time + self.action_pos_embed(pos_ids).unsqueeze(0)
 
-        # Causal self-attention mask
-        causal_mask = torch.triu(
-            torch.ones(T, T, device=x_t.device, dtype=torch.bool), diagonal=1,
-        )
-
-        # Cross-attend to observation context
+        # Bidirectional self-attention (Pi0-style): all action positions
+        # negotiate together to commit to one mode, preventing within-chunk
+        # gripper oscillation from causal drift.
         decoded = self.action_decoder(
             tgt=action_time,
             memory=context,
-            tgt_mask=causal_mask,
+            tgt_mask=None,
         )
 
         velocity = self.action_out_proj(decoded)  # [B, T, action_dim]
