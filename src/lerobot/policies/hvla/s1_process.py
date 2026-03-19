@@ -292,15 +292,30 @@ def run_s1(
         _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_images)
 
     # Load robot
-    config_path = robot_config_path or str(Path.home() / ".config" / "chop" / "robot_config.json")
+    config_path = robot_config_path or str(Path.home() / ".config" / "lerobot" / "robots" / "white.json")
     logger.info("S1: Loading robot from %s", config_path)
     with open(config_path) as f:
-        robot_raw = json.load(f)
-    robot_cfg = draccus.decode(RobotConfig, robot_raw)
+        profile = json.load(f)
+    # LeRobot profile format: {type, name, fields, cameras, rest_position, ...}
+    # draccus expects flat config: {type, <fields...>, cameras}
+    # Only pass fields that draccus/RobotConfig recognizes.
+    config_dict = {"type": profile["type"]}
+    # "fields" contains the actual robot config params (ports, etc.)
+    # Filter out GUI-only keys like "id" that aren't in the dataclass
+    for k, v in profile.get("fields", {}).items():
+        config_dict[k] = v
+    if "cameras" in profile:
+        config_dict["cameras"] = profile["cameras"]
+    robot_cfg = draccus.decode(RobotConfig, config_dict)
     robot = make_robot_from_config(robot_cfg)
     logger.info("S1: Connecting to robot...")
     robot.connect()
     logger.info("S1: Robot connected")
+
+    # Apply observation processor steps (e.g., depth edge overlay for RealSense)
+    obs_processor_steps = robot.get_observation_processor_steps() if hasattr(robot, "get_observation_processor_steps") else []
+    if obs_processor_steps:
+        logger.info("S1: Observation processors: %s", [type(s).__name__ for s in obs_processor_steps])
 
     # No keyboard listener — use Ctrl+C (SIGINT) via stop_event from launch.py
     listener = None
@@ -496,6 +511,15 @@ def run_s1(
 
             if grip_drop_save_dir:
                 _save_infer_drop(chunk_np, obs, len(s1_infer_times), grip_drop_save_dir)
+                # Also save every 50th inference as control group (no drop)
+                infer_count = len(s1_infer_times)
+                if infer_count % 50 == 0:
+                    import os
+                    ctrl_dir = os.path.join(grip_drop_save_dir, f"control_{infer_count}")
+                    os.makedirs(ctrl_dir, exist_ok=True)
+                    state_arr = np.array([float(obs.get(j, 0)) for j in JOINT_NAMES])
+                    np.save(os.path.join(ctrl_dir, "state.npy"), state_arr)
+                    np.save(os.path.join(ctrl_dir, "chunk.npy"), chunk_np)
 
             with _chunk_lock:
                 _chunk_data = chunk_np
@@ -554,6 +578,8 @@ def run_s1(
 
             # 1. Capture observation (main loop owns robot)
             obs = robot.get_observation()
+            for step in obs_processor_steps:
+                obs = step.observation(obs)
             t_now = time.perf_counter()
 
             # 2. Deep-copy image arrays before publishing. Camera background
