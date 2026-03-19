@@ -57,14 +57,13 @@ python scripts/train_act_vlm.py \
 python -u -m lerobot.policies.hvla.s1.flow_matching.train \
     --dataset-repo-id thewisp/cylinder_ring_assembly \
     --s2-latent-path ~/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly/s2_latents_pt_11997.npy \
-    --output-dir outputs/flow_s1_hvla \
-    --steps 25000 \
+    --output-dir outputs/flow_s1_hvla_v5 \
+    --steps 50000 \
     --batch-size 64 \
-    --save-freq 5000 \
+    --save-freq 10000 \
     --num-workers 16 \
-    --max-delay 0.15 \
     --resize-images 224x224 \
-    2>&1 | tee outputs/flow_s1_hvla/train.log
+    2>&1 | tee outputs/flow_s1_hvla_v5/train.log
 ```
 
 Flow matching S1 implements [Training-Time Action Conditioning for Efficient Real-Time Chunking](https://arxiv.org/abs/2512.05964) (Mees et al., 2025): simulated inference delay during training, with ground-truth action prefix inpainting. No architecture changes vs standard flow matching — just masking. At inference, actually-executed actions replace the prefix positions at each denoising step.
@@ -72,9 +71,10 @@ Flow matching S1 implements [Training-Time Action Conditioning for Efficient Rea
 - 97M trainable params (DINOv2 ViT-S finetuned + 75M decoder)
 - LR 2.5e-5 with cosine decay to 2.5e-6 (matching Pi0)
 - bf16 autocast + TF32 matmul
-- 5 denoising steps (Euler integration)
-- ~370ms/step at bs=64 → **~2.6 hours** on RTX 5090
-- 29ms inference latency
+- 15 denoising steps (Euler integration), rtc_max_delay=6
+- No S2 latent delay augmentation or age embedding (matching old ACT setup that worked)
+- ~870ms/step at bs=64 → **~12 hours** for 50k steps on RTX 5090
+- ~54ms inference latency (15 steps)
 
 ### 3a. Inference — ACT (default)
 
@@ -92,13 +92,14 @@ python -m lerobot.policies.hvla.launch \
 ```bash
 python -m lerobot.policies.hvla.launch \
     --s1-type flow \
-    --s1-checkpoint outputs/flow_s1_hvla_v3/checkpoint-50000/model.safetensors \
+    --s1-checkpoint outputs/flow_s1_hvla_v5/checkpoint-50000/model.safetensors \
     --s2-checkpoint ~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch/model.safetensors \
     --task "assemble cylinder into ring" \
-    --resize-images 224x224
+    --resize-images 224x224 \
+    --s1-query-interval 5
 ```
 
-No `--temporal-ensemble-coeff` needed — RTC provides chunk continuity natively.
+No `--temporal-ensemble-coeff` needed — RTC provides chunk continuity natively. `--s1-query-interval 5` executes 5 actions (~167ms) before re-querying S1. `--denoise-steps` overrides the config default (15) if needed.
 
 S2 auto-discovery: the launcher first tries to attach to an existing S2 process via shared memory. If found, S1 starts instantly (no 45s cold start). If not found, spawns S2 from `--s2-checkpoint`.
 
@@ -116,9 +117,10 @@ python -m lerobot.policies.hvla.s2_standalone \
 # Terminal 2: start/restart S1 freely (connects to S2 instantly)
 python -m lerobot.policies.hvla.launch \
     --s1-type flow \
-    --s1-checkpoint outputs/flow_s1_hvla_v3/checkpoint-50000/model.safetensors \
+    --s1-checkpoint outputs/flow_s1_hvla_v5/checkpoint-50000/model.safetensors \
     --task "assemble cylinder into ring" \
-    --resize-images 224x224
+    --resize-images 224x224 \
+    --s1-query-interval 5
 ```
 
 S1 auto-discovers the running S2 via well-known shared memory names. No `--s2-checkpoint` needed when S2 is already running.
@@ -174,14 +176,8 @@ src/lerobot/policies/hvla/
 ### S2 is VLM-only
 S2 uses PaliGemma (SigLIP + Gemma 2B) for scene understanding. The Pi0.5 action expert is NOT loaded — S1 generates all actions. This saves ~40% GPU memory and decouples the action policy from the VLM.
 
-### Latent age embedding
-S1 receives the S2 latent's age (seconds of staleness) as a learned additive embedding. The age embedding MLP output layer is **zero-initialized**, so:
-- Old checkpoints (without age weights) load fine — missing keys are zero, output unchanged
-- `age_embedding(0.0)` = zeros — no-age and age=0 produce identical results
-- New training learns to use age via standard backprop through action loss
-
-### Delay augmentation
-During S1 training, the S2 latent is randomly shifted backward by 0 to `max_delay` seconds within the same episode. This trains the model to handle stale latents gracefully, matching the real inference scenario where S2 runs at 4-15Hz while S1 runs at 22-30Hz.
+### No delay augmentation (v5)
+The old ACT-based S1 trained without delay augmentation and successfully used S2's latent. Flow matching v1-v4 introduced delay augmentation (shifting the S2 latent backward by 0-150ms), which caused S1 to learn to ignore the noisy/misaligned latent. v5 reverts to aligned latents (no delay, no age embedding) to match the working ACT setup.
 
 ### Shared memory IPC
 `SharedLatentCache` uses `torch.Tensor.share_memory_()` backed by `/dev/shm`. Each process manages its own CUDA context — no GPU contention from IPC. The [2048] float32 latent (8KB) transfers in <0.1ms.
