@@ -197,7 +197,10 @@ def _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_to):
     t0 = _time.perf_counter()
     with torch.no_grad():
         for i in range(3):
-            policy.select_action(dummy_batch)
+            if hasattr(policy, 'select_action'):
+                policy.select_action(dummy_batch)
+            else:
+                policy.predict_action_chunk(dummy_batch)
             if i == 0:
                 logger.info("S1: First compiled forward done (%.1fs)", _time.perf_counter() - t0)
     policy.reset()  # clear any state from warmup
@@ -286,8 +289,9 @@ def run_s1(
     # TODO: investigate torch.compile with fullgraph=False or compiling only the
     # ACT encoder/decoder (excluding DINOv2 backbone).
     if compile_s1:
-        logger.info("S1: Compiling model with torch.compile (mode=default)...")
-        policy.model = torch.compile(policy.model, mode="default")
+        logger.info("S1: Compiling denoise_step with torch.compile...")
+        inner = policy.model if hasattr(policy, 'model') else policy
+        inner.denoise_step = torch.compile(inner.denoise_step, mode="reduce-overhead")
         logger.info("S1: Warming up compiled model...")
         _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_images)
 
