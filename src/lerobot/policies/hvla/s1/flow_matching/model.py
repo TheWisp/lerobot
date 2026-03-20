@@ -133,26 +133,33 @@ class FlowMatchingS1Model(nn.Module):
         """Encode images + state + S2 latent → context tokens [B, N_ctx, D]."""
         tokens = []
 
-        # Image features from DINOv2
+        # Image features from DINOv2 (batched across cameras for efficiency)
         if self.backbone is not None:
             images = batch.get(OBS_IMAGES, [])
             if not images and self.config.image_features:
                 images = [batch[k] for k in self.config.image_features]
-            for img in images:
+            if images:
+                B = images[0].shape[0]
+                N_cams = len(images)
+                # Stack all cameras into one batch: [B*N_cams, C, H, W]
+                stacked = torch.cat(images, dim=0)
                 if self.config.freeze_backbone:
                     with torch.no_grad():
-                        features = self.backbone.forward_features(img)
-                        patch_tokens = features["x_norm_patchtokens"]  # [B, 256, 768]
+                        features = self.backbone.forward_features(stacked)
+                        all_patches = features["x_norm_patchtokens"]  # [B*N_cams, 256, 768]
                 elif self._backbone_grad_ckpt and self.training:
                     def _backbone_fwd(x):
                         return self.backbone.forward_features(x)["x_norm_patchtokens"]
-                    patch_tokens = torch.utils.checkpoint.checkpoint(
-                        _backbone_fwd, img, use_reentrant=False,
+                    all_patches = torch.utils.checkpoint.checkpoint(
+                        _backbone_fwd, stacked, use_reentrant=False,
                     )
                 else:
-                    features = self.backbone.forward_features(img)
-                    patch_tokens = features["x_norm_patchtokens"]
-                tokens.append(self.image_proj(patch_tokens))
+                    features = self.backbone.forward_features(stacked)
+                    all_patches = features["x_norm_patchtokens"]
+                # Split back per camera and project
+                per_cam = all_patches.reshape(N_cams, B, all_patches.shape[1], all_patches.shape[2])
+                for i in range(N_cams):
+                    tokens.append(self.image_proj(per_cam[i]))
 
         # State token
         if OBS_STATE in batch:

@@ -282,6 +282,10 @@ def run_s1(
     policy.eval()
     policy.reset()
 
+    # Enable TF32 matmul for faster float32 ops on Ampere+ GPUs
+    torch.set_float32_matmul_precision("high")
+    torch.backends.cudnn.benchmark = True
+
     logger.info("S1: Policy loaded (%s). Image keys: %s", s1_type, s1_image_keys)
 
     # torch.compile is opt-in via --compile-s1 flag.
@@ -291,7 +295,7 @@ def run_s1(
     if compile_s1:
         logger.info("S1: Compiling denoise_step with torch.compile...")
         inner = policy.model if hasattr(policy, 'model') else policy
-        inner.denoise_step = torch.compile(inner.denoise_step, mode="reduce-overhead")
+        inner.denoise_step = torch.compile(inner.denoise_step, mode="default")
         logger.info("S1: Warming up compiled model...")
         _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_images)
 
@@ -451,7 +455,7 @@ def run_s1(
 
             # Inference
             t_infer_start = time.perf_counter()
-            with torch.no_grad():
+            with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 actions = policy.predict_action_chunk(batch, num_steps=num_denoise_steps)  # [1, chunk_size, action_dim]
                 actions = postprocessor(actions)
             t_infer_end = time.perf_counter()
