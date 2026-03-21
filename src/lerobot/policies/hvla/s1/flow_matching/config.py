@@ -67,7 +67,7 @@ class FlowMatchingS1Config:
     use_s2_age_embedding: bool = False    # disabled — old ACT worked without it
 
     # --- Flow matching ---
-    num_inference_steps: int = 15         # denoising steps at inference (15 → ~130ms, cleaner ODE)
+    num_inference_steps: int = 10         # denoising steps at inference (10 = best quality/speed tradeoff)
     time_sampling_beta_alpha: float = 1.5 # Beta distribution for training time sampling
     time_sampling_beta_beta: float = 1.0
     time_min: float = 0.001              # minimum timestep

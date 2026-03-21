@@ -57,13 +57,13 @@ python scripts/train_act_vlm.py \
 python -u -m lerobot.policies.hvla.s1.flow_matching.train \
     --dataset-repo-id thewisp/cylinder_ring_assembly \
     --s2-latent-path ~/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly/s2_latents_pt_11997.npy \
-    --output-dir outputs/flow_s1_hvla_v5 \
+    --output-dir outputs/flow_s1_hvla_v6 \
     --steps 50000 \
     --batch-size 64 \
     --save-freq 10000 \
     --num-workers 16 \
     --resize-images 224x224 \
-    2>&1 | tee outputs/flow_s1_hvla_v5/train.log
+    2>&1 | tee outputs/flow_s1_hvla_v6/train.log
 ```
 
 Flow matching S1 implements [Training-Time Action Conditioning for Efficient Real-Time Chunking](https://arxiv.org/abs/2512.05964) (Mees et al., 2025): simulated inference delay during training, with ground-truth action prefix inpainting. No architecture changes vs standard flow matching — just masking. At inference, actually-executed actions replace the prefix positions at each denoising step.
@@ -71,9 +71,10 @@ Flow matching S1 implements [Training-Time Action Conditioning for Efficient Rea
 - 97M trainable params (DINOv2 ViT-S finetuned + 75M decoder)
 - LR 2.5e-5 with cosine decay to 2.5e-6 (matching Pi0)
 - bf16 autocast + TF32 matmul
+- Bidirectional action decoder attention (Pi0-style, all positions attend to all others)
 - 15 denoising steps (Euler integration), rtc_max_delay=6
 - No S2 latent delay augmentation or age embedding (matching old ACT setup that worked)
-- ~54ms inference latency (15 denoise steps)
+- v6: curated dataset + bidirectional attention (v5 used causal)
 
 ### 3a. Inference — ACT (default)
 
@@ -91,14 +92,17 @@ python -m lerobot.policies.hvla.launch \
 ```bash
 python -m lerobot.policies.hvla.launch \
     --s1-type flow \
-    --s1-checkpoint outputs/flow_s1_hvla_v5/checkpoint-50000/model.safetensors \
+    --s1-checkpoint outputs/flow_s1_hvla_v6/checkpoint-40000/model.safetensors \
     --s2-checkpoint ~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch/model.safetensors \
     --task "assemble cylinder into ring" \
-    --resize-images 224x224 \
-    --s1-query-interval 5
+    --resize-images 224x224
 ```
 
-No `--temporal-ensemble-coeff` needed — RTC provides chunk continuity natively. `--s1-query-interval 5` executes 5 actions (~167ms) before re-querying S1. `--denoise-steps` overrides the config default (15) if needed.
+No `--temporal-ensemble-coeff` needed — RTC provides chunk continuity natively. Key flags:
+- `--denoise-steps N`: override denoising steps (default 10, min usable ~5, max quality ~15)
+- `--s1-query-interval N`: re-query every N actions (default 2, ~67ms). Lower = fresher chunks, higher = more of each chunk executed
+- `--no-compile-s1`: disable torch.compile if needed (on by default, ~2ms savings)
+- `--save-grip-drops`: save observations when gripper drops detected (debugging)
 
 S2 auto-discovery: the launcher first tries to attach to an existing S2 process via shared memory. If found, S1 starts instantly (no 45s cold start). If not found, spawns S2 from `--s2-checkpoint`.
 
@@ -116,10 +120,9 @@ python -m lerobot.policies.hvla.s2_standalone \
 # Terminal 2: start/restart S1 freely (connects to S2 instantly)
 python -m lerobot.policies.hvla.launch \
     --s1-type flow \
-    --s1-checkpoint outputs/flow_s1_hvla_v5/checkpoint-50000/model.safetensors \
+    --s1-checkpoint outputs/flow_s1_hvla_v6/checkpoint-40000/model.safetensors \
     --task "assemble cylinder into ring" \
-    --resize-images 224x224 \
-    --s1-query-interval 5
+    --resize-images 224x224
 ```
 
 S1 auto-discovers the running S2 via well-known shared memory names. No `--s2-checkpoint` needed when S2 is already running.
@@ -175,8 +178,11 @@ src/lerobot/policies/hvla/
 ### S2 is VLM-only
 S2 uses PaliGemma (SigLIP + Gemma 2B) for scene understanding. The Pi0.5 action expert is NOT loaded — S1 generates all actions. This saves ~40% GPU memory and decouples the action policy from the VLM.
 
-### No delay augmentation (v5)
-The old ACT-based S1 trained without delay augmentation and successfully used S2's latent. Flow matching v1-v4 introduced delay augmentation (shifting the S2 latent backward by 0-150ms), which caused S1 to learn to ignore the noisy/misaligned latent. v5 reverts to aligned latents (no delay, no age embedding) to match the working ACT setup.
+### Action decoder: bidirectional attention (v6)
+Pi0's action expert uses bidirectional self-attention so all chunk positions "negotiate" and commit to one mode. Our v5 (causal) showed within-chunk gripper oscillation. v6 switches to bidirectional (`tgt_mask=None`), matching Pi0. Requires retraining — not a drop-in change.
+
+### No delay augmentation (v5+)
+The old ACT-based S1 trained without delay augmentation and successfully used S2's latent. Flow matching v1-v4 introduced delay augmentation (shifting the S2 latent backward by 0-150ms), which caused S1 to learn to ignore the noisy/misaligned latent. v5+ reverts to aligned latents (no delay, no age embedding) to match the working ACT setup.
 
 ### Shared memory IPC
 `SharedLatentCache` uses `torch.Tensor.share_memory_()` backed by `/dev/shm`. Each process manages its own CUDA context — no GPU contention from IPC. The [2048] float32 latent (8KB) transfers in <0.1ms.
@@ -186,27 +192,36 @@ S2 loads from any Pi0.5 safetensors checkpoint — action expert keys are filter
 
 ## Performance
 
+### S1 Flow Matching (v6, 10 denoise steps, compiled)
+
 | Component | Latency | Notes |
 |-----------|---------|-------|
 | S2 latent extraction | ~81ms | VLM-only, no action expert |
-| S1 prep (4 cameras) | ~6ms | CPU resize 720×1280→224×224 |
-| S1 inference | ~25ms | ACTWithVLM forward |
+| S1 obs prep (4 cameras) | ~6ms | cv2.resize on CPU, then GPU transfer |
+| S1 inference (10 steps) | 22-42ms | bf16 + KV cache + batched DINOv2 + compile |
 | IPC round-trip | <0.1ms | CPU shared memory |
 | Robot send_action | <1ms | Feetech serial, non-blocking |
 
-Typical S1 loop: 30-40ms/step (~25-33Hz). S2 runs at 4-15Hz depending on GPU scheduling.
+Typical S1 loop interval: ~34ms (~29Hz). Inference spikes to ~59ms under S2 GPU contention.
+
+### Optimization stack (cumulative)
+| Optimization | Inference time | Savings |
+|-------------|---------------|---------|
+| Baseline (fp32, 15 steps) | ~95ms | — |
+| + TF32 matmul | ~54ms | 41ms |
+| + bf16 autocast | ~25ms | 29ms |
+| + Cross-attention KV cache | ~14ms (isolated) | 11ms |
+| + Batched DINOv2 (4 cameras) | marginal | ~1ms |
+| + torch.compile (denoise_step) | ~2ms saved | ~2ms |
+| Real-world (10 steps, w/ S2) | 22-42ms | — |
 
 ## TODO
 
-### Critical
-- [ ] **Fix Corrupt JPEG data** — frequent "Corrupt JPEG data: premature end of data segment" from OpenCV cameras during inference. Likely cause: USB bandwidth saturation with 4 cameras at 720p30 + camera buffer contention. This corrupts images fed to S1, potentially causing bad action predictions and contributing to jitter. Investigate: (1) reduce camera resolution or fps, (2) stagger camera reads, (3) use V4L2 direct instead of OpenCV, (4) deep-copy camera frames in main loop before sharing.
-
 ### High priority
-- [ ] **Bidirectional action attention** — Current action decoder uses causal self-attention (each position only sees previous). Pi0's action expert uses bidirectional, allowing all positions to "negotiate" and commit to one mode. Our chunks show within-chunk gripper oscillation (e.g., `R: 28 28 28 14 14 13 10 9 5`) which bidirectional attention could fix. One-line change (`tgt_mask=None`), requires retraining. ~5-10% slower training/inference.
-- [ ] **S1 inference thread latency** — obs→infer gap is 3-45ms (avg ~20ms) due to `threading.Event.wait()` OS scheduler latency. The inference thread sleeps up to 33ms waiting for the next main loop tick. Options: (1) busy-wait with CPU yield, (2) double-buffered obs with atomic swap, (3) redesign so inference thread owns obs capture. This adds 0-33ms to chunk_age, reducing action freshness.
-- [ ] **S1 GPU priority over S2** — S1 inference doubles from 21ms to 50ms due to GPU contention with S2. S2 throttle (100ms sleep) helps but doesn't eliminate contention. Options: (1) CUDA MPS for proper time-slicing, (2) increase S2 throttle (trade S2 freshness for S1 speed), (3) Triton kernel optimization ([realtime-vla](https://github.com/Dexmal/realtime-vla), arXiv:2510.26742).
-- [ ] **Image resize optimization** — switched to cv2.resize (0.7ms/4 images), but consider: GPU resize (1.2ms, avoids CPU→GPU transfer of full-res), or cameras outputting 224x224 directly.
-- [ ] Persistent S2 process (avoid 45s cold start on every launch)
+- [ ] **S1 inference thread latency** — obs→infer gap is 8-51ms (typical ~14ms, spikes to 51ms) due to `threading.Event.wait()` OS scheduler jitter. Options: (1) busy-wait with CPU yield, (2) double-buffered obs with atomic swap, (3) redesign so inference thread owns obs capture.
+- [ ] **S1 GPU priority over S2** — S1 inference spikes from 22ms to 59ms under S2 contention. Options: (1) CUDA MPS for proper time-slicing, (2) separate GPUs, (3) Triton kernel optimization.
+- [ ] S2 LoRA finetuning — S2 cannot produce subtask transitions (stuck on "pick up the cylinder"). Needs finetuning with proper subtask labels.
+- [ ] S2 latent normalization — z-score normalize S2 latents before feeding to S1 (44× cosine gap improvement validated). Requires S1 retraining.
 - [ ] Generic SharedMemoryStore to replace per-type IPC classes
 - [ ] Pre-decode and cache training images to avoid repeated video decode (main training bottleneck)
 
@@ -216,9 +231,20 @@ Typical S1 loop: 30-40ms/step (~25-33Hz). S2 runs at 4-15Hz depending on GPU sch
 - [ ] wandb integration for training monitoring
 - [ ] Inference-time RTC guidance (LeRobot's `RTCProcessor`) on top of training-time RTC for extra smoothness
 - [ ] Soft landing: fix occasional motor overload error on disconnect
+- [ ] Corrupt JPEG data — "premature end of data segment" from OpenCV cameras (not seen recently, may be resolved)
+
+### Done
+- [x] Bidirectional action attention (Pi0-style, `tgt_mask=None`) — v6
+- [x] Cross-attention KV cache (pre-compute K,V from static context)
+- [x] Batched DINOv2 (4 cameras in one forward pass)
+- [x] bf16 autocast + TF32 matmul
+- [x] torch.compile denoise_step
+- [x] Image resize on CPU (cv2.resize, 0.7ms/4 images)
+- [x] Persistent S2 process (s2_standalone)
+- [x] Observation processor steps (DepthEdgeOverlayProcessorStep)
+- [x] Grip drop diagnostics with inference-time obs saving
 
 ### Future
-- [ ] S2 LoRA training (rank 32 on SigLIP + Gemma 2B) — lower priority since Pi0.5 checkpoint works
 - [ ] Co-training S1 + S2 (currently sequential: extract latents → train S1)
 - [ ] Adaptive action horizon (short chunks for precision, long for transit)
 - [ ] Switch S1 to using Pi0-style action expert architecture (proven at scale, matches Ψ₀)

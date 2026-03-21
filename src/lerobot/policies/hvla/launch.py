@@ -41,8 +41,10 @@ def main():
     parser.add_argument("--s2-image-keys", nargs="+",
                         default=["base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb", "base_1_rgb"])
     parser.add_argument("--zero-s2", action="store_true")
-    parser.add_argument("--compile-s1", action="store_true",
-                        help="torch.compile S1 model (experimental, may not work with DINOv2)")
+    parser.add_argument("--compile-s1", action="store_true", default=True,
+                        help="torch.compile S1 denoise_step (default: on, ~2ms savings)")
+    parser.add_argument("--no-compile-s1", dest="compile_s1", action="store_false",
+                        help="Disable torch.compile for S1")
     parser.add_argument("--s1-type", choices=["act", "flow"], default="act",
                         help="S1 policy type: 'act' (ACTWithVLM, default) or 'flow' (flow matching with RTC)")
     parser.add_argument("--s2-throttle-ms", type=int, default=100,
@@ -51,11 +53,11 @@ def main():
                         help="Enable both-arms oscillation skip: when both arms are flat, "
                              "jump ahead in chunk to where movement starts")
     parser.add_argument("--denoise-steps", type=int, default=None,
-                        help="Number of flow matching denoising steps (default: 5 from config)")
-    parser.add_argument("--s1-query-interval", type=int, default=5,
+                        help="Number of flow matching denoising steps (default: 10 from config)")
+    parser.add_argument("--s1-query-interval", type=int, default=2,
                         help="Number of action steps to wait before re-querying S1. "
                              "E.g. 20 = execute 20 actions (~660ms at 30fps) from current "
-                             "chunk before next inference. 0 = query as fast as possible (default).")
+                             "chunk before next inference. 0 = query as fast as possible.")
     parser.add_argument("--max-step-delta", type=float, default=None,
                         help="Max degrees any joint can change per frame (e.g. 10). Prevents sudden jumps.")
     parser.add_argument("--save-grip-drops", type=str, default=None,
