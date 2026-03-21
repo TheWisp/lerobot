@@ -127,28 +127,6 @@ python -m lerobot.policies.hvla.launch \
 
 S1 auto-discovers the running S2 via well-known shared memory names. No `--s2-checkpoint` needed when S2 is already running.
 
-### 3b. Inference (legacy WebSocket — compatible with OpenPI server)
-
-Start the Pi0.5 server (OpenPI):
-```bash
-cd ~/Documents/openpi_subtask && .venv/bin/python scripts/async_pi05/pytorch_pi05_server.py \
-    --checkpoint ~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch \
-    --norm-stats ~/.cache/openpi/checkpoints/soarm-pi05-state-11997/assets/thewisp/cylinder_ring_assembly/norm_stats.json \
-    --port 8765 --device cuda:0
-```
-
-Then run dual_system_infer.py:
-```bash
-python dual_system_infer.py \
-    --s1-checkpoint outputs/act_vlm_hvla/checkpoint-100000 \
-    --task "assemble cylinder into ring" \
-    --s2-host localhost --s2-port 8765 \
-    --resize-images 224x224 \
-    --temporal-ensemble-coeff 0.01
-```
-
-Both paths pass the S2 latent age to the age embedding. The model is checkpoint-compatible with both.
-
 ## Module Structure
 
 ```
@@ -169,26 +147,42 @@ src/lerobot/policies/hvla/
 ├── s2_process.py           S2 process entry point (extraction loop)
 ├── s1_process.py           S1 process entry point (robot control loop)
 ├── launch.py               Spawns S2 process + runs S1
-├── PLAN.md                 Design decisions and architecture rationale
 └── README.md               This file
 ```
 
-## Key Design Decisions
+## Design Decisions
 
 ### S2 is VLM-only
-S2 uses PaliGemma (SigLIP + Gemma 2B) for scene understanding. The Pi0.5 action expert is NOT loaded — S1 generates all actions. This saves ~40% GPU memory and decouples the action policy from the VLM.
+S2 uses PaliGemma (SigLIP + Gemma 2B) for scene understanding. The Pi0.5 action expert is NOT loaded — S1 generates all actions. This saves ~40% GPU memory and decouples the action policy from the VLM. S2 loads from any Pi0.5 safetensors checkpoint — action expert keys are filtered out at load time.
+
+### Latent interface: 2048-dim, single token
+
+S2 → S1 communication is a single [2048] float32 vector (PaliGemma's hidden dim), mean-pooled from the VLM's prefix features. S1 projects it down via MLP: 2048→1024→512.
+
+| System | Latent dim | Projection |
+|--------|-----------|------------|
+| OpenHelix | 512 | Linear from 4096 |
+| Dual Process VLA | 4096 | MLP |
+| RoboDual | 256 + 8 tokens | Perceiver |
+| **Ours** | **2048** | MLP: 2048→1024→512 in S1 |
 
 ### Action decoder: bidirectional attention (v6)
 Pi0's action expert uses bidirectional self-attention so all chunk positions "negotiate" and commit to one mode. Our v5 (causal) showed within-chunk gripper oscillation. v6 switches to bidirectional (`tgt_mask=None`), matching Pi0. Requires retraining — not a drop-in change.
 
-### No delay augmentation (v5+)
-The old ACT-based S1 trained without delay augmentation and successfully used S2's latent. Flow matching v1-v4 introduced delay augmentation (shifting the S2 latent backward by 0-150ms), which caused S1 to learn to ignore the noisy/misaligned latent. v5+ reverts to aligned latents (no delay, no age embedding) to match the working ACT setup.
+### S1 training: pre-extract S2 latents
+
+S2 latents are pre-extracted offline rather than computed during S1 training:
+- S2 inference (50ms/frame) on the same GPU as S1 training causes contention
+- DataLoader workers can't efficiently share a GPU model
+- Extraction is one-time: ~2.5h for 186k frames, produces ~1.5GB .npy file
+- If S2 is retrained, latents must be re-extracted before S1 retraining
+
+### Delay augmentation: tried and dropped (v5+)
+
+v1-v4 shifted the S2 latent backward by k frames (k ~ Uniform(0, 15) at 30fps = 0-500ms) to simulate S2 staleness, with an age embedding MLP so S1 knows how stale the latent is. In practice, this caused S1 to learn to ignore the latent entirely. v5+ trains with aligned latents (k=0, no age embedding), matching the original ACT setup that worked. The age embedding MLP still exists in the model but is disabled (`use_s2_age_embedding=False`).
 
 ### Shared memory IPC
 `SharedLatentCache` uses `torch.Tensor.share_memory_()` backed by `/dev/shm`. Each process manages its own CUDA context — no GPU contention from IPC. The [2048] float32 latent (8KB) transfers in <0.1ms.
-
-### Checkpoint compatibility
-S2 loads from any Pi0.5 safetensors checkpoint — action expert keys are filtered out, `paligemma_with_expert.paligemma.*` keys are remapped to `paligemma.*`.
 
 ## Performance
 
@@ -220,7 +214,7 @@ Typical S1 loop interval: ~34ms (~29Hz). Inference spikes to ~59ms under S2 GPU 
 ### High priority
 - [ ] **S1 inference thread latency** — obs→infer gap is 8-51ms (typical ~14ms, spikes to 51ms) due to `threading.Event.wait()` OS scheduler jitter. Options: (1) busy-wait with CPU yield, (2) double-buffered obs with atomic swap, (3) redesign so inference thread owns obs capture.
 - [ ] **S1 GPU priority over S2** — S1 inference spikes from 22ms to 59ms under S2 contention. Options: (1) CUDA MPS for proper time-slicing, (2) separate GPUs, (3) Triton kernel optimization.
-- [ ] S2 LoRA finetuning — S2 cannot produce subtask transitions (stuck on "pick up the cylinder"). Needs finetuning with proper subtask labels.
+- [ ] S2 LoRA finetuning — S2 cannot produce subtask transitions (stuck on "pick up the cylinder"). Plan: LoRA rank 32 on both Gemma 2B (q/k/v/o_proj, 18 layers) + SigLIP (QKV+out, 27 layers) ≈ 24M trainable params. Two losses: subtask cross-entropy (weight=10) + FAST token cross-entropy (weight=1). Needs per-frame `high_level_task` + `low_level_subtask` annotations.
 - [ ] S2 latent normalization — z-score normalize S2 latents before feeding to S1 (44× cosine gap improvement validated). Requires S1 retraining.
 - [ ] Generic SharedMemoryStore to replace per-type IPC classes
 - [ ] Pre-decode and cache training images to avoid repeated video decode (main training bottleneck)
