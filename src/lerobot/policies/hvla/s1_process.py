@@ -207,6 +207,63 @@ def _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_to):
     logger.info("S1: Warmup complete (%.1fs total)", _time.perf_counter() - t0)
 
 
+def _create_recording_dataset(repo_id: str, fps: int, robot, task: str):
+    """Create a LeRobotDataset for recording inference episodes.
+
+    Features are derived from the robot's action/observation specs.
+    """
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    obs_ft = robot.observation_features
+    action_ft = robot.action_features
+
+    # Joint names = non-camera observation features
+    joint_names = [k for k, v in action_ft.items() if not isinstance(v, tuple)]
+    cam_features = {k: v for k, v in obs_ft.items() if isinstance(v, tuple)}
+
+    features = {}
+    features["observation.state"] = {
+        "dtype": "float32",
+        "shape": (len(joint_names),),
+        "names": list(joint_names),
+    }
+    for cam_name, shape in cam_features.items():
+        features[f"observation.images.{cam_name}"] = {
+            "dtype": "video",
+            "shape": shape,
+            "names": ["height", "width", "channels"],
+        }
+    features["action"] = {
+        "dtype": "float32",
+        "shape": (len(joint_names),),
+        "names": list(joint_names),
+    }
+
+    dataset = LeRobotDataset.create(
+        repo_id=repo_id,
+        fps=fps,
+        features=features,
+        robot_type=type(robot).__name__,
+        use_videos=True,
+    )
+    logger.info("S1: Recording dataset '%s' created (%d joints, %d cameras)",
+                repo_id, len(joint_names), len(cam_features))
+    return dataset
+
+
+def _add_frame_to_dataset(dataset, obs: dict, action_np: np.ndarray, joint_names: list[str], task: str):
+    """Add a single frame (obs + action) to the recording dataset."""
+    frame = {"task": task}
+    frame["observation.state"] = np.array(
+        [float(obs.get(j, 0)) for j in joint_names], dtype=np.float32,
+    )
+    frame["action"] = action_np.astype(np.float32)
+    for k, v in obs.items():
+        if isinstance(v, np.ndarray) and v.ndim == 3:
+            frame[f"observation.images.{k}"] = v
+    dataset.add_frame(frame)
+
+
 def run_s1(
     s1_checkpoint: str,
     shared_cache: SharedLatentCache,
@@ -226,6 +283,7 @@ def run_s1(
     num_denoise_steps: int | None = None,
     max_step_delta: float | None = None,
     grip_drop_save_dir: str | None = None,
+    record_dataset: str | None = None,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -304,16 +362,17 @@ def run_s1(
     logger.info("S1: Loading robot from %s", config_path)
     with open(config_path) as f:
         profile = json.load(f)
-    # LeRobot profile format: {type, name, fields, cameras, rest_position, ...}
-    # draccus expects flat config: {type, <fields...>, cameras}
-    # Only pass fields that draccus/RobotConfig recognizes.
-    config_dict = {"type": profile["type"]}
-    # "fields" contains the actual robot config params (ports, etc.)
-    # Filter out GUI-only keys like "id" that aren't in the dataclass
-    for k, v in profile.get("fields", {}).items():
-        config_dict[k] = v
-    if "cameras" in profile:
-        config_dict["cameras"] = profile["cameras"]
+    # Support both formats:
+    # - LeRobot profile: {type, name, fields: {ports...}, cameras, ...}
+    # - Flat config: {type, left_arm_port, ..., cameras, ...}
+    if "fields" in profile:
+        config_dict = {"type": profile["type"]}
+        for k, v in profile["fields"].items():
+            config_dict[k] = v
+        if "cameras" in profile:
+            config_dict["cameras"] = profile["cameras"]
+    else:
+        config_dict = profile
     robot_cfg = draccus.decode(RobotConfig, config_dict)
     robot = make_robot_from_config(robot_cfg)
     logger.info("S1: Connecting to robot...")
@@ -325,8 +384,10 @@ def run_s1(
     if obs_processor_steps:
         logger.info("S1: Observation processors: %s", [type(s).__name__ for s in obs_processor_steps])
 
-    # No keyboard listener — use Ctrl+C (SIGINT) via stop_event from launch.py
-    listener = None
+    # Episode recording
+    dataset = None
+    if record_dataset:
+        dataset = _create_recording_dataset(record_dataset, fps, robot, task)
 
     # Note: S2 wait happens after inference thread starts (below),
     # because the inference thread publishes images that S2 needs.
@@ -632,6 +693,10 @@ def run_s1(
             robot.send_action(action_dict)
             t_after_send = time.perf_counter()
 
+            # Record frame to dataset
+            if dataset is not None:
+                _add_frame_to_dataset(dataset, obs, action_np, JOINT_NAMES, task)
+
             # Track chunk execution index for RTC prefix extraction
             if _supports_rtc:
                 with _main_loop_chunk_idx_lock:
@@ -694,6 +759,14 @@ def run_s1(
         if s1_infer_times:
             logger.info("S1: Done. %d steps | avg infer: %.1fms | S2 updates: %d",
                         step_count, np.mean(s1_infer_times), shared_cache.count)
+        # Save recorded episode
+        if dataset is not None:
+            try:
+                dataset.save_episode()
+                dataset.finalize()
+                logger.info("S1: Episode saved to dataset '%s' (%d frames)", record_dataset, step_count)
+            except Exception as e:
+                logger.warning("S1: Failed to save episode: %s", e)
         _soft_land(robot)
         try:
             robot.disconnect()

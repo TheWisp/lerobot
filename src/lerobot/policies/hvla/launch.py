@@ -62,6 +62,9 @@ def main():
                         help="Max degrees any joint can change per frame (e.g. 10). Prevents sudden jumps.")
     parser.add_argument("--save-grip-drops", type=str, default=None,
                         help="Directory to save observations when grip drops are detected (for offline analysis)")
+    parser.add_argument("--record-dataset", type=str, default=None,
+                        help="Record inference episode to LeRobotDataset (e.g. 'user/hvla_ep1'). "
+                             "Saves obs+actions each frame, commits on shutdown.")
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -170,6 +173,7 @@ def main():
             num_denoise_steps=args.denoise_steps,
             max_step_delta=args.max_step_delta,
             grip_drop_save_dir=args.save_grip_drops,
+            record_dataset=args.record_dataset,
         )
     finally:
         stop_event.set()
