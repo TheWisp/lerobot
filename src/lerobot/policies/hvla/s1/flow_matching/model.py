@@ -109,13 +109,15 @@ class FlowMatchingS1Model(nn.Module):
         )
         self.obs_encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.num_encoder_layers)
 
-        # --- Flow matching decoder ---
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=d, nhead=config.num_heads,
-            dim_feedforward=config.dim_feedforward,
-            dropout=config.dropout, batch_first=True,
-        )
-        self.action_decoder = nn.TransformerDecoder(decoder_layer, num_layers=config.num_decoder_layers)
+        # --- Flow matching decoder (with cross-attention KV caching) ---
+        self.decoder_layers = nn.ModuleList([
+            nn.TransformerDecoderLayer(
+                d_model=d, nhead=config.num_heads,
+                dim_feedforward=config.dim_feedforward,
+                dropout=config.dropout, batch_first=True,
+            )
+            for _ in range(config.num_decoder_layers)
+        ])
 
         # --- Action projections (matching Pi0/SmolVLA) ---
         self.action_in_proj = nn.Linear(config.action_dim, d)
@@ -178,11 +180,36 @@ class FlowMatchingS1Model(nn.Module):
         context = self.obs_encoder(context)
         return context
 
+    def precompute_cross_attn_kv(self, context: Tensor) -> list[tuple[Tensor, Tensor]]:
+        """Pre-compute cross-attention K,V from context for all decoder layers.
+
+        Called once before the denoising loop. The cached K,V are reused
+        across all denoise steps since context doesn't change.
+        """
+        cached_kv = []
+        for layer in self.decoder_layers:
+            # nn.TransformerDecoderLayer stores cross-attention as multihead_attn
+            mha = layer.multihead_attn
+            # Project context through K,V weights (in_proj contains Q,K,V stacked)
+            # For nn.MultiheadAttention with batch_first=True:
+            #   in_proj_weight is [3*d, d], split into Q, K, V
+            d = mha.embed_dim
+            w = mha.in_proj_weight  # [3*d, d]
+            b = mha.in_proj_bias    # [3*d]
+            # K = context @ W_K^T + b_K, V = context @ W_V^T + b_V
+            k = F.linear(context, w[d:2*d], b[d:2*d] if b is not None else None)
+            v = F.linear(context, w[2*d:3*d], b[2*d:3*d] if b is not None else None)
+            # Reshape for multi-head: [B, N, D] → [B, N, nhead, head_dim] → [B*nhead, N, head_dim]
+            # Actually, keep as [B, N, D] — we'll handle heads in the forward
+            cached_kv.append((k, v))
+        return cached_kv
+
     def denoise_step(
         self,
         x_t: Tensor,                # [B, chunk_size, action_dim]
         context: Tensor,             # [B, N_ctx, D]
         timestep: Tensor,            # [B, chunk_size] per-position timestep
+        cached_kv: list[tuple[Tensor, Tensor]] | None = None,
     ) -> Tensor:
         """Single denoising step: predict velocity field v(x_t, t, context).
 
@@ -191,6 +218,7 @@ class FlowMatchingS1Model(nn.Module):
             context: encoded observation tokens
             timestep: per-position timestep [B, chunk_size]. For training-time RTC,
                 prefix positions have t=0 (clean), future positions have t=t_flow.
+            cached_kv: pre-computed cross-attention K,V (from precompute_cross_attn_kv)
 
         Returns:
             velocity prediction [B, chunk_size, action_dim]
@@ -214,16 +242,35 @@ class FlowMatchingS1Model(nn.Module):
         pos_ids = torch.arange(T, device=x_t.device)
         action_time = action_time + self.action_pos_embed(pos_ids).unsqueeze(0)
 
-        # Bidirectional self-attention (Pi0-style): all action positions
-        # negotiate together to commit to one mode, preventing within-chunk
-        # gripper oscillation from causal drift.
-        decoded = self.action_decoder(
-            tgt=action_time,
-            memory=context,
-            tgt_mask=None,
-        )
+        # Decoder with optional KV cache for cross-attention
+        x = action_time
+        for i, layer in enumerate(self.decoder_layers):
+            if cached_kv is not None:
+                # Post-norm decoder (matching nn.TransformerDecoderLayer norm_first=False):
+                #   x = norm1(x + self_attn(x))
+                #   x = norm2(x + cross_attn(x, memory))
+                #   x = norm3(x + ffn(x))
+                # Self-attention (unchanged)
+                x = layer.norm1(x + layer.dropout1(layer.self_attn(x, x, x, need_weights=False)[0]))
+                # Cross-attention with pre-computed K,V
+                ck, cv = cached_kv[i]
+                mha = layer.multihead_attn
+                q = F.linear(x, mha.in_proj_weight[:d], mha.in_proj_bias[:d] if mha.in_proj_bias is not None else None)
+                nhead = mha.num_heads
+                head_dim = d // nhead
+                q = q.reshape(B, T, nhead, head_dim).transpose(1, 2)
+                k = ck.reshape(B, -1, nhead, head_dim).transpose(1, 2)
+                v = cv.reshape(B, -1, nhead, head_dim).transpose(1, 2)
+                attn_out = F.scaled_dot_product_attention(q, k, v)
+                attn_out = attn_out.transpose(1, 2).reshape(B, T, d)
+                attn_out = mha.out_proj(attn_out)
+                x = layer.norm2(x + layer.dropout2(attn_out))
+                # FFN
+                x = layer.norm3(x + layer.dropout3(layer.linear2(layer.dropout(layer.activation(layer.linear1(x))))))
+            else:
+                x = layer(x, context, tgt_mask=None)
 
-        velocity = self.action_out_proj(decoded)  # [B, T, action_dim]
+        velocity = self.action_out_proj(x)  # [B, T, action_dim]
         return velocity
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
@@ -341,6 +388,9 @@ class FlowMatchingS1Model(nn.Module):
         # Encode observations once (reused across denoising steps)
         context = self.encode_observations(batch)
 
+        # Pre-compute cross-attention K,V (reused across all denoise steps)
+        cached_kv = self.precompute_cross_attn_kv(context)
+
         # Build per-position timestep template
         # Prefix positions: t=0 (clean), future positions: t=t_denoise
         T = self.config.chunk_size
@@ -364,7 +414,7 @@ class FlowMatchingS1Model(nn.Module):
             if action_prefix is not None and prefix_len > 0:
                 per_pos_t[:, :D] = 0.0
 
-            v = self.denoise_step(x_t, context, per_pos_t)
+            v = self.denoise_step(x_t, context, per_pos_t, cached_kv=cached_kv)
             x_t = x_t + dt * v
 
             # Measure prefix drift BEFORE re-inject (how much the model
@@ -478,7 +528,12 @@ class FlowMatchingS1Policy(nn.Module):
         policy = cls(config)
 
         state_dict = safetensors.torch.load_file(checkpoint_path)
-        missing, unexpected = policy.load_state_dict(state_dict, strict=False)
+        # Remap old checkpoint key format (action_decoder.layers → decoder_layers)
+        remapped = {}
+        for k, v in state_dict.items():
+            new_k = k.replace("model.action_decoder.layers.", "model.decoder_layers.")
+            remapped[new_k] = v
+        missing, unexpected = policy.load_state_dict(remapped, strict=False)
         if missing:
             import logging
             logging.warning("Missing keys: %s", missing)
