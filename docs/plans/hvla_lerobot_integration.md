@@ -1,6 +1,6 @@
 # HVLA ↔ LeRobot Integration Plan
 
-Status: Draft (2026-03-22)
+Status: Implemented (2026-03-22)
 
 ## Context
 
@@ -160,8 +160,8 @@ Not in scope now, but for completeness:
 
 ## Implementation Order
 
-1. **Track 2.1**: HVLA train.py saves standard checkpoint format (unblocks everything else)
-2. **Track 1.2-1.3**: Derive from LeRobot Robot + propagation (enables any robot)
-3. **Track 2.2**: Policy-type-driven dispatch in Run tab (HVLA checkpoint → HVLA launch command)
-4. **Track 2.3**: HVLA-specific form fields (S2 path, task prompt, etc.)
-5. **Track 1.4**: Motor control via bus.enable/disable_torque (cleaner but not blocking)
+1. [x] **Track 2.1**: HVLA train.py saves standard checkpoint format — `pretrained_model/config.json` + `training_state/`
+2. [x] **Track 1.2-1.3**: Derive from LeRobot Robot — joint names, cameras, dims from `robot.action_features` / `robot.observation_features`
+3. [x] **Track 2.2**: Policy-type-driven dispatch — HVLA checkpoint (`hvla_flow_s1`) triggers `/api/run/hvla` endpoint
+4. [x] **Track 2.3**: HVLA-specific form fields — S2 path, task prompt, decode subtask toggle, episode controls
+5. [x] **Track 1.4**: Motor control via `bus.enable_torque()` / `bus.disable_torque()` — no more raw register writes
