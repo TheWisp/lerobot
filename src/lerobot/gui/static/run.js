@@ -395,9 +395,23 @@ function _modelCheckpointOptions() {
         // Use the last checkpoint's pretrained_model path
         const ckptPath = m.path + '/checkpoints/last/pretrained_model';
         const stepText = m.current_step != null ? ` (step ${m.current_step.toLocaleString()})` : '';
-        html += `<option value="${_esc(ckptPath)}" title="${_esc(m.path)}">${_esc(m.name)} — ${_esc(m.policy_type)}${stepText}</option>`;
+        html += `<option value="${_esc(ckptPath)}" data-policy-type="${_esc(m.policy_type)}" title="${_esc(m.path)}">${_esc(m.name)} — ${_esc(m.policy_type)}${stepText}</option>`;
     }
     return html;
+}
+
+function _getSelectedPolicyType() {
+    const sel = document.getElementById('run-policy-checkpoint');
+    if (!sel?.selectedOptions?.length) return '';
+    return sel.selectedOptions[0].dataset.policyType || '';
+}
+
+function _updateHVLAFieldsVisibility() {
+    const isHVLA = _getSelectedPolicyType() === 'hvla_flow_s1';
+    const hvlaSection = document.getElementById('run-policy-hvla-fields');
+    const standardSection = document.getElementById('run-policy-standard-fields');
+    if (hvlaSection) hvlaSection.style.display = isHVLA ? '' : 'none';
+    if (standardSection) standardSection.style.display = isHVLA ? 'none' : '';
 }
 
 function _onPolicyCheckpointChange() {
@@ -408,6 +422,7 @@ function _onPolicyCheckpointChange() {
     if (typeof _prefillPolicyFields === 'function') {
         _prefillPolicyFields(runPath);
     }
+    _updateHVLAFieldsVisibility();
 }
 
 async function _ensureModelDataLoaded() {
@@ -562,6 +577,30 @@ function renderRunForm() {
     html += `<label>FPS</label>`;
     html += `<input type="number" id="run-policy-fps" value="30" min="1" max="200">`;
     html += '</div>';
+    // ---- HVLA-specific fields (shown when HVLA checkpoint selected) ----
+    html += `<div id="run-policy-hvla-fields" style="display:none">`;
+    html += '<div class="form-section">';
+    html += '<div class="form-section-title">HVLA Settings</div>';
+    html += '<div class="form-grid">';
+    html += `<label>S2 Checkpoint</label>`;
+    html += `<input type="text" id="run-hvla-s2-checkpoint" placeholder="/path/to/s2/model.safetensors" value="">`;
+    html += `<label>Task Prompt</label>`;
+    html += `<input type="text" id="run-hvla-task" placeholder="assemble cylinder into ring" value="">`;
+    html += `<label>Decode Subtask</label>`;
+    html += `<label class="toggle-label"><input type="checkbox" id="run-hvla-decode-subtask"> Enable subtask decoding</label>`;
+    html += `<label>Record Dataset</label>`;
+    html += `<input type="text" id="run-hvla-record-dataset" placeholder="eval/hvla_eval (optional)" value="">`;
+    html += `<label>Episodes</label>`;
+    html += `<input type="number" id="run-hvla-episodes" value="1" min="1">`;
+    html += `<label>Episode Duration</label>`;
+    html += `<input type="number" id="run-hvla-episode-time" value="60" min="0">`;
+    html += `<label>Reset Duration</label>`;
+    html += `<input type="number" id="run-hvla-reset-time" value="20" min="0">`;
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+    // ---- Standard policy fields (hidden when HVLA selected) ----
+    html += `<div id="run-policy-standard-fields">`;
     // Recording settings
     html += '<div class="form-section">';
     html += '<div class="form-section-title">Record evaluation</div>';
@@ -585,6 +624,7 @@ function renderRunForm() {
     html += `<input type="number" id="run-policy-reset-time" value="60" min="0">`;
     html += '</div>';
     html += '</div>';
+    html += '</div>'; // end standard fields
     html += '</div>'; // end policy section
 
     form.innerHTML = html;
@@ -780,67 +820,98 @@ async function launchRun() {
             return;
         }
 
-        // Get task from dropdown or custom input
-        const taskSel = document.getElementById('run-policy-task-select');
-        const taskCustom = document.getElementById('run-policy-task-custom');
-        const taskPlain = document.getElementById('run-policy-task');
-        let task;
-        if (taskSel) {
-            task = (taskSel.value === '__new_task__')
-                ? taskCustom?.value?.trim()
-                : taskSel.value?.trim();
-        } else {
-            task = taskPlain?.value?.trim();
-        }
-        if (!task) {
-            showToast('Error', 'Task description is required', 'error');
-            return;
-        }
+        const policyType = _getSelectedPolicyType();
 
-        // Resolve dataset: new or existing
-        const datasetSel = document.getElementById('run-policy-dataset');
-        const datasetVal = datasetSel?.value || '__new__';
-        let repoId, root = null, resume = false;
-
-        if (datasetVal === '__new__') {
-            repoId = document.getElementById('run-policy-repo-id')?.value?.trim();
-            if (!repoId) {
-                showToast('Error', 'Enter a dataset name for evaluation recordings', 'error');
+        if (policyType === 'hvla_flow_s1') {
+            // ---- HVLA dispatch ----
+            const s2Ckpt = document.getElementById('run-hvla-s2-checkpoint')?.value?.trim();
+            if (!s2Ckpt) {
+                showToast('Error', 'S2 checkpoint path is required for HVLA', 'error');
                 return;
             }
-        } else {
-            const dsId = datasetVal.replace('existing:', '');
-            const d = (window.datasets || {})[dsId];
-            if (!d) {
-                showToast('Error', 'Selected dataset not found — was it closed?', 'error');
+            const hvlaTask = document.getElementById('run-hvla-task')?.value?.trim();
+            if (!hvlaTask) {
+                showToast('Error', 'Task prompt is required for HVLA', 'error');
                 return;
             }
-            repoId = _resolveDatasetRepoId(d);
-            root = d.root;
-            resume = true;
-        }
+            const recordDs = document.getElementById('run-hvla-record-dataset')?.value?.trim() || null;
+            endpoint = '/api/run/hvla';
+            body = {
+                robot: robotData,
+                s1_checkpoint: checkpointSel.value,
+                s2_checkpoint: s2Ckpt,
+                task: hvlaTask,
+                fps: parseInt(document.getElementById('run-policy-fps')?.value) || 30,
+                decode_subtask: document.getElementById('run-hvla-decode-subtask')?.checked || false,
+                record_dataset: recordDs,
+                num_episodes: parseInt(document.getElementById('run-hvla-episodes')?.value) || 1,
+                episode_time_s: parseFloat(document.getElementById('run-hvla-episode-time')?.value) || 60,
+                reset_time_s: parseFloat(document.getElementById('run-hvla-reset-time')?.value) || 20,
+            };
+        } else {
+            // ---- Standard policy dispatch ----
+            // Get task from dropdown or custom input
+            const taskSel = document.getElementById('run-policy-task-select');
+            const taskCustom = document.getElementById('run-policy-task-custom');
+            const taskPlain = document.getElementById('run-policy-task');
+            let task;
+            if (taskSel) {
+                task = (taskSel.value === '__new_task__')
+                    ? taskCustom?.value?.trim()
+                    : taskSel.value?.trim();
+            } else {
+                task = taskPlain?.value?.trim();
+            }
+            if (!task) {
+                showToast('Error', 'Task description is required', 'error');
+                return;
+            }
 
-        // Optional teleop for manual resets
-        const teleopSelect = document.getElementById('run-policy-teleop');
-        let teleopData = null;
-        if (teleopSelect?.value) {
-            teleopData = await _getProfileData('teleop', teleopSelect.value);
-        }
+            // Resolve dataset: new or existing
+            const datasetSel = document.getElementById('run-policy-dataset');
+            const datasetVal = datasetSel?.value || '__new__';
+            let repoId, root = null, resume = false;
 
-        endpoint = '/api/run/record';
-        body = {
-            robot: robotData,
-            teleop: teleopData,
-            policy_path: checkpointSel.value,
-            repo_id: repoId,
-            root: root,
-            single_task: task,
-            fps: parseInt(document.getElementById('run-policy-fps')?.value) || 30,
-            episode_time_s: parseFloat(document.getElementById('run-policy-episode-time')?.value) || 60,
-            reset_time_s: parseFloat(document.getElementById('run-policy-reset-time')?.value) || 60,
-            num_episodes: parseInt(document.getElementById('run-policy-episodes')?.value) || 10,
-            resume: resume,
-        };
+            if (datasetVal === '__new__') {
+                repoId = document.getElementById('run-policy-repo-id')?.value?.trim();
+                if (!repoId) {
+                    showToast('Error', 'Enter a dataset name for evaluation recordings', 'error');
+                    return;
+                }
+            } else {
+                const dsId = datasetVal.replace('existing:', '');
+                const d = (window.datasets || {})[dsId];
+                if (!d) {
+                    showToast('Error', 'Selected dataset not found — was it closed?', 'error');
+                    return;
+                }
+                repoId = _resolveDatasetRepoId(d);
+                root = d.root;
+                resume = true;
+            }
+
+            // Optional teleop for manual resets
+            const teleopSelect = document.getElementById('run-policy-teleop');
+            let teleopData = null;
+            if (teleopSelect?.value) {
+                teleopData = await _getProfileData('teleop', teleopSelect.value);
+            }
+
+            endpoint = '/api/run/record';
+            body = {
+                robot: robotData,
+                teleop: teleopData,
+                policy_path: checkpointSel.value,
+                repo_id: repoId,
+                root: root,
+                single_task: task,
+                fps: parseInt(document.getElementById('run-policy-fps')?.value) || 30,
+                episode_time_s: parseFloat(document.getElementById('run-policy-episode-time')?.value) || 60,
+                reset_time_s: parseFloat(document.getElementById('run-policy-reset-time')?.value) || 60,
+                num_episodes: parseInt(document.getElementById('run-policy-episodes')?.value) || 10,
+                resume: resume,
+            };
+        }
     } else {
         showToast('Error', 'Unknown workflow', 'error');
         return;

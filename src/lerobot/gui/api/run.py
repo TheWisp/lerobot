@@ -197,6 +197,20 @@ class ReplayRequest(BaseModel):
     fps: int = 30
 
 
+class HVLARunRequest(BaseModel):
+    robot: dict[str, Any]
+    s1_checkpoint: str
+    s2_checkpoint: str
+    task: str
+    fps: int = 30
+    s1_type: str = "flow"
+    decode_subtask: bool = False
+    record_dataset: str | None = None
+    num_episodes: int = 1
+    episode_time_s: float = 60
+    reset_time_s: float = 20
+
+
 # ============================================================================
 # Subprocess state
 # ============================================================================
@@ -385,6 +399,47 @@ async def start_replay(req: ReplayRequest) -> dict:
 
     await _launch_subprocess(args, command="replay", config=req.model_dump())
     return {"status": "started", "command": "replay", "pid": _active_process.pid}
+
+
+@router.post("/hvla")
+async def start_hvla(req: HVLARunRequest) -> dict:
+    """Launch HVLA dual-system inference (S1 + S2)."""
+    import tempfile
+
+    _ensure_no_active_process()
+
+    # Write robot profile to temp file (HVLA launch reads robot config from file)
+    robot_config = dict(req.robot)
+    if "fields" in robot_config:
+        flat = {"type": robot_config["type"]}
+        flat.update(robot_config["fields"])
+        if "cameras" in robot_config:
+            flat["cameras"] = robot_config["cameras"]
+        robot_config = flat
+
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, prefix="hvla_robot_")
+    tmp.write(json.dumps(robot_config, indent=2))
+    tmp.close()
+
+    args = [
+        "python", "-m", "lerobot.policies.hvla.launch",
+        f"--s1-checkpoint={req.s1_checkpoint}",
+        f"--s2-checkpoint={req.s2_checkpoint}",
+        f"--task={req.task}",
+        f"--robot-config={tmp.name}",
+        f"--fps={req.fps}",
+        f"--s1-type={req.s1_type}",
+    ]
+    if req.decode_subtask:
+        args.append("--decode-subtask")
+    if req.record_dataset:
+        args.append(f"--record-dataset={req.record_dataset}")
+    args.append(f"--num-episodes={req.num_episodes}")
+    args.append(f"--episode-time-s={req.episode_time_s}")
+    args.append(f"--reset-time-s={req.reset_time_s}")
+
+    await _launch_subprocess(args, command="hvla", config=req.model_dump())
+    return {"status": "started", "command": "hvla", "pid": _active_process.pid}
 
 
 @router.post("/stop")
