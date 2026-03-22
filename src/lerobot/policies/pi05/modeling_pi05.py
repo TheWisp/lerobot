@@ -18,7 +18,6 @@ import builtins
 import copy
 import logging
 import math
-import time
 from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict
@@ -1223,12 +1222,7 @@ class PI05Policy(PreTrainedPolicy):
 
         # Action queue logic for n_action_steps > 1
         if len(self._action_queue) == 0:
-            t0 = time.perf_counter()
             actions = self.predict_action_chunk(batch)[:, : self.config.n_action_steps]
-            infer_ms = (time.perf_counter() - t0) * 1000
-            logging.getLogger("pi05.inference").info(
-                f"[Pi05 inference] {infer_ms:.0f}ms | chunk={self.config.n_action_steps} actions"
-            )
             # Transpose to get shape (n_action_steps, batch_size, action_dim)
             self._action_queue.extend(actions.transpose(0, 1))
 
