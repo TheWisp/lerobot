@@ -65,6 +65,12 @@ def main():
     parser.add_argument("--record-dataset", type=str, default=None,
                         help="Record inference episode to LeRobotDataset (e.g. 'user/hvla_ep1'). "
                              "Saves obs+actions each frame, commits on shutdown.")
+    parser.add_argument("--num-episodes", type=int, default=1,
+                        help="Number of rollout episodes to record (default: 1 = single run)")
+    parser.add_argument("--episode-time-s", type=float, default=0,
+                        help="Max seconds per episode (0 = run until Ctrl+C)")
+    parser.add_argument("--reset-time-s", type=float, default=20,
+                        help="Seconds to wait during reset phase between episodes (default: 20)")
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -174,6 +180,9 @@ def main():
             max_step_delta=args.max_step_delta,
             grip_drop_save_dir=args.save_grip_drops,
             record_dataset=args.record_dataset,
+            num_episodes=args.num_episodes,
+            episode_time_s=args.episode_time_s,
+            reset_time_s=args.reset_time_s,
         )
     finally:
         stop_event.set()

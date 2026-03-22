@@ -284,6 +284,9 @@ def run_s1(
     max_step_delta: float | None = None,
     grip_drop_save_dir: str | None = None,
     record_dataset: str | None = None,
+    num_episodes: int = 1,
+    episode_time_s: float = 0,
+    reset_time_s: float = 20,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -635,14 +638,74 @@ def run_s1(
         return
 
     logger.info("S1: First chunk ready, starting at %d FPS", fps)
-    step_count = 0
+
+    # Multi-episode rollout support
+    multi_episode = num_episodes > 1 or episode_time_s > 0
+    if multi_episode:
+        from lerobot.utils.control_utils import init_keyboard_listener
+        listener, events = init_keyboard_listener()
+        logger.info("S1: Rollout mode — %d episodes, %.0fs/episode, %.0fs reset",
+                    num_episodes, episode_time_s, reset_time_s)
+        logger.info("S1: Press RIGHT ARROW to advance, ESC to stop")
+    else:
+        events = {"exit_early": False, "stop_recording": False}
+        listener = None
+
+    recorded_episodes = 0
 
     try:
+      while recorded_episodes < num_episodes and not events.get("stop_recording"):
+        # --- Reset phase ---
+        if multi_episode:
+            from lerobot.utils.utils import log_say
+
+            _soft_land(robot, duration_s=2.0, steps=10)
+            _disable_torque(robot)
+
+            if recorded_episodes > 0:
+                log_say(f"Reset the environment. Episode {recorded_episodes} of {num_episodes} done.")
+            else:
+                log_say("Reset the environment. Press right arrow to start.")
+
+            events["exit_early"] = False
+            reset_start = time.time()
+            while not events["exit_early"] and not events.get("stop_recording"):
+                if stop_event is not None and stop_event.is_set():
+                    break
+                # Only auto-advance on timeout for between-episode resets, not first
+                if recorded_episodes > 0 and reset_time_s > 0 and (time.time() - reset_start) >= reset_time_s:
+                    break
+                time.sleep(0.1)
+            events["exit_early"] = False
+
+            if events.get("stop_recording") or (stop_event is not None and stop_event.is_set()):
+                break
+
+            _enable_torque(robot)
+
+        # --- Recording phase ---
+        from lerobot.utils.utils import log_say
+        log_say(f"Recording episode {recorded_episodes + 1} of {num_episodes}")
+        step_count = 0
+        episode_start = time.time()
+        policy.reset()
+
         while stop_event is None or not stop_event.is_set():
             loop_start = time.perf_counter()
 
             if stop_event is not None and stop_event.is_set():
                 logger.info("S1: Stop signal received")
+                break
+
+            # Check episode time limit
+            if episode_time_s > 0 and (time.time() - episode_start) >= episode_time_s:
+                logger.info("S1: Episode time limit (%.0fs) reached", episode_time_s)
+                break
+
+            # Check exit_early (right arrow)
+            if events.get("exit_early"):
+                logger.info("S1: Right arrow — ending episode early")
+                events["exit_early"] = False
                 break
 
             # 1. Capture observation (main loop owns robot)
@@ -751,27 +814,80 @@ def run_s1(
             if sleep_s > 0:
                 time.sleep(sleep_s)
 
+        # --- End of recording phase for this episode ---
+        if dataset is not None and step_count > 0:
+            try:
+                dataset.save_episode()
+                logger.info("S1: Episode %d saved (%d frames, %.1fs)",
+                            recorded_episodes + 1, step_count, time.time() - episode_start)
+            except Exception as e:
+                logger.warning("S1: Failed to save episode %d: %s", recorded_episodes + 1, e)
+        recorded_episodes += 1
+
+        # Reset tracking state for next episode
+        prev_action_np = None
+        action_deltas.clear()
+        loop_intervals.clear()
+        last_send_time = None
+
     except KeyboardInterrupt:
         logger.info("S1: Interrupted by user")
     finally:
         _infer_running.clear()
         infer_thread.join(timeout=3.0)
         if s1_infer_times:
-            logger.info("S1: Done. %d steps | avg infer: %.1fms | S2 updates: %d",
-                        step_count, np.mean(s1_infer_times), shared_cache.count)
-        # Save recorded episode
+            logger.info("S1: Done. %d episodes, avg infer: %.1fms | S2 updates: %d",
+                        recorded_episodes, np.mean(s1_infer_times), shared_cache.count)
         if dataset is not None:
             try:
-                dataset.save_episode()
+                # Save any unsaved episode (interrupted mid-recording)
+                if dataset.episode_buffer is not None and dataset.episode_buffer.get("size", 0) > 0:
+                    dataset.save_episode()
+                    logger.info("S1: Final partial episode saved")
                 dataset.finalize()
-                logger.info("S1: Episode saved to dataset '%s' (%d frames)", record_dataset, step_count)
+                logger.info("S1: Dataset '%s' finalized (%d episodes)", record_dataset, recorded_episodes)
             except Exception as e:
-                logger.warning("S1: Failed to save episode: %s", e)
+                logger.warning("S1: Failed to finalize dataset: %s", e)
+        if listener is not None:
+            listener.stop()
         _soft_land(robot)
         try:
             robot.disconnect()
         except Exception as e:
             logger.warning("Robot disconnect error (non-fatal): %s", e)
+
+
+def _get_motor_buses(robot) -> list:
+    """Extract motor bus objects from any LeRobot robot."""
+    buses = []
+    for attr in ("left_arm", "right_arm", "arm"):
+        arm = getattr(robot, attr, None)
+        if arm is not None and hasattr(arm, "bus"):
+            buses.append(arm.bus)
+    return buses
+
+
+def _disable_torque(robot):
+    """Disable torque on all motors so the robot can be moved by hand."""
+    for bus in _get_motor_buses(robot):
+        for motor_name in bus.motors:
+            try:
+                bus.write("Torque_Enable", motor_name, 0)
+            except Exception:
+                pass
+    logger.info("S1: Torque disabled (robot can be moved by hand)")
+
+
+def _enable_torque(robot):
+    """Re-enable torque on all motors."""
+    for bus in _get_motor_buses(robot):
+        for motor_name in bus.motors:
+            try:
+                bus.write("Torque_Enable", motor_name, 1)
+                bus.write("Torque_Limit", motor_name, 1000, normalize=False)
+            except Exception:
+                pass
+    logger.info("S1: Torque enabled")
 
 
 def _soft_land(robot, duration_s=4.0, steps=20):
