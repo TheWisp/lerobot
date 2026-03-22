@@ -244,6 +244,7 @@ Typical S1 loop interval: ~34ms (~29Hz). Inference spikes to ~59ms under S2 GPU 
 - [ ] Pre-decode and cache training images to avoid repeated video decode (main training bottleneck)
 
 ### Medium priority
+- [ ] **Training DataLoader optimization** — GPU drops to 10% for ~2s every ~7s (video decode stall). Candidates: `persistent_workers=True` + `prefetch_factor=3` in DataLoader, pre-decode images to memmap. Needs benchmarking to measure actual improvement.
 - [ ] `torch.compile` for S1 training (mode=default, skip DINOv2 — needs investigation)
 - [ ] Separate backbone LR (lower for DINOv2 pretrained weights, matching ACT's approach)
 - [ ] wandb integration for training monitoring
