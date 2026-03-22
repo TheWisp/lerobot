@@ -17,6 +17,7 @@ from lerobot.policies.hvla.ipc import SharedLatentCache, SharedImageBuffer
 
 logger = logging.getLogger(__name__)
 
+# Default joint names for SO107 bimanual robot (backward compat / tests)
 JOINT_NAMES = [
     "left_shoulder_pan.pos", "left_shoulder_lift.pos", "left_elbow_flex.pos",
     "left_forearm_roll.pos", "left_wrist_flex.pos", "left_wrist_roll.pos", "left_gripper.pos",
@@ -24,13 +25,23 @@ JOINT_NAMES = [
     "right_forearm_roll.pos", "right_wrist_flex.pos", "right_wrist_roll.pos", "right_gripper.pos",
 ]
 
-# Map S1 robot obs camera names → S2 camera keys
+# Default S1→S2 camera key map for SO107 (override via --s2-camera-map)
 S2_CAM_KEY_MAP = {
     "front": "base_0_rgb",
     "top": "base_1_rgb",
     "left_wrist": "left_wrist_0_rgb",
     "right_wrist": "right_wrist_0_rgb",
 }
+
+
+def _joint_names_from_robot(robot) -> list[str]:
+    """Derive joint names from a connected LeRobot Robot instance."""
+    return list(robot.action_features.keys())
+
+
+def _camera_keys_from_robot(robot) -> list[str]:
+    """Derive camera keys from a connected LeRobot Robot instance."""
+    return [k for k, v in robot.observation_features.items() if isinstance(v, tuple)]
 
 
 def _compute_chunk_index(t_now: float, t_origin: float, fps: int, chunk_len: int) -> int:
@@ -41,23 +52,20 @@ def _compute_chunk_index(t_now: float, t_origin: float, fps: int, chunk_len: int
 
 
 def _osc_skip(chunk: np.ndarray, idx: int, step_count: int) -> int:
-    """Both-arms oscillation skip: if BOTH arms have low displacement
-    in the next 5 frames, scan ahead to where movement starts."""
+    """Oscillation skip: if all joints have low displacement in the next 5
+    frames, scan ahead to where movement starts. Robot-agnostic."""
     if idx >= len(chunk) - 10:
         return idx
     origin = chunk[idx]
     check_at = min(idx + 5, len(chunk) - 1)
-    left_cumul = np.linalg.norm(chunk[check_at, :7] - origin[:7])
-    right_cumul = np.linalg.norm(chunk[check_at, 7:] - origin[7:])
-    if left_cumul >= 2.0 or right_cumul >= 2.0:
+    total_disp = np.linalg.norm(chunk[check_at] - origin)
+    if total_disp >= 2.0:
         return idx
     for k in range(idx + 5, min(idx + 30, len(chunk))):
-        l_c = np.linalg.norm(chunk[k, :7] - origin[:7])
-        r_c = np.linalg.norm(chunk[k, 7:] - origin[7:])
-        if l_c > 3.0 or r_c > 3.0:
+        disp = np.linalg.norm(chunk[k] - origin)
+        if disp > 3.0:
             if step_count % 50 == 0:
-                logger.info("S1 osc-skip: both arms flat [%d]→[%d] (L=%.1f R=%.1f)",
-                            idx, k, l_c, r_c)
+                logger.info("S1 osc-skip: flat [%d]→[%d] (disp=%.1f)", idx, k, disp)
             return max(0, min(k, len(chunk) - 1))
     return idx
 
@@ -72,12 +80,17 @@ def _apply_delta_filter(action_np: np.ndarray, prev_action_np: np.ndarray,
     return action_np
 
 
-def _save_infer_drop(chunk_np: np.ndarray, obs: dict, infer_count: int, save_dir: str):
-    """Detect gripper jumps in predicted chunk and save inference-time obs for OOD analysis."""
-    r_diff = np.max(np.abs(np.diff(chunk_np[:20, 13])))
-    l_diff = np.max(np.abs(np.diff(chunk_np[:20, 6])))
-    if r_diff <= 10 and l_diff <= 10:
+def _save_infer_drop(chunk_np: np.ndarray, obs: dict, infer_count: int, save_dir: str,
+                     joint_names: list[str] | None = None):
+    """Detect large jumps in any joint of predicted chunk and save obs for analysis."""
+    # Max per-joint jump in first 20 steps
+    per_joint_max = np.max(np.abs(np.diff(chunk_np[:20], axis=0)), axis=0)
+    max_jump = np.max(per_joint_max)
+    if max_jump <= 10:
         return
+    worst_joint = int(np.argmax(per_joint_max))
+    names = joint_names or JOINT_NAMES
+    joint_label = names[worst_joint] if worst_joint < len(names) else f"joint_{worst_joint}"
     import os, cv2
     drop_dir = os.path.join(save_dir, f"infer_drop_{infer_count}")
     os.makedirs(drop_dir, exist_ok=True)
@@ -85,52 +98,51 @@ def _save_infer_drop(chunk_np: np.ndarray, obs: dict, infer_count: int, save_dir
         if isinstance(v, np.ndarray) and v.ndim == 3:
             safe = k.replace("/", "_").replace(".", "_")
             cv2.imwrite(os.path.join(drop_dir, f"{safe}.jpg"), v[:, :, ::-1])
-    state_arr = np.array([float(obs.get(j, 0)) for j in JOINT_NAMES])
+    state_arr = np.array([float(obs.get(j, 0)) for j in names])
     np.save(os.path.join(drop_dir, "state.npy"), state_arr)
     np.save(os.path.join(drop_dir, "chunk.npy"), chunk_np)
-    logger.info("S1 INFER DROP infer#%d | R_jump=%.1f L_jump=%.1f | saved to %s",
-                infer_count, r_diff, l_diff, drop_dir)
+    logger.info("S1 INFER DROP infer#%d | max_jump=%.1f (%s) | saved to %s",
+                infer_count, max_jump, joint_label, drop_dir)
 
 
-def _log_grip_diagnostics(
+def _log_joint_jump(
     action_np: np.ndarray, prev_action_np: np.ndarray,
     step_count: int, idx: int, chunk_data: np.ndarray | None,
     robot_state: np.ndarray | None = None,
     save_dir: str | None = None,
     obs_images: dict | None = None,
+    joint_names: list[str] | None = None,
 ):
-    """Log gripper drops with chunk trajectory dump and optional obs saving."""
-    grip_l_delta = abs(action_np[6] - prev_action_np[6])
-    grip_r_delta = abs(action_np[13] - prev_action_np[13])
-    if grip_l_delta <= 10 and grip_r_delta <= 10:
+    """Log large per-joint jumps with chunk trajectory and optional obs saving."""
+    per_joint_delta = np.abs(action_np - prev_action_np)
+    max_delta = np.max(per_joint_delta)
+    if max_delta <= 10:
         return
     if chunk_data is None:
         return
+    names = joint_names or JOINT_NAMES
+    worst = int(np.argmax(per_joint_delta))
+    joint_label = names[worst] if worst < len(names) else f"joint_{worst}"
     delta = np.linalg.norm(action_np - prev_action_np)
-    l_traj = [f"{chunk_data[i, 6]:.0f}" for i in range(min(20, len(chunk_data)))]
-    r_traj = [f"{chunk_data[i, 13]:.0f}" for i in range(min(20, len(chunk_data)))]
+
+    # Show trajectory of worst joint
+    traj = [f"{chunk_data[i, worst]:.0f}" for i in range(min(20, len(chunk_data)))]
     state_str = ""
     if robot_state is not None:
         state_str = "\n  state: " + " ".join(f"{v:6.1f}" for v in robot_state)
     logger.info(
-        "S1 GRIP DROP step %d idx=%d | L: %.1f→%.1f (Δ%.1f) R: %.1f→%.1f (Δ%.1f) | Δaction=%.1f\n"
-        "  chunk L[0:20]: %s\n"
-        "  chunk R[0:20]: %s%s",
-        step_count, idx,
-        prev_action_np[6], action_np[6], grip_l_delta,
-        prev_action_np[13], action_np[13], grip_r_delta,
-        delta,
-        " ".join(l_traj),
-        " ".join(r_traj),
-        state_str,
+        "S1 JUMP step %d idx=%d | %s: %.1f→%.1f (Δ%.1f) | Δaction=%.1f\n"
+        "  chunk %s[0:20]: %s%s",
+        step_count, idx, joint_label,
+        prev_action_np[worst], action_np[worst], per_joint_delta[worst],
+        delta, joint_label, " ".join(traj), state_str,
     )
-    # Save observation snapshot for offline distribution shift analysis
+    # Save observation snapshot for offline analysis
     if save_dir and obs_images:
         import os, cv2
-        drop_dir = os.path.join(save_dir, f"grip_drop_{step_count}")
+        drop_dir = os.path.join(save_dir, f"joint_jump_{step_count}")
         os.makedirs(drop_dir, exist_ok=True)
         for cam_name, img_np in obs_images.items():
-            # img_np is HWC uint8 (BGR or RGB depending on camera)
             safe_name = cam_name.replace("/", "_").replace(".", "_")
             cv2.imwrite(os.path.join(drop_dir, f"{safe_name}.jpg"), img_np[:, :, ::-1])
         if robot_state is not None:
@@ -146,11 +158,15 @@ def obs_to_s1_batch(
     s2_latent_key: str,
     device: torch.device,
     resize_to: tuple[int, int] | None = None,
+    joint_names: list[str] | None = None,
 ) -> dict:
     """Convert robot observation to S1 input batch.
 
     Images are resized on CPU before GPU transfer (0.6MB vs 10.5MB per image).
     """
+    if joint_names is None:
+        joint_names = JOINT_NAMES
+
     batch = {}
 
     for key in s1_image_keys:
@@ -162,7 +178,7 @@ def obs_to_s1_batch(
             img_tensor = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float().div_(255.0).to(device)
             batch[key] = img_tensor
 
-    state = [float(robot_obs[name]) for name in JOINT_NAMES]
+    state = [float(robot_obs[name]) for name in joint_names]
     batch["observation.state"] = torch.tensor([state], dtype=torch.float32, device=device)
 
     latent, age_seconds = shared_cache.read_with_age()
@@ -176,7 +192,8 @@ def obs_to_s1_batch(
     return batch
 
 
-def _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_to):
+def _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_to,
+               state_dim: int = 14, s2_latent_dim: int = 2048):
     """Run dummy forward passes to trigger torch.compile kernel compilation.
 
     Uses fake data — no robot needed. After this, the control loop runs
@@ -188,8 +205,8 @@ def _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_to):
     dummy_batch = {}
     for key in s1_image_keys:
         dummy_batch[key] = torch.randn(1, 3, h, w, device=device)
-    dummy_batch["observation.state"] = torch.zeros(1, 14, device=device)
-    dummy_batch["observation.s2_latent"] = torch.zeros(1, 2048, device=device)
+    dummy_batch["observation.state"] = torch.zeros(1, state_dim, device=device)
+    dummy_batch["observation.s2_latent"] = torch.zeros(1, s2_latent_dim, device=device)
     dummy_batch["observation.s2_latent_age"] = torch.zeros(1, 1, device=device)
 
     dummy_batch = preprocessor(dummy_batch)
@@ -358,7 +375,8 @@ def run_s1(
         inner = policy.model if hasattr(policy, 'model') else policy
         inner.denoise_step = torch.compile(inner.denoise_step, mode="default")
         logger.info("S1: Warming up compiled model...")
-        _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_images)
+        _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_images,
+                   state_dim=action_dim, s2_latent_dim=config.s2_latent_dim if s1_type == "flow" else 2048)
 
     # Load robot
     config_path = robot_config_path or str(Path.home() / ".config" / "lerobot" / "robots" / "white.json")
@@ -381,6 +399,13 @@ def run_s1(
     logger.info("S1: Connecting to robot...")
     robot.connect()
     logger.info("S1: Robot connected")
+
+    # Derive joint names and camera keys from the robot (robot-agnostic)
+    joint_names = _joint_names_from_robot(robot)
+    camera_keys = _camera_keys_from_robot(robot)
+    action_dim = len(joint_names)
+    logger.info("S1: Robot joints (%d): %s", action_dim, joint_names)
+    logger.info("S1: Robot cameras: %s", camera_keys)
 
     # Apply observation processor steps (e.g., depth edge overlay for RealSense)
     obs_processor_steps = robot.get_observation_processor_steps() if hasattr(robot, "get_observation_processor_steps") else []
@@ -407,7 +432,7 @@ def run_s1(
         shared_cache=shared_cache,
         s2_latent_key=S2_LATENT_KEY,
         s1_image_keys=s1_image_keys,
-        joint_names=JOINT_NAMES,
+        joint_names=joint_names,
         device=device,
         resize_to=resize_images,
         fps=fps,
@@ -438,7 +463,7 @@ def run_s1(
     # Capture initial obs, publish to both S2 and inference thread
     logger.info("S1: Capturing initial observation...")
     init_obs = robot.get_observation()
-    shared_images.write_images(init_obs, S2_CAM_KEY_MAP, JOINT_NAMES)
+    shared_images.write_images(init_obs, S2_CAM_KEY_MAP, joint_names)
     infer_thread.publish_obs(init_obs, time.perf_counter())
 
     # Wait for S2
@@ -545,7 +570,7 @@ def run_s1(
 
             # Publish to inference thread + S2
             infer_thread.publish_obs(obs_copy, t_now)
-            shared_images.write_images(obs, S2_CAM_KEY_MAP, JOINT_NAMES)
+            shared_images.write_images(obs, S2_CAM_KEY_MAP, joint_names)
 
             # 3. Read latest chunk
             chunk, t_origin, t_obs = infer_thread.get_chunk()
@@ -564,13 +589,13 @@ def run_s1(
             if max_step_delta is not None and prev_action_np is not None:
                 action_np = _apply_delta_filter(action_np, prev_action_np, max_step_delta)
 
-            action_dict = {name: float(action_np[i]) for i, name in enumerate(JOINT_NAMES) if i < len(action_np)}
+            action_dict = {name: float(action_np[i]) for i, name in enumerate(joint_names) if i < len(action_np)}
             robot.send_action(action_dict)
             t_after_send = time.perf_counter()
 
             # Record frame to dataset
             if dataset is not None:
-                _add_frame_to_dataset(dataset, obs, action_np, JOINT_NAMES, task)
+                _add_frame_to_dataset(dataset, obs, action_np, joint_names, task)
 
             # Track chunk execution index for RTC prefix extraction
             if _supports_rtc:
@@ -581,14 +606,15 @@ def run_s1(
                 action_deltas.append(np.linalg.norm(action_np - prev_action_np))
                 diag_chunk, _, _ = infer_thread.get_chunk()
                 # Build state array from robot obs (individual joint floats)
-                _state = np.array([float(obs.get(j, 0)) for j in JOINT_NAMES])
+                _state = np.array([float(obs.get(j, 0)) for j in joint_names])
                 # Collect raw images (numpy HWC uint8)
                 _imgs = {k: v for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
-                _log_grip_diagnostics(
+                _log_joint_jump(
                     action_np, prev_action_np, step_count, idx, diag_chunk,
                     robot_state=_state,
                     save_dir=grip_drop_save_dir,
                     obs_images=_imgs,
+                    joint_names=joint_names,
                 )
             prev_action_np = action_np.copy()
 
@@ -603,8 +629,8 @@ def run_s1(
                 if action_deltas:
                     r = action_deltas[-20:]
                     smooth_str += f" | Δaction: {np.mean(r):.3f}/{np.max(r):.3f}"
-                # Per-joint gripper values
-                smooth_str += f" | grip L={action_np[6]:.1f} R={action_np[13]:.1f}"
+                # Show max joint value for quick diagnostics
+                smooth_str += f" | max_joint={np.max(np.abs(action_np)):.1f}"
                 if loop_intervals:
                     r = loop_intervals[-20:]
                     smooth_str += f" | interval: {np.mean(r):.1f}±{np.std(r):.1f}ms"

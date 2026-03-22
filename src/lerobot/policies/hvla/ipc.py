@@ -213,11 +213,12 @@ class SharedImageBuffer:
     SHM_PREFIX = "hvla_img_"
 
     def __init__(self, camera_keys: tuple[str, ...], height: int = 720, width: int = 1280, channels: int = 3,
-                 create: bool = True):
+                 create: bool = True, state_dim: int = 32):
         self.camera_keys = camera_keys
         self.height = height
         self.width = width
         self.channels = channels
+        self.state_dim = state_dim
 
         self._cam_blocks: dict[str, SharedBlock] = {}
         for key in camera_keys:
@@ -227,7 +228,7 @@ class SharedImageBuffer:
             )
 
         self._state_block = SharedBlock(
-            name=f"{self.SHM_PREFIX}_state", shape=(32,), dtype=np.float32, create=create,
+            name=f"{self.SHM_PREFIX}_state", shape=(state_dim,), dtype=np.float32, create=create,
         )
 
     def write_images(self, robot_obs: dict, cam_key_map: dict[str, str], joint_names: list[str]):
@@ -237,9 +238,9 @@ class SharedImageBuffer:
                 if img.shape == (self.height, self.width, self.channels):
                     self._cam_blocks[s2_name].write(img)
 
-        state = np.zeros(32, dtype=np.float32)
+        state = np.zeros(self.state_dim, dtype=np.float32)
         for i, name in enumerate(joint_names):
-            if name in robot_obs and i < 32:
+            if name in robot_obs and i < self.state_dim:
                 state[i] = float(robot_obs[name])
         self._state_block.write(state)
 
@@ -251,7 +252,7 @@ class SharedImageBuffer:
             data, _ = self._cam_blocks[key].read()
             result[key] = data
         state, _ = self._state_block.read()
-        result["_state"] = state[:14]
+        result["_state"] = state
         return result
 
     @property
