@@ -397,41 +397,37 @@ def run_s1(
 
     logger.info("S1: Starting control loop at %d FPS", fps)
 
-    # --- Pipelined inference: background thread computes chunks, main loop executes at fixed rate ---
-    #
-    # Design:
-    # - Inference thread: captures obs → preps batch → runs model → publishes (chunk, t_obs)
-    # - Main loop: at each tick, computes index = ceil((now - t_obs) * fps) into chunk, sends action
-    # - Time-based indexing means the main loop always picks the action corresponding to "now",
-    #   regardless of when the chunk was produced or how long inference took.
-    # - Thread safety: chunk is an immutable np.ndarray reference swap (atomic in CPython).
+    # --- Pipelined inference thread ---
+    from lerobot.policies.hvla.s1_inference import InferenceThread
 
-    import threading
+    infer_thread = InferenceThread(
+        policy=policy,
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+        shared_cache=shared_cache,
+        s2_latent_key=S2_LATENT_KEY,
+        s1_image_keys=s1_image_keys,
+        joint_names=JOINT_NAMES,
+        device=device,
+        resize_to=resize_images,
+        fps=fps,
+        num_denoise_steps=num_denoise_steps,
+        query_interval_steps=query_interval_steps,
+        grip_drop_save_dir=grip_drop_save_dir,
+    )
 
-    # --- Pipelined S1 ---
-    # Main loop: captures obs → publishes to S2 + inference thread → sends action at fixed rate
-    # Inference thread: reads obs from buffer → preps → infers → publishes (chunk, t_obs)
-    # Main loop owns ALL robot I/O (cameras + motors not thread-safe).
+    _supports_rtc = getattr(policy, "supports_rtc", False)
+    _needs_ensemble = getattr(policy, "needs_temporal_ensemble", True)
+    if _supports_rtc:
+        logger.info("S1: RTC enabled (max_delay=%d, dynamic prefix from prev chunk)",
+                    getattr(policy, "rtc_prefix_length", 5))
+    elif _needs_ensemble:
+        logger.info("S1: Using temporal ensembling (no RTC)")
+    if query_interval_steps > 0:
+        logger.info("S1: Query interval = %d steps (%.0fms)",
+                    query_interval_steps, query_interval_steps / fps * 1000)
 
-    import threading
-
-    _chunk_data = None       # np.ndarray [chunk_size, action_dim]
-    _chunk_t_obs = 0.0       # perf_counter when obs was captured for current chunk
-    _chunk_t_origin = 0.0    # perf_counter: chunk[0] corresponds to this wall-clock time
-    _chunk_prefix_len = 0    # how many prefix actions were inpainted (RTC)
-    _chunk_lock = threading.Lock()
-    _chunk_ready = threading.Event()
-
-    # Obs buffer: main loop writes, inference thread reads
-    _obs_data = None
-    _obs_time = 0.0
-    _obs_lock = threading.Lock()
-    _obs_ready = threading.Event()
-
-    _infer_running = threading.Event()
-    _infer_running.set()
-    s1_infer_times = []
-    inference_delays = []
+    infer_thread.start()
 
     # Smoothness tracking
     prev_action_np = None
@@ -439,188 +435,11 @@ def run_s1(
     loop_intervals = []
     last_send_time = None
 
-    # RTC: previous chunk predictions used as prefix (arXiv:2512.05964, Ψ₀)
-    from lerobot.policies.hvla.s1.protocol import ACTION_PREFIX_KEY
-    _supports_rtc = getattr(policy, "supports_rtc", False)
-    _rtc_max_delay = getattr(policy, "rtc_prefix_length", 5) if _supports_rtc else 0
-    _needs_ensemble = getattr(policy, "needs_temporal_ensemble", True)
-
-    # Track which index in the current chunk the main loop is executing from
-    # so the inference thread can extract the overlap region as prefix.
-    _main_loop_chunk_idx = 0  # current execution index into _chunk_data
-    _main_loop_chunk_idx_lock = threading.Lock()
-
-    # Query interval: sleep N frames worth of time after publishing a chunk
-    # before starting the next inference. This lets the main loop execute more
-    # of the current chunk before re-querying (reduces GPU contention too).
-    _query_interval_s = query_interval_steps / fps if query_interval_steps > 0 else 0.0
-
-    if _supports_rtc:
-        logger.info("S1: RTC enabled (max_delay=%d, dynamic prefix from prev chunk)", _rtc_max_delay)
-    elif _needs_ensemble:
-        logger.info("S1: Using temporal ensembling (no RTC)")
-    if query_interval_steps > 0:
-        logger.info("S1: Query interval = %d steps (%.0fms)", query_interval_steps, _query_interval_s * 1000)
-
-    def _inference_thread():
-        """Reads obs from buffer → preps → infers → publishes chunk. No robot access."""
-        nonlocal _chunk_data, _chunk_t_obs, _chunk_t_origin, _chunk_prefix_len
-
-        while _infer_running.is_set():
-            # Wait for fresh obs from main loop (publishes at 30Hz).
-            if not _obs_ready.wait(timeout=0.5):
-                continue
-            _obs_ready.clear()
-
-            with _obs_lock:
-                obs = _obs_data
-                t_obs = _obs_time
-
-            if obs is None:
-                continue
-
-            # Prepare batch (CPU resize + GPU transfer)
-            batch = obs_to_s1_batch(obs, s1_image_keys, shared_cache, S2_LATENT_KEY, device,
-                                    resize_to=resize_images)
-            batch = preprocessor(batch)
-
-            # RTC prefix: the UPCOMING actions from the old chunk that the main
-            # loop WILL execute during this inference cycle (arXiv:2512.05964, Ψ₀).
-            #
-            # The main loop is currently at exec_idx in the old chunk.
-            # During inference (~80ms ≈ 2-3 frames), it will advance to
-            # exec_idx + d. Those predicted-but-not-yet-executed actions
-            # become the prefix. The model inpaints them at positions [0:d]
-            # and predicts the continuation at [d:].
-            current_prefix_len = 0
-            exec_idx = None
-            expected_d = 0
-            prefix = None
-            if _supports_rtc:
-                with _chunk_lock:
-                    old_chunk = _chunk_data
-                with _main_loop_chunk_idx_lock:
-                    exec_idx = _main_loop_chunk_idx
-                    t_exec_idx = time.perf_counter()  # when this exec_idx was current
-
-                if old_chunk is not None and exec_idx < len(old_chunk):
-                    # Estimate frames that will elapse during inference
-                    if inference_delays:
-                        expected_d = round(np.mean(inference_delays[-10:]) * fps)
-                    else:
-                        expected_d = 3  # ~100ms at 30fps initial estimate
-                    # Clamp: at least 1, at most d_max, don't exceed remaining chunk
-                    expected_d = max(1, min(expected_d, _rtc_max_delay,
-                                           len(old_chunk) - exec_idx))
-
-                    prefix = old_chunk[exec_idx : exec_idx + expected_d]
-                    batch[ACTION_PREFIX_KEY] = torch.from_numpy(prefix).unsqueeze(0).to(device)
-                    current_prefix_len = prefix.shape[0]
-
-            # Inference
-            t_infer_start = time.perf_counter()
-            with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                actions = policy.predict_action_chunk(batch, num_steps=num_denoise_steps)  # [1, chunk_size, action_dim]
-                actions = postprocessor(actions)
-            t_infer_end = time.perf_counter()
-            infer_ms = (t_infer_end - t_infer_start) * 1000
-            s1_infer_times.append(infer_ms)
-            total_delay = t_infer_end - t_obs  # obs capture → chunk ready
-            inference_delays.append(total_delay)
-
-            chunk_np = actions.cpu().numpy()[0]
-
-            # Measure actual delay in frames (time-based, not index-based,
-            # because main loop index resets when a new chunk is published).
-            actual_d_frames = round((t_infer_end - t_infer_start) * fps) if _supports_rtc else 0
-
-            # RTC diagnostic: how much did the model perturb the prefix positions
-            # BEFORE we re-injected the clean values? If the model learned t=0 → v≈0,
-            # this should be near zero. High drift means the model is "fighting" the prefix.
-            prefix_drift = None
-            if _supports_rtc and current_prefix_len > 0:
-                inner_model = policy.model if hasattr(policy, 'model') else policy
-                prefix_drift = getattr(inner_model, '_last_prefix_drift', None)
-
-            # Log RTC diagnostics periodically
-            if _supports_rtc and (len(s1_infer_times) <= 5 or len(s1_infer_times) % 50 == 0):
-                obs_to_infer_ms = (t_infer_start - t_obs) * 1000
-                logger.info(
-                    "S1 RTC diag | expected_d=%d actual_d=%d prefix_len=%d "
-                    "| obs→infer=%.0fms infer=%.0fms total=%.0fms "
-                    "| prefix_drift=%s exec_idx=%s",
-                    expected_d, actual_d_frames, current_prefix_len,
-                    obs_to_infer_ms, infer_ms, total_delay * 1000,
-                    f"{prefix_drift:.4f}" if prefix_drift is not None else "N/A",
-                    exec_idx,
-                )
-
-            # RTC alignment: slide new_chunk against old_chunk anchored at exec_idx
-            # new_chunk[0] should match old_chunk[exec_idx] (the prefix start).
-            # We scan offsets around exec_idx to verify alignment.
-            with _chunk_lock:
-                old_chunk_for_align = _chunk_data
-
-            if _supports_rtc and old_chunk_for_align is not None and exec_idx is not None:
-                scan_center = exec_idx
-                best_offset = 0
-                best_err = float("inf")
-                errors = []
-                for offset in range(max(0, scan_center - 3), min(len(old_chunk_for_align) - 1, scan_center + 8)):
-                    n = min(8, len(chunk_np), len(old_chunk_for_align) - offset)
-                    if n <= 0:
-                        continue
-                    err = np.mean(np.abs(chunk_np[:n] - old_chunk_for_align[offset:offset + n]))
-                    errors.append(f"{offset}={err:.1f}")
-                    if err < best_err:
-                        best_err = err
-                        best_offset = offset
-                if len(errors) > 0 and (len(s1_infer_times) <= 5 or len(s1_infer_times) % 50 == 0):
-                    logger.info(
-                        "S1 RTC align | exec_idx=%d best=%d (err=%.2f) | %s",
-                        exec_idx, best_offset, best_err, " ".join(errors),
-                    )
-
-            if grip_drop_save_dir:
-                _save_infer_drop(chunk_np, obs, len(s1_infer_times), grip_drop_save_dir)
-                # Also save every 50th inference as control group (no drop)
-                infer_count = len(s1_infer_times)
-                if infer_count % 50 == 0:
-                    import os
-                    ctrl_dir = os.path.join(grip_drop_save_dir, f"control_{infer_count}")
-                    os.makedirs(ctrl_dir, exist_ok=True)
-                    state_arr = np.array([float(obs.get(j, 0)) for j in JOINT_NAMES])
-                    np.save(os.path.join(ctrl_dir, "state.npy"), state_arr)
-                    np.save(os.path.join(ctrl_dir, "chunk.npy"), chunk_np)
-
-            with _chunk_lock:
-                _chunk_data = chunk_np
-                _chunk_t_obs = t_obs
-                # chunk[0] = old_chunk[exec_idx], which was current at t_exec_idx.
-                # For non-RTC (no prefix), chunk[0] = prediction for t_obs.
-                if _supports_rtc and exec_idx is not None and 't_exec_idx' in dir():
-                    _chunk_t_origin = t_exec_idx
-                else:
-                    _chunk_t_origin = t_obs
-                _chunk_prefix_len = current_prefix_len
-                _chunk_ready.set()
-
-            # Query interval: let main loop execute more of this chunk before re-querying
-            if _query_interval_s > 0 and _infer_running.is_set():
-                time.sleep(_query_interval_s)
-
-    # Start inference thread (no robot access — only GPU)
-    infer_thread = threading.Thread(target=_inference_thread, daemon=True)
-    infer_thread.start()
-
     # Capture initial obs, publish to both S2 and inference thread
     logger.info("S1: Capturing initial observation...")
     init_obs = robot.get_observation()
     shared_images.write_images(init_obs, S2_CAM_KEY_MAP, JOINT_NAMES)
-    with _obs_lock:
-        _obs_data = init_obs
-        _obs_time = time.perf_counter()
-    _obs_ready.set()
+    infer_thread.publish_obs(init_obs, time.perf_counter())
 
     # Wait for S2
     logger.info("S1: Waiting for first S2 latent (up to 120s)...")
@@ -631,10 +450,9 @@ def run_s1(
 
     # Wait for first chunk
     logger.info("S1: Waiting for first action chunk...")
-    _chunk_ready.wait(timeout=60.0)
-    if _chunk_data is None:
+    if not infer_thread.wait_for_first_chunk(timeout=60.0):
         logger.error("S1: No action chunk in 60s, aborting")
-        _infer_running.clear()
+        infer_thread.stop()
         return
 
     logger.info("S1: First chunk ready, starting at %d FPS", fps)
@@ -726,17 +544,11 @@ def run_s1(
                     obs_copy[k] = v  # scalars/strings are immutable, no copy needed
 
             # Publish to inference thread + S2
-            with _obs_lock:
-                _obs_data = obs_copy
-                _obs_time = t_now
-            _obs_ready.set()
+            infer_thread.publish_obs(obs_copy, t_now)
             shared_images.write_images(obs, S2_CAM_KEY_MAP, JOINT_NAMES)
 
             # 3. Read latest chunk
-            with _chunk_lock:
-                chunk = _chunk_data
-                t_origin = _chunk_t_origin
-                t_obs = _chunk_t_obs  # kept for logging
+            chunk, t_origin, t_obs = infer_thread.get_chunk()
 
             if chunk is None:
                 time.sleep(1.0 / fps)
@@ -762,14 +574,12 @@ def run_s1(
 
             # Track chunk execution index for RTC prefix extraction
             if _supports_rtc:
-                with _main_loop_chunk_idx_lock:
-                    _main_loop_chunk_idx = idx + 1  # next index to execute
+                infer_thread.update_exec_index(idx + 1)
 
             # Smoothness tracking (after send, not on critical path)
             if prev_action_np is not None:
                 action_deltas.append(np.linalg.norm(action_np - prev_action_np))
-                with _chunk_lock:
-                    diag_chunk = _chunk_data
+                diag_chunk, _, _ = infer_thread.get_chunk()
                 # Build state array from robot obs (individual joint floats)
                 _state = np.array([float(obs.get(j, 0)) for j in JOINT_NAMES])
                 # Collect raw images (numpy HWC uint8)
@@ -798,8 +608,8 @@ def run_s1(
                 if loop_intervals:
                     r = loop_intervals[-20:]
                     smooth_str += f" | interval: {np.mean(r):.1f}±{np.std(r):.1f}ms"
-                if s1_infer_times:
-                    smooth_str += f" | infer: {np.mean(s1_infer_times[-10:]):.0f}ms"
+                if infer_thread.infer_times:
+                    smooth_str += f" | infer: {np.mean(infer_thread.infer_times[-10:]):.0f}ms"
                 smooth_str += f" | chunk_age: {(t_before_send - t_origin)*1000:.0f}ms"
 
                 logger.info(
@@ -833,11 +643,10 @@ def run_s1(
     except KeyboardInterrupt:
         logger.info("S1: Interrupted by user")
     finally:
-        _infer_running.clear()
-        infer_thread.join(timeout=3.0)
-        if s1_infer_times:
+        infer_thread.stop()
+        if infer_thread.infer_times:
             logger.info("S1: Done. %d episodes, avg infer: %.1fms | S2 updates: %d",
-                        recorded_episodes, np.mean(s1_infer_times), shared_cache.count)
+                        recorded_episodes, np.mean(infer_thread.infer_times), shared_cache.count)
         if dataset is not None:
             try:
                 # Save any unsaved episode (interrupted mid-recording)
