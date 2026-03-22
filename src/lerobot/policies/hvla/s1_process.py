@@ -705,36 +705,33 @@ def _get_motor_buses(robot) -> list:
 def _disable_torque(robot):
     """Disable torque on all motors so the robot can be moved by hand."""
     for bus in _get_motor_buses(robot):
-        for motor_name in bus.motors:
-            try:
-                bus.write("Torque_Enable", motor_name, 0)
-            except Exception:
-                pass
+        try:
+            bus.disable_torque()
+        except Exception:
+            pass
     logger.info("S1: Torque disabled (robot can be moved by hand)")
 
 
 def _enable_torque(robot):
     """Re-enable torque on all motors."""
     for bus in _get_motor_buses(robot):
-        for motor_name in bus.motors:
-            try:
-                bus.write("Torque_Enable", motor_name, 1)
-                bus.write("Torque_Limit", motor_name, 1000, normalize=False)
-            except Exception:
-                pass
+        try:
+            bus.enable_torque()
+        except Exception:
+            pass
     logger.info("S1: Torque enabled")
 
 
 def _soft_land(robot, duration_s=4.0, steps=20):
-    """Gradually reduce torque so the robot lowers gently instead of dropping."""
+    """Gradually reduce torque so the robot lowers gently instead of dropping.
+
+    Uses Torque_Limit register for gradual reduction (Feetech/Dynamixel specific),
+    then bus.disable_torque() for clean shutdown.
+    """
     if not robot.is_connected:
         return
 
-    buses = []
-    if hasattr(robot, "left_arm"):
-        buses.append(robot.left_arm.bus)
-    if hasattr(robot, "right_arm"):
-        buses.append(robot.right_arm.bus)
+    buses = _get_motor_buses(robot)
     if not buses:
         return
 
@@ -745,7 +742,7 @@ def _soft_land(robot, duration_s=4.0, steps=20):
         if hold_action:
             robot.send_action(hold_action)
 
-        # Gradually reduce torque
+        # Gradually reduce torque limit (best-effort — not all motors support this)
         step_delay = duration_s / steps
         for i in range(steps):
             torque_value = int(1000 * (1.0 - (i + 1) / steps))
@@ -757,15 +754,14 @@ def _soft_land(robot, duration_s=4.0, steps=20):
                         pass
             time.sleep(step_delay)
 
-        # Disable torque completely so next run can re-enable
+        # Disable torque completely
         for bus in buses:
-            for motor_name in bus.motors:
-                try:
-                    bus.write("Torque_Enable", motor_name, 0)
-                except Exception:
-                    pass
+            try:
+                bus.disable_torque()
+            except Exception:
+                pass
 
-        # Restore torque limit so next run isn't stuck at 0
+        # Restore torque limit so next enable isn't stuck at 0
         for bus in buses:
             for motor_name in bus.motors:
                 try:
