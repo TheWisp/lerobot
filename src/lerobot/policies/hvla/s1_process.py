@@ -1,0 +1,943 @@
+"""S1 process: loads action policy, reads shared latent, runs robot control loop.
+
+Runs in the main process (needs direct robot/camera access). S1 is latency-critical (~30Hz).
+Adapted from dual_system_infer.py.
+"""
+
+import logging
+import math
+import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+import torch
+
+from lerobot.policies.hvla.ipc import SharedLatentCache, SharedImageBuffer
+
+logger = logging.getLogger(__name__)
+
+JOINT_NAMES = [
+    "left_shoulder_pan.pos", "left_shoulder_lift.pos", "left_elbow_flex.pos",
+    "left_forearm_roll.pos", "left_wrist_flex.pos", "left_wrist_roll.pos", "left_gripper.pos",
+    "right_shoulder_pan.pos", "right_shoulder_lift.pos", "right_elbow_flex.pos",
+    "right_forearm_roll.pos", "right_wrist_flex.pos", "right_wrist_roll.pos", "right_gripper.pos",
+]
+
+# Map S1 robot obs camera names → S2 camera keys
+S2_CAM_KEY_MAP = {
+    "front": "base_0_rgb",
+    "top": "base_1_rgb",
+    "left_wrist": "left_wrist_0_rgb",
+    "right_wrist": "right_wrist_0_rgb",
+}
+
+
+def _compute_chunk_index(t_now: float, t_origin: float, fps: int, chunk_len: int) -> int:
+    """Time-based index into current action chunk."""
+    elapsed = t_now - t_origin
+    idx = round(elapsed * fps)
+    return max(0, min(idx, chunk_len - 1))
+
+
+def _osc_skip(chunk: np.ndarray, idx: int, step_count: int) -> int:
+    """Both-arms oscillation skip: if BOTH arms have low displacement
+    in the next 5 frames, scan ahead to where movement starts."""
+    if idx >= len(chunk) - 10:
+        return idx
+    origin = chunk[idx]
+    check_at = min(idx + 5, len(chunk) - 1)
+    left_cumul = np.linalg.norm(chunk[check_at, :7] - origin[:7])
+    right_cumul = np.linalg.norm(chunk[check_at, 7:] - origin[7:])
+    if left_cumul >= 2.0 or right_cumul >= 2.0:
+        return idx
+    for k in range(idx + 5, min(idx + 30, len(chunk))):
+        l_c = np.linalg.norm(chunk[k, :7] - origin[:7])
+        r_c = np.linalg.norm(chunk[k, 7:] - origin[7:])
+        if l_c > 3.0 or r_c > 3.0:
+            if step_count % 50 == 0:
+                logger.info("S1 osc-skip: both arms flat [%d]→[%d] (L=%.1f R=%.1f)",
+                            idx, k, l_c, r_c)
+            return max(0, min(k, len(chunk) - 1))
+    return idx
+
+
+def _apply_delta_filter(action_np: np.ndarray, prev_action_np: np.ndarray,
+                        max_step_delta: float) -> np.ndarray:
+    """Per-joint delta filter: hold joints that jump > max_step_delta."""
+    diff = np.abs(action_np - prev_action_np)
+    bad_mask = diff > max_step_delta
+    if bad_mask.any():
+        action_np[bad_mask] = prev_action_np[bad_mask]
+    return action_np
+
+
+def _save_infer_drop(chunk_np: np.ndarray, obs: dict, infer_count: int, save_dir: str):
+    """Detect gripper jumps in predicted chunk and save inference-time obs for OOD analysis."""
+    r_diff = np.max(np.abs(np.diff(chunk_np[:20, 13])))
+    l_diff = np.max(np.abs(np.diff(chunk_np[:20, 6])))
+    if r_diff <= 10 and l_diff <= 10:
+        return
+    import os, cv2
+    drop_dir = os.path.join(save_dir, f"infer_drop_{infer_count}")
+    os.makedirs(drop_dir, exist_ok=True)
+    for k, v in obs.items():
+        if isinstance(v, np.ndarray) and v.ndim == 3:
+            safe = k.replace("/", "_").replace(".", "_")
+            cv2.imwrite(os.path.join(drop_dir, f"{safe}.jpg"), v[:, :, ::-1])
+    state_arr = np.array([float(obs.get(j, 0)) for j in JOINT_NAMES])
+    np.save(os.path.join(drop_dir, "state.npy"), state_arr)
+    np.save(os.path.join(drop_dir, "chunk.npy"), chunk_np)
+    logger.info("S1 INFER DROP infer#%d | R_jump=%.1f L_jump=%.1f | saved to %s",
+                infer_count, r_diff, l_diff, drop_dir)
+
+
+def _log_grip_diagnostics(
+    action_np: np.ndarray, prev_action_np: np.ndarray,
+    step_count: int, idx: int, chunk_data: np.ndarray | None,
+    robot_state: np.ndarray | None = None,
+    save_dir: str | None = None,
+    obs_images: dict | None = None,
+):
+    """Log gripper drops with chunk trajectory dump and optional obs saving."""
+    grip_l_delta = abs(action_np[6] - prev_action_np[6])
+    grip_r_delta = abs(action_np[13] - prev_action_np[13])
+    if grip_l_delta <= 10 and grip_r_delta <= 10:
+        return
+    if chunk_data is None:
+        return
+    delta = np.linalg.norm(action_np - prev_action_np)
+    l_traj = [f"{chunk_data[i, 6]:.0f}" for i in range(min(20, len(chunk_data)))]
+    r_traj = [f"{chunk_data[i, 13]:.0f}" for i in range(min(20, len(chunk_data)))]
+    state_str = ""
+    if robot_state is not None:
+        state_str = "\n  state: " + " ".join(f"{v:6.1f}" for v in robot_state)
+    logger.info(
+        "S1 GRIP DROP step %d idx=%d | L: %.1f→%.1f (Δ%.1f) R: %.1f→%.1f (Δ%.1f) | Δaction=%.1f\n"
+        "  chunk L[0:20]: %s\n"
+        "  chunk R[0:20]: %s%s",
+        step_count, idx,
+        prev_action_np[6], action_np[6], grip_l_delta,
+        prev_action_np[13], action_np[13], grip_r_delta,
+        delta,
+        " ".join(l_traj),
+        " ".join(r_traj),
+        state_str,
+    )
+    # Save observation snapshot for offline distribution shift analysis
+    if save_dir and obs_images:
+        import os, cv2
+        drop_dir = os.path.join(save_dir, f"grip_drop_{step_count}")
+        os.makedirs(drop_dir, exist_ok=True)
+        for cam_name, img_np in obs_images.items():
+            # img_np is HWC uint8 (BGR or RGB depending on camera)
+            safe_name = cam_name.replace("/", "_").replace(".", "_")
+            cv2.imwrite(os.path.join(drop_dir, f"{safe_name}.jpg"), img_np[:, :, ::-1])
+        if robot_state is not None:
+            np.save(os.path.join(drop_dir, "state.npy"), robot_state)
+        if chunk_data is not None:
+            np.save(os.path.join(drop_dir, "chunk.npy"), chunk_data)
+
+
+def obs_to_s1_batch(
+    robot_obs: dict,
+    s1_image_keys: list[str],
+    shared_cache: SharedLatentCache,
+    s2_latent_key: str,
+    device: torch.device,
+    resize_to: tuple[int, int] | None = None,
+) -> dict:
+    """Convert robot observation to S1 input batch.
+
+    Images are resized on CPU before GPU transfer (0.6MB vs 10.5MB per image).
+    """
+    batch = {}
+
+    for key in s1_image_keys:
+        cam_name = key.split(".")[-1]
+        if cam_name in robot_obs:
+            img = np.asarray(robot_obs[cam_name], dtype=np.uint8)
+            if resize_to is not None:
+                img = cv2.resize(img, (resize_to[1], resize_to[0]), interpolation=cv2.INTER_LINEAR)
+            img_tensor = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float().div_(255.0).to(device)
+            batch[key] = img_tensor
+
+    state = [float(robot_obs[name]) for name in JOINT_NAMES]
+    batch["observation.state"] = torch.tensor([state], dtype=torch.float32, device=device)
+
+    latent, age_seconds = shared_cache.read_with_age()
+    # Clamp age to training range — model was trained with max_delay_seconds
+    # (e.g., 0.15s). Ages beyond that are out-of-distribution.
+    max_train_age = 0.15  # must match --max-delay used during training
+    age_seconds = min(age_seconds, max_train_age)
+    batch[s2_latent_key] = latent.unsqueeze(0).to(device)
+    batch["observation.s2_latent_age"] = torch.tensor([[age_seconds]], dtype=torch.float32, device=device)
+
+    return batch
+
+
+def _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_to):
+    """Run dummy forward passes to trigger torch.compile kernel compilation.
+
+    Uses fake data — no robot needed. After this, the control loop runs
+    at full compiled speed with no compilation stalls.
+    """
+    import time as _time
+
+    h, w = resize_to if resize_to else (224, 224)
+    dummy_batch = {}
+    for key in s1_image_keys:
+        dummy_batch[key] = torch.randn(1, 3, h, w, device=device)
+    dummy_batch["observation.state"] = torch.zeros(1, 14, device=device)
+    dummy_batch["observation.s2_latent"] = torch.zeros(1, 2048, device=device)
+    dummy_batch["observation.s2_latent_age"] = torch.zeros(1, 1, device=device)
+
+    dummy_batch = preprocessor(dummy_batch)
+
+    t0 = _time.perf_counter()
+    with torch.no_grad():
+        for i in range(3):
+            if hasattr(policy, 'select_action'):
+                policy.select_action(dummy_batch)
+            else:
+                policy.predict_action_chunk(dummy_batch)
+            if i == 0:
+                logger.info("S1: First compiled forward done (%.1fs)", _time.perf_counter() - t0)
+    policy.reset()  # clear any state from warmup
+    logger.info("S1: Warmup complete (%.1fs total)", _time.perf_counter() - t0)
+
+
+def _create_recording_dataset(repo_id: str, fps: int, robot, task: str):
+    """Create a LeRobotDataset for recording inference episodes.
+
+    Features are derived from the robot's action/observation specs.
+    """
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    obs_ft = robot.observation_features
+    action_ft = robot.action_features
+
+    # Joint names = non-camera observation features
+    joint_names = [k for k, v in action_ft.items() if not isinstance(v, tuple)]
+    cam_features = {k: v for k, v in obs_ft.items() if isinstance(v, tuple)}
+
+    features = {}
+    features["observation.state"] = {
+        "dtype": "float32",
+        "shape": (len(joint_names),),
+        "names": list(joint_names),
+    }
+    for cam_name, shape in cam_features.items():
+        features[f"observation.images.{cam_name}"] = {
+            "dtype": "video",
+            "shape": shape,
+            "names": ["height", "width", "channels"],
+        }
+    features["action"] = {
+        "dtype": "float32",
+        "shape": (len(joint_names),),
+        "names": list(joint_names),
+    }
+
+    dataset = LeRobotDataset.create(
+        repo_id=repo_id,
+        fps=fps,
+        features=features,
+        robot_type=type(robot).__name__,
+        use_videos=True,
+    )
+    logger.info("S1: Recording dataset '%s' created (%d joints, %d cameras)",
+                repo_id, len(joint_names), len(cam_features))
+    return dataset
+
+
+def _add_frame_to_dataset(dataset, obs: dict, action_np: np.ndarray, joint_names: list[str], task: str):
+    """Add a single frame (obs + action) to the recording dataset."""
+    frame = {"task": task}
+    frame["observation.state"] = np.array(
+        [float(obs.get(j, 0)) for j in joint_names], dtype=np.float32,
+    )
+    frame["action"] = action_np.astype(np.float32)
+    for k, v in obs.items():
+        if isinstance(v, np.ndarray) and v.ndim == 3:
+            frame[f"observation.images.{k}"] = v
+    dataset.add_frame(frame)
+
+
+def run_s1(
+    s1_checkpoint: str,
+    shared_cache: SharedLatentCache,
+    shared_images: SharedImageBuffer,
+    task: str,
+    robot_config_path: str | None = None,
+    fps: int = 30,
+    device: str = "cuda",
+    resize_images: tuple[int, int] | None = (224, 224),
+    temporal_ensemble_coeff: float | None = None,
+    n_action_steps: int | None = None,
+    compile_s1: bool = False,
+    s1_type: str = "act",
+    stop_event=None,
+    osc_skip: bool = False,
+    query_interval_steps: int = 0,
+    num_denoise_steps: int | None = None,
+    max_step_delta: float | None = None,
+    grip_drop_save_dir: str | None = None,
+    record_dataset: str | None = None,
+    num_episodes: int = 1,
+    episode_time_s: float = 0,
+    reset_time_s: float = 20,
+):
+    """S1 control loop with robot. Runs in main process."""
+    # Main process logging should already be configured by launch.py,
+    # but ensure it works even if run standalone.
+    from lerobot.policies.hvla.logging_utils import setup_process_logging
+    if not logging.getLogger().handlers:
+        setup_process_logging()
+
+    import json
+    import draccus
+    from lerobot.policies.hvla.s1.protocol import S2_LATENT_KEY
+    from lerobot.robots import make_robot_from_config
+    from lerobot.robots.config import RobotConfig
+    # keyboard listener removed — Ctrl+C via stop_event is sufficient
+
+    # Register robot/camera types for draccus
+    from lerobot.robots import bi_so107_follower  # noqa: F401
+    from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
+    from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
+
+    device = torch.device(device)
+
+    # Load S1 policy based on type
+    logger.info("S1: Loading %s policy from %s", s1_type, s1_checkpoint)
+
+    if s1_type == "flow":
+        from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Policy, FlowMatchingS1Config
+        config = FlowMatchingS1Config()
+        policy = FlowMatchingS1Policy.from_pretrained(s1_checkpoint, config=config)
+        preprocessor = lambda batch: batch  # flow matching handles its own normalization
+        postprocessor = lambda actions: actions
+        s1_image_keys = list(config.image_features.keys())
+    else:
+        from lerobot.policies.act_vlm.modeling_act_vlm import ACTWithVLMPolicy
+        from lerobot.policies.factory import make_pre_post_processors
+        policy = ACTWithVLMPolicy.from_pretrained(pretrained_name_or_path=s1_checkpoint)
+
+        if temporal_ensemble_coeff is not None:
+            policy.config.temporal_ensemble_coeff = temporal_ensemble_coeff
+            policy.config.n_action_steps = 1
+            from lerobot.policies.act.modeling_act import ACTTemporalEnsembler
+            policy.temporal_ensembler = ACTTemporalEnsembler(temporal_ensemble_coeff, policy.config.chunk_size)
+            logger.info("S1: Temporal ensembling (coeff=%.3f)", temporal_ensemble_coeff)
+        elif n_action_steps is not None:
+            policy.config.n_action_steps = n_action_steps
+            logger.info("S1: n_action_steps=%d", n_action_steps)
+
+        s1_image_keys = list(policy.config.image_features.keys())
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy_cfg=policy.config, pretrained_path=s1_checkpoint,
+        )
+
+    policy.to(device)
+    policy.eval()
+    policy.reset()
+
+    # Enable TF32 matmul for faster float32 ops on Ampere+ GPUs
+    torch.set_float32_matmul_precision("high")
+    torch.backends.cudnn.benchmark = True
+
+    logger.info("S1: Policy loaded (%s). Image keys: %s", s1_type, s1_image_keys)
+
+    # torch.compile is opt-in via --compile-s1 flag.
+    # DINOv2 attention layers are not compatible with torch.compile out of the box.
+    # TODO: investigate torch.compile with fullgraph=False or compiling only the
+    # ACT encoder/decoder (excluding DINOv2 backbone).
+    if compile_s1:
+        logger.info("S1: Compiling denoise_step with torch.compile...")
+        inner = policy.model if hasattr(policy, 'model') else policy
+        inner.denoise_step = torch.compile(inner.denoise_step, mode="default")
+        logger.info("S1: Warming up compiled model...")
+        _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_images)
+
+    # Load robot
+    config_path = robot_config_path or str(Path.home() / ".config" / "lerobot" / "robots" / "white.json")
+    logger.info("S1: Loading robot from %s", config_path)
+    with open(config_path) as f:
+        profile = json.load(f)
+    # Support both formats:
+    # - LeRobot profile: {type, name, fields: {ports...}, cameras, ...}
+    # - Flat config: {type, left_arm_port, ..., cameras, ...}
+    if "fields" in profile:
+        config_dict = {"type": profile["type"]}
+        for k, v in profile["fields"].items():
+            config_dict[k] = v
+        if "cameras" in profile:
+            config_dict["cameras"] = profile["cameras"]
+    else:
+        config_dict = profile
+    robot_cfg = draccus.decode(RobotConfig, config_dict)
+    robot = make_robot_from_config(robot_cfg)
+    logger.info("S1: Connecting to robot...")
+    robot.connect()
+    logger.info("S1: Robot connected")
+
+    # Apply observation processor steps (e.g., depth edge overlay for RealSense)
+    obs_processor_steps = robot.get_observation_processor_steps() if hasattr(robot, "get_observation_processor_steps") else []
+    if obs_processor_steps:
+        logger.info("S1: Observation processors: %s", [type(s).__name__ for s in obs_processor_steps])
+
+    # Episode recording
+    dataset = None
+    if record_dataset:
+        dataset = _create_recording_dataset(record_dataset, fps, robot, task)
+
+    # Note: S2 wait happens after inference thread starts (below),
+    # because the inference thread publishes images that S2 needs.
+
+    logger.info("S1: Starting control loop at %d FPS", fps)
+
+    # --- Pipelined inference: background thread computes chunks, main loop executes at fixed rate ---
+    #
+    # Design:
+    # - Inference thread: captures obs → preps batch → runs model → publishes (chunk, t_obs)
+    # - Main loop: at each tick, computes index = ceil((now - t_obs) * fps) into chunk, sends action
+    # - Time-based indexing means the main loop always picks the action corresponding to "now",
+    #   regardless of when the chunk was produced or how long inference took.
+    # - Thread safety: chunk is an immutable np.ndarray reference swap (atomic in CPython).
+
+    import threading
+
+    # --- Pipelined S1 ---
+    # Main loop: captures obs → publishes to S2 + inference thread → sends action at fixed rate
+    # Inference thread: reads obs from buffer → preps → infers → publishes (chunk, t_obs)
+    # Main loop owns ALL robot I/O (cameras + motors not thread-safe).
+
+    import threading
+
+    _chunk_data = None       # np.ndarray [chunk_size, action_dim]
+    _chunk_t_obs = 0.0       # perf_counter when obs was captured for current chunk
+    _chunk_t_origin = 0.0    # perf_counter: chunk[0] corresponds to this wall-clock time
+    _chunk_prefix_len = 0    # how many prefix actions were inpainted (RTC)
+    _chunk_lock = threading.Lock()
+    _chunk_ready = threading.Event()
+
+    # Obs buffer: main loop writes, inference thread reads
+    _obs_data = None
+    _obs_time = 0.0
+    _obs_lock = threading.Lock()
+    _obs_ready = threading.Event()
+
+    _infer_running = threading.Event()
+    _infer_running.set()
+    s1_infer_times = []
+    inference_delays = []
+
+    # Smoothness tracking
+    prev_action_np = None
+    action_deltas = []
+    loop_intervals = []
+    last_send_time = None
+
+    # RTC: previous chunk predictions used as prefix (arXiv:2512.05964, Ψ₀)
+    from lerobot.policies.hvla.s1.protocol import ACTION_PREFIX_KEY
+    _supports_rtc = getattr(policy, "supports_rtc", False)
+    _rtc_max_delay = getattr(policy, "rtc_prefix_length", 5) if _supports_rtc else 0
+    _needs_ensemble = getattr(policy, "needs_temporal_ensemble", True)
+
+    # Track which index in the current chunk the main loop is executing from
+    # so the inference thread can extract the overlap region as prefix.
+    _main_loop_chunk_idx = 0  # current execution index into _chunk_data
+    _main_loop_chunk_idx_lock = threading.Lock()
+
+    # Query interval: sleep N frames worth of time after publishing a chunk
+    # before starting the next inference. This lets the main loop execute more
+    # of the current chunk before re-querying (reduces GPU contention too).
+    _query_interval_s = query_interval_steps / fps if query_interval_steps > 0 else 0.0
+
+    if _supports_rtc:
+        logger.info("S1: RTC enabled (max_delay=%d, dynamic prefix from prev chunk)", _rtc_max_delay)
+    elif _needs_ensemble:
+        logger.info("S1: Using temporal ensembling (no RTC)")
+    if query_interval_steps > 0:
+        logger.info("S1: Query interval = %d steps (%.0fms)", query_interval_steps, _query_interval_s * 1000)
+
+    def _inference_thread():
+        """Reads obs from buffer → preps → infers → publishes chunk. No robot access."""
+        nonlocal _chunk_data, _chunk_t_obs, _chunk_t_origin, _chunk_prefix_len
+
+        while _infer_running.is_set():
+            # Wait for fresh obs from main loop (publishes at 30Hz).
+            if not _obs_ready.wait(timeout=0.5):
+                continue
+            _obs_ready.clear()
+
+            with _obs_lock:
+                obs = _obs_data
+                t_obs = _obs_time
+
+            if obs is None:
+                continue
+
+            # Prepare batch (CPU resize + GPU transfer)
+            batch = obs_to_s1_batch(obs, s1_image_keys, shared_cache, S2_LATENT_KEY, device,
+                                    resize_to=resize_images)
+            batch = preprocessor(batch)
+
+            # RTC prefix: the UPCOMING actions from the old chunk that the main
+            # loop WILL execute during this inference cycle (arXiv:2512.05964, Ψ₀).
+            #
+            # The main loop is currently at exec_idx in the old chunk.
+            # During inference (~80ms ≈ 2-3 frames), it will advance to
+            # exec_idx + d. Those predicted-but-not-yet-executed actions
+            # become the prefix. The model inpaints them at positions [0:d]
+            # and predicts the continuation at [d:].
+            current_prefix_len = 0
+            exec_idx = None
+            expected_d = 0
+            prefix = None
+            if _supports_rtc:
+                with _chunk_lock:
+                    old_chunk = _chunk_data
+                with _main_loop_chunk_idx_lock:
+                    exec_idx = _main_loop_chunk_idx
+                    t_exec_idx = time.perf_counter()  # when this exec_idx was current
+
+                if old_chunk is not None and exec_idx < len(old_chunk):
+                    # Estimate frames that will elapse during inference
+                    if inference_delays:
+                        expected_d = round(np.mean(inference_delays[-10:]) * fps)
+                    else:
+                        expected_d = 3  # ~100ms at 30fps initial estimate
+                    # Clamp: at least 1, at most d_max, don't exceed remaining chunk
+                    expected_d = max(1, min(expected_d, _rtc_max_delay,
+                                           len(old_chunk) - exec_idx))
+
+                    prefix = old_chunk[exec_idx : exec_idx + expected_d]
+                    batch[ACTION_PREFIX_KEY] = torch.from_numpy(prefix).unsqueeze(0).to(device)
+                    current_prefix_len = prefix.shape[0]
+
+            # Inference
+            t_infer_start = time.perf_counter()
+            with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                actions = policy.predict_action_chunk(batch, num_steps=num_denoise_steps)  # [1, chunk_size, action_dim]
+                actions = postprocessor(actions)
+            t_infer_end = time.perf_counter()
+            infer_ms = (t_infer_end - t_infer_start) * 1000
+            s1_infer_times.append(infer_ms)
+            total_delay = t_infer_end - t_obs  # obs capture → chunk ready
+            inference_delays.append(total_delay)
+
+            chunk_np = actions.cpu().numpy()[0]
+
+            # Measure actual delay in frames (time-based, not index-based,
+            # because main loop index resets when a new chunk is published).
+            actual_d_frames = round((t_infer_end - t_infer_start) * fps) if _supports_rtc else 0
+
+            # RTC diagnostic: how much did the model perturb the prefix positions
+            # BEFORE we re-injected the clean values? If the model learned t=0 → v≈0,
+            # this should be near zero. High drift means the model is "fighting" the prefix.
+            prefix_drift = None
+            if _supports_rtc and current_prefix_len > 0:
+                inner_model = policy.model if hasattr(policy, 'model') else policy
+                prefix_drift = getattr(inner_model, '_last_prefix_drift', None)
+
+            # Log RTC diagnostics periodically
+            if _supports_rtc and (len(s1_infer_times) <= 5 or len(s1_infer_times) % 50 == 0):
+                obs_to_infer_ms = (t_infer_start - t_obs) * 1000
+                logger.info(
+                    "S1 RTC diag | expected_d=%d actual_d=%d prefix_len=%d "
+                    "| obs→infer=%.0fms infer=%.0fms total=%.0fms "
+                    "| prefix_drift=%s exec_idx=%s",
+                    expected_d, actual_d_frames, current_prefix_len,
+                    obs_to_infer_ms, infer_ms, total_delay * 1000,
+                    f"{prefix_drift:.4f}" if prefix_drift is not None else "N/A",
+                    exec_idx,
+                )
+
+            # RTC alignment: slide new_chunk against old_chunk anchored at exec_idx
+            # new_chunk[0] should match old_chunk[exec_idx] (the prefix start).
+            # We scan offsets around exec_idx to verify alignment.
+            with _chunk_lock:
+                old_chunk_for_align = _chunk_data
+
+            if _supports_rtc and old_chunk_for_align is not None and exec_idx is not None:
+                scan_center = exec_idx
+                best_offset = 0
+                best_err = float("inf")
+                errors = []
+                for offset in range(max(0, scan_center - 3), min(len(old_chunk_for_align) - 1, scan_center + 8)):
+                    n = min(8, len(chunk_np), len(old_chunk_for_align) - offset)
+                    if n <= 0:
+                        continue
+                    err = np.mean(np.abs(chunk_np[:n] - old_chunk_for_align[offset:offset + n]))
+                    errors.append(f"{offset}={err:.1f}")
+                    if err < best_err:
+                        best_err = err
+                        best_offset = offset
+                if len(errors) > 0 and (len(s1_infer_times) <= 5 or len(s1_infer_times) % 50 == 0):
+                    logger.info(
+                        "S1 RTC align | exec_idx=%d best=%d (err=%.2f) | %s",
+                        exec_idx, best_offset, best_err, " ".join(errors),
+                    )
+
+            if grip_drop_save_dir:
+                _save_infer_drop(chunk_np, obs, len(s1_infer_times), grip_drop_save_dir)
+                # Also save every 50th inference as control group (no drop)
+                infer_count = len(s1_infer_times)
+                if infer_count % 50 == 0:
+                    import os
+                    ctrl_dir = os.path.join(grip_drop_save_dir, f"control_{infer_count}")
+                    os.makedirs(ctrl_dir, exist_ok=True)
+                    state_arr = np.array([float(obs.get(j, 0)) for j in JOINT_NAMES])
+                    np.save(os.path.join(ctrl_dir, "state.npy"), state_arr)
+                    np.save(os.path.join(ctrl_dir, "chunk.npy"), chunk_np)
+
+            with _chunk_lock:
+                _chunk_data = chunk_np
+                _chunk_t_obs = t_obs
+                # chunk[0] = old_chunk[exec_idx], which was current at t_exec_idx.
+                # For non-RTC (no prefix), chunk[0] = prediction for t_obs.
+                if _supports_rtc and exec_idx is not None and 't_exec_idx' in dir():
+                    _chunk_t_origin = t_exec_idx
+                else:
+                    _chunk_t_origin = t_obs
+                _chunk_prefix_len = current_prefix_len
+                _chunk_ready.set()
+
+            # Query interval: let main loop execute more of this chunk before re-querying
+            if _query_interval_s > 0 and _infer_running.is_set():
+                time.sleep(_query_interval_s)
+
+    # Start inference thread (no robot access — only GPU)
+    infer_thread = threading.Thread(target=_inference_thread, daemon=True)
+    infer_thread.start()
+
+    # Capture initial obs, publish to both S2 and inference thread
+    logger.info("S1: Capturing initial observation...")
+    init_obs = robot.get_observation()
+    shared_images.write_images(init_obs, S2_CAM_KEY_MAP, JOINT_NAMES)
+    with _obs_lock:
+        _obs_data = init_obs
+        _obs_time = time.perf_counter()
+    _obs_ready.set()
+
+    # Wait for S2
+    logger.info("S1: Waiting for first S2 latent (up to 120s)...")
+    if not shared_cache.wait_for_first(timeout=120.0):
+        logger.warning("S1: No S2 latent after 120s, starting with zero latent")
+    else:
+        logger.info("S1: Got first S2 latent (count=%d)", shared_cache.count)
+
+    # Wait for first chunk
+    logger.info("S1: Waiting for first action chunk...")
+    _chunk_ready.wait(timeout=60.0)
+    if _chunk_data is None:
+        logger.error("S1: No action chunk in 60s, aborting")
+        _infer_running.clear()
+        return
+
+    logger.info("S1: First chunk ready, starting at %d FPS", fps)
+
+    # Multi-episode rollout support
+    multi_episode = num_episodes > 1 or episode_time_s > 0
+    if multi_episode:
+        from lerobot.utils.control_utils import init_keyboard_listener
+        listener, events = init_keyboard_listener()
+        logger.info("S1: Rollout mode — %d episodes, %.0fs/episode, %.0fs reset",
+                    num_episodes, episode_time_s, reset_time_s)
+        logger.info("S1: Press RIGHT ARROW to advance, ESC to stop")
+    else:
+        events = {"exit_early": False, "stop_recording": False}
+        listener = None
+
+    recorded_episodes = 0
+
+    try:
+      while recorded_episodes < num_episodes and not events.get("stop_recording"):
+        # --- Reset phase ---
+        if multi_episode:
+            from lerobot.utils.utils import log_say
+
+            _soft_land(robot, duration_s=2.0, steps=10)
+            _disable_torque(robot)
+
+            if recorded_episodes > 0:
+                log_say(f"Reset the environment. Episode {recorded_episodes} of {num_episodes} done.")
+            else:
+                log_say("Reset the environment. Press right arrow to start.")
+
+            events["exit_early"] = False
+            reset_start = time.time()
+            while not events["exit_early"] and not events.get("stop_recording"):
+                if stop_event is not None and stop_event.is_set():
+                    break
+                # Only auto-advance on timeout for between-episode resets, not first
+                if recorded_episodes > 0 and reset_time_s > 0 and (time.time() - reset_start) >= reset_time_s:
+                    break
+                time.sleep(0.1)
+            events["exit_early"] = False
+
+            if events.get("stop_recording") or (stop_event is not None and stop_event.is_set()):
+                break
+
+            _enable_torque(robot)
+
+        # --- Recording phase ---
+        from lerobot.utils.utils import log_say
+        log_say(f"Recording episode {recorded_episodes + 1} of {num_episodes}")
+        step_count = 0
+        episode_start = time.time()
+        policy.reset()
+
+        while stop_event is None or not stop_event.is_set():
+            loop_start = time.perf_counter()
+
+            if stop_event is not None and stop_event.is_set():
+                logger.info("S1: Stop signal received")
+                break
+
+            # Check episode time limit
+            if episode_time_s > 0 and (time.time() - episode_start) >= episode_time_s:
+                logger.info("S1: Episode time limit (%.0fs) reached", episode_time_s)
+                break
+
+            # Check exit_early (right arrow)
+            if events.get("exit_early"):
+                logger.info("S1: Right arrow — ending episode early")
+                events["exit_early"] = False
+                break
+
+            # 1. Capture observation (main loop owns robot)
+            obs = robot.get_observation()
+            for step in obs_processor_steps:
+                obs = step.observation(obs)
+            t_now = time.perf_counter()
+
+            # 2. Deep-copy image arrays before publishing. Camera background
+            # threads continuously overwrite their frame buffers; without a
+            # copy, the inference thread may read a partially-updated frame
+            # (causing "Corrupt JPEG" artifacts and bad action predictions).
+            obs_copy = {}
+            for k, v in obs.items():
+                if isinstance(v, np.ndarray) and v.ndim == 3:  # image: HWC
+                    obs_copy[k] = v.copy()
+                else:
+                    obs_copy[k] = v  # scalars/strings are immutable, no copy needed
+
+            # Publish to inference thread + S2
+            with _obs_lock:
+                _obs_data = obs_copy
+                _obs_time = t_now
+            _obs_ready.set()
+            shared_images.write_images(obs, S2_CAM_KEY_MAP, JOINT_NAMES)
+
+            # 3. Read latest chunk
+            with _chunk_lock:
+                chunk = _chunk_data
+                t_origin = _chunk_t_origin
+                t_obs = _chunk_t_obs  # kept for logging
+
+            if chunk is None:
+                time.sleep(1.0 / fps)
+                continue
+
+            # 4. Index chunk and send action
+            t_before_send = time.perf_counter()
+            idx = _compute_chunk_index(t_before_send, t_origin, fps, len(chunk))
+            if osc_skip:
+                idx = _osc_skip(chunk, idx, step_count)
+
+            action_np = chunk[idx].copy()
+            if max_step_delta is not None and prev_action_np is not None:
+                action_np = _apply_delta_filter(action_np, prev_action_np, max_step_delta)
+
+            action_dict = {name: float(action_np[i]) for i, name in enumerate(JOINT_NAMES) if i < len(action_np)}
+            robot.send_action(action_dict)
+            t_after_send = time.perf_counter()
+
+            # Record frame to dataset
+            if dataset is not None:
+                _add_frame_to_dataset(dataset, obs, action_np, JOINT_NAMES, task)
+
+            # Track chunk execution index for RTC prefix extraction
+            if _supports_rtc:
+                with _main_loop_chunk_idx_lock:
+                    _main_loop_chunk_idx = idx + 1  # next index to execute
+
+            # Smoothness tracking (after send, not on critical path)
+            if prev_action_np is not None:
+                action_deltas.append(np.linalg.norm(action_np - prev_action_np))
+                with _chunk_lock:
+                    diag_chunk = _chunk_data
+                # Build state array from robot obs (individual joint floats)
+                _state = np.array([float(obs.get(j, 0)) for j in JOINT_NAMES])
+                # Collect raw images (numpy HWC uint8)
+                _imgs = {k: v for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
+                _log_grip_diagnostics(
+                    action_np, prev_action_np, step_count, idx, diag_chunk,
+                    robot_state=_state,
+                    save_dir=grip_drop_save_dir,
+                    obs_images=_imgs,
+                )
+            prev_action_np = action_np.copy()
+
+            if last_send_time is not None:
+                loop_intervals.append((t_after_send - last_send_time) * 1000)
+            last_send_time = t_after_send
+            step_count += 1
+
+            # Periodic logging
+            if step_count % 100 == 0:
+                smooth_str = ""
+                if action_deltas:
+                    r = action_deltas[-20:]
+                    smooth_str += f" | Δaction: {np.mean(r):.3f}/{np.max(r):.3f}"
+                # Per-joint gripper values
+                smooth_str += f" | grip L={action_np[6]:.1f} R={action_np[13]:.1f}"
+                if loop_intervals:
+                    r = loop_intervals[-20:]
+                    smooth_str += f" | interval: {np.mean(r):.1f}±{np.std(r):.1f}ms"
+                if s1_infer_times:
+                    smooth_str += f" | infer: {np.mean(s1_infer_times[-10:]):.0f}ms"
+                smooth_str += f" | chunk_age: {(t_before_send - t_origin)*1000:.0f}ms"
+
+                logger.info(
+                    "S1 step %d | chunk[%d/%d] | S2 age: %.0fms | S2 #%d%s",
+                    step_count, idx, len(chunk),
+                    shared_cache.age_ms, shared_cache.count, smooth_str,
+                )
+
+            # Fixed-rate sleep
+            dt = time.perf_counter() - loop_start
+            sleep_s = max(1.0 / fps - dt, 0.0)
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+
+        # --- End of recording phase for this episode ---
+        if dataset is not None and step_count > 0:
+            try:
+                dataset.save_episode()
+                logger.info("S1: Episode %d saved (%d frames, %.1fs)",
+                            recorded_episodes + 1, step_count, time.time() - episode_start)
+            except Exception as e:
+                logger.warning("S1: Failed to save episode %d: %s", recorded_episodes + 1, e)
+        recorded_episodes += 1
+
+        # Reset tracking state for next episode
+        prev_action_np = None
+        action_deltas.clear()
+        loop_intervals.clear()
+        last_send_time = None
+
+    except KeyboardInterrupt:
+        logger.info("S1: Interrupted by user")
+    finally:
+        _infer_running.clear()
+        infer_thread.join(timeout=3.0)
+        if s1_infer_times:
+            logger.info("S1: Done. %d episodes, avg infer: %.1fms | S2 updates: %d",
+                        recorded_episodes, np.mean(s1_infer_times), shared_cache.count)
+        if dataset is not None:
+            try:
+                # Save any unsaved episode (interrupted mid-recording)
+                if dataset.episode_buffer is not None and dataset.episode_buffer.get("size", 0) > 0:
+                    dataset.save_episode()
+                    logger.info("S1: Final partial episode saved")
+                dataset.finalize()
+                logger.info("S1: Dataset '%s' finalized (%d episodes)", record_dataset, recorded_episodes)
+            except Exception as e:
+                logger.warning("S1: Failed to finalize dataset: %s", e)
+        if listener is not None:
+            listener.stop()
+        _soft_land(robot)
+        try:
+            robot.disconnect()
+        except Exception as e:
+            logger.warning("Robot disconnect error (non-fatal): %s", e)
+
+
+def _get_motor_buses(robot) -> list:
+    """Extract motor bus objects from any LeRobot robot."""
+    buses = []
+    for attr in ("left_arm", "right_arm", "arm"):
+        arm = getattr(robot, attr, None)
+        if arm is not None and hasattr(arm, "bus"):
+            buses.append(arm.bus)
+    return buses
+
+
+def _disable_torque(robot):
+    """Disable torque on all motors so the robot can be moved by hand."""
+    for bus in _get_motor_buses(robot):
+        for motor_name in bus.motors:
+            try:
+                bus.write("Torque_Enable", motor_name, 0)
+            except Exception:
+                pass
+    logger.info("S1: Torque disabled (robot can be moved by hand)")
+
+
+def _enable_torque(robot):
+    """Re-enable torque on all motors."""
+    for bus in _get_motor_buses(robot):
+        for motor_name in bus.motors:
+            try:
+                bus.write("Torque_Enable", motor_name, 1)
+                bus.write("Torque_Limit", motor_name, 1000, normalize=False)
+            except Exception:
+                pass
+    logger.info("S1: Torque enabled")
+
+
+def _soft_land(robot, duration_s=4.0, steps=20):
+    """Gradually reduce torque so the robot lowers gently instead of dropping."""
+    if not robot.is_connected:
+        return
+
+    buses = []
+    if hasattr(robot, "left_arm"):
+        buses.append(robot.left_arm.bus)
+    if hasattr(robot, "right_arm"):
+        buses.append(robot.right_arm.bus)
+    if not buses:
+        return
+
+    try:
+        # Hold current position first
+        obs = robot.get_observation()
+        hold_action = {k: v for k, v in obs.items() if k.endswith(".pos")}
+        if hold_action:
+            robot.send_action(hold_action)
+
+        # Gradually reduce torque
+        step_delay = duration_s / steps
+        for i in range(steps):
+            torque_value = int(1000 * (1.0 - (i + 1) / steps))
+            for bus in buses:
+                for motor_name in bus.motors:
+                    try:
+                        bus.write("Torque_Limit", motor_name, torque_value, normalize=False)
+                    except Exception:
+                        pass
+            time.sleep(step_delay)
+
+        # Disable torque completely so next run can re-enable
+        for bus in buses:
+            for motor_name in bus.motors:
+                try:
+                    bus.write("Torque_Enable", motor_name, 0)
+                except Exception:
+                    pass
+
+        # Restore torque limit so next run isn't stuck at 0
+        for bus in buses:
+            for motor_name in bus.motors:
+                try:
+                    bus.write("Torque_Limit", motor_name, 1000, normalize=False)
+                except Exception:
+                    pass
+
+        logger.info("S1: Soft landing complete")
+    except Exception as e:
+        logger.warning("S1: Soft landing error: %s", e)

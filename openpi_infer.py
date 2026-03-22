@@ -51,8 +51,8 @@ except ImportError:
 # --------------- Constants ---------------
 
 FPS = 30
-ACTION_HORIZON = 40
-PREFETCH_AT = 25
+ACTION_HORIZON = 50
+PREFETCH_AT = 47
 
 # Joint names in the order matching training data (left arm first, then right).
 # From bi_so107_follower._motors_ft and so_follower.py motor definitions.
