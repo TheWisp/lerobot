@@ -31,6 +31,7 @@ def run_s2(
     norm_stats_path: str | None = None,
     stop_event=None,
     throttle_ms: int = 100,
+    inject_active=None,  # threading.Event — when set, skip inference (injection overrides)
 ):
     """S2 extraction loop entry point. Runs in a spawned process."""
     # Spawned process needs its own logging config
@@ -45,14 +46,14 @@ def run_s2(
     try:
         _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
                       device, image_keys, decode_subtask, norm_stats_path, stop_event,
-                      throttle_ms=throttle_ms)
+                      throttle_ms=throttle_ms, inject_active=inject_active)
     except Exception:
         logger.exception("S2 process crashed")
 
 
 def _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
                   device, image_keys, decode_subtask, norm_stats_path, stop_event,
-                  throttle_ms=100):
+                  throttle_ms=100, inject_active=None):
     # Load model
     logger.info("S2: Loading VLM from %s...", checkpoint_path)
     model = S2VLMModel.from_pretrained(checkpoint_path, config)
@@ -86,6 +87,11 @@ def _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
     prev_latent_norm = 0.0
 
     while stop_event is None or not stop_event.is_set():
+        # Skip inference when injection is active (keyboard override)
+        if inject_active is not None and inject_active.is_set():
+            time.sleep(0.1)
+            continue
+
         images = shared_images.read_images()
         if images is None:
             time.sleep(0.05)
@@ -143,9 +149,33 @@ def _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
         if query_count == 1:
             logger.info("S2: First latent extracted (norm=%.1f, %.0fms)", latent.float().norm().item(), elapsed_ms)
 
+        # Track unique subtask labels and their latest latents (for injection)
+        latent_norm = latent[0].float().norm().item()
+        if decode_subtask and subtask_text:
+            subtask_label = subtask_text.split(";")[0].strip()
+            prev_label = getattr(run_s2, '_prev_subtask_label', None)
+
+            # Update the subtask latent bank (overwrite same label)
+            if not hasattr(run_s2, 'subtask_bank'):
+                run_s2.subtask_bank = {}  # {label: latent_tensor}
+                run_s2.subtask_order = []  # ordered list of labels
+            if subtask_label not in run_s2.subtask_bank:
+                run_s2.subtask_order.append(subtask_label)
+                idx = len(run_s2.subtask_order)
+                logger.info("S2: New subtask [%d] \"%s\" (norm=%.1f)", idx, subtask_label, latent_norm)
+                # Show all available subtasks
+                logger.info("S2: Available subtasks: %s",
+                            " | ".join(f"[{i+1}] {l}" for i, l in enumerate(run_s2.subtask_order)))
+            run_s2.subtask_bank[subtask_label] = latent[0].cpu().float().clone()
+
+            if subtask_label != prev_label:
+                idx = run_s2.subtask_order.index(subtask_label) + 1
+                logger.info("S2 #%d: SUBTASK → [%d] \"%s\" (norm=%.1f, %.0fms)",
+                            query_count, idx, subtask_label, latent_norm, elapsed_ms)
+            run_s2._prev_subtask_label = subtask_label
+
         # Periodic logging (every 10s)
         if time.time() - last_log_time >= 10.0:
-            latent_norm = latent[0].float().norm().item()
             delta = abs(latent_norm - prev_latent_norm)
             subtask_str = f' | subtask="{subtask_text}"' if subtask_text else ""
             logger.info("S2 #%d: %.0fms | norm=%.1f | Δnorm=%.2f%s",
