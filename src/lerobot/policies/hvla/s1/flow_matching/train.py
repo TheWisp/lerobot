@@ -252,8 +252,16 @@ def train(args):
     start_step = 0
     if args.resume:
         resume_dir = Path(args.resume)
-        model_path = resume_dir / "model.safetensors"
-        opt_path = resume_dir / "optimizer.pt"
+        # Support both standard (pretrained_model/) and legacy (flat) formats
+        pretrained_dir = resume_dir / "pretrained_model"
+        training_state_dir = resume_dir / "training_state"
+        if pretrained_dir.is_dir():
+            model_path = pretrained_dir / "model.safetensors"
+            opt_path = training_state_dir / "optimizer.pt"
+        else:
+            model_path = resume_dir / "model.safetensors"
+            opt_path = resume_dir / "optimizer.pt"
+
         if model_path.exists():
             import safetensors.torch as sft
             state_dict = sft.load_file(str(model_path))
@@ -269,7 +277,6 @@ def train(args):
             # Try to infer step from directory name
             try:
                 start_step = int(resume_dir.name.split("-")[-1])
-                # Advance scheduler to match
                 for _ in range(start_step):
                     scheduler.step()
                 logger.info("Resumed from step %d (no optimizer state, LR schedule advanced)", start_step)
@@ -293,19 +300,64 @@ def train(args):
         norm_stats["state_std"] = dataset.state_std
 
     def save_checkpoint(step):
-        ckpt_dir = output_dir / f"checkpoint-{step}"
-        ckpt_dir.mkdir(exist_ok=True)
+        import json
         import safetensors.torch as sft
+
+        ckpt_dir = output_dir / f"checkpoint-{step}"
+
+        # Save in standard LeRobot format: pretrained_model/ + training_state/
+        pretrained_dir = ckpt_dir / "pretrained_model"
+        pretrained_dir.mkdir(parents=True, exist_ok=True)
+        training_state_dir = ckpt_dir / "training_state"
+        training_state_dir.mkdir(parents=True, exist_ok=True)
+
+        # Model weights
         sft.save_file(
             {k: v for k, v in policy.state_dict().items()},
-            str(ckpt_dir / "model.safetensors"),
+            str(pretrained_dir / "model.safetensors"),
         )
-        torch.save(norm_stats, str(ckpt_dir / "norm_stats.pt"))
+
+        # Norm stats (HVLA-specific, alongside model weights)
+        torch.save(norm_stats, str(pretrained_dir / "norm_stats.pt"))
+
+        # config.json — identifies this as an HVLA checkpoint
+        policy_config = {
+            "type": "hvla_flow_s1",
+            "action_dim": config.action_dim,
+            "state_dim": config.state_dim,
+            "chunk_size": config.chunk_size,
+            "hidden_dim": config.hidden_dim,
+            "num_heads": config.num_heads,
+            "num_encoder_layers": config.num_encoder_layers,
+            "num_decoder_layers": config.num_decoder_layers,
+            "s2_latent_dim": config.s2_latent_dim,
+            "num_inference_steps": config.num_inference_steps,
+            "rtc_max_delay": config.rtc_max_delay,
+            "rtc_drop_prob": config.rtc_drop_prob,
+            "image_features": config.image_features,
+            "dino_model": config.dino_model,
+        }
+        (pretrained_dir / "config.json").write_text(json.dumps(policy_config, indent=2))
+
+        # train_config.json — training args for reproducibility
+        train_config = {
+            "dataset": {"repo_id": args.dataset_repo_id},
+            "s2_latent_path": args.s2_latent_path,
+            "steps": args.steps,
+            "batch_size": args.batch_size,
+            "max_delay": args.max_delay,
+            "resize_images": args.resize_images,
+        }
+        (pretrained_dir / "train_config.json").write_text(json.dumps(train_config, indent=2))
+
+        # Training state (optimizer, scheduler, step)
         torch.save({
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
             "step": step,
-        }, str(ckpt_dir / "optimizer.pt"))
+        }, str(training_state_dir / "optimizer.pt"))
+        (training_state_dir / "training_step.json").write_text(json.dumps({"step": step}))
+
         logger.info("Saved checkpoint (step %d): %s", step, ckpt_dir)
 
     # Training loop

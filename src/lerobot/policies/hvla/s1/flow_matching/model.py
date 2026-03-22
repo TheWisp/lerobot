@@ -518,16 +518,60 @@ class FlowMatchingS1Policy(nn.Module):
 
     @classmethod
     def from_pretrained(cls, checkpoint_path: str, config: FlowMatchingS1Config | None = None):
-        """Load from checkpoint. Also loads norm_stats.pt if present."""
+        """Load from checkpoint. Also loads norm_stats.pt if present.
+
+        Supports both standard LeRobot format (pretrained_model/) and legacy
+        flat format (model.safetensors in checkpoint dir).
+        """
+        import json
         import safetensors.torch
         from pathlib import Path
 
+        path = Path(checkpoint_path)
+
+        # Resolve checkpoint path: accept dir or file
+        if path.is_dir():
+            # Standard format: checkpoint-N/pretrained_model/model.safetensors
+            pretrained_dir = path / "pretrained_model"
+            if pretrained_dir.is_dir():
+                model_file = pretrained_dir / "model.safetensors"
+                norm_dir = pretrained_dir
+            else:
+                # Legacy flat format: checkpoint-N/model.safetensors
+                model_file = path / "model.safetensors"
+                norm_dir = path
+        else:
+            model_file = path
+            norm_dir = path.parent
+
+        # Load config from config.json if present and no config provided
         if config is None:
-            config = FlowMatchingS1Config()
+            config_file = norm_dir / "config.json"
+            if config_file.exists():
+                cfg_data = json.loads(config_file.read_text())
+                config = FlowMatchingS1Config(
+                    action_dim=cfg_data.get("action_dim", 14),
+                    state_dim=cfg_data.get("state_dim", 14),
+                    chunk_size=cfg_data.get("chunk_size", 50),
+                    hidden_dim=cfg_data.get("hidden_dim", 768),
+                    num_heads=cfg_data.get("num_heads", 8),
+                    num_encoder_layers=cfg_data.get("num_encoder_layers", 4),
+                    num_decoder_layers=cfg_data.get("num_decoder_layers", 6),
+                    s2_latent_dim=cfg_data.get("s2_latent_dim", 2048),
+                    num_inference_steps=cfg_data.get("num_inference_steps", 10),
+                    rtc_max_delay=cfg_data.get("rtc_max_delay", 6),
+                    rtc_drop_prob=cfg_data.get("rtc_drop_prob", 0.2),
+                )
+                if "image_features" in cfg_data:
+                    config.image_features = cfg_data["image_features"]
+                if "dino_model" in cfg_data:
+                    config.dino_model = cfg_data["dino_model"]
+            else:
+                config = FlowMatchingS1Config()
 
         policy = cls(config)
 
-        state_dict = safetensors.torch.load_file(checkpoint_path)
+        state_dict = safetensors.torch.load_file(str(model_file))
         # Remap old checkpoint key format (action_decoder.layers → decoder_layers)
         remapped = {}
         for k, v in state_dict.items():
@@ -541,9 +585,8 @@ class FlowMatchingS1Policy(nn.Module):
             import logging
             logging.warning("Unexpected keys: %s", unexpected)
 
-        # Load normalization stats from same directory
-        ckpt_dir = Path(checkpoint_path).parent
-        norm_path = ckpt_dir / "norm_stats.pt"
+        # Load normalization stats
+        norm_path = norm_dir / "norm_stats.pt"
         if norm_path.exists():
             import logging
             norm_stats = torch.load(norm_path, weights_only=True)
@@ -554,6 +597,6 @@ class FlowMatchingS1Policy(nn.Module):
             logging.info("Loaded norm stats from %s", norm_path)
         else:
             import logging
-            logging.warning("No norm_stats.pt found at %s — running without normalization", ckpt_dir)
+            logging.warning("No norm_stats.pt found at %s — running without normalization", norm_dir)
 
         return policy
