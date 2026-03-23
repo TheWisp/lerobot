@@ -71,7 +71,6 @@ async def startup_event():
     robot.set_app_state(_app_state)
     run.set_app_state(_app_state)
     models.set_app_state(_app_state)
-    run.init_rerun_server()
     logger.info(f"Initialized frame cache with {cache_size / 1_000_000:.0f} MB budget")
 
 

@@ -8,14 +8,11 @@ import pytest
 from fastapi import HTTPException
 
 from lerobot.gui.api.run import (
-    RERUN_GRPC_PORT,
     RecordRequest,
     ReplayRequest,
     TeleoperateRequest,
-    _display_args,
     _ensure_no_active_process,
     _profile_to_cli_args,
-    _rerun_env,
     start_record,
     start_replay,
     start_teleoperate,
@@ -136,36 +133,6 @@ class TestProfileToCliArgs:
 
 
 # ============================================================================
-# _display_args
-# ============================================================================
-
-
-class TestDisplayArgs:
-    """Tests for Rerun display arg generation."""
-
-    def test_returns_args_when_rerun_started(self):
-        with patch("lerobot.gui.api.run._rerun_started", True):
-            args = _display_args()
-        assert "--display_data=true" in args
-        assert "--display_compressed_images=true" in args
-
-    def test_returns_empty_when_rerun_not_started(self):
-        with patch("lerobot.gui.api.run._rerun_started", False):
-            args = _display_args()
-        assert args == []
-
-    def test_rerun_env_when_started(self):
-        with patch("lerobot.gui.api.run._rerun_started", True):
-            env = _rerun_env()
-        assert env == {"LEROBOT_RERUN_SERVE_PORT": str(RERUN_GRPC_PORT)}
-
-    def test_rerun_env_when_not_started(self):
-        with patch("lerobot.gui.api.run._rerun_started", False):
-            env = _rerun_env()
-        assert env == {}
-
-
-# ============================================================================
 # _ensure_no_active_process
 # ============================================================================
 
@@ -234,7 +201,6 @@ class TestTeleoperateEndpoint:
             with (
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_teleoperate(req)
 
@@ -246,22 +212,6 @@ class TestTeleoperateEndpoint:
         assert "--teleop.type=so107_leader" in captured_args
         assert "--teleop.port=/dev/ttyACM1" in captured_args
         assert "--fps=45" in captured_args
-
-    def test_teleoperate_includes_display_args(self):
-        captured_args = []
-
-        async def run():
-            req = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP)
-            with (
-                patch("lerobot.gui.api.run._active_process", None),
-                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", True),
-            ):
-                await start_teleoperate(req)
-
-        asyncio.run(run())
-
-        assert "--display_data=true" in captured_args
 
 
 class TestRecordEndpoint:
@@ -288,7 +238,6 @@ class TestRecordEndpoint:
             with (
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_record(req)
 
@@ -327,7 +276,6 @@ class TestRecordEndpoint:
             with (
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_record(req)
 
@@ -350,7 +298,6 @@ class TestRecordEndpoint:
             with (
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_record(req)
 
@@ -372,7 +319,6 @@ class TestRecordEndpoint:
             with (
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_record(req)
 
@@ -394,7 +340,6 @@ class TestRecordEndpoint:
             with (
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_record(req)
 
@@ -417,7 +362,6 @@ class TestRecordEndpoint:
             with (
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_record(req)
 
@@ -436,7 +380,6 @@ class TestRecordEndpoint:
             )
             with (
                 patch("lerobot.gui.api.run._active_process", None),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_record(req)
 
@@ -460,7 +403,6 @@ class TestUnifiedFps:
             with (
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_teleoperate(req)
 
@@ -480,7 +422,6 @@ class TestUnifiedFps:
             with (
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_record(req)
 
@@ -506,7 +447,6 @@ class TestReplayEndpoint:
             with (
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_replay(req)
 
@@ -518,9 +458,10 @@ class TestReplayEndpoint:
         assert "--dataset.repo_id=user/my_dataset" in captured_args
         assert "--dataset.episode=5" in captured_args
         assert "--dataset.fps=60" in captured_args
-        # Replay should not have teleop args or cameras
+        # Replay should not have teleop args
         assert not any("teleop" in a for a in captured_args)
-        assert not any("cameras" in a for a in captured_args)
+        # Replay now includes cameras (for obs-stream live viewer)
+        assert any("cameras" in a for a in captured_args)
         # No root provided
         assert not any("--dataset.root" in a for a in captured_args)
 
@@ -538,7 +479,6 @@ class TestReplayEndpoint:
             with (
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
-                patch("lerobot.gui.api.run._rerun_started", False),
             ):
                 await start_replay(req)
 

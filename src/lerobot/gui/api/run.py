@@ -6,12 +6,11 @@ import asyncio
 import json
 import logging
 import signal
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -27,67 +26,6 @@ _app_state: "AppState" = None  # type: ignore
 def set_app_state(state: "AppState") -> None:
     global _app_state
     _app_state = state
-
-
-# ============================================================================
-# Rerun server
-# ============================================================================
-
-_rerun_started = False
-RERUN_GRPC_PORT = 9876
-RERUN_WEB_PORT = 9090
-
-
-def _is_port_in_use(port: int) -> bool:
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(("127.0.0.1", port)) == 0
-
-
-def init_rerun_server() -> None:
-    """Serve the Rerun web viewer (static files only).
-
-    The subprocess itself hosts a gRPC server via LEROBOT_RERUN_SERVE_PORT,
-    and the web viewer connects to it via the ?url= query parameter in the
-    iframe src.
-    """
-    global _rerun_started
-    if _rerun_started:
-        return
-    try:
-        import rerun as rr
-
-        # Kill anything on the web viewer port so we own it
-        if _is_port_in_use(RERUN_WEB_PORT):
-            logger.info(f"Killing stale process on web viewer port {RERUN_WEB_PORT}")
-            try:
-                subprocess.run(["fuser", "-k", f"{RERUN_WEB_PORT}/tcp"], capture_output=True, timeout=5)
-            except Exception as e:
-                logger.warning(f"fuser -k {RERUN_WEB_PORT}/tcp failed: {e}")
-            import time
-            for i in range(10):
-                if not _is_port_in_use(RERUN_WEB_PORT):
-                    break
-                time.sleep(0.2)
-
-        rr.serve_web_viewer(web_port=RERUN_WEB_PORT, open_browser=False)
-        logger.info(f"Rerun web viewer serving on port {RERUN_WEB_PORT}")
-        _rerun_started = True
-    except Exception as e:
-        logger.warning(f"Failed to start Rerun web viewer: {e}")
-
-
-@router.get("/rerun-ports")
-async def get_rerun_ports() -> dict:
-    """Return Rerun server ports for the frontend iframe."""
-    web_ok = _is_port_in_use(RERUN_WEB_PORT)
-    logger.info(f"Rerun health: started={_rerun_started}, web={web_ok}")
-    return {
-        "available": _rerun_started and web_ok,
-        "web_port": RERUN_WEB_PORT if _rerun_started else None,
-        "grpc_port": RERUN_GRPC_PORT if _rerun_started else None,
-    }
 
 
 # ============================================================================
@@ -282,24 +220,13 @@ async def _launch_subprocess(args: list[str], command: str, config: dict) -> Non
     """Launch a subprocess and start reading its output."""
     global _active_process, _active_command, _active_config, _output_lines, _stream_tasks
 
-    # Kill any leftover gRPC server on the port from a previous run
-    if _is_port_in_use(RERUN_GRPC_PORT):
-        logger.info(f"Killing stale process on gRPC port {RERUN_GRPC_PORT}")
-        try:
-            subprocess.run(["fuser", "-k", f"{RERUN_GRPC_PORT}/tcp"], capture_output=True, timeout=5)
-        except Exception as e:
-            logger.warning(f"fuser -k {RERUN_GRPC_PORT}/tcp failed: {e}")
-
     _output_lines = []
     _active_command = command
     _active_config = config
 
-    rerun_extra = _rerun_env()
-    env = {**__import__("os").environ, **rerun_extra}
+    env = {**__import__("os").environ, "LEROBOT_OBS_STREAM": "1"}
     cmd_str = " ".join(args)
     logger.info(f"Launching: {cmd_str}")
-    if rerun_extra:
-        logger.info(f"Rerun env vars: {rerun_extra}")
     _append_output(f"--- Starting {command} ---")
     _append_output(f"$ {cmd_str}\n")
 
@@ -317,23 +244,6 @@ async def _launch_subprocess(args: list[str], command: str, config: dict) -> Non
     asyncio.create_task(_wait_for_exit())
 
 
-def _display_args() -> list[str]:
-    """CLI args to enable Rerun display in the subprocess."""
-    if not _rerun_started:
-        logger.info("Rerun not started — skipping display args")
-        return []
-    args = ["--display_data=true", "--display_compressed_images=true"]
-    logger.info(f"Rerun display args: {args}")
-    return args
-
-
-def _rerun_env() -> dict[str, str]:
-    """Extra env vars for the subprocess to self-host a gRPC server."""
-    if not _rerun_started:
-        return {}
-    return {"LEROBOT_RERUN_SERVE_PORT": str(RERUN_GRPC_PORT)}
-
-
 # ============================================================================
 # Endpoints
 # ============================================================================
@@ -347,7 +257,6 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
     args.extend(_profile_to_cli_args(req.robot, "robot"))
     args.extend(_profile_to_cli_args(req.teleop, "teleop"))
     args.append(f"--fps={req.fps}")
-    args.extend(_display_args())
 
     await _launch_subprocess(args, command="teleoperate", config=req.model_dump())
     return {"status": "started", "command": "teleoperate", "pid": _active_process.pid}
@@ -380,7 +289,6 @@ async def start_record(req: RecordRequest) -> dict:
     args.append(f"--play_sounds={'true' if req.play_sounds else 'false'}")
     if req.resume:
         args.append("--resume=true")
-    args.extend(_display_args())
 
     await _launch_subprocess(args, command="record", config=req.model_dump())
     return {"status": "started", "command": "record", "pid": _active_process.pid}
@@ -391,7 +299,7 @@ async def start_replay(req: ReplayRequest) -> dict:
     _ensure_no_active_process()
 
     args = ["lerobot-replay"]
-    args.extend(_profile_to_cli_args(req.robot, "robot", include_cameras=False))
+    args.extend(_profile_to_cli_args(req.robot, "robot"))
     args.append(f"--dataset.repo_id={req.repo_id}")
     if req.root:
         args.append(f"--dataset.root={req.root}")
@@ -465,6 +373,7 @@ async def stop_process() -> dict:
     _active_process = None
     _active_command = None
     _active_config = None
+    _close_obs_reader()
     return {"status": "stopped", "pid": pid}
 
 
@@ -531,4 +440,103 @@ async def stream_output() -> StreamingResponse:
         event_generator(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ============================================================================
+# Observation stream endpoints (shared-memory camera/state viewer)
+# ============================================================================
+
+_obs_reader = None  # ObservationStreamReader | None
+_jpeg_cache: dict[str, tuple[int, bytes]] = {}  # cam_key → (seq, jpeg_bytes)
+
+
+def _get_obs_reader():
+    """Lazily attach to the robot's observation stream."""
+    global _obs_reader
+    if _obs_reader is not None:
+        return _obs_reader
+    try:
+        from lerobot.robots.obs_stream import ObservationStreamReader
+
+        _obs_reader = ObservationStreamReader()
+        logger.info(
+            "ObservationStreamReader attached: %d scalars, %d cameras",
+            len(_obs_reader.obs_scalar_keys),
+            len(_obs_reader.image_keys),
+        )
+        return _obs_reader
+    except Exception:
+        return None
+
+
+def _close_obs_reader():
+    global _obs_reader
+    if _obs_reader is not None:
+        _obs_reader.close()
+        _obs_reader = None
+    _jpeg_cache.clear()
+
+
+@router.get("/obs-stream/meta")
+async def obs_stream_meta() -> dict:
+    """Return observation stream layout (feature names, image dims)."""
+    reader = _get_obs_reader()
+    if reader is None:
+        return {"available": False}
+    return {
+        "available": True,
+        "obs_scalar_keys": reader.obs_scalar_keys,
+        "action_keys": reader.action_keys,
+        "image_keys": reader.image_keys,
+    }
+
+
+@router.get("/obs-stream/state")
+async def obs_stream_state() -> dict:
+    """Return latest scalar observations and actions."""
+    reader = _get_obs_reader()
+    if reader is None:
+        raise HTTPException(503, "Observation stream not available")
+    obs_result = reader.read_obs()
+    act_result = reader.read_action()
+    return {
+        "obs": obs_result[0] if obs_result else None,
+        "obs_ts": obs_result[1] if obs_result else None,
+        "action": act_result[0] if act_result else None,
+        "action_ts": act_result[1] if act_result else None,
+    }
+
+
+@router.get("/obs-stream/image/{cam_key}")
+async def obs_stream_image(cam_key: str) -> Response:
+    """Return latest camera frame as JPEG (cached until new frame arrives)."""
+    reader = _get_obs_reader()
+    if reader is None:
+        raise HTTPException(503, "Observation stream not available")
+
+    # Skip re-encoding if the frame hasn't changed
+    seq = reader.image_seq(cam_key)
+    cached = _jpeg_cache.get(cam_key)
+    if cached is not None and cached[0] == seq:
+        return Response(
+            content=cached[1],
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    result = reader.read_image(cam_key)
+    if result is None:
+        raise HTTPException(404, f"No image for camera '{cam_key}'")
+    img, _ts = result
+
+    import cv2
+
+    _, jpeg = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 80])
+    jpeg_bytes = jpeg.tobytes()
+    _jpeg_cache[cam_key] = (seq, jpeg_bytes)
+    return Response(
+        content=jpeg_bytes,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
     )

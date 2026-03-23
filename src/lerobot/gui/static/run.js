@@ -3,7 +3,8 @@
 let runTabInitialized = false;
 let runEventSource = null;
 let selectedWorkflow = 'teleop'; // 'teleop' | 'replay' | 'policy'
-let rerunPorts = null; // {available, web_port, grpc_port}
+let obsStreamMeta = null; // {available, obs_scalar_keys, action_keys, image_keys}
+let obsStreamTimer = null; // interval ID for camera polling
 let _runFormRendered = false; // true once all three workflow sections are in the DOM
 
 // ============================================================================
@@ -30,14 +31,6 @@ async function runTabInit() {
             const res = await fetch('/api/robot/teleop-profiles');
             teleopProfiles = await res.json();
         } catch (e) { /* ignore */ }
-    }
-
-    // Fetch Rerun ports
-    try {
-        const res = await fetch('/api/run/rerun-ports');
-        rerunPorts = await res.json();
-    } catch (e) {
-        console.warn('Failed to fetch Rerun ports:', e);
     }
 
     initSplitHandle();
@@ -932,8 +925,8 @@ async function launchRun() {
         showToast('Started', `${data.command} started (PID ${data.pid})`, 'success');
         updateRunUI(true);
         connectOutputSSE();
-        // Delay so the subprocess has time to start its gRPC server
-        setTimeout(showRerunViewer, 5000);
+        // Start live camera viewer (polls until obs stream is available)
+        startObsStreamViewer();
     } catch (e) {
         showToast('Error', e.message, 'error');
     }
@@ -948,6 +941,7 @@ async function stopRun() {
             return;
         }
         showToast('Stopped', 'Process stopped', 'info');
+        stopObsStreamViewer();
         updateRunUI(false);
     } catch (e) {
         showToast('Error', e.message, 'error');
@@ -1092,7 +1086,7 @@ async function pollRunStatus() {
         // If running but no SSE, reconnect
         if (status.running && !runEventSource) {
             connectOutputSSE();
-            showRerunViewer();
+            startObsStreamViewer();
         }
     } catch (e) {
         console.error('Status poll failed:', e);
@@ -1123,7 +1117,7 @@ function updateRunUI(isRunning) {
 }
 
 // ============================================================================
-// Resizable split between Rerun viewer and terminal
+// Resizable split between camera viewer and terminal
 // ============================================================================
 
 function initSplitHandle() {
@@ -1163,27 +1157,107 @@ function initSplitHandle() {
 }
 
 // ============================================================================
-// Rerun viewer
+// Live camera viewer (obs-stream via shared memory)
 // ============================================================================
 
-function showRerunViewer() {
+async function startObsStreamViewer() {
+    stopObsStreamViewer();
+
     const container = document.getElementById('rerun-viewer');
-    if (!container || !rerunPorts?.available) return;
+    if (!container) return;
+
+    // Poll until the stream becomes available (robot needs time to connect)
+    let attempts = 0;
+    const maxAttempts = 30; // 30 × 500ms = 15s
+    while (attempts < maxAttempts) {
+        try {
+            const res = await fetch('/api/run/obs-stream/meta');
+            obsStreamMeta = await res.json();
+            if (obsStreamMeta?.available) break;
+        } catch (e) { /* not ready yet */ }
+        await new Promise(r => setTimeout(r, 500));
+        attempts++;
+    }
+
+    if (!obsStreamMeta?.available) {
+        console.warn('Observation stream not available after timeout');
+        return;
+    }
 
     const placeholder = document.getElementById('rerun-placeholder');
     if (placeholder) placeholder.style.display = 'none';
 
-    const grpcUrl = encodeURIComponent(`rerun+http://localhost:${rerunPorts.grpc_port}/proxy`);
-    const src = `http://localhost:${rerunPorts.web_port}?url=${grpcUrl}&hide_welcome_screen`;
+    // Remove any old content (iframe or previous grid)
+    const oldIframe = container.querySelector('iframe');
+    if (oldIframe) oldIframe.remove();
+    let grid = container.querySelector('.obs-cam-grid');
+    if (grid) grid.remove();
 
-    let iframe = container.querySelector('iframe');
-    if (!iframe) {
-        iframe = document.createElement('iframe');
-        iframe.style.width = '100%';
-        iframe.style.height = '100%';
-        iframe.style.border = 'none';
-        container.appendChild(iframe);
+    // Build camera grid
+    const camKeys = Object.keys(obsStreamMeta.image_keys);
+    if (camKeys.length === 0) return;
+
+    grid = document.createElement('div');
+    grid.className = 'obs-cam-grid';
+    const cols = camKeys.length <= 2 ? camKeys.length : Math.min(camKeys.length, 3);
+    grid.style.cssText = `
+        display: grid;
+        grid-template-columns: repeat(${cols}, 1fr);
+        gap: 4px;
+        width: 100%; height: 100%;
+        padding: 4px;
+        box-sizing: border-box;
+    `;
+
+    const imgElements = {};
+    for (const key of camKeys) {
+        const cell = document.createElement('div');
+        cell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
+
+        const img = document.createElement('img');
+        img.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
+        img.alt = key;
+        cell.appendChild(img);
+
+        const label = document.createElement('div');
+        label.textContent = key;
+        label.style.cssText = `
+            position: absolute; top: 4px; left: 6px;
+            color: #ccc; font-size: 11px; font-family: monospace;
+            background: rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 3px;
+        `;
+        cell.appendChild(label);
+
+        grid.appendChild(cell);
+        imgElements[key] = img;
     }
-    // Always (re)set src so the viewer reconnects to the subprocess gRPC server
-    iframe.src = src;
+    container.appendChild(grid);
+
+    // Poll camera frames at ~10fps
+    let frameSeq = 0;
+    obsStreamTimer = setInterval(() => {
+        const seq = ++frameSeq;
+        for (const key of camKeys) {
+            const img = imgElements[key];
+            if (!img) continue;
+            // Append seq to bust browser cache
+            img.src = `/api/run/obs-stream/image/${encodeURIComponent(key)}?_=${seq}`;
+        }
+    }, 100);
+}
+
+function stopObsStreamViewer() {
+    if (obsStreamTimer) {
+        clearInterval(obsStreamTimer);
+        obsStreamTimer = null;
+    }
+    obsStreamMeta = null;
+
+    const container = document.getElementById('rerun-viewer');
+    if (!container) return;
+    const grid = container.querySelector('.obs-cam-grid');
+    if (grid) grid.remove();
+
+    const placeholder = document.getElementById('rerun-placeholder');
+    if (placeholder) placeholder.style.display = '';
 }
