@@ -43,6 +43,12 @@ class Robot(abc.ABC):
     config_class: builtins.type[RobotConfig]
     name: str
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        from lerobot.robots.obs_stream import wrap_robot_cls
+
+        wrap_robot_cls(cls)
+
     def __init__(self, config: RobotConfig):
         self.robot_type = self.name
         self.id = config.id
