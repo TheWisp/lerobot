@@ -557,10 +557,15 @@ class FlowMatchingS1Policy(nn.Module):
                     num_heads=cfg_data.get("num_heads", 8),
                     num_encoder_layers=cfg_data.get("num_encoder_layers", 4),
                     num_decoder_layers=cfg_data.get("num_decoder_layers", 6),
+                    dim_feedforward=cfg_data.get("dim_feedforward", 2048),
                     s2_latent_dim=cfg_data.get("s2_latent_dim", 2048),
+                    s2_proj_hidden=cfg_data.get("s2_proj_hidden", 1024),
                     num_inference_steps=cfg_data.get("num_inference_steps", 10),
                     rtc_max_delay=cfg_data.get("rtc_max_delay", 6),
                     rtc_drop_prob=cfg_data.get("rtc_drop_prob", 0.2),
+                    use_dino_backbone=cfg_data.get("use_dino_backbone", True),
+                    backbone_dim=cfg_data.get("backbone_dim", 384),
+                    freeze_backbone=cfg_data.get("freeze_backbone", False),
                 )
                 if "image_features" in cfg_data:
                     config.image_features = cfg_data["image_features"]
