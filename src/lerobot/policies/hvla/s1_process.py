@@ -376,7 +376,8 @@ def run_s1(
         inner.denoise_step = torch.compile(inner.denoise_step, mode="default")
         logger.info("S1: Warming up compiled model...")
         _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_images,
-                   state_dim=action_dim, s2_latent_dim=config.s2_latent_dim if s1_type == "flow" else 2048)
+                   state_dim=config.action_dim if s1_type == "flow" else 14,
+                   s2_latent_dim=config.s2_latent_dim if s1_type == "flow" else 2048)
 
     # Load robot
     config_path = robot_config_path or str(Path.home() / ".config" / "lerobot" / "robots" / "white.json")

@@ -7,6 +7,7 @@ import json
 import logging
 import signal
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException
@@ -424,7 +425,7 @@ async def start_hvla(req: HVLARunRequest) -> dict:
     args = [
         "python", "-m", "lerobot.policies.hvla.launch",
         f"--s1-checkpoint={req.s1_checkpoint}",
-        f"--s2-checkpoint={req.s2_checkpoint}",
+        f"--s2-checkpoint={Path(req.s2_checkpoint).expanduser()}",
         f"--task={req.task}",
         f"--robot-config={tmp.name}",
         f"--fps={req.fps}",
