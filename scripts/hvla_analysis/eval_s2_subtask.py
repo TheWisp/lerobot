@@ -54,6 +54,10 @@ def main():
                         help="Evaluate every N-th frame (1=all, 10=10%% sample)")
     parser.add_argument("--max-frames", type=int, default=0,
                         help="Max frames to evaluate (0=all)")
+    parser.add_argument("--random-sample", action="store_true",
+                        help="Randomly sample frames instead of fixed stride")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed for reproducible sampling")
     parser.add_argument("--image-keys", default="base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb,base_1_rgb")
     args = parser.parse_args()
 
@@ -97,12 +101,19 @@ def main():
     }
     lerobot_image_keys = [k for k, v in IMAGE_KEY_MAP.items() if v in image_keys]
 
-    # Evaluation loop
-    indices = list(range(0, n_frames, args.stride))
-    if args.max_frames > 0:
-        indices = indices[:args.max_frames]
-
-    logger.info("\nEvaluating %d frames (stride=%d)...", len(indices), args.stride)
+    # Evaluation loop — random sample or fixed stride
+    if args.random_sample:
+        import random
+        if args.seed is not None:
+            random.seed(args.seed)
+        n_sample = args.max_frames if args.max_frames > 0 else n_frames // args.stride
+        indices = sorted(random.sample(range(n_frames), min(n_sample, n_frames)))
+        logger.info("\nEvaluating %d randomly sampled frames (seed=%s)...", len(indices), args.seed)
+    else:
+        indices = list(range(0, n_frames, args.stride))
+        if args.max_frames > 0:
+            indices = indices[:args.max_frames]
+        logger.info("\nEvaluating %d frames (stride=%d)...", len(indices), args.stride)
 
     results = []  # (idx, gt_subtask, pred_subtask, match)
     per_subtask = defaultdict(lambda: {"correct": 0, "total": 0, "preds": Counter()})
