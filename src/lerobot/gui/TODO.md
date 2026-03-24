@@ -61,8 +61,20 @@
   - Models tab: "Test on frame" button on checkpoint detail
   - Saved dumps (`/tmp/hvla_drops/`): load images + state from dump directory
 
+  **Live teleop probe mode:**
+  - Teleop the robot freely while model(s) predict in real-time — predictions are displayed but NOT executed
+  - Use cases:
+    - **Subtask discovery**: teleop through a task, watch S2 subtask label change live. Find the exact pose/view that triggers (or fails to trigger) a subtask transition
+    - **Action preview**: freeze at a pose, see the predicted action chunk trajectory. "Would the model grasp here or drop?"
+    - **Confidence mapping**: teleop slowly through workspace, display model uncertainty (action variance, latent norm). Find where the policy is reliable vs fragile
+    - **Multi-model comparison**: run two checkpoints (or S2 + S1) side-by-side on the same live observation
+    - **Data collection guidance**: while teleopoing for training data, see what the current model predicts. Focus demonstrations on states where the model is wrong
+  - Implementation: standard teleop process writes obs to shared memory, a separate model process reads and predicts, GUI displays predictions in a panel alongside the live camera view
+  - Prediction display: subtask text (VLM), action chunk plot (policy), latent stats, confidence score
+
   **Backend:**
   - `/api/debug/run-frame` endpoint: accepts model path + dataset + frame index (or image paths)
+  - `/api/debug/live-probe` endpoint: start/stop live prediction alongside teleop
   - Lazy model loading with caching (don't reload for consecutive frames)
   - Returns structured JSON (predictions, stats, timing)
 
