@@ -410,6 +410,13 @@ def run_s1(
 
     # Apply observation processor steps (e.g., depth edge overlay for RealSense)
     obs_processor_steps = robot.get_observation_processor_steps() if hasattr(robot, "get_observation_processor_steps") else []
+
+    # Append obs stream writer as the last step (writes processed obs to shared memory for GUI)
+    from lerobot.robots.obs_stream import make_obs_stream_writer_step
+    obs_stream_step = make_obs_stream_writer_step()
+    if obs_stream_step is not None:
+        obs_processor_steps.append(obs_stream_step)
+
     if obs_processor_steps:
         logger.info("S1: Observation processors: %s", [type(s).__name__ for s in obs_processor_steps])
 

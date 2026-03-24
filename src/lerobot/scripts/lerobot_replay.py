@@ -122,6 +122,13 @@ def replay(cfg: ReplayConfig):
     episode_frames = dataset.hf_dataset.filter(lambda x: x["episode_index"] == cfg.dataset.episode)
     actions = episode_frames.select_columns(ACTION)
 
+    # Build obs stream processor chain: robot processors + stream writer at the end
+    from lerobot.robots.obs_stream import make_obs_stream_writer_step
+    obs_stream_steps = list(robot.get_observation_processor_steps() if hasattr(robot, "get_observation_processor_steps") else [])
+    obs_stream_writer = make_obs_stream_writer_step()
+    if obs_stream_writer is not None:
+        obs_stream_steps.append(obs_stream_writer)
+
     robot.connect()
 
     try:
@@ -135,6 +142,10 @@ def replay(cfg: ReplayConfig):
                 action[name] = action_array[i]
 
             robot_obs = robot.get_observation()
+            if obs_stream_steps:
+                obs_for_stream = robot_obs
+                for step in obs_stream_steps:
+                    obs_for_stream = step.observation(obs_for_stream)
 
             processed_action = robot_action_processor((action, robot_obs))
 

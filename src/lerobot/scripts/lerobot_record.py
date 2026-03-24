@@ -461,6 +461,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         robot_observation_processor.steps = custom_steps + robot_observation_processor.steps
         logging.info(f"Added {len(custom_steps)} custom observation processor step(s) from robot")
 
+    # Append obs stream writer as the last step (writes processed obs to shared memory)
+    from lerobot.robots.obs_stream import make_obs_stream_writer_step
+    obs_stream_step = make_obs_stream_writer_step()
+    if obs_stream_step is not None:
+        robot_observation_processor.steps.append(obs_stream_step)
+
     dataset_features = combine_feature_dicts(
         aggregate_pipeline_dataset_features(
             pipeline=teleop_action_processor,

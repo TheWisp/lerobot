@@ -2,7 +2,11 @@
 
 Activated by setting LEROBOT_OBS_STREAM=1.  Robot subclasses are
 automatically wrapped (via __init_subclass__ in robot.py) so that
-connect/disconnect/get_observation/send_action publish to shared memory.
+connect/disconnect/send_action publish to shared memory.
+
+Observation writes are done via ObservationStreamWriterStep — a processor
+step appended to the end of robot_observation_processor pipeline, so the
+stream receives post-processed observations (with overlays etc.).
 
 Any process can read the latest state by constructing an ObservationStreamReader.
 
@@ -289,6 +293,53 @@ class ObservationStreamReader:
 
 
 # ============================================================================
+# Observation processor step (writes processed obs to stream)
+# ============================================================================
+
+
+class ObservationStreamWriterStep:
+    """Processor step that writes observations to the shared memory stream.
+
+    Append this as the LAST step in robot_observation_processor so the stream
+    receives post-processed observations (with overlays etc.), not raw.
+
+    Follows the ObservationProcessorStep interface (observation() method)
+    but does not subclass it to avoid importing the processor module at
+    module level (which would create a circular dependency).
+    """
+
+    def observation(self, observation: dict) -> dict:
+        """Write observation to stream and pass through unchanged."""
+        if _active_stream is not None:
+            try:
+                _active_stream.write_obs(observation)
+            except Exception:
+                pass
+        return observation
+
+    def __call__(self, transition):
+        """Support being called as a pipeline step (EnvTransition interface)."""
+        observation = transition.get("observation") if isinstance(transition, dict) else transition
+        if isinstance(observation, dict):
+            self.observation(observation)
+        return transition
+
+    def transform_features(self, features):
+        """Pass-through — this step doesn't modify features."""
+        return features
+
+
+def make_obs_stream_writer_step() -> ObservationStreamWriterStep | None:
+    """Create an ObservationStreamWriterStep if the obs stream is enabled.
+
+    Returns None if LEROBOT_OBS_STREAM is not set — callers should skip appending.
+    """
+    if not os.environ.get(ENV_VAR):
+        return None
+    return ObservationStreamWriterStep()
+
+
+# ============================================================================
 # __init_subclass__ wrapping helpers
 # ============================================================================
 
@@ -318,14 +369,6 @@ def _maybe_stop_stream(robot) -> None:
         _active_stream.cleanup()
         _active_stream = None
         _active_robot_id = None
-
-
-def _maybe_write_obs(robot, obs: dict) -> None:
-    if _active_stream is not None and _active_robot_id == id(robot):
-        try:
-            _active_stream.write_obs(obs)
-        except Exception:
-            logger.debug("ObservationStream.write_obs failed", exc_info=True)
 
 
 def _maybe_write_action(robot, action: dict) -> None:
@@ -370,16 +413,9 @@ def wrap_robot_cls(cls) -> None:
 
         cls.disconnect = _disconnect
 
-    if "get_observation" in cls.__dict__:
-        _orig_get_obs = cls.__dict__["get_observation"]
-
-        @functools.wraps(_orig_get_obs)
-        def _get_observation(self, *args, **kwargs):
-            obs = _orig_get_obs(self, *args, **kwargs)
-            _maybe_write_obs(self, obs)
-            return obs
-
-        cls.get_observation = _get_observation
+    # NOTE: get_observation is NOT wrapped — obs stream writes are handled by
+    # ObservationStreamWriterStep in the processor pipeline, so the stream
+    # receives post-processed observations (with overlays etc.).
 
     if "send_action" in cls.__dict__:
         _orig_send_act = cls.__dict__["send_action"]

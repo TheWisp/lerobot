@@ -135,6 +135,7 @@ def teleop_loop(
     display_data: bool = False,
     duration: float | None = None,
     display_compressed_images: bool = False,
+    obs_stream_steps: list | None = None,
 ):
     """
     This function continuously reads actions from a teleoperation device, processes them through optional
@@ -160,10 +161,13 @@ def teleop_loop(
         loop_start = time.perf_counter()
 
         # Get robot observation
-        # Not really needed for now other than for visualization
-        # teleop_action_processor can take None as an observation
-        # given that it is the identity processor as default
         obs = robot.get_observation()
+
+        # Run obs processors + stream writer (for GUI live viewer with overlays)
+        if obs_stream_steps:
+            obs_for_stream = obs
+            for step in obs_stream_steps:
+                obs_for_stream = step.observation(obs_for_stream)
 
         # Get teleop action
         raw_action = teleop.get_action()
@@ -178,11 +182,8 @@ def teleop_loop(
         _ = robot.send_action(robot_action_to_send)
 
         if display_data:
-            # Process robot observation through pipeline
-            obs_transition = robot_observation_processor(obs)
-
             log_rerun_data(
-                observation=obs_transition,
+                observation=robot_observation_processor(obs),
                 action=teleop_action,
                 compress_images=display_compressed_images,
             )
@@ -231,6 +232,15 @@ def teleoperate(cfg: TeleoperateConfig):
         robot_observation_processor.steps = custom_steps + robot_observation_processor.steps
         logging.info(f"Added {len(custom_steps)} custom observation processor step(s) from robot")
 
+    # Build obs stream processor chain: robot processors + stream writer at the end
+    # This runs on every observation so the GUI viewer sees the same processed
+    # images the model would see (with overlays etc.)
+    from lerobot.robots.obs_stream import make_obs_stream_writer_step
+    obs_stream_steps = list(robot.get_observation_processor_steps() or [])
+    obs_stream_writer = make_obs_stream_writer_step()
+    if obs_stream_writer is not None:
+        obs_stream_steps.append(obs_stream_writer)
+
     teleop.connect()
     robot.connect()
 
@@ -245,6 +255,7 @@ def teleoperate(cfg: TeleoperateConfig):
             robot_action_processor=robot_action_processor,
             robot_observation_processor=robot_observation_processor,
             display_compressed_images=display_compressed_images,
+            obs_stream_steps=obs_stream_steps,
         )
     except KeyboardInterrupt:
         pass
