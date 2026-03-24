@@ -47,19 +47,18 @@ def load_sample_batch(latents_dir: str, device: str, n_samples: int = 8):
     """Load a few real S2 latents and create a dummy observation batch."""
     latents_dir = Path(latents_dir)
 
-    # Load latents
-    latent_files = sorted(latents_dir.glob("*.npy"))
-    if not latent_files:
-        # Try single file
-        single = latents_dir / "latents.npy"
-        if single.exists():
-            all_latents = np.load(str(single))
-            logger.info("Loaded latents from %s: shape %s", single, all_latents.shape)
-        else:
+    # Load latents — accept direct .npy file or directory
+    if latents_dir.is_file() and latents_dir.suffix == ".npy":
+        all_latents = np.load(str(latents_dir))
+        logger.info("Loaded latents from %s: shape %s", latents_dir, all_latents.shape)
+    elif latents_dir.is_dir():
+        latent_files = sorted(latents_dir.glob("*.npy"))
+        if not latent_files:
             raise FileNotFoundError(f"No latent files found in {latents_dir}")
-    else:
         all_latents = np.load(str(latent_files[0]))
         logger.info("Loaded latents from %s: shape %s", latent_files[0], all_latents.shape)
+    else:
+        raise FileNotFoundError(f"Not a valid latent file or directory: {latents_dir}")
 
     # Pick random samples
     indices = np.random.choice(len(all_latents), size=min(n_samples, len(all_latents)), replace=False)

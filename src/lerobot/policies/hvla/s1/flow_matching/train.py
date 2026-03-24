@@ -303,7 +303,9 @@ def train(args):
         import json
         import safetensors.torch as sft
 
-        ckpt_dir = output_dir / f"checkpoint-{step}"
+        ckpts_dir = output_dir / "checkpoints"
+        ckpts_dir.mkdir(exist_ok=True)
+        ckpt_dir = ckpts_dir / f"checkpoint-{step}"
 
         # Save in standard LeRobot format: pretrained_model/ + training_state/
         pretrained_dir = ckpt_dir / "pretrained_model"
@@ -362,6 +364,12 @@ def train(args):
             "step": step,
         }, str(training_state_dir / "optimizer.pt"))
         (training_state_dir / "training_step.json").write_text(json.dumps({"step": step}))
+
+        # Update 'last' symlink
+        last_link = ckpts_dir / "last"
+        if last_link.exists() or last_link.is_symlink():
+            last_link.unlink()
+        last_link.symlink_to(ckpt_dir.name)
 
         logger.info("Saved checkpoint (step %d): %s", step, ckpt_dir)
 
