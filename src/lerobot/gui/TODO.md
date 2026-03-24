@@ -33,6 +33,39 @@
 - [Done] ~~After trimming an episode and saving, playback still shows the old duration~~
 - [Low] Cannot open a dataset in the Data tab while it's being recorded (at least for new datasets — need to verify behavior for existing ones)
 
+## Model Debugger (Single-Frame Inference)
+
+- [High] **Single-frame model debugger**: Run any model (S1, S2, Pi0, ACT, etc.) on a single dataset frame and inspect outputs. Goal: understand what a model "sees" at a specific moment, compare outputs across frames to diagnose bugs (gripper drops, wrong subtask predictions, action divergence).
+
+  **Core features:**
+  - Select a frame from any opened dataset (episode + frame index, or scrub to it in playback)
+  - Select a model checkpoint (from Models tab)
+  - Run inference → show outputs:
+    - **VLM (S2)**: decoded subtask text, latent vector norm/stats, token probabilities
+    - **Action policy (S1, ACT, Pi0)**: action chunk as trajectory plot (per-joint over horizon), key stats (max delta, gripper values)
+    - **Any model**: raw tensor shapes, norms, timing
+  - Show input images (all cameras) alongside outputs
+
+  **Compare mode:**
+  - Pin frame A's output, select frame B → side-by-side diff
+  - Highlight which outputs changed and by how much
+  - Use case: "frame 100 gives smooth actions, frame 105 gives a gripper drop — what changed?"
+
+  **Episode sweep:**
+  - Run model on every N-th frame of an episode, plot outputs over time
+  - Visualize subtask transitions, latent norm trajectory, action variance
+  - Overlay ground-truth subtask labels from dataset
+
+  **Integration points:**
+  - Data tab: right-click frame → "Debug with model"
+  - Models tab: "Test on frame" button on checkpoint detail
+  - Saved dumps (`/tmp/hvla_drops/`): load images + state from dump directory
+
+  **Backend:**
+  - `/api/debug/run-frame` endpoint: accepts model path + dataset + frame index (or image paths)
+  - Lazy model loading with caching (don't reload for consecutive frames)
+  - Returns structured JSON (predictions, stats, timing)
+
 ## Dataset Tools
 
 - [Mid] Consolidate `_keep_episodes_from_video_by_time` (time-based) with `_keep_episodes_from_video_with_av` (frame-based, upstream) in `dataset_tools.py`. Migrate trim callers to frame indices so only one video filtering function is needed.
