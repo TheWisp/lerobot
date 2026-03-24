@@ -307,6 +307,8 @@ def run_s1(
     num_episodes: int = 1,
     episode_time_s: float = 0,
     reset_time_s: float = 20,
+    teleop_config_path: str | None = None,
+    intervention_dataset: str | None = None,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -429,6 +431,34 @@ def run_s1(
     if record_dataset:
         dataset = _create_recording_dataset(record_dataset, fps, robot, task)
 
+    # Intervention recording dataset
+    int_dataset = None
+    if intervention_dataset:
+        int_dataset = _create_recording_dataset(intervention_dataset, fps, robot, task)
+        logger.info("S1: Intervention dataset '%s' created", intervention_dataset)
+
+    # Teleop (leader arm) for intervention / inverse follow
+    teleop = None
+    if teleop_config_path:
+        logger.info("S1: Loading teleop from %s", teleop_config_path)
+        with open(teleop_config_path) as f:
+            teleop_profile = json.load(f)
+        # Support LeRobot profile format: {type, fields: {...}}
+        if "fields" in teleop_profile:
+            teleop_config_dict = {"type": teleop_profile["type"]}
+            for k, v in teleop_profile["fields"].items():
+                teleop_config_dict[k] = v
+        else:
+            teleop_config_dict = teleop_profile
+        # Force intervention_enabled on
+        teleop_config_dict["intervention_enabled"] = True
+        from lerobot.teleoperators import TeleoperatorConfig
+        from lerobot.teleoperators.utils import make_teleoperator_from_config
+        teleop_cfg = draccus.decode(TeleoperatorConfig, teleop_config_dict)
+        teleop = make_teleoperator_from_config(teleop_cfg)
+        teleop.connect()
+        logger.info("S1: Teleop connected (intervention enabled, press SPACE to toggle)")
+
     # Note: S2 wait happens after inference thread starts (below),
     # because the inference thread publishes images that S2 needs.
 
@@ -520,6 +550,9 @@ def run_s1(
 
             _soft_land(robot, duration_s=2.0, steps=10)
             _disable_torque(robot)
+            # Also disable leader torque for manual reset
+            if teleop is not None and hasattr(teleop, "disable_torque"):
+                teleop.disable_torque()
 
             if recorded_episodes > 0:
                 log_say(f"Reset the environment. Episode {recorded_episodes} of {num_episodes} done.")
@@ -548,6 +581,15 @@ def run_s1(
         step_count = 0
         episode_start = time.time()
         policy.reset()
+
+        # Intervention tracking for this episode
+        was_intervening = False
+        last_follower_pos_sent: dict[str, float] = {}
+        pending_int_episodes: list[dict] = []
+        if teleop is not None and hasattr(teleop, "reset_intervention"):
+            teleop.reset_intervention()
+        if int_dataset is not None:
+            int_dataset.episode_buffer = int_dataset.create_episode_buffer()
 
         while stop_event is None or not stop_event.is_set():
             loop_start = time.perf_counter()
@@ -584,87 +626,161 @@ def run_s1(
                 else:
                     obs_copy[k] = v  # scalars/strings are immutable, no copy needed
 
-            # Publish to inference thread + S2
+            # Publish to inference thread + S2 (keep publishing even during
+            # intervention so S2 latent stays current for policy resume)
             infer_thread.publish_obs(obs_copy, t_now)
             if shared_images is not None:
                 shared_images.write_images(obs, S2_CAM_KEY_MAP, joint_names)
 
-            # 3. Read latest chunk
-            chunk, t_origin, t_obs = infer_thread.get_chunk()
+            # Check intervention state
+            is_intervention = False
+            if teleop is not None and hasattr(teleop, "get_teleop_events"):
+                from lerobot.teleoperators.utils import TeleopEvents
+                teleop_events = teleop.get_teleop_events()
+                is_intervention = teleop_events.get(TeleopEvents.IS_INTERVENTION, False)
 
-            if chunk is None:
-                time.sleep(1.0 / fps)
-                continue
+            if is_intervention and teleop is not None:
+                # --- INTERVENTION MODE: human controls via leader arm ---
+                if not was_intervening:
+                    # Transition: policy → intervention
+                    logger.info("S1: INTERVENTION ON — pausing inference, human takes over")
+                    infer_thread.pause()
 
-            # 4. Index chunk and send action
-            t_before_send = time.perf_counter()
-            idx = _compute_chunk_index(t_before_send, t_origin, fps, len(chunk))
-            if osc_skip:
-                idx = _osc_skip(chunk, idx, step_count)
+                    # Compensate servo tracking error before releasing torque
+                    if last_follower_pos_sent and hasattr(teleop, "send_feedback"):
+                        _servo_sync(teleop, last_follower_pos_sent)
 
-            action_np = chunk[idx].copy()
-            if max_step_delta is not None and prev_action_np is not None:
-                action_np = _apply_delta_filter(action_np, prev_action_np, max_step_delta)
+                    if hasattr(teleop, "disable_torque"):
+                        teleop.disable_torque()
+                    _disable_torque(robot)
+                    log_say("Intervention")
 
-            action_dict = {name: float(action_np[i]) for i, name in enumerate(joint_names) if i < len(action_np)}
-            robot.send_action(action_dict)
-            t_after_send = time.perf_counter()
+                # Read leader arm positions and send to robot
+                act = teleop.get_action()
+                action_np = np.array([float(act.get(j, 0)) for j in joint_names], dtype=np.float32)
+                action_dict = {name: float(action_np[i]) for i, name in enumerate(joint_names) if i < len(action_np)}
+                robot.send_action(action_dict)
+                t_after_send = time.perf_counter()
 
-            # Record frame to dataset
-            if dataset is not None:
-                _add_frame_to_dataset(dataset, obs, action_np, joint_names, task)
+                # Record to intervention dataset
+                if int_dataset is not None:
+                    _add_frame_to_dataset(int_dataset, obs, action_np, joint_names, task)
 
-            # Track chunk execution index for RTC prefix extraction
-            if _supports_rtc:
-                infer_thread.update_exec_index(idx + 1)
+                # Record to main dataset too (so episode is continuous)
+                if dataset is not None:
+                    _add_frame_to_dataset(dataset, obs, action_np, joint_names, task)
 
-            # Smoothness tracking (after send, not on critical path)
-            if prev_action_np is not None:
-                action_deltas.append(np.linalg.norm(action_np - prev_action_np))
-                diag_chunk, _, _ = infer_thread.get_chunk()
-                # Build state array from robot obs (individual joint floats)
-                _state = np.array([float(obs.get(j, 0)) for j in joint_names])
-                # Collect raw images (numpy HWC uint8)
-                _imgs = {k: v for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
-                _log_joint_jump(
-                    action_np, prev_action_np, step_count, idx, diag_chunk,
-                    robot_state=_state,
-                    save_dir=grip_drop_save_dir,
-                    obs_images=_imgs,
-                    joint_names=joint_names,
-                )
+            else:
+                # --- POLICY MODE: S1 inference controls robot ---
+                if was_intervening:
+                    # Transition: intervention → policy
+                    logger.info("S1: INTERVENTION OFF — resuming inference")
+
+                    # Save pending intervention episode buffer
+                    if int_dataset is not None and int_dataset.episode_buffer is not None and int_dataset.episode_buffer.get("size", 0) > 0:
+                        import copy
+                        pending_int_episodes.append(copy.deepcopy(int_dataset.episode_buffer))
+                        int_dataset.episode_buffer = int_dataset.create_episode_buffer()
+
+                    _enable_torque(robot)
+                    if hasattr(teleop, "enable_torque"):
+                        try:
+                            teleop.enable_torque()
+                        except ConnectionError as e:
+                            logger.warning("S1: Failed to enable leader torque: %s", e)
+                    infer_thread.resume()
+                    log_say("Policy")
+
+                # 3. Read latest chunk
+                chunk, t_origin, t_obs = infer_thread.get_chunk()
+
+                if chunk is None:
+                    time.sleep(1.0 / fps)
+                    was_intervening = is_intervention
+                    continue
+
+                # 4. Index chunk and send action
+                t_before_send = time.perf_counter()
+                idx = _compute_chunk_index(t_before_send, t_origin, fps, len(chunk))
+                if osc_skip:
+                    idx = _osc_skip(chunk, idx, step_count)
+
+                action_np = chunk[idx].copy()
+                if max_step_delta is not None and prev_action_np is not None:
+                    action_np = _apply_delta_filter(action_np, prev_action_np, max_step_delta)
+
+                action_dict = {name: float(action_np[i]) for i, name in enumerate(joint_names) if i < len(action_np)}
+                robot.send_action(action_dict)
+                t_after_send = time.perf_counter()
+
+                # Inverse follow: send follower position to leader so it mirrors
+                if teleop is not None and hasattr(teleop, "send_feedback"):
+                    follower_pos = {k: v for k, v in obs.items() if k.endswith(".pos")}
+                    leader_actual = teleop.get_action()
+                    compensated = {}
+                    correction_gain = 0.3
+                    for k, target in follower_pos.items():
+                        error = leader_actual.get(k, target) - target
+                        compensated[k] = target - correction_gain * error
+                    teleop.send_feedback(compensated)
+                    last_follower_pos_sent = follower_pos
+
+                # Record frame to dataset
+                if dataset is not None:
+                    _add_frame_to_dataset(dataset, obs, action_np, joint_names, task)
+
+                # Track chunk execution index for RTC prefix extraction
+                if _supports_rtc:
+                    infer_thread.update_exec_index(idx + 1)
+
+                # Smoothness tracking (after send, not on critical path)
+                if prev_action_np is not None:
+                    action_deltas.append(np.linalg.norm(action_np - prev_action_np))
+                    diag_chunk, _, _ = infer_thread.get_chunk()
+                    _state = np.array([float(obs.get(j, 0)) for j in joint_names])
+                    _imgs = {k: v for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
+                    _log_joint_jump(
+                        action_np, prev_action_np, step_count, idx, diag_chunk,
+                        robot_state=_state,
+                        save_dir=grip_drop_save_dir,
+                        obs_images=_imgs,
+                        joint_names=joint_names,
+                    )
+
             prev_action_np = action_np.copy()
 
             if last_send_time is not None:
                 loop_intervals.append((t_after_send - last_send_time) * 1000)
             last_send_time = t_after_send
             step_count += 1
+            was_intervening = is_intervention
 
             # Periodic logging
             if step_count % 100 == 0:
+                mode_str = "INTERVENTION" if is_intervention else "POLICY"
                 smooth_str = ""
                 if action_deltas:
                     r = action_deltas[-20:]
                     smooth_str += f" | Δaction: {np.mean(r):.3f}/{np.max(r):.3f}"
-                # Show max joint value for quick diagnostics
                 smooth_str += f" | max_joint={np.max(np.abs(action_np)):.1f}"
                 if loop_intervals:
                     r = loop_intervals[-20:]
                     smooth_str += f" | interval: {np.mean(r):.1f}±{np.std(r):.1f}ms"
                 if infer_thread.infer_times:
                     smooth_str += f" | infer: {np.mean(infer_thread.infer_times[-10:]):.0f}ms"
-                smooth_str += f" | chunk_age: {(t_before_send - t_origin)*1000:.0f}ms"
+                if not is_intervention:
+                    smooth_str += f" | chunk_age: {(t_before_send - t_origin)*1000:.0f}ms"
 
                 if shared_cache is not None:
                     logger.info(
-                        "S1 step %d | chunk[%d/%d] | S2 age: %.0fms | S2 #%d%s",
-                        step_count, idx, len(chunk),
+                        "S1 step %d [%s] | S2 age: %.0fms | S2 #%d%s",
+                        step_count, mode_str,
                         shared_cache.age_ms, shared_cache.count, smooth_str,
                     )
                 else:
                     logger.info(
-                        "S1 step %d | chunk[%d/%d]%s",
-                        step_count, idx, len(chunk), smooth_str,
+                        "S1 step %d [%s]%s",
+                        step_count, mode_str, smooth_str,
                     )
 
             # Fixed-rate sleep
@@ -674,6 +790,13 @@ def run_s1(
                 time.sleep(sleep_s)
 
         # --- End of recording phase for this episode ---
+        # Collect any remaining intervention buffer
+        if int_dataset is not None:
+            if int_dataset.episode_buffer is not None and int_dataset.episode_buffer.get("size", 0) > 0:
+                import copy
+                pending_int_episodes.append(copy.deepcopy(int_dataset.episode_buffer))
+                int_dataset.episode_buffer = int_dataset.create_episode_buffer()
+
         if dataset is not None and step_count > 0:
             try:
                 dataset.save_episode()
@@ -681,6 +804,16 @@ def run_s1(
                             recorded_episodes + 1, step_count, time.time() - episode_start)
             except Exception as e:
                 logger.warning("S1: Failed to save episode %d: %s", recorded_episodes + 1, e)
+
+        # Save intervention episodes after main episode
+        if int_dataset is not None and pending_int_episodes:
+            for ep_buffer in pending_int_episodes:
+                try:
+                    int_dataset.save_episode(episode_data=ep_buffer)
+                    logger.info("S1: Saved intervention episode %d", int_dataset.num_episodes - 1)
+                except Exception as e:
+                    logger.warning("S1: Failed to save intervention episode: %s", e)
+
         recorded_episodes += 1
 
         # Reset tracking state for next episode
@@ -699,7 +832,6 @@ def run_s1(
                         recorded_episodes, np.mean(infer_thread.infer_times), s2_info)
         if dataset is not None:
             try:
-                # Save any unsaved episode (interrupted mid-recording)
                 if dataset.episode_buffer is not None and dataset.episode_buffer.get("size", 0) > 0:
                     dataset.save_episode()
                     logger.info("S1: Final partial episode saved")
@@ -707,13 +839,51 @@ def run_s1(
                 logger.info("S1: Dataset '%s' finalized (%d episodes)", record_dataset, recorded_episodes)
             except Exception as e:
                 logger.warning("S1: Failed to finalize dataset: %s", e)
+        if int_dataset is not None:
+            try:
+                int_dataset.finalize()
+                logger.info("S1: Intervention dataset finalized (%d episodes)", int_dataset.num_episodes)
+            except Exception as e:
+                logger.warning("S1: Failed to finalize intervention dataset: %s", e)
         if listener is not None:
             listener.stop()
         _soft_land(robot)
+        if teleop is not None:
+            try:
+                teleop.disconnect()
+            except Exception as e:
+                logger.warning("Teleop disconnect error (non-fatal): %s", e)
         try:
             robot.disconnect()
         except Exception as e:
             logger.warning("Robot disconnect error (non-fatal): %s", e)
+
+
+def _servo_sync(teleop, target_pos: dict[str, float], tolerance: float = 1.0, timeout: float = 5.0):
+    """Iteratively compensate servo tracking error before releasing torque.
+
+    The leader servo can't perfectly reach its goal position under load.
+    This measures the error, adjusts the goal to overshoot, and repeats
+    until the actual position converges to the target.
+    """
+    goal = dict(target_pos)
+    start = time.perf_counter()
+    while True:
+        pos = teleop.get_action()
+        max_err = max(abs(pos.get(k, 0) - target_pos[k]) for k in target_pos)
+        if max_err < tolerance:
+            break
+        if time.perf_counter() - start > timeout:
+            logger.warning("S1: Servo sync timed out (max_err=%.2f), releasing anyway", max_err)
+            break
+        # Nudge goal by remaining error
+        for k in target_pos:
+            error = pos.get(k, 0) - target_pos[k]
+            goal[k] = goal[k] - error
+        teleop.send_feedback(goal)
+        time.sleep(0.02)
+    elapsed_ms = (time.perf_counter() - start) * 1e3
+    logger.info("S1: Servo sync converged in %.0fms (max_err=%.2f)", elapsed_ms, max_err)
 
 
 def _get_motor_buses(robot) -> list:
