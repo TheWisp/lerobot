@@ -853,6 +853,9 @@ function renderRunForm() {
     html += `<input type="number" id="run-hvla-episode-time" value="60" min="0">`;
     html += `<label>Reset Duration</label>`;
     html += `<input type="number" id="run-hvla-reset-time" value="20" min="0">`;
+    html += `<label>Intervention Dataset</label>`;
+    html += `<input type="text" id="run-hvla-intervention-dataset" placeholder="eval/hvla_interventions (optional)" value="">`;
+    html += `<div class="form-hint" style="grid-column: 1 / -1;">When the human takes over via SPACE, intervention fragments are saved to this dataset.</div>`;
     html += '</div>';
     html += '</div>';
     html += '</div>';
@@ -1107,6 +1110,15 @@ async function launchRun() {
                 return;
             }
             const recordDs = document.getElementById('run-hvla-record-dataset')?.value?.trim() || null;
+            const intDs = document.getElementById('run-hvla-intervention-dataset')?.value?.trim() || null;
+
+            // Optional teleop for intervention / inverse follow
+            const teleopSelect = document.getElementById('run-policy-teleop');
+            let hvlaTeleopData = null;
+            if (teleopSelect?.value) {
+                hvlaTeleopData = await _getProfileData('teleop', teleopSelect.value);
+            }
+
             endpoint = '/api/run/hvla';
             body = {
                 robot: robotData,
@@ -1121,6 +1133,8 @@ async function launchRun() {
                 num_episodes: parseInt(document.getElementById('run-hvla-episodes')?.value) || 1,
                 episode_time_s: parseFloat(document.getElementById('run-hvla-episode-time')?.value) || 60,
                 reset_time_s: parseFloat(document.getElementById('run-hvla-reset-time')?.value) || 20,
+                teleop: hvlaTeleopData,
+                intervention_dataset: intDs,
             };
         } else {
             // ---- Standard policy dispatch ----

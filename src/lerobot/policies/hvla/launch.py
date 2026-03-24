@@ -71,6 +71,12 @@ def main():
                         help="Max seconds per episode (0 = run until Ctrl+C)")
     parser.add_argument("--reset-time-s", type=float, default=20,
                         help="Seconds to wait during reset phase between episodes (default: 20)")
+    parser.add_argument("--teleop-config", type=str, default=None,
+                        help="Path to teleop profile JSON for intervention / inverse follow. "
+                             "When set, SPACE toggles between policy and human control.")
+    parser.add_argument("--intervention-dataset", type=str, default=None,
+                        help="Record intervention fragments to a separate LeRobotDataset "
+                             "(e.g. 'user/hvla_interventions')")
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -183,6 +189,8 @@ def main():
             num_episodes=args.num_episodes,
             episode_time_s=args.episode_time_s,
             reset_time_s=args.reset_time_s,
+            teleop_config_path=args.teleop_config,
+            intervention_dataset=args.intervention_dataset,
         )
     finally:
         stop_event.set()

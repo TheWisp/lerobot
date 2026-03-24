@@ -162,6 +162,8 @@ class HVLARunRequest(BaseModel):
     num_episodes: int = 1
     episode_time_s: float = 60
     reset_time_s: float = 20
+    teleop: dict[str, Any] | None = None
+    intervention_dataset: str | None = None
 
 
 # ============================================================================
@@ -519,7 +521,6 @@ async def start_record(req: RecordRequest) -> dict:
         args.append("--resume=true")
     if req.intervention_repo_id:
         args.append(f"--intervention_repo_id={req.intervention_repo_id}")
-    args.extend(_display_args())
 
     extra_env = None
     if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
@@ -591,6 +592,15 @@ async def start_hvla(req: HVLARunRequest) -> dict:
         args.append(f"--num-episodes={req.num_episodes}")
         args.append(f"--episode-time-s={req.episode_time_s}")
         args.append(f"--reset-time-s={req.reset_time_s}")
+
+    # Teleop for intervention / inverse follow
+    if req.teleop:
+        teleop_tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, prefix="hvla_teleop_")
+        teleop_tmp.write(json.dumps(req.teleop, indent=2))
+        teleop_tmp.close()
+        args.append(f"--teleop-config={teleop_tmp.name}")
+    if req.intervention_dataset:
+        args.append(f"--intervention-dataset={req.intervention_dataset}")
 
     await _launch_subprocess(args, command="hvla", config=req.model_dump())
     return {"status": "started", "command": "hvla", "pid": _active_process.pid}
@@ -755,7 +765,9 @@ async def obs_stream_meta() -> dict:
     """Return observation stream layout (feature names, image dims)."""
     reader = _get_obs_reader()
     if reader is None:
+        logger.debug("obs-stream/meta: reader not available")
         return {"available": False}
+    logger.info("obs-stream/meta: available, cameras=%s", list(reader.image_keys.keys()))
     return {
         "available": True,
         "obs_scalar_keys": reader.obs_scalar_keys,
