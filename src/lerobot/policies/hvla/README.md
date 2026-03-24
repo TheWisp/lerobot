@@ -138,7 +138,10 @@ No `--temporal-ensemble-coeff` needed — RTC provides chunk continuity natively
 - `--denoise-steps N`: override denoising steps (default 10, min usable ~5, max quality ~15)
 - `--s1-query-interval N`: re-query every N actions (default 2, ~67ms). Lower = fresher chunks, higher = more of each chunk executed
 - `--no-compile-s1`: disable torch.compile if needed (on by default, ~2ms savings)
-- `--save-grip-drops`: save observations when gripper drops detected (debugging)
+- `--save-grip-drops DIR`: save observations when gripper drops detected (debugging)
+- `--record-dataset REPO_ID`: record inference episode to LeRobotDataset (e.g. `user/hvla_ep1`). Saves obs+actions every frame, commits on shutdown. Compatible with GUI, Rerun, and further training.
+- `--teleop-config PATH`: path to teleop profile JSON for intervention / inverse follow. When set, the leader arm mirrors the robot during policy mode; press SPACE to toggle human control.
+- `--intervention-dataset REPO_ID`: record intervention fragments to a separate dataset (e.g. `user/hvla_interventions`). Each human takeover segment becomes a separate episode.
 
 S2 auto-discovery: the launcher first tries to attach to an existing S2 process via shared memory. If found, S1 starts instantly (no 45s cold start). If not found, spawns S2 from `--s2-checkpoint`.
 
@@ -261,10 +264,13 @@ Typical S1 loop interval: ~34ms (~29Hz). Inference spikes to ~59ms under S2 GPU 
 - [ ] Separate backbone LR (lower for DINOv2 pretrained weights, matching ACT's approach)
 - [ ] wandb integration for training monitoring
 - [ ] Inference-time RTC guidance (LeRobot's `RTCProcessor`) on top of training-time RTC for extra smoothness
-- [ ] Soft landing: fix occasional motor overload error on disconnect
 - [ ] Corrupt JPEG data — "premature end of data segment" from OpenCV cameras (not seen recently, may be resolved)
 
 ### Done
+- [x] Intervention / inverse follow (`--teleop-config`, `--intervention-dataset`)
+- [x] Inference episode recording to LeRobotDataset (`--record-dataset`)
+- [x] Robot-agnostic control loop (joint names derived from robot, no hardcoded SO107)
+- [x] Extracted helpers: `load_robot()`, `load_s1_policy()`, `create_recording_dataset()`
 - [x] Bidirectional action attention (Pi0-style, `tgt_mask=None`) — v6
 - [x] Cross-attention KV cache (pre-compute K,V from static context)
 - [x] Batched DINOv2 (4 cameras in one forward pass)
@@ -274,6 +280,7 @@ Typical S1 loop interval: ~34ms (~29Hz). Inference spikes to ~59ms under S2 GPU 
 - [x] Persistent S2 process (s2_standalone)
 - [x] Observation processor steps (DepthEdgeOverlayProcessorStep)
 - [x] Grip drop diagnostics with inference-time obs saving
+- [x] Soft landing with hold-position during torque ramp-down
 
 ### Future
 - [ ] Co-training S1 + S2 (currently sequential: extract latents → train S1)
