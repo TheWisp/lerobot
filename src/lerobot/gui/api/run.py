@@ -210,6 +210,7 @@ async def _wait_for_exit() -> None:
         _active_process = None
         _active_command = None
         _active_config = None
+        _close_obs_reader()
         logger.info(f"Process exited (rc={rc}), state cleared")
     _output_event.set()
 
