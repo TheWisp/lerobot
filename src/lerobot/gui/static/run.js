@@ -412,13 +412,18 @@ function _getDebugModelConfig() {
     return config;
 }
 
+let _debugModelLoading = false;  // prevent double-click
+
 async function _loadDebugModel() {
+    if (_debugModelLoading) return;
     const config = _getDebugModelConfig();
     if (!config) {
         showToast('Error', 'Select a model first', 'error');
         return;
     }
     const status = document.getElementById('run-debug-model-status');
+    _debugModelLoading = true;
+    _updateDebugButtons();
     if (status) status.textContent = 'Loading...';
     try {
         const res = await fetch('/api/run/debug/load', {
@@ -429,28 +434,49 @@ async function _loadDebugModel() {
         const data = await res.json();
         if (res.ok) {
             if (status) status.textContent = `Loaded (PID ${data.pid})`;
+            _debugModelLoaded = true;
             showToast('Debug model', 'Model loaded', 'success');
         } else {
-            if (status) status.textContent = 'Failed';
+            if (status) status.textContent = 'Not loaded';
             showToast('Error', data.detail || 'Failed to load', 'error');
         }
     } catch (e) {
         if (status) status.textContent = 'Error';
         showToast('Error', e.message, 'error');
+    } finally {
+        _debugModelLoading = false;
+        _updateDebugButtons();
     }
 }
 
 async function _unloadDebugModel() {
+    if (_debugModelLoading) return;
     const status = document.getElementById('run-debug-model-status');
+    _debugModelLoading = true;
+    _updateDebugButtons();
     try {
         const res = await fetch('/api/run/debug/unload', { method: 'POST' });
+        const data = await res.json();
         if (res.ok) {
             if (status) status.textContent = 'Not loaded';
-            showToast('Debug model', 'Model unloaded', 'info');
+            _debugModelLoaded = false;
+            if (data.status !== 'not_loaded') showToast('Debug model', 'Model unloaded', 'info');
         }
     } catch (e) {
         showToast('Error', e.message, 'error');
+    } finally {
+        _debugModelLoading = false;
+        _updateDebugButtons();
     }
+}
+
+let _debugModelLoaded = false;
+
+function _updateDebugButtons() {
+    const loadBtn = document.querySelector('[onclick="_loadDebugModel()"]');
+    const unloadBtn = document.querySelector('[onclick="_unloadDebugModel()"]');
+    if (loadBtn) loadBtn.disabled = _debugModelLoading || _debugModelLoaded;
+    if (unloadBtn) unloadBtn.disabled = _debugModelLoading || !_debugModelLoaded;
 }
 
 async function _refreshDebugModelStatus() {
@@ -459,7 +485,9 @@ async function _refreshDebugModelStatus() {
     try {
         const res = await fetch('/api/run/debug/status');
         const data = await res.json();
+        _debugModelLoaded = data.loaded;
         status.textContent = data.loaded ? `Loaded (PID ${data.pid})` : 'Not loaded';
+        _updateDebugButtons();
     } catch (e) {
         status.textContent = 'Unknown';
     }

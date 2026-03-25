@@ -309,37 +309,42 @@ async def _stop_debug_process() -> None:
 # Debug model management
 # ============================================================================
 
+_debug_lock = asyncio.Lock()  # prevent concurrent load/unload
+
+
+def _is_debug_loaded() -> bool:
+    return _debug_process is not None and _debug_process.returncode is None
+
 
 @router.post("/debug/load")
 async def load_debug_model(config: DebugModelConfig) -> dict:
     """Load a debug model process (keeps it warm for reuse across teleop sessions)."""
-    # If a different model is loaded, unload it first
-    if _debug_process is not None and _debug_process.returncode is None:
-        await _stop_debug_process()
+    async with _debug_lock:
+        if _is_debug_loaded():
+            raise HTTPException(409, "Debug model already loaded — unload first")
 
-    if config.policy_type == "hvla_s2_vlm":
-        await _launch_debug_s2(config)
-    else:
-        raise HTTPException(400, f"Unsupported debug model type: {config.policy_type}")
+        if config.policy_type == "hvla_s2_vlm":
+            await _launch_debug_s2(config)
+        else:
+            raise HTTPException(400, f"Unsupported debug model type: {config.policy_type}")
 
-    return {"status": "loaded", "policy_type": config.policy_type, "pid": _debug_process.pid}
+        return {"status": "loaded", "policy_type": config.policy_type, "pid": _debug_process.pid}
 
 
 @router.post("/debug/unload")
 async def unload_debug_model() -> dict:
     """Unload the debug model process (frees GPU memory)."""
-    if _debug_process is None or _debug_process.returncode is not None:
-        return {"status": "not_loaded"}
-    await _stop_debug_process()
-    return {"status": "unloaded"}
+    async with _debug_lock:
+        if not _is_debug_loaded():
+            return {"status": "not_loaded"}
+        await _stop_debug_process()
+        return {"status": "unloaded"}
 
 
 @router.get("/debug/status")
 async def debug_model_status() -> dict:
     """Check if a debug model is loaded."""
-    if _debug_process is not None and _debug_process.returncode is None:
-        return {"loaded": True, "pid": _debug_process.pid}
-    return {"loaded": False}
+    return {"loaded": _is_debug_loaded(), "pid": _debug_process.pid if _is_debug_loaded() else None}
 
 
 # ============================================================================
