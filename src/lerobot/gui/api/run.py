@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import signal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -166,6 +167,10 @@ _active_process: asyncio.subprocess.Process | None = None
 _active_command: str | None = None
 _active_config: dict | None = None
 _debug_process: asyncio.subprocess.Process | None = None  # optional model debug alongside teleop
+_debug_output_path: Path | None = None  # log file for debug model output
+_debug_output_lines: list[str] = []
+_debug_output_event: asyncio.Event = asyncio.Event()
+_debug_read_task: asyncio.Task | None = None
 _output_lines: list[str] = []
 _output_event: asyncio.Event = asyncio.Event()
 _OUTPUT_MAX_LINES = 2000
@@ -260,12 +265,13 @@ async def _launch_subprocess(args: list[str], command: str, config: dict,
 
 async def _launch_debug_s2(config: DebugModelConfig) -> None:
     """Launch HVLA S2 standalone as a debug model process alongside teleop."""
-    global _debug_process
+    global _debug_process, _debug_output_path, _debug_output_lines, _debug_read_task
+    import tempfile
 
     await _stop_debug_process()
 
     args = [
-        "python", "-m", "lerobot.policies.hvla.s2_standalone",
+        "python", "-u", "-m", "lerobot.policies.hvla.s2_standalone",
         f"--checkpoint={Path(config.checkpoint).expanduser() / 'model.safetensors'}"
         if not config.checkpoint.endswith(".safetensors")
         else f"--checkpoint={Path(config.checkpoint).expanduser()}",
@@ -274,26 +280,59 @@ async def _launch_debug_s2(config: DebugModelConfig) -> None:
     if config.decode_subtask:
         args.append("--decode-subtask")
 
-    env = {**__import__("os").environ}
-    _append_output(f"--- Starting debug S2 ---")
-    _append_output(f"$ {' '.join(args)}\n")
-    logger.info(f"Launching debug S2: {' '.join(args)}")
+    # Write output to a dedicated log file (not mixed with main process output)
+    _debug_output_path = Path(tempfile.mktemp(prefix="lerobot_debug_model_", suffix=".log"))
+    _debug_output_lines = []
 
+    env = {**__import__("os").environ}
+    logger.info(f"Launching debug S2: {' '.join(args)}")
+    logger.info(f"Debug model output: {_debug_output_path}")
+
+    debug_log_fd = os.open(str(_debug_output_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
     _debug_process = await asyncio.create_subprocess_exec(
         *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stdout=debug_log_fd,
+        stderr=debug_log_fd,
         env=env,
     )
+    os.close(debug_log_fd)  # subprocess inherited the fd, we can close our copy
 
-    # Stream S2 output to the same output panel (prefixed)
-    asyncio.create_task(_read_stream(_debug_process.stdout, prefix="[S2] "))
-    asyncio.create_task(_read_stream(_debug_process.stderr, prefix="[S2 err] "))
+    # Tail the log file in background
+    _debug_read_task = asyncio.create_task(_tail_debug_log())
+
+
+async def _tail_debug_log() -> None:
+    """Tail the debug model log file, appending lines to _debug_output_lines."""
+    global _debug_output_lines
+    if _debug_output_path is None:
+        return
+    # Wait for file to exist
+    for _ in range(50):
+        if _debug_output_path.exists():
+            break
+        await asyncio.sleep(0.1)
+    if not _debug_output_path.exists():
+        return
+    with open(_debug_output_path) as f:
+        while True:
+            line = f.readline()
+            if line:
+                line = line.rstrip("\n\r")
+                if line:
+                    _debug_output_lines.append(line)
+                    if len(_debug_output_lines) > 1000:
+                        _debug_output_lines = _debug_output_lines[-1000:]
+                    _debug_output_event.set()
+            else:
+                # No new data — check if process exited
+                if _debug_process is None or _debug_process.returncode is not None:
+                    break
+                await asyncio.sleep(0.1)
 
 
 async def _stop_debug_process() -> None:
     """Stop the debug model process if running."""
-    global _debug_process
+    global _debug_process, _debug_read_task, _debug_output_path
     if _debug_process is not None and _debug_process.returncode is None:
         _debug_process.terminate()
         try:
@@ -301,8 +340,17 @@ async def _stop_debug_process() -> None:
         except asyncio.TimeoutError:
             _debug_process.kill()
             await _debug_process.wait()
-        _append_output("--- Debug model stopped ---")
     _debug_process = None
+    if _debug_read_task is not None:
+        _debug_read_task.cancel()
+        _debug_read_task = None
+    # Clean up log file
+    if _debug_output_path is not None:
+        try:
+            _debug_output_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        _debug_output_path = None
 
 
 # ============================================================================
@@ -345,6 +393,33 @@ async def unload_debug_model() -> dict:
 async def debug_model_status() -> dict:
     """Check if a debug model is loaded."""
     return {"loaded": _is_debug_loaded(), "pid": _debug_process.pid if _is_debug_loaded() else None}
+
+
+@router.get("/debug/output")
+async def debug_output_sse():
+    """SSE stream of debug model output lines."""
+    sent = 0
+
+    async def event_generator():
+        nonlocal sent
+        while True:
+            _debug_output_event.clear()
+            # Send any new lines
+            while sent < len(_debug_output_lines):
+                line = _debug_output_lines[sent]
+                sent += 1
+                yield f"data: {line}\n\n"
+            # Wait for new data or timeout (keepalive)
+            try:
+                await asyncio.wait_for(_debug_output_event.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ============================================================================

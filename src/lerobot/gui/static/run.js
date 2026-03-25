@@ -424,10 +424,13 @@ async function _loadDebugModel() {
     const status = document.getElementById('run-debug-model-status');
     _debugModelLoading = true;
     _updateDebugButtons();
+    _showModelPanel(true);  // show panel immediately during loading
     if (status) status.textContent = 'Loading...';
     // Clear model terminal
     const modelTerminal = document.getElementById('run-model-terminal');
     if (modelTerminal) modelTerminal.innerHTML = '<div class="terminal-line" style="color: #666;">Loading model...</div>';
+    // Connect SSE immediately so output appears as model loads
+    _connectDebugOutputSSE();
     try {
         const res = await fetch('/api/run/debug/load', {
             method: 'POST',
@@ -439,6 +442,7 @@ async function _loadDebugModel() {
             if (status) status.textContent = `Loaded (PID ${data.pid})`;
             _debugModelLoaded = true;
             showToast('Debug model', 'Model loaded', 'success');
+            console.log('Debug model loaded, showing panel');
         } else {
             if (status) status.textContent = 'Not loaded';
             showToast('Error', data.detail || 'Failed to load', 'error');
@@ -463,6 +467,7 @@ async function _unloadDebugModel() {
         if (res.ok) {
             if (status) status.textContent = 'Not loaded';
             _debugModelLoaded = false;
+            _disconnectDebugOutputSSE();
             if (data.status !== 'not_loaded') showToast('Debug model', 'Model unloaded', 'info');
         }
     } catch (e) {
@@ -1163,29 +1168,46 @@ function _classifyLine(text, isStderr) {
 let _lastTableBlock = null;
 let _tableBlockNode = null;
 
+let _debugOutputSSE = null;
+
 function _showModelPanel(show) {
     const panel = document.getElementById('run-terminal-panel-model');
-    if (panel) panel.style.display = show ? '' : 'none';
+    if (!panel) { console.warn('Model panel element not found'); return; }
+    panel.style.display = show ? '' : 'none';
+    console.log('Model panel display:', show ? 'visible' : 'hidden');
+    if (show && !_debugOutputSSE) {
+        _connectDebugOutputSSE();
+    } else if (!show && _debugOutputSSE) {
+        _disconnectDebugOutputSSE();
+    }
+}
+
+function _connectDebugOutputSSE() {
+    _disconnectDebugOutputSSE();
+    _debugOutputSSE = new EventSource('/api/run/debug/output');
+    _debugOutputSSE.onmessage = (event) => {
+        const modelTerminal = document.getElementById('run-model-terminal');
+        if (!modelTerminal) return;
+        const text = _stripAnsi(event.data);
+        const line = document.createElement('div');
+        line.className = 'terminal-line';
+        line.textContent = text;
+        modelTerminal.appendChild(line);
+        modelTerminal.scrollTop = modelTerminal.scrollHeight;
+        while (modelTerminal.children.length > 500) {
+            modelTerminal.removeChild(modelTerminal.firstChild);
+        }
+    };
+}
+
+function _disconnectDebugOutputSSE() {
+    if (_debugOutputSSE) {
+        _debugOutputSSE.close();
+        _debugOutputSSE = null;
+    }
 }
 
 function appendTerminalLine(rawText) {
-    // Route [S2] lines to model output panel
-    if (rawText.startsWith('[S2] ') || rawText.startsWith('[S2 err] ')) {
-        const modelTerminal = document.getElementById('run-model-terminal');
-        if (modelTerminal) {
-            const text = _stripAnsi(rawText.startsWith('[S2 err] ') ? rawText.slice(9) : rawText.slice(5));
-            const line = document.createElement('div');
-            line.className = 'terminal-line';
-            line.textContent = text;
-            modelTerminal.appendChild(line);
-            modelTerminal.scrollTop = modelTerminal.scrollHeight;
-            while (modelTerminal.children.length > 500) {
-                modelTerminal.removeChild(modelTerminal.firstChild);
-            }
-        }
-        return;
-    }
-
     const terminal = document.getElementById('run-terminal');
     if (!terminal) return;
 
