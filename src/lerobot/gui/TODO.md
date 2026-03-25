@@ -12,7 +12,7 @@
 
 ## Architecture
 
-- [Mid] Cross-tab data synchronization is fragile and not scalable — current approach (refreshRunProfileSelects, refreshRunDatasetSelects, refreshExpandedSources, refreshOpenedDatasets) hardcodes specific refresh calls between tabs. Any data source update should notify all dependent UI components efficiently, e.g. via a pub/sub event bus, rather than point-to-point wiring
+- [Mid] Cross-tab data synchronization is fragile and not scalable — current approach (refreshRunProfileSelects, refreshRunDatasetSelects, refreshExpandedSources, refreshOpenedDatasets) hardcodes specific refresh calls between tabs. Any data source update should notify all dependent UI components efficiently, e.g. via a pub/sub event bus, rather than point-to-point wiring. Same issue with model data: `_ensureModelDataLoaded()` is called per-workflow, and each new model selector needs manual refresh wiring.
 
 ## UX
 
