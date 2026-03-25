@@ -385,8 +385,10 @@ function _modelCheckpointOptions() {
     }
     let html = '<option value="" disabled selected>Select checkpoint</option>';
     for (const m of entries) {
-        // Use the last checkpoint's pretrained_model path
-        const ckptPath = m.path + '/checkpoints/last/pretrained_model';
+        // Standard checkpoints: path/checkpoints/last/pretrained_model
+        // Flat checkpoints (converted S2 etc.): path directly contains model.safetensors
+        const isFlat = m.num_checkpoints === 1 && m.current_step == null;
+        const ckptPath = isFlat ? m.path : m.path + '/checkpoints/last/pretrained_model';
         const stepText = m.current_step != null ? ` (step ${m.current_step.toLocaleString()})` : '';
         html += `<option value="${_esc(ckptPath)}" data-policy-type="${_esc(m.policy_type)}" title="${_esc(m.path)}">${_esc(m.name)} — ${_esc(m.policy_type)}${stepText}</option>`;
     }

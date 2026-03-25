@@ -33,21 +33,30 @@ def set_app_state(state: "AppState") -> None:
 # ============================================================================
 
 _DEFAULT_SOURCE = str(Path.cwd() / "outputs")
+_CONVERTED_SOURCE = str(Path.home() / ".cache" / "lerobot" / "converted")
 
 
 def _read_sources() -> list[dict]:
-    default = {"path": _DEFAULT_SOURCE, "removable": False, "expanded": True}
+    defaults = [
+        {"path": _DEFAULT_SOURCE, "removable": False, "expanded": True},
+    ]
+    # Add converted checkpoints source if it exists
+    if Path(_CONVERTED_SOURCE).is_dir():
+        defaults.append({"path": _CONVERTED_SOURCE, "removable": False, "expanded": True})
+
     if not SOURCES_FILE.exists():
-        return [default]
+        return defaults
     try:
         data = json.loads(SOURCES_FILE.read_text())
         sources = data.get("sources", [])
-        if not any(s["path"] == _DEFAULT_SOURCE for s in sources):
-            sources.insert(0, default)
+        # Ensure defaults are present
+        for d in defaults:
+            if not any(s["path"] == d["path"] for s in sources):
+                sources.insert(0, d)
         return sources
     except Exception:
         logger.warning("Failed to read model sources, using defaults", exc_info=True)
-        return [default]
+        return defaults
 
 
 def _write_sources(sources: list[dict]) -> None:
@@ -185,6 +194,52 @@ def _read_train_config(ckpt_dir: Path) -> dict | None:
         return None
 
 
+def _read_flat_checkpoint(ckpt_dir: Path) -> dict | None:
+    """Read metadata from a flat checkpoint directory (model.safetensors + config.json).
+
+    Used for converted checkpoints that don't have the standard
+    checkpoints/pretrained_model/ structure (e.g. HVLA S2 VLM).
+    """
+    config_file = ckpt_dir / "config.json"
+    model_file = ckpt_dir / "model.safetensors"
+    if not config_file.is_file() or not model_file.is_file():
+        return None
+
+    try:
+        config = json.loads(config_file.read_text())
+    except Exception:
+        return None
+
+    model_size = model_file.stat().st_size
+    num_params = _count_safetensor_params(model_file)
+
+    return {
+        "name": ckpt_dir.name,
+        "path": str(ckpt_dir),
+        "policy_type": config.get("type", "unknown"),
+        "dataset": "",
+        "dataset_root": None,
+        "current_step": None,
+        "total_steps": None,
+        "batch_size": None,
+        "model_size_bytes": model_size,
+        "num_parameters": num_params,
+        "num_checkpoints": 1,
+        "checkpoints": [{
+            "name": ckpt_dir.name,
+            "path": str(ckpt_dir),
+            "step": None,
+            "model_size_bytes": model_size,
+            "num_parameters": num_params,
+            "has_training_state": False,
+            "is_last": True,
+            "policy_type": config.get("type", "unknown"),
+        }],
+        "wandb_run_id": None,
+        "wandb_project": None,
+    }
+
+
 def _scan_source(source_path: str, max_depth: int = 2) -> list[dict]:
     """Scan a directory for training runs (dirs containing checkpoints/)."""
     root = Path(source_path)
@@ -203,17 +258,28 @@ def _scan_recursive(
     if depth > max_depth:
         return
     try:
-        # Check if this directory is a training run
+        # Check if this directory is a training run (standard LeRobot format)
         if (current / "checkpoints").is_dir():
             run_meta = _scan_training_run(current)
             if run_meta:
-                # Use relative path from base as name
                 try:
                     run_meta["name"] = str(current.relative_to(base))
                 except ValueError:
                     pass
                 found.append(run_meta)
             return  # Don't recurse into training run subdirs
+
+        # Check if this is a flat checkpoint dir (model.safetensors + config.json, no checkpoints/)
+        # Used by converted checkpoints (e.g. HVLA S2 VLM)
+        if (current / "model.safetensors").is_file() and (current / "config.json").is_file():
+            meta = _read_flat_checkpoint(current)
+            if meta:
+                try:
+                    meta["name"] = str(current.relative_to(base))
+                except ValueError:
+                    pass
+                found.append(meta)
+            return
 
         # Recurse
         if depth < max_depth:
