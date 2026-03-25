@@ -321,33 +321,46 @@ class ObservationStreamWriterStep:
             self._s2_enabled = False
 
     def _ensure_s2_buffer(self, obs: dict):
+        """Attach to S2 shared memory. Lazy init + retry until S2 process creates it."""
         if self._s2_buffer is not None:
             return
+
+        # One-time: discover joint names and image resolution from first observation
+        if self._s2_joint_names is None:
+            try:
+                from lerobot.policies.hvla.ipc import DEFAULT_S2_CAM_KEY_MAP
+                self._s2_cam_key_map = DEFAULT_S2_CAM_KEY_MAP
+                self._s2_joint_names = [k for k, v in obs.items()
+                                        if isinstance(v, (int, float)) and not k.startswith("_")]
+                for cam_name in self._s2_cam_key_map:
+                    img = obs.get(cam_name)
+                    if img is not None:
+                        self._s2_height, self._s2_width = img.shape[0], img.shape[1]
+                        break
+                else:
+                    self._s2_height, self._s2_width = 720, 1280
+            except Exception:
+                self._s2_enabled = False
+                return
+
+        # Try attach (cheap existence check first)
+        shm_name = "hvla_img_" + next(iter(self._s2_cam_key_map.values()))
+        if _shm_exists(shm_name):
+            self._try_attach_s2()
+
+    def _try_attach_s2(self):
+        """Try to attach to S2's SharedImageBuffer. No-op if not found."""
         try:
-            from lerobot.policies.hvla.ipc import SharedImageBuffer, DEFAULT_S2_CAM_KEY_MAP
-            self._s2_cam_key_map = DEFAULT_S2_CAM_KEY_MAP
-            self._s2_joint_names = [
-                k for k, v in obs.items()
-                if isinstance(v, (int, float)) and not k.startswith("_")
-            ]
+            from lerobot.policies.hvla.ipc import SharedImageBuffer
             s2_image_keys = tuple(self._s2_cam_key_map.values())
-            # Get image resolution from first camera in obs
-            for cam_name in self._s2_cam_key_map:
-                img = obs.get(cam_name)
-                if img is not None:
-                    h, w = img.shape[0], img.shape[1]
-                    break
-            else:
-                h, w = 720, 1280
             self._s2_buffer = SharedImageBuffer(
-                camera_keys=s2_image_keys, height=h, width=w,
-                create=True, state_dim=max(len(self._s2_joint_names), 32),
+                camera_keys=s2_image_keys, height=self._s2_height, width=self._s2_width,
+                create=False, state_dim=max(len(self._s2_joint_names), 32),
             )
-            logger.info("S2 SharedImageBuffer created for debug model (%dx%d, %d joints)",
-                        w, h, len(self._s2_joint_names))
-        except Exception:
-            self._s2_enabled = False
-            logger.warning("Failed to create S2 SharedImageBuffer", exc_info=True)
+            logger.info("Attached to S2 SharedImageBuffer (%dx%d, %d joints)",
+                        self._s2_width, self._s2_height, len(self._s2_joint_names))
+        except FileNotFoundError:
+            logger.debug("S2 SharedImageBuffer not found yet, will retry")
 
     def observation(self, observation: dict) -> dict:
         """Write observation to stream(s) and pass through unchanged."""
@@ -357,14 +370,19 @@ class ObservationStreamWriterStep:
             except Exception:
                 pass
         if self._s2_enabled:
-            try:
-                self._ensure_s2_buffer(observation)
-                if self._s2_buffer is not None:
-                    self._s2_buffer.write_images(
-                        observation, self._s2_cam_key_map, self._s2_joint_names,
-                    )
-            except Exception:
-                pass
+            self._ensure_s2_buffer(observation)
+            if self._s2_buffer is not None:
+                # Check if S2 shared memory is still alive (S2 may have been unloaded)
+                shm_name = "hvla_img_" + next(iter(self._s2_cam_key_map.values()))
+                if not _shm_exists(shm_name):
+                    self._s2_buffer = None  # S2 unloaded — will re-attach on next call
+                else:
+                    try:
+                        self._s2_buffer.write_images(
+                            observation, self._s2_cam_key_map, self._s2_joint_names,
+                        )
+                    except Exception:
+                        self._s2_buffer = None
         return observation
 
     def __call__(self, transition):
@@ -377,6 +395,11 @@ class ObservationStreamWriterStep:
     def transform_features(self, features):
         """Pass-through — this step doesn't modify features."""
         return features
+
+
+def _shm_exists(name: str) -> bool:
+    """Check if a named shared memory segment exists via /dev/shm (no syscall overhead)."""
+    return os.path.exists(f"/dev/shm/{name}")
 
 
 def make_obs_stream_writer_step() -> ObservationStreamWriterStep | None:

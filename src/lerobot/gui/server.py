@@ -74,6 +74,23 @@ async def startup_event():
     logger.info(f"Initialized frame cache with {cache_size / 1_000_000:.0f} MB budget")
 
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up subprocesses on server shutdown."""
+    from lerobot.gui.api.run import _stop_debug_process, _active_process
+    import signal
+    # Stop debug model process
+    await _stop_debug_process()
+    # Stop active process (teleop/record/etc.)
+    if _active_process is not None and _active_process.returncode is None:
+        _active_process.send_signal(signal.SIGINT)
+        try:
+            import asyncio
+            await asyncio.wait_for(_active_process.wait(), timeout=5.0)
+        except Exception:
+            _active_process.kill()
+
+
 # Include API routers
 app.include_router(datasets.router)
 app.include_router(playback.router)
