@@ -62,11 +62,15 @@ class _Block:
         self._data_size = data_size
         total = _HDR_SIZE + data_size
 
-        # Suppress resource_tracker registration for ALL SharedMemory calls
-        # in this constructor.  We manage lifecycle explicitly (cleanup/unlink),
-        # so the tracker is not needed and causes KeyError spam on Python 3.10.
+        # Suppress resource_tracker register AND unregister for ALL
+        # SharedMemory calls in this constructor.  We manage lifecycle
+        # explicitly (cleanup/unlink), so the tracker is not needed and
+        # causes KeyError spam on Python 3.10 (old.unlink() triggers
+        # unregister for a name that was never registered in this process).
         _orig_register = resource_tracker.register
+        _orig_unregister = resource_tracker.unregister
         resource_tracker.register = lambda *a, **kw: None
+        resource_tracker.unregister = lambda *a, **kw: None
         try:
             if create:
                 # Clean up stale shm from a crashed prior run
@@ -84,6 +88,7 @@ class _Block:
                 data_size = total - _HDR_SIZE
         finally:
             resource_tracker.register = _orig_register
+            resource_tracker.unregister = _orig_unregister
 
         self.name = self._shm.name
         self._total = total

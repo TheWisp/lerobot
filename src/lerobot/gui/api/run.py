@@ -241,6 +241,10 @@ async def _launch_subprocess(args: list[str], command: str, config: dict,
     _active_command = command
     _active_config = config
 
+    # Close stale obs reader — the new process will create fresh shared memory
+    # segments; any existing reader is mapped to old (possibly unlinked) segments.
+    _close_obs_reader()
+
     env = {**__import__("os").environ, "LEROBOT_OBS_STREAM": "1"}
     if extra_env:
         env.update(extra_env)
@@ -635,18 +639,43 @@ async def stream_output() -> StreamingResponse:
 # ============================================================================
 
 _obs_reader = None  # ObservationStreamReader | None
+_obs_reader_meta_ino: int | None = None  # inode of /dev/shm/lerobot_obs_meta at attach time
 _jpeg_cache: dict[str, tuple[int, bytes]] = {}  # cam_key → (seq, jpeg_bytes)
+
+_OBS_META_SHM_PATH = "/dev/shm/lerobot_obs_meta"
 
 
 def _get_obs_reader():
-    """Lazily attach to the robot's observation stream."""
-    global _obs_reader
+    """Lazily attach to the robot's observation stream.
+
+    Detects stream recreation (e.g. new teleop session after a crash) by
+    comparing the inode of ``/dev/shm/lerobot_obs_meta`` — if it changed,
+    the old reader is stale (mapped to unlinked segments) and we re-attach.
+    """
+    global _obs_reader, _obs_reader_meta_ino
+
     if _obs_reader is not None:
-        return _obs_reader
+        # Cheap staleness check: has the meta segment been recreated?
+        try:
+            current_ino = os.stat(_OBS_META_SHM_PATH).st_ino
+        except FileNotFoundError:
+            _close_obs_reader()
+            return None
+        if current_ino != _obs_reader_meta_ino:
+            logger.info("ObservationStream recreated (inode changed), re-attaching reader")
+            _close_obs_reader()
+            # Fall through to create new reader
+        else:
+            return _obs_reader
+
     try:
         from lerobot.robots.obs_stream import ObservationStreamReader
 
         _obs_reader = ObservationStreamReader()
+        try:
+            _obs_reader_meta_ino = os.stat(_OBS_META_SHM_PATH).st_ino
+        except FileNotFoundError:
+            _obs_reader_meta_ino = None
         logger.info(
             "ObservationStreamReader attached: %d scalars, %d cameras",
             len(_obs_reader.obs_scalar_keys),
@@ -658,10 +687,11 @@ def _get_obs_reader():
 
 
 def _close_obs_reader():
-    global _obs_reader
+    global _obs_reader, _obs_reader_meta_ino
     if _obs_reader is not None:
         _obs_reader.close()
         _obs_reader = None
+    _obs_reader_meta_ino = None
     _jpeg_cache.clear()
 
 

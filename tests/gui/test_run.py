@@ -180,7 +180,7 @@ def _make_fake_launch(captured_args):
     """Create a fake _launch_subprocess that captures args and sets _active_process."""
     import lerobot.gui.api.run as run_module
 
-    async def fake_launch(args, command, config):
+    async def fake_launch(args, command, config, extra_env=None):
         captured_args.extend(args)
         # The endpoint reads _active_process.pid after launch, so set a mock
         mock_proc = AsyncMock()
@@ -487,3 +487,116 @@ class TestReplayEndpoint:
         assert "--dataset.root=/tmp/datasets/user/my_dataset" in captured_args
         assert "--dataset.repo_id=user/my_dataset" in captured_args
         assert "--dataset.episode=3" in captured_args
+
+
+# ============================================================================
+# Stale obs reader cleanup on launch
+# ============================================================================
+
+
+class TestObsReaderCleanupOnLaunch:
+    """_launch_subprocess must close the obs reader so the GUI doesn't serve
+    stale frames from a previous session's shared memory segments."""
+
+    def test_launch_clears_obs_reader(self):
+        """Launching any workflow closes existing obs reader."""
+        import lerobot.gui.api.run as run_module
+
+        close_called = False
+        original_close = run_module._close_obs_reader
+
+        def tracking_close():
+            nonlocal close_called
+            close_called = True
+            original_close()
+
+        captured_args = []
+
+        async def run():
+            req = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP, fps=30)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._close_obs_reader", tracking_close),
+                patch(
+                    "lerobot.gui.api.run._launch_subprocess",
+                    wraps=run_module._launch_subprocess,
+                ) as mock_launch,
+                patch("asyncio.create_subprocess_exec") as mock_exec,
+            ):
+                mock_proc = AsyncMock()
+                mock_proc.pid = 9999
+                mock_proc.stdout = AsyncMock()
+                mock_proc.stderr = AsyncMock()
+                mock_exec.return_value = mock_proc
+                await start_teleoperate(req)
+
+        asyncio.run(run())
+        assert close_called, "_close_obs_reader must be called during launch"
+
+    def test_inode_based_reader_reattach(self):
+        """_get_obs_reader detects inode change and re-attaches."""
+        import lerobot.gui.api.run as run_module
+
+        # Simulate: reader attached with inode 1000, then stream recreated with inode 2000
+        mock_reader = AsyncMock()
+        mock_reader.close = lambda: None
+
+        run_module._obs_reader = mock_reader
+        run_module._obs_reader_meta_ino = 1000
+
+        with (
+            patch("os.stat") as mock_stat,
+            patch(
+                "lerobot.robots.obs_stream.ObservationStreamReader",
+            ) as MockReader,
+        ):
+            # Current inode is different — stream was recreated
+            mock_stat.return_value.st_ino = 2000
+            new_reader = AsyncMock()
+            new_reader.obs_scalar_keys = ["j.pos"]
+            new_reader.image_keys = {}
+            MockReader.return_value = new_reader
+
+            result = run_module._get_obs_reader()
+
+            assert result is new_reader, "Should return newly created reader"
+            assert run_module._obs_reader is new_reader
+            assert run_module._obs_reader_meta_ino == 2000
+
+        # Cleanup
+        run_module._obs_reader = None
+        run_module._obs_reader_meta_ino = None
+
+    def test_same_inode_keeps_reader(self):
+        """_get_obs_reader returns cached reader when inode hasn't changed."""
+        import lerobot.gui.api.run as run_module
+
+        mock_reader = AsyncMock()
+        run_module._obs_reader = mock_reader
+        run_module._obs_reader_meta_ino = 1000
+
+        with patch("os.stat") as mock_stat:
+            mock_stat.return_value.st_ino = 1000  # Same inode
+            result = run_module._get_obs_reader()
+            assert result is mock_reader, "Should return cached reader"
+
+        # Cleanup
+        run_module._obs_reader = None
+        run_module._obs_reader_meta_ino = None
+
+    def test_missing_shm_clears_reader(self):
+        """_get_obs_reader clears reader if /dev/shm file disappears."""
+        import lerobot.gui.api.run as run_module
+
+        mock_reader = AsyncMock()
+        mock_reader.close = lambda: None
+        run_module._obs_reader = mock_reader
+        run_module._obs_reader_meta_ino = 1000
+
+        with patch("os.stat", side_effect=FileNotFoundError):
+            result = run_module._get_obs_reader()
+            assert result is None
+            assert run_module._obs_reader is None
+
+        # Cleanup
+        run_module._obs_reader_meta_ino = None

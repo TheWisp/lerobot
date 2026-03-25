@@ -302,10 +302,16 @@ class TestInitSubclassWrapping:
     """Test that Robot.__init_subclass__ wrapping works correctly."""
 
     def test_methods_are_wrapped(self):
-        """connect/get_observation/send_action/disconnect should be closures."""
-        for method_name in ("connect", "disconnect", "get_observation", "send_action"):
+        """connect/send_action/disconnect should be closures.
+
+        NOTE: get_observation is NOT wrapped — obs stream writes are handled
+        by ObservationStreamWriterStep in the processor pipeline.
+        """
+        for method_name in ("connect", "disconnect", "send_action"):
             fn = _SimpleRobot.__dict__[method_name]
             assert fn.__closure__ is not None, f"{method_name} should be wrapped"
+        # get_observation should NOT be wrapped
+        assert _SimpleRobot.__dict__["get_observation"].__closure__ is None
 
     def test_no_stream_without_env_var(self):
         import lerobot.robots.obs_stream as mod
@@ -326,8 +332,10 @@ class TestInitSubclassWrapping:
             assert mod._active_stream is not None
             assert mod._active_robot_id == id(robot)
 
-            # get_observation should publish
+            # Obs writes are done by the processor step, not get_observation.
+            # Manually write to verify stream is functional.
             obs = robot.get_observation()
+            mod._active_stream.write_obs(obs)
             reader = ObservationStreamReader()
             result = reader.read_obs()
             assert result is not None
@@ -349,8 +357,9 @@ class TestInitSubclassWrapping:
             assert mod._active_robot_id != id(robot.left)
             assert mod._active_robot_id != id(robot.right)
 
-            # Composite's get_observation publishes both joints
-            robot.get_observation()
+            # Manually write composite obs to the stream
+            obs = robot.get_observation()
+            mod._active_stream.write_obs(obs)
             reader = ObservationStreamReader()
             result = reader.read_obs()
             assert result is not None
@@ -401,3 +410,94 @@ class TestMultipleCameras:
         assert abs(result[0]["j.pos"] - 42.0) < 1e-4
         reader.close()
         stream.cleanup()
+
+
+# ============================================================================
+# Stale stream detection (crash → restart)
+# ============================================================================
+
+
+class TestStaleStreamDetection:
+    """When a teleop session crashes and restarts, the GUI reader must detect
+    that shared memory was recreated (unlinked + new allocation) and re-attach
+    to the fresh segments rather than reading stale data from the old mapping.
+    """
+
+    def test_reader_reads_stale_after_recreate_without_reattach(self, simple_features):
+        """Demonstrate the problem: reader on old mapping reads stale data."""
+        obs_ft, act_ft = simple_features
+        stream1 = ObservationStream(obs_ft, act_ft)
+        stream1.write_obs({"j1.pos": 1.0, "j2.pos": 2.0, "cam": np.zeros((240, 320, 3), dtype=np.uint8)})
+
+        reader = ObservationStreamReader()
+        result = reader.read_obs()
+        assert result is not None
+        assert abs(result[0]["j1.pos"] - 1.0) < 1e-4
+
+        # Simulate crash + restart: old stream cleaned up, new one created
+        stream1.cleanup()
+        stream2 = ObservationStream(obs_ft, act_ft)
+        stream2.write_obs({"j1.pos": 99.0, "j2.pos": 88.0, "cam": np.zeros((240, 320, 3), dtype=np.uint8)})
+
+        # Old reader still mapped to unlinked segments — reads stale data
+        result = reader.read_obs()
+        assert result is not None
+        assert abs(result[0]["j1.pos"] - 1.0) < 1e-4  # Still the old value!
+
+        reader.close()
+        stream2.cleanup()
+
+    def test_inode_changes_on_recreate(self, simple_features):
+        """The /dev/shm inode changes when segments are recreated, which is
+        what the GUI reader uses to detect staleness."""
+        obs_ft, act_ft = simple_features
+        stream1 = ObservationStream(obs_ft, act_ft)
+        stream1.write_obs({"j1.pos": 1.0, "j2.pos": 2.0, "cam": np.zeros((240, 320, 3), dtype=np.uint8)})
+
+        ino1 = os.stat("/dev/shm/lerobot_obs_meta").st_ino
+
+        stream1.cleanup()
+        stream2 = ObservationStream(obs_ft, act_ft)
+
+        ino2 = os.stat("/dev/shm/lerobot_obs_meta").st_ino
+        assert ino1 != ino2, "Inode should change after unlink + recreate"
+
+        stream2.cleanup()
+
+    def test_new_reader_after_recreate_sees_fresh_data(self, simple_features):
+        """A fresh reader attached after recreate reads the new data."""
+        obs_ft, act_ft = simple_features
+        stream1 = ObservationStream(obs_ft, act_ft)
+        stream1.write_obs({"j1.pos": 1.0, "j2.pos": 2.0, "cam": np.zeros((240, 320, 3), dtype=np.uint8)})
+
+        reader1 = ObservationStreamReader()
+        result = reader1.read_obs()
+        assert abs(result[0]["j1.pos"] - 1.0) < 1e-4
+        reader1.close()
+
+        # Recreate stream (simulates new teleop session)
+        stream1.cleanup()
+        stream2 = ObservationStream(obs_ft, act_ft)
+        stream2.write_obs({"j1.pos": 99.0, "j2.pos": 88.0, "cam": np.zeros((240, 320, 3), dtype=np.uint8)})
+
+        # New reader sees new data
+        reader2 = ObservationStreamReader()
+        result = reader2.read_obs()
+        assert abs(result[0]["j1.pos"] - 99.0) < 1e-4
+        reader2.close()
+        stream2.cleanup()
+
+    def test_new_stream_header_zeroed_before_first_write(self, simple_features):
+        """After recreate but before first write, read returns None (not stale)."""
+        obs_ft, act_ft = simple_features
+        stream1 = ObservationStream(obs_ft, act_ft)
+        stream1.write_obs({"j1.pos": 1.0, "j2.pos": 2.0, "cam": np.zeros((240, 320, 3), dtype=np.uint8)})
+        stream1.cleanup()
+
+        stream2 = ObservationStream(obs_ft, act_ft)
+        # No write yet — header is zeroed
+        reader = ObservationStreamReader()
+        assert reader.read_obs() is None
+        assert reader.read_image("cam") is None
+        reader.close()
+        stream2.cleanup()
