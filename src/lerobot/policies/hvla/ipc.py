@@ -44,33 +44,37 @@ class SharedBlock:
         self._data_size = int(np.prod(shape)) * self.dtype.itemsize
         self._total_size = _HEADER_SIZE + self._data_size
 
-        if create:
-            # Clean up stale shared memory from previous crashed runs
-            if name is not None:
-                try:
-                    old = multiprocessing.shared_memory.SharedMemory(name=name)
-                    old.close()
-                    old.unlink()
-                except FileNotFoundError:
-                    pass
-            self._shm = multiprocessing.shared_memory.SharedMemory(
-                name=name, create=True, size=self._total_size,
-            )
-            self._shm.buf[:_HEADER_SIZE] = struct.pack(_HEADER_FMT, 0, 0, 0.0)
-            self._shm.buf[_HEADER_SIZE:] = b'\x00' * self._data_size
-        else:
-            self._shm = multiprocessing.shared_memory.SharedMemory(name=name)
+        # Suppress resource_tracker register/unregister — we manage lifecycle
+        # explicitly. Without this, the tracker auto-unlinks shared memory on
+        # process exit (destroys persistent S2's memory when S1 exits) and
+        # causes KeyError spam on Python 3.10.
+        _orig_register = resource_tracker.register
+        _orig_unregister = resource_tracker.unregister
+        resource_tracker.register = lambda *a, **kw: None
+        resource_tracker.unregister = lambda *a, **kw: None
+        try:
+            if create:
+                # Clean up stale shared memory from previous crashed runs
+                if name is not None:
+                    try:
+                        old = multiprocessing.shared_memory.SharedMemory(name=name)
+                        old.close()
+                        old.unlink()
+                    except FileNotFoundError:
+                        pass
+                self._shm = multiprocessing.shared_memory.SharedMemory(
+                    name=name, create=True, size=self._total_size,
+                )
+                self._shm.buf[:_HEADER_SIZE] = struct.pack(_HEADER_FMT, 0, 0, 0.0)
+                self._shm.buf[_HEADER_SIZE:] = b'\x00' * self._data_size
+            else:
+                self._shm = multiprocessing.shared_memory.SharedMemory(name=name)
+        finally:
+            resource_tracker.register = _orig_register
+            resource_tracker.unregister = _orig_unregister
 
         self.shm_name = self._shm.name
         self._view: np.ndarray | None = None
-
-        # Unregister from Python's resource tracker — we manage lifecycle explicitly.
-        # Without this, the resource tracker auto-unlinks shared memory on process exit,
-        # which destroys persistent S2's memory when S1 exits.
-        try:
-            resource_tracker.unregister(f"/{self.shm_name}", "shared_memory")
-        except Exception:
-            pass
 
     def _ensure_view(self):
         if self._view is None:
@@ -128,10 +132,14 @@ class SharedBlock:
             pass
 
     def unlink(self):
+        _orig = resource_tracker.unregister
+        resource_tracker.unregister = lambda *a, **kw: None
         try:
             self._shm.unlink()
         except Exception:
             pass
+        finally:
+            resource_tracker.unregister = _orig
 
     def __getstate__(self):
         return {"shm_name": self.shm_name, "shape": self.shape, "dtype": self.dtype.str}
@@ -152,6 +160,9 @@ class SharedLatentCache:
     S2 calls write(latent_tensor). S1 calls read() or read_with_age().
     Torn-read protected via sequence counters in SharedBlock.
 
+    Optionally stores a subtask text string (up to 256 bytes, UTF-8) in a
+    separate shared block for GUI overlay display.
+
     Args:
         latent_dim: size of the latent vector.
         create: True to create new shared memory (S2 side), False to attach (S1 side).
@@ -159,18 +170,46 @@ class SharedLatentCache:
     """
 
     SHM_NAME = "hvla_s2_latent"
+    _SUBTASK_MAX_BYTES = 256
 
     def __init__(self, latent_dim: int = 2048, create: bool = True, name: str | None = None):
         self.latent_dim = latent_dim
         shm_name = name or self.SHM_NAME
         self._block = SharedBlock(name=shm_name, shape=(latent_dim,), dtype=np.float32, create=create)
+        self._subtask_block = SharedBlock(
+            name=shm_name + "_subtask", shape=(self._SUBTASK_MAX_BYTES,), dtype=np.uint8, create=create,
+        )
+        self._confidence_block = SharedBlock(
+            name=shm_name + "_conf", shape=(1,), dtype=np.float32, create=create,
+        )
 
-    def write(self, latent: Tensor) -> None:
+    def write(self, latent: Tensor, subtask: str | None = None, confidence: float = 0.0) -> None:
         self._block.write(latent.detach().cpu().to(torch.float32).numpy())
+        if subtask is not None:
+            encoded = subtask.encode("utf-8")[:self._SUBTASK_MAX_BYTES]
+            buf = np.zeros(self._SUBTASK_MAX_BYTES, dtype=np.uint8)
+            buf[:len(encoded)] = np.frombuffer(encoded, dtype=np.uint8)
+            self._subtask_block.write(buf)
+            self._confidence_block.write(np.array([confidence], dtype=np.float32))
 
     def read(self) -> tuple[Tensor, float]:
         data, ts = self._block.read()
         return torch.from_numpy(data), ts
+
+    def read_subtask(self) -> tuple[str, float, float]:
+        """Read the latest subtask text + confidence.
+
+        Returns (text, timestamp, confidence). ("", 0.0, 0.0) if never written.
+        """
+        if self._subtask_block.count == 0:
+            return "", 0.0, 0.0
+        data, ts = self._subtask_block.read()
+        text = bytes(data).split(b"\x00", 1)[0].decode("utf-8", errors="replace")
+        conf = 0.0
+        if self._confidence_block.count > 0:
+            conf_data, _ = self._confidence_block.read()
+            conf = float(conf_data[0])
+        return text, ts, conf
 
     def read_with_age(self) -> tuple[Tensor, float]:
         data, ts = self._block.read()
@@ -196,8 +235,12 @@ class SharedLatentCache:
 
     def cleanup(self):
         self._block.close()
+        self._subtask_block.close()
+        self._confidence_block.close()
         if self._block._owner:
             self._block.unlink()
+            self._subtask_block.unlink()
+            self._confidence_block.unlink()
 
 
 class SharedImageBuffer:

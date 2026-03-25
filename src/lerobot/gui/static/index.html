@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
-    <link rel="stylesheet" href="/static/style.css?v=19">
+    <link rel="stylesheet" href="/static/style.css?v=21">
 </head>
 <body>
     <div class="tab-bar">
@@ -130,6 +130,11 @@
             <div class="main run-main-split" id="run-main">
                 <div class="rerun-viewer" id="rerun-viewer">
                     <div class="rerun-placeholder" id="rerun-placeholder">Camera view will appear here when a process is running</div>
+                    <!-- TODO: generalize this overlay — currently hardcoded for HVLA S2
+                         subtask text. When we support multiple debug model types, this
+                         should be driven by a model output schema (the model declares
+                         its output fields + types, user picks which to overlay). -->
+                    <div class="debug-model-overlay" id="debug-model-overlay"></div>
                 </div>
                 <div class="run-split-handle" id="run-split-handle"></div>
                 <div class="run-terminal-container" id="run-terminal-container">
@@ -138,6 +143,10 @@
                             <div class="run-terminal-header">
                                 <span>Output</span>
                                 <span class="run-status idle" id="run-status-indicator">Idle</span>
+                                <span class="terminal-actions">
+                                    <button class="btn-terminal" onclick="copyTerminal('run-terminal')" title="Copy">Copy</button>
+                                    <button class="btn-terminal" onclick="clearTerminal('run-terminal')" title="Clear">Clear</button>
+                                </span>
                             </div>
                             <div class="run-terminal" id="run-terminal">
                                 <div class="terminal-line" style="color: #666;">Select a workflow and press Launch</div>
@@ -146,6 +155,10 @@
                         <div class="run-terminal-panel" id="run-terminal-panel-model" style="display:none;">
                             <div class="run-terminal-header">
                                 <span>Model Output</span>
+                                <span class="terminal-actions">
+                                    <button class="btn-terminal" onclick="copyTerminal('run-model-terminal')" title="Copy">Copy</button>
+                                    <button class="btn-terminal" onclick="clearTerminal('run-model-terminal')" title="Clear">Clear</button>
+                                </span>
                             </div>
                             <div class="run-terminal" id="run-model-terminal">
                                 <div class="terminal-line" style="color: #666;">Model output will appear here</div>
@@ -213,7 +226,7 @@
 
     <script src="/static/app.js?v=24"></script>
     <script src="/static/robot.js?v=18"></script>
-    <script src="/static/run.js?v=23"></script>
+    <script src="/static/run.js?v=25"></script>
     <script src="/static/model.js?v=3"></script>
 </body>
 </html>

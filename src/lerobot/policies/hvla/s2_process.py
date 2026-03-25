@@ -126,8 +126,9 @@ def _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
                         len(image_tensors))
 
         # Extract latent
+        confidence = 0.0
         if decode_subtask:
-            latent, subtask_tokens, _ = model.extract_prefix_latent_and_subtask(
+            latent, subtask_tokens, _, confidence = model.extract_prefix_latent_and_subtask(
                 image_tensors, image_masks, lang_tokens, lang_masks,
                 temperature=config.subtask_temperature,
             )
@@ -141,8 +142,11 @@ def _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
             latent = model.extract_prefix_latent(image_tensors, image_masks, lang_tokens, lang_masks)
             subtask_text = None
 
-        # Write to shared memory
-        shared_cache.write(latent[0])
+        # Write to shared memory (latent + subtask text + confidence if decoding)
+        subtask_label_for_shm = None
+        if decode_subtask and subtask_text:
+            subtask_label_for_shm = subtask_text.split(";")[0].strip()
+        shared_cache.write(latent[0], subtask=subtask_label_for_shm, confidence=confidence)
         query_count += 1
         elapsed_ms = (time.perf_counter() - t0) * 1000
 

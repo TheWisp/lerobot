@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import signal
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -336,7 +337,8 @@ async def _tail_debug_log() -> None:
 
 async def _stop_debug_process() -> None:
     """Stop the debug model process if running."""
-    global _debug_process, _debug_read_task, _debug_output_path
+    global _debug_process, _debug_read_task, _debug_output_path, _s2_subtask_cache
+    _s2_subtask_cache = None
     if _debug_process is not None and _debug_process.returncode is None:
         _debug_process.terminate()
         try:
@@ -424,6 +426,38 @@ async def debug_output_sse():
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# TODO: generalize — currently hardcoded for HVLA S2 subtask.
+# When multiple debug model types exist, this should read from a generic
+# model output schema rather than importing HVLA-specific IPC.
+_s2_subtask_cache = None  # SharedLatentCache | None (read-only attach)
+
+
+@router.get("/debug/subtask")
+async def debug_subtask() -> dict:
+    """Read the latest S2 subtask text directly from shared memory.
+
+    Returns {"subtask": str, "age_ms": float} or {"subtask": ""} if unavailable.
+    """
+    global _s2_subtask_cache
+    if not _is_debug_loaded():
+        _s2_subtask_cache = None
+        return {"subtask": ""}
+    # Lazily attach to S2's shared memory
+    if _s2_subtask_cache is None:
+        try:
+            from lerobot.policies.hvla.ipc import SharedLatentCache
+            _s2_subtask_cache = SharedLatentCache(create=False)
+        except FileNotFoundError:
+            return {"subtask": ""}
+    try:
+        text, ts, confidence = _s2_subtask_cache.read_subtask()
+        age_ms = (time.time() - ts) * 1000 if ts > 0 else 0.0
+        return {"subtask": text, "age_ms": age_ms, "confidence": confidence}
+    except Exception:
+        _s2_subtask_cache = None
+        return {"subtask": ""}
 
 
 # ============================================================================

@@ -495,6 +495,7 @@ async function _refreshDebugModelStatus() {
         const res = await fetch('/api/run/debug/status');
         const data = await res.json();
         _debugModelLoaded = data.loaded;
+        _debugModelLoading = false;  // reset stuck loading flag on status refresh
         status.textContent = data.loaded ? `Loaded (PID ${data.pid})` : 'Not loaded';
         _updateDebugButtons();
     } catch (e) {
@@ -1197,7 +1198,37 @@ function _connectDebugOutputSSE() {
         while (modelTerminal.children.length > 500) {
             modelTerminal.removeChild(modelTerminal.firstChild);
         }
+
     };
+}
+
+// TODO: generalize — currently hardcoded for HVLA S2 subtask text.
+// When multiple debug model types exist, the model should declare its
+// output schema and the user picks which field to overlay.
+
+// Called from the camera poll loop (startObsStreamViewer) — no separate timer.
+async function _pollSubtaskOverlay() {
+    if (!_debugModelLoaded) return;
+    try {
+        const res = await fetch('/api/run/debug/subtask');
+        if (!res.ok) return;
+        const data = await res.json();
+        const overlay = document.getElementById('debug-model-overlay');
+        if (!overlay) return;
+        if (data.subtask) {
+            const conf = data.confidence != null ? ` (${(data.confidence * 100).toFixed(0)}%)` : '';
+            overlay.textContent = data.subtask + conf;
+            overlay.style.display = 'block';
+        }
+    } catch (e) { /* ignore */ }
+}
+
+function _hideSubtaskOverlay() {
+    const overlay = document.getElementById('debug-model-overlay');
+    if (overlay) {
+        overlay.style.display = 'none';
+        overlay.textContent = '';
+    }
 }
 
 function _disconnectDebugOutputSSE() {
@@ -1205,6 +1236,23 @@ function _disconnectDebugOutputSSE() {
         _debugOutputSSE.close();
         _debugOutputSSE = null;
     }
+    _hideSubtaskOverlay();
+}
+
+function copyTerminal(terminalId) {
+    const terminal = document.getElementById(terminalId);
+    if (!terminal) return;
+    const lines = Array.from(terminal.querySelectorAll('.terminal-line'))
+        .map(el => el.textContent).join('\n');
+    navigator.clipboard.writeText(lines).then(() => {
+        showToast('Terminal', 'Copied to clipboard', 'info');
+    }).catch(() => {});
+}
+
+function clearTerminal(terminalId) {
+    const terminal = document.getElementById(terminalId);
+    if (!terminal) return;
+    terminal.innerHTML = '';
 }
 
 function appendTerminalLine(rawText) {
@@ -1433,7 +1481,8 @@ async function startObsStreamViewer() {
             // Append seq to bust browser cache
             img.src = `/api/run/obs-stream/image/${encodeURIComponent(key)}?_=${seq}`;
         }
-    }, 100);
+        _pollSubtaskOverlay();
+    }, 50);
 }
 
 function stopObsStreamViewer() {
@@ -1442,6 +1491,7 @@ function stopObsStreamViewer() {
         obsStreamTimer = null;
     }
     obsStreamMeta = null;
+    _hideSubtaskOverlay();
 
     const container = document.getElementById('rerun-viewer');
     if (!container) return;
