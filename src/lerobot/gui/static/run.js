@@ -395,6 +395,32 @@ function _modelCheckpointOptions() {
     return html;
 }
 
+function _getDebugModelConfig() {
+    // Returns debug model config or null if none selected.
+    const sel = document.getElementById('run-teleop-debug-model');
+    if (!sel?.value) return null;
+    const opt = sel.selectedOptions[0];
+    const policyType = opt?.dataset?.policyType || '';
+    const config = {
+        checkpoint: sel.value,
+        policy_type: policyType,
+    };
+    if (policyType === 'hvla_s2_vlm') {
+        config.task = document.getElementById('run-teleop-debug-s2-task')?.value?.trim() || '';
+        config.decode_subtask = document.getElementById('run-teleop-debug-s2-decode')?.checked || false;
+    }
+    return config;
+}
+
+function _onDebugModelChange() {
+    const sel = document.getElementById('run-teleop-debug-model');
+    const s2Fields = document.getElementById('run-teleop-debug-s2-fields');
+    if (!sel || !s2Fields) return;
+    const opt = sel.selectedOptions[0];
+    const policyType = opt?.dataset?.policyType || '';
+    s2Fields.style.display = policyType === 'hvla_s2_vlm' ? '' : 'none';
+}
+
 function _getSelectedPolicyType() {
     const sel = document.getElementById('run-policy-checkpoint');
     if (!sel?.selectedOptions?.length) return '';
@@ -539,6 +565,26 @@ function renderRunForm() {
     html += `<input type="number" id="run-teleop-episode-time" value="60" min="1">`;
     html += `<label>Reset Duration</label>`;
     html += `<input type="number" id="run-teleop-reset-time" value="60" min="0">`;
+    html += '</div>';
+    html += '</div>';
+    // Debug model (optional — runs alongside teleop for live prediction display)
+    html += '<div class="form-section">';
+    html += '<div class="form-section-title">Debug model</div>';
+    html += '<div class="form-grid">';
+    html += `<label>Model</label>`;
+    html += `<select id="run-teleop-debug-model" onchange="_onDebugModelChange()">`;
+    html += `<option value="">None</option>`;
+    html += _modelCheckpointOptions();
+    html += `</select>`;
+    html += `</div>`;
+    // HVLA S2 specific fields (shown when S2 checkpoint selected)
+    html += `<div id="run-teleop-debug-s2-fields" style="display:none">`;
+    html += '<div class="form-grid">';
+    html += `<label>Task Prompt</label>`;
+    html += `<input type="text" id="run-teleop-debug-s2-task" placeholder="assemble cylinder into ring" value="assemble cylinder into ring">`;
+    html += `<label>Decode Subtask</label>`;
+    html += `<label class="toggle-label"><input type="checkbox" id="run-teleop-debug-s2-decode" checked> Show subtask predictions</label>`;
+    html += '</div>';
     html += '</div>';
     html += '</div>';
     html += '</div>'; // end teleop section
@@ -702,6 +748,8 @@ async function launchRun() {
         const datasetSel = document.getElementById('run-teleop-record-dataset');
         const datasetVal = datasetSel?.value || '';
 
+        const debugModel = _getDebugModelConfig();
+
         if (datasetVal === '') {
             // Pure teleoperate — no recording
             endpoint = '/api/run/teleoperate';
@@ -709,6 +757,7 @@ async function launchRun() {
                 robot: robotData,
                 teleop: teleopData,
                 fps: parseInt(document.getElementById('run-teleop-fps')?.value) || 60,
+                debug_model: debugModel,
             };
         } else {
             // Record mode — existing or new dataset

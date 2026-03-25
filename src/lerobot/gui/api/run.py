@@ -105,10 +105,18 @@ def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bo
 # ============================================================================
 
 
+class DebugModelConfig(BaseModel):
+    checkpoint: str
+    policy_type: str
+    task: str = ""
+    decode_subtask: bool = True
+
+
 class TeleoperateRequest(BaseModel):
     robot: dict[str, Any]
     teleop: dict[str, Any]
     fps: int = 60
+    debug_model: DebugModelConfig | None = None
 
 
 class RecordRequest(BaseModel):
@@ -157,6 +165,7 @@ class HVLARunRequest(BaseModel):
 _active_process: asyncio.subprocess.Process | None = None
 _active_command: str | None = None
 _active_config: dict | None = None
+_debug_process: asyncio.subprocess.Process | None = None  # optional model debug alongside teleop
 _output_lines: list[str] = []
 _output_event: asyncio.Event = asyncio.Event()
 _OUTPUT_MAX_LINES = 2000
@@ -211,6 +220,7 @@ async def _wait_for_exit() -> None:
         _active_command = None
         _active_config = None
         _close_obs_reader()
+        await _stop_debug_process()
         logger.info(f"Process exited (rc={rc}), state cleared")
     _output_event.set()
 
@@ -245,6 +255,53 @@ async def _launch_subprocess(args: list[str], command: str, config: dict) -> Non
     asyncio.create_task(_wait_for_exit())
 
 
+async def _launch_debug_s2(config: DebugModelConfig) -> None:
+    """Launch HVLA S2 standalone as a debug model process alongside teleop."""
+    global _debug_process
+
+    await _stop_debug_process()
+
+    args = [
+        "python", "-m", "lerobot.policies.hvla.s2_standalone",
+        f"--checkpoint={Path(config.checkpoint).expanduser() / 'model.safetensors'}"
+        if not config.checkpoint.endswith(".safetensors")
+        else f"--checkpoint={Path(config.checkpoint).expanduser()}",
+        f"--task={config.task}",
+    ]
+    if config.decode_subtask:
+        args.append("--decode-subtask")
+
+    env = {**__import__("os").environ}
+    _append_output(f"--- Starting debug S2 ---")
+    _append_output(f"$ {' '.join(args)}\n")
+    logger.info(f"Launching debug S2: {' '.join(args)}")
+
+    _debug_process = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+
+    # Stream S2 output to the same output panel (prefixed)
+    asyncio.create_task(_read_stream(_debug_process.stdout, prefix="[S2] "))
+    asyncio.create_task(_read_stream(_debug_process.stderr, prefix="[S2 err] "))
+
+
+async def _stop_debug_process() -> None:
+    """Stop the debug model process if running."""
+    global _debug_process
+    if _debug_process is not None and _debug_process.returncode is None:
+        _debug_process.terminate()
+        try:
+            await asyncio.wait_for(_debug_process.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            _debug_process.kill()
+            await _debug_process.wait()
+        _append_output("--- Debug model stopped ---")
+    _debug_process = None
+
+
 # ============================================================================
 # Endpoints
 # ============================================================================
@@ -258,6 +315,10 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
     args.extend(_profile_to_cli_args(req.robot, "robot"))
     args.extend(_profile_to_cli_args(req.teleop, "teleop"))
     args.append(f"--fps={req.fps}")
+
+    # Launch debug model process alongside teleop (if selected)
+    if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
+        await _launch_debug_s2(req.debug_model)
 
     await _launch_subprocess(args, command="teleoperate", config=req.model_dump())
     return {"status": "started", "command": "teleoperate", "pid": _active_process.pid}
@@ -375,6 +436,7 @@ async def stop_process() -> dict:
     _active_command = None
     _active_config = None
     _close_obs_reader()
+    await _stop_debug_process()
     return {"status": "stopped", "pid": pid}
 
 
