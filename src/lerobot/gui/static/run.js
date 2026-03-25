@@ -583,7 +583,7 @@ function renderRunForm() {
     html += `<label>Task Prompt</label>`;
     html += `<input type="text" id="run-teleop-debug-s2-task" placeholder="assemble cylinder into ring" value="assemble cylinder into ring">`;
     html += `<label>Decode Subtask</label>`;
-    html += `<label class="toggle-label"><input type="checkbox" id="run-teleop-debug-s2-decode" checked> Show subtask predictions</label>`;
+    html += `<input type="checkbox" id="run-teleop-debug-s2-decode" checked>`;
     html += '</div>';
     html += '</div>';
     html += '</div>';

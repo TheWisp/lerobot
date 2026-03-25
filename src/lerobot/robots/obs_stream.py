@@ -298,21 +298,71 @@ class ObservationStreamReader:
 
 
 class ObservationStreamWriterStep:
-    """Processor step that writes observations to the shared memory stream.
+    """Processor step that writes observations to shared memory stream(s).
 
     Append this as the LAST step in robot_observation_processor so the stream
     receives post-processed observations (with overlays etc.), not raw.
+
+    Automatically also writes to HVLA's SharedImageBuffer if the
+    LEROBOT_S2_IMAGE_BUFFER env var is set (for debug S2 model alongside teleop).
 
     Follows the ObservationProcessorStep interface (observation() method)
     but does not subclass it to avoid importing the processor module at
     module level (which would create a circular dependency).
     """
 
+    def __init__(self):
+        self._s2_buffer = None
+        self._s2_joint_names = None
+        # Lazily create S2 shared image buffer if env var is set
+        if os.environ.get("LEROBOT_S2_IMAGE_BUFFER"):
+            self._s2_enabled = True
+        else:
+            self._s2_enabled = False
+
+    def _ensure_s2_buffer(self, obs: dict):
+        if self._s2_buffer is not None:
+            return
+        try:
+            from lerobot.policies.hvla.ipc import SharedImageBuffer, DEFAULT_S2_CAM_KEY_MAP
+            self._s2_cam_key_map = DEFAULT_S2_CAM_KEY_MAP
+            self._s2_joint_names = [
+                k for k, v in obs.items()
+                if isinstance(v, (int, float)) and not k.startswith("_")
+            ]
+            s2_image_keys = tuple(self._s2_cam_key_map.values())
+            # Get image resolution from first camera in obs
+            for cam_name in self._s2_cam_key_map:
+                img = obs.get(cam_name)
+                if img is not None:
+                    h, w = img.shape[0], img.shape[1]
+                    break
+            else:
+                h, w = 720, 1280
+            self._s2_buffer = SharedImageBuffer(
+                camera_keys=s2_image_keys, height=h, width=w,
+                create=True, state_dim=max(len(self._s2_joint_names), 32),
+            )
+            logger.info("S2 SharedImageBuffer created for debug model (%dx%d, %d joints)",
+                        w, h, len(self._s2_joint_names))
+        except Exception:
+            self._s2_enabled = False
+            logger.warning("Failed to create S2 SharedImageBuffer", exc_info=True)
+
     def observation(self, observation: dict) -> dict:
-        """Write observation to stream and pass through unchanged."""
+        """Write observation to stream(s) and pass through unchanged."""
         if _active_stream is not None:
             try:
                 _active_stream.write_obs(observation)
+            except Exception:
+                pass
+        if self._s2_enabled:
+            try:
+                self._ensure_s2_buffer(observation)
+                if self._s2_buffer is not None:
+                    self._s2_buffer.write_images(
+                        observation, self._s2_cam_key_map, self._s2_joint_names,
+                    )
             except Exception:
                 pass
         return observation

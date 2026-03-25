@@ -267,3 +267,16 @@ class SharedImageBuffer:
         self._state_block.close()
         if self._state_block._owner:
             self._state_block.unlink()
+
+
+# Default S1 → S2 camera key mapping for SO107 bimanual
+DEFAULT_S2_CAM_KEY_MAP = {
+    "front": "base_0_rgb",
+    "top": "base_1_rgb",
+    "left_wrist": "left_wrist_0_rgb",
+    "right_wrist": "right_wrist_0_rgb",
+}
+
+DEFAULT_S2_IMAGE_KEYS = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb", "base_1_rgb")
+
+

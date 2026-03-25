@@ -233,8 +233,8 @@ def teleoperate(cfg: TeleoperateConfig):
         logging.info(f"Added {len(custom_steps)} custom observation processor step(s) from robot")
 
     # Build obs stream processor chain: robot processors + stream writer at the end
-    # This runs on every observation so the GUI viewer sees the same processed
-    # images the model would see (with overlays etc.)
+    # The stream writer handles both ObservationStream (GUI viewer) and optionally
+    # SharedImageBuffer (S2 debug model) based on env vars.
     from lerobot.robots.obs_stream import make_obs_stream_writer_step
     obs_stream_steps = list(robot.get_observation_processor_steps() or [])
     obs_stream_writer = make_obs_stream_writer_step()

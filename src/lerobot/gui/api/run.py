@@ -227,7 +227,8 @@ async def _wait_for_exit() -> None:
 
 
 
-async def _launch_subprocess(args: list[str], command: str, config: dict) -> None:
+async def _launch_subprocess(args: list[str], command: str, config: dict,
+                             extra_env: dict[str, str] | None = None) -> None:
     """Launch a subprocess and start reading its output."""
     global _active_process, _active_command, _active_config, _output_lines, _stream_tasks
 
@@ -236,6 +237,8 @@ async def _launch_subprocess(args: list[str], command: str, config: dict) -> Non
     _active_config = config
 
     env = {**__import__("os").environ, "LEROBOT_OBS_STREAM": "1"}
+    if extra_env:
+        env.update(extra_env)
     cmd_str = " ".join(args)
     logger.info(f"Launching: {cmd_str}")
     _append_output(f"--- Starting {command} ---")
@@ -317,10 +320,13 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
     args.append(f"--fps={req.fps}")
 
     # Launch debug model process alongside teleop (if selected)
+    extra_env = None
     if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
         await _launch_debug_s2(req.debug_model)
+        extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
 
-    await _launch_subprocess(args, command="teleoperate", config=req.model_dump())
+    await _launch_subprocess(args, command="teleoperate", config=req.model_dump(),
+                             extra_env=extra_env)
     return {"status": "started", "command": "teleoperate", "pid": _active_process.pid}
 
 
