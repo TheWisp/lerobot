@@ -52,7 +52,7 @@ function selectWorkflow(workflow) {
         const section = document.getElementById(`run-section-${wf}`);
         if (section) section.style.display = (wf === workflow) ? '' : 'none';
     }
-    if (workflow === 'policy') {
+    if (workflow === 'policy' || workflow === 'teleop') {
         _ensureModelDataLoaded();
     }
 }
@@ -412,6 +412,59 @@ function _getDebugModelConfig() {
     return config;
 }
 
+async function _loadDebugModel() {
+    const config = _getDebugModelConfig();
+    if (!config) {
+        showToast('Error', 'Select a model first', 'error');
+        return;
+    }
+    const status = document.getElementById('run-debug-model-status');
+    if (status) status.textContent = 'Loading...';
+    try {
+        const res = await fetch('/api/run/debug/load', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(config),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            if (status) status.textContent = `Loaded (PID ${data.pid})`;
+            showToast('Debug model', 'Model loaded', 'success');
+        } else {
+            if (status) status.textContent = 'Failed';
+            showToast('Error', data.detail || 'Failed to load', 'error');
+        }
+    } catch (e) {
+        if (status) status.textContent = 'Error';
+        showToast('Error', e.message, 'error');
+    }
+}
+
+async function _unloadDebugModel() {
+    const status = document.getElementById('run-debug-model-status');
+    try {
+        const res = await fetch('/api/run/debug/unload', { method: 'POST' });
+        if (res.ok) {
+            if (status) status.textContent = 'Not loaded';
+            showToast('Debug model', 'Model unloaded', 'info');
+        }
+    } catch (e) {
+        showToast('Error', e.message, 'error');
+    }
+}
+
+async function _refreshDebugModelStatus() {
+    const status = document.getElementById('run-debug-model-status');
+    if (!status) return;
+    try {
+        const res = await fetch('/api/run/debug/status');
+        const data = await res.json();
+        status.textContent = data.loaded ? `Loaded (PID ${data.pid})` : 'Not loaded';
+    } catch (e) {
+        status.textContent = 'Unknown';
+    }
+}
+
 function _onDebugModelChange() {
     const sel = document.getElementById('run-teleop-debug-model');
     const s2Fields = document.getElementById('run-teleop-debug-s2-fields');
@@ -452,9 +505,15 @@ async function _ensureModelDataLoaded() {
         if (typeof modelTabInit === 'function') {
             await modelTabInit();
         }
-        // Re-render the checkpoint selector after data is loaded
+        // Re-render checkpoint selectors after data is loaded
         const sel = document.getElementById('run-policy-checkpoint');
         if (sel) sel.innerHTML = _modelCheckpointOptions();
+        const debugSel = document.getElementById('run-teleop-debug-model');
+        if (debugSel) {
+            const prev = debugSel.value;
+            debugSel.innerHTML = '<option value="">None</option>' + _modelCheckpointOptions();
+            debugSel.value = prev;
+        }
     }
 }
 
@@ -576,6 +635,10 @@ function renderRunForm() {
     html += `<option value="">None</option>`;
     html += _modelCheckpointOptions();
     html += `</select>`;
+    html += `<label></label>`;
+    html += `<div><button class="btn-tiny btn-accent" onclick="_loadDebugModel()">Load</button> `;
+    html += `<button class="btn-tiny" onclick="_unloadDebugModel()">Unload</button> `;
+    html += `<span id="run-debug-model-status" class="form-hint">Not loaded</span></div>`;
     html += `</div>`;
     // HVLA S2 specific fields (shown when S2 checkpoint selected)
     html += `<div id="run-teleop-debug-s2-fields" style="display:none">`;
@@ -583,7 +646,7 @@ function renderRunForm() {
     html += `<label>Task Prompt</label>`;
     html += `<input type="text" id="run-teleop-debug-s2-task" placeholder="assemble cylinder into ring" value="assemble cylinder into ring">`;
     html += `<label>Decode Subtask</label>`;
-    html += `<input type="checkbox" id="run-teleop-debug-s2-decode" checked>`;
+    html += `<div style="text-align:left"><input type="checkbox" id="run-teleop-debug-s2-decode" checked></div>`;
     html += '</div>';
     html += '</div>';
     html += '</div>';

@@ -220,7 +220,7 @@ async def _wait_for_exit() -> None:
         _active_command = None
         _active_config = None
         _close_obs_reader()
-        await _stop_debug_process()
+        # NOTE: debug model is NOT stopped here — it stays warm for reuse
         logger.info(f"Process exited (rc={rc}), state cleared")
     _output_event.set()
 
@@ -306,6 +306,43 @@ async def _stop_debug_process() -> None:
 
 
 # ============================================================================
+# Debug model management
+# ============================================================================
+
+
+@router.post("/debug/load")
+async def load_debug_model(config: DebugModelConfig) -> dict:
+    """Load a debug model process (keeps it warm for reuse across teleop sessions)."""
+    # If a different model is loaded, unload it first
+    if _debug_process is not None and _debug_process.returncode is None:
+        await _stop_debug_process()
+
+    if config.policy_type == "hvla_s2_vlm":
+        await _launch_debug_s2(config)
+    else:
+        raise HTTPException(400, f"Unsupported debug model type: {config.policy_type}")
+
+    return {"status": "loaded", "policy_type": config.policy_type, "pid": _debug_process.pid}
+
+
+@router.post("/debug/unload")
+async def unload_debug_model() -> dict:
+    """Unload the debug model process (frees GPU memory)."""
+    if _debug_process is None or _debug_process.returncode is not None:
+        return {"status": "not_loaded"}
+    await _stop_debug_process()
+    return {"status": "unloaded"}
+
+
+@router.get("/debug/status")
+async def debug_model_status() -> dict:
+    """Check if a debug model is loaded."""
+    if _debug_process is not None and _debug_process.returncode is None:
+        return {"loaded": True, "pid": _debug_process.pid}
+    return {"loaded": False}
+
+
+# ============================================================================
 # Endpoints
 # ============================================================================
 
@@ -319,10 +356,11 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
     args.extend(_profile_to_cli_args(req.teleop, "teleop"))
     args.append(f"--fps={req.fps}")
 
-    # Launch debug model process alongside teleop (if selected)
+    # Ensure debug model is loaded if selected (lazy load, stays warm after teleop)
     extra_env = None
     if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
-        await _launch_debug_s2(req.debug_model)
+        if _debug_process is None or _debug_process.returncode is not None:
+            await _launch_debug_s2(req.debug_model)
         extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
 
     await _launch_subprocess(args, command="teleoperate", config=req.model_dump(),
@@ -442,7 +480,7 @@ async def stop_process() -> dict:
     _active_command = None
     _active_config = None
     _close_obs_reader()
-    await _stop_debug_process()
+    # NOTE: debug model is NOT stopped here — it stays warm for reuse
     return {"status": "stopped", "pid": pid}
 
 
