@@ -133,12 +133,24 @@
                 </div>
                 <div class="run-split-handle" id="run-split-handle"></div>
                 <div class="run-terminal-container" id="run-terminal-container">
-                    <div class="run-terminal-header">
-                        <span>Output</span>
-                        <span class="run-status idle" id="run-status-indicator">Idle</span>
-                    </div>
-                    <div class="run-terminal" id="run-terminal">
-                        <div class="terminal-line" style="color: #666;">Select a workflow and press Launch</div>
+                    <div class="run-terminals-split">
+                        <div class="run-terminal-panel" id="run-terminal-panel-main">
+                            <div class="run-terminal-header">
+                                <span>Output</span>
+                                <span class="run-status idle" id="run-status-indicator">Idle</span>
+                            </div>
+                            <div class="run-terminal" id="run-terminal">
+                                <div class="terminal-line" style="color: #666;">Select a workflow and press Launch</div>
+                            </div>
+                        </div>
+                        <div class="run-terminal-panel" id="run-terminal-panel-model" style="display:none;">
+                            <div class="run-terminal-header">
+                                <span>Model Output</span>
+                            </div>
+                            <div class="run-terminal" id="run-model-terminal">
+                                <div class="terminal-line" style="color: #666;">Model output will appear here</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

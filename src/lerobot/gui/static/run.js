@@ -425,6 +425,9 @@ async function _loadDebugModel() {
     _debugModelLoading = true;
     _updateDebugButtons();
     if (status) status.textContent = 'Loading...';
+    // Clear model terminal
+    const modelTerminal = document.getElementById('run-model-terminal');
+    if (modelTerminal) modelTerminal.innerHTML = '<div class="terminal-line" style="color: #666;">Loading model...</div>';
     try {
         const res = await fetch('/api/run/debug/load', {
             method: 'POST',
@@ -477,6 +480,7 @@ function _updateDebugButtons() {
     const unloadBtn = document.querySelector('[onclick="_unloadDebugModel()"]');
     if (loadBtn) loadBtn.disabled = _debugModelLoading || _debugModelLoaded;
     if (unloadBtn) unloadBtn.disabled = _debugModelLoading || !_debugModelLoaded;
+    _showModelPanel(_debugModelLoaded);
 }
 
 async function _refreshDebugModelStatus() {
@@ -1159,7 +1163,29 @@ function _classifyLine(text, isStderr) {
 let _lastTableBlock = null;
 let _tableBlockNode = null;
 
+function _showModelPanel(show) {
+    const panel = document.getElementById('run-terminal-panel-model');
+    if (panel) panel.style.display = show ? '' : 'none';
+}
+
 function appendTerminalLine(rawText) {
+    // Route [S2] lines to model output panel
+    if (rawText.startsWith('[S2] ') || rawText.startsWith('[S2 err] ')) {
+        const modelTerminal = document.getElementById('run-model-terminal');
+        if (modelTerminal) {
+            const text = _stripAnsi(rawText.startsWith('[S2 err] ') ? rawText.slice(9) : rawText.slice(5));
+            const line = document.createElement('div');
+            line.className = 'terminal-line';
+            line.textContent = text;
+            modelTerminal.appendChild(line);
+            modelTerminal.scrollTop = modelTerminal.scrollHeight;
+            while (modelTerminal.children.length > 500) {
+                modelTerminal.removeChild(modelTerminal.firstChild);
+            }
+        }
+        return;
+    }
+
     const terminal = document.getElementById('run-terminal');
     if (!terminal) return;
 
