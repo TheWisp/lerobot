@@ -35,6 +35,7 @@ async function runTabInit() {
 
     initSplitHandle();
     renderRunForm();
+    await _ensureModelDataLoaded();
     await pollRunStatus();
 }
 
@@ -42,7 +43,7 @@ async function runTabInit() {
 // Workflow selection
 // ============================================================================
 
-function selectWorkflow(workflow) {
+async function selectWorkflow(workflow) {
     selectedWorkflow = workflow;
     document.querySelectorAll('.workflow-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.workflow === workflow);
@@ -53,7 +54,7 @@ function selectWorkflow(workflow) {
         if (section) section.style.display = (wf === workflow) ? '' : 'none';
     }
     if (workflow === 'policy' || workflow === 'teleop') {
-        _ensureModelDataLoaded();
+        await _ensureModelDataLoaded();
     }
 }
 
@@ -538,20 +539,21 @@ function _onPolicyCheckpointChange() {
 }
 
 async function _ensureModelDataLoaded() {
-    // If Model tab hasn't been visited, load model sources and scan them
-    if (typeof modelSourceData === 'undefined' || !Object.keys(modelSourceData).length) {
-        if (typeof modelTabInit === 'function') {
-            await modelTabInit();
-        }
-        // Re-render checkpoint selectors after data is loaded
-        const sel = document.getElementById('run-policy-checkpoint');
-        if (sel) sel.innerHTML = _modelCheckpointOptions();
-        const debugSel = document.getElementById('run-teleop-debug-model');
-        if (debugSel) {
-            const prev = debugSel.value;
-            debugSel.innerHTML = '<option value="">None</option>' + _modelCheckpointOptions();
-            debugSel.value = prev;
-        }
+    // Already have data — nothing to do
+    if (typeof modelSourceData !== 'undefined' && Object.keys(modelSourceData).length) return;
+    // Load sources and scan (bypass modelTabInit's one-shot guard which
+    // blocks retries when the first attempt finished with empty data).
+    if (typeof loadModelSources === 'function') {
+        await loadModelSources();
+    }
+    // Re-render checkpoint selectors after data is loaded
+    const sel = document.getElementById('run-policy-checkpoint');
+    if (sel) sel.innerHTML = _modelCheckpointOptions();
+    const debugSel = document.getElementById('run-teleop-debug-model');
+    if (debugSel) {
+        const prev = debugSel.value;
+        debugSel.innerHTML = '<option value="">None</option>' + _modelCheckpointOptions();
+        debugSel.value = prev;
     }
 }
 
