@@ -929,6 +929,7 @@ async function launchRun() {
                 reset_time_s: parseFloat(document.getElementById('run-teleop-reset-time')?.value) || 60,
                 num_episodes: parseInt(document.getElementById('run-teleop-num-episodes')?.value) || 50,
                 resume: resume,
+                debug_model: _getDebugModelConfig(),
             };
         }
     } else if (selectedWorkflow === 'replay') {

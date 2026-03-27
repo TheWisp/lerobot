@@ -136,6 +136,7 @@ class RecordRequest(BaseModel):
     vcodec: str = "libsvtav1"
     play_sounds: bool = True
     resume: bool = False
+    debug_model: DebugModelConfig | None = None
 
 
 class ReplayRequest(BaseModel):
@@ -510,11 +511,19 @@ async def start_record(req: RecordRequest) -> dict:
     args.append(f"--dataset.video={'true' if req.video else 'false'}")
     args.append("--dataset.push_to_hub=false")
     args.append(f"--dataset.vcodec={req.vcodec}")
+    args.append("--dataset.streaming_encoding=true")
     args.append(f"--play_sounds={'true' if req.play_sounds else 'false'}")
     if req.resume:
         args.append("--resume=true")
 
-    await _launch_subprocess(args, command="record", config=req.model_dump())
+    extra_env = None
+    if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
+        if _debug_process is None or _debug_process.returncode is not None:
+            await _launch_debug_s2(req.debug_model)
+        extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
+
+    await _launch_subprocess(args, command="record", config=req.model_dump(),
+                             extra_env=extra_env)
     return {"status": "started", "command": "record", "pid": _active_process.pid}
 
 
