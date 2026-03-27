@@ -5,6 +5,7 @@ Spawned by launch.py via 'spawn' context. Has its own CUDA context.
 
 import json
 import logging
+import math
 import time
 
 import numpy as np
@@ -128,7 +129,7 @@ def _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
         # Extract latent
         confidence = 0.0
         if decode_subtask:
-            latent, subtask_tokens, _, confidence = model.extract_prefix_latent_and_subtask(
+            latent, subtask_tokens, _, token_log_probs = model.extract_prefix_latent_and_subtask(
                 image_tensors, image_masks, lang_tokens, lang_masks,
                 temperature=config.subtask_temperature,
             )
@@ -138,6 +139,26 @@ def _run_s2_inner(checkpoint_path, shared_cache, shared_images, task, config,
                     subtask_text = tokenizer.detokenize(np.array(subtask_tokens))
                 except Exception:
                     subtask_text = f"<{len(subtask_tokens)} tokens>"
+            # Compute confidence as geometric mean of per-token probs, only
+            # over the subtask portion (before ";"). Action tokens after ";"
+            # are irrelevant and would drag confidence to ~0.
+            if subtask_text and token_log_probs:
+                semi_pos = subtask_text.find(";")
+                if semi_pos >= 0:
+                    # Count tokens up to ";" by detokenizing incrementally
+                    n_subtask_tokens = 0
+                    partial = ""
+                    for i, _ in enumerate(subtask_tokens):
+                        partial = tokenizer.detokenize(np.array(subtask_tokens[:i + 1]))
+                        n_subtask_tokens = i + 1
+                        if ";" in partial:
+                            break
+                    # +1 for the first token (before loop)
+                    n_conf = min(n_subtask_tokens + 1, len(token_log_probs))
+                else:
+                    n_conf = len(token_log_probs)
+                lp = sum(token_log_probs[:n_conf])
+                confidence = math.exp(lp / n_conf)
         else:
             latent = model.extract_prefix_latent(image_tensors, image_masks, lang_tokens, lang_masks)
             subtask_text = None

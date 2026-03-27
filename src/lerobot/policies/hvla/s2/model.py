@@ -269,13 +269,16 @@ class S2VLMModel(nn.Module):
 
         output_tokens: list[int] = []
         topk_per_step: list[list[tuple[int, float]]] = []
-        log_prob_sum = 0.0  # accumulate log-probs for sequence confidence
+        # Per-token log-probs for confidence (geometric mean, so length-
+        # independent). Stored per step so s2_process can compute confidence
+        # over just the subtask portion (before ";") after detokenization.
+        token_log_probs: list[float] = []
 
         # Top-k for first token + log-prob of chosen token
         first_topk = torch.topk(logits[0, 0], k=min(5, logits.shape[-1]))
         topk_per_step.append(list(zip(first_topk.indices.tolist(), first_topk.values.tolist())))
         first_log_probs = torch.log_softmax(logits[0, 0].float(), dim=-1)
-        log_prob_sum += first_log_probs[next_token[0, 0]].item()
+        token_log_probs.append(first_log_probs[next_token[0, 0]].item())
 
         for step in range(max_decoding_steps):
             tok = next_token[0, 0].item()
@@ -304,12 +307,9 @@ class S2VLMModel(nn.Module):
             step_topk = torch.topk(logits[0, 0], k=min(5, logits.shape[-1]))
             topk_per_step.append(list(zip(step_topk.indices.tolist(), step_topk.values.tolist())))
             next_token = self._sample_token(logits[:, 0], temperature)
-            # Log-prob of chosen token (full softmax over vocab)
             step_log_probs = torch.log_softmax(logits[0, 0].float(), dim=-1)
-            log_prob_sum += step_log_probs[next_token[0, 0]].item()
-
-        confidence = math.exp(log_prob_sum) if output_tokens else 0.0
-        return pooled, output_tokens, topk_per_step, confidence
+            token_log_probs.append(step_log_probs[next_token[0, 0]].item())
+        return pooled, output_tokens, topk_per_step, token_log_probs
 
     @staticmethod
     def _sample_token(logits_2d: Tensor, temperature: float) -> Tensor:

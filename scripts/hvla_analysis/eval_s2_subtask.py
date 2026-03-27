@@ -141,7 +141,7 @@ def main():
 
         t0 = time.perf_counter()
         with torch.no_grad():
-            _, subtask_tokens, _, confidence = model.extract_prefix_latent_and_subtask(
+            _, subtask_tokens, _, _token_log_probs = model.extract_prefix_latent_and_subtask(
                 image_tensors, image_masks, lang_tokens, lang_masks,
                 temperature=config.subtask_temperature,
             )
