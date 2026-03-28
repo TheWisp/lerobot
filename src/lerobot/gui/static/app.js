@@ -192,14 +192,27 @@ async function openDataset(path) {
         const data = await res.json();
         datasets[data.id] = data;
 
-        // Show toast for any warnings
-        if (data.warnings && data.warnings.length > 0) {
+        // Show errors as persistent red toast
+        if (data.errors && data.errors.length > 0) {
             showToast(
-                'Dataset Warning',
-                data.warnings.join('\n'),
-                'warning',
-                8000
+                'Dataset Error',
+                data.errors.join('\n'),
+                'error',
+                0  // persistent — don't auto-dismiss
             );
+        }
+        // Show non-critical warnings as brief yellow toast
+        if (data.warnings && data.warnings.length > 0) {
+            // Filter out stats.json mismatches (noisy, not actionable)
+            const actionable = data.warnings.filter(w => !w.startsWith('stats.json mismatch'));
+            if (actionable.length > 0) {
+                showToast(
+                    'Dataset Warning',
+                    actionable.join('\n'),
+                    'warning',
+                    8000
+                );
+            }
         }
 
         // Load episodes
@@ -257,7 +270,7 @@ function renderTree() {
             <div class="tree-node">
                 <div class="tree-header" onclick="toggleDataset('${id}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}')" title="${tooltip}">
                     <span class="tree-toggle">${isExpanded ? '▼' : '▶'}</span>
-                    <span class="tree-icon">📁</span>
+                    <span class="tree-icon">${ds.errors && ds.errors.length > 0 ? '⚠️' : '📁'}</span>
                     <span class="tree-label">${ds.repo_id}</span>
                     <span class="tree-meta">${dsEditCount > 0 ? `${dsEditCount}✎ ` : ''}${ds.total_episodes} ep</span>
                     <span class="tree-close" onclick="closeDataset('${id}', event)" title="Close">&times;</span>
@@ -527,11 +540,19 @@ function showToast(title, message, type = 'info', duration = 5000) {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.innerHTML = `<div class="toast-title">${title}</div><div class="toast-message">${message}</div>`;
-    container.appendChild(toast);
-    setTimeout(() => {
+    // Click to dismiss
+    toast.style.cursor = 'pointer';
+    toast.addEventListener('click', () => {
         toast.style.animation = 'toast-out 0.3s ease-out forwards';
         setTimeout(() => toast.remove(), 300);
-    }, duration);
+    });
+    container.appendChild(toast);
+    if (duration > 0) {
+        setTimeout(() => {
+            toast.style.animation = 'toast-out 0.3s ease-out forwards';
+            setTimeout(() => toast.remove(), 300);
+        }, duration);
+    }
 }
 
 // Timeline interaction

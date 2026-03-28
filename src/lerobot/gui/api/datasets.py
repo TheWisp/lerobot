@@ -683,7 +683,8 @@ class DatasetInfo(BaseModel):
     robot_type: str = ""
     camera_keys: list[str]
     features: list[str]
-    warnings: list[str] = []  # Any warnings (repairs, verification issues) from loading
+    errors: list[str] = []    # Verification errors (metadata mismatches — dataset may be corrupted)
+    warnings: list[str] = []  # Non-critical warnings (stale stats, etc.)
 
 
 class EpisodeInfo(BaseModel):
@@ -798,6 +799,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
         # Check and repair episode metadata indices if needed
         from lerobot.datasets.dataset_tools import repair_episode_indices, verify_dataset
 
+        errors: list[str] = []
         warnings: list[str] = []
 
         repaired = repair_episode_indices(dataset.root)
@@ -810,8 +812,8 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
         verification = verify_dataset(dataset.root, check_videos=False, verbose=False)
         if not verification.is_valid:
             for err in verification.errors:
-                logger.warning(f"Dataset verification: {err.message}")
-                warnings.append(err.message)
+                logger.warning(f"Dataset verification ERROR: {err.message}")
+                errors.append(err.message)
         for warn in verification.warnings:
             logger.warning(f"Dataset verification warning: {warn.message}")
             warnings.append(warn.message)
@@ -848,6 +850,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             robot_type=getattr(dataset.meta, "robot_type", "") or "",
             camera_keys=list(dataset.meta.camera_keys),
             features=list(dataset.meta.features.keys()),
+            errors=errors,
             warnings=warnings,
         )
 

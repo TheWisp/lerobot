@@ -3,6 +3,7 @@
 ## Data Tab
 
 - [High] **Warning/error panel**: dataset verification errors and warnings are currently buried in server log text. Add a visible warning panel (banner or sidebar) that surfaces verification results when a dataset is opened — errors as red, warnings as yellow. Users must not miss data integrity issues.
+- [High] **Open local dataset by path**: opening a copied/renamed local dataset fails because `LeRobotDataset.__init__` tries to reach HuggingFace Hub when the folder name doesn't match a cached `owner/name` repo_id. Spaces in folder names also rejected. Need to bypass Hub entirely for local-only datasets.
 - [ ] Parquet data display (action/state charts in timeline)
 - [ ] Monitor local dataset changes — auto-refresh UI when new episodes recorded while GUI is open
 - [ ] Duplicate episode
