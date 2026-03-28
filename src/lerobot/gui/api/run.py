@@ -511,7 +511,6 @@ async def start_record(req: RecordRequest) -> dict:
     args.append(f"--dataset.video={'true' if req.video else 'false'}")
     args.append("--dataset.push_to_hub=false")
     args.append(f"--dataset.vcodec={req.vcodec}")
-    args.append("--dataset.streaming_encoding=true")
     args.append(f"--play_sounds={'true' if req.play_sounds else 'false'}")
     if req.resume:
         args.append("--resume=true")

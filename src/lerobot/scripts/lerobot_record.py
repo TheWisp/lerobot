@@ -502,6 +502,13 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     num_processes=cfg.dataset.num_image_writer_processes,
                     num_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
                 )
+            # HACK: LeRobotDataset.__init__ (resume path) doesn't call
+            # _init_video_encoders() or create episode_buffer, unlike create().
+            # Without this, our per-camera streaming encoder is never set up
+            # and recording falls back to slow PNG-then-encode.
+            # TODO: move this into LeRobotDataset.__init__ for a clean setup.
+            dataset.episode_buffer = dataset.create_episode_buffer()
+            dataset._init_video_encoders()
             sanity_check_dataset_robot_compatibility(dataset, robot, cfg.dataset.fps, dataset_features)
         else:
             # Create empty dataset or load existing saved episodes

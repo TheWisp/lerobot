@@ -1838,8 +1838,9 @@ class LeRobotDataset(torch.utils.data.Dataset):
         obj._lazy_loading = False
         obj._recorded_frames = 0
         obj._writer_closed_for_reading = False
-        if streaming_encoding is None:
-            # Default: use our per-camera streaming encoders
+        if not streaming_encoding:
+            # Default: use our per-camera streaming encoders (covers both
+            # None from programmatic callers and False from CLI default)
             obj._init_video_encoders()
         else:
             obj.video_encoders = {}
