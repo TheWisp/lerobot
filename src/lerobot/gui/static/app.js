@@ -820,8 +820,24 @@ function openMergeModal(sourceDatasetId) {
         select.appendChild(opt);
     }
 
+    updateMergePreview();
     const overlay = document.getElementById('merge-modal-overlay');
     overlay.style.display = 'flex';
+}
+
+function updateMergePreview() {
+    const preview = document.getElementById('merge-preview');
+    const targetId = document.getElementById('merge-target-select').value;
+    const sourceDs = _mergeSourceId ? datasets[_mergeSourceId] : null;
+    const targetDs = targetId ? datasets[targetId] : null;
+    if (!sourceDs || !targetDs) { preview.textContent = ''; return; }
+
+    const srcEps = sourceDs.total_episodes;
+    const tgtEps = targetDs.total_episodes;
+    preview.innerHTML =
+        `<strong>${targetDs.repo_id}</strong> will go from ${tgtEps} to ${tgtEps + srcEps} episodes ` +
+        `(+${srcEps} from ${sourceDs.repo_id}).<br>` +
+        `This modifies the target dataset on disk.`;
 }
 
 function closeMergeModal() {
@@ -832,6 +848,14 @@ function closeMergeModal() {
 async function executeMerge() {
     const targetId = document.getElementById('merge-target-select').value;
     if (!_mergeSourceId || !targetId) return;
+
+    const sourceDs = datasets[_mergeSourceId];
+    const targetDs = datasets[targetId];
+    if (!confirm(
+        `Merge ${sourceDs.total_episodes} episodes from "${sourceDs.repo_id}" ` +
+        `into "${targetDs.repo_id}"?\n\n` +
+        `This will modify "${targetDs.repo_id}" on disk.`
+    )) return;
 
     const btn = document.getElementById('merge-execute-btn');
     const status = document.getElementById('merge-status');

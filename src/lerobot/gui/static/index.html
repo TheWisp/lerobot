@@ -233,11 +233,12 @@
             <p style="margin:0 0 12px 0; font-size:12px; color:var(--text-secondary, #999);">
                 Merge all episodes from <strong id="merge-source-name"></strong> into:
             </p>
-            <select id="merge-target-select" style="width:100%; padding:6px 8px; margin-bottom:16px; background:var(--bg-primary, #252526); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px;"></select>
-            <div id="merge-status" style="font-size:11px; color:var(--text-secondary, #999); margin-bottom:12px; min-height:16px;"></div>
+            <select id="merge-target-select" onchange="updateMergePreview()" style="width:100%; padding:6px 8px; margin-bottom:8px; background:var(--bg-primary, #252526); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px;"></select>
+            <div id="merge-preview" style="font-size:11px; color:var(--text-secondary, #999); margin-bottom:8px; padding:8px; background:var(--bg-primary, #252526); border-radius:4px; min-height:16px;"></div>
+            <div id="merge-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
             <div style="display:flex; justify-content:flex-end; gap:8px;">
                 <button onclick="closeMergeModal()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
-                <button id="merge-execute-btn" onclick="executeMerge()" style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Merge</button>
+                <button id="merge-execute-btn" onclick="executeMerge()" style="padding:5px 14px; background:#c24038; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Merge (modifies target)</button>
             </div>
         </div>
     </div>
