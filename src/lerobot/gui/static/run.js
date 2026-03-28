@@ -35,8 +35,26 @@ async function runTabInit() {
 
     initSplitHandle();
     renderRunForm();
+    _initSelectTitleSync();
     await _ensureModelDataLoaded();
     await pollRunStatus();
+}
+
+/** Sync select title attribute to selected option text (for ellipsis tooltip). */
+function _initSelectTitleSync() {
+    const sidebar = document.querySelector('.sidebar');
+    if (!sidebar) return;
+    function _syncTitle(sel) {
+        const opt = sel.options[sel.selectedIndex];
+        sel.title = opt ? opt.textContent : '';
+    }
+    sidebar.addEventListener('change', (e) => {
+        if (e.target.tagName === 'SELECT') _syncTitle(e.target);
+    });
+    // Also observe innerHTML changes so programmatic updates get titles too
+    new MutationObserver(() => {
+        sidebar.querySelectorAll('select').forEach(_syncTitle);
+    }).observe(sidebar, { childList: true, subtree: true });
 }
 
 // ============================================================================

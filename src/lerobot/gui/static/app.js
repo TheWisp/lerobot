@@ -536,6 +536,30 @@ function showToast(title, message, type = 'info', duration = 5000) {
 
 // Timeline interaction
 document.addEventListener('DOMContentLoaded', () => {
+    // --- Resizable sidebars ---
+    document.querySelectorAll('.sidebar-resize-handle').forEach((handle) => {
+        const sidebar = handle.previousElementSibling;
+        if (!sidebar || !sidebar.classList.contains('sidebar')) return;
+        let startX, startW;
+        handle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            startX = e.clientX;
+            startW = sidebar.offsetWidth;
+            handle.classList.add('dragging');
+            function onMove(e) {
+                const w = Math.max(240, Math.min(startW + e.clientX - startX, window.innerWidth * 0.5));
+                sidebar.style.width = w + 'px';
+            }
+            function onUp() {
+                handle.classList.remove('dragging');
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    });
+
     const timelineContainer = document.getElementById('timeline-container');
     const timeline = document.getElementById('timeline');
     const scrubber = document.getElementById('timeline-scrubber');
