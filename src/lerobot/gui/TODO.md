@@ -2,6 +2,7 @@
 
 ## Data Tab
 
+- [High] **Warning/error panel**: dataset verification errors and warnings are currently buried in server log text. Add a visible warning panel (banner or sidebar) that surfaces verification results when a dataset is opened — errors as red, warnings as yellow. Users must not miss data integrity issues.
 - [ ] Parquet data display (action/state charts in timeline)
 - [ ] Monitor local dataset changes — auto-refresh UI when new episodes recorded while GUI is open
 - [ ] Duplicate episode
