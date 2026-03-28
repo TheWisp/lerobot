@@ -764,6 +764,22 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             hf_datasets.disable_caching()
             try:
                 dataset = LeRobotDataset(repo_id, root=local_path)
+            except Exception as e:
+                # LeRobotDataset.__init__ tries to download from Hub when
+                # cached data doesn't match info.json (episode count mismatch).
+                # For local datasets this is wrong — surface the real issue.
+                err_msg = str(e)
+                if "Repository Not Found" in err_msg or "doesn't contain all requested episodes" in err_msg:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Dataset metadata is inconsistent: info.json episode/frame counts "
+                            f"don't match the actual parquet data. This usually means episodes "
+                            f"were added or removed without updating info.json. "
+                            f"Run dataset verification to identify and repair the issue."
+                        ),
+                    ) from e
+                raise
             finally:
                 hf_datasets.enable_caching()
 
