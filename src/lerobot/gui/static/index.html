@@ -221,7 +221,25 @@
     <div class="context-menu" id="folder-context-menu">
         <div class="context-menu-item" id="folder-ctx-test-on-robot" onclick="folderContextAction('test-on-robot')" style="display:none">Test on Robot</div>
         <div class="context-menu-separator" id="folder-ctx-test-separator" style="display:none"></div>
+        <div class="context-menu-item" id="folder-ctx-merge-into" onclick="folderContextAction('merge-into')" style="display:none">Merge Into...</div>
+        <div class="context-menu-separator" id="folder-ctx-merge-separator" style="display:none"></div>
         <div class="context-menu-item" onclick="folderContextAction('open-in-files')">Open in File Manager</div>
+    </div>
+
+    <!-- Merge Into modal -->
+    <div id="merge-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:340px; max-width:480px;">
+            <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Merge Into</h3>
+            <p style="margin:0 0 12px 0; font-size:12px; color:var(--text-secondary, #999);">
+                Merge all episodes from <strong id="merge-source-name"></strong> into:
+            </p>
+            <select id="merge-target-select" style="width:100%; padding:6px 8px; margin-bottom:16px; background:var(--bg-primary, #252526); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px;"></select>
+            <div id="merge-status" style="font-size:11px; color:var(--text-secondary, #999); margin-bottom:12px; min-height:16px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button onclick="closeMergeModal()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
+                <button id="merge-execute-btn" onclick="executeMerge()" style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Merge</button>
+            </div>
+        </div>
     </div>
 
     <!-- Toast notifications -->

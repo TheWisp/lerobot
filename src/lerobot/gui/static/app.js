@@ -767,6 +767,13 @@ function showFolderContextMenu(e, path, isModelRun) {
     const testSep = document.getElementById('folder-ctx-test-separator');
     if (testItem) testItem.style.display = _folderContextIsModelRun ? '' : 'none';
     if (testSep) testSep.style.display = _folderContextIsModelRun ? '' : 'none';
+    // Show/hide merge-into for opened datasets with 2+ datasets open
+    const isOpenedDataset = !!datasets[path];
+    const hasMultipleDatasets = Object.keys(datasets).length >= 2;
+    const mergeItem = document.getElementById('folder-ctx-merge-into');
+    const mergeSep = document.getElementById('folder-ctx-merge-separator');
+    if (mergeItem) mergeItem.style.display = (isOpenedDataset && hasMultipleDatasets) ? '' : 'none';
+    if (mergeSep) mergeSep.style.display = (isOpenedDataset && hasMultipleDatasets) ? '' : 'none';
     menu.style.left = e.clientX + 'px';
     menu.style.top = e.clientY + 'px';
     menu.classList.add('visible');
@@ -784,9 +791,100 @@ function folderContextAction(action) {
         if (typeof testModelOnRobot === 'function') {
             testModelOnRobot(_folderContextPath);
         }
+    } else if (action === 'merge-into') {
+        openMergeModal(_folderContextPath);
     }
     hideContextMenu();
 }
+
+// --- Merge Into modal ---
+let _mergeSourceId = null;
+
+function openMergeModal(sourceDatasetId) {
+    _mergeSourceId = sourceDatasetId;
+    const sourceDs = datasets[sourceDatasetId];
+    if (!sourceDs) return;
+
+    document.getElementById('merge-source-name').textContent = sourceDs.repo_id;
+    document.getElementById('merge-status').textContent = '';
+    document.getElementById('merge-execute-btn').disabled = false;
+
+    // Populate target dropdown with other opened datasets
+    const select = document.getElementById('merge-target-select');
+    select.innerHTML = '';
+    for (const [id, ds] of Object.entries(datasets)) {
+        if (id === sourceDatasetId) continue;
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = `${ds.repo_id} (${ds.total_episodes} ep)`;
+        select.appendChild(opt);
+    }
+
+    const overlay = document.getElementById('merge-modal-overlay');
+    overlay.style.display = 'flex';
+}
+
+function closeMergeModal() {
+    document.getElementById('merge-modal-overlay').style.display = 'none';
+    _mergeSourceId = null;
+}
+
+async function executeMerge() {
+    const targetId = document.getElementById('merge-target-select').value;
+    if (!_mergeSourceId || !targetId) return;
+
+    const btn = document.getElementById('merge-execute-btn');
+    const status = document.getElementById('merge-status');
+    btn.disabled = true;
+    status.textContent = 'Merging...';
+
+    try {
+        const res = await fetch('/api/edits/merge-into', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_dataset_id: _mergeSourceId,
+                target_dataset_id: targetId,
+            })
+        });
+
+        if (res.status === 423) {
+            status.textContent = 'Dataset is busy, please wait.';
+            btn.disabled = false;
+            return;
+        }
+
+        const data = await res.json();
+        if (!res.ok) {
+            status.textContent = data.detail || 'Merge failed';
+            btn.disabled = false;
+            return;
+        }
+
+        closeMergeModal();
+        showToast('Merge Complete', data.message, 'info');
+
+        // Refresh the target dataset's episodes in the tree
+        try {
+            const epRes = await fetch(`/api/datasets/${encodeURIComponent(targetId)}/episodes`);
+            if (epRes.ok) {
+                episodes[targetId] = await epRes.json();
+                datasets[targetId].total_episodes = episodes[targetId].length;
+                datasets[targetId].total_frames = episodes[targetId].reduce((s, e) => s + e.length, 0);
+            }
+        } catch (e) { /* ignore */ }
+        renderTree();
+    } catch (e) {
+        status.textContent = 'Error: ' + e.message;
+        btn.disabled = false;
+    }
+}
+
+// Close merge modal on overlay click
+document.addEventListener('click', (e) => {
+    const overlay = document.getElementById('merge-modal-overlay');
+    if (e.target === overlay) closeMergeModal();
+});
 
 function contextAction(action) {
     if (!contextMenuTarget) return;

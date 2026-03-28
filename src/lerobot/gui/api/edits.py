@@ -452,3 +452,86 @@ async def _apply_edits_locked(dataset_id: str):
         }
 
     return {"status": "ok", "message": f"Applied {applied} edits", "applied": applied, "warnings": warnings}
+
+
+class MergeIntoRequest(BaseModel):
+    source_dataset_id: str
+    target_dataset_id: str
+
+
+@router.post("/merge-into")
+async def merge_into_dataset(request: MergeIntoRequest):
+    """Merge all episodes from source dataset into target dataset in-place."""
+    from lerobot.datasets.dataset_tools import merge_into
+
+    source_id = request.source_dataset_id
+    target_id = request.target_dataset_id
+
+    if source_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Source dataset not found: {source_id}")
+    if target_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Target dataset not found: {target_id}")
+    if source_id == target_id:
+        raise HTTPException(status_code=400, detail="Cannot merge a dataset into itself")
+
+    _require_unlocked(source_id)
+    _require_unlocked(target_id)
+
+    target_lock = _app_state.get_lock(target_id)
+    source_lock = _app_state.get_lock(source_id)
+
+    if target_lock.locked() or source_lock.locked():
+        raise HTTPException(status_code=423, detail="One or both datasets are busy")
+
+    async with target_lock:
+        async with source_lock:
+            return await _merge_into_locked(source_id, target_id)
+
+
+async def _merge_into_locked(source_id: str, target_id: str):
+    """Execute merge while holding both dataset locks."""
+    source_ds = _app_state.datasets[source_id]
+    target_ds = _app_state.datasets[target_id]
+
+    source_eps = source_ds.num_episodes
+    source_frames = source_ds.num_frames
+    target_eps_before = target_ds.num_episodes
+
+    logger.info(
+        f"Merging {source_eps} episodes from {source_id} into {target_id} "
+        f"({target_eps_before} episodes)"
+    )
+
+    try:
+        from lerobot.datasets.dataset_tools import merge_into
+
+        merge_into(target_ds, source_ds)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Merge failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Merge failed: {e}")
+
+    # Invalidate frame cache for target (new episodes added)
+    num_invalidated = _app_state.frame_cache.invalidate_dataset(target_id)
+    logger.info(f"Invalidated {num_invalidated} cached frames for target")
+
+    # Clear video decoder cache
+    try:
+        from lerobot.datasets.video_utils import _default_decoder_cache
+
+        _default_decoder_cache.clear()
+    except Exception:
+        pass
+
+    logger.info(
+        f"Merge complete: {target_ds.num_episodes} episodes, "
+        f"{target_ds.num_frames} frames in target"
+    )
+
+    return {
+        "status": "ok",
+        "message": f"Merged {source_eps} episodes ({source_frames} frames) into {target_id}",
+        "target_episodes": target_ds.num_episodes,
+        "target_frames": target_ds.num_frames,
+    }
