@@ -89,6 +89,20 @@ See [docs/model_tab.md](docs/model_tab.md) for full design.
 - [Low] Rerun web viewer has ~200ms visual lag (Rerun 0.26 limitation)
 - [Low] Replay FPS setting doesn't seem to affect playback speed — remove if not useful
 
+### Dataset Debugging Overlay
+
+Live overlay during teleop/record showing how the current state compares to the dataset — helps the user identify gaps in data coverage and fill them efficiently.
+
+- [ ] **Live coverage indicator**: compare current observation against the dataset (either a selected reference dataset or the one currently being recorded). Show as an overlay badge (like the S2 subtask overlay) indicating how "novel" the current state is relative to existing data.
+- [ ] **Growing coverage feedback**: as the user records more episodes, the feedback should reflect that more cases are covered — "you've seen states like this N times" or a heatmap-style confidence.
+- [ ] **Define similarity metric**: what does "similar" mean? Options to explore:
+  - Joint state L2 distance (cheap, ignores visual context)
+  - Image embedding distance (e.g. DINO/CLIP features, captures visual similarity)
+  - S2 latent distance (if debug model is loaded — reuses existing infrastructure)
+  - Hybrid: state distance + image embedding distance
+- [ ] **Nearest-neighbor lookup**: build an index (e.g. FAISS) over dataset observations, query with current obs each frame. Display distance + closest episode/frame reference.
+- [ ] **TODO: hardcoded vs generic**: start with a simple metric (joint state L2 or S2 latent distance), add a comment that this will be generalized later (same pattern as model debugger overlay).
+
 ## Robot Tab
 
 - [Low] UX consistency pass: ensure consistent button coloring/hierarchy across views
