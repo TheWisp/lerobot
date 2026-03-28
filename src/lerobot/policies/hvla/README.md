@@ -78,6 +78,7 @@ python scripts/train_act_vlm.py \
 ### 2b. Train S1 — Flow Matching with Training-Time RTC
 
 ```bash
+# With S2 conditioning:
 python -u -m lerobot.policies.hvla.s1.flow_matching.train \
     --dataset-repo-id thewisp/cylinder_ring_assembly \
     --s2-latent-path ~/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly/s2_latents_pt_11997.npy \
@@ -86,9 +87,20 @@ python -u -m lerobot.policies.hvla.s1.flow_matching.train \
     --batch-size 64 \
     --save-freq 10000 \
     --num-workers 16 \
-    --resize-images 224x224 \
-    2>&1 | tee outputs/flow_s1_hvla_v6/train.log
+    --resize-images 224x224
+
+# Without S2 (images + state only):
+python -u -m lerobot.policies.hvla.s1.flow_matching.train \
+    --dataset-repo-id thewisp/cylinder_ring_assembly \
+    --output-dir outputs/flow_s1_no_s2_v1 \
+    --steps 50000 \
+    --batch-size 64 \
+    --save-freq 10000 \
+    --num-workers 16 \
+    --resize-images 224x224
 ```
+
+Training logs are automatically saved to `{output_dir}/train.log`.
 
 Flow matching S1 implements [Training-Time Action Conditioning for Efficient Real-Time Chunking](https://arxiv.org/abs/2512.05964) (Mees et al., 2025): simulated inference delay during training, with ground-truth action prefix inpainting. No architecture changes vs standard flow matching — just masking. At inference, actually-executed actions replace the prefix positions at each denoising step.
 

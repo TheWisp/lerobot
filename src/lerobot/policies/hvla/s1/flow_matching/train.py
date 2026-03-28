@@ -137,14 +137,15 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         if self._all_states is not None:
             sample["observation.state"] = self._all_states[idx]
 
-        # --- S2 latent with delay augmentation ---
-        k = np.random.randint(0, self.max_delay_frames + 1)
-        delayed_idx = max(idx - k, ep_start)
-        s2_latent = torch.from_numpy(self.s2_latents[delayed_idx]).float()
-        age_seconds = k / self.fps
+        # --- S2 latent with delay augmentation (skip if training without S2) ---
+        if self.s2_latents is not None:
+            k = np.random.randint(0, self.max_delay_frames + 1)
+            delayed_idx = max(idx - k, ep_start)
+            s2_latent = torch.from_numpy(self.s2_latents[delayed_idx]).float()
+            age_seconds = k / self.fps
 
-        sample[S2_LATENT_KEY] = s2_latent
-        sample[S2_AGE_KEY] = torch.tensor([age_seconds], dtype=torch.float32)
+            sample[S2_LATENT_KEY] = s2_latent
+            sample[S2_AGE_KEY] = torch.tensor([age_seconds], dtype=torch.float32)
 
         # --- Resize images if needed ---
         if self.resize_to is not None and self.image_keys:
@@ -163,13 +164,20 @@ def train(args):
     """Main training loop."""
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
     import sys
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
     logging.getLogger().handlers[0].stream = sys.stderr  # ensure unbuffered
 
     device = torch.device(args.device)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Auto-create train.log in output dir (appends on resume)
+    file_handler = logging.FileHandler(output_dir / "train.log", mode="a")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logging.getLogger().addHandler(file_handler)
+
+    logger.info("Command: %s", " ".join(sys.argv))
 
     # Load config
     config = FlowMatchingS1Config(
@@ -192,10 +200,14 @@ def train(args):
     logger.info("Loading dataset: %s", args.dataset_repo_id)
     lerobot_dataset = LeRobotDataset(args.dataset_repo_id)
 
-    # Load S2 latents
-    logger.info("Loading S2 latents from %s", args.s2_latent_path)
-    s2_latents = np.load(args.s2_latent_path)
-    logger.info("S2 latents shape: %s", s2_latents.shape)
+    # Load S2 latents (optional — train without S2 conditioning if omitted)
+    s2_latents = None
+    if args.s2_latent_path:
+        logger.info("Loading S2 latents from %s", args.s2_latent_path)
+        s2_latents = np.load(args.s2_latent_path)
+        logger.info("S2 latents shape: %s", s2_latents.shape)
+    else:
+        logger.info("No S2 latent path provided — training without S2 conditioning")
 
     # Parse resize
     resize_to = None
@@ -422,7 +434,8 @@ def train(args):
 def main():
     parser = argparse.ArgumentParser(description="Train Flow Matching S1 with Training-Time RTC")
     parser.add_argument("--dataset-repo-id", required=True)
-    parser.add_argument("--s2-latent-path", required=True)
+    parser.add_argument("--s2-latent-path", default=None,
+                        help="Path to S2 latents .npy file. If omitted, S1 trains without S2 conditioning.")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--steps", type=int, default=100000)
     parser.add_argument("--batch-size", type=int, default=16)
