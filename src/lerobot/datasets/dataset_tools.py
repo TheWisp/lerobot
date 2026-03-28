@@ -36,7 +36,13 @@ import pyarrow.parquet as pq
 import torch
 from tqdm import tqdm
 
-from lerobot.datasets.aggregate import aggregate_datasets
+from lerobot.datasets.aggregate import (
+    aggregate_data,
+    aggregate_datasets,
+    aggregate_metadata,
+    aggregate_videos,
+    validate_all_metadata,
+)
 from lerobot.datasets.compute_stats import aggregate_stats, compute_episode_stats
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import (
@@ -453,6 +459,154 @@ def merge_datasets(
     )
 
     return merged_dataset
+
+
+def _compute_next_file_indices(
+    target_meta: LeRobotDatasetMetadata,
+) -> tuple[dict, dict, dict]:
+    """Compute next available (chunk, file) indices from the target dataset's episode metadata.
+
+    Scans all episodes to find the maximum file indices for data, meta, and video files,
+    then increments by one to get the starting point for new files.
+
+    Returns:
+        Tuple of (data_idx, meta_idx, videos_idx) ready for aggregate functions.
+    """
+    episodes = target_meta.episodes
+    chunk_size = target_meta.chunks_size
+
+    def _next_idx(chunk_col, file_col):
+        chunks = [int(episodes[i][chunk_col]) for i in range(len(episodes))]
+        files = [int(episodes[i][file_col]) for i in range(len(episodes))]
+        max_chunk = max(chunks)
+        max_file = max(f for c, f in zip(chunks, files) if c == max_chunk)
+        return update_chunk_file_indices(max_chunk, max_file, chunk_size)
+
+    next_data_chunk, next_data_file = _next_idx("data/chunk_index", "data/file_index")
+    data_idx = {"chunk": next_data_chunk, "file": next_data_file}
+
+    next_meta_chunk, next_meta_file = _next_idx("meta/episodes/chunk_index", "meta/episodes/file_index")
+    meta_idx = {"chunk": next_meta_chunk, "file": next_meta_file}
+
+    videos_idx = {}
+    for key in target_meta.video_keys:
+        next_vid_chunk, next_vid_file = _next_idx(
+            f"videos/{key}/chunk_index", f"videos/{key}/file_index"
+        )
+        videos_idx[key] = {
+            "chunk": next_vid_chunk,
+            "file": next_vid_file,
+            "latest_duration": 0,
+            "episode_duration": 0,
+        }
+
+    return data_idx, meta_idx, videos_idx
+
+
+def merge_into(
+    target: LeRobotDataset,
+    source: LeRobotDataset,
+) -> LeRobotDataset:
+    """Merge source dataset episodes into target dataset in-place.
+
+    Appends all episodes from source into target. Existing target data files,
+    video files, and episode metadata files remain untouched — only new files
+    are created for the incoming episodes, plus small metadata updates
+    (info.json, tasks, stats).
+
+    Prerequisites (checked automatically):
+    - Same FPS
+    - Same robot_type
+    - Same features (observation keys, action dimensions, dtypes)
+
+    Args:
+        target: The destination dataset (modified in-place).
+        source: The source dataset whose episodes will be appended.
+
+    Returns:
+        The target dataset, reloaded to reflect the merged state.
+    """
+    # Reload target metadata from disk to ensure fresh state
+    target.meta.episodes = load_episodes(target.meta.root)
+    target.meta.info = load_info(target.meta.root)
+
+    # 1. Validate compatibility
+    validate_all_metadata([target.meta, source.meta])
+
+    # 2. Compute starting file indices (one past target's current max)
+    data_idx, meta_idx, videos_idx = _compute_next_file_indices(target.meta)
+
+    # 3. Merge tasks — preserve target's existing task indices, append only new
+    existing_tasks = target.meta.tasks.copy()
+    new_tasks = [t for t in source.meta.tasks.index if t not in existing_tasks.index]
+    next_task_idx = len(existing_tasks)
+    for task in new_tasks:
+        existing_tasks.loc[task] = next_task_idx
+        next_task_idx += 1
+    target.meta.tasks = existing_tasks
+
+    # 4. Run aggregate pipeline — writes new files into target directory
+    src_meta = source.meta
+    dst_meta = target.meta
+
+    if dst_meta.video_keys:
+        videos_idx = aggregate_videos(
+            src_meta, dst_meta, videos_idx,
+            dst_meta.video_files_size_in_mb, dst_meta.chunks_size,
+        )
+
+    data_idx = aggregate_data(
+        src_meta, dst_meta, data_idx,
+        dst_meta.data_files_size_in_mb, dst_meta.chunks_size,
+    )
+
+    meta_idx = aggregate_metadata(src_meta, dst_meta, meta_idx, data_idx, videos_idx)
+
+    # 5. Update totals
+    dst_meta.info["total_episodes"] += src_meta.total_episodes
+    dst_meta.info["total_frames"] += src_meta.total_frames
+    dst_meta.info["total_tasks"] = len(dst_meta.tasks)
+    dst_meta.info["splits"] = {"train": f"0:{dst_meta.info['total_episodes']}"}
+    write_info(dst_meta.info, dst_meta.root)
+
+    # 6. Write tasks
+    write_tasks(dst_meta.tasks, dst_meta.root)
+
+    # 7. Reaggregate stats from all episode parquet files
+    _reaggregate_and_write_stats(dst_meta.root, dst_meta.features)
+
+    # 8. Reload target in-place (avoids LeRobotDataset constructor which makes Hub calls)
+    target.meta.info = load_info(target.root)
+    target.meta.episodes = load_episodes(target.root)
+    target.meta.stats = load_stats(target.root)
+
+    from lerobot.datasets.utils import (
+        get_hf_features_from_features,
+        hf_transform_to_torch,
+        load_nested_dataset,
+    )
+    import datasets as hf_datasets
+
+    if target.hf_dataset is not None:
+        try:
+            target.hf_dataset.cleanup_cache_files()
+        except Exception:
+            pass
+
+    hf_datasets.disable_caching()
+    try:
+        features = get_hf_features_from_features(target.meta.features)
+        target.hf_dataset = load_nested_dataset(target.root / "data", features=features)
+        target.hf_dataset.set_transform(hf_transform_to_torch)
+        target._lazy_loading = False
+    finally:
+        hf_datasets.enable_caching()
+
+    logging.info(
+        f"Merged {src_meta.total_episodes} episodes ({src_meta.total_frames} frames) "
+        f"into {target.repo_id}. New total: {dst_meta.info['total_episodes']} episodes."
+    )
+    return target
 
 
 def modify_features(
