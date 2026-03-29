@@ -191,8 +191,10 @@ def main():
             if s2_proc.is_alive():
                 logger.warning("S2 process didn't exit cleanly, terminating")
                 s2_proc.terminate()
-        shared_images.cleanup()
-        shared_cache.cleanup()
+        if shared_images is not None:
+            shared_images.cleanup()
+        if shared_cache is not None:
+            shared_cache.cleanup()
         logger.info("HVLA shutdown complete")
 
 
