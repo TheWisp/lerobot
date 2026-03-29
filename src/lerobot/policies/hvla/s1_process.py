@@ -227,6 +227,34 @@ def _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_to,
     logger.info("S1: Warmup complete (%.1fs total)", _time.perf_counter() - t0)
 
 
+def _create_or_resume_dataset(repo_id: str, fps: int, features: dict, robot_type: str):
+    """HACK: wrapper over LeRobotDataset.create that resumes if dir exists.
+
+    When a previous run crashes mid-creation, the dataset dir is left behind
+    and LeRobotDataset.create(exist_ok=False) refuses to overwrite.
+    This tries to resume first, falling back to delete+recreate if corrupted.
+    TODO: move this logic into LeRobotDataset itself.
+    """
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset, HF_LEROBOT_HOME
+
+    dataset_root = HF_LEROBOT_HOME / repo_id
+    if dataset_root.exists():
+        try:
+            dataset = LeRobotDataset(repo_id)
+            dataset.episode_buffer = dataset.create_episode_buffer()
+            dataset._init_video_encoders()
+            return dataset
+        except Exception as e:
+            logger.warning("Failed to resume '%s' (%s), recreating", repo_id, e)
+            import shutil
+            shutil.rmtree(dataset_root)
+
+    return LeRobotDataset.create(
+        repo_id=repo_id, fps=fps, features=features,
+        robot_type=robot_type, use_videos=True,
+    )
+
+
 def _create_recording_dataset(repo_id: str, fps: int, robot, task: str):
     """Create a LeRobotDataset for recording inference episodes.
 
@@ -259,15 +287,12 @@ def _create_recording_dataset(repo_id: str, fps: int, robot, task: str):
         "names": list(joint_names),
     }
 
-    dataset = LeRobotDataset.create(
-        repo_id=repo_id,
-        fps=fps,
-        features=features,
+    dataset = _create_or_resume_dataset(
+        repo_id=repo_id, fps=fps, features=features,
         robot_type=type(robot).__name__,
-        use_videos=True,
     )
-    logger.info("S1: Recording dataset '%s' created (%d joints, %d cameras)",
-                repo_id, len(joint_names), len(cam_features))
+    logger.info("S1: Recording dataset '%s' (%d joints, %d cameras, %d existing episodes)",
+                repo_id, len(joint_names), len(cam_features), dataset.meta.total_episodes)
     return dataset
 
 
@@ -568,7 +593,22 @@ def run_s1(
                 # Only auto-advance on timeout for between-episode resets, not first
                 if recorded_episodes > 0 and reset_time_s > 0 and (time.time() - reset_start) >= reset_time_s:
                     break
-                time.sleep(0.1)
+
+                loop_start = time.perf_counter()
+
+                # Teleop during reset: read leader → send to follower
+                if teleop is not None:
+                    act = teleop.get_action()
+                    action_dict = {name: float(act.get(name, 0)) for name in joint_names}
+                    robot.send_action(action_dict)
+
+                # Keep obs stream alive for GUI camera preview
+                obs = robot.get_observation()
+                for step in obs_processor_steps:
+                    obs = step.observation(obs)
+
+                dt = time.perf_counter() - loop_start
+                time.sleep(max(1.0 / fps - dt, 0.0))
             events["exit_early"] = False
 
             if events.get("stop_recording") or (stop_event is not None and stop_event.is_set()):
@@ -582,6 +622,42 @@ def run_s1(
         step_count = 0
         episode_start = time.time()
         policy.reset()
+        prev_action_np = None  # reset per episode to avoid stale delta checks
+
+        # Ensure inference thread is running and has fresh data.
+        # May have been paused by intervention in previous episode.
+        if infer_thread.is_paused:
+            logger.info("S1: Resuming inference thread (was paused from previous episode)")
+            if teleop is not None and hasattr(teleop, "enable_torque"):
+                teleop.enable_torque()
+            infer_thread.resume()
+
+        # Publish fresh observation and wait for a fresh chunk —
+        # same as startup, avoids executing stale chunks from reset period.
+        fresh_obs = robot.get_observation()
+        for step in obs_processor_steps:
+            fresh_obs = step.observation(fresh_obs)
+        infer_thread.publish_obs(fresh_obs, time.perf_counter())
+        _t_wait = time.perf_counter()
+        while True:
+            chunk, t_origin, _ = infer_thread.get_chunk()
+            if chunk is not None and (time.perf_counter() - t_origin) < 2.0:
+                break  # got a fresh chunk
+            if time.perf_counter() - _t_wait > 10.0:
+                logger.warning("S1: Timeout waiting for fresh chunk at episode start")
+                break
+            time.sleep(0.01)
+
+        # --- Episode start assertions ---
+        if infer_thread.is_paused:
+            raise RuntimeError("BUG: inference thread still paused at episode start")
+        if chunk is None:
+            raise RuntimeError("BUG: no chunk available at episode start")
+        _chunk_age = time.perf_counter() - t_origin
+        if _chunk_age > 5.0:
+            raise RuntimeError(f"BUG: chunk is stale at episode start (age={_chunk_age:.1f}s)")
+        if events.get("exit_early"):
+            raise RuntimeError("BUG: exit_early flag not cleared before episode start")
 
         # Intervention tracking for this episode
         was_intervening = False
@@ -589,11 +665,42 @@ def run_s1(
         pending_int_episodes: list[dict] = []
         if teleop is not None and hasattr(teleop, "reset_intervention"):
             teleop.reset_intervention()
+            logger.info("S1: Intervention flag reset for new episode")
+            # Verify it's actually off
+            if hasattr(teleop, "get_teleop_events"):
+                from lerobot.teleoperators.utils import TeleopEvents
+                _ev = teleop.get_teleop_events()
+                _is_int = _ev.get(TeleopEvents.IS_INTERVENTION, False)
+                if _is_int:
+                    raise RuntimeError("BUG: intervention still active after reset_intervention()")
+                logger.info("S1: Intervention state confirmed OFF")
         if int_dataset is not None:
             int_dataset.episode_buffer = int_dataset.create_episode_buffer()
+            # Restart video encoders for the new intervention episode.
+            # Discard any active encoder from previous episode first.
+            for enc in int_dataset.video_encoders.values():
+                if enc._episode_active:
+                    enc.discard()
+            if int_dataset.video_encoders:
+                int_dataset._start_video_encoders()
+            # Verify encoders are ready
+            for key, enc in int_dataset.video_encoders.items():
+                assert enc._episode_active, \
+                    f"BUG: int_dataset video encoder '{key}' not active at episode start"
 
+        _first_iter = True
         while stop_event is None or not stop_event.is_set():
             loop_start = time.perf_counter()
+
+            if _first_iter:
+                _first_iter = False
+                logger.info(
+                    "S1: Episode loop start — was_intervening=%s, infer_paused=%s, "
+                    "prev_action=%s, chunk_age=%.1fs",
+                    was_intervening, infer_thread.is_paused,
+                    "None" if prev_action_np is None else "set",
+                    time.perf_counter() - t_origin if chunk is not None else -1,
+                )
 
             if stop_event is not None and stop_event.is_set():
                 logger.info("S1: Stop signal received")
@@ -647,18 +754,117 @@ def run_s1(
                     logger.info("S1: INTERVENTION ON — pausing inference, human takes over")
                     infer_thread.pause()
 
-                    # Compensate servo tracking error before releasing torque
+                    # Measure initial leader-follower delta before any sync
+                    leader_pos_before = teleop.get_action()
+                    follower_pos_now = {k: v for k, v in obs.items() if k.endswith(".pos")}
+                    initial_deltas = {
+                        k: abs(leader_pos_before.get(k, 0) - follower_pos_now.get(k, 0))
+                        for k in follower_pos_now
+                    }
+                    max_initial_delta = max(initial_deltas.values()) if initial_deltas else 0
+                    worst_joint = max(initial_deltas, key=initial_deltas.get) if initial_deltas else "?"
+                    logger.info(
+                        "S1: Intervention start — leader-follower delta: max=%.1f° (%s), "
+                        "mean=%.1f°",
+                        max_initial_delta, worst_joint,
+                        sum(initial_deltas.values()) / max(len(initial_deltas), 1),
+                    )
+                    if max_initial_delta > 90:
+                        raise RuntimeError(
+                            f"BUG: leader-follower delta {max_initial_delta:.1f}° on {worst_joint} "
+                            f"is dangerously large — inverse follow may not be working"
+                        )
+
+                    # Compensate servo tracking error before releasing torque.
+                    # Uses the same logic as lerobot_record: iterative correction
+                    # with audio feedback (the beep sleep provides natural timing
+                    # that prevents divergence).
                     if last_follower_pos_sent and hasattr(teleop, "send_feedback"):
-                        _servo_sync(teleop, last_follower_pos_sent)
+                        import subprocess as _sp
+                        target = last_follower_pos_sent
+                        goal = dict(target)
+                        settle_tolerance = 1.0
+                        sync_timeout = 5.0
+                        sync_start = time.perf_counter()
+                        beep_proc = None
+                        while True:
+                            pos = teleop.get_action()
+                            max_err = max(abs(pos.get(k, 0) - target[k]) for k in target)
+                            if max_err < settle_tolerance:
+                                if beep_proc is not None:
+                                    beep_proc.terminate()
+                                break
+                            if time.perf_counter() - sync_start > sync_timeout:
+                                logger.warning("S1: Servo sync timed out (max_err=%.2f)", max_err)
+                                if beep_proc is not None:
+                                    beep_proc.terminate()
+                                break
+                            for k in target:
+                                error = pos.get(k, 0) - target[k]
+                                goal[k] = goal[k] - error
+                            teleop.send_feedback(goal)
+                            almost_ready = max_err < settle_tolerance * 2
+                            if almost_ready:
+                                if beep_proc is None or beep_proc.poll() is not None:
+                                    sr = 8000
+                                    dur = 1.0
+                                    t_arr = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
+                                    tone = (np.sin(2 * np.pi * 1000 * t_arr) * 16000).astype(np.int16)
+                                    beep_proc = _sp.Popen(
+                                        ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+                                        stdin=_sp.PIPE, stderr=_sp.DEVNULL,
+                                    )
+                                    beep_proc.stdin.write(tone.tobytes())
+                                    beep_proc.stdin.close()
+                                time.sleep(0.05)
+                            else:
+                                if beep_proc is not None and beep_proc.poll() is None:
+                                    beep_proc.terminate()
+                                    beep_proc = None
+                                interval = min(0.5, max(0.05, 0.05 + 0.45 * (1 - max_err / 50)))
+                                if beep_proc is None or beep_proc.poll() is not None:
+                                    sr = 8000
+                                    dur = min(interval * 0.6, 0.08)
+                                    t_arr = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
+                                    freq = 600 + min(max_err, 50) * 8
+                                    tone = (np.sin(2 * np.pi * freq * t_arr) * 16000).astype(np.int16)
+                                    beep_proc = _sp.Popen(
+                                        ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+                                        stdin=_sp.PIPE, stderr=_sp.DEVNULL,
+                                    )
+                                    beep_proc.stdin.write(tone.tobytes())
+                                    beep_proc.stdin.close()
+                                time.sleep(interval)
+                        logger.info("S1: Servo sync done in %.0fms (max_err=%.2f)",
+                                    (time.perf_counter() - sync_start) * 1e3, max_err)
+                    else:
+                        logger.warning("S1: No last_follower_pos_sent — skipping servo sync")
 
                     if hasattr(teleop, "disable_torque"):
                         teleop.disable_torque()
-                    _disable_torque(robot)
+                    # NOTE: do NOT disable follower torque — it must hold position
+                    # while the human grabs the leader. The follower will be driven
+                    # by send_action() once the human starts moving the leader.
                     log_say("Intervention")
 
                 # Read leader arm positions and send to robot
                 act = teleop.get_action()
                 action_np = np.array([float(act.get(j, 0)) for j in joint_names], dtype=np.float32)
+
+                # Safety guard: abort if leader position jumps too far from
+                # current follower position (indicates servo released badly)
+                if prev_action_np is not None:
+                    max_delta = np.abs(action_np - prev_action_np).max()
+                    if max_delta > 30.0:
+                        logger.warning(
+                            "S1: INTERVENTION SAFETY — leader jump %.1f° > 30° threshold, "
+                            "holding follower position. Leader pos: %s",
+                            max_delta,
+                            {joint_names[i]: f"{action_np[i]:.1f}" for i in range(min(4, len(action_np)))}
+                        )
+                        # Don't send this action — hold previous position
+                        action_np = prev_action_np.copy()
+
                 action_dict = {name: float(action_np[i]) for i, name in enumerate(joint_names) if i < len(action_np)}
                 robot.send_action(action_dict)
                 t_after_send = time.perf_counter()
@@ -682,6 +888,14 @@ def run_s1(
                         import copy
                         pending_int_episodes.append(copy.deepcopy(int_dataset.episode_buffer))
                         int_dataset.episode_buffer = int_dataset.create_episode_buffer()
+                        for enc in int_dataset.video_encoders.values():
+                            if enc._episode_active:
+                                enc.discard()
+                        if int_dataset.video_encoders:
+                            int_dataset._start_video_encoders()
+                        for key, enc in int_dataset.video_encoders.items():
+                            assert enc._episode_active, \
+                                f"BUG: int_dataset encoder '{key}' not active after restart"
 
                     _enable_torque(robot)
                     if hasattr(teleop, "enable_torque"):
@@ -690,12 +904,26 @@ def run_s1(
                         except ConnectionError as e:
                             logger.warning("S1: Failed to enable leader torque: %s", e)
                     infer_thread.resume()
+                    assert not infer_thread.is_paused, \
+                        "BUG: inference thread still paused after resume"
                     log_say("Policy")
 
                 # 3. Read latest chunk
                 chunk, t_origin, t_obs = infer_thread.get_chunk()
 
                 if chunk is None:
+                    time.sleep(1.0 / fps)
+                    was_intervening = is_intervention
+                    continue
+
+                # Runtime check: chunk must not be stale (>5s = definitely a bug)
+                chunk_age_s = time.perf_counter() - t_origin
+                if chunk_age_s > 5.0:
+                    logger.error(
+                        "S1: STALE CHUNK — age %.1fs, inference paused=%s. "
+                        "Skipping action to avoid executing outdated commands.",
+                        chunk_age_s, infer_thread.is_paused,
+                    )
                     time.sleep(1.0 / fps)
                     was_intervening = is_intervention
                     continue
@@ -709,6 +937,28 @@ def run_s1(
                 action_np = chunk[idx].copy()
                 if max_step_delta is not None and prev_action_np is not None:
                     action_np = _apply_delta_filter(action_np, prev_action_np, max_step_delta)
+
+                # Sanity: actions must be finite
+                if not np.isfinite(action_np).all():
+                    logger.error("S1: NaN/Inf in action — holding previous position")
+                    if prev_action_np is not None:
+                        action_np = prev_action_np.copy()
+                    else:
+                        was_intervening = is_intervention
+                        continue
+
+                # Safety: clamp large jumps (>30° any joint) to prevent damage
+                if prev_action_np is not None:
+                    delta = action_np - prev_action_np
+                    max_delta = np.abs(delta).max()
+                    if max_delta > 30.0:
+                        worst_idx = int(np.abs(delta).argmax())
+                        logger.warning(
+                            "S1: POLICY JUMP CLAMP — %.1f° on %s (step %d idx %d), "
+                            "clamping to ±30°",
+                            max_delta, joint_names[worst_idx], step_count, idx,
+                        )
+                        action_np = prev_action_np + np.clip(delta, -30.0, 30.0)
 
                 action_dict = {name: float(action_np[i]) for i, name in enumerate(joint_names) if i < len(action_np)}
                 robot.send_action(action_dict)
@@ -860,31 +1110,6 @@ def run_s1(
             logger.warning("Robot disconnect error (non-fatal): %s", e)
 
 
-def _servo_sync(teleop, target_pos: dict[str, float], tolerance: float = 1.0, timeout: float = 5.0):
-    """Iteratively compensate servo tracking error before releasing torque.
-
-    The leader servo can't perfectly reach its goal position under load.
-    This measures the error, adjusts the goal to overshoot, and repeats
-    until the actual position converges to the target.
-    """
-    goal = dict(target_pos)
-    start = time.perf_counter()
-    while True:
-        pos = teleop.get_action()
-        max_err = max(abs(pos.get(k, 0) - target_pos[k]) for k in target_pos)
-        if max_err < tolerance:
-            break
-        if time.perf_counter() - start > timeout:
-            logger.warning("S1: Servo sync timed out (max_err=%.2f), releasing anyway", max_err)
-            break
-        # Nudge goal by remaining error
-        for k in target_pos:
-            error = pos.get(k, 0) - target_pos[k]
-            goal[k] = goal[k] - error
-        teleop.send_feedback(goal)
-        time.sleep(0.02)
-    elapsed_ms = (time.perf_counter() - start) * 1e3
-    logger.info("S1: Servo sync converged in %.0fms (max_err=%.2f)", elapsed_ms, max_err)
 
 
 def _get_motor_buses(robot) -> list:

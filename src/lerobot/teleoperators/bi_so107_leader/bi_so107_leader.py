@@ -150,5 +150,6 @@ class BiSO107Leader(Teleoperator):
         self.right_arm.disable_torque()
 
     def reset_intervention(self) -> None:
-        """Reset intervention state for new episode."""
+        """Reset intervention state for new episode on both arms."""
         self.left_arm.reset_intervention()
+        self.right_arm.reset_intervention()
