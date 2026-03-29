@@ -750,6 +750,8 @@ function renderRunForm() {
     html += `<input type="text" id="run-hvla-task" placeholder="assemble cylinder into ring" value="">`;
     html += `<label>Decode Subtask</label>`;
     html += `<label class="toggle-label"><input type="checkbox" id="run-hvla-decode-subtask"> Enable subtask decoding</label>`;
+    html += `<label>Query Interval (steps between S1 inference, default 2)</label>`;
+    html += `<input type="number" id="run-hvla-query-interval" placeholder="2" min="0">`;
     html += `<label>Record Dataset</label>`;
     html += `<input type="text" id="run-hvla-record-dataset" placeholder="eval/hvla_eval (optional)" value="">`;
     html += `<label>Episodes</label>`;
@@ -1004,6 +1006,7 @@ async function launchRun() {
                 s2_checkpoint: s2Ckpt,
                 task: hvlaTask,
                 fps: parseInt(document.getElementById('run-policy-fps')?.value) || 30,
+                s1_query_interval: parseInt(document.getElementById('run-hvla-query-interval')?.value) || null,
                 decode_subtask: document.getElementById('run-hvla-decode-subtask')?.checked || false,
                 record_dataset: recordDs,
                 num_episodes: parseInt(document.getElementById('run-hvla-episodes')?.value) || 1,

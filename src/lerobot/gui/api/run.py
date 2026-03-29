@@ -155,6 +155,7 @@ class HVLARunRequest(BaseModel):
     fps: int = 30
     s1_type: str = "flow"
     decode_subtask: bool = False
+    s1_query_interval: int | None = None
     record_dataset: str | None = None
     num_episodes: int = 1
     episode_time_s: float = 60
@@ -570,6 +571,8 @@ async def start_hvla(req: HVLARunRequest) -> dict:
         f"--fps={req.fps}",
         f"--s1-type={req.s1_type}",
     ]
+    if req.s1_query_interval is not None:
+        args.append(f"--s1-query-interval={req.s1_query_interval}")
     if req.s2_checkpoint:
         args.append(f"--s2-checkpoint={Path(req.s2_checkpoint).expanduser()}")
     else:
