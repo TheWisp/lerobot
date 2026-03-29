@@ -632,18 +632,26 @@ def run_s1(
                 teleop.enable_torque()
             infer_thread.resume()
 
-        # Publish fresh observation and wait for a fresh chunk —
-        # same as startup, avoids executing stale chunks from reset period.
+        # Publish fresh observation and wait for a chunk produced AFTER it.
+        # Clear the existing chunk first so we don't accept a stale one
+        # that was computed from a previous episode's observation.
         fresh_obs = robot.get_observation()
         for step in obs_processor_steps:
             fresh_obs = step.observation(fresh_obs)
-        infer_thread.publish_obs(fresh_obs, time.perf_counter())
-        _t_wait = time.perf_counter()
+        _t_publish = time.perf_counter()
+        # Invalidate current chunk so wait loop only accepts new ones
+        with infer_thread._chunk_lock:
+            infer_thread._chunk_data = None
+            infer_thread._chunk_t_origin = 0.0
+        infer_thread.publish_obs(fresh_obs, _t_publish)
+        logger.info("S1: Waiting for fresh chunk (published obs at t=%.3f)", _t_publish)
         while True:
             chunk, t_origin, _ = infer_thread.get_chunk()
-            if chunk is not None and (time.perf_counter() - t_origin) < 2.0:
-                break  # got a fresh chunk
-            if time.perf_counter() - _t_wait > 10.0:
+            # Only accept chunks produced AFTER we published the fresh obs
+            if chunk is not None and t_origin >= _t_publish - 0.1:
+                logger.info("S1: Got fresh chunk (age=%.3fs)", time.perf_counter() - t_origin)
+                break
+            if time.perf_counter() - _t_publish > 10.0:
                 logger.warning("S1: Timeout waiting for fresh chunk at episode start")
                 break
             time.sleep(0.01)
