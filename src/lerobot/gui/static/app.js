@@ -795,6 +795,13 @@ function showFolderContextMenu(e, path, isModelRun) {
     const mergeSep = document.getElementById('folder-ctx-merge-separator');
     if (mergeItem) mergeItem.style.display = (isOpenedDataset && hasMultipleDatasets) ? '' : 'none';
     if (mergeSep) mergeSep.style.display = (isOpenedDataset && hasMultipleDatasets) ? '' : 'none';
+    // Show/hide Hub upload/download for opened datasets
+    const hubUpload = document.getElementById('folder-ctx-hub-upload');
+    const hubDownload = document.getElementById('folder-ctx-hub-download');
+    const hubSep = document.getElementById('folder-ctx-hub-separator');
+    if (hubUpload) hubUpload.style.display = isOpenedDataset ? '' : 'none';
+    if (hubDownload) hubDownload.style.display = isOpenedDataset ? '' : 'none';
+    if (hubSep) hubSep.style.display = isOpenedDataset ? '' : 'none';
     menu.style.left = e.clientX + 'px';
     menu.style.top = e.clientY + 'px';
     menu.classList.add('visible');
@@ -814,6 +821,10 @@ function folderContextAction(action) {
         }
     } else if (action === 'merge-into') {
         openMergeModal(_folderContextPath);
+    } else if (action === 'hub-upload') {
+        hubUploadDataset(_folderContextPath);
+    } else if (action === 'hub-download') {
+        hubDownloadDataset(_folderContextPath);
     }
     hideContextMenu();
 }
@@ -1282,7 +1293,185 @@ async function restoreOpenedDatasets() {
     }
 }
 
+// --- HuggingFace Hub operations ---
+
+async function checkHubAuth() {
+    try {
+        const res = await fetch('/api/datasets/hub/auth-status');
+        const data = await res.json();
+        const el = document.getElementById('hf-auth-indicator');
+        if (el) {
+            el.textContent = data.logged_in ? `HF: @${data.username}` : 'HF: not logged in';
+            el.style.color = data.logged_in ? 'var(--text-secondary, #888)' : 'var(--text-tertiary, #555)';
+        }
+    } catch (e) { /* ignore */ }
+}
+
+let _hubDatasetId = null;
+let _hubAction = null;  // 'upload' or 'download'
+let _hubRepoInfoTimer = null;
+
+function hubUploadDataset(datasetId) { openHubModal(datasetId, 'upload'); }
+function hubDownloadDataset(datasetId) { openHubModal(datasetId, 'download'); }
+
+function openHubModal(datasetId, action) {
+    _hubDatasetId = datasetId;
+    _hubAction = action;
+    const ds = datasets[datasetId];
+    if (!ds) return;
+
+    const isUpload = action === 'upload';
+    document.getElementById('hub-modal-title').textContent = isUpload ? 'Upload to Hub' : 'Download from Hub';
+    document.getElementById('hub-execute-btn').textContent = isUpload ? 'Upload' : 'Download';
+    document.getElementById('hub-execute-btn').style.background = isUpload ? 'var(--accent, #0e639c)' : '#c24038';
+    document.getElementById('hub-execute-btn').disabled = false;
+    document.getElementById('hub-status').textContent = '';
+    document.getElementById('hub-repo-input').value = ds.repo_id;
+
+    // Show local dataset info
+    document.getElementById('hub-local-info').innerHTML =
+        `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>` +
+        `<span style="color:var(--text-tertiary,#666)">${ds.root}</span>`;
+
+    document.getElementById('hub-repo-info').innerHTML = '<span style="color:var(--text-tertiary,#666)">Loading remote info...</span>';
+    document.getElementById('hub-modal-overlay').style.display = 'flex';
+
+    fetchHubRepoInfo();
+    fetchHubDiff();
+}
+
+function closeHubModal() {
+    document.getElementById('hub-modal-overlay').style.display = 'none';
+    _hubDatasetId = null;
+    _hubAction = null;
+}
+
+function fetchHubRepoInfo() {
+    clearTimeout(_hubRepoInfoTimer);
+    _hubRepoInfoTimer = setTimeout(async () => {
+        const repoId = document.getElementById('hub-repo-input').value.trim();
+        const infoEl = document.getElementById('hub-repo-info');
+        if (!repoId) { infoEl.innerHTML = ''; return; }
+
+        infoEl.innerHTML = '<span style="color:var(--text-tertiary,#666)">Loading...</span>';
+        try {
+            const res = await fetch(`/api/datasets/hub/repo-info?repo_id=${encodeURIComponent(repoId)}`);
+            const data = await res.json();
+            if (!data.exists) {
+                infoEl.innerHTML = _hubAction === 'upload'
+                    ? '<span style="color:#e5c07b">New repo — will be created on upload</span>'
+                    : '<span style="color:#e06c75">Repo not found on Hub</span>';
+                return;
+            }
+            const epInfo = data.total_episodes != null
+                ? `${data.total_episodes} episodes, ${data.total_frames?.toLocaleString() || '?'} frames`
+                : `${data.files} files`;
+            infoEl.innerHTML =
+                `<strong>Remote:</strong> ${epInfo}, ${data.total_size_mb} MB` +
+                `${data.private ? ' (private)' : ''}<br>` +
+                `Last modified: ${data.last_modified || 'unknown'}<br>` +
+                `Downloads: ${data.downloads} | SHA: ${data.sha || '?'}`;
+        } catch (e) {
+            infoEl.innerHTML = `<span style="color:#e06c75">Failed to fetch info</span>`;
+        }
+        // Also refresh diff when repo changes
+        fetchHubDiff();
+    }, 400);
+}
+
+async function fetchHubDiff() {
+    if (!_hubDatasetId) return;
+    const repoId = document.getElementById('hub-repo-input').value.trim();
+    const statusEl = document.getElementById('hub-status');
+    if (!repoId) { statusEl.textContent = ''; return; }
+
+    statusEl.innerHTML = '<span style="color:var(--text-tertiary,#666)">Comparing...</span>';
+    try {
+        const res = await fetch(`/api/datasets/${encodeURIComponent(_hubDatasetId)}/hub/diff?repo_id=${encodeURIComponent(repoId)}`);
+        const data = await res.json();
+        if (data.status === 'error') {
+            statusEl.textContent = data.message;
+            return;
+        }
+        if (data.in_sync) {
+            statusEl.innerHTML = '<span style="color:#98c379">In sync — no differences</span>';
+            return;
+        }
+        let parts = [];
+        if (data.modified.length > 0) parts.push(`${data.modified.length} modified`);
+        if (data.local_only.length > 0) parts.push(`${data.local_only.length} local only`);
+        if (data.remote_only.length > 0) parts.push(`${data.remote_only.length} remote only`);
+        statusEl.innerHTML = `<span style="color:#e5c07b">${parts.join(', ')} (${data.unchanged} unchanged)</span>`;
+    } catch (e) {
+        statusEl.textContent = '';
+    }
+}
+
+async function executeHubAction() {
+    if (!_hubDatasetId || !_hubAction) return;
+    const repoId = document.getElementById('hub-repo-input').value.trim();
+    if (!repoId) return;
+
+    const btn = document.getElementById('hub-execute-btn');
+    const status = document.getElementById('hub-status');
+    btn.disabled = true;
+    status.textContent = _hubAction === 'upload' ? 'Uploading...' : 'Downloading...';
+
+    const endpoint = `/api/datasets/${encodeURIComponent(_hubDatasetId)}/hub/${_hubAction}`;
+    try {
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repo_id: repoId }),
+        });
+
+        if (res.status === 401) {
+            status.textContent = 'Not logged in. Run `huggingface-cli login` in terminal.';
+            btn.disabled = false;
+            return;
+        }
+        if (res.status === 423) {
+            status.textContent = 'Dataset is busy, please wait.';
+            btn.disabled = false;
+            return;
+        }
+
+        const data = await res.json();
+        if (!res.ok) {
+            status.textContent = data.detail || 'Operation failed';
+            btn.disabled = false;
+            return;
+        }
+
+        closeHubModal();
+        showToast(_hubAction === 'upload' ? 'Upload Complete' : 'Download Complete', data.message, 'info');
+
+        // Refresh dataset after download (data changed)
+        if (_hubAction === 'download') {
+            try {
+                const epRes = await fetch(`/api/datasets/${encodeURIComponent(_hubDatasetId)}/episodes`);
+                if (epRes.ok) {
+                    episodes[_hubDatasetId] = await epRes.json();
+                    datasets[_hubDatasetId].total_episodes = episodes[_hubDatasetId].length;
+                    datasets[_hubDatasetId].total_frames = episodes[_hubDatasetId].reduce((s, e) => s + e.length, 0);
+                }
+            } catch (e) { /* ignore */ }
+            renderTree();
+        }
+    } catch (e) {
+        status.textContent = 'Error: ' + e.message;
+        btn.disabled = false;
+    }
+}
+
+// Close hub modal on overlay click
+document.addEventListener('click', (e) => {
+    const overlay = document.getElementById('hub-modal-overlay');
+    if (e.target === overlay) closeHubModal();
+});
+
 // Initialize
 refreshPendingEdits();
 loadSources();
 restoreOpenedDatasets();
+checkHubAuth();

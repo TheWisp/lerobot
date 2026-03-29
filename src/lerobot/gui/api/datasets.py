@@ -756,8 +756,18 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                     features=list(dataset.meta.features.keys()),
                 )
 
-            # Extract repo_id from path or use path name
-            repo_id = request.repo_id or local_path.name
+            # Extract repo_id from path: if under HF_LEROBOT_HOME, use owner/name
+            repo_id = request.repo_id
+            if not repo_id:
+                try:
+                    rel = local_path.relative_to(HF_LEROBOT_HOME)
+                    parts = rel.parts
+                    if len(parts) >= 2:
+                        repo_id = f"{parts[0]}/{parts[1]}"
+                    else:
+                        repo_id = local_path.name
+                except ValueError:
+                    repo_id = local_path.name
 
             # Disable HuggingFace caching to ensure fresh data is loaded
             # This is important for datasets that may have been edited
@@ -1213,3 +1223,268 @@ async def visualize_episode(dataset_id: str, episode_idx: int) -> dict[str, str]
     return {"status": "ok", "message": f"Launched Rerun for episode {episode_idx}"}
 
 
+# ---------------------------------------------------------------------------
+# HuggingFace Hub operations
+# ---------------------------------------------------------------------------
+
+
+@router.get("/hub/auth-status")
+async def hub_auth_status():
+    """Check if the user is logged in to HuggingFace Hub."""
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+        info = api.whoami()
+        return {"logged_in": True, "username": info.get("name", info.get("fullname", "unknown"))}
+    except Exception:
+        return {"logged_in": False, "username": None}
+
+
+@router.get("/hub/repo-info")
+async def hub_repo_info(repo_id: str):
+    """Get info about a dataset repo on HuggingFace Hub."""
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+        info = api.dataset_info(repo_id, files_metadata=True)
+        siblings = info.siblings or []
+        total_size = sum(s.size for s in siblings if s.size)
+        # Fetch episode/frame counts from remote info.json
+        remote_episodes = None
+        remote_frames = None
+        remote_fps = None
+        try:
+            import json as _json
+            from huggingface_hub import hf_hub_download
+
+            info_path = hf_hub_download(repo_id, "meta/info.json", repo_type="dataset")
+            remote_info = _json.loads(Path(info_path).read_text())
+            remote_episodes = remote_info.get("total_episodes")
+            remote_frames = remote_info.get("total_frames")
+            remote_fps = remote_info.get("fps")
+        except Exception:
+            pass
+
+        return {
+            "exists": True,
+            "repo_id": info.id,
+            "private": info.private,
+            "last_modified": str(info.last_modified) if info.last_modified else None,
+            "downloads": info.downloads,
+            "files": len(siblings),
+            "total_size_mb": round(total_size / 1e6, 1),
+            "sha": info.sha[:12] if info.sha else None,
+            "total_episodes": remote_episodes,
+            "total_frames": remote_frames,
+            "fps": remote_fps,
+        }
+    except Exception:
+        return {"exists": False, "repo_id": repo_id}
+
+
+@router.get("/{dataset_id:path}/hub/diff")
+async def hub_diff(dataset_id: str, repo_id: str | None = None):
+    """Compare local dataset against HuggingFace Hub version by file size.
+
+    Returns lists of modified, local-only, and remote-only files.
+    Fast: no downloads, just file size comparison.
+    """
+    dataset_id = unquote(dataset_id)
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    dataset = _app_state.datasets[dataset_id]
+    target_repo_id = repo_id or dataset.repo_id
+    root = dataset.root
+
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+        info = api.dataset_info(target_repo_id, files_metadata=True)
+    except Exception:
+        return {"status": "error", "message": f"Repo not found: {target_repo_id}"}
+
+    remote_files = {}
+    for s in info.siblings or []:
+        remote_files[s.rfilename] = {
+            "size": s.size,
+            "sha": s.lfs.sha256 if s.lfs else s.blob_id,
+        }
+
+    local_only = []
+    remote_only = []
+    modified = []
+    unchanged = 0
+
+    for rname, rinfo in remote_files.items():
+        local_path = root / rname
+        if not local_path.exists():
+            remote_only.append(rname)
+            continue
+        local_size = local_path.stat().st_size
+        if rinfo["size"] and local_size != rinfo["size"]:
+            modified.append({"file": rname, "local_size": local_size, "remote_size": rinfo["size"]})
+        else:
+            unchanged += 1
+
+    for p in sorted(root.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = str(p.relative_to(root))
+        if rel.startswith(".cache/") or rel.startswith(".lerobot"):
+            continue
+        if rel not in remote_files:
+            local_only.append(rel)
+
+    in_sync = len(modified) == 0 and len(local_only) == 0 and len(remote_only) == 0
+    return {
+        "status": "ok",
+        "in_sync": in_sync,
+        "unchanged": unchanged,
+        "modified": modified,
+        "local_only": local_only,
+        "remote_only": remote_only,
+    }
+
+
+class HubUploadRequest(BaseModel):
+    repo_id: str | None = None  # If None, uses dataset's repo_id
+
+
+class HubDownloadRequest(BaseModel):
+    repo_id: str | None = None  # If None, uses dataset's repo_id
+
+
+@router.post("/{dataset_id:path}/hub/upload")
+async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
+    """Push local dataset to HuggingFace Hub (overwrites remote)."""
+    dataset_id = unquote(dataset_id)
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    lock = _app_state.get_lock(dataset_id)
+    if lock.locked():
+        raise HTTPException(status_code=423, detail="Dataset is busy")
+
+    dataset = _app_state.datasets[dataset_id]
+    repo_id = (request.repo_id if request and request.repo_id else None) or dataset.repo_id
+
+    async with lock:
+        try:
+            from huggingface_hub import HfApi
+
+            api = HfApi()
+            api.whoami()
+        except Exception:
+            raise HTTPException(status_code=401, detail="Not logged in to HuggingFace Hub. Run `huggingface-cli login` in terminal.")
+
+        logger.info(f"Uploading dataset to {repo_id} from {dataset.root}")
+        try:
+            from huggingface_hub import upload_folder
+
+            upload_folder(
+                folder_path=str(dataset.root),
+                repo_id=repo_id,
+                repo_type="dataset",
+                commit_message="Update from LeRobot GUI",
+            )
+        except Exception as e:
+            logger.exception(f"Upload failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+
+    logger.info(f"Upload complete: {repo_id}")
+    return {
+        "status": "ok",
+        "message": f"Uploaded to {repo_id}",
+        "url": f"https://huggingface.co/datasets/{repo_id}",
+    }
+
+
+@router.post("/{dataset_id:path}/hub/download")
+async def hub_download(dataset_id: str, request: HubDownloadRequest | None = None):
+    """Pull dataset from HuggingFace Hub, overwriting local copy.
+
+    TODO: clean up stale HF download cache/lock files before downloading
+    to avoid deadlocks from interrupted previous downloads.
+    """
+    dataset_id = unquote(dataset_id)
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    lock = _app_state.get_lock(dataset_id)
+    if lock.locked():
+        raise HTTPException(status_code=423, detail="Dataset is busy")
+
+    dataset = _app_state.datasets[dataset_id]
+    repo_id = (request.repo_id if request and request.repo_id else None) or dataset.repo_id
+    root = dataset.root
+
+    async with lock:
+        logger.info(f"Downloading dataset {repo_id} to {root}")
+        try:
+            from huggingface_hub import snapshot_download
+
+            snapshot_download(
+                repo_id=repo_id,
+                repo_type="dataset",
+                local_dir=str(root),
+            )
+        except Exception as e:
+            logger.exception(f"Download failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Download failed: {e}")
+
+        # Reload dataset in-place (same pattern as merge_into / apply_edits)
+        try:
+            import datasets as hf_datasets
+
+            from lerobot.datasets.utils import (
+                get_hf_features_from_features,
+                hf_transform_to_torch,
+                load_episodes,
+                load_info,
+                load_stats,
+                load_tasks,
+                load_nested_dataset,
+            )
+
+            dataset.meta.info = load_info(root)
+            dataset.meta.episodes = load_episodes(root)
+            dataset.meta.stats = load_stats(root)
+            dataset.meta.tasks = load_tasks(root)
+
+            if dataset.hf_dataset is not None:
+                try:
+                    dataset.hf_dataset.cleanup_cache_files()
+                except Exception:
+                    pass
+
+            hf_datasets.disable_caching()
+            try:
+                features = get_hf_features_from_features(dataset.meta.features)
+                dataset.hf_dataset = load_nested_dataset(root / "data", features=features)
+                dataset.hf_dataset.set_transform(hf_transform_to_torch)
+                dataset._lazy_loading = False
+            finally:
+                hf_datasets.enable_caching()
+
+            # Invalidate caches
+            _app_state.frame_cache.invalidate_dataset(dataset_id)
+            try:
+                from lerobot.datasets.video_utils import _default_decoder_cache
+                _default_decoder_cache.clear()
+            except Exception:
+                pass
+            _invalidate_episode_start_indices(dataset_id)
+
+        except Exception as e:
+            logger.exception(f"Reload after download failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Download succeeded but reload failed: {e}")
+
+    logger.info(f"Download complete: {repo_id} ({dataset.meta.total_episodes} episodes)")
+    return {
+        "status": "ok",
+        "message": f"Downloaded {repo_id} ({dataset.meta.total_episodes} episodes, {dataset.meta.total_frames} frames)",
+    }

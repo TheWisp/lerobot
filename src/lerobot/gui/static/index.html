@@ -12,6 +12,7 @@
         <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
+        <span id="hf-auth-indicator" style="margin-left:auto; font-size:11px; color:var(--text-secondary, #666); padding-right:12px; cursor:default;" title="HuggingFace Hub login status"></span>
     </div>
 
     <!-- Data tab (existing) -->
@@ -223,6 +224,9 @@
         <div class="context-menu-separator" id="folder-ctx-test-separator" style="display:none"></div>
         <div class="context-menu-item" id="folder-ctx-merge-into" onclick="folderContextAction('merge-into')" style="display:none">Merge Into...</div>
         <div class="context-menu-separator" id="folder-ctx-merge-separator" style="display:none"></div>
+        <div class="context-menu-item" id="folder-ctx-hub-upload" onclick="folderContextAction('hub-upload')" style="display:none">Upload to Hub</div>
+        <div class="context-menu-item" id="folder-ctx-hub-download" onclick="folderContextAction('hub-download')" style="display:none">Download from Hub</div>
+        <div class="context-menu-separator" id="folder-ctx-hub-separator" style="display:none"></div>
         <div class="context-menu-item" onclick="folderContextAction('open-in-files')">Open in File Manager</div>
     </div>
 
@@ -239,6 +243,24 @@
             <div style="display:flex; justify-content:flex-end; gap:8px;">
                 <button onclick="closeMergeModal()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
                 <button id="merge-execute-btn" onclick="executeMerge()" style="padding:5px 14px; background:#c24038; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Merge (modifies target)</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hub Upload/Download modal -->
+    <div id="hub-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:400px; max-width:520px;">
+            <h3 id="hub-modal-title" style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);"></h3>
+            <div style="margin-bottom:12px;">
+                <label style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Repository ID</label>
+                <input id="hub-repo-input" type="text" oninput="fetchHubRepoInfo()" style="width:100%; padding:6px 8px; background:var(--bg-primary, #252526); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+            </div>
+            <div id="hub-repo-info" style="font-size:11px; color:var(--text-secondary, #999); padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px; min-height:40px;"></div>
+            <div id="hub-local-info" style="font-size:11px; color:var(--text-secondary, #999); padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px;"></div>
+            <div id="hub-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button onclick="closeHubModal()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
+                <button id="hub-execute-btn" onclick="executeHubAction()" style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;"></button>
             </div>
         </div>
     </div>
