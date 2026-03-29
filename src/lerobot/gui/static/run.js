@@ -14,6 +14,7 @@ let _runFormRendered = false; // true once all three workflow sections are in th
 async function runTabInit() {
     if (runTabInitialized) {
         // Re-check status and reconnect SSE if needed
+        _toggleHvlaRecordFields();
         await pollRunStatus();
         return;
     }
@@ -543,6 +544,15 @@ function _updateHVLAFieldsVisibility() {
     const standardSection = document.getElementById('run-policy-standard-fields');
     if (hvlaSection) hvlaSection.style.display = isHVLA ? '' : 'none';
     if (standardSection) standardSection.style.display = isHVLA ? 'none' : '';
+    if (isHVLA) _toggleHvlaRecordFields();
+}
+
+function _toggleHvlaRecordFields() {
+    const hasDataset = !!document.getElementById('run-hvla-record-dataset')?.value?.trim();
+    for (const id of ['run-hvla-episodes', 'run-hvla-episode-time', 'run-hvla-reset-time']) {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !hasDataset;
+    }
 }
 
 function _onPolicyCheckpointChange() {
@@ -755,7 +765,7 @@ function renderRunForm() {
     html += `<label>Denoise Steps (default 10)</label>`;
     html += `<input type="number" id="run-hvla-denoise-steps" placeholder="10" min="1">`;
     html += `<label>Record Dataset</label>`;
-    html += `<input type="text" id="run-hvla-record-dataset" placeholder="eval/hvla_eval (optional)" value="">`;
+    html += `<input type="text" id="run-hvla-record-dataset" placeholder="eval/hvla_eval (optional)" value="" oninput="_toggleHvlaRecordFields()">`;
     html += `<label>Episodes</label>`;
     html += `<input type="number" id="run-hvla-episodes" value="1" min="1">`;
     html += `<label>Episode Duration</label>`;
@@ -794,6 +804,7 @@ function renderRunForm() {
     html += '</div>'; // end policy section
 
     form.innerHTML = html;
+    _toggleHvlaRecordFields();
 }
 
 // ============================================================================
