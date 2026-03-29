@@ -326,6 +326,7 @@ def run_s1(
 
     # Register robot/camera types for draccus
     from lerobot.robots import bi_so107_follower  # noqa: F401
+    from lerobot.teleoperators import bi_so107_leader  # noqa: F401
     from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
     from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
 
