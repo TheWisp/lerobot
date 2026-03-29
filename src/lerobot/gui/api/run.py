@@ -150,7 +150,7 @@ class ReplayRequest(BaseModel):
 class HVLARunRequest(BaseModel):
     robot: dict[str, Any]
     s1_checkpoint: str
-    s2_checkpoint: str
+    s2_checkpoint: str | None = None
     task: str
     fps: int = 30
     s1_type: str = "flow"
@@ -565,12 +565,15 @@ async def start_hvla(req: HVLARunRequest) -> dict:
     args = [
         "python", "-m", "lerobot.policies.hvla.launch",
         f"--s1-checkpoint={req.s1_checkpoint}",
-        f"--s2-checkpoint={Path(req.s2_checkpoint).expanduser()}",
         f"--task={req.task}",
         f"--robot-config={tmp.name}",
         f"--fps={req.fps}",
         f"--s1-type={req.s1_type}",
     ]
+    if req.s2_checkpoint:
+        args.append(f"--s2-checkpoint={Path(req.s2_checkpoint).expanduser()}")
+    else:
+        args.append("--zero-s2")
     if req.decode_subtask:
         args.append("--decode-subtask")
     if req.record_dataset:

@@ -181,19 +181,21 @@ def obs_to_s1_batch(
     state = [float(robot_obs[name]) for name in joint_names]
     batch["observation.state"] = torch.tensor([state], dtype=torch.float32, device=device)
 
-    latent, age_seconds = shared_cache.read_with_age()
-    # Clamp age to training range — model was trained with max_delay_seconds
-    # (e.g., 0.15s). Ages beyond that are out-of-distribution.
-    max_train_age = 0.15  # must match --max-delay used during training
-    age_seconds = min(age_seconds, max_train_age)
-    batch[s2_latent_key] = latent.unsqueeze(0).to(device)
-    batch["observation.s2_latent_age"] = torch.tensor([[age_seconds]], dtype=torch.float32, device=device)
+    if shared_cache is not None:
+        latent, age_seconds = shared_cache.read_with_age()
+        # Clamp age to training range — model was trained with max_delay_seconds
+        # (e.g., 0.15s). Ages beyond that are out-of-distribution.
+        max_train_age = 0.15  # must match --max-delay used during training
+        age_seconds = min(age_seconds, max_train_age)
+        batch[s2_latent_key] = latent.unsqueeze(0).to(device)
+        batch["observation.s2_latent_age"] = torch.tensor([[age_seconds]], dtype=torch.float32, device=device)
 
     return batch
 
 
 def _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_to,
-               state_dim: int = 14, s2_latent_dim: int = 2048):
+               state_dim: int = 14, s2_latent_dim: int = 2048,
+               use_s2: bool = True):
     """Run dummy forward passes to trigger torch.compile kernel compilation.
 
     Uses fake data — no robot needed. After this, the control loop runs
@@ -206,8 +208,9 @@ def _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_to,
     for key in s1_image_keys:
         dummy_batch[key] = torch.randn(1, 3, h, w, device=device)
     dummy_batch["observation.state"] = torch.zeros(1, state_dim, device=device)
-    dummy_batch["observation.s2_latent"] = torch.zeros(1, s2_latent_dim, device=device)
-    dummy_batch["observation.s2_latent_age"] = torch.zeros(1, 1, device=device)
+    if use_s2:
+        dummy_batch["observation.s2_latent"] = torch.zeros(1, s2_latent_dim, device=device)
+        dummy_batch["observation.s2_latent_age"] = torch.zeros(1, 1, device=device)
 
     dummy_batch = preprocessor(dummy_batch)
 
@@ -377,7 +380,8 @@ def run_s1(
         logger.info("S1: Warming up compiled model...")
         _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_images,
                    state_dim=config.action_dim if s1_type == "flow" else 14,
-                   s2_latent_dim=config.s2_latent_dim if s1_type == "flow" else 2048)
+                   s2_latent_dim=config.s2_latent_dim if s1_type == "flow" else 2048,
+                   use_s2=shared_cache is not None)
 
     # Load robot
     config_path = robot_config_path or str(Path.home() / ".config" / "lerobot" / "robots" / "white.json")
@@ -471,15 +475,19 @@ def run_s1(
     # Capture initial obs, publish to both S2 and inference thread
     logger.info("S1: Capturing initial observation...")
     init_obs = robot.get_observation()
-    shared_images.write_images(init_obs, S2_CAM_KEY_MAP, joint_names)
+    if shared_images is not None:
+        shared_images.write_images(init_obs, S2_CAM_KEY_MAP, joint_names)
     infer_thread.publish_obs(init_obs, time.perf_counter())
 
-    # Wait for S2
-    logger.info("S1: Waiting for first S2 latent (up to 120s)...")
-    if not shared_cache.wait_for_first(timeout=120.0):
-        logger.warning("S1: No S2 latent after 120s, starting with zero latent")
+    # Wait for S2 (skip if running without S2)
+    if shared_cache is not None:
+        logger.info("S1: Waiting for first S2 latent (up to 120s)...")
+        if not shared_cache.wait_for_first(timeout=120.0):
+            logger.warning("S1: No S2 latent after 120s, starting with zero latent")
+        else:
+            logger.info("S1: Got first S2 latent (count=%d)", shared_cache.count)
     else:
-        logger.info("S1: Got first S2 latent (count=%d)", shared_cache.count)
+        logger.info("S1: Running without S2 conditioning")
 
     # Wait for first chunk
     logger.info("S1: Waiting for first action chunk...")
@@ -578,7 +586,8 @@ def run_s1(
 
             # Publish to inference thread + S2
             infer_thread.publish_obs(obs_copy, t_now)
-            shared_images.write_images(obs, S2_CAM_KEY_MAP, joint_names)
+            if shared_images is not None:
+                shared_images.write_images(obs, S2_CAM_KEY_MAP, joint_names)
 
             # 3. Read latest chunk
             chunk, t_origin, t_obs = infer_thread.get_chunk()
@@ -646,11 +655,17 @@ def run_s1(
                     smooth_str += f" | infer: {np.mean(infer_thread.infer_times[-10:]):.0f}ms"
                 smooth_str += f" | chunk_age: {(t_before_send - t_origin)*1000:.0f}ms"
 
-                logger.info(
-                    "S1 step %d | chunk[%d/%d] | S2 age: %.0fms | S2 #%d%s",
-                    step_count, idx, len(chunk),
-                    shared_cache.age_ms, shared_cache.count, smooth_str,
-                )
+                if shared_cache is not None:
+                    logger.info(
+                        "S1 step %d | chunk[%d/%d] | S2 age: %.0fms | S2 #%d%s",
+                        step_count, idx, len(chunk),
+                        shared_cache.age_ms, shared_cache.count, smooth_str,
+                    )
+                else:
+                    logger.info(
+                        "S1 step %d | chunk[%d/%d]%s",
+                        step_count, idx, len(chunk), smooth_str,
+                    )
 
             # Fixed-rate sleep
             dt = time.perf_counter() - loop_start
@@ -679,8 +694,9 @@ def run_s1(
     finally:
         infer_thread.stop()
         if infer_thread.infer_times:
-            logger.info("S1: Done. %d episodes, avg infer: %.1fms | S2 updates: %d",
-                        recorded_episodes, np.mean(infer_thread.infer_times), shared_cache.count)
+            s2_info = f" | S2 updates: {shared_cache.count}" if shared_cache is not None else ""
+            logger.info("S1: Done. %d episodes, avg infer: %.1fms%s",
+                        recorded_episodes, np.mean(infer_thread.infer_times), s2_info)
         if dataset is not None:
             try:
                 # Save any unsaved episode (interrupted mid-recording)

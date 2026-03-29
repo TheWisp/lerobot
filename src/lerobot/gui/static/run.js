@@ -990,11 +990,7 @@ async function launchRun() {
 
         if (policyType === 'hvla_flow_s1') {
             // ---- HVLA dispatch ----
-            const s2Ckpt = document.getElementById('run-hvla-s2-checkpoint')?.value?.trim();
-            if (!s2Ckpt) {
-                showToast('Error', 'S2 checkpoint path is required for HVLA', 'error');
-                return;
-            }
+            const s2Ckpt = document.getElementById('run-hvla-s2-checkpoint')?.value?.trim() || null;
             const hvlaTask = document.getElementById('run-hvla-task')?.value?.trim();
             if (!hvlaTask) {
                 showToast('Error', 'Task prompt is required for HVLA', 'error');

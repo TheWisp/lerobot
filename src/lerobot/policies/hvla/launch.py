@@ -106,8 +106,10 @@ def main():
             shared_cache = SharedLatentCache(create=True)
             shared_images = SharedImageBuffer(camera_keys=s2_image_keys, create=True)
     else:
-        shared_cache = SharedLatentCache(create=True)
-        shared_images = SharedImageBuffer(camera_keys=s2_image_keys, create=True)
+        # --zero-s2: run S1 without S2 conditioning entirely.
+        # Pass None to s1_process so S2 latent is never injected into the batch.
+        shared_cache = None
+        shared_images = None
 
     stop_event = ctx.Event()
 
@@ -131,9 +133,7 @@ def main():
     if s2_attached:
         logger.info("Using existing S2 process (no spawn)")
     elif args.zero_s2:
-        import torch
-        logger.info("--zero-s2: S2 disabled, using zero latent (ablation mode)")
-        shared_cache.write(torch.zeros(2048))
+        logger.info("--zero-s2: S2 disabled, S1 runs without S2 conditioning")
     else:
         from lerobot.policies.hvla.s2_process import run_s2
 
