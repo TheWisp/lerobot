@@ -584,9 +584,9 @@ async def start_hvla(req: HVLARunRequest) -> dict:
         args.append("--decode-subtask")
     if req.record_dataset:
         args.append(f"--record-dataset={req.record_dataset}")
-    args.append(f"--num-episodes={req.num_episodes}")
-    args.append(f"--episode-time-s={req.episode_time_s}")
-    args.append(f"--reset-time-s={req.reset_time_s}")
+        args.append(f"--num-episodes={req.num_episodes}")
+        args.append(f"--episode-time-s={req.episode_time_s}")
+        args.append(f"--reset-time-s={req.reset_time_s}")
 
     await _launch_subprocess(args, command="hvla", config=req.model_dump())
     return {"status": "started", "command": "hvla", "pid": _active_process.pid}
