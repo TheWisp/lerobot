@@ -522,6 +522,29 @@ def aggregate_data(src_meta, dst_meta, data_idx, data_files_size_in_mb, chunk_si
             df = pd.read_parquet(src_path)
         df = update_data_df(df, src_meta, dst_meta)
 
+        # Align source columns to match destination schema (handles force-merge
+        # where features differ: pad missing columns, drop extras)
+        dst_parquet_cols = [
+            k for k, v in dst_meta.features.items()
+            if v.get("dtype") not in ("video",)
+        ]
+        for col in dst_parquet_cols:
+            if col not in df.columns:
+                feat = dst_meta.features[col]
+                dtype_str = feat.get("dtype", "float32")
+                if dtype_str == "string":
+                    df[col] = ""
+                elif dtype_str in ("int64", "int32"):
+                    df[col] = 0
+                else:
+                    df[col] = 0.0
+        # Drop columns not in destination features
+        extra = [c for c in df.columns if c not in dst_parquet_cols]
+        if extra:
+            df = df.drop(columns=extra)
+        # Reorder to match destination
+        df = df[[c for c in dst_parquet_cols if c in df.columns]]
+
         # Write data and get the actual destination file it was written to
         # This avoids duplicating the rotation logic here
         data_idx, (dst_chunk, dst_file) = append_or_create_parquet_file(

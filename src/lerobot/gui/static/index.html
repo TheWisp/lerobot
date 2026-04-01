@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
-    <link rel="stylesheet" href="/static/style.css?v=21">
+    <link rel="stylesheet" href="/static/style.css?v=22">
 </head>
 <body>
     <div class="tab-bar">
@@ -239,6 +239,7 @@
             </p>
             <select id="merge-target-select" onchange="updateMergePreview()" style="width:100%; padding:6px 8px; margin-bottom:8px; background:var(--bg-primary, #252526); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px;"></select>
             <div id="merge-preview" style="font-size:11px; color:var(--text-secondary, #999); margin-bottom:8px; padding:8px; background:var(--bg-primary, #252526); border-radius:4px; min-height:16px;"></div>
+            <div id="merge-diff-panel" style="display:none; font-size:11px; margin-bottom:8px; max-height:220px; overflow-y:auto; border:1px solid #555; border-radius:4px; padding:8px; background:#1a1a2e;"></div>
             <div id="merge-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
             <div style="display:flex; justify-content:flex-end; gap:8px;">
                 <button onclick="closeMergeModal()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
@@ -268,7 +269,7 @@
     <!-- Toast notifications -->
     <div class="toast-container" id="toast-container"></div>
 
-    <script src="/static/app.js?v=25"></script>
+    <script src="/static/app.js?v=26"></script>
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=32"></script>
     <script src="/static/model.js?v=3"></script>

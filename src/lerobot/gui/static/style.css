@@ -364,3 +364,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .btn-tiny:hover { background: #0f3460; color: #eee; }
 .btn-tiny.btn-accent { border-color: #4fc3f7; color: #4fc3f7; }
 .btn-tiny.btn-accent:hover { background: #4fc3f7; color: #111; }
+
+/* Merge diff panel */
+.merge-diff-header { font-weight: bold; color: #e5c07b; margin-bottom: 6px; font-size: 12px; }
+.merge-diff-section { margin-bottom: 6px; }
+.merge-diff-label { color: #999; font-weight: 600; }
+.merge-diff-removed { background: rgba(220,50,47,0.15); color: #e06c75; padding: 1px 5px; border-radius: 3px; margin: 2px 3px; display: inline-block; }
+.merge-diff-added { background: rgba(80,180,80,0.15); color: #98c379; padding: 1px 5px; border-radius: 3px; margin: 2px 3px; display: inline-block; }
+.merge-diff-json { font-family: monospace; font-size: 10px; margin: 4px 0; }
+.merge-diff-json pre { margin: 2px 0; white-space: pre-wrap; word-break: break-all; }
+#merge-diff-panel details { margin: 2px 0; }
+#merge-diff-panel summary { cursor: pointer; color: #61afef; }
+#merge-diff-panel summary:hover { text-decoration: underline; }

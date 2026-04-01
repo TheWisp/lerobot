@@ -506,6 +506,7 @@ def _compute_next_file_indices(
 def merge_into(
     target: LeRobotDataset,
     source: LeRobotDataset,
+    skip_validation: bool = False,
 ) -> LeRobotDataset:
     """Merge source dataset episodes into target dataset in-place.
 
@@ -514,7 +515,7 @@ def merge_into(
     are created for the incoming episodes, plus small metadata updates
     (info.json, tasks, stats).
 
-    Prerequisites (checked automatically):
+    Prerequisites (checked automatically unless skip_validation=True):
     - Same FPS
     - Same robot_type
     - Same features (observation keys, action dimensions, dtypes)
@@ -522,6 +523,7 @@ def merge_into(
     Args:
         target: The destination dataset (modified in-place).
         source: The source dataset whose episodes will be appended.
+        skip_validation: If True, skip fps/robot_type/features validation.
 
     Returns:
         The target dataset, reloaded to reflect the merged state.
@@ -531,7 +533,8 @@ def merge_into(
     target.meta.info = load_info(target.meta.root)
 
     # 1. Validate compatibility
-    validate_all_metadata([target.meta, source.meta])
+    if not skip_validation:
+        validate_all_metadata([target.meta, source.meta])
 
     # 2. Compute starting file indices (one past target's current max)
     data_idx, meta_idx, videos_idx = _compute_next_file_indices(target.meta)
