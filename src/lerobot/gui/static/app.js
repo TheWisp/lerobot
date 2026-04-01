@@ -857,12 +857,15 @@ function openMergeModal(sourceDatasetId) {
     overlay.style.display = 'flex';
 }
 
+let _mergeForce = false;
+
 function updateMergePreview() {
     const preview = document.getElementById('merge-preview');
+    const diffPanel = document.getElementById('merge-diff-panel');
     const targetId = document.getElementById('merge-target-select').value;
     const sourceDs = _mergeSourceId ? datasets[_mergeSourceId] : null;
     const targetDs = targetId ? datasets[targetId] : null;
-    if (!sourceDs || !targetDs) { preview.textContent = ''; return; }
+    if (!sourceDs || !targetDs) { preview.textContent = ''; diffPanel.style.display = 'none'; return; }
 
     const srcEps = sourceDs.total_episodes;
     const tgtEps = targetDs.total_episodes;
@@ -870,11 +873,101 @@ function updateMergePreview() {
         `<strong>${targetDs.repo_id}</strong> will go from ${tgtEps} to ${tgtEps + srcEps} episodes ` +
         `(+${srcEps} from ${sourceDs.repo_id}).<br>` +
         `This modifies the target dataset on disk.`;
+
+    // Reset diff panel and force state on target change
+    diffPanel.style.display = 'none';
+    _mergeForce = false;
+    const btn = document.getElementById('merge-execute-btn');
+    btn.textContent = 'Merge (modifies target)';
+    btn.style.background = '#c24038';
+    document.getElementById('merge-status').textContent = '';
+
+    // Run validation in background
+    _validateMerge(sourceDs, targetDs, targetId);
 }
+
+async function _validateMerge(sourceDs, targetDs, targetId) {
+    try {
+        const res = await fetch('/api/edits/merge-into/validate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_dataset_id: _mergeSourceId,
+                target_dataset_id: targetId,
+            })
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        _renderMergeDiff(data);
+    } catch (e) { /* ignore */ }
+}
+
+function _renderMergeDiff(validation) {
+    const diffPanel = document.getElementById('merge-diff-panel');
+    const btn = document.getElementById('merge-execute-btn');
+
+    if (validation.compatible) {
+        diffPanel.style.display = 'none';
+        _mergeForce = false;
+        btn.textContent = 'Merge (modifies target)';
+        btn.style.background = '#c24038';
+        btn.disabled = false;
+        return;
+    }
+
+    // Build diff HTML
+    let html = '';
+    for (const m of validation.mismatches) {
+        if (m.field === 'features') {
+            if (m.target_only.length) {
+                html += `<div class="merge-diff-section"><span class="merge-diff-label">Only in target:</span>`;
+                for (const k of m.target_only)
+                    html += `<span class="merge-diff-removed">${_esc(k)}</span>`;
+                html += `</div>`;
+            }
+            if (m.source_only.length) {
+                html += `<div class="merge-diff-section"><span class="merge-diff-label">Only in source:</span>`;
+                for (const k of m.source_only)
+                    html += `<span class="merge-diff-added">${_esc(k)}</span>`;
+                html += `</div>`;
+            }
+            if (Object.keys(m.shared_diff).length) {
+                html += `<div class="merge-diff-section"><span class="merge-diff-label">Different definitions:</span>`;
+                for (const [k, v] of Object.entries(m.shared_diff)) {
+                    html += `<details><summary>${_esc(k)}</summary>` +
+                        `<div class="merge-diff-json">` +
+                        `<div class="merge-diff-removed"><strong>target:</strong><pre>${_esc(JSON.stringify(v.target, null, 2))}</pre></div>` +
+                        `<div class="merge-diff-added"><strong>source:</strong><pre>${_esc(JSON.stringify(v.source, null, 2))}</pre></div>` +
+                        `</div></details>`;
+                }
+                html += `</div>`;
+            }
+        } else {
+            html += `<div class="merge-diff-section">` +
+                `<span class="merge-diff-label">${_esc(m.field)}:</span> ` +
+                `<span class="merge-diff-removed">${_esc(String(m.target))}</span> (target) vs ` +
+                `<span class="merge-diff-added">${_esc(String(m.source))}</span> (source)` +
+                `</div>`;
+        }
+    }
+
+    diffPanel.innerHTML = `<div class="merge-diff-header">Mismatches found</div>${html}`;
+    diffPanel.style.display = 'block';
+
+    // Switch button to force mode
+    _mergeForce = true;
+    btn.textContent = 'Force merge (skip validation)';
+    btn.style.background = '#8b4513';
+    btn.disabled = false;
+}
+
+function _esc(s) { const d = document.createElement('span'); d.textContent = s; return d.innerHTML; }
 
 function closeMergeModal() {
     document.getElementById('merge-modal-overlay').style.display = 'none';
+    document.getElementById('merge-diff-panel').style.display = 'none';
     _mergeSourceId = null;
+    _mergeForce = false;
 }
 
 async function executeMerge() {
@@ -883,10 +976,12 @@ async function executeMerge() {
 
     const sourceDs = datasets[_mergeSourceId];
     const targetDs = datasets[targetId];
+
+    const forceLabel = _mergeForce ? '\n\nWARNING: Skipping validation - features/metadata may differ!' : '';
     if (!confirm(
         `Merge ${sourceDs.total_episodes} episodes from "${sourceDs.repo_id}" ` +
         `into "${targetDs.repo_id}"?\n\n` +
-        `This will modify "${targetDs.repo_id}" on disk.`
+        `This will modify "${targetDs.repo_id}" on disk.${forceLabel}`
     )) return;
 
     const btn = document.getElementById('merge-execute-btn');
@@ -901,6 +996,7 @@ async function executeMerge() {
             body: JSON.stringify({
                 source_dataset_id: _mergeSourceId,
                 target_dataset_id: targetId,
+                force: _mergeForce,
             })
         });
 

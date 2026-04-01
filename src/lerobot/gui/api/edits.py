@@ -457,6 +457,54 @@ async def _apply_edits_locked(dataset_id: str):
 class MergeIntoRequest(BaseModel):
     source_dataset_id: str
     target_dataset_id: str
+    force: bool = False
+
+
+def _validate_merge_compat(source_meta, target_meta) -> list[dict]:
+    """Compare two dataset metas and return a list of mismatches (may be empty)."""
+    mismatches = []
+    if target_meta.fps != source_meta.fps:
+        mismatches.append({"field": "fps", "target": target_meta.fps, "source": source_meta.fps})
+    if target_meta.robot_type != source_meta.robot_type:
+        mismatches.append({
+            "field": "robot_type",
+            "target": target_meta.robot_type,
+            "source": source_meta.robot_type,
+        })
+    tf = target_meta.features
+    sf = source_meta.features
+    if tf != sf:
+        target_only = sorted(set(tf.keys()) - set(sf.keys()))
+        source_only = sorted(set(sf.keys()) - set(tf.keys()))
+        shared_diff = {}
+        for k in sorted(set(tf.keys()) & set(sf.keys())):
+            if tf[k] != sf[k]:
+                shared_diff[k] = {"target": tf[k], "source": sf[k]}
+        mismatches.append({
+            "field": "features",
+            "target_only": target_only,
+            "source_only": source_only,
+            "shared_diff": shared_diff,
+        })
+    return mismatches
+
+
+@router.post("/merge-into/validate")
+async def validate_merge(request: MergeIntoRequest):
+    """Check compatibility between source and target datasets for merge."""
+    source_id = request.source_dataset_id
+    target_id = request.target_dataset_id
+
+    if source_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Source dataset not found: {source_id}")
+    if target_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Target dataset not found: {target_id}")
+
+    mismatches = _validate_merge_compat(
+        _app_state.datasets[source_id].meta,
+        _app_state.datasets[target_id].meta,
+    )
+    return {"compatible": len(mismatches) == 0, "mismatches": mismatches}
 
 
 @router.post("/merge-into")
@@ -485,10 +533,10 @@ async def merge_into_dataset(request: MergeIntoRequest):
 
     async with target_lock:
         async with source_lock:
-            return await _merge_into_locked(source_id, target_id)
+            return await _merge_into_locked(source_id, target_id, force=request.force)
 
 
-async def _merge_into_locked(source_id: str, target_id: str):
+async def _merge_into_locked(source_id: str, target_id: str, *, force: bool = False):
     """Execute merge while holding both dataset locks."""
     source_ds = _app_state.datasets[source_id]
     target_ds = _app_state.datasets[target_id]
@@ -499,13 +547,13 @@ async def _merge_into_locked(source_id: str, target_id: str):
 
     logger.info(
         f"Merging {source_eps} episodes from {source_id} into {target_id} "
-        f"({target_eps_before} episodes)"
+        f"({target_eps_before} episodes) force={force}"
     )
 
     try:
         from lerobot.datasets.dataset_tools import merge_into
 
-        merge_into(target_ds, source_ds)
+        merge_into(target_ds, source_ds, skip_validation=force)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

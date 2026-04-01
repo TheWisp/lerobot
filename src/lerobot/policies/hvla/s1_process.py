@@ -289,7 +289,7 @@ def _create_recording_dataset(repo_id: str, fps: int, robot, task: str):
 
     dataset = _create_or_resume_dataset(
         repo_id=repo_id, fps=fps, features=features,
-        robot_type=type(robot).__name__,
+        robot_type=robot.robot_type,
     )
     logger.info("S1: Recording dataset '%s' (%d joints, %d cameras, %d existing episodes)",
                 repo_id, len(joint_names), len(cam_features), dataset.meta.total_episodes)
