@@ -160,7 +160,15 @@ class InferenceThread:
             actions[:, :C, :] = actor_denorm
 
         # Store transition in replay buffer (Paper Alg 1 line 12)
-        assert self._rlt_active, "BUG: _rlt_inference_step called but _rlt_active is False"
+        # Guard: _rlt_active may have been cleared by main thread during this call
+        # (race between main thread setting flag and inference thread mid-method).
+        # If cleared, skip storage but don't crash — the actor already modified
+        # the actions tensor which is fine (it'll be overwritten next inference).
+        if not self._rlt_active:
+            logger.warning("RLT: _rlt_active cleared mid-inference, skipping transition storage")
+            self._rlt_prev = None
+            return
+
         prev = self._rlt_prev
         if prev is not None:
             done = self._rlt_state.get("reward_triggered", False)
@@ -168,16 +176,16 @@ class InferenceThread:
                 z_rl=prev["z_rl"], state=prev["state"],
                 action_chunk=prev["action"], ref_chunk=prev["ref"],
                 reward=1.0 if done else 0.0,
-                next_z_rl=z_rl.squeeze(0).float(),
-                next_state=state_norm.squeeze(0),
-                next_ref_chunk=ref_norm.squeeze(0),
+                next_z_rl=z_rl.squeeze(0).float().detach(),
+                next_state=state_norm.squeeze(0).detach(),
+                next_ref_chunk=ref_norm.squeeze(0).detach(),
                 done=done,
             )
             self._rlt_state["total_transitions"] += 1
 
         self._rlt_prev = {
-            "z_rl": z_rl.squeeze(0).float(),
-            "state": state_norm.squeeze(0),
+            "z_rl": z_rl.squeeze(0).float().detach(),
+            "state": state_norm.squeeze(0).detach(),
             "action": actor_norm.squeeze(0).detach(),
             "ref": ref_norm.squeeze(0).detach(),
         }
