@@ -52,6 +52,27 @@
 | Failed episodes | all timed out at 60s |
 | Log file | `outputs/hvla_runs/run_20260403_155719.log` |
 
-### Next steps:
-- Write tests (Step 5)
-- Robot testing with RLT v2 — target: beat 65% success rate and 10.4/10min throughput
+## 2026-04-03: RLT v2 Training Session
+
+### Training progression
+- Ep 1-10: Warmup (S1 passthrough), 80% success
+- Ep 11-90 (beta=1.0, sigma=0.01→0.02): Actor delta flat at 0.02, no visible learning. BC penalty dominated Q gradient.
+- Ep 91+ (beta=0.1): Immediate behavior change — faster successes, more exploration, some wrong directions.
+- Ep 179: 70% autonomous, mean 15.2s (vs baseline 24s). First clear RL improvement.
+- Ep 256: 70% autonomous, mean 17.4s. Stable.
+- Ep ~280: Q value range temporarily collapsed (buffer 85% full, old successes overwritten). Recovered. Expanded buffer 50K→200K.
+- Ep 289: 60% success rate (dip from cold cases + low beta)
+
+### Key findings
+- beta=0.1 unlocked learning but destabilized cold (unseen) states — actor follows random Q noise without BC anchor
+- sigma=0.02 adds visible jitter but unclear if it helps vs just adding noise on joint angles
+- Speed improvement confirmed: 6.5-17s vs 24s baseline on successful episodes
+- Buffer capacity matters — 50K too small, old trajectories overwritten causing Q collapse
+- Consistent reset positions (paper's "small randomization") would help critic coverage
+
+### TODO
+1. **Adaptive beta**: High beta for cold/unseen states, low beta for well-covered states. At minimum expose beta as a GUI slider for live tuning during training.
+2. **Deployment mode**: Run trained RL actor alongside base VLA without training loop. Inference-only mode that loads actor checkpoint and applies to S1 chunks.
+3. **Sigma research**: Is random exploration needed for our task? Paper's sigma=0.1 on delta EE is fundamentally different from sigma on joint angles. For coarse manipulation, human intervention may provide all exploration signal needed. Consider sigma=0 with intervention-only exploration.
+4. **More episodes**: Paper runs 400-1000. We have ~289. Keep running with consistent reset positions.
+5. **Tests**: Unit tests still pending.
