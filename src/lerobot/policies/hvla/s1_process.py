@@ -593,9 +593,13 @@ def run_s1(
                     m.episode = saved.get("episode", 0)
                     s = saved.get("series", {})
                     m.episode_successes = s.get("episode_successes", [])
+                    m.episode_autonomous = s.get("episode_autonomous", [])
                     m.critic_losses = s.get("critic_losses", [])
                     m.actor_losses = s.get("actor_losses", [])
                     m.actor_deltas = s.get("actor_deltas", [])
+                    m.q_values_mean = s.get("q_values_mean", [])
+                    m.q_values_min = s.get("q_values_min", [])
+                    m.q_values_max = s.get("q_values_max", [])
                     logger.info("RLT: Restored metrics from %s", metrics_path)
                 except Exception as e:
                     logger.warning("RLT: Failed to restore metrics: %s", e)
@@ -786,6 +790,7 @@ def run_s1(
         if rlt_mode:
             infer_thread._rlt_active = True
             infer_thread._rlt_prev = None
+            rlt_state["_episode_had_intervention"] = False
             logger.info("RLT: collection RESUMED (episode start)")
 
         # Ensure inference thread is running and has fresh data.
@@ -933,6 +938,7 @@ def run_s1(
                         infer_thread._rlt_active = False
                         infer_thread._rlt_prev = None
                         logger.info("S1: INTERVENTION ON — inference continues (RLT), actor paused")
+                        rlt_state["_episode_had_intervention"] = True
                         logger.info("RLT: collection PAUSED (intervention)")
                         # Init human chunk accumulator
                         rlt_state["_int_chunk_buf"] = []
@@ -1336,19 +1342,30 @@ def run_s1(
             logger.info("RLT: collection PAUSED (episode end)")
 
             success = rlt_state["reward_triggered"]
-            was_intervention = False  # TODO: track per-episode intervention flag
+            had_intervention = rlt_state.get("_episode_had_intervention", False)
+            autonomous = success and not had_intervention
+            ep_duration = time.time() - episode_start
+
             rlt_state["successes"].append(success)
             rlt_state["episode"] += 1
             recent = rlt_state["successes"][-20:]
 
+            auto_label = "AUTONOMOUS" if autonomous else ("ASSISTED" if success else "FAIL")
             logger.info(
-                "RLT ep%d: %s | transitions=%d updates=%d success_rate(20)=%.0f%%",
-                rlt_state["episode"], "SUCCESS" if success else "FAIL",
+                "RLT ep%d: %s (intervention=%s) | transitions=%d updates=%d "
+                "success_rate(20)=%.0f%% | %.1fs",
+                rlt_state["episode"], auto_label,
+                "yes" if had_intervention else "no",
                 rlt_state["total_transitions"], rlt_state["total_updates"],
                 np.mean(recent) * 100 if recent else 0,
+                ep_duration,
             )
             from lerobot.policies.hvla.rlt.metrics import get_metrics, save_metrics_to_file
-            get_metrics().record_episode(rlt_state["episode"], success)
+            get_metrics().record_episode(
+                rlt_state["episode"], success,
+                autonomous=not had_intervention,
+                duration_s=ep_duration,
+            )
             save_metrics_to_file()
 
             rlt_state["reward_triggered"] = False
