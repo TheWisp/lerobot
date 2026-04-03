@@ -134,6 +134,15 @@ class RLTMetrics:
                 if t >= window_start and s and a:
                     throughput += 1
 
+            # Pre-compute rolling autonomous rate for the chart
+            # Same formula as autonomous_rate above, at every episode point
+            auto_rate_rolling = []
+            for i in range(n):
+                win_s = successes[max(0, i - 19):i + 1]
+                win_a = autonomous[max(0, i - 19):i + 1]
+                auto_s = sum(1 for s, a in zip(win_s, win_a) if s and a)
+                auto_rate_rolling.append(auto_s / len(win_s) if win_s else 0.0)
+
             return {
                 "episode": self.episode,
                 "step_count": self.step_count,
@@ -148,8 +157,12 @@ class RLTMetrics:
                 "total_autonomous": sum(1 for a in autonomous if a),
                 "total_episodes": n,
                 "series": {
+                    # Per-episode records (needed for resume)
                     "episode_successes": successes[-200:],
                     "episode_autonomous": autonomous[-200:],
+                    # Pre-computed rolling series (for chart, single source of truth)
+                    "autonomous_rate_rolling": auto_rate_rolling[-200:],
+                    # Training metrics
                     "critic_losses": self.critic_losses[-200:],
                     "actor_losses": self.actor_losses[-200:],
                     "actor_deltas": self.actor_deltas[-200:],

@@ -1746,18 +1746,9 @@ function _updateRLTDashboard(data) {
 
     const s = data.series || {};
 
-    // Autonomous success rate chart (only autonomous episodes)
-    if (s.episode_autonomous && s.episode_successes && s.episode_successes.length > 0) {
-        const rolling = [];
-        for (let i = 0; i < s.episode_successes.length; i++) {
-            // Count autonomous successes in window
-            const winS = s.episode_successes.slice(Math.max(0, i - 19), i + 1);
-            const winA = s.episode_autonomous.slice(Math.max(0, i - 19), i + 1);
-            const autoEps = winA.filter(a => a);
-            const autoSuccesses = winS.filter((s, j) => winA[j] && s);
-            rolling.push(autoEps.length > 0 ? autoSuccesses.length / autoEps.length : 0);
-        }
-        _drawSparkline('rlt-chart-success', rolling, '#4fc3f7', 0, 1, true);
+    // Autonomous success rate chart (pre-computed server-side)
+    if (s.autonomous_rate_rolling && s.autonomous_rate_rolling.length > 0) {
+        _drawSparkline('rlt-chart-success', s.autonomous_rate_rolling, '#4fc3f7', 0, 1, true);
     }
 
     // Q values chart (min/mean/max band)
