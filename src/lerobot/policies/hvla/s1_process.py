@@ -493,6 +493,17 @@ def run_s1(
     # Note: S2 wait happens after inference thread starts (below),
     # because the inference thread publishes images that S2 needs.
 
+    # Log all runs to file (not just RLT) for post-analysis
+    import datetime
+    from pathlib import Path
+    run_log_dir = Path("outputs/hvla_runs")
+    run_log_dir.mkdir(parents=True, exist_ok=True)
+    run_log_file = run_log_dir / f"run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    _run_fh = logging.FileHandler(str(run_log_file), mode="w")
+    _run_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    logging.getLogger().addHandler(_run_fh)
+    logger.info("S1: Run log → %s", run_log_file)
+
     logger.info("S1: Starting control loop at %d FPS", fps)
 
     # --- RLT setup ---
