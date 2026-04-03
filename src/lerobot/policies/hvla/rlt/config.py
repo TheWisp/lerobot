@@ -37,7 +37,7 @@ class RLTConfig:
     critic_lr: float = 3e-4
     discount: float = 0.99               # gamma
     tau: float = 0.005                    # target network soft update rate
-    beta: float = 1.0                     # BC regularizer weight
+    beta: float = 0.1                     # BC regularizer weight (paper uses 1.0 with delta EE)
     actor_sigma: float = 0.02            # fixed Gaussian std for exploration (normalized space)
                                           # Paper uses 0.1 but with delta EE position (~1cm scale).
                                           # Joint angles have ~24° std, so 0.02 ≈ 0.5° exploration.
@@ -46,7 +46,7 @@ class RLTConfig:
     subsample_stride: int = 2             # stride for replay buffer subsampling
 
     # --- Replay buffer ---
-    replay_capacity: int = 50_000         # max transitions
+    replay_capacity: int = 200_000        # max transitions (~1.2GB)
 
     # --- Warmup ---
     warmup_episodes: int = 10             # VLA executes, actor/critic train on VLA data

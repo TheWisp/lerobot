@@ -111,23 +111,37 @@ class ReplayBuffer:
             }, path)
 
     def load(self, path: str) -> None:
-        """Load buffer contents from disk. Capacity must match."""
+        """Load buffer contents from disk. Supports same or larger capacity."""
+        import logging
         with self._lock:
             data = torch.load(path, weights_only=True)
-            assert data["capacity"] == self.capacity, (
-                f"Buffer capacity mismatch: saved={data['capacity']}, current={self.capacity}"
-            )
-            self.size = data["size"]
-            self.ptr = data["ptr"]
-            self._z_rl[:] = data["z_rl"]
-            self._state[:] = data["state"]
-            self._action[:] = data["action"]
-            self._ref[:] = data["ref"]
-            self._reward[:] = data["reward"]
-            self._next_z_rl[:] = data["next_z_rl"]
-            self._next_state[:] = data["next_state"]
-            self._next_ref[:] = data["next_ref"]
-            self._done[:] = data["done"]
+            saved_cap = data["capacity"]
+            saved_size = data["size"]
+
+            if saved_cap > self.capacity:
+                raise ValueError(
+                    f"Cannot load buffer: saved capacity {saved_cap} > current {self.capacity}. "
+                    f"Increase replay_capacity to at least {saved_cap}."
+                )
+
+            n = saved_size
+            self._z_rl[:n] = data["z_rl"][:n]
+            self._state[:n] = data["state"][:n]
+            self._action[:n] = data["action"][:n]
+            self._ref[:n] = data["ref"][:n]
+            self._reward[:n] = data["reward"][:n]
+            self._next_z_rl[:n] = data["next_z_rl"][:n]
+            self._next_state[:n] = data["next_state"][:n]
+            self._next_ref[:n] = data["next_ref"][:n]
+            self._done[:n] = data["done"][:n]
+            self.size = n
+            self.ptr = n % self.capacity
+
+            if saved_cap < self.capacity:
+                logging.getLogger(__name__).info(
+                    "Replay buffer expanded: %d → %d capacity, %d transitions preserved",
+                    saved_cap, self.capacity, n,
+                )
 
     def __len__(self) -> int:
         with self._lock:
