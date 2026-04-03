@@ -622,10 +622,21 @@ function _updateHVLAFieldsVisibility() {
 
 function _toggleHvlaRecordFields() {
     const hasDataset = !!document.getElementById('run-hvla-record-dataset')?.value?.trim();
+    const rltEnabled = document.getElementById('run-hvla-rlt-mode')?.checked;
+    const enableEpFields = hasDataset || rltEnabled;
     for (const id of ['run-hvla-episodes', 'run-hvla-episode-time', 'run-hvla-reset-time']) {
         const el = document.getElementById(id);
-        if (el) el.disabled = !hasDataset;
+        if (el) el.disabled = !enableEpFields;
     }
+}
+
+function _toggleHvlaRltFields() {
+    const enabled = document.getElementById('run-hvla-rlt-mode')?.checked;
+    for (const id of ['run-hvla-rlt-checkpoint', 'run-hvla-rlt-chunk-length', 'run-hvla-rlt-output-dir']) {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !enabled;
+    }
+    _toggleHvlaRecordFields();
 }
 
 function _onPolicyCheckpointChange() {
@@ -856,6 +867,20 @@ function renderRunForm() {
     html += `<label>Intervention Dataset</label>`;
     html += `<input type="text" id="run-hvla-intervention-dataset" placeholder="eval/hvla_interventions (optional)" value="">`;
     html += `<div class="form-hint" style="grid-column: 1 / -1;">When the human takes over via SPACE, intervention fragments are saved to this dataset.</div>`;
+    html += '</div>';
+    html += '</div>';
+    // ---- RLT section ----
+    html += '<div class="form-section">';
+    html += '<div class="form-section-title">RLT Online RL</div>';
+    html += '<div class="form-grid">';
+    html += `<label>Enable RLT</label>`;
+    html += `<label class="toggle-label"><input type="checkbox" id="run-hvla-rlt-mode" onchange="_toggleHvlaRltFields()"> Online RL (R=reward, SPACE=intervene)</label>`;
+    html += `<label>RL Token Checkpoint</label>`;
+    html += `<input type="text" id="run-hvla-rlt-checkpoint" placeholder="outputs/rlt_token_v2/checkpoint-10000" value="" disabled>`;
+    html += `<label>RL Chunk Length</label>`;
+    html += `<input type="number" id="run-hvla-rlt-chunk-length" value="10" min="1" max="50" disabled>`;
+    html += `<label>Output Directory</label>`;
+    html += `<input type="text" id="run-hvla-rlt-output-dir" value="outputs/rlt_online" disabled>`;
     html += '</div>';
     html += '</div>';
     html += '</div>';
@@ -1135,6 +1160,10 @@ async function launchRun() {
                 reset_time_s: parseFloat(document.getElementById('run-hvla-reset-time')?.value) || 20,
                 teleop: hvlaTeleopData,
                 intervention_dataset: intDs,
+                rlt_mode: document.getElementById('run-hvla-rlt-mode')?.checked || false,
+                rl_token_checkpoint: document.getElementById('run-hvla-rlt-checkpoint')?.value?.trim() || null,
+                rl_chunk_length: parseInt(document.getElementById('run-hvla-rlt-chunk-length')?.value) || 10,
+                rlt_output_dir: document.getElementById('run-hvla-rlt-output-dir')?.value?.trim() || 'outputs/rlt_online',
             };
         } else {
             // ---- Standard policy dispatch ----
@@ -1237,6 +1266,7 @@ async function launchRun() {
         showToast('Started', `${data.command} started (PID ${data.pid})`, 'success');
         updateRunUI(true);
         connectOutputSSE();
+        if (body?.rlt_mode) _startRLTPoll();
         // Start live camera viewer (polls until obs stream is available)
         startObsStreamViewer();
     } catch (e) {
@@ -1280,6 +1310,7 @@ function connectOutputSSE() {
         const data = JSON.parse(event.data);
         if (data.done) {
             disconnectOutputSSE();
+            _stopRLTPoll();
             pollRunStatus();
             // Re-scan dataset sources and refresh opened datasets
             if (typeof window.refreshExpandedSources === 'function') {
@@ -1660,4 +1691,122 @@ function stopObsStreamViewer() {
 
     const placeholder = document.getElementById('rerun-placeholder');
     if (placeholder) placeholder.style.display = '';
+}
+
+
+// =============================================================================
+// RLT Training Dashboard
+// =============================================================================
+
+let _rltPollTimer = null;
+
+function _switchBottomTab(tab) {
+    document.querySelectorAll('.run-bottom-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.tab === tab);
+    });
+    const outputPanel = document.getElementById('run-bottom-panel-output');
+    const rlPanel = document.getElementById('run-bottom-panel-rl');
+    if (outputPanel) outputPanel.style.display = (tab === 'output') ? '' : 'none';
+    if (rlPanel) rlPanel.style.display = (tab === 'rl') ? '' : 'none';
+}
+
+function _showRLTab(show) {
+    const tab = document.getElementById('run-bottom-tab-rl');
+    if (tab) tab.style.display = show ? '' : 'none';
+}
+
+function _startRLTPoll() {
+    _stopRLTPoll();
+    _showRLTab(true);
+    _rltPollTimer = setInterval(_fetchRLTMetrics, 2000);
+    _fetchRLTMetrics();
+}
+
+function _stopRLTPoll() {
+    if (_rltPollTimer) { clearInterval(_rltPollTimer); _rltPollTimer = null; }
+}
+
+async function _fetchRLTMetrics() {
+    try {
+        const res = await fetch('/api/run/rlt-metrics');
+        if (!res.ok) return;
+        const data = await res.json();
+        _updateRLTDashboard(data);
+    } catch (e) { /* ignore */ }
+}
+
+function _updateRLTDashboard(data) {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('rlt-stat-episode', data.episode);
+    set('rlt-stat-mode', data.mode);
+    set('rlt-stat-rate', Math.round(data.success_rate * 100) + '%');
+    set('rlt-stat-buffer', data.buffer_size?.toLocaleString() || '0');
+    set('rlt-stat-updates', data.total_updates?.toLocaleString() || '0');
+
+    const s = data.series || {};
+
+    // Success rate chart
+    if (s.episode_successes && s.episode_successes.length > 0) {
+        const rolling = [];
+        for (let i = 0; i < s.episode_successes.length; i++) {
+            const window = s.episode_successes.slice(Math.max(0, i - 19), i + 1);
+            rolling.push(window.reduce((a, b) => a + (b ? 1 : 0), 0) / window.length);
+        }
+        _drawSparkline('rlt-chart-success', rolling, '#4fc3f7', 0, 1, true);
+    }
+
+    // Q values chart
+    if (s.q_values && s.q_values.length > 0)
+        _drawSparkline('rlt-chart-qvalues', s.q_values, '#2ecc71');
+
+    // Actor delta chart
+    if (s.actor_deltas && s.actor_deltas.length > 0)
+        _drawSparkline('rlt-chart-delta', s.actor_deltas, '#e5c07b');
+
+    // Critic loss chart
+    if (s.critic_losses && s.critic_losses.length > 0)
+        _drawSparkline('rlt-chart-critic', s.critic_losses, '#f39c12');
+}
+
+function _drawSparkline(canvasId, data, color, fixedMin, fixedMax, percentage) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || data.length === 0) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = rect.height;
+
+    ctx.clearRect(0, 0, W, H);
+
+    const min = fixedMin !== undefined ? fixedMin : Math.min(...data);
+    const max = fixedMax !== undefined ? fixedMax : Math.max(...data);
+    const range = (max - min) || 1;
+    const pad = 4;
+
+    ctx.strokeStyle = '#1a1a3e';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+        const y = pad + (H - 2 * pad) * (1 - i / 4);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+        const x = (i / Math.max(data.length - 1, 1)) * W;
+        const y = pad + (H - 2 * pad) * (1 - (data[i] - min) / range);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    const last = data[data.length - 1];
+    const label = percentage ? (last * 100).toFixed(0) + '%' : last.toFixed(4);
+    ctx.fillStyle = color;
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(label, W - 4, 12);
 }

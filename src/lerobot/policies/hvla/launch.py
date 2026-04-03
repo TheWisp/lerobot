@@ -77,6 +77,16 @@ def main():
     parser.add_argument("--intervention-dataset", type=str, default=None,
                         help="Record intervention fragments to a separate LeRobotDataset "
                              "(e.g. 'user/hvla_interventions')")
+    # --- RLT (online RL) ---
+    parser.add_argument("--rlt-mode", action="store_true",
+                        help="Enable RLT online RL: actor MLP refines S1 chunks. "
+                             "Press R for success (+1 reward, ends episode).")
+    parser.add_argument("--rl-token-checkpoint", type=str, default=None,
+                        help="Path to trained RL token encoder checkpoint")
+    parser.add_argument("--rl-chunk-length", type=int, default=10,
+                        help="RL action chunk length C (default: 10)")
+    parser.add_argument("--rlt-output-dir", type=str, default="outputs/rlt_online",
+                        help="Directory for RLT checkpoints and logs")
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -191,6 +201,10 @@ def main():
             reset_time_s=args.reset_time_s,
             teleop_config_path=args.teleop_config,
             intervention_dataset=args.intervention_dataset,
+            rlt_mode=args.rlt_mode,
+            rl_token_checkpoint=args.rl_token_checkpoint,
+            rl_chunk_length=args.rl_chunk_length,
+            rlt_output_dir=args.rlt_output_dir,
         )
     finally:
         stop_event.set()

@@ -141,30 +141,69 @@
                 </div>
                 <div class="run-split-handle" id="run-split-handle"></div>
                 <div class="run-terminal-container" id="run-terminal-container">
-                    <div class="run-terminals-split">
-                        <div class="run-terminal-panel" id="run-terminal-panel-main">
-                            <div class="run-terminal-header">
-                                <span>Output</span>
-                                <span class="run-status idle" id="run-status-indicator">Idle</span>
-                                <span class="terminal-actions">
-                                    <button class="btn-terminal" onclick="copyTerminal('run-terminal')" title="Copy">Copy</button>
-                                    <button class="btn-terminal" onclick="clearTerminal('run-terminal')" title="Clear">Clear</button>
-                                </span>
+                    <!-- Tab bar for Output / RL Training -->
+                    <div class="run-bottom-tabs" id="run-bottom-tabs">
+                        <button class="run-bottom-tab active" data-tab="output" onclick="_switchBottomTab('output')">Output</button>
+                        <button class="run-bottom-tab" data-tab="rl" onclick="_switchBottomTab('rl')" id="run-bottom-tab-rl" style="display:none">RL Training</button>
+                    </div>
+                    <!-- Output tab -->
+                    <div class="run-bottom-panel" id="run-bottom-panel-output">
+                        <div class="run-terminals-split">
+                            <div class="run-terminal-panel" id="run-terminal-panel-main">
+                                <div class="run-terminal-header">
+                                    <span>Output</span>
+                                    <span class="run-status idle" id="run-status-indicator">Idle</span>
+                                    <span class="terminal-actions">
+                                        <button class="btn-terminal" onclick="copyTerminal('run-terminal')" title="Copy">Copy</button>
+                                        <button class="btn-terminal" onclick="clearTerminal('run-terminal')" title="Clear">Clear</button>
+                                    </span>
+                                </div>
+                                <div class="run-terminal" id="run-terminal">
+                                    <div class="terminal-line" style="color: #666;">Select a workflow and press Launch</div>
+                                </div>
                             </div>
-                            <div class="run-terminal" id="run-terminal">
-                                <div class="terminal-line" style="color: #666;">Select a workflow and press Launch</div>
+                            <div class="run-terminal-panel" id="run-terminal-panel-model" style="display:none;">
+                                <div class="run-terminal-header">
+                                    <span>Model Output</span>
+                                    <span class="terminal-actions">
+                                        <button class="btn-terminal" onclick="copyTerminal('run-model-terminal')" title="Copy">Copy</button>
+                                        <button class="btn-terminal" onclick="clearTerminal('run-model-terminal')" title="Clear">Clear</button>
+                                    </span>
+                                </div>
+                                <div class="run-terminal" id="run-model-terminal">
+                                    <div class="terminal-line" style="color: #666;">Model output will appear here</div>
+                                </div>
                             </div>
                         </div>
-                        <div class="run-terminal-panel" id="run-terminal-panel-model" style="display:none;">
-                            <div class="run-terminal-header">
-                                <span>Model Output</span>
-                                <span class="terminal-actions">
-                                    <button class="btn-terminal" onclick="copyTerminal('run-model-terminal')" title="Copy">Copy</button>
-                                    <button class="btn-terminal" onclick="clearTerminal('run-model-terminal')" title="Clear">Clear</button>
-                                </span>
+                    </div>
+                    <!-- RL Training tab -->
+                    <div class="run-bottom-panel" id="run-bottom-panel-rl" style="display:none">
+                        <div class="rlt-dashboard">
+                            <div class="rlt-status-bar" id="rlt-status-bar">
+                                <span class="rlt-stat">Episode: <b id="rlt-stat-episode">0</b></span>
+                                <span class="rlt-stat">Mode: <b id="rlt-stat-mode">IDLE</b></span>
+                                <span class="rlt-stat">Autonomous: <b id="rlt-stat-rate">0%</b></span>
+                                <span class="rlt-stat">Throughput: <b id="rlt-stat-throughput">0/10min</b></span>
+                                <span class="rlt-stat">Buffer: <b id="rlt-stat-buffer">0</b></span>
+                                <span class="rlt-stat">Updates: <b id="rlt-stat-updates">0</b></span>
                             </div>
-                            <div class="run-terminal" id="run-model-terminal">
-                                <div class="terminal-line" style="color: #666;">Model output will appear here</div>
+                            <div class="rlt-charts">
+                                <div class="rlt-chart-box">
+                                    <div class="rlt-chart-title">Autonomous Success Rate (rolling 20)</div>
+                                    <canvas id="rlt-chart-success" width="400" height="80"></canvas>
+                                </div>
+                                <div class="rlt-chart-box">
+                                    <div class="rlt-chart-title">Q Values (min/mean/max)</div>
+                                    <canvas id="rlt-chart-qvalues" width="400" height="80"></canvas>
+                                </div>
+                                <div class="rlt-chart-box">
+                                    <div class="rlt-chart-title">Actor Delta (deviation from S1)</div>
+                                    <canvas id="rlt-chart-delta" width="400" height="80"></canvas>
+                                </div>
+                                <div class="rlt-chart-box">
+                                    <div class="rlt-chart-title">Critic Loss</div>
+                                    <canvas id="rlt-chart-critic" width="400" height="80"></canvas>
+                                </div>
                             </div>
                         </div>
                     </div>
