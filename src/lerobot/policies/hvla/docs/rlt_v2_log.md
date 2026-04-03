@@ -34,7 +34,24 @@
 2. `dd3e3a35` — Updated design doc
 3. `a897f9cb` — Integration (s1_inference, s1_process, launch, GUI)
 
+## 2026-04-03: Baseline measurement
+
+### Setup
+- S1 checkpoint: `flow_s1_no_s2_v1`
+- Task: cylinder-ring assembly, critical phase only (operator teleops to pre-critical)
+- Episode timeout: 60s
+- No RLT, no intervention
+- 20 episodes
+
+### Results
+| Metric | Value |
+|--------|-------|
+| Autonomous success rate | **65%** (13/20) |
+| Throughput | **10.4 successes / 10 min** |
+| Median success time | ~24s |
+| Failed episodes | all timed out at 60s |
+| Log file | `outputs/hvla_runs/run_20260403_155719.log` |
+
 ### Next steps:
 - Write tests (Step 5)
-- Establish baseline: 20 episodes base S1 without RLT (Step 6)
-- Robot testing with RLT v2
+- Robot testing with RLT v2 — target: beat 65% success rate and 10.4/10min throughput
