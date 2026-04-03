@@ -594,6 +594,19 @@ def run_s1(
                     s = saved.get("series", {})
                     m.episode_successes = s.get("episode_successes", [])
                     m.episode_autonomous = s.get("episode_autonomous", [])
+                    # HACK: backfill autonomous flags for old episodes that lack them.
+                    # Remove this once all old checkpoints are gone.
+                    if len(m.episode_autonomous) < len(m.episode_successes):
+                        missing = len(m.episode_successes) - len(m.episode_autonomous)
+                        m.episode_autonomous = [True] * missing + m.episode_autonomous
+                        logger.warning("RLT: HACK — backfilled %d missing autonomous flags as True", missing)
+                    m.episode_timestamps = s.get("episode_timestamps", [])
+                    m.episode_lengths_s = s.get("episode_lengths_s", [])
+                    if len(m.episode_timestamps) < len(m.episode_successes):
+                        missing = len(m.episode_successes) - len(m.episode_timestamps)
+                        m.episode_timestamps = [0.0] * missing + m.episode_timestamps
+                        m.episode_lengths_s = [30.0] * missing + m.episode_lengths_s
+                        logger.warning("RLT: HACK — backfilled %d missing timestamps/lengths", missing)
                     m.critic_losses = s.get("critic_losses", [])
                     m.actor_losses = s.get("actor_losses", [])
                     m.actor_deltas = s.get("actor_deltas", [])

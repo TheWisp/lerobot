@@ -115,10 +115,11 @@ class RLTMetrics:
             recent_s = successes[-20:]
             success_rate = sum(recent_s) / len(recent_s) if recent_s else 0.0
 
-            # Autonomous success rate (rolling 20, only counting autonomous episodes)
+            # Autonomous success rate (rolling 20, out of ALL episodes)
+            # Autonomous = succeeded WITHOUT intervention. Assisted = not autonomous.
             recent_auto = [(s, a) for s, a in zip(successes[-20:], autonomous[-20:])]
-            auto_episodes = [s for s, a in recent_auto if a]
-            autonomous_rate = sum(auto_episodes) / len(auto_episodes) if auto_episodes else 0.0
+            auto_successes = sum(1 for s, a in recent_auto if s and a)
+            autonomous_rate = auto_successes / len(recent_auto) if recent_auto else 0.0
 
             # Intervention rate (rolling 20)
             recent_a = autonomous[-20:]
