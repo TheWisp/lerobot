@@ -1809,6 +1809,10 @@ function _drawSparkline(canvasId, data, color, fixedMin, fixedMax, percentage) {
     ctx.font = '10px monospace';
     ctx.textAlign = 'right';
     ctx.fillText(label, W - 4, 12);
+    // Show data point count on left (x-axis scale)
+    ctx.fillStyle = '#444';
+    ctx.textAlign = 'left';
+    ctx.fillText(data.length + ' pts', 4, H - 4);
 }
 
 function _drawSparkBand(canvasId, dataMin, dataMax, dataMean, color) {
