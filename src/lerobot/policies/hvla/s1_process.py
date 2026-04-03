@@ -1075,7 +1075,8 @@ def run_s1(
                     # Snapshot z_rl + state at frame 0 of each C-step window
                     if frame_idx % C == 0:
                         # z_rl from inference thread (still running for z_rl extraction)
-                        rlt_state["_int_chunk_z_rl"] = getattr(infer_thread, '_rlt_prev', {}).get("z_rl")
+                        prev = getattr(infer_thread, '_rlt_prev', None)
+                        rlt_state["_int_chunk_z_rl"] = prev["z_rl"] if prev is not None else None
                         state_np_norm = np.array([float(obs[j]) for j in joint_names], dtype=np.float32)
                         state_t = torch.from_numpy(state_np_norm).to(device)
                         if policy._state_mean is not None:
