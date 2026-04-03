@@ -1760,9 +1760,13 @@ function _updateRLTDashboard(data) {
         _drawSparkline('rlt-chart-success', rolling, '#4fc3f7', 0, 1, true);
     }
 
-    // Q values chart (mean)
-    if (s.q_values_mean && s.q_values_mean.length > 0)
-        _drawSparkline('rlt-chart-qvalues', s.q_values_mean, '#2ecc71');
+    // Q values chart (min/mean/max band)
+    if (s.q_values_mean && s.q_values_mean.length > 0) {
+        if (s.q_values_min && s.q_values_max)
+            _drawSparkBand('rlt-chart-qvalues', s.q_values_min, s.q_values_max, s.q_values_mean, '#2ecc71');
+        else
+            _drawSparkline('rlt-chart-qvalues', s.q_values_mean, '#2ecc71');
+    }
 
     // Actor delta chart
     if (s.actor_deltas && s.actor_deltas.length > 0)
@@ -1814,4 +1818,58 @@ function _drawSparkline(canvasId, data, color, fixedMin, fixedMax, percentage) {
     ctx.font = '10px monospace';
     ctx.textAlign = 'right';
     ctx.fillText(label, W - 4, 12);
+}
+
+function _drawSparkBand(canvasId, dataMin, dataMax, dataMean, color) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || dataMean.length === 0) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = rect.height;
+    ctx.clearRect(0, 0, W, H);
+
+    const allVals = [...dataMin, ...dataMax];
+    const min = Math.min(...allVals);
+    const max = Math.max(...allVals);
+    const range = (max - min) || 1;
+    const pad = 4;
+    const n = dataMean.length;
+
+    const toY = (v) => pad + (H - 2 * pad) * (1 - (v - min) / range);
+    const toX = (i) => (i / Math.max(n - 1, 1)) * W;
+
+    // Grid
+    ctx.strokeStyle = '#1a1a3e'; ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+        const y = pad + (H - 2 * pad) * (1 - i / 4);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    // Min-max band (filled)
+    ctx.fillStyle = color + '20';  // 12% opacity
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) ctx.lineTo(toX(i), toY(dataMax[i] || 0));
+    for (let i = n - 1; i >= 0; i--) ctx.lineTo(toX(i), toY(dataMin[i] || 0));
+    ctx.closePath();
+    ctx.fill();
+
+    // Mean line
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+        const x = toX(i), y = toY(dataMean[i]);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Labels
+    ctx.fillStyle = color; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    const lastMean = dataMean[n - 1];
+    const lastMax = (dataMax[n - 1] || 0);
+    const lastMin = (dataMin[n - 1] || 0);
+    ctx.fillText(`${lastMin.toFixed(2)}/${lastMean.toFixed(2)}/${lastMax.toFixed(2)}`, W - 4, 12);
 }
