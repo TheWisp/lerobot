@@ -1097,6 +1097,11 @@ def run_s1(
                         z_rl_snap = rlt_state["_int_chunk_z_rl"]
                         state_snap = rlt_state["_int_chunk_state"]
 
+                        if z_rl_snap is None:
+                            logger.warning("RLT: z_rl is None during intervention frame %d — skipping chunk", frame_idx)
+                        elif state_snap is None:
+                            logger.warning("RLT: state is None during intervention frame %d — skipping chunk", frame_idx)
+
                         if z_rl_snap is not None and state_snap is not None:
                             # Store previous chunk's transition
                             prev_int = rlt_state.get("_int_prev")
@@ -1320,9 +1325,14 @@ def run_s1(
 
         # RLT: episode bookkeeping
         if rlt_mode and rlt_state is not None:
-            # Pause collection during reset
+            # Pause collection during reset + clear all state
             infer_thread._rlt_active = False
             infer_thread._rlt_prev = None
+            rlt_state.pop("_int_chunk_buf", None)
+            rlt_state.pop("_int_chunk_z_rl", None)
+            rlt_state.pop("_int_chunk_state", None)
+            rlt_state.pop("_int_frame_count", None)
+            rlt_state.pop("_int_prev", None)
             logger.info("RLT: collection PAUSED (episode end)")
 
             success = rlt_state["reward_triggered"]
@@ -1344,22 +1354,25 @@ def run_s1(
             rlt_state["reward_triggered"] = False
 
             # Save checkpoint
-            save_dir = rlt_state["output_dir"] / "latest"
-            save_dir.mkdir(parents=True, exist_ok=True)
-            torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
-            torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
-            torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
-            torch.save({
-                "actor_opt": rlt_agent.actor_opt.state_dict(),
-                "critic_opt": rlt_agent.critic_opt.state_dict(),
-                "episode": rlt_state["episode"],
-                "total_transitions": rlt_state["total_transitions"],
-                "total_updates": rlt_state["total_updates"],
-                "successes": rlt_state["successes"],
-            }, save_dir / "training_state.pt")
-            rlt_replay.save(str(save_dir / "replay_buffer.pt"))
-            logger.info("RLT: Saved checkpoint → %s (ep=%d, buf=%d, updates=%d)",
-                        save_dir, rlt_state["episode"], len(rlt_replay), rlt_state["total_updates"])
+            try:
+                save_dir = rlt_state["output_dir"] / "latest"
+                save_dir.mkdir(parents=True, exist_ok=True)
+                torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
+                torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
+                torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
+                torch.save({
+                    "actor_opt": rlt_agent.actor_opt.state_dict(),
+                    "critic_opt": rlt_agent.critic_opt.state_dict(),
+                    "episode": rlt_state["episode"],
+                    "total_transitions": rlt_state["total_transitions"],
+                    "total_updates": rlt_state["total_updates"],
+                    "successes": rlt_state["successes"],
+                }, save_dir / "training_state.pt")
+                rlt_replay.save(str(save_dir / "replay_buffer.pt"))
+                logger.info("RLT: Saved checkpoint → %s (ep=%d, buf=%d, updates=%d)",
+                            save_dir, rlt_state["episode"], len(rlt_replay), rlt_state["total_updates"])
+            except Exception as e:
+                logger.error("RLT: Failed to save checkpoint: %s", e)
 
         # Reset tracking state for next episode
         prev_action_np = None
