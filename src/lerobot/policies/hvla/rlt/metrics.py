@@ -102,6 +102,17 @@ class RLTMetrics:
             self.episode_timestamps.append(time.time())
             self.episode_lengths_s.append(duration_s)
 
+    @staticmethod
+    def _smooth(data: list, window: int = 20) -> list:
+        """Rolling mean for smoother charts."""
+        if len(data) <= window:
+            return data
+        result = []
+        for i in range(len(data)):
+            start = max(0, i - window + 1)
+            result.append(sum(data[start:i + 1]) / (i - start + 1))
+        return result
+
     def snapshot(self) -> dict:
         """Return a JSON-serializable snapshot for the API."""
         with self._lock:
@@ -162,10 +173,10 @@ class RLTMetrics:
                     "episode_autonomous": autonomous[-200:],
                     # Pre-computed rolling series (for chart, single source of truth)
                     "autonomous_rate_rolling": auto_rate_rolling[-200:],
-                    # Training metrics
-                    "critic_losses": self.critic_losses[-200:],
-                    "actor_losses": self.actor_losses[-200:],
-                    "actor_deltas": self.actor_deltas[-200:],
+                    # Training metrics (smoothed with rolling window for readability)
+                    "critic_losses": self._smooth(self.critic_losses[-200:], 20),
+                    "actor_losses": self._smooth(self.actor_losses[-200:], 20),
+                    "actor_deltas": self._smooth(self.actor_deltas[-200:], 20),
                     "q_values_mean": self.q_values_mean[-200:],
                     "q_values_min": self.q_values_min[-200:],
                     "q_values_max": self.q_values_max[-200:],
