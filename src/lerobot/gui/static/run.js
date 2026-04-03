@@ -1739,25 +1739,30 @@ function _updateRLTDashboard(data) {
     const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
     set('rlt-stat-episode', data.episode);
     set('rlt-stat-mode', data.mode);
-    set('rlt-stat-rate', Math.round(data.success_rate * 100) + '%');
+    set('rlt-stat-rate', Math.round((data.autonomous_rate || 0) * 100) + '%');
+    set('rlt-stat-throughput', (data.throughput_10min || 0) + '/10min');
     set('rlt-stat-buffer', data.buffer_size?.toLocaleString() || '0');
     set('rlt-stat-updates', data.total_updates?.toLocaleString() || '0');
 
     const s = data.series || {};
 
-    // Success rate chart
-    if (s.episode_successes && s.episode_successes.length > 0) {
+    // Autonomous success rate chart (only autonomous episodes)
+    if (s.episode_autonomous && s.episode_successes && s.episode_successes.length > 0) {
         const rolling = [];
         for (let i = 0; i < s.episode_successes.length; i++) {
-            const window = s.episode_successes.slice(Math.max(0, i - 19), i + 1);
-            rolling.push(window.reduce((a, b) => a + (b ? 1 : 0), 0) / window.length);
+            // Count autonomous successes in window
+            const winS = s.episode_successes.slice(Math.max(0, i - 19), i + 1);
+            const winA = s.episode_autonomous.slice(Math.max(0, i - 19), i + 1);
+            const autoEps = winA.filter(a => a);
+            const autoSuccesses = winS.filter((s, j) => winA[j] && s);
+            rolling.push(autoEps.length > 0 ? autoSuccesses.length / autoEps.length : 0);
         }
         _drawSparkline('rlt-chart-success', rolling, '#4fc3f7', 0, 1, true);
     }
 
-    // Q values chart
-    if (s.q_values && s.q_values.length > 0)
-        _drawSparkline('rlt-chart-qvalues', s.q_values, '#2ecc71');
+    // Q values chart (mean)
+    if (s.q_values_mean && s.q_values_mean.length > 0)
+        _drawSparkline('rlt-chart-qvalues', s.q_values_mean, '#2ecc71');
 
     // Actor delta chart
     if (s.actor_deltas && s.actor_deltas.length > 0)

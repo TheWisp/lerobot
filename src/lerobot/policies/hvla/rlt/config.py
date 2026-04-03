@@ -38,9 +38,9 @@ class RLTConfig:
     discount: float = 0.99               # gamma
     tau: float = 0.005                    # target network soft update rate
     beta: float = 1.0                     # BC regularizer weight
-    actor_sigma: float = 0.01            # fixed Gaussian std for exploration (normalized space)
+    actor_sigma: float = 0.02            # fixed Gaussian std for exploration (normalized space)
                                           # Paper uses 0.1 but with delta EE position (~1cm scale).
-                                          # Joint angles have ~24° std, so 0.01 ≈ 0.24° exploration.
+                                          # Joint angles have ~24° std, so 0.02 ≈ 0.5° exploration.
     ref_action_dropout: float = 0.5       # probability of zeroing reference chunk
     utd_ratio: int = 5                    # gradient updates per new transition
     subsample_stride: int = 2             # stride for replay buffer subsampling

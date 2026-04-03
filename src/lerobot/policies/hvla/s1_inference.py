@@ -276,7 +276,7 @@ class InferenceThread:
             buffer_size=len(self._rlt_replay),
             total_updates=self._rlt_state["total_updates"],
             mode="TRAIN", critic_loss=avg_c, actor_loss=avg_a,
-            q_value=q_mean,
+            q_mean=q_mean, q_min=q_min, q_max=q_max,
         )
 
     def start(self) -> None:
