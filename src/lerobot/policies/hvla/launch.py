@@ -82,7 +82,11 @@ def main():
                         help="Enable RLT online RL: actor MLP refines S1 chunks. "
                              "Press R for success (+1 reward, ends episode).")
     parser.add_argument("--rl-token-checkpoint", type=str, default=None,
-                        help="Path to trained RL token encoder checkpoint")
+                        help="Path to trained RL token encoder checkpoint (Phase 1)")
+    parser.add_argument("--rlt-checkpoint", type=str, default=None,
+                        help="Path to existing RLT actor checkpoint dir (resumes training or deploys)")
+    parser.add_argument("--rlt-deploy", action="store_true",
+                        help="Deploy mode: actor forward only, no training loop")
     parser.add_argument("--rl-chunk-length", type=int, default=10,
                         help="RL action chunk length C (default: 10)")
     parser.add_argument("--rlt-output-dir", type=str, default="outputs/rlt_online",
@@ -203,6 +207,8 @@ def main():
             intervention_dataset=args.intervention_dataset,
             rlt_mode=args.rlt_mode,
             rl_token_checkpoint=args.rl_token_checkpoint,
+            rlt_checkpoint=args.rlt_checkpoint,
+            rlt_deploy=args.rlt_deploy,
             rl_chunk_length=args.rl_chunk_length,
             rlt_output_dir=args.rlt_output_dir,
         )

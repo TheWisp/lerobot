@@ -147,11 +147,15 @@ class InferenceThread:
             ref_norm = (ref_chunk - self._policy._action_mean.to(self._device)) / self._policy._action_std.to(self._device)
 
         # Actor forward (Paper Alg 1 line 9)
-        if is_warmup:
+        is_deploy = self._rlt_state.get("deploy", False)
+        if is_warmup and not is_deploy:
             # Warmup: execute VLA reference, actor not called
             actor_norm = ref_norm
         else:
-            actor_norm = self._rlt_actor(z_rl.float(), state_norm, ref_norm)
+            actor_norm = self._rlt_actor(
+                z_rl.float(), state_norm, ref_norm,
+                deterministic=is_deploy,  # no exploration noise in deploy mode
+            )
             # Denormalize and replace first C actions in output
             if self._policy._action_mean is not None:
                 actor_denorm = actor_norm * self._policy._action_std.to(self._device) + self._policy._action_mean.to(self._device)
@@ -170,7 +174,7 @@ class InferenceThread:
             return
 
         prev = self._rlt_prev
-        if prev is not None:
+        if prev is not None and self._rlt_replay is not None:
             done = self._rlt_state.get("reward_triggered", False)
             self._rlt_replay.add(
                 z_rl=prev["z_rl"], state=prev["state"],
@@ -195,17 +199,18 @@ class InferenceThread:
         actor_delta = (actor_norm - ref_norm).abs().mean().item()
 
         from lerobot.policies.hvla.rlt.metrics import get_metrics, save_metrics_to_file
-        mode = "WARMUP" if is_warmup else "RL"
+        is_deploy = self._rlt_state.get("deploy", False)
+        mode = "DEPLOY" if is_deploy else ("WARMUP" if is_warmup else "RL")
         get_metrics().record_step(
             step=self._rlt_step_count, delta=actor_delta,
-            buffer_size=len(self._rlt_replay),
+            buffer_size=len(self._rlt_replay) if self._rlt_replay else 0,
             total_updates=self._rlt_state["total_updates"], mode=mode,
         )
         if self._rlt_step_count % 100 == 0:
             logger.info(
                 "RLT step %d [%s] | delta=%.3f | buf=%d | updates=%d",
                 self._rlt_step_count, mode, actor_delta,
-                len(self._rlt_replay),
+                len(self._rlt_replay) if self._rlt_replay else 0,
                 self._rlt_state["total_updates"],
             )
             save_metrics_to_file()
@@ -273,7 +278,7 @@ class InferenceThread:
         from lerobot.policies.hvla.rlt.metrics import get_metrics
         get_metrics().record_step(
             step=self._rlt_step_count, delta=0,
-            buffer_size=len(self._rlt_replay),
+            buffer_size=len(self._rlt_replay) if self._rlt_replay else 0,
             total_updates=self._rlt_state["total_updates"],
             mode="TRAIN", critic_loss=avg_c, actor_loss=avg_a,
             q_mean=q_mean, q_min=q_min, q_max=q_max,
