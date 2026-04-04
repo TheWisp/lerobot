@@ -334,6 +334,11 @@ def run_s1(
     reset_time_s: float = 20,
     teleop_config_path: str | None = None,
     intervention_dataset: str | None = None,
+    # RLT parameters
+    rlt_mode: bool = False,
+    rl_token_checkpoint: str | None = None,
+    rl_chunk_length: int = 10,
+    rlt_output_dir: str = "outputs/rlt_online",
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -488,7 +493,136 @@ def run_s1(
     # Note: S2 wait happens after inference thread starts (below),
     # because the inference thread publishes images that S2 needs.
 
+    # Log all runs to file (not just RLT) for post-analysis
+    import datetime
+    from pathlib import Path
+    run_log_dir = Path("outputs/hvla_runs")
+    run_log_dir.mkdir(parents=True, exist_ok=True)
+    run_log_file = run_log_dir / f"run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    _run_fh = logging.FileHandler(str(run_log_file), mode="w")
+    _run_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    logging.getLogger().addHandler(_run_fh)
+    logger.info("S1: Run log → %s", run_log_file)
+
     logger.info("S1: Starting control loop at %d FPS", fps)
+
+    # --- RLT setup ---
+    rl_token_encoder = None
+    rlt_agent = None
+    rlt_replay = None
+    rlt_state = None
+
+    if rlt_mode:
+        from pathlib import Path
+        from lerobot.policies.hvla.rlt.config import RLTConfig
+        from lerobot.policies.hvla.rlt.token import RLTokenEncoder
+        from lerobot.policies.hvla.rlt.actor_critic import TD3Agent
+        from lerobot.policies.hvla.rlt.replay_buffer import ReplayBuffer
+
+        rlt_config = RLTConfig(
+            rl_token_dim=policy.config.hidden_dim,
+            rl_chunk_length=rl_chunk_length,
+        )
+        rl_token_encoder = RLTokenEncoder(rlt_config).to(device)
+        if rl_token_checkpoint:
+            ckpt_path = Path(rl_token_checkpoint)
+            enc_file = ckpt_path / "encoder.pt" if ckpt_path.is_dir() else ckpt_path
+            rl_token_encoder.load_state_dict(
+                torch.load(str(enc_file), weights_only=True, map_location=device)
+            )
+            logger.info("S1 RLT: Loaded RL token encoder from %s", enc_file)
+        rl_token_encoder.eval()
+        for p in rl_token_encoder.parameters():
+            p.requires_grad = False
+
+        action_dim = policy.config.action_dim
+        state_dim = policy.config.state_dim
+        rlt_agent = TD3Agent(rlt_config, state_dim, action_dim, device)
+        rlt_replay = ReplayBuffer(
+            rlt_config.replay_capacity, rlt_config.rl_token_dim,
+            state_dim, action_dim, rl_chunk_length, device,
+        )
+        rlt_state = {
+            "config": rlt_config, "episode": 0,
+            "total_updates": 0, "total_transitions": 0,
+            "successes": [], "reward_triggered": False,
+            "output_dir": Path(rlt_output_dir),
+        }
+        rlt_state["output_dir"].mkdir(parents=True, exist_ok=True)
+
+        # Log file
+        rlt_log_file = rlt_state["output_dir"] / "train.log"
+        _rlt_fh = logging.FileHandler(str(rlt_log_file), mode="a")
+        _rlt_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logging.getLogger().addHandler(_rlt_fh)
+        logger.info("RLT: Logging to %s", rlt_log_file)
+
+        # Metrics file for GUI dashboard
+        from lerobot.policies.hvla.rlt.metrics import set_metrics_path
+        set_metrics_path(str(rlt_state["output_dir"] / "metrics.json"))
+
+        # Auto-resume
+        latest_dir = rlt_state["output_dir"] / "latest"
+        if (latest_dir / "actor.pt").exists():
+            from lerobot.policies.hvla.rlt.metrics import get_metrics
+            rlt_agent.actor.load_state_dict(
+                torch.load(str(latest_dir / "actor.pt"), weights_only=True, map_location=device))
+            rlt_agent.critic.load_state_dict(
+                torch.load(str(latest_dir / "critic.pt"), weights_only=True, map_location=device))
+            if (latest_dir / "critic_target.pt").exists():
+                rlt_agent.critic_target.load_state_dict(
+                    torch.load(str(latest_dir / "critic_target.pt"), weights_only=True, map_location=device))
+            if (latest_dir / "training_state.pt").exists():
+                ts = torch.load(str(latest_dir / "training_state.pt"), weights_only=True, map_location=device)
+                rlt_agent.actor_opt.load_state_dict(ts["actor_opt"])
+                rlt_agent.critic_opt.load_state_dict(ts["critic_opt"])
+                rlt_state["episode"] = ts["episode"]
+                rlt_state["total_transitions"] = ts["total_transitions"]
+                rlt_state["total_updates"] = ts["total_updates"]
+                rlt_state["successes"] = ts["successes"]
+            if (latest_dir / "replay_buffer.pt").exists():
+                rlt_replay.load(str(latest_dir / "replay_buffer.pt"))
+            # Restore metrics
+            import json, os
+            metrics_path = str(rlt_state["output_dir"] / "metrics.json")
+            if os.path.exists(metrics_path):
+                try:
+                    with open(metrics_path) as f:
+                        saved = json.load(f)
+                    m = get_metrics()
+                    m.episode = saved.get("episode", 0)
+                    s = saved.get("series", {})
+                    m.episode_successes = s.get("episode_successes", [])
+                    m.episode_autonomous = s.get("episode_autonomous", [])
+                    # HACK: backfill autonomous flags for old episodes that lack them.
+                    # Remove this once all old checkpoints are gone.
+                    if len(m.episode_autonomous) < len(m.episode_successes):
+                        missing = len(m.episode_successes) - len(m.episode_autonomous)
+                        m.episode_autonomous = [True] * missing + m.episode_autonomous
+                        logger.warning("RLT: HACK — backfilled %d missing autonomous flags as True", missing)
+                    m.episode_timestamps = s.get("episode_timestamps", [])
+                    m.episode_lengths_s = s.get("episode_lengths_s", [])
+                    if len(m.episode_timestamps) < len(m.episode_successes):
+                        missing = len(m.episode_successes) - len(m.episode_timestamps)
+                        m.episode_timestamps = [0.0] * missing + m.episode_timestamps
+                        m.episode_lengths_s = [30.0] * missing + m.episode_lengths_s
+                        logger.warning("RLT: HACK — backfilled %d missing timestamps/lengths", missing)
+                    m.critic_losses = s.get("critic_losses", [])
+                    m.actor_losses = s.get("actor_losses", [])
+                    m.actor_deltas = s.get("actor_deltas", [])
+                    m.q_values_mean = s.get("q_values_mean", [])
+                    m.q_values_min = s.get("q_values_min", [])
+                    m.q_values_max = s.get("q_values_max", [])
+                    logger.info("RLT: Restored metrics from %s", metrics_path)
+                except Exception as e:
+                    logger.warning("RLT: Failed to restore metrics: %s", e)
+            logger.info("RLT: Resumed from %s (ep=%d, buf=%d, updates=%d)",
+                        latest_dir, rlt_state["episode"], len(rlt_replay), rlt_state["total_updates"])
+        else:
+            logger.info(
+                "S1 RLT: Online RL enabled — C=%d, UTD=%d, beta=%.2f, sigma=%.3f",
+                rl_chunk_length, rlt_config.utd_ratio, rlt_config.beta, rlt_config.actor_sigma,
+            )
 
     # --- Pipelined inference thread ---
     from lerobot.policies.hvla.s1_inference import InferenceThread
@@ -507,6 +641,11 @@ def run_s1(
         num_denoise_steps=num_denoise_steps,
         query_interval_steps=query_interval_steps,
         grip_drop_save_dir=grip_drop_save_dir,
+        rl_token_encoder=rl_token_encoder,
+        rlt_actor=rlt_agent.actor if rlt_agent else None,
+        rlt_agent=rlt_agent,
+        rlt_state=rlt_state,
+        rlt_replay=rlt_replay,
     )
 
     _supports_rtc = getattr(policy, "supports_rtc", False)
@@ -555,7 +694,8 @@ def run_s1(
     logger.info("S1: First chunk ready, starting at %d FPS", fps)
 
     # Multi-episode rollout support
-    multi_episode = num_episodes > 1 or episode_time_s > 0
+    # RLT always needs multi-episode mode
+    multi_episode = num_episodes > 1 or episode_time_s > 0 or rlt_mode
     if multi_episode:
         from lerobot.utils.control_utils import init_keyboard_listener
         listener, events = init_keyboard_listener()
@@ -565,6 +705,41 @@ def run_s1(
     else:
         events = {"exit_early": False, "stop_recording": False}
         listener = None
+
+    # RLT: hook R key into existing keyboard listener for reward signal
+    if rlt_mode and rlt_state is not None and listener is not None:
+        _orig_on_press = listener.on_press
+
+        def _rlt_on_press(key, *args):
+            try:
+                if hasattr(key, 'char') and key.char == "r":
+                    rlt_state["reward_triggered"] = True
+                    events["exit_early"] = True
+                    logger.info("RLT: SUCCESS — reward +1, ending episode")
+                    # Play success sound
+                    try:
+                        import subprocess, numpy as _np
+                        sr = 16000
+                        t = _np.linspace(0, 0.3, int(sr * 0.3), dtype=_np.float32)
+                        tone = (_np.sin(2 * _np.pi * 800 * t) * 20000).astype(_np.int16)
+                        tone2 = (_np.sin(2 * _np.pi * 1200 * t[:len(t)//2]) * 20000).astype(_np.int16)
+                        sound = _np.concatenate([tone, tone2])
+                        proc = subprocess.Popen(
+                            ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+                            stdin=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                        )
+                        proc.stdin.write(sound.tobytes())
+                        proc.stdin.close()
+                    except Exception:
+                        pass
+                    return
+            except AttributeError:
+                pass
+            if _orig_on_press is not None:
+                _orig_on_press(key)
+
+        listener.on_press = _rlt_on_press
+        logger.info("RLT: Press 'r' = success (+1 reward, ends episode)")
 
     recorded_episodes = 0
 
@@ -623,6 +798,13 @@ def run_s1(
         episode_start = time.time()
         policy.reset()
         prev_action_np = None  # reset per episode to avoid stale delta checks
+
+        # RLT: activate collection for this episode
+        if rlt_mode:
+            infer_thread._rlt_active = True
+            infer_thread._rlt_prev = None
+            rlt_state["_episode_had_intervention"] = False
+            logger.info("RLT: collection RESUMED (episode start)")
 
         # Ensure inference thread is running and has fresh data.
         # May have been paused by intervention in previous episode.
@@ -719,9 +901,14 @@ def run_s1(
                 logger.info("S1: Episode time limit (%.0fs) reached", episode_time_s)
                 break
 
-            # Check exit_early (right arrow)
+            # Check exit_early (right/left arrow or R key in RLT mode)
             if events.get("exit_early"):
-                logger.info("S1: Right arrow — ending episode early")
+                if rlt_mode and rlt_state and rlt_state.get("reward_triggered"):
+                    logger.info("S1: R key — episode SUCCESS, ending early")
+                elif events.get("rerecord_episode"):
+                    logger.info("S1: Left arrow — ending episode (will rerecord)")
+                else:
+                    logger.info("S1: Right arrow — ending episode early")
                 events["exit_early"] = False
                 break
 
@@ -759,8 +946,21 @@ def run_s1(
                 # --- INTERVENTION MODE: human controls via leader arm ---
                 if not was_intervening:
                     # Transition: policy → intervention
-                    logger.info("S1: INTERVENTION ON — pausing inference, human takes over")
-                    infer_thread.pause()
+                    if rlt_mode:
+                        # RLT: keep inference running (for z_rl) but stop actor + collection
+                        infer_thread._rlt_active = False
+                        infer_thread._rlt_prev = None
+                        logger.info("S1: INTERVENTION ON — inference continues (RLT), actor paused")
+                        rlt_state["_episode_had_intervention"] = True
+                        logger.info("RLT: collection PAUSED (intervention)")
+                        # Init human chunk accumulator
+                        rlt_state["_int_chunk_buf"] = []
+                        rlt_state["_int_chunk_z_rl"] = None
+                        rlt_state["_int_chunk_state"] = None
+                        rlt_state["_int_frame_count"] = 0
+                    else:
+                        logger.info("S1: INTERVENTION ON — pausing inference, human takes over")
+                        infer_thread.pause()
 
                     # Measure initial leader-follower delta before any sync
                     leader_pos_before = teleop.get_action()
@@ -885,6 +1085,64 @@ def run_s1(
                 if dataset is not None:
                     _add_frame_to_dataset(dataset, obs, action_np, joint_names, task)
 
+                # RLT: accumulate human actions into C-frame chunks for replay buffer
+                # Paper Alg 1 lines 9, 11, 12: a=a_human, ã=a_human, store transition
+                if rlt_mode and rlt_state is not None:
+                    C = rlt_state["config"].rl_chunk_length
+                    frame_idx = rlt_state["_int_frame_count"]
+
+                    # Snapshot z_rl + state at frame 0 of each C-step window
+                    if frame_idx % C == 0:
+                        # z_rl from inference thread (still running for z_rl extraction)
+                        prev = getattr(infer_thread, '_rlt_prev', None)
+                        rlt_state["_int_chunk_z_rl"] = prev["z_rl"] if prev is not None else None
+                        state_np_norm = np.array([float(obs[j]) for j in joint_names], dtype=np.float32)
+                        state_t = torch.from_numpy(state_np_norm).to(device)
+                        if policy._state_mean is not None:
+                            state_t = (state_t - policy._state_mean.to(device)) / policy._state_std.to(device)
+                        rlt_state["_int_chunk_state"] = state_t
+                        rlt_state["_int_chunk_buf"] = []
+
+                    # Normalize and accumulate human action
+                    a_t = torch.from_numpy(action_np).float()
+                    if policy._action_mean is not None:
+                        a_t = (a_t - policy._action_mean) / policy._action_std
+                    rlt_state["_int_chunk_buf"].append(a_t)
+                    rlt_state["_int_frame_count"] += 1
+
+                    # Store completed C-frame chunk
+                    if len(rlt_state["_int_chunk_buf"]) == C:
+                        human_chunk = torch.stack(rlt_state["_int_chunk_buf"])  # [C, A]
+                        z_rl_snap = rlt_state["_int_chunk_z_rl"]
+                        state_snap = rlt_state["_int_chunk_state"]
+
+                        if z_rl_snap is None:
+                            logger.warning("RLT: z_rl is None during intervention frame %d — skipping chunk", frame_idx)
+                        elif state_snap is None:
+                            logger.warning("RLT: state is None during intervention frame %d — skipping chunk", frame_idx)
+
+                        if z_rl_snap is not None and state_snap is not None:
+                            # Store previous chunk's transition
+                            prev_int = rlt_state.get("_int_prev")
+                            if prev_int is not None:
+                                rlt_replay.add(
+                                    z_rl=prev_int["z_rl"], state=prev_int["state"],
+                                    action_chunk=prev_int["action"], ref_chunk=prev_int["ref"],
+                                    reward=0.0,  # intermediate, not terminal
+                                    next_z_rl=z_rl_snap, next_state=state_snap,
+                                    next_ref_chunk=human_chunk, done=False,
+                                )
+                                rlt_state["total_transitions"] += 1
+
+                            # action = ref = human_chunk (Paper Alg 1 line 11)
+                            rlt_state["_int_prev"] = {
+                                "z_rl": z_rl_snap,
+                                "state": state_snap,
+                                "action": human_chunk,
+                                "ref": human_chunk,
+                            }
+                        rlt_state["_int_chunk_buf"] = []
+
             else:
                 # --- POLICY MODE: S1 inference controls robot ---
                 if was_intervening:
@@ -911,9 +1169,18 @@ def run_s1(
                             teleop.enable_torque()
                         except ConnectionError as e:
                             logger.warning("S1: Failed to enable leader torque: %s", e)
-                    infer_thread.resume()
-                    assert not infer_thread.is_paused, \
-                        "BUG: inference thread still paused after resume"
+                    if rlt_mode:
+                        # Resume RLT collection — actor runs again
+                        infer_thread._rlt_active = True
+                        infer_thread._rlt_prev = None  # fresh start after intervention
+                        # Clear intervention chunk state
+                        rlt_state.pop("_int_prev", None)
+                        rlt_state.pop("_int_chunk_buf", None)
+                        logger.info("RLT: collection RESUMED (intervention ended)")
+                    else:
+                        infer_thread.resume()
+                        assert not infer_thread.is_paused, \
+                            "BUG: inference thread still paused after resume"
                     log_say("Policy")
 
                 # 3. Read latest chunk
@@ -1075,6 +1342,68 @@ def run_s1(
 
         recorded_episodes += 1
 
+        # RLT: episode bookkeeping
+        if rlt_mode and rlt_state is not None:
+            # Pause collection during reset + clear all state
+            infer_thread._rlt_active = False
+            infer_thread._rlt_prev = None
+            rlt_state.pop("_int_chunk_buf", None)
+            rlt_state.pop("_int_chunk_z_rl", None)
+            rlt_state.pop("_int_chunk_state", None)
+            rlt_state.pop("_int_frame_count", None)
+            rlt_state.pop("_int_prev", None)
+            logger.info("RLT: collection PAUSED (episode end)")
+
+            success = rlt_state["reward_triggered"]
+            had_intervention = rlt_state.get("_episode_had_intervention", False)
+            autonomous = success and not had_intervention
+            ep_duration = time.time() - episode_start
+
+            rlt_state["successes"].append(success)
+            rlt_state["episode"] += 1
+            recent = rlt_state["successes"][-20:]
+
+            auto_label = "AUTONOMOUS" if autonomous else ("ASSISTED" if success else "FAIL")
+            logger.info(
+                "RLT ep%d: %s (intervention=%s) | transitions=%d updates=%d "
+                "success_rate(20)=%.0f%% | %.1fs",
+                rlt_state["episode"], auto_label,
+                "yes" if had_intervention else "no",
+                rlt_state["total_transitions"], rlt_state["total_updates"],
+                np.mean(recent) * 100 if recent else 0,
+                ep_duration,
+            )
+            from lerobot.policies.hvla.rlt.metrics import get_metrics, save_metrics_to_file
+            get_metrics().record_episode(
+                rlt_state["episode"], success,
+                autonomous=not had_intervention,
+                duration_s=ep_duration,
+            )
+            save_metrics_to_file()
+
+            rlt_state["reward_triggered"] = False
+
+            # Save checkpoint
+            try:
+                save_dir = rlt_state["output_dir"] / "latest"
+                save_dir.mkdir(parents=True, exist_ok=True)
+                torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
+                torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
+                torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
+                torch.save({
+                    "actor_opt": rlt_agent.actor_opt.state_dict(),
+                    "critic_opt": rlt_agent.critic_opt.state_dict(),
+                    "episode": rlt_state["episode"],
+                    "total_transitions": rlt_state["total_transitions"],
+                    "total_updates": rlt_state["total_updates"],
+                    "successes": rlt_state["successes"],
+                }, save_dir / "training_state.pt")
+                rlt_replay.save(str(save_dir / "replay_buffer.pt"))
+                logger.info("RLT: Saved checkpoint → %s (ep=%d, buf=%d, updates=%d)",
+                            save_dir, rlt_state["episode"], len(rlt_replay), rlt_state["total_updates"])
+            except Exception as e:
+                logger.error("RLT: Failed to save checkpoint: %s", e)
+
         # Reset tracking state for next episode
         prev_action_np = None
         action_deltas.clear()
@@ -1106,6 +1435,25 @@ def run_s1(
                 logger.warning("S1: Failed to finalize intervention dataset: %s", e)
         if listener is not None:
             listener.stop()
+        # RLT: final save
+        if rlt_mode and rlt_agent is not None:
+            save_dir = rlt_state["output_dir"] / "latest"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
+            torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
+            torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
+            torch.save({
+                "actor_opt": rlt_agent.actor_opt.state_dict(),
+                "critic_opt": rlt_agent.critic_opt.state_dict(),
+                "episode": rlt_state["episode"],
+                "total_transitions": rlt_state["total_transitions"],
+                "total_updates": rlt_state["total_updates"],
+                "successes": rlt_state["successes"],
+            }, save_dir / "training_state.pt")
+            rlt_replay.save(str(save_dir / "replay_buffer.pt"))
+            from lerobot.policies.hvla.rlt.metrics import save_metrics_to_file
+            save_metrics_to_file()
+            logger.info("RLT: Final checkpoint → %s", save_dir)
         _soft_land(robot)
         if teleop is not None:
             try:

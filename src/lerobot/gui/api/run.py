@@ -164,6 +164,11 @@ class HVLARunRequest(BaseModel):
     reset_time_s: float = 20
     teleop: dict[str, Any] | None = None
     intervention_dataset: str | None = None
+    # RLT
+    rlt_mode: bool = False
+    rl_token_checkpoint: str | None = None
+    rl_chunk_length: int = 10
+    rlt_output_dir: str = "outputs/rlt_online"
 
 
 # ============================================================================
@@ -602,8 +607,36 @@ async def start_hvla(req: HVLARunRequest) -> dict:
     if req.intervention_dataset:
         args.append(f"--intervention-dataset={req.intervention_dataset}")
 
+    # RLT
+    if req.rlt_mode:
+        args.append("--rlt-mode")
+        if req.rl_token_checkpoint:
+            args.append(f"--rl-token-checkpoint={Path(req.rl_token_checkpoint).expanduser()}")
+        args.append(f"--rl-chunk-length={req.rl_chunk_length}")
+        args.append(f"--rlt-output-dir={req.rlt_output_dir}")
+        # RLT needs multi-episode mode
+        if not req.record_dataset:
+            args.append(f"--num-episodes={req.num_episodes}")
+            args.append(f"--episode-time-s={req.episode_time_s}")
+            args.append(f"--reset-time-s={req.reset_time_s}")
+
     await _launch_subprocess(args, command="hvla", config=req.model_dump())
     return {"status": "started", "command": "hvla", "pid": _active_process.pid}
+
+
+@router.get("/rlt-metrics")
+async def get_rlt_metrics() -> dict:
+    """Return current RLT training metrics from file (cross-process)."""
+    try:
+        from lerobot.policies.hvla.rlt.metrics import load_metrics_from_file
+        data = load_metrics_from_file()
+        if data:
+            return data
+    except Exception as e:
+        logger.warning("RLT metrics read failed: %s", e)
+    return {"episode": 0, "step_count": 0, "buffer_size": 0,
+            "total_updates": 0, "mode": "IDLE", "success_rate": 0,
+            "total_successes": 0, "total_episodes": 0, "series": {}}
 
 
 @router.post("/stop")
