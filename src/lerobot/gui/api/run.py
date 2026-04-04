@@ -164,10 +164,12 @@ class HVLARunRequest(BaseModel):
     reset_time_s: float = 20
     teleop: dict[str, Any] | None = None
     intervention_dataset: str | None = None
-    # RLT
+    # RLT (RL Token)
     rlt_mode: bool = False
-    rl_token_checkpoint: str | None = None
-    rl_chunk_length: int = 10
+    rlt_token_checkpoint: str | None = None  # Phase 1: RL token encoder
+    rlt_checkpoint: str | None = None        # Phase 2: existing actor checkpoint dir
+    rlt_deploy: bool = False                 # True = inference only, no training
+    rlt_chunk_length: int = 10
     rlt_output_dir: str = "outputs/rlt_online"
 
 
@@ -610,9 +612,13 @@ async def start_hvla(req: HVLARunRequest) -> dict:
     # RLT
     if req.rlt_mode:
         args.append("--rlt-mode")
-        if req.rl_token_checkpoint:
-            args.append(f"--rl-token-checkpoint={Path(req.rl_token_checkpoint).expanduser()}")
-        args.append(f"--rl-chunk-length={req.rl_chunk_length}")
+        if req.rlt_token_checkpoint:
+            args.append(f"--rl-token-checkpoint={Path(req.rlt_token_checkpoint).expanduser()}")
+        if req.rlt_checkpoint:
+            args.append(f"--rlt-checkpoint={Path(req.rlt_checkpoint).expanduser()}")
+        if req.rlt_deploy:
+            args.append("--rlt-deploy")
+        args.append(f"--rl-chunk-length={req.rlt_chunk_length}")
         args.append(f"--rlt-output-dir={req.rlt_output_dir}")
         # RLT needs multi-episode mode
         if not req.record_dataset:
