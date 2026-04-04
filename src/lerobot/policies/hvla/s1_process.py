@@ -337,6 +337,8 @@ def run_s1(
     # RLT parameters
     rlt_mode: bool = False,
     rl_token_checkpoint: str | None = None,
+    rlt_checkpoint: str | None = None,
+    rlt_deploy: bool = False,
     rl_chunk_length: int = 10,
     rlt_output_dir: str = "outputs/rlt_online",
 ):
@@ -524,13 +526,32 @@ def run_s1(
             rl_chunk_length=rl_chunk_length,
         )
         rl_token_encoder = RLTokenEncoder(rlt_config).to(device)
-        if rl_token_checkpoint:
-            ckpt_path = Path(rl_token_checkpoint)
+
+        # Resolve RL token encoder checkpoint:
+        # 1. Explicit --rl-token-checkpoint
+        # 2. Saved in training_state.pt of the RLT checkpoint
+        # 3. None (encoder stays random — won't work, but doesn't crash)
+        resolved_token_ckpt = rl_token_checkpoint
+        if not resolved_token_ckpt and rlt_checkpoint:
+            ts_path = Path(rlt_checkpoint) / "training_state.pt"
+            if ts_path.exists():
+                try:
+                    ts = torch.load(str(ts_path), weights_only=False, map_location=device)
+                    resolved_token_ckpt = ts.get("rlt_token_checkpoint")
+                    if resolved_token_ckpt:
+                        logger.info("RLT: Auto-discovered token encoder from checkpoint: %s", resolved_token_ckpt)
+                except Exception as e:
+                    logger.warning("RLT: Failed to read token path from training state: %s", e)
+
+        if resolved_token_ckpt:
+            ckpt_path = Path(resolved_token_ckpt)
             enc_file = ckpt_path / "encoder.pt" if ckpt_path.is_dir() else ckpt_path
             rl_token_encoder.load_state_dict(
                 torch.load(str(enc_file), weights_only=True, map_location=device)
             )
             logger.info("S1 RLT: Loaded RL token encoder from %s", enc_file)
+        else:
+            logger.warning("RLT: No RL token encoder checkpoint — z_rl will be random (unusable)")
         rl_token_encoder.eval()
         for p in rl_token_encoder.parameters():
             p.requires_grad = False
@@ -538,20 +559,28 @@ def run_s1(
         action_dim = policy.config.action_dim
         state_dim = policy.config.state_dim
         rlt_agent = TD3Agent(rlt_config, state_dim, action_dim, device)
-        rlt_replay = ReplayBuffer(
-            rlt_config.replay_capacity, rlt_config.rl_token_dim,
-            state_dim, action_dim, rl_chunk_length, device,
-        )
+
+        # Deploy mode: actor only, no critic/replay/training
+        if rlt_deploy:
+            assert rlt_checkpoint, "--rlt-deploy requires --rlt-checkpoint (which actor to deploy?)"
+            rlt_replay = None
+        else:
+            rlt_replay = ReplayBuffer(
+                rlt_config.replay_capacity, rlt_config.rl_token_dim,
+                state_dim, action_dim, rl_chunk_length, device,
+            )
+
         rlt_state = {
             "config": rlt_config, "episode": 0,
             "total_updates": 0, "total_transitions": 0,
             "successes": [], "reward_triggered": False,
             "output_dir": Path(rlt_output_dir),
+            "deploy": rlt_deploy,
         }
         rlt_state["output_dir"].mkdir(parents=True, exist_ok=True)
 
         # Log file
-        rlt_log_file = rlt_state["output_dir"] / "train.log"
+        rlt_log_file = rlt_state["output_dir"] / ("deploy.log" if rlt_deploy else "train.log")
         _rlt_fh = logging.FileHandler(str(rlt_log_file), mode="a")
         _rlt_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
         logging.getLogger().addHandler(_rlt_fh)
@@ -561,32 +590,43 @@ def run_s1(
         from lerobot.policies.hvla.rlt.metrics import set_metrics_path
         set_metrics_path(str(rlt_state["output_dir"] / "metrics.json"))
 
-        # Auto-resume
-        latest_dir = rlt_state["output_dir"] / "latest"
-        if (latest_dir / "actor.pt").exists():
-            from lerobot.policies.hvla.rlt.metrics import get_metrics
+        # Load checkpoint: explicit path (--rlt-checkpoint) or auto-resume from output_dir/latest
+        load_dir = None
+        if rlt_checkpoint:
+            load_dir = Path(rlt_checkpoint)
+        else:
+            latest_dir = rlt_state["output_dir"] / "latest"
+            if (latest_dir / "actor.pt").exists():
+                load_dir = latest_dir
+
+        if load_dir and (load_dir / "actor.pt").exists():
             rlt_agent.actor.load_state_dict(
-                torch.load(str(latest_dir / "actor.pt"), weights_only=True, map_location=device))
-            rlt_agent.critic.load_state_dict(
-                torch.load(str(latest_dir / "critic.pt"), weights_only=True, map_location=device))
-            if (latest_dir / "critic_target.pt").exists():
-                rlt_agent.critic_target.load_state_dict(
-                    torch.load(str(latest_dir / "critic_target.pt"), weights_only=True, map_location=device))
-            if (latest_dir / "training_state.pt").exists():
-                ts = torch.load(str(latest_dir / "training_state.pt"), weights_only=True, map_location=device)
-                rlt_agent.actor_opt.load_state_dict(ts["actor_opt"])
-                rlt_agent.critic_opt.load_state_dict(ts["critic_opt"])
-                rlt_state["episode"] = ts["episode"]
-                rlt_state["total_transitions"] = ts["total_transitions"]
-                rlt_state["total_updates"] = ts["total_updates"]
-                rlt_state["successes"] = ts["successes"]
-            if (latest_dir / "replay_buffer.pt").exists():
-                rlt_replay.load(str(latest_dir / "replay_buffer.pt"))
+                torch.load(str(load_dir / "actor.pt"), weights_only=True, map_location=device))
+            if not rlt_deploy:
+                # Training mode: load critic, optimizer, replay buffer
+                if (load_dir / "critic.pt").exists():
+                    rlt_agent.critic.load_state_dict(
+                        torch.load(str(load_dir / "critic.pt"), weights_only=True, map_location=device))
+                if (load_dir / "critic_target.pt").exists():
+                    rlt_agent.critic_target.load_state_dict(
+                        torch.load(str(load_dir / "critic_target.pt"), weights_only=True, map_location=device))
+                if (load_dir / "training_state.pt").exists():
+                    ts = torch.load(str(load_dir / "training_state.pt"), weights_only=True, map_location=device)
+                    rlt_agent.actor_opt.load_state_dict(ts["actor_opt"])
+                    rlt_agent.critic_opt.load_state_dict(ts["critic_opt"])
+                    rlt_state["episode"] = ts["episode"]
+                    rlt_state["total_transitions"] = ts["total_transitions"]
+                    rlt_state["total_updates"] = ts["total_updates"]
+                    rlt_state["successes"] = ts["successes"]
+                if rlt_replay and (load_dir / "replay_buffer.pt").exists():
+                    rlt_replay.load(str(load_dir / "replay_buffer.pt"))
+
             # Restore metrics
             import json, os
             metrics_path = str(rlt_state["output_dir"] / "metrics.json")
             if os.path.exists(metrics_path):
                 try:
+                    from lerobot.policies.hvla.rlt.metrics import get_metrics
                     with open(metrics_path) as f:
                         saved = json.load(f)
                     m = get_metrics()
@@ -616,8 +656,11 @@ def run_s1(
                     logger.info("RLT: Restored metrics from %s", metrics_path)
                 except Exception as e:
                     logger.warning("RLT: Failed to restore metrics: %s", e)
-            logger.info("RLT: Resumed from %s (ep=%d, buf=%d, updates=%d)",
-                        latest_dir, rlt_state["episode"], len(rlt_replay), rlt_state["total_updates"])
+
+            mode_str = "DEPLOY" if rlt_deploy else "TRAIN"
+            logger.info("RLT: %s mode — loaded from %s (ep=%d, updates=%d)",
+                        mode_str, load_dir, rlt_state["episode"],
+                        rlt_state["total_updates"])
         else:
             logger.info(
                 "S1 RLT: Online RL enabled — C=%d, UTD=%d, beta=%.2f, sigma=%.3f",
@@ -1383,26 +1426,28 @@ def run_s1(
 
             rlt_state["reward_triggered"] = False
 
-            # Save checkpoint
-            try:
-                save_dir = rlt_state["output_dir"] / "latest"
-                save_dir.mkdir(parents=True, exist_ok=True)
-                torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
-                torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
-                torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
-                torch.save({
-                    "actor_opt": rlt_agent.actor_opt.state_dict(),
-                    "critic_opt": rlt_agent.critic_opt.state_dict(),
-                    "episode": rlt_state["episode"],
-                    "total_transitions": rlt_state["total_transitions"],
-                    "total_updates": rlt_state["total_updates"],
-                    "successes": rlt_state["successes"],
-                }, save_dir / "training_state.pt")
-                rlt_replay.save(str(save_dir / "replay_buffer.pt"))
-                logger.info("RLT: Saved checkpoint → %s (ep=%d, buf=%d, updates=%d)",
-                            save_dir, rlt_state["episode"], len(rlt_replay), rlt_state["total_updates"])
-            except Exception as e:
-                logger.error("RLT: Failed to save checkpoint: %s", e)
+            # Save checkpoint (training mode only)
+            if not rlt_state.get("deploy"):
+                try:
+                    save_dir = rlt_state["output_dir"] / "latest"
+                    save_dir.mkdir(parents=True, exist_ok=True)
+                    torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
+                    torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
+                    torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
+                    torch.save({
+                        "actor_opt": rlt_agent.actor_opt.state_dict(),
+                        "critic_opt": rlt_agent.critic_opt.state_dict(),
+                        "episode": rlt_state["episode"],
+                        "total_transitions": rlt_state["total_transitions"],
+                        "total_updates": rlt_state["total_updates"],
+                        "successes": rlt_state["successes"],
+                        "rlt_token_checkpoint": rl_token_checkpoint,
+                    }, save_dir / "training_state.pt")
+                    rlt_replay.save(str(save_dir / "replay_buffer.pt"))
+                    logger.info("RLT: Saved checkpoint → %s (ep=%d, buf=%d, updates=%d)",
+                                save_dir, rlt_state["episode"], len(rlt_replay), rlt_state["total_updates"])
+                except Exception as e:
+                    logger.error("RLT: Failed to save checkpoint: %s", e)
 
         # Reset tracking state for next episode
         prev_action_np = None
@@ -1435,25 +1480,28 @@ def run_s1(
                 logger.warning("S1: Failed to finalize intervention dataset: %s", e)
         if listener is not None:
             listener.stop()
-        # RLT: final save
-        if rlt_mode and rlt_agent is not None:
-            save_dir = rlt_state["output_dir"] / "latest"
-            save_dir.mkdir(parents=True, exist_ok=True)
-            torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
-            torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
-            torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
-            torch.save({
-                "actor_opt": rlt_agent.actor_opt.state_dict(),
-                "critic_opt": rlt_agent.critic_opt.state_dict(),
-                "episode": rlt_state["episode"],
-                "total_transitions": rlt_state["total_transitions"],
-                "total_updates": rlt_state["total_updates"],
-                "successes": rlt_state["successes"],
-            }, save_dir / "training_state.pt")
-            rlt_replay.save(str(save_dir / "replay_buffer.pt"))
-            from lerobot.policies.hvla.rlt.metrics import save_metrics_to_file
-            save_metrics_to_file()
-            logger.info("RLT: Final checkpoint → %s", save_dir)
+        # RLT: final save (training mode only)
+        if rlt_mode and rlt_agent is not None and not rlt_state.get("deploy"):
+            try:
+                save_dir = rlt_state["output_dir"] / "latest"
+                save_dir.mkdir(parents=True, exist_ok=True)
+                torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
+                torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
+                torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
+                torch.save({
+                    "actor_opt": rlt_agent.actor_opt.state_dict(),
+                    "critic_opt": rlt_agent.critic_opt.state_dict(),
+                    "episode": rlt_state["episode"],
+                    "total_transitions": rlt_state["total_transitions"],
+                    "total_updates": rlt_state["total_updates"],
+                    "successes": rlt_state["successes"],
+                }, save_dir / "training_state.pt")
+                rlt_replay.save(str(save_dir / "replay_buffer.pt"))
+                from lerobot.policies.hvla.rlt.metrics import save_metrics_to_file
+                save_metrics_to_file()
+                logger.info("RLT: Final checkpoint → %s", save_dir)
+            except Exception as e:
+                logger.error("RLT: Failed to save final checkpoint: %s", e)
         _soft_land(robot)
         if teleop is not None:
             try:
