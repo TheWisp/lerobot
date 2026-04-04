@@ -617,12 +617,16 @@ function _updateHVLAFieldsVisibility() {
     const standardSection = document.getElementById('run-policy-standard-fields');
     if (hvlaSection) hvlaSection.style.display = isHVLA ? '' : 'none';
     if (standardSection) standardSection.style.display = isHVLA ? 'none' : '';
-    if (isHVLA) _toggleHvlaRecordFields();
+    if (isHVLA) {
+        _toggleHvlaRecordFields();
+        _refreshRltCheckpoints();
+    }
 }
 
 function _toggleHvlaRecordFields() {
     const hasDataset = !!document.getElementById('run-hvla-record-dataset')?.value?.trim();
-    const rltEnabled = document.getElementById('run-hvla-rlt-mode')?.checked;
+    const rltVal = document.getElementById('run-hvla-rlt-select')?.value || '';
+    const rltEnabled = rltVal !== '';
     const enableEpFields = hasDataset || rltEnabled;
     for (const id of ['run-hvla-episodes', 'run-hvla-episode-time', 'run-hvla-reset-time']) {
         const el = document.getElementById(id);
@@ -630,13 +634,62 @@ function _toggleHvlaRecordFields() {
     }
 }
 
-function _toggleHvlaRltFields() {
-    const enabled = document.getElementById('run-hvla-rlt-mode')?.checked;
-    for (const id of ['run-hvla-rlt-checkpoint', 'run-hvla-rlt-chunk-length', 'run-hvla-rlt-output-dir']) {
+function _onRltSelectChange() {
+    const sel = document.getElementById('run-hvla-rlt-select');
+    const val = sel?.value || '';
+    const isNew = val === '__new__';
+    const isExisting = val && !isNew;
+
+    // Token encoder: shown for both New and Existing (auto-discovery may fail for old checkpoints)
+    for (const id of ['run-hvla-rlt-token-label', 'run-hvla-rlt-token-ckpt']) {
         const el = document.getElementById(id);
-        if (el) el.disabled = !enabled;
+        if (el) el.style.display = (isNew || isExisting) ? '' : 'none';
+    }
+    // Output dir: only for New training
+    for (const id of ['run-hvla-rlt-outdir-label', 'run-hvla-rlt-output-dir']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = isNew ? '' : 'none';
+    }
+    // Existing checkpoint fields
+    for (const id of ['run-hvla-rlt-mode-label', 'run-hvla-rlt-run-mode']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = isExisting ? '' : 'none';
+    }
+    // Common fields (chunk length)
+    for (const id of ['run-hvla-rlt-chunk-label', 'run-hvla-rlt-chunk-length']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = (isNew || isExisting) ? '' : 'none';
     }
     _toggleHvlaRecordFields();
+}
+
+async function _refreshRltCheckpoints() {
+    try {
+        const res = await fetch('/api/models/rlt-checkpoints');
+        if (!res.ok) return;
+        const checkpoints = await res.json();
+        const sel = document.getElementById('run-hvla-rlt-select');
+        if (!sel) return;
+        // Preserve current selection
+        const currentVal = sel.value;
+        // Keep None and New options, replace the rest
+        sel.innerHTML = '<option value="">None (no RL)</option><option value="__new__">+ New training...</option>';
+        for (const ckpt of checkpoints) {
+            const label = ckpt.name + (ckpt.episode ? ` (ep ${ckpt.episode})` : '');
+            const opt = document.createElement('option');
+            opt.value = ckpt.path;
+            opt.textContent = label;
+            opt.dataset.hasReplayBuffer = ckpt.has_replay_buffer || false;
+            opt.dataset.hasCritic = ckpt.has_critic || false;
+            sel.appendChild(opt);
+        }
+        // Restore selection if still valid
+        if (currentVal && [...sel.options].some(o => o.value === currentVal)) {
+            sel.value = currentVal;
+        }
+    } catch (e) {
+        console.warn('Failed to fetch RLT checkpoints:', e);
+    }
 }
 
 function _onPolicyCheckpointChange() {
@@ -873,14 +926,25 @@ function renderRunForm() {
     html += '<div class="form-section">';
     html += '<div class="form-section-title">RLT Online RL</div>';
     html += '<div class="form-grid">';
-    html += `<label>Enable RLT</label>`;
-    html += `<label class="toggle-label"><input type="checkbox" id="run-hvla-rlt-mode" onchange="_toggleHvlaRltFields()"> Online RL (R=reward, SPACE=intervene)</label>`;
-    html += `<label>RL Token Checkpoint</label>`;
-    html += `<input type="text" id="run-hvla-rlt-checkpoint" placeholder="outputs/rlt_token_v2/checkpoint-10000" value="" disabled>`;
-    html += `<label>RL Chunk Length</label>`;
-    html += `<input type="number" id="run-hvla-rlt-chunk-length" value="10" min="1" max="50" disabled>`;
-    html += `<label>Output Directory</label>`;
-    html += `<input type="text" id="run-hvla-rlt-output-dir" value="outputs/rlt_online" disabled>`;
+    html += `<label>RL Checkpoint</label>`;
+    html += `<select id="run-hvla-rlt-select" onchange="_onRltSelectChange()">`;
+    html += `<option value="">None (no RL)</option>`;
+    html += `<option value="__new__">+ New training...</option>`;
+    html += `</select>`;
+    // Fields shown when New is selected
+    html += `<label id="run-hvla-rlt-token-label" style="display:none">RL Token Encoder</label>`;
+    html += `<input type="text" id="run-hvla-rlt-token-ckpt" placeholder="outputs/rlt_token_v2/checkpoint-10000" style="display:none">`;
+    html += `<label id="run-hvla-rlt-outdir-label" style="display:none">Output Directory</label>`;
+    html += `<input type="text" id="run-hvla-rlt-output-dir" value="outputs/rlt_online" style="display:none">`;
+    // Fields shown when existing checkpoint selected
+    html += `<label id="run-hvla-rlt-mode-label" style="display:none">Mode</label>`;
+    html += `<select id="run-hvla-rlt-run-mode" style="display:none">`;
+    html += `<option value="train">Train (continue learning)</option>`;
+    html += `<option value="deploy">Deploy (inference only)</option>`;
+    html += `</select>`;
+    // Common fields
+    html += `<label id="run-hvla-rlt-chunk-label" style="display:none">Chunk Length</label>`;
+    html += `<input type="number" id="run-hvla-rlt-chunk-length" value="10" min="1" max="50" style="display:none">`;
     html += '</div>';
     html += '</div>';
     html += '</div>';
@@ -1160,10 +1224,29 @@ async function launchRun() {
                 reset_time_s: parseFloat(document.getElementById('run-hvla-reset-time')?.value) || 20,
                 teleop: hvlaTeleopData,
                 intervention_dataset: intDs,
-                rlt_mode: document.getElementById('run-hvla-rlt-mode')?.checked || false,
-                rl_token_checkpoint: document.getElementById('run-hvla-rlt-checkpoint')?.value?.trim() || null,
-                rl_chunk_length: parseInt(document.getElementById('run-hvla-rlt-chunk-length')?.value) || 10,
-                rlt_output_dir: document.getElementById('run-hvla-rlt-output-dir')?.value?.trim() || 'outputs/rlt_online',
+                ...(() => {
+                    const rltSel = document.getElementById('run-hvla-rlt-select');
+                    const rltVal = rltSel?.value || '';
+                    if (!rltVal) return {};  // None selected
+                    if (rltVal === '__new__') {
+                        return {
+                            rlt_mode: true,
+                            rlt_token_checkpoint: document.getElementById('run-hvla-rlt-token-ckpt')?.value?.trim() || null,
+                            rl_chunk_length: parseInt(document.getElementById('run-hvla-rlt-chunk-length')?.value) || 10,
+                            rlt_output_dir: document.getElementById('run-hvla-rlt-output-dir')?.value?.trim() || 'outputs/rlt_online',
+                        };
+                    }
+                    // Existing checkpoint
+                    const runMode = document.getElementById('run-hvla-rlt-run-mode')?.value || 'train';
+                    return {
+                        rlt_mode: true,
+                        rlt_checkpoint: rltVal,  // path to existing actor.pt directory
+                        rlt_token_checkpoint: document.getElementById('run-hvla-rlt-token-ckpt')?.value?.trim() || null,
+                        rlt_deploy: runMode === 'deploy',
+                        rl_chunk_length: parseInt(document.getElementById('run-hvla-rlt-chunk-length')?.value) || 10,
+                        rlt_output_dir: rltVal,  // same dir for continued training
+                    };
+                })(),
             };
         } else {
             // ---- Standard policy dispatch ----

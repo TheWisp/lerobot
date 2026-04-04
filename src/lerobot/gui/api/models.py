@@ -281,6 +281,14 @@ def _scan_recursive(
                 found.append(meta)
             return
 
+        # Check if this is an RLT checkpoint dir (actor.pt)
+        # Hidden from main model browser, listed separately for HVLA form
+        if (current / "actor.pt").is_file():
+            meta = _read_rlt_checkpoint(current, base)
+            if meta:
+                found.append(meta)
+            return
+
         # Recurse
         if depth < max_depth:
             for child in sorted(current.iterdir()):
@@ -290,6 +298,38 @@ def _scan_recursive(
         pass
     except Exception:
         pass
+
+
+def _read_rlt_checkpoint(ckpt_dir: Path, base: Path) -> dict | None:
+    """Read metadata from an RLT checkpoint (actor.pt + optional training_state.pt)."""
+    meta = {
+        "type": "rlt",
+        "path": str(ckpt_dir),
+        "policyType": "rlt",
+    }
+    try:
+        meta["name"] = str(ckpt_dir.relative_to(base))
+    except ValueError:
+        meta["name"] = str(ckpt_dir)
+
+    # Read training state if available
+    ts_path = ckpt_dir / "training_state.pt"
+    if ts_path.exists():
+        try:
+            import torch
+            ts = torch.load(str(ts_path), weights_only=True, map_location="cpu")
+            meta["episode"] = ts.get("episode", 0)
+            meta["updates"] = ts.get("total_updates", 0)
+            meta["successes"] = sum(ts.get("successes", []))
+        except Exception as e:
+            logger.warning("Failed to read RLT training state from %s: %s", ts_path, e)
+
+    # Check for RL token encoder in parent or sibling dirs
+    # (convention: rlt_token checkpoint is separate from actor checkpoint)
+    meta["has_replay_buffer"] = (ckpt_dir / "replay_buffer.pt").exists()
+    meta["has_critic"] = (ckpt_dir / "critic.pt").exists()
+
+    return meta
 
 
 # ============================================================================
@@ -401,7 +441,25 @@ async def scan_source(encoded_path: str) -> list[ModelSourceEntry]:
 
     loop = asyncio.get_event_loop()
     models = await loop.run_in_executor(None, _scan_source, path)
+    # Filter out RLT checkpoints from main browser (they show in HVLA form instead)
+    models = [m for m in models if m.get("type") != "rlt"]
     return [ModelSourceEntry(**{k: v for k, v in m.items() if k != "checkpoints"}) for m in models]
+
+
+@router.get("/rlt-checkpoints")
+async def list_rlt_checkpoints() -> list[dict]:
+    """List RLT checkpoints across all source directories."""
+    import asyncio
+
+    sources = _read_sources()
+    all_rlt = []
+
+    loop = asyncio.get_event_loop()
+    for s in sources:
+        models = await loop.run_in_executor(None, _scan_source, s["path"])
+        all_rlt.extend(m for m in models if m.get("type") == "rlt")
+
+    return all_rlt
 
 
 @router.get("/run/{encoded_path:path}/checkpoints")
