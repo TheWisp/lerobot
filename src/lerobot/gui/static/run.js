@@ -1803,6 +1803,7 @@ function _startRLTPoll() {
     _showRLTab(true);
     _rltPollTimer = setInterval(_fetchRLTMetrics, 2000);
     _fetchRLTMetrics();
+    _initRLTSliders();
 }
 
 function _stopRLTPoll() {
@@ -1849,6 +1850,47 @@ function _updateRLTDashboard(data) {
     // Critic loss chart
     if (s.critic_losses && s.critic_losses.length > 0)
         _drawSparkline('rlt-chart-critic', s.critic_losses, '#f39c12');
+}
+
+let _rltConfigTimer = null;
+function _initRLTSliders() {
+    const controls = document.getElementById('rlt-controls');
+    if (controls) controls.style.display = '';
+
+    const betaSlider = document.getElementById('rlt-slider-beta');
+    const sigmaSlider = document.getElementById('rlt-slider-sigma');
+    const betaVal = document.getElementById('rlt-slider-beta-val');
+    const sigmaVal = document.getElementById('rlt-slider-sigma-val');
+
+    if (betaSlider) {
+        betaSlider.oninput = () => {
+            betaVal.textContent = parseFloat(betaSlider.value).toFixed(2);
+            _sendRLTConfig();
+        };
+    }
+    if (sigmaSlider) {
+        sigmaSlider.oninput = () => {
+            sigmaVal.textContent = parseFloat(sigmaSlider.value).toFixed(3);
+            _sendRLTConfig();
+        };
+    }
+}
+
+function _sendRLTConfig() {
+    // Debounce: wait 300ms after last change before sending
+    if (_rltConfigTimer) clearTimeout(_rltConfigTimer);
+    _rltConfigTimer = setTimeout(async () => {
+        const beta = parseFloat(document.getElementById('rlt-slider-beta')?.value);
+        const sigma = parseFloat(document.getElementById('rlt-slider-sigma')?.value);
+        if (isNaN(beta) || isNaN(sigma)) return;
+        try {
+            await fetch('/api/run/rlt-config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({beta, actor_sigma: sigma}),
+            });
+        } catch (e) { /* ignore */ }
+    }, 300);
 }
 
 function _drawSparkline(canvasId, data, color, fixedMin, fixedMax, percentage) {

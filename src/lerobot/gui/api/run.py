@@ -645,6 +645,34 @@ async def get_rlt_metrics() -> dict:
             "total_successes": 0, "total_episodes": 0, "series": {}}
 
 
+@router.post("/rlt-config")
+async def set_rlt_config(body: dict) -> dict:
+    """Write RLT config overrides for the training subprocess to pick up."""
+    import json as _json
+    if not _active_config or not _active_config.get("rlt_output_dir"):
+        raise HTTPException(409, "No active RLT session")
+    # Validate: only known keys, numeric values in range
+    allowed = {"beta": (0.0, 10.0), "actor_sigma": (0.0, 1.0)}
+    filtered = {}
+    for key, (lo, hi) in allowed.items():
+        if key in body:
+            val = float(body[key])
+            filtered[key] = max(lo, min(hi, val))
+    if not filtered:
+        raise HTTPException(400, f"No valid keys. Allowed: {list(allowed)}")
+    override_path = Path(_active_config["rlt_output_dir"]) / "rlt_overrides.json"
+    try:
+        tmp = str(override_path) + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump(filtered, f)
+        os.replace(tmp, str(override_path))
+        logger.info("RLT config override written: %s", filtered)
+        return {"status": "ok", **filtered}
+    except Exception as e:
+        logger.warning("RLT config write failed: %s", e)
+        raise HTTPException(500, str(e))
+
+
 @router.post("/stop")
 async def stop_process() -> dict:
     global _active_process, _active_command, _active_config

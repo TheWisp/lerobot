@@ -215,6 +215,33 @@ class InferenceThread:
             )
             save_metrics_to_file()
 
+    def _rlt_check_config_overrides(self):
+        """Check for GUI config overrides (beta, sigma sliders).
+        Called each gradient step — cost is one stat() syscall (~1us)."""
+        import json as _json
+        override_path = self._rlt_state["output_dir"] / "rlt_overrides.json"
+        try:
+            mtime = override_path.stat().st_mtime
+        except OSError:
+            return
+        last = getattr(self, "_rlt_override_mtime", 0)
+        if mtime <= last:
+            return
+        self._rlt_override_mtime = mtime
+        try:
+            with open(override_path) as f:
+                overrides = _json.load(f)
+            cfg = self._rlt_state["config"]
+            for key in ("beta", "actor_sigma"):
+                if key in overrides:
+                    old = getattr(cfg, key)
+                    new = float(overrides[key])
+                    if old != new:
+                        setattr(cfg, key, new)
+                        logger.info("RLT config override: %s %.4f → %.4f", key, old, new)
+        except Exception as e:
+            logger.warning("RLT config override read failed: %s", e)
+
     def _rlt_gradient_updates(self):
         """Run UTD gradient steps during query interval idle time.
         Paper: UTD=5, two critic updates per actor update.
@@ -223,6 +250,7 @@ class InferenceThread:
         import time as _time
         t0 = _time.perf_counter()
 
+        self._rlt_check_config_overrides()
         cfg = self._rlt_state["config"]
         C = cfg.rl_chunk_length
         A_flat = self._rlt_replay._action.shape[1]

@@ -603,6 +603,7 @@ def run_s1(
                 load_dir = latest_dir
 
         if load_dir and (load_dir / "actor.pt").exists():
+            logger.info("RLT: Loading checkpoint from %s", load_dir)
             rlt_agent.actor.load_state_dict(
                 torch.load(str(load_dir / "actor.pt"), weights_only=True, map_location=device))
             if not rlt_deploy:
@@ -610,9 +611,13 @@ def run_s1(
                 if (load_dir / "critic.pt").exists():
                     rlt_agent.critic.load_state_dict(
                         torch.load(str(load_dir / "critic.pt"), weights_only=True, map_location=device))
+                else:
+                    logger.warning("RLT: critic.pt not found, using random init")
                 if (load_dir / "critic_target.pt").exists():
                     rlt_agent.critic_target.load_state_dict(
                         torch.load(str(load_dir / "critic_target.pt"), weights_only=True, map_location=device))
+                else:
+                    logger.warning("RLT: critic_target.pt not found, using random init")
                 if (load_dir / "training_state.pt").exists():
                     ts = torch.load(str(load_dir / "training_state.pt"), weights_only=True, map_location=device)
                     rlt_agent.actor_opt.load_state_dict(ts["actor_opt"])
@@ -621,9 +626,16 @@ def run_s1(
                     rlt_state["total_transitions"] = ts["total_transitions"]
                     rlt_state["total_updates"] = ts["total_updates"]
                     rlt_state["successes"] = ts["successes"]
+                    logger.info("RLT: Loaded training state (ep=%d, updates=%d)",
+                                rlt_state["episode"], rlt_state["total_updates"])
+                else:
+                    logger.warning("RLT: training_state.pt not found, starting from ep=0")
                 if rlt_replay is not None and (load_dir / "replay_buffer.pt").exists():
                     rlt_replay.load(str(load_dir / "replay_buffer.pt"))
                     logger.info("RLT: Loaded replay buffer (%d transitions)", len(rlt_replay))
+                else:
+                    logger.warning("RLT: replay buffer not loaded (replay=%s, file exists=%s)",
+                                   rlt_replay is not None, (load_dir / "replay_buffer.pt").exists())
 
             # Restore metrics
             import json, os
@@ -964,6 +976,15 @@ def run_s1(
             for step in obs_processor_steps:
                 obs = step.observation(obs)
             t_now = time.perf_counter()
+
+            # Runtime check: inference thread must be alive
+            if not infer_thread._thread.is_alive():
+                logger.critical(
+                    "S1: Inference thread DIED — stopping episode. "
+                    "Check logs above for the exception."
+                )
+                events["exit_early"] = True
+                break
 
             # 2. Deep-copy image arrays before publishing. Camera background
             # threads continuously overwrite their frame buffers; without a

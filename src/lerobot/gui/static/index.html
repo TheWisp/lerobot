@@ -187,6 +187,16 @@
                                 <span class="rlt-stat">Buffer: <b id="rlt-stat-buffer">0</b></span>
                                 <span class="rlt-stat">Updates: <b id="rlt-stat-updates">0</b></span>
                             </div>
+                            <div class="rlt-controls" id="rlt-controls" style="display:none">
+                                <label class="rlt-slider-label">β (BC weight)
+                                    <input type="range" id="rlt-slider-beta" min="0" max="2" step="0.01" value="0.1">
+                                    <span id="rlt-slider-beta-val">0.10</span>
+                                </label>
+                                <label class="rlt-slider-label">σ (exploration)
+                                    <input type="range" id="rlt-slider-sigma" min="0" max="0.1" step="0.001" value="0.02">
+                                    <span id="rlt-slider-sigma-val">0.020</span>
+                                </label>
+                            </div>
                             <div class="rlt-charts">
                                 <div class="rlt-chart-box">
                                     <div class="rlt-chart-title">Autonomous Success Rate (rolling 20)</div>
