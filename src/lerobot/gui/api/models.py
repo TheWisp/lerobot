@@ -281,11 +281,16 @@ def _scan_recursive(
                 found.append(meta)
             return
 
-        # Check if this is an RLT checkpoint dir (actor.pt)
-        # Hidden from main model browser, listed separately for HVLA form
-        if (current / "actor.pt").is_file():
-            meta = _read_rlt_checkpoint(current, base)
+        # Check if this is an RLT run dir (latest/actor.pt inside it)
+        # Mirrors how training runs are detected by checkpoints/ subdir.
+        if (current / "latest" / "actor.pt").is_file():
+            meta = _read_rlt_checkpoint(current / "latest", base)
             if meta:
+                meta["path"] = str(current)  # run dir, not checkpoint subdir
+                try:
+                    meta["name"] = str(current.relative_to(base))
+                except ValueError:
+                    pass
                 found.append(meta)
             return
 

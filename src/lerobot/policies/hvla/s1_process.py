@@ -594,6 +594,9 @@ def run_s1(
         load_dir = None
         if rlt_checkpoint:
             load_dir = Path(rlt_checkpoint)
+            # If this is a run dir (not a checkpoint dir), look for latest/ inside
+            if not (load_dir / "actor.pt").exists() and (load_dir / "latest" / "actor.pt").exists():
+                load_dir = load_dir / "latest"
         else:
             latest_dir = rlt_state["output_dir"] / "latest"
             if (latest_dir / "actor.pt").exists():
