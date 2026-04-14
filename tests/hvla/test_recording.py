@@ -15,6 +15,7 @@ def mock_robot():
     """Mock robot with observation_features and action_features like BiSO107."""
     robot = MagicMock()
     robot.__class__.__name__ = "BiSO107Follower"
+    robot.robot_type = "biso107"
 
     joint_names = [
         "left_shoulder_pan.pos", "left_shoulder_lift.pos", "left_elbow_flex.pos",
@@ -82,6 +83,7 @@ class TestCreateRecordingDataset:
 
         robot = MagicMock()
         robot.__class__.__name__ = "SO100Follower"
+        robot.robot_type = "so100"
         joint_names = [f"joint_{i}.pos" for i in range(7)]
         robot.action_features = {name: float for name in joint_names}
         robot.observation_features = {
