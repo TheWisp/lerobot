@@ -621,8 +621,9 @@ def run_s1(
                     rlt_state["total_transitions"] = ts["total_transitions"]
                     rlt_state["total_updates"] = ts["total_updates"]
                     rlt_state["successes"] = ts["successes"]
-                if rlt_replay and (load_dir / "replay_buffer.pt").exists():
+                if rlt_replay is not None and (load_dir / "replay_buffer.pt").exists():
                     rlt_replay.load(str(load_dir / "replay_buffer.pt"))
+                    logger.info("RLT: Loaded replay buffer (%d transitions)", len(rlt_replay))
 
             # Restore metrics
             import json, os
