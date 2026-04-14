@@ -597,25 +597,70 @@ function assignCameraRole(cameraIndex, role) {
     if (!role) return;
 
     const cam = detectedCameras[cameraIndex];
-    const camConfig = {};
+    if (!currentProfile.data.cameras) currentProfile.data.cameras = {};
+
+    const camId = String(cam.id || '');
+
+    // Find the old role this physical camera was assigned to
+    let oldRole = null;
+    for (const [r, c] of Object.entries(currentProfile.data.cameras)) {
+        if (String(c.index_or_path ?? c.serial_number_or_name ?? '') === camId && r !== role) {
+            oldRole = r;
+            break;
+        }
+    }
+
+    // Find the physical camera currently occupying the target role
+    const targetConfig = currentProfile.data.cameras[role] || null;
+    const targetId = targetConfig ? String(targetConfig.index_or_path ?? targetConfig.serial_number_or_name ?? '') : '';
+
+    // Auto-swap: if both cameras had roles, move the displaced camera to the old role
+    if (oldRole && targetConfig && targetId) {
+        // Swap: put target role's old camera into this camera's old role,
+        // preserving the old role's settings (width, height, fps, fourcc)
+        const oldRoleConfig = { ...currentProfile.data.cameras[oldRole] };
+        // Update only the device identity to point to the displaced camera
+        if (targetConfig.type === 'opencv') {
+            oldRoleConfig.type = 'opencv';
+            oldRoleConfig.index_or_path = targetConfig.index_or_path;
+            delete oldRoleConfig.serial_number_or_name;
+        } else if (targetConfig.type === 'intelrealsense') {
+            oldRoleConfig.type = 'intelrealsense';
+            oldRoleConfig.serial_number_or_name = targetConfig.serial_number_or_name;
+            delete oldRoleConfig.index_or_path;
+        }
+        currentProfile.data.cameras[oldRole] = oldRoleConfig;
+    } else if (oldRole) {
+        // No swap target — just remove old role
+        delete currentProfile.data.cameras[oldRole];
+    }
+
+    // Assign this camera to the target role, preserving target role's settings
+    const existing = targetConfig || {};
+    const camConfig = { ...existing };
     if (cam.type === 'OpenCV') {
         camConfig.type = 'opencv';
         camConfig.index_or_path = cam.id;
+        delete camConfig.serial_number_or_name;
     } else if (cam.type === 'RealSense') {
         camConfig.type = 'intelrealsense';
         camConfig.serial_number_or_name = String(cam.id);
+        delete camConfig.index_or_path;
     }
+    // Only fill in settings from detected defaults if not already configured
     const profile = cam.default_stream_profile || {};
-    if (profile.width) camConfig.width = profile.width;
-    if (profile.height) camConfig.height = profile.height;
-    if (profile.fps) camConfig.fps = profile.fps;
-    if (profile.fourcc) camConfig.fourcc = profile.fourcc;
+    if (!camConfig.width && profile.width) camConfig.width = profile.width;
+    if (!camConfig.height && profile.height) camConfig.height = profile.height;
+    if (!camConfig.fps && profile.fps) camConfig.fps = profile.fps;
+    if (!camConfig.fourcc && profile.fourcc) camConfig.fourcc = profile.fourcc;
 
-    if (!currentProfile.data.cameras) currentProfile.data.cameras = {};
     currentProfile.data.cameras[role] = camConfig;
     _rerender();
     _updateDirtyState();
-    showToast('Camera assigned', `${cam.name || 'Camera'} assigned as "${role}"`, 'success');
+    const msg = oldRole && targetId
+        ? `Swapped: ${cam.name || 'Camera'} → "${role}", displaced camera → "${oldRole}"`
+        : `${cam.name || 'Camera'} assigned as "${role}"`;
+    showToast('Camera assigned', msg, 'success');
 }
 
 // Re-render the entire editor from currentProfile state.
