@@ -1363,7 +1363,14 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
     """Push local dataset to HuggingFace Hub (overwrites remote)."""
     dataset_id = unquote(dataset_id)
     if dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+        # Auto-open if path exists on disk (handles GUI restart with stale frontend)
+        p = Path(dataset_id)
+        if p.exists() and (p / "meta" / "info.json").exists():
+            from lerobot.datasets.lerobot_dataset import LeRobotDataset
+            _app_state.datasets[dataset_id] = LeRobotDataset(str(p), local_files_only=True)
+            logger.info("Auto-opened dataset for upload: %s", dataset_id)
+        else:
+            raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
 
     lock = _app_state.get_lock(dataset_id)
     if lock.locked():
@@ -1385,6 +1392,7 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
         try:
             from huggingface_hub import upload_folder
 
+            api.create_repo(repo_id=repo_id, repo_type="dataset", exist_ok=True, private=True)
             upload_folder(
                 folder_path=str(dataset.root),
                 repo_id=repo_id,
