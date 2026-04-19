@@ -19,27 +19,24 @@ S2 Process (~4-15Hz)                shared memory           S1 Process (~22-30Hz
 
 ### 0. Convert S2 checkpoint (JAX → PyTorch, one-time)
 
-S2 uses a Pi0.5 checkpoint converted from OpenPI's JAX format to PyTorch safetensors. The conversion script lives in the openpi_subtask repo:
-
-```bash
-cd ~/Documents/openpi_subtask
-python scripts/run_conversion.py
-```
-
-This reads the JAX checkpoint from `~/.cache/openpi/checkpoints/soarm-pi05-state-11997` and outputs `~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch/model.safetensors`. To download a checkpoint from HuggingFace first:
+S2 uses a [Pi0.5](https://huggingface.co/KeWangRobotics/soarm-pi05-state-11997) checkpoint converted from [OpenPI](https://github.com/Ke-Wang1017/openpi_subtask)'s JAX format to PyTorch safetensors:
 
 ```bash
 # Download JAX checkpoint
-hf download KeWangRobotics/soarm-pi05-state-11997 \
+huggingface-cli download KeWangRobotics/soarm-pi05-state-11997 \
     --local-dir ~/.cache/openpi/checkpoints/soarm-pi05-state-11997
 
-# Convert to PyTorch
+# Convert (requires openpi_subtask repo: https://github.com/Ke-Wang1017/openpi_subtask)
 cd ~/Documents/openpi_subtask && .venv/bin/python scripts/run_conversion.py
 ```
 
-Available checkpoints:
-- `KeWangRobotics/soarm-pi05-state-11997` — Pi0.5 base (state-based)
-- `KeWangRobotics/soarm-pi05-fast-7998` — Pi0.5 with FAST tokens
+Output: `~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch/model.safetensors`
+
+Available checkpoints (public):
+- [`KeWangRobotics/soarm-pi05-state-11997`](https://huggingface.co/KeWangRobotics/soarm-pi05-state-11997) — Pi0.5 base (state-based)
+- [`KeWangRobotics/soarm-pi05-fast-7998`](https://huggingface.co/KeWangRobotics/soarm-pi05-fast-7998) — Pi0.5 with FAST tokens
+
+> **S2 is optional.** S1 can run without S2 using `--zero-s2`. Skip steps 0-1 if you don't need VLM conditioning.
 
 ### 1. Extract S2 latents (offline, one-time)
 

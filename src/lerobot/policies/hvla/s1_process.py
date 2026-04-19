@@ -826,6 +826,7 @@ def run_s1(
             if teleop is not None and hasattr(teleop, "disable_torque"):
                 teleop.disable_torque()
 
+            print("##OVERLAY:Resetting:#888888##", flush=True)
             if recorded_episodes > 0:
                 log_say(f"Reset the environment. Episode {recorded_episodes} of {num_episodes} done.")
             else:
