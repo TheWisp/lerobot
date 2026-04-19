@@ -171,6 +171,7 @@ class HVLARunRequest(BaseModel):
     rlt_deploy: bool = False                 # True = inference only, no training
     rlt_chunk_length: int = 10
     rlt_output_dir: str = "outputs/rlt_online"
+    rlt_start_engaged: bool = True
 
 
 # ============================================================================
@@ -190,9 +191,25 @@ _output_event: asyncio.Event = asyncio.Event()
 _OUTPUT_MAX_LINES = 2000
 
 
+_overlay_state: dict | None = None  # {"text": "...", "color": "..."}
+
+
 def _append_output(line: str) -> None:
-    """Append a line to the output buffer and notify SSE waiters."""
-    global _output_lines
+    """Append a line to the output buffer and notify SSE waiters.
+
+    Lines matching ##OVERLAY:text:color## are intercepted as overlay
+    updates and not appended to the terminal. Any subprocess can set
+    the camera-feed overlay by printing this format to stdout.
+    """
+    global _output_lines, _overlay_state
+    if line.startswith("##OVERLAY:"):
+        parts = line.strip().strip("#").split(":")
+        # OVERLAY:text or OVERLAY:text:color
+        text = parts[1] if len(parts) > 1 else ""
+        color = parts[2] if len(parts) > 2 else "#ffffff"
+        _overlay_state = {"text": text, "color": color}
+        _output_event.set()  # wake SSE to send overlay update
+        return
     _output_lines.append(line)
     if len(_output_lines) > _OUTPUT_MAX_LINES:
         _output_lines = _output_lines[-_OUTPUT_MAX_LINES:]
@@ -620,6 +637,8 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             args.append("--rlt-deploy")
         args.append(f"--rl-chunk-length={req.rlt_chunk_length}")
         args.append(f"--rlt-output-dir={req.rlt_output_dir}")
+        if not req.rlt_start_engaged:
+            args.append("--rlt-start-disengaged")
         # RLT needs multi-episode mode
         if not req.record_dataset:
             args.append(f"--num-episodes={req.num_episodes}")
@@ -725,6 +744,7 @@ async def stream_output() -> StreamingResponse:
 
     async def event_generator():
         sent_lines = 0
+        sent_overlay = None  # track last overlay sent to avoid duplicates
         proc_at_start = _active_process
 
         logger.info(f"SSE: connected, buffered={len(_output_lines)} lines, process={'running' if proc_at_start and proc_at_start.returncode is None else 'none/done'}")
@@ -738,6 +758,11 @@ async def stream_output() -> StreamingResponse:
         # Then wait for new lines
         while True:
             _output_event.clear()
+
+            # Send overlay update if changed
+            if _overlay_state is not None and _overlay_state != sent_overlay:
+                sent_overlay = _overlay_state.copy()
+                yield f"data: {json.dumps({'overlay': sent_overlay})}\n\n"
 
             while sent_lines < len(_output_lines):
                 line = _output_lines[sent_lines]

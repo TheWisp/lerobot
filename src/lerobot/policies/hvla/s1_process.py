@@ -341,6 +341,7 @@ def run_s1(
     rlt_deploy: bool = False,
     rl_chunk_length: int = 10,
     rlt_output_dir: str = "outputs/rlt_online",
+    rlt_start_engaged: bool = True,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -792,6 +793,16 @@ def run_s1(
                     except Exception:
                         pass
                     return
+                if hasattr(key, 'char') and key.char == "e":
+                    from lerobot.utils.utils import log_say
+                    engaged = not infer_thread._rlt_user_engaged
+                    infer_thread._rlt_user_engaged = engaged
+                    label = "Policy + RL" if engaged else "Policy"
+                    logger.info("RLT: RL actor %s (E key)", "ENGAGED" if engaged else "DISENGAGED")
+                    log_say(label)
+                    color = "#4fc3f7" if engaged else "#2ecc71"
+                    print(f"##OVERLAY:{label}:{color}##", flush=True)
+                    return
             except AttributeError:
                 pass
             if _orig_on_press is not None:
@@ -799,6 +810,7 @@ def run_s1(
 
         listener.on_press = _rlt_on_press
         logger.info("RLT: Press 'r' = success (+1 reward, ends episode)")
+        logger.info("RLT: Press 'e' = toggle RL actor on/off")
 
     recorded_episodes = 0
 
@@ -860,10 +872,16 @@ def run_s1(
 
         # RLT: activate collection for this episode
         if rlt_mode:
-            infer_thread._rlt_active = True
+            infer_thread._rlt_system_active = True
+            infer_thread._rlt_user_engaged = rlt_start_engaged
             infer_thread._rlt_prev = None
             rlt_state["_episode_had_intervention"] = False
-            logger.info("RLT: collection RESUMED (episode start)")
+            engaged_str = "engaged" if rlt_start_engaged else "disengaged (press E to engage)"
+            logger.info("RLT: collection RESUMED (episode start), actor %s", engaged_str)
+            if rlt_start_engaged:
+                print("##OVERLAY:Policy + RL:#4fc3f7##", flush=True)
+            else:
+                print("##OVERLAY:Policy:#2ecc71##", flush=True)
 
         # Ensure inference thread is running and has fresh data.
         # May have been paused by intervention in previous episode.
@@ -1016,7 +1034,7 @@ def run_s1(
                     # Transition: policy → intervention
                     if rlt_mode:
                         # RLT: keep inference running (for z_rl) but stop actor + collection
-                        infer_thread._rlt_active = False
+                        infer_thread._rlt_system_active = False
                         infer_thread._rlt_prev = None
                         logger.info("S1: INTERVENTION ON — inference continues (RLT), actor paused")
                         rlt_state["_episode_had_intervention"] = True
@@ -1122,6 +1140,7 @@ def run_s1(
                     # while the human grabs the leader. The follower will be driven
                     # by send_action() once the human starts moving the leader.
                     log_say("Intervention")
+                    print("##OVERLAY:Intervention:#e5c07b##", flush=True)
 
                 # Read leader arm positions and send to robot
                 act = teleop.get_action()
@@ -1239,7 +1258,7 @@ def run_s1(
                             logger.warning("S1: Failed to enable leader torque: %s", e)
                     if rlt_mode:
                         # Resume RLT collection — actor runs again
-                        infer_thread._rlt_active = True
+                        infer_thread._rlt_system_active = True
                         infer_thread._rlt_prev = None  # fresh start after intervention
                         # Clear intervention chunk state
                         rlt_state.pop("_int_prev", None)
@@ -1249,7 +1268,12 @@ def run_s1(
                         infer_thread.resume()
                         assert not infer_thread.is_paused, \
                             "BUG: inference thread still paused after resume"
-                    log_say("Policy")
+                    if rlt_mode and infer_thread._rlt_user_engaged:
+                        log_say("Policy + RL")
+                        print("##OVERLAY:Policy + RL:#4fc3f7##", flush=True)
+                    else:
+                        log_say("Policy")
+                        print("##OVERLAY:Policy:#2ecc71##", flush=True)
 
                 # 3. Read latest chunk
                 chunk, t_origin, t_obs = infer_thread.get_chunk()
@@ -1413,7 +1437,7 @@ def run_s1(
         # RLT: episode bookkeeping
         if rlt_mode and rlt_state is not None:
             # Pause collection during reset + clear all state
-            infer_thread._rlt_active = False
+            infer_thread._rlt_system_active = False
             infer_thread._rlt_prev = None
             rlt_state.pop("_int_chunk_buf", None)
             rlt_state.pop("_int_chunk_z_rl", None)

@@ -70,10 +70,12 @@ class InferenceThread:
         self._rlt_agent = rlt_agent  # TD3Agent (for gradient updates)
         self._rlt_state = rlt_state
         self._rlt_replay = rlt_replay
-        # When True, inference thread runs actor + stores transitions + runs gradients.
-        # Set False during: intervention, reset, pre-episode.
-        # Main thread controls this flag.
-        self._rlt_active = False
+        # Dual flags for RL gating:
+        #   _rlt_user_engaged: operator toggle (E key). Persists across episodes.
+        #   _rlt_system_active: system gate (paused during intervention/reset/pre-episode).
+        # Actor runs only when both are True (via rlt_active property).
+        self._rlt_user_engaged = True
+        self._rlt_system_active = False
         self._rlt_prev: dict | None = None  # previous transition for replay buffer
         self._rlt_step_count: int = 0
 
@@ -113,10 +115,15 @@ class InferenceThread:
 
     # --- RLT methods ---
 
+    @property
+    def rlt_active(self) -> bool:
+        """Actor runs only when both user (E key) and system (not intervening) say yes."""
+        return self._rlt_user_engaged and self._rlt_system_active
+
     def _rlt_inference_step(self, batch, actions, z_rl, obs):
         """Run RLT actor (if past warmup) and store transition.
         Called inside inference loop — one call per S1 chunk.
-        Only runs when _rlt_active is True (main thread controls this).
+        Only runs when rlt_active is True (user engaged + system active).
 
         Paper Algorithm 1:
         - Line 7: S1 produces ref chunk (already done before this call)
@@ -164,12 +171,12 @@ class InferenceThread:
             actions[:, :C, :] = actor_denorm
 
         # Store transition in replay buffer (Paper Alg 1 line 12)
-        # Guard: _rlt_active may have been cleared by main thread during this call
+        # Guard: rlt_active may have been cleared by main thread during this call
         # (race between main thread setting flag and inference thread mid-method).
         # If cleared, skip storage but don't crash — the actor already modified
         # the actions tensor which is fine (it'll be overwritten next inference).
-        if not self._rlt_active:
-            logger.warning("RLT: _rlt_active cleared mid-inference, skipping transition storage")
+        if not self.rlt_active:
+            logger.warning("RLT: rlt_active cleared mid-inference, skipping transition storage")
             self._rlt_prev = None
             return
 
@@ -439,7 +446,7 @@ class InferenceThread:
                 actions = self._postprocessor(actions)
 
                 # RLT: actor refines chunk + store transition
-                if self._rlt_active and self._rlt_state is not None and z_rl_out is not None:
+                if self.rlt_active and self._rlt_state is not None and z_rl_out is not None:
                     self._rlt_inference_step(batch, actions, z_rl_out, obs)
 
             t_infer_end = time.perf_counter()

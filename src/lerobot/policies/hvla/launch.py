@@ -91,6 +91,8 @@ def main():
                         help="RL action chunk length C (default: 10)")
     parser.add_argument("--rlt-output-dir", type=str, default="outputs/rlt_online",
                         help="Directory for RLT checkpoints and logs")
+    parser.add_argument("--rlt-start-disengaged", action="store_true",
+                        help="Start each episode with RL actor off. Press E to engage mid-episode.")
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -211,6 +213,7 @@ def main():
             rlt_deploy=args.rlt_deploy,
             rl_chunk_length=args.rl_chunk_length,
             rlt_output_dir=args.rlt_output_dir,
+            rlt_start_engaged=not args.rlt_start_disengaged,
         )
     finally:
         stop_event.set()

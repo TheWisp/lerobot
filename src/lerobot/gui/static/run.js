@@ -655,8 +655,8 @@ function _onRltSelectChange() {
         const el = document.getElementById(id);
         if (el) el.style.display = isExisting ? '' : 'none';
     }
-    // Common fields (chunk length)
-    for (const id of ['run-hvla-rlt-chunk-label', 'run-hvla-rlt-chunk-length']) {
+    // Common fields (chunk length, start engaged)
+    for (const id of ['run-hvla-rlt-chunk-label', 'run-hvla-rlt-chunk-length', 'run-hvla-rlt-start-label', 'run-hvla-rlt-start-engaged']) {
         const el = document.getElementById(id);
         if (el) el.style.display = (isNew || isExisting) ? '' : 'none';
     }
@@ -904,7 +904,7 @@ function renderRunForm() {
     html += `<label>Task Prompt</label>`;
     html += `<input type="text" id="run-hvla-task" placeholder="assemble cylinder into ring" value="">`;
     html += `<label>Decode Subtask</label>`;
-    html += `<label class="toggle-label"><input type="checkbox" id="run-hvla-decode-subtask"> Enable subtask decoding</label>`;
+    html += `<input type="checkbox" id="run-hvla-decode-subtask">`;
     html += `<label>Query Interval (steps between S1 inference, default 2)</label>`;
     html += `<input type="number" id="run-hvla-query-interval" placeholder="2" min="0">`;
     html += `<label>Denoise Steps (default 10)</label>`;
@@ -945,6 +945,8 @@ function renderRunForm() {
     // Common fields
     html += `<label id="run-hvla-rlt-chunk-label" style="display:none">Chunk Length</label>`;
     html += `<input type="number" id="run-hvla-rlt-chunk-length" value="10" min="1" max="50" style="display:none">`;
+    html += `<label id="run-hvla-rlt-start-label" style="display:none">Start with RL active</label>`;
+    html += `<input type="checkbox" id="run-hvla-rlt-start-engaged" checked style="display:none">`;
     html += '</div>';
     html += '</div>';
     html += '</div>';
@@ -1228,12 +1230,14 @@ async function launchRun() {
                     const rltSel = document.getElementById('run-hvla-rlt-select');
                     const rltVal = rltSel?.value || '';
                     if (!rltVal) return {};  // None selected
+                    const rltStartEngaged = document.getElementById('run-hvla-rlt-start-engaged')?.checked !== false;
                     if (rltVal === '__new__') {
                         return {
                             rlt_mode: true,
                             rlt_token_checkpoint: document.getElementById('run-hvla-rlt-token-ckpt')?.value?.trim() || null,
                             rl_chunk_length: parseInt(document.getElementById('run-hvla-rlt-chunk-length')?.value) || 10,
                             rlt_output_dir: document.getElementById('run-hvla-rlt-output-dir')?.value?.trim() || 'outputs/rlt_online',
+                            rlt_start_engaged: rltStartEngaged,
                         };
                     }
                     // Existing checkpoint
@@ -1245,6 +1249,7 @@ async function launchRun() {
                         rlt_deploy: runMode === 'deploy',
                         rl_chunk_length: parseInt(document.getElementById('run-hvla-rlt-chunk-length')?.value) || 10,
                         rlt_output_dir: rltVal,  // same dir for continued training
+                        rlt_start_engaged: rltStartEngaged,
                     };
                 })(),
             };
@@ -1403,6 +1408,14 @@ function connectOutputSSE() {
                 window.refreshOpenedDatasets();
             }
             return;
+        }
+        if (data.overlay) {
+            const el = document.getElementById('debug-model-overlay');
+            if (el) {
+                el.textContent = data.overlay.text || '';
+                el.style.color = data.overlay.color || '#fff';
+                el.style.display = data.overlay.text ? 'block' : 'none';
+            }
         }
         if (data.line !== undefined) {
             appendTerminalLine(data.line);
