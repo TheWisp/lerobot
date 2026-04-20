@@ -194,6 +194,8 @@ class RLTMetrics:
                     "q_values_max": self.q_values_max[-200:],
                     "actor_q_terms": self._smooth(self.actor_q_terms[-200:], 20),
                     "actor_bc_terms": self._smooth(self.actor_bc_terms[-200:], 20),
+                    # Wall-clock timestamps aligned with per-step series (same index).
+                    "step_timestamps": self.step_timestamps[-200:],
                 },
             }
 

@@ -1843,31 +1843,37 @@ function _updateRLTDashboard(data) {
 
     const s = data.series || {};
 
-    // Autonomous success rate chart (pre-computed server-side)
+    // Success rate uses episode axis, not synced with per-step charts
     if (s.autonomous_rate_rolling && s.autonomous_rate_rolling.length > 0) {
         _drawSparkline('rlt-chart-success', s.autonomous_rate_rolling, '#4fc3f7', 0, 1, true);
     }
 
-    // Q values chart (min/mean/max band)
+    // Per-step synced charts — all share the same step index as X
+    _syncedTimestamps = s.step_timestamps || [];
+    _syncedLatestStep = data.total_updates || 0;
+
     if (s.q_values_mean && s.q_values_mean.length > 0) {
-        if (s.q_values_min && s.q_values_max)
-            _drawSparkBand('rlt-chart-qvalues', s.q_values_min, s.q_values_max, s.q_values_mean, '#2ecc71');
-        else
-            _drawSparkline('rlt-chart-qvalues', s.q_values_mean, '#2ecc71');
+        _registerSyncedChart('rlt-chart-qvalues', [
+            {data: s.q_values_min || [], color: '#2ecc71', label: 'min',
+             bandPair: 'min', bandColor: '#2ecc71', hideLine: true},
+            {data: s.q_values_max || [], color: '#2ecc71', label: 'max',
+             bandPair: 'max', hideLine: true},
+            {data: s.q_values_mean || [], color: '#2ecc71', label: 'mean'},
+        ]);
     }
-
-    // Actor delta chart
-    if (s.actor_deltas && s.actor_deltas.length > 0)
-        _drawSparkline('rlt-chart-delta', s.actor_deltas, '#e5c07b');
-
-    // Critic loss chart
-    if (s.critic_losses && s.critic_losses.length > 0)
-        _drawSparkline('rlt-chart-critic', s.critic_losses, '#f39c12');
-
-    // Actor loss components: q_term vs bc_term on shared axes
+    if (s.actor_deltas && s.actor_deltas.length > 0) {
+        _registerSyncedChart('rlt-chart-delta', [
+            {data: s.actor_deltas, color: '#e5c07b', label: 'delta'},
+        ]);
+    }
+    if (s.critic_losses && s.critic_losses.length > 0) {
+        _registerSyncedChart('rlt-chart-critic', [
+            {data: s.critic_losses, color: '#f39c12', label: 'critic'},
+        ]);
+    }
     if ((s.actor_q_terms && s.actor_q_terms.length > 0) ||
         (s.actor_bc_terms && s.actor_bc_terms.length > 0)) {
-        _drawSparklineMulti('rlt-chart-actor-components', [
+        _registerSyncedChart('rlt-chart-actor-components', [
             {data: s.actor_q_terms || [], color: '#e06c75', label: 'q'},
             {data: s.actor_bc_terms || [], color: '#4fc3f7', label: 'bc'},
         ]);
@@ -1913,6 +1919,166 @@ function _sendRLTConfig() {
             });
         } catch (e) { /* ignore */ }
     }, 300);
+}
+
+// Registry of per-step synced charts. When the cursor hovers over any of
+// them, a vertical crosshair and value readouts appear on all.
+// Each entry: { canvas, series: [{data, color, label, percentage}], min, max, pad, W, H }
+const _syncedCharts = {};
+let _syncedTimestamps = [];  // shared wall-clock timestamps for per-step charts
+let _syncedLatestStep = 0;   // global step count of the rightmost (newest) data point
+let _hoverIndex = -1;        // -1 = no hover, else index into series
+
+function _fmtTime(ts) {
+    if (!ts) return '';
+    const d = new Date(ts * 1000);
+    return d.toLocaleTimeString();
+}
+
+function _fmtAgo(ts) {
+    if (!ts) return '';
+    const now = Date.now() / 1000;
+    const ago = Math.max(0, now - ts);
+    if (ago < 60) return Math.round(ago) + 's ago';
+    if (ago < 3600) return Math.round(ago / 60) + 'm ago';
+    return Math.round(ago / 3600) + 'h ago';
+}
+
+function _renderSyncedChart(id) {
+    const c = _syncedCharts[id];
+    if (!c) return;
+    const ctx = c.canvas.getContext('2d');
+    const {W, H, pad, min, max, series} = c;
+    const range = (max - min) || 1;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Grid
+    ctx.strokeStyle = '#1a1a3e'; ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+        const y = pad + (H - 2 * pad) * (1 - i / 4);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+    // Zero line if range crosses zero
+    if (min < 0 && max > 0) {
+        const zeroY = pad + (H - 2 * pad) * (1 - (0 - min) / range);
+        ctx.strokeStyle = '#333'; ctx.lineWidth = 0.8;
+        ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(W, zeroY); ctx.stroke();
+    }
+
+    const N = Math.max(...series.map(s => s.data.length), 1);
+    const toX = i => (i / Math.max(N - 1, 1)) * W;
+    const toY = v => pad + (H - 2 * pad) * (1 - (v - min) / range);
+
+    // Optional min/max band fill (pair of series with `bandPair` key)
+    const bandMin = series.find(s => s.bandPair === 'min');
+    const bandMax = series.find(s => s.bandPair === 'max');
+    if (bandMin && bandMax && bandMin.data.length > 0 && bandMax.data.length > 0) {
+        ctx.fillStyle = (bandMin.bandColor || bandMin.color) + '33';  // ~20% opacity
+        ctx.beginPath();
+        for (let i = 0; i < bandMax.data.length; i++) ctx.lineTo(toX(i), toY(bandMax.data[i]));
+        for (let i = bandMin.data.length - 1; i >= 0; i--) ctx.lineTo(toX(i), toY(bandMin.data[i]));
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    // Series lines
+    for (const s of series) {
+        if (s.data.length === 0) continue;
+        if (s.hideLine) continue;
+        ctx.strokeStyle = s.color; ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let i = 0; i < s.data.length; i++) {
+            const x = toX(i);
+            const y = toY(s.data[i]);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+
+    // Crosshair
+    if (_hoverIndex >= 0 && _hoverIndex < N) {
+        const x = (_hoverIndex / Math.max(N - 1, 1)) * W;
+        ctx.strokeStyle = '#888'; ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    // Value labels (top-right) — at hover index if hovering, else last value
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    const showIdx = _hoverIndex >= 0 ? _hoverIndex : -1;
+    for (let i = 0; i < series.length; i++) {
+        const s = series[i];
+        if (s.data.length === 0) continue;
+        const idx = showIdx >= 0 && showIdx < s.data.length ? showIdx : s.data.length - 1;
+        const v = s.data[idx];
+        const label = s.percentage ? (v * 100).toFixed(0) + '%' : v.toFixed(4);
+        ctx.fillStyle = s.color;
+        ctx.fillText(label, W - 4, 12 + i * 12);
+    }
+
+    // Step/time label (bottom-left)
+    ctx.fillStyle = '#444';
+    ctx.textAlign = 'left';
+    if (_hoverIndex >= 0) {
+        // Global step: rightmost data point is at step _syncedLatestStep
+        const globalStep = _syncedLatestStep - (N - 1 - _hoverIndex);
+        // Align timestamps from the right (shorter arrays right-aligned)
+        const tsOffset = N - _syncedTimestamps.length;
+        const tsIdx = _hoverIndex - tsOffset;
+        const ts = tsIdx >= 0 ? _syncedTimestamps[tsIdx] : null;
+        const label = ts
+            ? `step ${globalStep}  ${_fmtTime(ts)} (${_fmtAgo(ts)})`
+            : `step ${globalStep}`;
+        ctx.fillText(label, 4, H - 4);
+    } else {
+        ctx.fillText(N + ' pts', 4, H - 4);
+    }
+}
+
+function _registerSyncedChart(canvasId, seriesList) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const valid = seriesList.filter(s => s.data && s.data.length > 0);
+    if (valid.length === 0) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.getContext('2d').scale(dpr, dpr);
+
+    let allVals = [];
+    for (const s of valid) allVals = allVals.concat(s.data);
+    const min = Math.min(...allVals);
+    const max = Math.max(...allVals);
+
+    _syncedCharts[canvasId] = {
+        canvas, series: seriesList, min, max, pad: 4,
+        W: rect.width, H: rect.height,
+    };
+
+    // Attach hover handlers once
+    if (!canvas._syncedAttached) {
+        canvas.addEventListener('mousemove', (e) => {
+            const r = canvas.getBoundingClientRect();
+            const x = e.clientX - r.left;
+            const c = _syncedCharts[canvasId];
+            if (!c) return;
+            const N = Math.max(...c.series.map(s => s.data.length), 1);
+            _hoverIndex = Math.min(N - 1, Math.max(0, Math.round((x / c.W) * (N - 1))));
+            for (const id of Object.keys(_syncedCharts)) _renderSyncedChart(id);
+        });
+        canvas.addEventListener('mouseleave', () => {
+            _hoverIndex = -1;
+            for (const id of Object.keys(_syncedCharts)) _renderSyncedChart(id);
+        });
+        canvas._syncedAttached = true;
+    }
+
+    _renderSyncedChart(canvasId);
 }
 
 function _drawSparklineMulti(canvasId, seriesList) {
