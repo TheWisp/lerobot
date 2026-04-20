@@ -93,7 +93,7 @@ class TestBCPenalty:
             expected_loss_sum = -q_val.mean() + 1.0 * bc_sum
             expected_loss_mse = -q_val.mean() + 1.0 * bc_mse
 
-        actual_loss = agent.update_actor(z_rl.clone(), state.clone(), ref.clone())
+        actual_loss, _q_term, _bc_term = agent.update_actor(z_rl.clone(), state.clone(), ref.clone())
 
         # actual_loss should match sum formula, not MSE formula
         assert abs(actual_loss - expected_loss_sum.item()) < 0.1, (
@@ -113,7 +113,7 @@ class TestBCPenalty:
         z_rl = torch.randn(B, D, device=device)
         state = torch.randn(B, S, device=device)
 
-        loss = agent.update_actor(z_rl, state, ref)
+        loss, _q_term, _bc_term = agent.update_actor(z_rl, state, ref)
         # With beta=100 and ref=5.0, if BC is against ref, loss should be large.
         # If BC were against the zeroed input, penalty would be much smaller.
         assert loss > 10.0, (

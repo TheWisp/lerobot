@@ -34,6 +34,11 @@ class RLTMetrics:
     q_values_mean: list[float] = field(default_factory=list)
     q_values_min: list[float] = field(default_factory=list)
     q_values_max: list[float] = field(default_factory=list)
+    # Actor loss decomposition: actor_loss = q_term + bc_term.
+    # q_term = -Q.mean() (sign depends on critic values).
+    # bc_term = β · ||a - ref||² (always ≥ 0, pulls actor toward S1 reference).
+    actor_q_terms: list[float] = field(default_factory=list)
+    actor_bc_terms: list[float] = field(default_factory=list)
     step_timestamps: list[float] = field(default_factory=list)
 
     # Current values
@@ -57,6 +62,8 @@ class RLTMetrics:
         q_mean: float | None = None,
         q_min: float | None = None,
         q_max: float | None = None,
+        actor_q_term: float | None = None,
+        actor_bc_term: float | None = None,
     ) -> None:
         with self._lock:
             self.step_count = step
@@ -78,12 +85,17 @@ class RLTMetrics:
                 self.q_values_min.append(q_min)
             if q_max is not None:
                 self.q_values_max.append(q_max)
+            if actor_q_term is not None:
+                self.actor_q_terms.append(actor_q_term)
+            if actor_bc_term is not None:
+                self.actor_bc_terms.append(actor_bc_term)
 
             # Bound series length
             for series in (
                 self.actor_deltas, self.step_timestamps,
                 self.critic_losses, self.actor_losses,
                 self.q_values_mean, self.q_values_min, self.q_values_max,
+                self.actor_q_terms, self.actor_bc_terms,
             ):
                 if len(series) > self._MAX_SERIES_LEN:
                     del series[:len(series) - self._MAX_SERIES_LEN]
@@ -180,6 +192,8 @@ class RLTMetrics:
                     "q_values_mean": self.q_values_mean[-200:],
                     "q_values_min": self.q_values_min[-200:],
                     "q_values_max": self.q_values_max[-200:],
+                    "actor_q_terms": self._smooth(self.actor_q_terms[-200:], 20),
+                    "actor_bc_terms": self._smooth(self.actor_bc_terms[-200:], 20),
                 },
             }
 

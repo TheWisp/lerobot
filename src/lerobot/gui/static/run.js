@@ -1863,6 +1863,15 @@ function _updateRLTDashboard(data) {
     // Critic loss chart
     if (s.critic_losses && s.critic_losses.length > 0)
         _drawSparkline('rlt-chart-critic', s.critic_losses, '#f39c12');
+
+    // Actor loss components: q_term vs bc_term on shared axes
+    if ((s.actor_q_terms && s.actor_q_terms.length > 0) ||
+        (s.actor_bc_terms && s.actor_bc_terms.length > 0)) {
+        _drawSparklineMulti('rlt-chart-actor-components', [
+            {data: s.actor_q_terms || [], color: '#e06c75', label: 'q'},
+            {data: s.actor_bc_terms || [], color: '#4fc3f7', label: 'bc'},
+        ]);
+    }
 }
 
 let _rltConfigTimer = null;
@@ -1904,6 +1913,71 @@ function _sendRLTConfig() {
             });
         } catch (e) { /* ignore */ }
     }, 300);
+}
+
+function _drawSparklineMulti(canvasId, seriesList) {
+    // seriesList: [{data, color, label}, ...] — all on shared Y axis computed from combined range
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const validSeries = seriesList.filter(s => s.data && s.data.length > 0);
+    if (validSeries.length === 0) return;
+
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = rect.height;
+
+    ctx.clearRect(0, 0, W, H);
+
+    let allVals = [];
+    for (const s of validSeries) allVals = allVals.concat(s.data);
+    const min = Math.min(...allVals);
+    const max = Math.max(...allVals);
+    const range = (max - min) || 1;
+    const pad = 4;
+
+    ctx.strokeStyle = '#1a1a3e';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+        const y = pad + (H - 2 * pad) * (1 - i / 4);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    // Zero line if range crosses zero
+    if (min < 0 && max > 0) {
+        const zeroY = pad + (H - 2 * pad) * (1 - (0 - min) / range);
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 0.8;
+        ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(W, zeroY); ctx.stroke();
+    }
+
+    for (const s of validSeries) {
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let i = 0; i < s.data.length; i++) {
+            const x = (i / Math.max(s.data.length - 1, 1)) * W;
+            const y = pad + (H - 2 * pad) * (1 - (s.data[i] - min) / range);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+
+    // Latest values on right
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    for (let i = 0; i < validSeries.length; i++) {
+        const s = validSeries[i];
+        ctx.fillStyle = s.color;
+        ctx.fillText(s.data[s.data.length - 1].toFixed(4), W - 4, 12 + i * 12);
+    }
+    // Data point count on left
+    ctx.fillStyle = '#444';
+    ctx.textAlign = 'left';
+    ctx.fillText(validSeries[0].data.length + ' pts', 4, H - 4);
 }
 
 function _drawSparkline(canvasId, data, color, fixedMin, fixedMax, percentage) {

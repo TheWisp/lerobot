@@ -184,8 +184,16 @@ class TD3Agent:
         z_rl: Tensor,
         state: Tensor,
         ref_chunk: Tensor,
-    ) -> float:
-        """Single actor gradient step. Returns loss value."""
+    ) -> tuple[float, float, float]:
+        """Single actor gradient step.
+
+        Returns:
+            (actor_loss, q_term, bc_term) where:
+              q_term = -Q.mean() (negative = Q gradient pushing actor to high-Q actions)
+              bc_term = β * ||a - ref||² (positive = BC penalty pulling toward ref)
+              actor_loss = q_term + bc_term
+            The ratio |q_term|/bc_term tells you which force dominates.
+        """
         beta = self.config.beta
 
         # Reference action dropout: zero out ref_chunk with probability p
@@ -201,10 +209,12 @@ class TD3Agent:
         # Paper Eq. 5: β||a - ã||²_2 — squared L2 norm (sum, not mean).
         # Sum over action dims (C×A), average over batch.
         bc_penalty = ((action - ref_chunk) ** 2).sum(dim=(-1, -2)).mean()
-        actor_loss = -q_val.mean() + beta * bc_penalty
+        q_term = -q_val.mean()
+        bc_term = beta * bc_penalty
+        actor_loss = q_term + bc_term
 
         self.actor_opt.zero_grad()
         actor_loss.backward()
         self.actor_opt.step()
 
-        return actor_loss.item()
+        return actor_loss.item(), q_term.item(), bc_term.item()

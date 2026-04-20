@@ -264,6 +264,7 @@ class InferenceThread:
         A = A_flat // C
 
         critic_sum, actor_sum = 0.0, 0.0
+        q_term_sum, bc_term_sum = 0.0, 0.0
         n_critic, n_actor = 0, 0
 
         for _ in range(cfg.utd_ratio):
@@ -280,16 +281,20 @@ class InferenceThread:
                 n_critic += 1
             # 1 actor update (Paper Alg 1 line 17)
             b = self._rlt_replay.sample(256)
-            al = self._rlt_agent.update_actor(
+            al, q_term, bc_term = self._rlt_agent.update_actor(
                 b["z_rl"], b["state"], b["ref"].reshape(-1, C, A),
             )
             actor_sum += al
+            q_term_sum += q_term
+            bc_term_sum += bc_term
             n_actor += 1
             self._rlt_state["total_updates"] += 1
 
         elapsed = (_time.perf_counter() - t0) * 1000
         avg_c = critic_sum / n_critic if n_critic else 0
         avg_a = actor_sum / n_actor if n_actor else 0
+        avg_q_term = q_term_sum / n_actor if n_actor else 0
+        avg_bc_term = bc_term_sum / n_actor if n_actor else 0
 
         # Log Q values for monitoring (Paper's primary metric for critic quality)
         with torch.no_grad():
@@ -303,9 +308,12 @@ class InferenceThread:
             q_max = qs.max().item()
 
         if self._rlt_state["total_updates"] % 10 < cfg.utd_ratio:
+            # q_term = -Q.mean (sign depends on critic; negative when Q>0 as expected).
+            # bc_term = β * ||a-ref||² (always ≥ 0, pulls actor toward S1 ref).
             logger.info(
-                "RLT grad | critic=%.4f actor=%.4f | Q: mean=%.4f min=%.4f max=%.4f | updates=%d | %.0fms",
-                avg_c, avg_a, q_mean, q_min, q_max,
+                "RLT grad | critic=%.4f actor=%.4f (q=%.4f bc=%.4f) | Q: mean=%.4f min=%.4f max=%.4f | updates=%d | %.0fms",
+                avg_c, avg_a, avg_q_term, avg_bc_term,
+                q_mean, q_min, q_max,
                 self._rlt_state["total_updates"], elapsed,
             )
 
@@ -317,6 +325,7 @@ class InferenceThread:
             total_updates=self._rlt_state["total_updates"],
             mode="TRAIN", critic_loss=avg_c, actor_loss=avg_a,
             q_mean=q_mean, q_min=q_min, q_max=q_max,
+            actor_q_term=avg_q_term, actor_bc_term=avg_bc_term,
         )
 
     def start(self) -> None:
