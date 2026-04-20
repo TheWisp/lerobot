@@ -186,6 +186,14 @@
                                 <span class="rlt-stat">Throughput: <b id="rlt-stat-throughput">0/10min</b></span>
                                 <span class="rlt-stat">Buffer: <b id="rlt-stat-buffer">0</b></span>
                                 <span class="rlt-stat">Updates: <b id="rlt-stat-updates">0</b></span>
+                                <span class="rlt-stat" style="margin-left:auto">History:
+                                    <select id="rlt-stat-history" style="margin-left:4px">
+                                        <option value="200">Last 200</option>
+                                        <option value="500">Last 500</option>
+                                        <option value="1000" selected>Last 1000</option>
+                                        <option value="5000">Last 5000</option>
+                                    </select>
+                                </span>
                             </div>
                             <div class="rlt-controls" id="rlt-controls" style="display:none">
                                 <label class="rlt-slider-label">β (BC weight)

@@ -90,6 +90,7 @@ See [docs/model_tab.md](docs/model_tab.md) for full design.
 - [Low] Text output freezes after a while — teleoperate uses ANSI cursor-up in piped stdout
 - [Low] Rerun web viewer has ~200ms visual lag (Rerun 0.26 limitation)
 - [Low] Replay FPS setting doesn't seem to affect playback speed — remove if not useful
+- [High] **RLT metrics pipeline is wasteful end-to-end**. Two compounding issues: (1) Training subprocess rewrites the entire `metrics.json` (~150KB for 5000 points × 8 series) on every save, even when only a few new points were appended — atomic write via `.tmp` + `os.replace` on each episode end and every 100 inference steps. (2) GUI polls `/api/run/rlt-metrics` every 2s and gets the same full snapshot back, of which ~99.6% is unchanged from the previous poll. Fine on localhost, wasteful otherwise. Options: append-only JSONL or shared memory on the write side; SSE push of only new points or cursor-based polling (`?since_step=N`) on the read side. Frontend maintains a local buffer.
 
 ### Dataset Debugging Overlay
 

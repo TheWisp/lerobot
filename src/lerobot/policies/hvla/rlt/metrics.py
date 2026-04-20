@@ -186,16 +186,16 @@ class RLTMetrics:
                     # Pre-computed rolling series (for chart, single source of truth)
                     "autonomous_rate_rolling": auto_rate_rolling[-200:],
                     # Training metrics (smoothed with rolling window for readability)
-                    "critic_losses": self._smooth(self.critic_losses[-200:], 20),
-                    "actor_losses": self._smooth(self.actor_losses[-200:], 20),
-                    "actor_deltas": self._smooth(self.actor_deltas[-200:], 20),
-                    "q_values_mean": self.q_values_mean[-200:],
-                    "q_values_min": self.q_values_min[-200:],
-                    "q_values_max": self.q_values_max[-200:],
-                    "actor_q_terms": self._smooth(self.actor_q_terms[-200:], 20),
-                    "actor_bc_terms": self._smooth(self.actor_bc_terms[-200:], 20),
+                    "critic_losses": self._smooth(self.critic_losses[-5000:], 20),
+                    "actor_losses": self._smooth(self.actor_losses[-5000:], 20),
+                    "actor_deltas": self._smooth(self.actor_deltas[-5000:], 20),
+                    "q_values_mean": self.q_values_mean[-5000:],
+                    "q_values_min": self.q_values_min[-5000:],
+                    "q_values_max": self.q_values_max[-5000:],
+                    "actor_q_terms": self._smooth(self.actor_q_terms[-5000:], 20),
+                    "actor_bc_terms": self._smooth(self.actor_bc_terms[-5000:], 20),
                     # Wall-clock timestamps aligned with per-step series (same index).
-                    "step_timestamps": self.step_timestamps[-200:],
+                    "step_timestamps": self.step_timestamps[-5000:],
                 },
             }
 

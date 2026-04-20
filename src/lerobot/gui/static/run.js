@@ -1841,7 +1841,23 @@ function _updateRLTDashboard(data) {
     set('rlt-stat-buffer', data.buffer_size?.toLocaleString() || '0');
     set('rlt-stat-updates', data.total_updates?.toLocaleString() || '0');
 
-    const s = data.series || {};
+    const rawS = data.series || {};
+
+    // Clip all per-step series to the user-selected history length
+    const nMax = parseInt(document.getElementById('rlt-stat-history')?.value) || 1000;
+    const clip = arr => (arr && arr.length > nMax) ? arr.slice(-nMax) : (arr || []);
+    const s = {
+        ...rawS,
+        critic_losses: clip(rawS.critic_losses),
+        actor_losses: clip(rawS.actor_losses),
+        actor_deltas: clip(rawS.actor_deltas),
+        q_values_mean: clip(rawS.q_values_mean),
+        q_values_min: clip(rawS.q_values_min),
+        q_values_max: clip(rawS.q_values_max),
+        actor_q_terms: clip(rawS.actor_q_terms),
+        actor_bc_terms: clip(rawS.actor_bc_terms),
+        step_timestamps: clip(rawS.step_timestamps),
+    };
 
     // Success rate uses episode axis, not synced with per-step charts
     if (s.autonomous_rate_rolling && s.autonomous_rate_rolling.length > 0) {
@@ -1901,6 +1917,11 @@ function _initRLTSliders() {
             sigmaVal.textContent = parseFloat(sigmaSlider.value).toFixed(3);
             _sendRLTConfig();
         };
+    }
+
+    const historySelect = document.getElementById('rlt-stat-history');
+    if (historySelect) {
+        historySelect.onchange = () => _fetchRLTMetrics();
     }
 }
 
