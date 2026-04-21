@@ -356,9 +356,12 @@ async def _apply_edits_locked(dataset_id: str):
     _app_state.clear_edits(dataset_id)
     clear_edits_file(original_root)
 
-    # Invalidate dataset-scoped caches (frame cache + video decoder cache).
+    # Invalidate all dataset-scoped caches. Edits change episode lengths,
+    # so the cumulative-sum cache (_episode_start_indices) must also be
+    # dropped — otherwise subsequent frame lookups use stale offsets.
     from lerobot.gui.cache_invalidation import invalidate_caches
-    invalidate_caches(_app_state, dataset_id)
+    from lerobot.gui.api.datasets import _invalidate_episode_start_indices
+    invalidate_caches(_app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices)
 
     # Reload dataset from disk to get updated metadata
     # We reload in-place to avoid LeRobotDataset constructor trying to access HuggingFace Hub
@@ -460,9 +463,12 @@ async def _merge_into_locked(source_id: str, target_id: str):
         logger.exception(f"Merge failed: {e}")
         raise HTTPException(status_code=500, detail=f"Merge failed: {e}")
 
-    # Invalidate caches for the merge target (new episodes added)
+    # Invalidate caches for the merge target (new episodes added — the
+    # cumulative-sum cache must be dropped so subsequent frame lookups
+    # pick up the grown dataset).
     from lerobot.gui.cache_invalidation import invalidate_caches
-    invalidate_caches(_app_state, target_id)
+    from lerobot.gui.api.datasets import _invalidate_episode_start_indices
+    invalidate_caches(_app_state, target_id, invalidate_episode_indices=_invalidate_episode_start_indices)
 
     logger.info(
         f"Merge complete: {target_ds.num_episodes} episodes, "
