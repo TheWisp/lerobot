@@ -245,15 +245,6 @@ async def discard_edits(dataset_id: str | None = None):
 @router.post("/apply")
 async def apply_edits(dataset_id: str):
     """Apply all pending edits for a dataset to disk."""
-    from pathlib import Path
-
-    from lerobot.datasets.dataset_tools import (
-        delete_episodes_virtual,
-        reaggregate_dataset_stats,
-        trim_episode_virtual,
-    )
-    from lerobot.datasets.utils import load_episodes
-
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
 
