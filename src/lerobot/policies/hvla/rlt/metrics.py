@@ -39,6 +39,10 @@ class RLTMetrics:
     # bc_term = β · ||a - ref||² (always ≥ 0, pulls actor toward S1 reference).
     actor_q_terms: list[float] = field(default_factory=list)
     actor_bc_terms: list[float] = field(default_factory=list)
+    # Actor updates per wall-clock second (new updates since last step / elapsed).
+    # Drops to ~0 during intervention, reset, or when the buffer is below the
+    # 256-sample minimum. Steady-state rate reflects GPU throughput.
+    update_rates: list[float] = field(default_factory=list)
     step_timestamps: list[float] = field(default_factory=list)
 
     # Current values
@@ -64,6 +68,7 @@ class RLTMetrics:
         q_max: float | None = None,
         actor_q_term: float | None = None,
         actor_bc_term: float | None = None,
+        update_rate: float | None = None,
     ) -> None:
         with self._lock:
             self.step_count = step
@@ -89,6 +94,8 @@ class RLTMetrics:
                 self.actor_q_terms.append(actor_q_term)
             if actor_bc_term is not None:
                 self.actor_bc_terms.append(actor_bc_term)
+            if update_rate is not None:
+                self.update_rates.append(update_rate)
 
             # Bound series length
             for series in (
@@ -96,6 +103,7 @@ class RLTMetrics:
                 self.critic_losses, self.actor_losses,
                 self.q_values_mean, self.q_values_min, self.q_values_max,
                 self.actor_q_terms, self.actor_bc_terms,
+                self.update_rates,
             ):
                 if len(series) > self._MAX_SERIES_LEN:
                     del series[:len(series) - self._MAX_SERIES_LEN]
@@ -194,6 +202,7 @@ class RLTMetrics:
                     "q_values_max": self.q_values_max[-5000:],
                     "actor_q_terms": self._smooth(self.actor_q_terms[-5000:], 20),
                     "actor_bc_terms": self._smooth(self.actor_bc_terms[-5000:], 20),
+                    "update_rates": self._smooth(self.update_rates[-5000:], 20),
                     # Wall-clock timestamps aligned with per-step series (same index).
                     "step_timestamps": self.step_timestamps[-5000:],
                 },

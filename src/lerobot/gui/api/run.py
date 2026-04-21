@@ -677,13 +677,26 @@ async def set_rlt_config(body: dict) -> dict:
         if key in body:
             val = float(body[key])
             filtered[key] = max(lo, min(hi, val))
+    # Boolean flags (no range)
+    if "dump_chunks" in body:
+        filtered["dump_chunks"] = bool(body["dump_chunks"])
     if not filtered:
-        raise HTTPException(400, f"No valid keys. Allowed: {list(allowed)}")
+        raise HTTPException(400, f"No valid keys. Allowed: beta, actor_sigma, dump_chunks")
     override_path = Path(_active_config["rlt_output_dir"]) / "rlt_overrides.json"
     try:
+        # Merge with existing file so partial updates (e.g. only dump_chunks)
+        # don't wipe other keys (beta, actor_sigma).
+        existing = {}
+        if override_path.exists():
+            try:
+                with open(override_path) as f:
+                    existing = _json.load(f)
+            except Exception:
+                pass
+        merged = {**existing, **filtered}
         tmp = str(override_path) + ".tmp"
         with open(tmp, "w") as f:
-            _json.dump(filtered, f)
+            _json.dump(merged, f)
         os.replace(tmp, str(override_path))
         logger.info("RLT config override written: %s", filtered)
         return {"status": "ok", **filtered}

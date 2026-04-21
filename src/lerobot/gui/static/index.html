@@ -186,7 +186,10 @@
                                 <span class="rlt-stat">Throughput: <b id="rlt-stat-throughput">0/10min</b></span>
                                 <span class="rlt-stat">Buffer: <b id="rlt-stat-buffer">0</b></span>
                                 <span class="rlt-stat">Updates: <b id="rlt-stat-updates">0</b></span>
-                                <span class="rlt-stat" style="margin-left:auto">History:
+                                <span class="rlt-stat" style="margin-left:auto">
+                                    <button id="rlt-btn-diagnostic" type="button" class="rlt-btn">Diagnostic: OFF</button>
+                                </span>
+                                <span class="rlt-stat">History:
                                     <select id="rlt-stat-history" style="margin-left:4px">
                                         <option value="200">Last 200</option>
                                         <option value="500">Last 500</option>
@@ -225,6 +228,10 @@
                                 <div class="rlt-chart-box">
                                     <div class="rlt-chart-title">Actor Loss Components (<span style="color:#e06c75">q</span> / <span style="color:#4fc3f7">bc</span>)</div>
                                     <canvas id="rlt-chart-actor-components" width="400" height="80"></canvas>
+                                </div>
+                                <div class="rlt-chart-box">
+                                    <div class="rlt-chart-title">Update Rate (actor updates/sec)</div>
+                                    <canvas id="rlt-chart-update-rate" width="400" height="80"></canvas>
                                 </div>
                             </div>
                         </div>

@@ -672,6 +672,7 @@ def run_s1(
                     m.q_values_max = s.get("q_values_max", [])
                     m.actor_q_terms = s.get("actor_q_terms", [])
                     m.actor_bc_terms = s.get("actor_bc_terms", [])
+                    m.update_rates = s.get("update_rates", [])
                     logger.info("RLT: Restored metrics from %s", metrics_path)
                 except Exception as e:
                     logger.warning("RLT: Failed to restore metrics: %s", e)

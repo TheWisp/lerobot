@@ -78,6 +78,8 @@ class InferenceThread:
         self._rlt_system_active = False
         self._rlt_prev: dict | None = None  # previous transition for replay buffer
         self._rlt_step_count: int = 0
+        self._rlt_last_update_time: float = 0.0  # wall-clock of last gradient call (for rate)
+        self._rlt_dump_chunks: bool = False  # diagnostic: dump ref/actor chunks to jsonl
 
         # RTC config
         self._supports_rtc = getattr(policy, "supports_rtc", False)
@@ -170,6 +172,27 @@ class InferenceThread:
                 actor_denorm = actor_norm
             actions[:, :C, :] = actor_denorm
 
+            # Dump ref vs actor chunks (normalized) for offline comparison.
+            # Gated by diagnostic toggle in GUI (rlt_overrides.json: dump_chunks).
+            try:
+                output_dir = self._rlt_state.get("output_dir")
+                if output_dir is not None and getattr(self, "_rlt_dump_chunks", False):
+                    import json as _json
+                    import time as _t
+                    dump_path = output_dir / "chunk_compare.jsonl"
+                    record = {
+                        "t": _t.time(),
+                        "step": self._rlt_step_count,
+                        "ep": self._rlt_state.get("episode", 0),
+                        "ref": ref_norm.squeeze(0).detach().cpu().tolist(),
+                        "actor": actor_norm.squeeze(0).detach().cpu().tolist(),
+                        "deploy": is_deploy,
+                    }
+                    with open(dump_path, "a") as f:
+                        f.write(_json.dumps(record) + "\n")
+            except Exception as e:
+                logger.warning("Failed to dump chunk comparison: %s", e)
+
         # Store transition in replay buffer (Paper Alg 1 line 12)
         # Guard: rlt_active may have been cleared by main thread during this call
         # (race between main thread setting flag and inference thread mid-method).
@@ -246,6 +269,12 @@ class InferenceThread:
                     if old != new:
                         setattr(cfg, key, new)
                         logger.info("RLT config override: %s %.4f → %.4f", key, old, new)
+            if "dump_chunks" in overrides:
+                new = bool(overrides["dump_chunks"])
+                old = getattr(self, "_rlt_dump_chunks", False)
+                if old != new:
+                    self._rlt_dump_chunks = new
+                    logger.info("RLT diagnostic dump: %s", "ON" if new else "OFF")
         except Exception as e:
             logger.warning("RLT config override read failed: %s", e)
 
@@ -256,6 +285,14 @@ class InferenceThread:
         """
         import time as _time
         t0 = _time.perf_counter()
+
+        # Compute wall-clock update rate = UTD / elapsed since last call.
+        # First call or long gap: rate = 0 (treat as non-training time).
+        if self._rlt_last_update_time > 0:
+            elapsed_since_last = t0 - self._rlt_last_update_time
+        else:
+            elapsed_since_last = 0.0
+        self._rlt_last_update_time = t0
 
         self._rlt_check_config_overrides()
         cfg = self._rlt_state["config"]
@@ -319,6 +356,9 @@ class InferenceThread:
 
         # Update metrics with Q values
         from lerobot.policies.hvla.rlt.metrics import get_metrics
+        # Update rate: actor updates since last call / elapsed time.
+        # 0 on first call or after a long pause (intervention/reset).
+        update_rate = cfg.utd_ratio / elapsed_since_last if elapsed_since_last > 0 else 0.0
         get_metrics().record_step(
             step=self._rlt_step_count, delta=0,
             buffer_size=len(self._rlt_replay) if self._rlt_replay else 0,
@@ -326,6 +366,7 @@ class InferenceThread:
             mode="TRAIN", critic_loss=avg_c, actor_loss=avg_a,
             q_mean=q_mean, q_min=q_min, q_max=q_max,
             actor_q_term=avg_q_term, actor_bc_term=avg_bc_term,
+            update_rate=update_rate,
         )
 
     def start(self) -> None:

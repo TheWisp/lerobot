@@ -1856,6 +1856,7 @@ function _updateRLTDashboard(data) {
         q_values_max: clip(rawS.q_values_max),
         actor_q_terms: clip(rawS.actor_q_terms),
         actor_bc_terms: clip(rawS.actor_bc_terms),
+        update_rates: clip(rawS.update_rates),
         step_timestamps: clip(rawS.step_timestamps),
     };
 
@@ -1894,6 +1895,11 @@ function _updateRLTDashboard(data) {
             {data: s.actor_bc_terms || [], color: '#4fc3f7', label: 'bc'},
         ]);
     }
+    if (s.update_rates && s.update_rates.length > 0) {
+        _registerSyncedChart('rlt-chart-update-rate', [
+            {data: s.update_rates, color: '#bd93f9', label: 'rate'},
+        ]);
+    }
 }
 
 let _rltConfigTimer = null;
@@ -1922,6 +1928,22 @@ function _initRLTSliders() {
     const historySelect = document.getElementById('rlt-stat-history');
     if (historySelect) {
         historySelect.onchange = () => _fetchRLTMetrics();
+    }
+
+    const diagBtn = document.getElementById('rlt-btn-diagnostic');
+    if (diagBtn) {
+        diagBtn.onclick = async () => {
+            const on = !diagBtn.classList.contains('active');
+            diagBtn.classList.toggle('active', on);
+            diagBtn.textContent = on ? 'Diagnostic: ON' : 'Diagnostic: OFF';
+            try {
+                await fetch('/api/run/rlt-config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({dump_chunks: on}),
+                });
+            } catch (e) { /* ignore */ }
+        };
     }
 }
 
@@ -1965,6 +1987,19 @@ function _fmtAgo(ts) {
     return Math.round(ago / 3600) + 'h ago';
 }
 
+// Returns the max series length across all synced charts — shared X axis
+function _syncedGlobalN() {
+    let maxN = 1;
+    for (const c of Object.values(_syncedCharts)) {
+        for (const s of c.series) {
+            if (s.data && s.data.length > maxN) maxN = s.data.length;
+        }
+    }
+    // Also account for step_timestamps, which may be longer than any chart's series
+    if (_syncedTimestamps.length > maxN) maxN = _syncedTimestamps.length;
+    return maxN;
+}
+
 function _renderSyncedChart(id) {
     const c = _syncedCharts[id];
     if (!c) return;
@@ -1987,9 +2022,14 @@ function _renderSyncedChart(id) {
         ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(W, zeroY); ctx.stroke();
     }
 
-    const N = Math.max(...series.map(s => s.data.length), 1);
-    const toX = i => (i / Math.max(N - 1, 1)) * W;
+    // Shared global N across all synced charts. Each series is right-aligned:
+    // short series occupy the right portion, long series fill the canvas.
+    const N = _syncedGlobalN();
     const toY = v => pad + (H - 2 * pad) * (1 - (v - min) / range);
+    // toX for global index (0..N-1)
+    const toXGlobal = i => (i / Math.max(N - 1, 1)) * W;
+    // Right-align a series: convert local data index to global x
+    const globalIdxForSeries = (s, localIdx) => (N - s.data.length) + localIdx;
 
     // Optional min/max band fill (pair of series with `bandPair` key)
     const bandMin = series.find(s => s.bandPair === 'min');
@@ -1997,8 +2037,12 @@ function _renderSyncedChart(id) {
     if (bandMin && bandMax && bandMin.data.length > 0 && bandMax.data.length > 0) {
         ctx.fillStyle = (bandMin.bandColor || bandMin.color) + '33';  // ~20% opacity
         ctx.beginPath();
-        for (let i = 0; i < bandMax.data.length; i++) ctx.lineTo(toX(i), toY(bandMax.data[i]));
-        for (let i = bandMin.data.length - 1; i >= 0; i--) ctx.lineTo(toX(i), toY(bandMin.data[i]));
+        for (let i = 0; i < bandMax.data.length; i++) {
+            ctx.lineTo(toXGlobal(globalIdxForSeries(bandMax, i)), toY(bandMax.data[i]));
+        }
+        for (let i = bandMin.data.length - 1; i >= 0; i--) {
+            ctx.lineTo(toXGlobal(globalIdxForSeries(bandMin, i)), toY(bandMin.data[i]));
+        }
         ctx.closePath();
         ctx.fill();
     }
@@ -2010,46 +2054,56 @@ function _renderSyncedChart(id) {
         ctx.strokeStyle = s.color; ctx.lineWidth = 1.5;
         ctx.beginPath();
         for (let i = 0; i < s.data.length; i++) {
-            const x = toX(i);
+            const x = toXGlobal(globalIdxForSeries(s, i));
             const y = toY(s.data[i]);
             if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }
         ctx.stroke();
     }
 
-    // Crosshair
+    // Crosshair at global index
     if (_hoverIndex >= 0 && _hoverIndex < N) {
-        const x = (_hoverIndex / Math.max(N - 1, 1)) * W;
+        const x = toXGlobal(_hoverIndex);
         ctx.strokeStyle = '#888'; ctx.lineWidth = 1;
         ctx.setLineDash([2, 2]);
         ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
         ctx.setLineDash([]);
     }
 
-    // Value labels (top-right) — at hover index if hovering, else last value
+    // Value labels (top-right) — at hover global index if hovering, else last value
     ctx.font = '10px monospace';
     ctx.textAlign = 'right';
-    const showIdx = _hoverIndex >= 0 ? _hoverIndex : -1;
     for (let i = 0; i < series.length; i++) {
         const s = series[i];
         if (s.data.length === 0) continue;
-        const idx = showIdx >= 0 && showIdx < s.data.length ? showIdx : s.data.length - 1;
-        const v = s.data[idx];
+        let localIdx;
+        if (_hoverIndex >= 0) {
+            // Convert global index to local: subtract the right-align offset.
+            localIdx = _hoverIndex - (N - s.data.length);
+            if (localIdx < 0 || localIdx >= s.data.length) {
+                // Hover is before this series started — skip
+                ctx.fillStyle = s.color;
+                ctx.fillText('—', W - 4, 12 + i * 12);
+                continue;
+            }
+        } else {
+            localIdx = s.data.length - 1;
+        }
+        const v = s.data[localIdx];
         const label = s.percentage ? (v * 100).toFixed(0) + '%' : v.toFixed(4);
         ctx.fillStyle = s.color;
         ctx.fillText(label, W - 4, 12 + i * 12);
     }
 
-    // Step/time label (bottom-left)
+    // Step/time label (bottom-left) — uses global index consistently
     ctx.fillStyle = '#444';
     ctx.textAlign = 'left';
     if (_hoverIndex >= 0) {
-        // Global step: rightmost data point is at step _syncedLatestStep
         const globalStep = _syncedLatestStep - (N - 1 - _hoverIndex);
-        // Align timestamps from the right (shorter arrays right-aligned)
-        const tsOffset = N - _syncedTimestamps.length;
-        const tsIdx = _hoverIndex - tsOffset;
-        const ts = tsIdx >= 0 ? _syncedTimestamps[tsIdx] : null;
+        // Timestamps are also right-aligned within N
+        const tsLocalIdx = _hoverIndex - (N - _syncedTimestamps.length);
+        const ts = tsLocalIdx >= 0 && tsLocalIdx < _syncedTimestamps.length
+            ? _syncedTimestamps[tsLocalIdx] : null;
         const label = ts
             ? `step ${globalStep}  ${_fmtTime(ts)} (${_fmtAgo(ts)})`
             : `step ${globalStep}`;
@@ -2088,7 +2142,9 @@ function _registerSyncedChart(canvasId, seriesList) {
             const x = e.clientX - r.left;
             const c = _syncedCharts[canvasId];
             if (!c) return;
-            const N = Math.max(...c.series.map(s => s.data.length), 1);
+            // Use GLOBAL N (shared across all synced charts) so hover index
+            // maps consistently regardless of which chart the mouse is on.
+            const N = _syncedGlobalN();
             _hoverIndex = Math.min(N - 1, Math.max(0, Math.round((x / c.W) * (N - 1))));
             for (const id of Object.keys(_syncedCharts)) _renderSyncedChart(id);
         });
