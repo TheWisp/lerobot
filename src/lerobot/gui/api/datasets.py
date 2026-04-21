@@ -180,13 +180,8 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
         finally:
             hf_datasets.enable_caching()
 
-        # Invalidate frame cache for this dataset
-        num_invalidated = _app_state.frame_cache.invalidate_dataset(dataset_id)
-        if num_invalidated > 0:
-            logger.info(f"Invalidated {num_invalidated} cached frames")
-
-        # Invalidate episode start index cache
-        _invalidate_episode_start_indices(dataset_id)
+        from lerobot.gui.cache_invalidation import invalidate_caches
+        invalidate_caches(_app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices)
 
         # Verify dataset integrity after reload
         from lerobot.datasets.dataset_tools import verify_dataset
@@ -1450,14 +1445,8 @@ async def hub_download(dataset_id: str, request: HubDownloadRequest | None = Non
 
             reload_dataset_from_disk(dataset, root=root)
 
-            # Invalidate caches
-            _app_state.frame_cache.invalidate_dataset(dataset_id)
-            try:
-                from lerobot.datasets.video_utils import _default_decoder_cache
-                _default_decoder_cache.clear()
-            except Exception:
-                pass
-            _invalidate_episode_start_indices(dataset_id)
+            from lerobot.gui.cache_invalidation import invalidate_caches
+            invalidate_caches(_app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices)
 
         except Exception as e:
             logger.exception(f"Reload after download failed: {e}")

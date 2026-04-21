@@ -356,22 +356,9 @@ async def _apply_edits_locked(dataset_id: str):
     _app_state.clear_edits(dataset_id)
     clear_edits_file(original_root)
 
-    # Invalidate frame cache for this dataset
-    logger.info(f"Invalidating frame cache for {dataset_id}...")
-    num_invalidated = _app_state.frame_cache.invalidate_dataset(dataset_id)
-    logger.info(f"Invalidated {num_invalidated} cached frames")
-
-    # Clear video decoder cache to ensure fresh video data is loaded
-    # The video decoder caches file handles which may become stale after edits
-    try:
-        from lerobot.datasets.video_utils import _default_decoder_cache
-
-        cache_size = _default_decoder_cache.size()
-        if cache_size > 0:
-            _default_decoder_cache.clear()
-            logger.info(f"Cleared video decoder cache ({cache_size} entries)")
-    except Exception as e:
-        logger.warning(f"Could not clear video decoder cache: {e}")
+    # Invalidate dataset-scoped caches (frame cache + video decoder cache).
+    from lerobot.gui.cache_invalidation import invalidate_caches
+    invalidate_caches(_app_state, dataset_id)
 
     # Reload dataset from disk to get updated metadata
     # We reload in-place to avoid LeRobotDataset constructor trying to access HuggingFace Hub
@@ -473,17 +460,9 @@ async def _merge_into_locked(source_id: str, target_id: str):
         logger.exception(f"Merge failed: {e}")
         raise HTTPException(status_code=500, detail=f"Merge failed: {e}")
 
-    # Invalidate frame cache for target (new episodes added)
-    num_invalidated = _app_state.frame_cache.invalidate_dataset(target_id)
-    logger.info(f"Invalidated {num_invalidated} cached frames for target")
-
-    # Clear video decoder cache
-    try:
-        from lerobot.datasets.video_utils import _default_decoder_cache
-
-        _default_decoder_cache.clear()
-    except Exception:
-        pass
+    # Invalidate caches for the merge target (new episodes added)
+    from lerobot.gui.cache_invalidation import invalidate_caches
+    invalidate_caches(_app_state, target_id)
 
     logger.info(
         f"Merge complete: {target_ds.num_episodes} episodes, "
