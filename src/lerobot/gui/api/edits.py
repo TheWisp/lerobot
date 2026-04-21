@@ -376,50 +376,11 @@ async def _apply_edits_locked(dataset_id: str):
     # Reload dataset from disk to get updated metadata
     # We reload in-place to avoid LeRobotDataset constructor trying to access HuggingFace Hub
     try:
-        from lerobot.datasets.utils import (
-            load_info,
-            load_stats,
-            load_tasks,
-            load_nested_dataset,
-            get_hf_features_from_features,
-            hf_transform_to_torch,
-        )
-        import datasets
+        from lerobot.gui.dataset_reload import reload_dataset_from_disk
 
         old_dataset = _app_state.datasets[dataset_id]
-        root = old_dataset.root
-
-        logger.info(f"Reloading dataset from {root}")
-
-        # Reload all metadata from disk
-        old_dataset.meta.info = load_info(root)
-        old_dataset.meta.episodes = load_episodes(root)
-        old_dataset.meta.stats = load_stats(root)
-        old_dataset.meta.tasks = load_tasks(root)
-
-        # Clean up any existing HuggingFace cache files for this dataset
-        # This ensures we load fresh data, not cached Arrow files
-        if old_dataset.hf_dataset is not None:
-            try:
-                num_cleaned = old_dataset.hf_dataset.cleanup_cache_files()
-                if num_cleaned > 0:
-                    logger.info(f"Cleaned up {num_cleaned} cache files")
-            except Exception as e:
-                logger.warning(f"Could not cleanup cache files: {e}")
-
-        # Reload the HuggingFace dataset from parquet files
-        # Use disable_caching to ensure fresh data is loaded
-        datasets.disable_caching()
-        try:
-            features = get_hf_features_from_features(old_dataset.meta.features)
-            old_dataset.hf_dataset = load_nested_dataset(root / "data", features=features)
-            old_dataset.hf_dataset.set_transform(hf_transform_to_torch)
-            # CRITICAL: Set _lazy_loading to False to prevent _ensure_hf_dataset_loaded
-            # from reloading stale cached data and overwriting our fresh hf_dataset
-            old_dataset._lazy_loading = False
-        finally:
-            datasets.enable_caching()
-
+        logger.info(f"Reloading dataset from {old_dataset.root}")
+        reload_dataset_from_disk(old_dataset)
         logger.info(f"Reloaded dataset {dataset_id}: {old_dataset.meta.total_episodes} episodes, {old_dataset.meta.total_frames} frames")
 
     except Exception as e:

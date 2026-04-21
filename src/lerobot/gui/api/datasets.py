@@ -819,8 +819,8 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             raise HTTPException(status_code=400, detail="Must provide either repo_id or local_path")
 
         # Ensure episodes are loaded
-        if dataset.meta.episodes is None:
-            dataset.meta.episodes = load_episodes(dataset.root)
+        from lerobot.gui.dataset_reload import ensure_episodes_loaded
+        ensure_episodes_loaded(dataset)
 
         # Check and repair episode metadata indices if needed
         from lerobot.datasets.dataset_tools import repair_episode_indices, verify_dataset
@@ -1446,37 +1446,9 @@ async def hub_download(dataset_id: str, request: HubDownloadRequest | None = Non
 
         # Reload dataset in-place (same pattern as merge_into / apply_edits)
         try:
-            import datasets as hf_datasets
+            from lerobot.gui.dataset_reload import reload_dataset_from_disk
 
-            from lerobot.datasets.utils import (
-                get_hf_features_from_features,
-                hf_transform_to_torch,
-                load_episodes,
-                load_info,
-                load_stats,
-                load_tasks,
-                load_nested_dataset,
-            )
-
-            dataset.meta.info = load_info(root)
-            dataset.meta.episodes = load_episodes(root)
-            dataset.meta.stats = load_stats(root)
-            dataset.meta.tasks = load_tasks(root)
-
-            if dataset.hf_dataset is not None:
-                try:
-                    dataset.hf_dataset.cleanup_cache_files()
-                except Exception:
-                    pass
-
-            hf_datasets.disable_caching()
-            try:
-                features = get_hf_features_from_features(dataset.meta.features)
-                dataset.hf_dataset = load_nested_dataset(root / "data", features=features)
-                dataset.hf_dataset.set_transform(hf_transform_to_torch)
-                dataset._lazy_loading = False
-            finally:
-                hf_datasets.enable_caching()
+            reload_dataset_from_disk(dataset, root=root)
 
             # Invalidate caches
             _app_state.frame_cache.invalidate_dataset(dataset_id)

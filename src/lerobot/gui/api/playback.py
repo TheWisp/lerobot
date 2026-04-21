@@ -84,9 +84,8 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
         ds = get_dataset()
         if ds is None:
             return {}
-        if ds.meta.episodes is None:
-            from lerobot.datasets.utils import load_episodes
-            ds.meta.episodes = load_episodes(ds.root)
+        from lerobot.gui.dataset_reload import ensure_episodes_loaded
+        ensure_episodes_loaded(ds)
         return ds.meta.episodes
 
     def get_episode_length(ep_idx: int) -> int:
