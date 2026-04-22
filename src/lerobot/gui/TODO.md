@@ -116,8 +116,6 @@ Live overlay during teleop/record showing how the current state compares to the 
 - [**Critical**] **Reactive UI state management**: the current imperative DOM manipulation (innerHTML + manual toggle/refresh calls scattered across functions) is fundamentally broken. Field state (disabled, visible, selected) must be called at every possible code path that reveals the element, leading to endless monkey-patching. Migrate to a reactive pattern where UI state is derived from data (React, Preact, or even a minimal reactive store + render loop). This blocks every new UI feature.
 - [Mid] Cross-tab data synchronization — replace point-to-point refresh calls with pub/sub event bus
 - [High] Extract frontend to separate files (then optionally migrate to React/Vite)
-- [Mid] Extract `reload_dataset_from_disk()` — currently duplicated in edits.py and datasets.py
-- [Mid] Extract `ensure_episodes_loaded()` helper — pattern appears 4+ times
 - [Mid] FastAPI dependency injection for AppState — replace global `_app_state` with `Depends(get_app_state)`
 - [Mid] Consolidate module-level caches (`_episode_start_indices`, `_dataset_info_mtime`) into AppState
 
