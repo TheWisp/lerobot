@@ -664,6 +664,42 @@ async def get_rlt_metrics() -> dict:
             "total_successes": 0, "total_episodes": 0, "series": {}}
 
 
+@router.get("/rlt-config")
+async def get_rlt_config() -> dict:
+    """Return current RLT override values so the GUI sliders can show the
+    actually-applied settings instead of their hardcoded HTML defaults.
+
+    Falls back to ``RLTConfig`` defaults for any key not present in the file,
+    so the GUI always has a value to display. Returns empty dict when no RLT
+    session is active.
+    """
+    import json as _json
+    from lerobot.policies.hvla.rlt.config import RLTConfig
+
+    defaults = RLTConfig()
+    result = {
+        "beta": defaults.beta,
+        "actor_sigma": defaults.actor_sigma,
+        "dump_chunks": False,
+    }
+    if not _active_config or not _active_config.get("rlt_output_dir"):
+        return result
+    override_path = Path(_active_config["rlt_output_dir"]) / "rlt_overrides.json"
+    if not override_path.exists():
+        return result
+    try:
+        with open(override_path) as f:
+            overrides = _json.load(f)
+        for key in ("beta", "actor_sigma"):
+            if key in overrides:
+                result[key] = float(overrides[key])
+        if "dump_chunks" in overrides:
+            result["dump_chunks"] = bool(overrides["dump_chunks"])
+    except Exception as e:
+        logger.warning("RLT config read failed: %s", e)
+    return result
+
+
 @router.post("/rlt-config")
 async def set_rlt_config(body: dict) -> dict:
     """Write RLT config overrides for the training subprocess to pick up."""

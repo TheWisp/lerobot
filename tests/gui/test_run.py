@@ -600,3 +600,81 @@ class TestObsReaderCleanupOnLaunch:
 
         # Cleanup
         run_module._obs_reader_meta_ino = None
+
+
+# ============================================================================
+# GET /api/run/rlt-config — slider seed endpoint
+# ============================================================================
+
+
+class TestGetRltConfig:
+    """The GUI sliders seed from this endpoint on init so they reflect what
+    the training process actually has applied, not HTML hardcoded defaults.
+    """
+
+    @pytest.fixture
+    def reset_active(self):
+        import lerobot.gui.api.run as run_module
+        prev = run_module._active_config
+        run_module._active_config = None
+        yield run_module
+        run_module._active_config = prev
+
+    def test_no_active_session_returns_defaults(self, reset_active):
+        """Before any RLT session starts, endpoint returns RLTConfig defaults.
+        Without this the GUI would crash trying to read undefined state."""
+        from lerobot.policies.hvla.rlt.config import RLTConfig
+        from lerobot.gui.api.run import get_rlt_config
+
+        cfg = asyncio.run(get_rlt_config())
+        defaults = RLTConfig()
+        assert cfg["beta"] == defaults.beta
+        assert cfg["actor_sigma"] == defaults.actor_sigma
+        assert cfg["dump_chunks"] is False
+
+    def test_reads_current_override_values(self, reset_active, tmp_path):
+        """The whole point: the value on disk must round-trip to the GUI.
+        Before this endpoint existed, the slider hardcoded 0.02 regardless
+        of what the training process was using (the bug we're fixing)."""
+        from lerobot.gui.api.run import get_rlt_config
+
+        (tmp_path / "rlt_overrides.json").write_text(
+            json.dumps({"beta": 0.5, "actor_sigma": 0.0, "dump_chunks": True})
+        )
+        reset_active._active_config = {"rlt_output_dir": str(tmp_path)}
+        cfg = asyncio.run(get_rlt_config())
+        assert cfg["beta"] == 0.5
+        assert cfg["actor_sigma"] == 0.0
+        assert cfg["dump_chunks"] is True
+
+    def test_partial_override_fills_missing_keys_from_defaults(self, reset_active, tmp_path):
+        """Old override files may predate some keys. Missing keys fall back
+        to config defaults so the GUI always has a value to show."""
+        from lerobot.gui.api.run import get_rlt_config
+        from lerobot.policies.hvla.rlt.config import RLTConfig
+
+        (tmp_path / "rlt_overrides.json").write_text(json.dumps({"beta": 0.3}))
+        reset_active._active_config = {"rlt_output_dir": str(tmp_path)}
+        cfg = asyncio.run(get_rlt_config())
+        assert cfg["beta"] == 0.3
+        assert cfg["actor_sigma"] == RLTConfig().actor_sigma
+        assert cfg["dump_chunks"] is False
+
+    def test_missing_file_returns_defaults(self, reset_active, tmp_path):
+        """Fresh RLT session hasn't written the file yet — don't 404."""
+        from lerobot.gui.api.run import get_rlt_config
+        from lerobot.policies.hvla.rlt.config import RLTConfig
+
+        reset_active._active_config = {"rlt_output_dir": str(tmp_path)}
+        cfg = asyncio.run(get_rlt_config())
+        assert cfg["beta"] == RLTConfig().beta
+
+    def test_malformed_file_returns_defaults(self, reset_active, tmp_path):
+        """Never break the GUI over a corrupt override file."""
+        from lerobot.gui.api.run import get_rlt_config
+        from lerobot.policies.hvla.rlt.config import RLTConfig
+
+        (tmp_path / "rlt_overrides.json").write_text("not json {{{")
+        reset_active._active_config = {"rlt_output_dir": str(tmp_path)}
+        cfg = asyncio.run(get_rlt_config())
+        assert cfg["beta"] == RLTConfig().beta

@@ -1903,7 +1903,7 @@ function _updateRLTDashboard(data) {
 }
 
 let _rltConfigTimer = null;
-function _initRLTSliders() {
+async function _initRLTSliders() {
     const controls = document.getElementById('rlt-controls');
     if (controls) controls.style.display = '';
 
@@ -1911,6 +1911,30 @@ function _initRLTSliders() {
     const sigmaSlider = document.getElementById('rlt-slider-sigma');
     const betaVal = document.getElementById('rlt-slider-beta-val');
     const sigmaVal = document.getElementById('rlt-slider-sigma-val');
+    const diagBtn = document.getElementById('rlt-btn-diagnostic');
+
+    // Seed controls from the backend so sliders show the values actually
+    // applied to the training process, not the HTML's hardcoded defaults.
+    // Without this, a page reload makes the UI lie about current β / σ.
+    try {
+        const resp = await fetch('/api/run/rlt-config');
+        if (resp.ok) {
+            const cfg = await resp.json();
+            if (betaSlider && typeof cfg.beta === 'number') {
+                betaSlider.value = cfg.beta;
+                if (betaVal) betaVal.textContent = cfg.beta.toFixed(2);
+            }
+            if (sigmaSlider && typeof cfg.actor_sigma === 'number') {
+                sigmaSlider.value = cfg.actor_sigma;
+                if (sigmaVal) sigmaVal.textContent = cfg.actor_sigma.toFixed(3);
+            }
+            if (diagBtn) {
+                const on = !!cfg.dump_chunks;
+                diagBtn.classList.toggle('active', on);
+                diagBtn.textContent = on ? 'Diagnostic: ON' : 'Diagnostic: OFF';
+            }
+        }
+    } catch (e) { /* backend unreachable — keep HTML defaults */ }
 
     if (betaSlider) {
         betaSlider.oninput = () => {
@@ -1930,7 +1954,6 @@ function _initRLTSliders() {
         historySelect.onchange = () => _fetchRLTMetrics();
     }
 
-    const diagBtn = document.getElementById('rlt-btn-diagnostic');
     if (diagBtn) {
         diagBtn.onclick = async () => {
             const on = !diagBtn.classList.contains('active');
