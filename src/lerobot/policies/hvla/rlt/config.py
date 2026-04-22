@@ -50,3 +50,12 @@ class RLTConfig:
 
     # --- Warmup ---
     warmup_episodes: int = 10             # VLA executes, actor/critic train on VLA data
+
+    def is_warmup(self, episode: int) -> bool:
+        """True when the 0-indexed episode is part of warmup.
+
+        With ``warmup_episodes=10``, episodes 0..9 are warmup (10 total) and
+        ep10 is the first non-warmup episode. Guard against off-by-one by
+        using this helper instead of inlining the comparison.
+        """
+        return episode < self.warmup_episodes

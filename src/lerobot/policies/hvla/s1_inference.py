@@ -135,7 +135,7 @@ class InferenceThread:
         """
         cfg = self._rlt_state["config"]
         C = cfg.rl_chunk_length
-        is_warmup = self._rlt_state["episode"] <= cfg.warmup_episodes
+        is_warmup = cfg.is_warmup(self._rlt_state["episode"])
 
         # Normalize state
         state_t = batch.get("observation.state")

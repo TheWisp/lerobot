@@ -572,7 +572,11 @@ def run_s1(
             )
 
         rlt_state = {
-            "config": rlt_config, "episode": 0,
+            "config": rlt_config,
+            # 0-indexed episode counter. -1 means "no episode has started yet";
+            # incremented at the top of each episode so the first runs as ep0.
+            # Stored value on disk = index of last completed episode.
+            "episode": -1,
             "total_updates": 0, "total_transitions": 0,
             "successes": [], "reward_triggered": False,
             "output_dir": Path(rlt_output_dir),
@@ -876,6 +880,10 @@ def run_s1(
 
         # RLT: activate collection for this episode
         if rlt_mode:
+            # Advance to this episode's 0-indexed number BEFORE anything reads
+            # `rlt_state["episode"]` (warmup check in inference thread,
+            # chunk_compare dump, metrics). Fresh run: -1 -> 0 for ep0.
+            rlt_state["episode"] += 1
             infer_thread._rlt_system_active = True
             infer_thread._rlt_user_engaged = rlt_start_engaged
             infer_thread._rlt_prev = None
@@ -1456,7 +1464,7 @@ def run_s1(
             ep_duration = time.time() - episode_start
 
             rlt_state["successes"].append(success)
-            rlt_state["episode"] += 1
+            # NOTE: episode counter is incremented at episode start, not here.
             recent = rlt_state["successes"][-20:]
 
             auto_label = "AUTONOMOUS" if autonomous else ("ASSISTED" if success else "FAIL")

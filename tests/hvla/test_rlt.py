@@ -422,6 +422,36 @@ class TestMetrics:
 
 
 # ===================================================================
+# Config: warmup episode boundary (0-indexed)
+# ===================================================================
+
+class TestWarmupBoundary:
+    """Guards against the pre-migration off-by-one where ``episode <=
+    warmup_episodes`` with a 1-indexed counter incremented at episode END
+    caused ``warmup_episodes=10`` to actually warm up 11 episodes.
+    """
+
+    def test_first_episode_is_warmup(self):
+        cfg = RLTConfig(warmup_episodes=10)
+        assert cfg.is_warmup(0), "Episode 0 must be warmup (0-indexed)"
+
+    def test_last_warmup_episode_included(self):
+        cfg = RLTConfig(warmup_episodes=10)
+        assert cfg.is_warmup(9), "Episode 9 must still be warmup with warmup_episodes=10"
+
+    def test_first_non_warmup_episode_excluded(self):
+        cfg = RLTConfig(warmup_episodes=10)
+        assert not cfg.is_warmup(10), (
+            "Episode 10 must NOT be warmup. If this fires, we've regressed "
+            "to the pre-migration off-by-one (11 warmup episodes instead of 10)."
+        )
+
+    def test_warmup_zero_disables_warmup(self):
+        cfg = RLTConfig(warmup_episodes=0)
+        assert not cfg.is_warmup(0), "warmup_episodes=0 must disable warmup entirely"
+
+
+# ===================================================================
 # Helpers
 # ===================================================================
 
