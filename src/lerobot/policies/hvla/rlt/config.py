@@ -15,6 +15,13 @@ class RLTConfig:
 
     # --- RL Token (Phase 1) ---
     rl_token_dim: int = 768               # bottleneck dim (matches S1 hidden_dim)
+    # Dim of S1 context tokens fed into the encoder. ``None`` means "same
+    # as rl_token_dim" (symmetric setup — the original). Set explicitly
+    # when widening the bottleneck beyond S1's hidden_dim (e.g. to match
+    # the paper's 2048). Encoder then adds an input projection
+    # (context_dim → rl_token_dim) and decoder a matching output
+    # projection so reconstruction lands back in context_dim space.
+    context_dim: int | None = None
     token_encoder_layers: int = 2         # small transformer encoder
     token_decoder_layers: int = 2         # small transformer decoder
     token_num_heads: int = 4

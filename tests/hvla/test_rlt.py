@@ -520,6 +520,74 @@ class TestTokenCheckpointManifest:
         # Would raise RuntimeError if the manifest mechanism failed
         rebuilt.load_state_dict(torch.load(tmp_path / "encoder.pt"))
 
+    def test_asymmetric_context_dim_round_trips(self, tmp_path):
+        """Guard for the widened-bottleneck setup (context_dim != rl_token_dim).
+        The encoder must accept [B, N, context_dim] input, the decoder must
+        reconstruct back into [B, N, context_dim] — otherwise the loss
+        compares tensors of different shape and training explodes.
+
+        Also verifies the manifest round-trips context_dim so loaders
+        rebuild the same input/output projections that were trained.
+        """
+        # Widened: ctx=64, bottleneck=128 (mimics our 768 → 2048 experiment)
+        trained_cfg = RLTConfig(
+            rl_token_dim=128, context_dim=64,
+            token_encoder_layers=2, token_ffn_dim=128,
+        )
+        enc = RLTokenEncoder(trained_cfg)
+        dec = RLTokenDecoder(trained_cfg)
+
+        # Input has context_dim channels; output z_rl must have rl_token_dim;
+        # reconstruction must land back in context_dim.
+        ctx = torch.randn(3, 10, 64)        # [B=3, N=10, C=64]
+        z_rl = enc(ctx)
+        assert z_rl.shape == (3, 128), (
+            f"z_rl shape {z_rl.shape} — expected [B, rl_token_dim] = [3, 128]"
+        )
+        recon = dec(z_rl, ctx)
+        assert recon.shape == ctx.shape, (
+            f"Reconstruction shape {recon.shape} must equal target shape "
+            f"{ctx.shape} — otherwise the reconstruction loss can't compare them"
+        )
+
+        # Manifest round-trip
+        torch.save(enc.state_dict(), tmp_path / "encoder.pt")
+        torch.save(dec.state_dict(), tmp_path / "decoder.pt")
+        save_rlt_token_config(tmp_path, trained_cfg)
+
+        # Loader starts with a runtime base that knows nothing about
+        # context_dim — must pick it up from the manifest.
+        runtime_base = RLTConfig(rl_token_dim=128)  # default token_ffn_dim=2048
+        loader_cfg = load_rlt_token_config(tmp_path, base=runtime_base)
+        assert loader_cfg.context_dim == 64
+        assert loader_cfg.rl_token_dim == 128
+        # Rebuild + load — would raise if the projections had wrong shape
+        rebuilt_enc = RLTokenEncoder(loader_cfg)
+        rebuilt_dec = RLTokenDecoder(loader_cfg)
+        rebuilt_enc.load_state_dict(torch.load(tmp_path / "encoder.pt"))
+        rebuilt_dec.load_state_dict(torch.load(tmp_path / "decoder.pt"))
+
+    def test_symmetric_setup_has_no_projection_params(self, tmp_path):
+        """Backward compatibility: when context_dim is None (default), the
+        encoder and decoder must NOT introduce any new parameters. Older
+        checkpoints from before this feature load via existing state_dict
+        keys unchanged — state_dict keys are determined by module types,
+        and nn.Identity has zero keys."""
+        cfg = RLTConfig(rl_token_dim=64, context_dim=None,
+                        token_encoder_layers=1, token_ffn_dim=32)
+        enc = RLTokenEncoder(cfg)
+        dec = RLTokenDecoder(cfg)
+        enc_keys = set(enc.state_dict().keys())
+        dec_keys = set(dec.state_dict().keys())
+        # No projection keys should appear
+        assert not any("input_proj" in k for k in enc_keys), (
+            f"Encoder in symmetric mode should not have input_proj params — "
+            f"got keys with it: {[k for k in enc_keys if 'input_proj' in k]}"
+        )
+        assert not any("target_proj" in k for k in dec_keys), (
+            f"Decoder in symmetric mode should not have target_proj params"
+        )
+
 
 # ===================================================================
 # Helpers

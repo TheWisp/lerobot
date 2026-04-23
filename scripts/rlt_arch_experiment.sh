@@ -27,22 +27,50 @@ DEC_LAYERS=${DEC_LAYERS:-4}
 # than the 2-layer batch=64 baseline, but the relative trend of
 # "does depth help?" is preserved for the early-stop decision.
 BATCH_SIZE=${BATCH_SIZE:-32}
+# Widened bottleneck (paper spec: 2048). When unset, we train at
+# whatever S1's hidden_dim is (symmetric, fits in RLTConfig default).
+# When set, the encoder gains input/output projections; memory scales
+# with d^2, so pair with a smaller BATCH_SIZE (e.g. 8-16 for d=2048).
+RL_TOKEN_DIM=${RL_TOKEN_DIM:-}
 # PyTorch allocator: reduces fragmentation-OOMs on long training runs.
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
-# Baseline 2-layer rel-err curve (from prior run at rlt_token_v2/).
-# Checkpoint step → rel-err %. Used for comparison + early-stop decision.
-declare -A BASELINE_2L
-BASELINE_2L[1000]=50.9
-BASELINE_2L[2000]=48.0  # interpolated — we didn't probe this step
-BASELINE_2L[3000]=45.0
-BASELINE_2L[5000]=41.4
-BASELINE_2L[7000]=39.1
-BASELINE_2L[10000]=36.4
-# Early-stop threshold at step 2000. If 4-layer @ 2k is >= this, the
-# architecture isn't helping and we don't burn 2+ more hours. The value
-# ~45% is the 2-layer @ 3k rel-err: we expect 4-layer to beat it at 2k.
+# Reference curve for "previous best arch we're trying to beat".
+# - If you set BASELINE=4L in the env, compares against the 4-layer d=768
+#   run (when measuring the widened-bottleneck experiment).
+# - If BASELINE=2L (or unset), compares against the original 2-layer run.
+# Early-stop threshold is derived from whichever curve is active.
+BASELINE=${BASELINE:-2L}
+declare -A BASELINE_CURVE
+case "$BASELINE" in
+    2L)
+        BASELINE_CURVE[1000]=50.9
+        BASELINE_CURVE[2000]=48.0  # interpolated
+        BASELINE_CURVE[3000]=45.0
+        BASELINE_CURVE[5000]=41.4
+        BASELINE_CURVE[7000]=39.1
+        BASELINE_CURVE[10000]=36.4
+        EARLY_STOP_DEFAULT=45.0   # beat 2L @ 3k by step 2000
+        ;;
+    4L)
+        # From the 4-layer d=768 run (outputs/rlt_token_v3_4layer/).
+        BASELINE_CURVE[1000]=50.6
+        BASELINE_CURVE[2000]=44.1
+        BASELINE_CURVE[3000]=40.3
+        BASELINE_CURVE[4000]=37.1
+        BASELINE_CURVE[5000]=35.3
+        BASELINE_CURVE[6000]=32.7
+        BASELINE_CURVE[7000]=30.8
+        BASELINE_CURVE[9000]=29.4
+        BASELINE_CURVE[10000]=29.8
+        EARLY_STOP_DEFAULT=40.0   # beat 4L @ 3k by step 2000 (44->40 is a real lead)
+        ;;
+    *)
+        echo "BASELINE must be 2L or 4L, got $BASELINE" >&2
+        exit 2
+        ;;
+esac
 EARLY_STOP_STEP=2000
-EARLY_STOP_THRESHOLD=${EARLY_STOP_THRESHOLD:-45.0}
+EARLY_STOP_THRESHOLD=${EARLY_STOP_THRESHOLD:-$EARLY_STOP_DEFAULT}
 
 mkdir -p "$OUTPUT_DIR"
 LOG="$OUTPUT_DIR/experiment_log.txt"
@@ -56,20 +84,26 @@ conda activate lerobot 2>/dev/null || true
 log()  { echo "$(date '+%H:%M:%S') $*" | tee -a "$LOG"; }
 
 log "=== RLT arch experiment starting ==="
-log "output_dir=$OUTPUT_DIR  enc_layers=$ENC_LAYERS  dec_layers=$DEC_LAYERS"
+log "output_dir=$OUTPUT_DIR  enc_layers=$ENC_LAYERS  dec_layers=$DEC_LAYERS  rl_token_dim=${RL_TOKEN_DIM:-default}"
 log "steps=$STEPS  save_freq=$SAVE_FREQ  batch_size=$BATCH_SIZE"
 log "early-stop at step $EARLY_STOP_STEP if rel-err >= ${EARLY_STOP_THRESHOLD}%"
 
 # Launch training, detach from this shell
+train_args=(
+    --s1-checkpoint "$S1_CKPT"
+    --dataset-repo-id "$DATASET"
+    --output-dir "$OUTPUT_DIR"
+    --steps "$STEPS"
+    --save-freq "$SAVE_FREQ"
+    --encoder-layers "$ENC_LAYERS"
+    --decoder-layers "$DEC_LAYERS"
+    --batch-size "$BATCH_SIZE"
+)
+if [ -n "$RL_TOKEN_DIM" ]; then
+    train_args+=(--rl-token-dim "$RL_TOKEN_DIM")
+fi
 nohup python -u -m lerobot.policies.hvla.rlt.train_token \
-    --s1-checkpoint "$S1_CKPT" \
-    --dataset-repo-id "$DATASET" \
-    --output-dir "$OUTPUT_DIR" \
-    --steps "$STEPS" \
-    --save-freq "$SAVE_FREQ" \
-    --encoder-layers "$ENC_LAYERS" \
-    --decoder-layers "$DEC_LAYERS" \
-    --batch-size "$BATCH_SIZE" \
+    "${train_args[@]}" \
     > "$TRAIN_LOG" 2>&1 &
 TRAIN_PID=$!
 log "training launched, PID=$TRAIN_PID  (tail $TRAIN_LOG for stdout)"
@@ -101,9 +135,9 @@ while kill -0 "$TRAIN_PID" 2>/dev/null; do
             --batches 10 --batch-size 4 2>&1 \
             | grep -E 'relative error|RLT arch' | head -3)
         rel_err=$(echo "$probe_out" | grep 'relative error' | grep -oE '[0-9]+\.[0-9]+%' | head -1)
-        base="${BASELINE_2L[$step]-n/a}"
+        base="${BASELINE_CURVE[$step]-n/a}"
         if [ -n "$rel_err" ]; then
-            log "  step=$step  4L=$rel_err   2L-baseline=${base}%"
+            log "  step=$step  4L=$rel_err   ${BASELINE}-baseline=${base}%"
         else
             log "  step=$step  probe FAILED:"
             echo "$probe_out" | sed 's/^/    /' | tee -a "$LOG"
@@ -150,9 +184,9 @@ for ckpt in "$OUTPUT_DIR"/checkpoint-*; do
         --batches 10 --batch-size 4 2>&1 \
         | grep -E 'relative error|RLT arch' | head -3)
     rel_err=$(echo "$probe_out" | grep 'relative error' | grep -oE '[0-9]+\.[0-9]+%' | head -1)
-    base="${BASELINE_2L[$step]-n/a}"
+    base="${BASELINE_CURVE[$step]-n/a}"
     if [ -n "$rel_err" ]; then
-        log "  step=$step  4L=$rel_err   2L-baseline=${base}%"
+        log "  step=$step  4L=$rel_err   ${BASELINE}-baseline=${base}%"
     else
         log "  step=$step  probe FAILED"
     fi

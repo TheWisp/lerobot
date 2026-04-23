@@ -68,6 +68,7 @@ def train(args):
     logger.info("S1 hidden_dim=%d, chunk_size=%d", s1_config.hidden_dim, s1_config.chunk_size)
 
     # --- RLT config ---
+    # Default: bottleneck dim = S1 hidden_dim (symmetric setup).
     rlt_config = RLTConfig(rl_token_dim=s1_config.hidden_dim)
     if args.steps:
         rlt_config.token_train_steps = args.steps
@@ -81,6 +82,13 @@ def train(args):
         rlt_config.token_encoder_layers = args.encoder_layers
     if args.decoder_layers is not None:
         rlt_config.token_decoder_layers = args.decoder_layers
+    if args.rl_token_dim is not None and args.rl_token_dim != s1_config.hidden_dim:
+        # Widen the bottleneck past S1's hidden_dim. The encoder inserts
+        # an input projection (context_dim = s1_hidden → rl_token_dim);
+        # the decoder a symmetric output projection. Memory scales with
+        # rl_token_dim², so consider dropping batch_size accordingly.
+        rlt_config.context_dim = s1_config.hidden_dim
+        rlt_config.rl_token_dim = args.rl_token_dim
 
     # --- Build encoder-decoder ---
     encoder = RLTokenEncoder(rlt_config).to(device)
@@ -218,6 +226,10 @@ def main():
                         help="Override RLTConfig.token_encoder_layers")
     parser.add_argument("--decoder-layers", type=int, default=None,
                         help="Override RLTConfig.token_decoder_layers")
+    parser.add_argument("--rl-token-dim", type=int, default=None,
+                        help="Widen bottleneck past S1 hidden_dim (adds "
+                             "input/output projections in encoder/decoder). "
+                             "Default = S1 hidden_dim (symmetric).")
     return parser.parse_args()
 
 
