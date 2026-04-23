@@ -30,6 +30,7 @@ from lerobot.policies.hvla.rlt.token import (
     RLTokenDecoder,
     RLTokenEncoder,
     rl_token_reconstruction_loss,
+    save_rlt_token_config,
 )
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
@@ -72,6 +73,14 @@ def train(args):
         rlt_config.token_train_steps = args.steps
     if args.lr:
         rlt_config.token_lr = args.lr
+    # Architecture overrides: gated rollout so we can train a 4-layer
+    # variant alongside the existing 2-layer checkpoints. The values
+    # land in config.json next to each checkpoint so loaders rebuild
+    # the same arch (see token.save_rlt_token_config).
+    if args.encoder_layers is not None:
+        rlt_config.token_encoder_layers = args.encoder_layers
+    if args.decoder_layers is not None:
+        rlt_config.token_decoder_layers = args.decoder_layers
 
     # --- Build encoder-decoder ---
     encoder = RLTokenEncoder(rlt_config).to(device)
@@ -173,6 +182,11 @@ def train(args):
             save_dir.mkdir(exist_ok=True)
             torch.save(encoder.state_dict(), save_dir / "encoder.pt")
             torch.save(decoder.state_dict(), save_dir / "decoder.pt")
+            # Manifest: shape-defining RLTConfig fields so a loader can
+            # rebuild the same architecture without guessing (e.g. when
+            # we train with --encoder-layers 4 the loader knows to
+            # instantiate 4 layers, not the default 2).
+            save_rlt_token_config(save_dir, rlt_config)
             torch.save(
                 {"optimizer": optimizer.state_dict(), "step": step},
                 save_dir / "optimizer.pt",
@@ -196,6 +210,14 @@ def main():
     parser.add_argument("--resize-images", default="224x224")
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--device", default="cuda")
+    # Architecture gating — default None means "keep RLTConfig defaults"
+    # (currently 2+2 layers). Pass --encoder-layers 4 --decoder-layers 4
+    # to train the larger variant. Saved to each checkpoint's config.json
+    # so inference / probe loaders rebuild the matching architecture.
+    parser.add_argument("--encoder-layers", type=int, default=None,
+                        help="Override RLTConfig.token_encoder_layers")
+    parser.add_argument("--decoder-layers", type=int, default=None,
+                        help="Override RLTConfig.token_decoder_layers")
     return parser.parse_args()
 
 

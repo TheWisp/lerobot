@@ -529,7 +529,7 @@ def run_s1(
     if rlt_mode:
         from pathlib import Path
         from lerobot.policies.hvla.rlt.config import RLTConfig
-        from lerobot.policies.hvla.rlt.token import RLTokenEncoder
+        from lerobot.policies.hvla.rlt.token import RLTokenEncoder, load_rlt_token_config
         from lerobot.policies.hvla.rlt.actor_critic import TD3Agent
         from lerobot.policies.hvla.rlt.replay_buffer import ReplayBuffer
 
@@ -537,7 +537,6 @@ def run_s1(
             rl_token_dim=policy.config.hidden_dim,
             rl_chunk_length=rl_chunk_length,
         )
-        rl_token_encoder = RLTokenEncoder(rlt_config).to(device)
 
         # Resolve RL token encoder checkpoint:
         # 1. Explicit --rl-token-checkpoint
@@ -555,13 +554,30 @@ def run_s1(
                 except Exception as e:
                     logger.warning("RLT: Failed to read token path from training state: %s", e)
 
+        # Apply the trained checkpoint's architecture manifest (if any)
+        # BEFORE instantiating the encoder — otherwise state_dict load
+        # fails when the checkpoint was trained with a non-default arch
+        # (e.g. --encoder-layers 4). Legacy checkpoints with no
+        # config.json fall back to the RLTConfig defaults above.
         if resolved_token_ckpt:
             ckpt_path = Path(resolved_token_ckpt)
+            ckpt_dir = ckpt_path if ckpt_path.is_dir() else ckpt_path.parent
+            rlt_config = load_rlt_token_config(ckpt_dir, base=rlt_config)
+
+        rl_token_encoder = RLTokenEncoder(rlt_config).to(device)
+
+        if resolved_token_ckpt:
             enc_file = ckpt_path / "encoder.pt" if ckpt_path.is_dir() else ckpt_path
             rl_token_encoder.load_state_dict(
                 torch.load(str(enc_file), weights_only=True, map_location=device)
             )
-            logger.info("S1 RLT: Loaded RL token encoder from %s", enc_file)
+            logger.info(
+                "S1 RLT: Loaded RL token encoder from %s "
+                "(enc_layers=%d dec_layers=%d)",
+                enc_file,
+                rlt_config.token_encoder_layers,
+                rlt_config.token_decoder_layers,
+            )
         else:
             logger.warning("RLT: No RL token encoder checkpoint — z_rl will be random (unusable)")
         rl_token_encoder.eval()

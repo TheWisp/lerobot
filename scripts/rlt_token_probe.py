@@ -41,6 +41,7 @@ from lerobot.policies.hvla.rlt.config import RLTConfig
 from lerobot.policies.hvla.rlt.token import (
     RLTokenDecoder,
     RLTokenEncoder,
+    load_rlt_token_config,
     rl_token_reconstruction_loss,
 )
 
@@ -105,11 +106,20 @@ def main() -> None:
     )
 
     # Load encoder + decoder from a train_token.py checkpoint dir (each is a
-    # separate state_dict file).
-    rlt_config = RLTConfig()
+    # separate state_dict file). Read the architecture manifest if present
+    # so we instantiate layers/heads/ffn matching the trained checkpoint
+    # (supports the gated 4-layer variant). Legacy checkpoints without a
+    # config.json fall back to RLTConfig defaults (2 layers).
+    ckpt_dir = args.rl_token_checkpoint
+    rlt_config = load_rlt_token_config(ckpt_dir)
+    logger.info(
+        "RLT arch: encoder_layers=%d decoder_layers=%d heads=%d ffn=%d dim=%d",
+        rlt_config.token_encoder_layers, rlt_config.token_decoder_layers,
+        rlt_config.token_num_heads, rlt_config.token_ffn_dim,
+        rlt_config.rl_token_dim,
+    )
     encoder = RLTokenEncoder(rlt_config).to(device).eval()
     decoder = RLTokenDecoder(rlt_config).to(device).eval()
-    ckpt_dir = args.rl_token_checkpoint
     encoder.load_state_dict(torch.load(ckpt_dir / "encoder.pt", map_location=device))
     decoder.load_state_dict(torch.load(ckpt_dir / "decoder.pt", map_location=device))
 

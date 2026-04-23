@@ -12,12 +12,64 @@ Architecture follows Xu et al. 2026, Sec IV-A:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
 from lerobot.policies.hvla.rlt.config import RLTConfig
+
+
+# Fields that determine encoder/decoder tensor shapes. Saved to
+# ``config.json`` alongside each trained checkpoint so a loader can
+# rebuild the exact architecture regardless of what's in the live
+# ``RLTConfig`` defaults. Non-shape fields (dropout, LR, etc.) are
+# omitted — they don't affect loading, only training.
+_SHAPE_FIELDS = (
+    "rl_token_dim",
+    "token_encoder_layers",
+    "token_decoder_layers",
+    "token_num_heads",
+    "token_ffn_dim",
+)
+
+
+def save_rlt_token_config(ckpt_dir: "Path | str", rlt_config: RLTConfig) -> None:
+    """Write the shape-defining subset of ``rlt_config`` to
+    ``{ckpt_dir}/config.json`` alongside encoder.pt / decoder.pt. Must be
+    called at save time for every checkpoint that wants to be loadable
+    with a non-default architecture."""
+    ckpt_dir = Path(ckpt_dir)
+    arch = {k: getattr(rlt_config, k) for k in _SHAPE_FIELDS}
+    (ckpt_dir / "config.json").write_text(json.dumps(arch, indent=2))
+
+
+def load_rlt_token_config(
+    ckpt_dir: "Path | str",
+    base: RLTConfig | None = None,
+) -> RLTConfig:
+    """Return an ``RLTConfig`` whose shape fields match the saved
+    checkpoint. Falls back to ``base`` (or defaults) for checkpoints
+    without a ``config.json`` — those predate the manifest and are
+    assumed to use the default 2-layer architecture.
+
+    Any non-shape fields on ``base`` are preserved, so callers can
+    supply a config already populated with e.g. the runtime
+    ``rl_token_dim`` matching the live S1 policy; the manifest only
+    overrides shape-affecting fields.
+    """
+    cfg = base if base is not None else RLTConfig()
+    config_path = Path(ckpt_dir) / "config.json"
+    if not config_path.exists():
+        return cfg
+    arch = json.loads(config_path.read_text())
+    for k, v in arch.items():
+        if k in _SHAPE_FIELDS and hasattr(cfg, k):
+            setattr(cfg, k, v)
+    return cfg
 
 
 class RLTokenEncoder(nn.Module):

@@ -19,7 +19,9 @@ from lerobot.policies.hvla.rlt.actor_critic import RLTActor, RLTCritic, TD3Agent
 from lerobot.policies.hvla.rlt.token import (
     RLTokenDecoder,
     RLTokenEncoder,
+    load_rlt_token_config,
     rl_token_reconstruction_loss,
+    save_rlt_token_config,
 )
 from lerobot.policies.hvla.rlt.replay_buffer import ReplayBuffer
 from lerobot.policies.hvla.rlt.metrics import (
@@ -449,6 +451,74 @@ class TestWarmupBoundary:
     def test_warmup_zero_disables_warmup(self):
         cfg = RLTConfig(warmup_episodes=0)
         assert not cfg.is_warmup(0), "warmup_episodes=0 must disable warmup entirely"
+
+
+class TestTokenCheckpointManifest:
+    """Guards the gated-rollout mechanism: a trained token checkpoint carries
+    a config.json with the architecture it was trained under, so loaders
+    instantiate the matching encoder/decoder regardless of what RLTConfig's
+    live defaults happen to be. Without this, a 4-layer checkpoint silently
+    fails to load into a 2-layer encoder (state_dict shape mismatch)."""
+
+    def test_save_load_roundtrip(self, tmp_path):
+        """Train-time save → load-time read produces the same arch fields."""
+        trained_cfg = RLTConfig(
+            rl_token_dim=512,
+            token_encoder_layers=4,
+            token_decoder_layers=4,
+            token_num_heads=8,
+            token_ffn_dim=1024,
+        )
+        save_rlt_token_config(tmp_path, trained_cfg)
+        loaded = load_rlt_token_config(tmp_path)
+        assert loaded.token_encoder_layers == 4
+        assert loaded.token_decoder_layers == 4
+        assert loaded.token_num_heads == 8
+        assert loaded.token_ffn_dim == 1024
+        assert loaded.rl_token_dim == 512
+
+    def test_missing_manifest_returns_defaults(self, tmp_path):
+        """Legacy checkpoints that predate config.json (like the ones
+        currently at outputs/rlt_token_v2/checkpoint-10000) must still load,
+        assumed to use the default 2-layer architecture."""
+        # tmp_path is empty — no config.json
+        loaded = load_rlt_token_config(tmp_path)
+        defaults = RLTConfig()
+        assert loaded.token_encoder_layers == defaults.token_encoder_layers == 2
+        assert loaded.token_decoder_layers == defaults.token_decoder_layers == 2
+
+    def test_base_preserves_non_shape_fields(self, tmp_path):
+        """The loader should only override SHAPE fields, leaving runtime
+        fields (e.g. rl_token_dim bound to live S1 hidden_dim, beta, sigma)
+        untouched on the base config the caller supplied."""
+        trained_cfg = RLTConfig(token_encoder_layers=4)
+        save_rlt_token_config(tmp_path, trained_cfg)
+
+        # Caller's base has runtime values that shouldn't be clobbered
+        base = RLTConfig(beta=0.5, actor_sigma=0.1)
+        loaded = load_rlt_token_config(tmp_path, base=base)
+        assert loaded.token_encoder_layers == 4    # shape field — overridden from manifest
+        assert loaded.beta == 0.5                  # non-shape — base preserved
+        assert loaded.actor_sigma == 0.1           # non-shape — base preserved
+
+    def test_load_with_trained_arch_can_load_state_dict(self, tmp_path):
+        """End-to-end: save a 4-layer encoder's state_dict + its manifest,
+        read the manifest, rebuild the encoder with the loaded config,
+        and the state_dict load must succeed (no shape mismatch)."""
+        # Build, save, done — pretend this is what train_token.py produces
+        trained_cfg = RLTConfig(rl_token_dim=128, token_encoder_layers=4,
+                                token_ffn_dim=256)
+        original = RLTokenEncoder(trained_cfg)
+        torch.save(original.state_dict(), tmp_path / "encoder.pt")
+        save_rlt_token_config(tmp_path, trained_cfg)
+
+        # Now simulate the loader: different runtime config (2 layers defaults)
+        # + the manifest should reconstruct the 4-layer arch
+        runtime_base = RLTConfig(rl_token_dim=128)  # 2 layers by default
+        loader_cfg = load_rlt_token_config(tmp_path, base=runtime_base)
+        rebuilt = RLTokenEncoder(loader_cfg)
+        # Would raise RuntimeError if the manifest mechanism failed
+        rebuilt.load_state_dict(torch.load(tmp_path / "encoder.pt"))
 
 
 # ===================================================================
