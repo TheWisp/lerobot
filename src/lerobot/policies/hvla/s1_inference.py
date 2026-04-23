@@ -229,10 +229,17 @@ class InferenceThread:
             # Warmup: execute VLA reference, actor not called
             actor_norm = ref_norm_first_c
         else:
-            actor_norm = self._rlt_actor(
-                z_rl.float(), state_norm, ref_norm_first_c,
-                deterministic=is_deploy,  # no exploration noise in deploy mode
-            )
+            # Actor training (``_rlt_gradient_updates``) runs in fp32 with no
+            # autocast; inference reaches this point from inside S1's bf16
+            # autocast block. Disable autocast locally and cast inputs to
+            # fp32 so the actor sees the same dtype it was trained on —
+            # otherwise bf16 rounding introduces a per-joint bias ~1e-2 that
+            # accumulates into the actor's learned "bias direction".
+            with torch.autocast(device_type=self._device.type, enabled=False):
+                actor_norm = self._rlt_actor(
+                    z_rl.float(), state_norm.float(), ref_norm_first_c.float(),
+                    deterministic=is_deploy,  # no exploration noise in deploy mode
+                )
             # Denormalize and replace first C actions in output
             if self._policy._action_mean is not None:
                 actor_denorm = actor_norm * self._policy._action_std.to(self._device) + self._policy._action_mean.to(self._device)
