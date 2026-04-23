@@ -80,6 +80,11 @@ class InferenceThread:
         self._rlt_step_count: int = 0
         self._rlt_last_update_time: float = 0.0  # wall-clock of last gradient call (for rate)
         self._rlt_dump_chunks: bool = False  # diagnostic: dump ref/actor chunks to jsonl
+        self._rlt_override_mtime: float = 0.0  # mtime of last-read rlt_overrides.json
+        # Last actor output, used by the dump path. Reset every inference so
+        # a stale tensor from a previous step can never leak into a record
+        # (would produce a wrong 'actor' field if rlt_active flipped off).
+        self._rlt_last_actor_norm: "torch.Tensor | None" = None
 
         # RTC config
         self._supports_rtc = getattr(policy, "supports_rtc", False)
@@ -122,10 +127,14 @@ class InferenceThread:
         """Actor runs only when both user (E key) and system (not intervening) say yes."""
         return self._rlt_user_engaged and self._rlt_system_active
 
-    def _rlt_inference_step(self, batch, actions, z_rl, obs):
+    def _rlt_inference_step(self, batch, actions, z_rl, obs, ref_norm=None):
         """Run RLT actor (if past warmup) and store transition.
         Called inside inference loop — one call per S1 chunk.
         Only runs when rlt_active is True (user engaged + system active).
+
+        ``ref_norm`` may be supplied by the caller (main inference loop uses
+        the same normalized ref for both actor input and diagnostic dump);
+        when None, it's computed here.
 
         Paper Algorithm 1:
         - Line 7: S1 produces ref chunk (already done before this call)
@@ -149,20 +158,21 @@ class InferenceThread:
         if self._policy._state_mean is not None:
             state_norm = (state_t.float() - self._policy._state_mean.to(self._device)) / self._policy._state_std.to(self._device)
 
-        # Normalize ref chunk (first C actions from S1)
-        ref_chunk = actions[:, :C, :].float()
-        ref_norm = ref_chunk
-        if self._policy._action_mean is not None:
-            ref_norm = (ref_chunk - self._policy._action_mean.to(self._device)) / self._policy._action_std.to(self._device)
+        if ref_norm is None:
+            ref_norm = self._rlt_compute_ref_norm(actions)
+        # ref_norm covers the full S1 chunk (all 50 frames) so the dump can
+        # record the S1-only tail past the actor boundary. Actor input,
+        # BC comparison and replay-buffer storage only use the first C.
+        ref_norm_first_c = ref_norm[:, :C, :]
 
         # Actor forward (Paper Alg 1 line 9)
         is_deploy = self._rlt_state.get("deploy", False)
         if is_warmup and not is_deploy:
             # Warmup: execute VLA reference, actor not called
-            actor_norm = ref_norm
+            actor_norm = ref_norm_first_c
         else:
             actor_norm = self._rlt_actor(
-                z_rl.float(), state_norm, ref_norm,
+                z_rl.float(), state_norm, ref_norm_first_c,
                 deterministic=is_deploy,  # no exploration noise in deploy mode
             )
             # Denormalize and replace first C actions in output
@@ -172,26 +182,12 @@ class InferenceThread:
                 actor_denorm = actor_norm
             actions[:, :C, :] = actor_denorm
 
-            # Dump ref vs actor chunks (normalized) for offline comparison.
-            # Gated by diagnostic toggle in GUI (rlt_overrides.json: dump_chunks).
-            try:
-                output_dir = self._rlt_state.get("output_dir")
-                if output_dir is not None and getattr(self, "_rlt_dump_chunks", False):
-                    import json as _json
-                    import time as _t
-                    dump_path = output_dir / "chunk_compare.jsonl"
-                    record = {
-                        "t": _t.time(),
-                        "step": self._rlt_step_count,
-                        "ep": self._rlt_state.get("episode", 0),
-                        "ref": ref_norm.squeeze(0).detach().cpu().tolist(),
-                        "actor": actor_norm.squeeze(0).detach().cpu().tolist(),
-                        "deploy": is_deploy,
-                    }
-                    with open(dump_path, "a") as f:
-                        f.write(_json.dumps(record) + "\n")
-            except Exception as e:
-                logger.warning("Failed to dump chunk comparison: %s", e)
+        # Expose actor output for the caller's dump helper, which also runs
+        # when the actor did NOT run (rlt_active False) so A/B baseline
+        # records share a schema. None marks "no meaningful actor output".
+        self._rlt_last_actor_norm = (
+            actor_norm.squeeze(0).detach() if not (is_warmup and not is_deploy) else None
+        )
 
         # Store transition in replay buffer (Paper Alg 1 line 12)
         # Guard: rlt_active may have been cleared by main thread during this call
@@ -212,7 +208,7 @@ class InferenceThread:
                 reward=1.0 if done else 0.0,
                 next_z_rl=z_rl.squeeze(0).float().detach(),
                 next_state=state_norm.squeeze(0).detach(),
-                next_ref_chunk=ref_norm.squeeze(0).detach(),
+                next_ref_chunk=ref_norm_first_c.squeeze(0).detach(),
                 done=done,
             )
             self._rlt_state["total_transitions"] += 1
@@ -221,12 +217,12 @@ class InferenceThread:
             "z_rl": z_rl.squeeze(0).float().detach(),
             "state": state_norm.squeeze(0).detach(),
             "action": actor_norm.squeeze(0).detach(),
-            "ref": ref_norm.squeeze(0).detach(),
+            "ref": ref_norm_first_c.squeeze(0).detach(),
         }
 
-        # Metrics + logging
-        self._rlt_step_count += 1
-        actor_delta = (actor_norm - ref_norm).abs().mean().item()
+        # Metrics + logging. Note: step_count is advanced in the main loop
+        # (so baseline / actor-off dumps also get a unique step per inference).
+        actor_delta = (actor_norm - ref_norm_first_c).abs().mean().item()
 
         from lerobot.policies.hvla.rlt.metrics import get_metrics, save_metrics_to_file
         is_deploy = self._rlt_state.get("deploy", False)
@@ -244,6 +240,82 @@ class InferenceThread:
                 self._rlt_state["total_updates"],
             )
             save_metrics_to_file()
+
+    def _rlt_compute_ref_norm(self, actions):
+        """Normalize the full S1 action chunk into actor input space.
+
+        Returns the complete chunk (e.g. 50 frames) — callers slice the first
+        ``cfg.rl_chunk_length`` for the actor input and for replay-buffer
+        storage; the dump path records the full chunk so analysis can see
+        the actor-modified prefix alongside the S1-only tail.
+
+        Computed from a clone so later in-place modification of
+        ``actions[:, :C, :]`` (when actor executes) cannot corrupt the
+        dump's ref value.
+        """
+        cfg = self._rlt_state["config"]
+        C = cfg.rl_chunk_length
+        # The actor needs at least C frames to operate on. If S1 emits fewer,
+        # downstream slices [:, :C, :] truncate silently and per-frame
+        # indexing between actor output and ref desyncs.
+        assert actions.shape[1] >= C, (
+            f"S1 chunk length {actions.shape[1]} < RLT rl_chunk_length {C}; "
+            "ref would be truncated and per-frame indexing desyncs from actor"
+        )
+        ref = actions.clone().float()
+        if self._policy._action_mean is not None:
+            ref = (
+                ref - self._policy._action_mean.to(self._device)
+            ) / self._policy._action_std.to(self._device)
+        # Clone must decouple ref from actions; otherwise the next line
+        # `actions[:, :C, :] = actor_denorm` (when actor runs) would
+        # overwrite the dump's ref in-place — silently misattributing actor
+        # output as "S1 reference" in every record.
+        assert ref.data_ptr() != actions.data_ptr(), (
+            "ref aliases actions — in-place actor overwrite would "
+            "corrupt the dump's ref value"
+        )
+        return ref
+
+    def _rlt_write_dump_record(self, ref_norm, actor_norm, is_rlt_active: bool):
+        """Append one chunk_compare.jsonl record.
+
+        Runs whenever RLT is loaded and ``dump_chunks`` is on — regardless
+        of whether the actor executed this step. When the actor didn't run
+        (user disengaged via E / Start-engaged off), ``actor_norm`` is None
+        and the record stores ``"actor": null``. This lets A/B baseline runs
+        (actor off) produce schema-compatible records alongside actor-on runs.
+        """
+        assert ref_norm is not None, "_rlt_write_dump_record called without ref_norm"
+        # Misattribution tripwire: if ``actor_norm`` is a tensor while
+        # ``is_rlt_active`` says the actor didn't run, the record would claim
+        # "actor=X" in a baseline leg — exactly the staleness bug we've been
+        # chasing. Callers must zero out actor_norm themselves.
+        assert is_rlt_active or actor_norm is None, (
+            "actor_norm must be None when is_rlt_active=False; otherwise "
+            "a stale tensor from a previous step misattributes a baseline record"
+        )
+        if self._rlt_state is None:
+            return
+        output_dir = self._rlt_state.get("output_dir")
+        if output_dir is None:
+            return
+        try:
+            import json as _json
+            import time as _t
+            record = {
+                "t": _t.time(),
+                "step": self._rlt_step_count,
+                "ep": self._rlt_state.get("episode", 0),
+                "ref": ref_norm.squeeze(0).detach().cpu().tolist() if ref_norm.dim() > 2 else ref_norm.detach().cpu().tolist(),
+                "actor": actor_norm.detach().cpu().tolist() if actor_norm is not None else None,
+                "deploy": self._rlt_state.get("deploy", False),
+                "rlt_active": bool(is_rlt_active),
+            }
+            with open(output_dir / "chunk_compare.jsonl", "a") as f:
+                f.write(_json.dumps(record) + "\n")
+        except Exception as e:
+            logger.warning("Failed to dump chunk comparison: %s", e)
 
     def _rlt_check_config_overrides(self):
         """Check for GUI config overrides (beta, sigma sliders).
@@ -495,9 +567,45 @@ class InferenceThread:
                 actions = self._policy.predict_action_chunk(batch, num_steps=self._num_denoise_steps)
                 actions = self._postprocessor(actions)
 
-                # RLT: actor refines chunk + store transition
-                if self.rlt_active and self._rlt_state is not None and z_rl_out is not None:
-                    self._rlt_inference_step(batch, actions, z_rl_out, obs)
+                # RLT: compute ref_norm, optionally run actor, optionally dump.
+                # Dump is decoupled from actor activity so A/B baseline runs
+                # (actor off) produce schema-compatible records — the
+                # Diagnostic button just works for both modes.
+                ref_norm_snapshot = None
+                if self._rlt_state is not None and z_rl_out is not None:
+                    # Refresh live overrides (beta / sigma / dump_chunks)
+                    # here, not only inside gradient_updates. Gradient updates
+                    # don't fire in deploy mode, so without this call the
+                    # Diagnostic button would be ignored during deploy runs.
+                    self._rlt_check_config_overrides()
+
+                    # Reset the per-step actor snapshot BEFORE dispatching so
+                    # that if _rlt_inference_step doesn't run (or returns
+                    # without assigning), the dump path cannot see a stale
+                    # tensor from a previous inference.
+                    self._rlt_last_actor_norm = None
+                    self._rlt_step_count += 1
+                    ref_norm_snapshot = self._rlt_compute_ref_norm(actions)
+                    if self.rlt_active:
+                        self._rlt_inference_step(
+                            batch, actions, z_rl_out, obs,
+                            ref_norm=ref_norm_snapshot,
+                        )
+                    # Dump only during an active episode — system_active is
+                    # cleared during reset / pre-first-episode, where the
+                    # episode counter is stale (-1 before first ep) and the
+                    # state is meaningless for analysis.
+                    if self._rlt_dump_chunks and self._rlt_system_active:
+                        # Only trust the actor snapshot if the actor actually
+                        # ran this inference. Paranoid even though we reset
+                        # above — paired check keeps the invariant visible.
+                        actor_norm_snapshot = (
+                            self._rlt_last_actor_norm if self.rlt_active else None
+                        )
+                        self._rlt_write_dump_record(
+                            ref_norm_snapshot, actor_norm_snapshot,
+                            is_rlt_active=self.rlt_active,
+                        )
 
             t_infer_end = time.perf_counter()
             infer_ms = (t_infer_end - t_infer_start) * 1000
