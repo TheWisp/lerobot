@@ -22,6 +22,13 @@ STEPS=${STEPS:-10000}
 SAVE_FREQ=${SAVE_FREQ:-1000}
 ENC_LAYERS=${ENC_LAYERS:-4}
 DEC_LAYERS=${DEC_LAYERS:-4}
+# 4-layer enc/dec at batch=64 OOMs on a 32GB 5090 (activations + grads
+# ~28GB). Halve to batch=32 to fit. Different per-sample gradient variance
+# than the 2-layer batch=64 baseline, but the relative trend of
+# "does depth help?" is preserved for the early-stop decision.
+BATCH_SIZE=${BATCH_SIZE:-32}
+# PyTorch allocator: reduces fragmentation-OOMs on long training runs.
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 # Baseline 2-layer rel-err curve (from prior run at rlt_token_v2/).
 # Checkpoint step → rel-err %. Used for comparison + early-stop decision.
 declare -A BASELINE_2L
@@ -50,7 +57,7 @@ log()  { echo "$(date '+%H:%M:%S') $*" | tee -a "$LOG"; }
 
 log "=== RLT arch experiment starting ==="
 log "output_dir=$OUTPUT_DIR  enc_layers=$ENC_LAYERS  dec_layers=$DEC_LAYERS"
-log "steps=$STEPS  save_freq=$SAVE_FREQ"
+log "steps=$STEPS  save_freq=$SAVE_FREQ  batch_size=$BATCH_SIZE"
 log "early-stop at step $EARLY_STOP_STEP if rel-err >= ${EARLY_STOP_THRESHOLD}%"
 
 # Launch training, detach from this shell
@@ -62,6 +69,7 @@ nohup python -u -m lerobot.policies.hvla.rlt.train_token \
     --save-freq "$SAVE_FREQ" \
     --encoder-layers "$ENC_LAYERS" \
     --decoder-layers "$DEC_LAYERS" \
+    --batch-size "$BATCH_SIZE" \
     > "$TRAIN_LOG" 2>&1 &
 TRAIN_PID=$!
 log "training launched, PID=$TRAIN_PID  (tail $TRAIN_LOG for stdout)"
@@ -123,7 +131,35 @@ while kill -0 "$TRAIN_PID" 2>/dev/null; do
 done
 
 log ""
-log "=== training process done (PID $TRAIN_PID) ==="
+log "training process done (PID $TRAIN_PID) — running final sweep for any checkpoints saved between polls"
+
+# Final-sweep: when training exits normally it saves checkpoint-N at the
+# last step just before exit. The monitor loop runs at 30s cadence, so
+# that final checkpoint can slip through. Probe anything unprobed now
+# before emitting the summary.
+for ckpt in "$OUTPUT_DIR"/checkpoint-*; do
+    [ -d "$ckpt" ] || continue
+    step=$(basename "$ckpt" | sed 's/checkpoint-//')
+    [[ " $probed " == *" $step "* ]] && continue
+    [ -f "$ckpt/encoder.pt" ] && [ -f "$ckpt/decoder.pt" ] && [ -f "$ckpt/config.json" ] || continue
+    log "probing checkpoint-$step (post-training final sweep) ..."
+    probe_out=$(timeout 180 python scripts/rlt_token_probe.py \
+        --s1-checkpoint "$S1_CKPT" \
+        --rl-token-checkpoint "$ckpt" \
+        --dataset "$DATASET" \
+        --batches 10 --batch-size 4 2>&1 \
+        | grep -E 'relative error|RLT arch' | head -3)
+    rel_err=$(echo "$probe_out" | grep 'relative error' | grep -oE '[0-9]+\.[0-9]+%' | head -1)
+    base="${BASELINE_2L[$step]-n/a}"
+    if [ -n "$rel_err" ]; then
+        log "  step=$step  4L=$rel_err   2L-baseline=${base}%"
+    else
+        log "  step=$step  probe FAILED"
+    fi
+done
+
+log ""
+log "=== experiment complete ==="
 log "Final probe curve (from this experiment_log):"
 grep -E 'step=[0-9]+ *4L=' "$LOG" | sed 's/^/  /' | tee -a "$LOG"
 log "Check $TRAIN_LOG for training stdout (loss trajectory)."
