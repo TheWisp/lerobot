@@ -12,6 +12,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+import torchvision.transforms.functional as TF
 
 from lerobot.policies.hvla.ipc import SharedLatentCache, SharedImageBuffer
 
@@ -172,11 +173,21 @@ def obs_to_s1_batch(
     for key in s1_image_keys:
         cam_name = key.split(".")[-1]
         if cam_name in robot_obs:
+            # Resize path must match training (FlowMatchingDataset uses
+            # torchvision bilinear + antialias=True) — see parity test
+            # test_inference_image_resize_matches_training. cv2.resize without
+            # antialiasing aliases high-frequency content, producing inputs
+            # DINOv2 never saw at train time.
             img = np.asarray(robot_obs[cam_name], dtype=np.uint8)
+            img_tensor = (
+                torch.from_numpy(img).permute(2, 0, 1).float().div_(255.0)
+            )  # CPU float [3,H,W] in [0,1]
             if resize_to is not None:
-                img = cv2.resize(img, (resize_to[1], resize_to[0]), interpolation=cv2.INTER_LINEAR)
-            img_tensor = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float().div_(255.0).to(device)
-            batch[key] = img_tensor
+                img_tensor = TF.resize(
+                    img_tensor, list(resize_to),
+                    interpolation=TF.InterpolationMode.BILINEAR, antialias=True,
+                )
+            batch[key] = img_tensor.unsqueeze(0).to(device)
 
     state = [float(robot_obs[name]) for name in joint_names]
     batch["observation.state"] = torch.tensor([state], dtype=torch.float32, device=device)
