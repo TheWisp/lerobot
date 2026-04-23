@@ -387,6 +387,8 @@ class TestRLTChunkDump:
             "t", "step", "ep", "ref", "actor", "deploy", "rlt_active",
             "prefix_len", "exec_idx",
             "rlt_enc_ms", "rlt_post_ms", "total_delay_ms",
+            "obs_to_infer_ms", "enc_obs_ms", "rl_tok_ms",
+            "s1_denoise_ms", "rlt_actor_ms",
         }
         for r in recs:
             assert set(r.keys()) == required, (
@@ -422,6 +424,34 @@ class TestRLTChunkDump:
         assert r["rlt_enc_ms"] == 3.14
         assert r["rlt_post_ms"] == 1.59
         assert r["total_delay_ms"] == 62.5
+
+    def test_dump_records_per_stage_timing_breakdown(self, tmp_path):
+        """The per-stage fields split rlt_enc into its two components and
+        add s1_denoise / actor timings so the dump carries the full journey.
+        This lets analysis code compute proper attribution instead of
+        guessing from the coarse umbrella fields."""
+        thread = self._make_thread_with_rlt(tmp_path)
+        ref_norm = thread._rlt_compute_ref_norm(self._actions())
+        thread._rlt_write_dump_record(
+            ref_norm, None, is_rlt_active=False,
+            prefix_len=2, exec_idx=7,
+            rlt_enc_ms=2.5, rlt_post_ms=1.0, total_delay_ms=60.0,
+            obs_to_infer_ms=12.5,
+            enc_obs_ms=1.8,
+            rl_tok_ms=0.7,
+            s1_denoise_ms=43.2,
+            rlt_actor_ms=0.4,
+        )
+        r = self._read_records(tmp_path)[0]
+        assert r["obs_to_infer_ms"] == 12.5
+        assert r["enc_obs_ms"] == 1.8
+        assert r["rl_tok_ms"] == 0.7
+        assert r["s1_denoise_ms"] == 43.2
+        assert r["rlt_actor_ms"] == 0.4
+        # Legacy rlt_enc_ms should be populated by the main loop as
+        # enc_obs_ms + rl_tok_ms; this helper-level test just checks it
+        # still round-trips as supplied.
+        assert r["rlt_enc_ms"] == 2.5
 
     def test_dump_skipped_when_no_output_dir(self, tmp_path):
         """No output_dir on rlt_state (shouldn't happen in practice) must not

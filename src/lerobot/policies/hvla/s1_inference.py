@@ -185,7 +185,7 @@ class InferenceThread:
         """Actor runs only when both user (E key) and system (not intervening) say yes."""
         return self._rlt_user_engaged and self._rlt_system_active
 
-    def _rlt_inference_step(self, batch, actions, z_rl, obs, ref_norm=None):
+    def _rlt_inference_step(self, batch, actions, z_rl, obs, ref_norm=None, actor_timer=None):
         """Run RLT actor (if past warmup) and store transition.
         Called inside inference loop — one call per S1 chunk.
         Only runs when rlt_active is True (user engaged + system active).
@@ -235,7 +235,10 @@ class InferenceThread:
             # fp32 so the actor sees the same dtype it was trained on —
             # otherwise bf16 rounding introduces a per-joint bias ~1e-2 that
             # accumulates into the actor's learned "bias direction".
-            with torch.autocast(device_type=self._device.type, enabled=False):
+            # ``actor_timer`` lets the caller (main inference loop) measure
+            # the actor forward in isolation for the per-stage dump fields.
+            _noop_cm = _TimedBlock(self._device) if actor_timer is None else actor_timer
+            with torch.autocast(device_type=self._device.type, enabled=False), _noop_cm:
                 actor_norm = self._rlt_actor(
                     z_rl.float(), state_norm.float(), ref_norm_first_c.float(),
                     deterministic=is_deploy,  # no exploration noise in deploy mode
@@ -347,6 +350,11 @@ class InferenceThread:
         prefix_len: int = 0, exec_idx: int | None = None,
         rlt_enc_ms: float | None = None, rlt_post_ms: float | None = None,
         total_delay_ms: float | None = None,
+        obs_to_infer_ms: float | None = None,
+        enc_obs_ms: float | None = None,
+        rl_tok_ms: float | None = None,
+        s1_denoise_ms: float | None = None,
+        rlt_actor_ms: float | None = None,
     ):
         """Append one chunk_compare.jsonl record.
 
@@ -396,22 +404,31 @@ class InferenceThread:
                 "rlt_active": bool(is_rlt_active),
                 "prefix_len": int(prefix_len),
                 "exec_idx": int(exec_idx) if exec_idx is not None else None,
-                # Per-inference RLT timing.
+                # Per-inference timing — the full journey in one record.
                 #
                 # ``total_delay_ms`` = obs-to-chunk-ready end-to-end latency,
-                # measured AFTER torch.cuda.synchronize(). This is what feeds
-                # RTC's expected_d.
+                # measured AFTER torch.cuda.synchronize(). Feeds RTC's
+                # expected_d. This is the ground truth.
                 #
-                # ``rlt_enc_ms`` / ``rlt_post_ms`` = GPU execution time of the
-                # RLT token-encoder block and the post-S1 RLT block,
-                # measured via torch.cuda.Event (CUDA stream timestamps).
-                # No hot-path sync: the events are read after the
-                # end-of-inference sync that already happens. On CPU-only
-                # runs these fall back to perf_counter (CPU dispatch time
-                # only, but on CPU there's no async gap).
+                # Per-stage timings (all GPU execution via torch.cuda.Event,
+                # no extra syncs on hot path; CPU fallback uses perf_counter):
+                #   * obs_to_infer_ms — queue + transfer before inference starts
+                #   * enc_obs_ms      — DINOv2 feature extraction (encode_observations)
+                #   * rl_tok_ms       — RL token encoder forward only
+                #   * s1_denoise_ms   — predict_action_chunk (flow matching + RTC prefix)
+                #   * rlt_actor_ms    — actor MLP forward only (0 when actor didn't run)
+                #   * rlt_post_ms     — umbrella for post-S1 RLT block
+                #                       (ref_norm + actor + transition + dump prep)
+                #   * rlt_enc_ms      — legacy sum (enc_obs_ms + rl_tok_ms); kept for
+                #                       continuity with earlier analysis code.
                 "rlt_enc_ms": round(rlt_enc_ms, 3) if rlt_enc_ms is not None else None,
                 "rlt_post_ms": round(rlt_post_ms, 3) if rlt_post_ms is not None else None,
                 "total_delay_ms": round(total_delay_ms, 1) if total_delay_ms is not None else None,
+                "obs_to_infer_ms": round(obs_to_infer_ms, 2) if obs_to_infer_ms is not None else None,
+                "enc_obs_ms": round(enc_obs_ms, 3) if enc_obs_ms is not None else None,
+                "rl_tok_ms": round(rl_tok_ms, 3) if rl_tok_ms is not None else None,
+                "s1_denoise_ms": round(s1_denoise_ms, 3) if s1_denoise_ms is not None else None,
+                "rlt_actor_ms": round(rlt_actor_ms, 3) if rlt_actor_ms is not None else None,
             }
             with open(output_dir / "chunk_compare.jsonl", "a") as f:
                 f.write(_json.dumps(record) + "\n")
@@ -650,9 +667,18 @@ class InferenceThread:
                     batch[ACTION_PREFIX_KEY] = torch.from_numpy(prefix).unsqueeze(0).to(self._device)
                     current_prefix_len = prefix.shape[0]
 
-            # Inference
+            # Inference — per-stage timers for dump-level journey tracking.
+            # Each block is wrapped; the main log stays quiet (one RTC diag
+            # every 50 steps). Readings happen after the end-of-inference
+            # sync, so CUDA events resolve correctly.
             t_infer_start = time.perf_counter()
-            rlt_enc_timer = _TimedBlock(self._device)
+            enc_obs_timer = _TimedBlock(self._device)
+            rl_tok_timer = _TimedBlock(self._device)
+            s1_denoise_timer = _TimedBlock(self._device)
+            actor_timer = _TimedBlock(self._device)
+            # Legacy umbrella timer — kept for pre-split consumers, covers
+            # the same range as the post-S1 RLT block (ref_norm + actor +
+            # dump prep).
             rlt_post_timer = _TimedBlock(self._device)
             with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 # RLT: extract z_rl from S1 context tokens. Context is
@@ -663,7 +689,7 @@ class InferenceThread:
                 z_rl_out = None
                 cached_context = None
                 if self._rl_token_encoder is not None:
-                    with rlt_enc_timer:
+                    with enc_obs_timer:
                         # CRITICAL: use the policy's shared prep helper so the
                         # state is normalized (z-scored) the same way it was
                         # during RL-token-encoder training. Calling
@@ -672,6 +698,7 @@ class InferenceThread:
                         # weeks before the parity tests caught it.
                         rlt_batch = self._policy.prepare_batch_for_encode_observations(batch)
                         cached_context = self._policy.model.encode_observations(rlt_batch)
+                    with rl_tok_timer:
                         z_rl_out = self._rl_token_encoder(cached_context.float()).detach()
 
                 # S1 flow matching decoder → reference chunk. Pass the
@@ -681,11 +708,12 @@ class InferenceThread:
                 # a context to share, so policy implementations without
                 # the ``context`` parameter (mocks, older variants) aren't
                 # forced to accept it.
-                predict_kwargs = {"num_steps": self._num_denoise_steps}
-                if cached_context is not None:
-                    predict_kwargs["context"] = cached_context
-                actions = self._policy.predict_action_chunk(batch, **predict_kwargs)
-                actions = self._postprocessor(actions)
+                with s1_denoise_timer:
+                    predict_kwargs = {"num_steps": self._num_denoise_steps}
+                    if cached_context is not None:
+                        predict_kwargs["context"] = cached_context
+                    actions = self._policy.predict_action_chunk(batch, **predict_kwargs)
+                    actions = self._postprocessor(actions)
 
                 # RLT: compute ref_norm, optionally run actor, optionally dump.
                 # Dump is decoupled from actor activity so A/B baseline runs
@@ -713,6 +741,7 @@ class InferenceThread:
                             self._rlt_inference_step(
                                 batch, actions, z_rl_out, obs,
                                 ref_norm=ref_norm_snapshot,
+                                actor_timer=actor_timer,
                             )
                         # Dump only during an active episode — system_active is
                         # cleared during reset / pre-first-episode, where the
@@ -737,8 +766,15 @@ class InferenceThread:
 
             # Now that the stream has drained, read the event-based GPU
             # timings (accurate, unlike the CPU-dispatch perf_counter path).
-            rlt_enc_ms = rlt_enc_timer.read_ms()
+            enc_obs_ms = enc_obs_timer.read_ms()
+            rl_tok_ms = rl_tok_timer.read_ms()
+            s1_denoise_ms = s1_denoise_timer.read_ms()
+            rlt_actor_ms = actor_timer.read_ms()  # 0 if actor didn't run
             rlt_post_ms = rlt_post_timer.read_ms()
+            # Legacy umbrella field for the dump's "enc" stage — retained
+            # for continuity with earlier record schema, now redundant with
+            # the two-way split into enc_obs_ms + rl_tok_ms.
+            rlt_enc_ms = enc_obs_ms + rl_tok_ms
 
             t_infer_end = time.perf_counter()
             infer_ms = (t_infer_end - t_infer_start) * 1000
@@ -757,6 +793,7 @@ class InferenceThread:
             # RTC's ``expected_d``. Per-inference timing therefore lives in
             # the dump file, not in the main log.
             if self._rlt_state is not None and z_rl_out is not None and _dump_pending:
+                obs_to_infer_ms = (t_infer_start - t_obs) * 1000
                 self._rlt_write_dump_record(
                     ref_norm_snapshot, _dump_actor,
                     is_rlt_active=self.rlt_active,
@@ -765,6 +802,11 @@ class InferenceThread:
                     rlt_enc_ms=rlt_enc_ms,
                     rlt_post_ms=rlt_post_ms,
                     total_delay_ms=total_delay * 1000,
+                    obs_to_infer_ms=obs_to_infer_ms,
+                    enc_obs_ms=enc_obs_ms,
+                    rl_tok_ms=rl_tok_ms,
+                    s1_denoise_ms=s1_denoise_ms,
+                    rlt_actor_ms=rlt_actor_ms,
                 )
 
             chunk_np = actions.cpu().numpy()[0]
