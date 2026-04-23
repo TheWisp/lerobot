@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# RLT token architecture experiment: 4-layer vs 2-layer baseline.
+#
+# Runs train_token.py with --encoder-layers 4 --decoder-layers 4 in the
+# background, polls the output dir for new checkpoints, probes each one
+# against the held-out data, compares against the 2-layer baseline curve,
+# and early-stops if the 2k checkpoint isn't bending the curve downward.
+#
+# Safe to exit your terminal after launching — ``nohup``-detached. Read
+# ``experiment_log.txt`` when you come back.
+#
+# Usage:
+#   nohup bash scripts/rlt_arch_experiment.sh > /dev/null 2>&1 &
+#   tail -f outputs/rlt_token_v3_4layer/experiment_log.txt
+
+set -u
+
+OUTPUT_DIR=${OUTPUT_DIR:-outputs/rlt_token_v3_4layer}
+S1_CKPT=${S1_CKPT:-/home/feit/Documents/lerobot/outputs/flow_s1_no_s2_v1/checkpoints/last/pretrained_model}
+DATASET=${DATASET:-thewisp/cylinder_ring_assembly}
+STEPS=${STEPS:-10000}
+SAVE_FREQ=${SAVE_FREQ:-1000}
+ENC_LAYERS=${ENC_LAYERS:-4}
+DEC_LAYERS=${DEC_LAYERS:-4}
+# Baseline 2-layer rel-err curve (from prior run at rlt_token_v2/).
+# Checkpoint step → rel-err %. Used for comparison + early-stop decision.
+declare -A BASELINE_2L
+BASELINE_2L[1000]=50.9
+BASELINE_2L[2000]=48.0  # interpolated — we didn't probe this step
+BASELINE_2L[3000]=45.0
+BASELINE_2L[5000]=41.4
+BASELINE_2L[7000]=39.1
+BASELINE_2L[10000]=36.4
+# Early-stop threshold at step 2000. If 4-layer @ 2k is >= this, the
+# architecture isn't helping and we don't burn 2+ more hours. The value
+# ~45% is the 2-layer @ 3k rel-err: we expect 4-layer to beat it at 2k.
+EARLY_STOP_STEP=2000
+EARLY_STOP_THRESHOLD=${EARLY_STOP_THRESHOLD:-45.0}
+
+mkdir -p "$OUTPUT_DIR"
+LOG="$OUTPUT_DIR/experiment_log.txt"
+TRAIN_LOG="$OUTPUT_DIR/training.stdout"
+
+# Activate conda env — training requires it
+# shellcheck disable=SC1091
+source "$HOME/miniforge3/etc/profile.d/conda.sh" 2>/dev/null || true
+conda activate lerobot 2>/dev/null || true
+
+log()  { echo "$(date '+%H:%M:%S') $*" | tee -a "$LOG"; }
+
+log "=== RLT arch experiment starting ==="
+log "output_dir=$OUTPUT_DIR  enc_layers=$ENC_LAYERS  dec_layers=$DEC_LAYERS"
+log "steps=$STEPS  save_freq=$SAVE_FREQ"
+log "early-stop at step $EARLY_STOP_STEP if rel-err >= ${EARLY_STOP_THRESHOLD}%"
+
+# Launch training, detach from this shell
+nohup python -u -m lerobot.policies.hvla.rlt.train_token \
+    --s1-checkpoint "$S1_CKPT" \
+    --dataset-repo-id "$DATASET" \
+    --output-dir "$OUTPUT_DIR" \
+    --steps "$STEPS" \
+    --save-freq "$SAVE_FREQ" \
+    --encoder-layers "$ENC_LAYERS" \
+    --decoder-layers "$DEC_LAYERS" \
+    > "$TRAIN_LOG" 2>&1 &
+TRAIN_PID=$!
+log "training launched, PID=$TRAIN_PID  (tail $TRAIN_LOG for stdout)"
+
+# Startup check — if the process dies within 20s, startup failed
+sleep 20
+if ! kill -0 "$TRAIN_PID" 2>/dev/null; then
+    log "ERROR: training process exited within 20s. Last stdout:"
+    tail -30 "$TRAIN_LOG" | tee -a "$LOG"
+    exit 1
+fi
+log "training alive after 20s warm-up; entering monitor loop"
+
+probed=""
+while kill -0 "$TRAIN_PID" 2>/dev/null; do
+    for ckpt in "$OUTPUT_DIR"/checkpoint-*; do
+        [ -d "$ckpt" ] || continue
+        step=$(basename "$ckpt" | sed 's/checkpoint-//')
+        # Already handled this step?
+        [[ " $probed " == *" $step "* ]] && continue
+        # Save may be in flight — require both state_dicts + manifest
+        [ -f "$ckpt/encoder.pt" ] && [ -f "$ckpt/decoder.pt" ] && [ -f "$ckpt/config.json" ] || continue
+
+        log "probing checkpoint-$step ..."
+        probe_out=$(timeout 180 python scripts/rlt_token_probe.py \
+            --s1-checkpoint "$S1_CKPT" \
+            --rl-token-checkpoint "$ckpt" \
+            --dataset "$DATASET" \
+            --batches 10 --batch-size 4 2>&1 \
+            | grep -E 'relative error|RLT arch' | head -3)
+        rel_err=$(echo "$probe_out" | grep 'relative error' | grep -oE '[0-9]+\.[0-9]+%' | head -1)
+        base="${BASELINE_2L[$step]-n/a}"
+        if [ -n "$rel_err" ]; then
+            log "  step=$step  4L=$rel_err   2L-baseline=${base}%"
+        else
+            log "  step=$step  probe FAILED:"
+            echo "$probe_out" | sed 's/^/    /' | tee -a "$LOG"
+        fi
+        probed="$probed $step"
+
+        # Early-stop evaluation at step 2000
+        if [ "$step" = "$EARLY_STOP_STEP" ] && [ -n "$rel_err" ]; then
+            rel_num=${rel_err%\%}
+            if python3 -c "import sys; sys.exit(0 if float('$rel_num') >= $EARLY_STOP_THRESHOLD else 1)"; then
+                log ""
+                log "EARLY STOP: step $EARLY_STOP_STEP rel-err ($rel_err) >= threshold (${EARLY_STOP_THRESHOLD}%)."
+                log "Depth alone isn't bending the curve. Killing training PID $TRAIN_PID."
+                log "Suggested next experiments: bump rl_token_dim (768->2048), or joint S1 fine-tune."
+                kill "$TRAIN_PID" 2>/dev/null
+                break 2
+            else
+                log ""
+                log "CONTINUE: step $EARLY_STOP_STEP rel-err ($rel_err) < threshold (${EARLY_STOP_THRESHOLD}%)."
+                log "4-layer arch is helping. Letting training run to $STEPS steps."
+            fi
+        fi
+    done
+    sleep 30
+done
+
+log ""
+log "=== training process done (PID $TRAIN_PID) ==="
+log "Final probe curve (from this experiment_log):"
+grep -E 'step=[0-9]+ *4L=' "$LOG" | sed 's/^/  /' | tee -a "$LOG"
+log "Check $TRAIN_LOG for training stdout (loss trajectory)."
