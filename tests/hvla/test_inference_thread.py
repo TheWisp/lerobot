@@ -383,11 +383,45 @@ class TestRLTChunkDump:
 
         recs = self._read_records(tmp_path)
         assert len(recs) == 2
-        required = {"t", "step", "ep", "ref", "actor", "deploy", "rlt_active"}
+        required = {
+            "t", "step", "ep", "ref", "actor", "deploy", "rlt_active",
+            "prefix_len", "exec_idx",
+            "rlt_enc_ms", "rlt_post_ms", "total_delay_ms",
+        }
         for r in recs:
             assert set(r.keys()) == required, (
                 f"Expected {required}, got {set(r.keys())} in record {r}"
             )
+
+    def test_dump_records_prefix_metadata(self, tmp_path):
+        """``prefix_len`` and ``exec_idx`` from the RTC logic must round-trip
+        into the dump so analysis can reconstruct which frames were the
+        clamped prefix (frames [0:prefix_len]) at each inference."""
+        thread = self._make_thread_with_rlt(tmp_path)
+        ref_norm = thread._rlt_compute_ref_norm(self._actions())
+        thread._rlt_write_dump_record(
+            ref_norm, None, is_rlt_active=False,
+            prefix_len=4, exec_idx=6,
+        )
+        recs = self._read_records(tmp_path)
+        assert recs[0]["prefix_len"] == 4
+        assert recs[0]["exec_idx"] == 6
+
+    def test_dump_records_rlt_timing_fields(self, tmp_path):
+        """Per-inference RLT timing belongs in the dump, not the main log.
+        If this fires, either the field was dropped or the caller stopped
+        passing timings through."""
+        thread = self._make_thread_with_rlt(tmp_path)
+        ref_norm = thread._rlt_compute_ref_norm(self._actions())
+        thread._rlt_write_dump_record(
+            ref_norm, None, is_rlt_active=False,
+            prefix_len=3, exec_idx=5,
+            rlt_enc_ms=3.14, rlt_post_ms=1.59, total_delay_ms=62.5,
+        )
+        r = self._read_records(tmp_path)[0]
+        assert r["rlt_enc_ms"] == 3.14
+        assert r["rlt_post_ms"] == 1.59
+        assert r["total_delay_ms"] == 62.5
 
     def test_dump_skipped_when_no_output_dir(self, tmp_path):
         """No output_dir on rlt_state (shouldn't happen in practice) must not

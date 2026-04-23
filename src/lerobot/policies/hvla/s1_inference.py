@@ -17,6 +17,59 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+class _TimedBlock:
+    """Measures the duration of a block of code.
+
+    Uses ``torch.cuda.Event`` on CUDA devices to capture real GPU execution
+    time (CUDA ops are async; CPU-side wall clock only captures dispatch).
+    Falls back to ``time.perf_counter`` on CPU-only devices where there's
+    no async gap.
+
+    Intended use:
+
+        enc_timer = _TimedBlock(device)
+        with enc_timer:
+            # ... GPU / CPU work ...
+        # Later, AFTER the CUDA stream has been synchronized:
+        ms = enc_timer.read_ms()  # for CUDA events this requires the sync
+
+    The read_ms() must be called after a torch.cuda.synchronize() in the
+    CUDA case — otherwise the events aren't done and elapsed_time would
+    block or return stale values.
+    """
+
+    __slots__ = ("_use_events", "_ev_start", "_ev_end", "_cpu_start", "_cached_ms")
+
+    def __init__(self, device: "torch.device"):
+        self._use_events = device.type == "cuda"
+        self._ev_start = None
+        self._ev_end = None
+        self._cpu_start: float | None = None
+        self._cached_ms: float = 0.0
+
+    def __enter__(self) -> "_TimedBlock":
+        if self._use_events:
+            self._ev_start = torch.cuda.Event(enable_timing=True)
+            self._ev_end = torch.cuda.Event(enable_timing=True)
+            self._ev_start.record()
+        else:
+            self._cpu_start = time.perf_counter()
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        if self._use_events:
+            self._ev_end.record()
+        else:
+            self._cached_ms = (time.perf_counter() - self._cpu_start) * 1000
+
+    def read_ms(self) -> float:
+        """Return elapsed ms. CUDA variant reads after the end-of-inference
+        sync has drained the stream; CPU variant is already final."""
+        if self._use_events and self._ev_start is not None and self._ev_end is not None:
+            return self._ev_start.elapsed_time(self._ev_end)
+        return self._cached_ms
+
+
 class InferenceThread:
     """Background GPU inference with pause/resume support.
 
@@ -85,6 +138,11 @@ class InferenceThread:
         # a stale tensor from a previous step can never leak into a record
         # (would produce a wrong 'actor' field if rlt_active flipped off).
         self._rlt_last_actor_norm: "torch.Tensor | None" = None
+        # Rolling per-inference timing of the RLT portion (token encoder +
+        # actor + dump). Separated from S1's time so we can verify RLT's
+        # contribution to inference latency — which feeds RTC's expected_d.
+        self._rlt_enc_ms_hist: list[float] = []
+        self._rlt_post_ms_hist: list[float] = []
 
         # RTC config
         self._supports_rtc = getattr(policy, "supports_rtc", False)
@@ -277,7 +335,12 @@ class InferenceThread:
         )
         return ref
 
-    def _rlt_write_dump_record(self, ref_norm, actor_norm, is_rlt_active: bool):
+    def _rlt_write_dump_record(
+        self, ref_norm, actor_norm, is_rlt_active: bool,
+        prefix_len: int = 0, exec_idx: int | None = None,
+        rlt_enc_ms: float | None = None, rlt_post_ms: float | None = None,
+        total_delay_ms: float | None = None,
+    ):
         """Append one chunk_compare.jsonl record.
 
         Runs whenever RLT is loaded and ``dump_chunks`` is on — regardless
@@ -285,6 +348,19 @@ class InferenceThread:
         (user disengaged via E / Start-engaged off), ``actor_norm`` is None
         and the record stores ``"actor": null``. This lets A/B baseline runs
         (actor off) produce schema-compatible records alongside actor-on runs.
+
+        ``prefix_len`` is the RTC prefix size D this inference received. The
+        first D frames of ``ref`` are the clamped prefix (already-committed
+        past actions), the rest are S1's denoised continuation. Actor rewrote
+        frames [0:C], which overlaps [0:D] (prefix territory) when D < C.
+        ``exec_idx`` is the chunk index the robot had reached when this
+        inference started — useful for reconstructing which frames actually
+        executed.
+
+        ``rlt_enc_ms`` / ``rlt_post_ms`` / ``total_delay_ms`` are documented
+        at the record construction site: total_delay is GPU-sync'd end-to-end
+        and accurate; the enc/post splits are CPU dispatch times only (async
+        GPU work, lower bound).
         """
         assert ref_norm is not None, "_rlt_write_dump_record called without ref_norm"
         # Misattribution tripwire: if ``actor_norm`` is a tensor while
@@ -311,6 +387,24 @@ class InferenceThread:
                 "actor": actor_norm.detach().cpu().tolist() if actor_norm is not None else None,
                 "deploy": self._rlt_state.get("deploy", False),
                 "rlt_active": bool(is_rlt_active),
+                "prefix_len": int(prefix_len),
+                "exec_idx": int(exec_idx) if exec_idx is not None else None,
+                # Per-inference RLT timing.
+                #
+                # ``total_delay_ms`` = obs-to-chunk-ready end-to-end latency,
+                # measured AFTER torch.cuda.synchronize(). This is what feeds
+                # RTC's expected_d.
+                #
+                # ``rlt_enc_ms`` / ``rlt_post_ms`` = GPU execution time of the
+                # RLT token-encoder block and the post-S1 RLT block,
+                # measured via torch.cuda.Event (CUDA stream timestamps).
+                # No hot-path sync: the events are read after the
+                # end-of-inference sync that already happens. On CPU-only
+                # runs these fall back to perf_counter (CPU dispatch time
+                # only, but on CPU there's no async gap).
+                "rlt_enc_ms": round(rlt_enc_ms, 3) if rlt_enc_ms is not None else None,
+                "rlt_post_ms": round(rlt_post_ms, 3) if rlt_post_ms is not None else None,
+                "total_delay_ms": round(total_delay_ms, 1) if total_delay_ms is not None else None,
             }
             with open(output_dir / "chunk_compare.jsonl", "a") as f:
                 f.write(_json.dumps(record) + "\n")
@@ -551,17 +645,20 @@ class InferenceThread:
 
             # Inference
             t_infer_start = time.perf_counter()
+            rlt_enc_timer = _TimedBlock(self._device)
+            rlt_post_timer = _TimedBlock(self._device)
             with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 # RLT: extract z_rl from S1 context tokens
                 z_rl_out = None
                 if self._rl_token_encoder is not None:
-                    s1_config = self._policy.config
-                    if s1_config.image_features:
-                        batch["observation.images"] = [
-                            batch[key] for key in s1_config.image_features
-                        ]
-                    context = self._policy.model.encode_observations(batch)
-                    z_rl_out = self._rl_token_encoder(context.float()).detach()
+                    with rlt_enc_timer:
+                        s1_config = self._policy.config
+                        if s1_config.image_features:
+                            batch["observation.images"] = [
+                                batch[key] for key in s1_config.image_features
+                            ]
+                        context = self._policy.model.encode_observations(batch)
+                        z_rl_out = self._rl_token_encoder(context.float()).detach()
 
                 # S1 flow matching decoder → reference chunk
                 actions = self._policy.predict_action_chunk(batch, num_steps=self._num_denoise_steps)
@@ -572,46 +669,80 @@ class InferenceThread:
                 # (actor off) produce schema-compatible records — the
                 # Diagnostic button just works for both modes.
                 ref_norm_snapshot = None
+                _dump_pending = False
+                _dump_actor = None
                 if self._rlt_state is not None and z_rl_out is not None:
-                    # Refresh live overrides (beta / sigma / dump_chunks)
-                    # here, not only inside gradient_updates. Gradient updates
-                    # don't fire in deploy mode, so without this call the
-                    # Diagnostic button would be ignored during deploy runs.
-                    self._rlt_check_config_overrides()
+                    with rlt_post_timer:
+                        # Refresh live overrides (beta / sigma / dump_chunks)
+                        # here, not only inside gradient_updates. Gradient updates
+                        # don't fire in deploy mode, so without this call the
+                        # Diagnostic button would be ignored during deploy runs.
+                        self._rlt_check_config_overrides()
 
-                    # Reset the per-step actor snapshot BEFORE dispatching so
-                    # that if _rlt_inference_step doesn't run (or returns
-                    # without assigning), the dump path cannot see a stale
-                    # tensor from a previous inference.
-                    self._rlt_last_actor_norm = None
-                    self._rlt_step_count += 1
-                    ref_norm_snapshot = self._rlt_compute_ref_norm(actions)
-                    if self.rlt_active:
-                        self._rlt_inference_step(
-                            batch, actions, z_rl_out, obs,
-                            ref_norm=ref_norm_snapshot,
-                        )
-                    # Dump only during an active episode — system_active is
-                    # cleared during reset / pre-first-episode, where the
-                    # episode counter is stale (-1 before first ep) and the
-                    # state is meaningless for analysis.
-                    if self._rlt_dump_chunks and self._rlt_system_active:
-                        # Only trust the actor snapshot if the actor actually
-                        # ran this inference. Paranoid even though we reset
-                        # above — paired check keeps the invariant visible.
-                        actor_norm_snapshot = (
+                        # Reset the per-step actor snapshot BEFORE dispatching so
+                        # that if _rlt_inference_step doesn't run (or returns
+                        # without assigning), the dump path cannot see a stale
+                        # tensor from a previous inference.
+                        self._rlt_last_actor_norm = None
+                        self._rlt_step_count += 1
+                        ref_norm_snapshot = self._rlt_compute_ref_norm(actions)
+                        if self.rlt_active:
+                            self._rlt_inference_step(
+                                batch, actions, z_rl_out, obs,
+                                ref_norm=ref_norm_snapshot,
+                            )
+                        # Dump only during an active episode — system_active is
+                        # cleared during reset / pre-first-episode, where the
+                        # episode counter is stale (-1 before first ep) and the
+                        # state is meaningless for analysis.
+                        # Snapshot the dump args now; the actual write happens
+                        # after t_infer_end so the record can carry real timing.
+                        _dump_pending = self._rlt_dump_chunks and self._rlt_system_active
+                        _dump_actor = (
                             self._rlt_last_actor_norm if self.rlt_active else None
                         )
-                        self._rlt_write_dump_record(
-                            ref_norm_snapshot, actor_norm_snapshot,
-                            is_rlt_active=self.rlt_active,
-                        )
+
+            # Force GPU to finish before stamping t_infer_end. Without this,
+            # t_infer_end captures CPU dispatch time while GPU is still
+            # running — which systematically understates latency and leads
+            # to an expected_d that's too short for the next RTC prefix.
+            # The sync cost is ~0 here because the chunk tensor is needed
+            # immediately below (it would block at .cpu() anyway). This same
+            # sync also makes the CUDA events readable on the next line.
+            if self._device.type == "cuda":
+                torch.cuda.synchronize()
+
+            # Now that the stream has drained, read the event-based GPU
+            # timings (accurate, unlike the CPU-dispatch perf_counter path).
+            rlt_enc_ms = rlt_enc_timer.read_ms()
+            rlt_post_ms = rlt_post_timer.read_ms()
 
             t_infer_end = time.perf_counter()
             infer_ms = (t_infer_end - t_infer_start) * 1000
             self.infer_times.append(infer_ms)
             total_delay = t_infer_end - t_obs
             self.inference_delays.append(total_delay)
+            self._rlt_enc_ms_hist.append(rlt_enc_ms)
+            self._rlt_post_ms_hist.append(rlt_post_ms)
+            if len(self._rlt_enc_ms_hist) > 200:
+                self._rlt_enc_ms_hist = self._rlt_enc_ms_hist[-200:]
+                self._rlt_post_ms_hist = self._rlt_post_ms_hist[-200:]
+
+            # Dump record now that the post-sync timing is known. Writing
+            # the record here (rather than inside the autocast block) lets
+            # us include ``total_delay_ms`` — the same quantity that feeds
+            # RTC's ``expected_d``. Per-inference timing therefore lives in
+            # the dump file, not in the main log.
+            if self._rlt_state is not None and z_rl_out is not None and _dump_pending:
+                self._rlt_write_dump_record(
+                    ref_norm_snapshot, _dump_actor,
+                    is_rlt_active=self.rlt_active,
+                    prefix_len=current_prefix_len,
+                    exec_idx=exec_idx,
+                    rlt_enc_ms=rlt_enc_ms,
+                    rlt_post_ms=rlt_post_ms,
+                    total_delay_ms=total_delay * 1000,
+                )
 
             chunk_np = actions.cpu().numpy()[0]
 
