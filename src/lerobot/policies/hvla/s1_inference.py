@@ -655,8 +655,13 @@ class InferenceThread:
             rlt_enc_timer = _TimedBlock(self._device)
             rlt_post_timer = _TimedBlock(self._device)
             with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                # RLT: extract z_rl from S1 context tokens
+                # RLT: extract z_rl from S1 context tokens. Context is
+                # computed ONCE and reused — we also pass it to
+                # predict_action_chunk below so S1's internal
+                # encode_observations call is skipped (otherwise the same
+                # DINOv2 forward runs twice).
                 z_rl_out = None
+                cached_context = None
                 if self._rl_token_encoder is not None:
                     with rlt_enc_timer:
                         # CRITICAL: use the policy's shared prep helper so the
@@ -666,11 +671,20 @@ class InferenceThread:
                         # OOD z_rl — a latent bug that hurt RLT learning for
                         # weeks before the parity tests caught it.
                         rlt_batch = self._policy.prepare_batch_for_encode_observations(batch)
-                        context = self._policy.model.encode_observations(rlt_batch)
-                        z_rl_out = self._rl_token_encoder(context.float()).detach()
+                        cached_context = self._policy.model.encode_observations(rlt_batch)
+                        z_rl_out = self._rl_token_encoder(cached_context.float()).detach()
 
-                # S1 flow matching decoder → reference chunk
-                actions = self._policy.predict_action_chunk(batch, num_steps=self._num_denoise_steps)
+                # S1 flow matching decoder → reference chunk. Pass the
+                # pre-computed context (if any) so the internal
+                # encode_observations call is skipped — saves the ~11ms
+                # DINOv2 forward. The kwarg is only added when we have
+                # a context to share, so policy implementations without
+                # the ``context`` parameter (mocks, older variants) aren't
+                # forced to accept it.
+                predict_kwargs = {"num_steps": self._num_denoise_steps}
+                if cached_context is not None:
+                    predict_kwargs["context"] = cached_context
+                actions = self._policy.predict_action_chunk(batch, **predict_kwargs)
                 actions = self._postprocessor(actions)
 
                 # RLT: compute ref_norm, optionally run actor, optionally dump.

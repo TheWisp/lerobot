@@ -361,6 +361,7 @@ class FlowMatchingS1Model(nn.Module):
         num_steps: int | None = None,
         action_prefix: Tensor | None = None,
         prefix_len: int = 0,
+        context: Tensor | None = None,
     ) -> Tensor:
         """Generate actions via Euler integration with optional RTC prefix.
 
@@ -373,6 +374,11 @@ class FlowMatchingS1Model(nn.Module):
             num_steps: override denoising steps
             action_prefix: [B, D, action_dim] actually-executed actions for RTC
             prefix_len: number of prefix positions (D). If 0, no RTC.
+            context: [B, N_ctx, D] pre-computed context tokens. When provided,
+                the internal ``encode_observations`` call is skipped. Used by
+                the RLT inference path, which already computes the same
+                context for the RL token encoder — avoids doing one DINOv2
+                forward twice per inference.
 
         Returns:
             [B, chunk_size, action_dim] — generated action chunk
@@ -385,8 +391,12 @@ class FlowMatchingS1Model(nn.Module):
                 B = v.shape[0]
                 break
 
-        # Encode observations once (reused across denoising steps)
-        context = self.encode_observations(batch)
+        # Encode observations once (reused across denoising steps) — unless
+        # the caller pre-computed it. They must have normalized the batch the
+        # same way prepare_batch_for_encode_observations does; otherwise the
+        # supplied context is inconsistent with the prefix/state on the batch.
+        if context is None:
+            context = self.encode_observations(batch)
 
         # Pre-compute cross-attention K,V (reused across all denoise steps)
         cached_kv = self.precompute_cross_attn_kv(context)
@@ -497,12 +507,23 @@ class FlowMatchingS1Policy(nn.Module):
         return batch
 
     @torch.no_grad()
-    def predict_action_chunk(self, batch: dict[str, Tensor], num_steps: int | None = None) -> Tensor:
+    def predict_action_chunk(
+        self, batch: dict[str, Tensor], num_steps: int | None = None,
+        context: Tensor | None = None,
+    ) -> Tensor:
         """Predict action chunk via flow matching with RTC inpainting.
 
         RTC prefix (ACTION_PREFIX_KEY) should contain actions from the PREVIOUS
         chunk's predictions (the overlap portion), in raw (unnormalized) space.
         The prefix length d equals the actual measured inference delay in frames.
+
+        ``context``: pre-computed context tokens from ``encode_observations``.
+        When supplied, the internal encode_observations call inside
+        ``sample_actions`` is skipped. Caller is responsible for having
+        computed context on a batch that matches what
+        ``prepare_batch_for_encode_observations`` would produce (same state
+        normalization + image-keys mapping). Used by the RLT inference path
+        to avoid redundant DINOv2 forwards.
 
         Returns: [B, chunk_size, action_dim] in original (unnormalized) action space
         """
@@ -528,6 +549,7 @@ class FlowMatchingS1Policy(nn.Module):
             num_steps=num_steps,
             action_prefix=action_prefix,
             prefix_len=prefix_len,
+            context=context,
         )
 
         # Denormalize output
