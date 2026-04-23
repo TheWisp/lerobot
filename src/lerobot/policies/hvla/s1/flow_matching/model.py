@@ -465,6 +465,37 @@ class FlowMatchingS1Policy(nn.Module):
     def reset(self) -> None:
         self._action_queue.clear()
 
+    def prepare_batch_for_encode_observations(
+        self, batch: dict[str, Tensor],
+    ) -> dict[str, Tensor]:
+        """Return a shallow copy of ``batch`` normalized exactly the way
+        ``FlowMatchingDataset`` does at training time, ready to pass to
+        ``self.model.encode_observations``.
+
+        Contract — the resulting batch:
+          * has ``observation.state`` z-scored with training-time mean/std
+            (if the policy has norm_stats)
+          * has ``OBS_IMAGES`` populated from ``self.config.image_features``
+            (so ``encode_observations`` takes the fast path)
+          * leaves ``ACTION_PREFIX_KEY`` untouched here (RTC prefix handling
+            lives with ``predict_action_chunk``, since it's denoise-specific)
+
+        Used by ``predict_action_chunk`` for its own denoise pass, and by
+        external callers that feed ``encode_observations`` directly (RLT
+        inference needs context tokens for the RL token encoder). Sharing
+        this one helper is what eliminates the train/infer state mismatch:
+        both paths normalize identically.
+        """
+        batch = dict(batch)
+        if self.config.image_features:
+            batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
+        if self._state_mean is not None and "observation.state" in batch:
+            device = batch["observation.state"].device
+            batch["observation.state"] = (
+                batch["observation.state"] - self._state_mean.to(device)
+            ) / self._state_std.to(device)
+        return batch
+
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor], num_steps: int | None = None) -> Tensor:
         """Predict action chunk via flow matching with RTC inpainting.
@@ -476,18 +507,15 @@ class FlowMatchingS1Policy(nn.Module):
         Returns: [B, chunk_size, action_dim] in original (unnormalized) action space
         """
         self.eval()
-        batch = dict(batch)
-        if self.config.image_features:
-            batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
+        # Shared prep (images, state normalization) — exact same transform
+        # that FlowMatchingDataset applies at training time. Also used by
+        # external callers like RLT inference.
+        batch = self.prepare_batch_for_encode_observations(batch)
 
-        # Normalize state input
-        if self._state_mean is not None and "observation.state" in batch:
-            device = batch["observation.state"].device
-            batch["observation.state"] = (
-                batch["observation.state"] - self._state_mean.to(device)
-            ) / self._state_std.to(device)
-
-        # RTC prefix: previous chunk's predictions (raw space → normalize)
+        # RTC prefix: previous chunk's predictions (raw space → normalize).
+        # Kept out of ``prepare_batch_for_encode_observations`` because only
+        # the denoising pass needs the prefix; the encode_observations path
+        # doesn't consume it.
         action_prefix = batch.pop(ACTION_PREFIX_KEY, None)
         if action_prefix is not None and self._action_mean is not None:
             device = action_prefix.device

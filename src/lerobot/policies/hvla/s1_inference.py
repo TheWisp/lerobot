@@ -652,12 +652,14 @@ class InferenceThread:
                 z_rl_out = None
                 if self._rl_token_encoder is not None:
                     with rlt_enc_timer:
-                        s1_config = self._policy.config
-                        if s1_config.image_features:
-                            batch["observation.images"] = [
-                                batch[key] for key in s1_config.image_features
-                            ]
-                        context = self._policy.model.encode_observations(batch)
+                        # CRITICAL: use the policy's shared prep helper so the
+                        # state is normalized (z-scored) the same way it was
+                        # during RL-token-encoder training. Calling
+                        # encode_observations on un-normalized state produces
+                        # OOD z_rl — a latent bug that hurt RLT learning for
+                        # weeks before the parity tests caught it.
+                        rlt_batch = self._policy.prepare_batch_for_encode_observations(batch)
+                        context = self._policy.model.encode_observations(rlt_batch)
                         z_rl_out = self._rl_token_encoder(context.float()).detach()
 
                 # S1 flow matching decoder → reference chunk
