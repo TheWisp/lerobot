@@ -933,7 +933,7 @@ function renderRunForm() {
     html += `</select>`;
     // Fields shown when New is selected
     html += `<label id="run-hvla-rlt-token-label" style="display:none">RL Token Encoder</label>`;
-    html += `<input type="text" id="run-hvla-rlt-token-ckpt" placeholder="outputs/rlt_token_v2/checkpoint-10000" style="display:none">`;
+    html += `<input type="text" id="run-hvla-rlt-token-ckpt" placeholder="outputs/rlt_token_v4_4layer_d2048/checkpoint-10000" style="display:none">`;
     html += `<label id="run-hvla-rlt-outdir-label" style="display:none">Output Directory</label>`;
     html += `<input type="text" id="run-hvla-rlt-output-dir" value="outputs/rlt_online" style="display:none">`;
     // Fields shown when existing checkpoint selected
