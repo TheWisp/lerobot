@@ -1992,6 +1992,11 @@ async function _initRLTSliders() {
 
     if (diagBtn) {
         diagBtn.onclick = async () => {
+            // Drop focus so SPACE/ENTER don't keep re-triggering this button.
+            // The subprocess captures SPACE for intervention; if this button
+            // keeps focus after click, SPACE fires both the intervention and
+            // this toggle, flipping the diagnostic flag on every intervention.
+            diagBtn.blur();
             const on = !diagBtn.classList.contains('active');
             diagBtn.classList.toggle('active', on);
             diagBtn.textContent = on ? 'Diagnostic: ON' : 'Diagnostic: OFF';
