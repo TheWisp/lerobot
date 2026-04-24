@@ -691,7 +691,8 @@ async def get_rlt_config() -> dict:
     defaults = RLTConfig()
     result = {
         "beta": defaults.beta,
-        "actor_sigma": defaults.actor_sigma,
+        "exploration_sigma": defaults.exploration_sigma,
+        "target_sigma": defaults.target_sigma,
         "dump_chunks": False,
     }
     if not _active_config or not _active_config.get("rlt_output_dir"):
@@ -702,7 +703,10 @@ async def get_rlt_config() -> dict:
     try:
         with open(override_path) as f:
             overrides = _json.load(f)
-        for key in ("beta", "actor_sigma"):
+        # Back-compat: legacy "actor_sigma" is a synonym for exploration_sigma.
+        if "actor_sigma" in overrides and "exploration_sigma" not in overrides:
+            overrides["exploration_sigma"] = overrides["actor_sigma"]
+        for key in ("beta", "exploration_sigma", "target_sigma"):
             if key in overrides:
                 result[key] = float(overrides[key])
         if "dump_chunks" in overrides:
@@ -718,8 +722,16 @@ async def set_rlt_config(body: dict) -> dict:
     import json as _json
     if not _active_config or not _active_config.get("rlt_output_dir"):
         raise HTTPException(409, "No active RLT session")
-    # Validate: only known keys, numeric values in range
-    allowed = {"beta": (0.0, 10.0), "actor_sigma": (0.0, 1.0)}
+    # Validate: only known keys, numeric values in range. Legacy "actor_sigma"
+    # is accepted as a synonym for exploration_sigma so older GUI builds don't
+    # break mid-session.
+    if "actor_sigma" in body and "exploration_sigma" not in body:
+        body["exploration_sigma"] = body["actor_sigma"]
+    allowed = {
+        "beta": (0.0, 10.0),
+        "exploration_sigma": (0.0, 1.0),
+        "target_sigma": (0.0, 1.0),
+    }
     filtered = {}
     for key, (lo, hi) in allowed.items():
         if key in body:
@@ -729,7 +741,10 @@ async def set_rlt_config(body: dict) -> dict:
     if "dump_chunks" in body:
         filtered["dump_chunks"] = bool(body["dump_chunks"])
     if not filtered:
-        raise HTTPException(400, f"No valid keys. Allowed: beta, actor_sigma, dump_chunks")
+        raise HTTPException(
+            400,
+            "No valid keys. Allowed: beta, exploration_sigma, target_sigma, dump_chunks",
+        )
     override_path = Path(_active_config["rlt_output_dir"]) / "rlt_overrides.json"
     try:
         # Merge with existing file so partial updates (e.g. only dump_chunks)

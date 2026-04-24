@@ -1960,9 +1960,9 @@ async function _initRLTSliders() {
                 betaSlider.value = cfg.beta;
                 if (betaVal) betaVal.textContent = cfg.beta.toFixed(2);
             }
-            if (sigmaSlider && typeof cfg.actor_sigma === 'number') {
-                sigmaSlider.value = cfg.actor_sigma;
-                if (sigmaVal) sigmaVal.textContent = cfg.actor_sigma.toFixed(3);
+            if (sigmaSlider && typeof cfg.exploration_sigma === 'number') {
+                sigmaSlider.value = cfg.exploration_sigma;
+                if (sigmaVal) sigmaVal.textContent = cfg.exploration_sigma.toFixed(3);
             }
             if (diagBtn) {
                 const on = !!cfg.dump_chunks;
@@ -2022,7 +2022,7 @@ function _sendRLTConfig() {
             await fetch('/api/run/rlt-config', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({beta, actor_sigma: sigma}),
+                body: JSON.stringify({beta, exploration_sigma: sigma}),
             });
         } catch (e) { /* ignore */ }
     }, 300);

@@ -45,9 +45,25 @@ class RLTConfig:
     discount: float = 0.99               # gamma
     tau: float = 0.005                    # target network soft update rate
     beta: float = 0.1                     # BC regularizer weight (paper uses 1.0 with delta EE)
-    actor_sigma: float = 0.02            # fixed Gaussian std for exploration (normalized space)
-                                          # Paper uses 0.1 but with delta EE position (~1cm scale).
-                                          # Joint angles have ~24° std, so 0.02 ≈ 0.5° exploration.
+    exploration_sigma: float = 0.02      # ε_expl in TD3: Gaussian std added to the ACTION
+                                          # the robot executes. Drives exploration and
+                                          # shows up as joint jitter. Paper uses 0.1 with
+                                          # delta EE (~1cm); joint angles have ~24° std,
+                                          # so 0.02 ≈ 0.5° jitter.
+                                          #
+                                          # Setting this to 0 disables joint jitter but
+                                          # does NOT disable target policy smoothing —
+                                          # that's controlled separately by target_sigma.
+    target_sigma: float = 0.02           # ε̃ in TD3: Gaussian std added to the TARGET
+                                          # action inside the Bellman backup for target
+                                          # policy smoothing (Fujimoto 2018). Prevents
+                                          # the critic from latching onto over-estimates
+                                          # of a single deterministic action. Decoupled
+                                          # from exploration_sigma so that exploration=0
+                                          # doesn't also disable TD3's stability trick
+                                          # (as happened in rlt_online_v2_widened).
+    target_noise_clip: float = 0.5       # TD3 target noise clip: ε̃ clamped to [-c, c].
+                                          # Paper default: 0.5.
     ref_action_dropout: float = 0.5       # probability of zeroing reference chunk
     utd_ratio: int = 5                    # gradient updates per new transition
     subsample_stride: int = 2             # stride for replay buffer subsampling

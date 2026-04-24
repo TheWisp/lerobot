@@ -64,12 +64,21 @@ class RLTActor(nn.Module):
         state: Tensor,
         ref_chunk: Tensor,
         deterministic: bool = False,
+        sigma: float | None = None,
+        clip: float | None = None,
     ) -> Tensor:
         """
         Args:
             z_rl: [B, D] RL token
             state: [B, state_dim] proprioceptive state
             ref_chunk: [B, C, action_dim] reference chunk from frozen S1
+            deterministic: if True, return μ with no noise
+            sigma: noise std. When None, uses ``config.exploration_sigma``
+                (the execution/exploration noise). The critic's target
+                bootstrap passes ``config.target_sigma`` explicitly to
+                apply TD3 target policy smoothing with a different std.
+            clip: symmetric clip applied to the noise (TD3 ε̃ clip).
+                None = no clip.
         Returns:
             actions: [B, C, action_dim] — direct output (paper Eq. 4)
         """
@@ -82,7 +91,10 @@ class RLTActor(nn.Module):
         if deterministic:
             return mu
 
-        noise = torch.randn_like(mu) * self.config.actor_sigma
+        sigma_val = self.config.exploration_sigma if sigma is None else sigma
+        noise = torch.randn_like(mu) * sigma_val
+        if clip is not None:
+            noise = noise.clamp(-clip, clip)
         return mu + noise
 
     def mean(self, z_rl: Tensor, state: Tensor, ref_chunk: Tensor) -> Tensor:
@@ -172,8 +184,16 @@ class TD3Agent:
         gamma = self.config.discount
 
         with torch.no_grad():
-            # Target actions from actor (with clipped noise for TD3)
-            next_action = self.actor(next_z_rl, next_state, next_ref_chunk, deterministic=False)
+            # Target policy smoothing (TD3, Fujimoto 2018): use target_sigma +
+            # clip here, NOT exploration_sigma. These were coupled historically
+            # and caused the rlt_online_v2_widened Q explosion when the user
+            # set exploration_sigma=0 and inadvertently also killed smoothing.
+            next_action = self.actor(
+                next_z_rl, next_state, next_ref_chunk,
+                deterministic=False,
+                sigma=self.config.target_sigma,
+                clip=self.config.target_noise_clip,
+            )
             target_q = self.critic_target.min_q(next_z_rl, next_state, next_action)
             # C-step return: reward is already the C-step cumulative
             q_target = reward + (gamma ** C) * (1 - done) * target_q

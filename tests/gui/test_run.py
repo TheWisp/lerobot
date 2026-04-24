@@ -629,7 +629,8 @@ class TestGetRltConfig:
         cfg = asyncio.run(get_rlt_config())
         defaults = RLTConfig()
         assert cfg["beta"] == defaults.beta
-        assert cfg["actor_sigma"] == defaults.actor_sigma
+        assert cfg["exploration_sigma"] == defaults.exploration_sigma
+        assert cfg["target_sigma"] == defaults.target_sigma
         assert cfg["dump_chunks"] is False
 
     def test_reads_current_override_values(self, reset_active, tmp_path):
@@ -639,13 +640,25 @@ class TestGetRltConfig:
         from lerobot.gui.api.run import get_rlt_config
 
         (tmp_path / "rlt_overrides.json").write_text(
-            json.dumps({"beta": 0.5, "actor_sigma": 0.0, "dump_chunks": True})
+            json.dumps({"beta": 0.5, "exploration_sigma": 0.0, "dump_chunks": True})
         )
         reset_active._active_config = {"rlt_output_dir": str(tmp_path)}
         cfg = asyncio.run(get_rlt_config())
         assert cfg["beta"] == 0.5
-        assert cfg["actor_sigma"] == 0.0
+        assert cfg["exploration_sigma"] == 0.0
         assert cfg["dump_chunks"] is True
+
+    def test_legacy_actor_sigma_key_is_accepted(self, reset_active, tmp_path):
+        """Older GUI builds wrote ``actor_sigma``. Accept as synonym for
+        ``exploration_sigma`` so mid-session upgrades don't drop the value."""
+        from lerobot.gui.api.run import get_rlt_config
+
+        (tmp_path / "rlt_overrides.json").write_text(
+            json.dumps({"beta": 0.5, "actor_sigma": 0.0})
+        )
+        reset_active._active_config = {"rlt_output_dir": str(tmp_path)}
+        cfg = asyncio.run(get_rlt_config())
+        assert cfg["exploration_sigma"] == 0.0
 
     def test_partial_override_fills_missing_keys_from_defaults(self, reset_active, tmp_path):
         """Old override files may predate some keys. Missing keys fall back
@@ -657,7 +670,7 @@ class TestGetRltConfig:
         reset_active._active_config = {"rlt_output_dir": str(tmp_path)}
         cfg = asyncio.run(get_rlt_config())
         assert cfg["beta"] == 0.3
-        assert cfg["actor_sigma"] == RLTConfig().actor_sigma
+        assert cfg["exploration_sigma"] == RLTConfig().exploration_sigma
         assert cfg["dump_chunks"] is False
 
     def test_missing_file_returns_defaults(self, reset_active, tmp_path):

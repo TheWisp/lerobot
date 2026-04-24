@@ -451,8 +451,13 @@ class InferenceThread:
         try:
             with open(override_path) as f:
                 overrides = _json.load(f)
+            # Back-compat: accept legacy "actor_sigma" as a synonym for
+            # "exploration_sigma". Older rlt_overrides.json files on disk
+            # (and older GUI builds) still use the old name.
+            if "actor_sigma" in overrides and "exploration_sigma" not in overrides:
+                overrides["exploration_sigma"] = overrides["actor_sigma"]
             cfg = self._rlt_state["config"]
-            for key in ("beta", "actor_sigma"):
+            for key in ("beta", "exploration_sigma", "target_sigma", "target_noise_clip"):
                 if key in overrides:
                     old = getattr(cfg, key)
                     new = float(overrides[key])

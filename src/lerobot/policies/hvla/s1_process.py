@@ -727,8 +727,9 @@ def run_s1(
                         rlt_state["total_updates"])
         else:
             logger.info(
-                "S1 RLT: Online RL enabled — C=%d, UTD=%d, beta=%.2f, sigma=%.3f",
-                rl_chunk_length, rlt_config.utd_ratio, rlt_config.beta, rlt_config.actor_sigma,
+                "S1 RLT: Online RL enabled — C=%d, UTD=%d, beta=%.2f, expl_sigma=%.3f, target_sigma=%.3f",
+                rl_chunk_length, rlt_config.utd_ratio, rlt_config.beta,
+                rlt_config.exploration_sigma, rlt_config.target_sigma,
             )
 
     # --- Pipelined inference thread ---

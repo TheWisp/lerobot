@@ -57,7 +57,7 @@ def config():
         critic_num_layers=1,
         num_critics=2,
         rl_chunk_length=C,
-        actor_sigma=0.02,
+        exploration_sigma=0.02,
         beta=0.1,
         ref_action_dropout=0.0,
         replay_capacity=100,
@@ -546,11 +546,11 @@ class TestTokenCheckpointManifest:
         save_rlt_token_config(tmp_path, trained_cfg)
 
         # Caller's base has runtime values that shouldn't be clobbered
-        base = RLTConfig(beta=0.5, actor_sigma=0.1)
+        base = RLTConfig(beta=0.5, exploration_sigma=0.1)
         loaded = load_rlt_token_config(tmp_path, base=base)
         assert loaded.token_encoder_layers == 4    # shape field — overridden from manifest
         assert loaded.beta == 0.5                  # non-shape — base preserved
-        assert loaded.actor_sigma == 0.1           # non-shape — base preserved
+        assert loaded.exploration_sigma == 0.1     # non-shape — base preserved
 
     def test_load_with_trained_arch_can_load_state_dict(self, tmp_path):
         """End-to-end: save a 4-layer encoder's state_dict + its manifest,
