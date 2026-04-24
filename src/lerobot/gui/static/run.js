@@ -1354,7 +1354,13 @@ async function launchRun() {
         showToast('Started', `${data.command} started (PID ${data.pid})`, 'success');
         updateRunUI(true);
         connectOutputSSE();
-        if (body?.rlt_mode) _startRLTPoll();
+        if (body?.rlt_mode) {
+            _startRLTPoll();
+            // Remember the output dir of a freshly-launched "+ New training..." run
+            // so we can auto-select its new checkpoint in the dropdown when the
+            // run ends (see connectOutputSSE done handler).
+            _pendingNewRltOutputDir = body.rlt_checkpoint ? null : (body.rlt_output_dir || null);
+        }
         // Start live camera viewer (polls until obs stream is available)
         startObsStreamViewer();
     } catch (e) {
@@ -1406,6 +1412,31 @@ function connectOutputSSE() {
             }
             if (typeof window.refreshOpenedDatasets === 'function') {
                 window.refreshOpenedDatasets();
+            }
+            // If the run that just ended was a "+ New training..." RLT launch,
+            // refresh the checkpoint dropdown and auto-select the entry whose
+            // path matches the output dir we just trained into. That way, the
+            // next launch naturally resumes from the newly-written checkpoint
+            // instead of silently re-starting a fresh training on top of it.
+            const newOutDir = _pendingNewRltOutputDir;
+            _pendingNewRltOutputDir = null;
+            if (newOutDir) {
+                _refreshRltCheckpoints().then(() => {
+                    const sel = document.getElementById('run-hvla-rlt-select');
+                    if (!sel) return;
+                    // Paths in the dropdown are absolute; the user's output dir
+                    // may be relative — match by suffix in either direction.
+                    const match = [...sel.options].find(o => {
+                        if (!o.value || o.value === '__new__') return false;
+                        return o.value === newOutDir
+                            || o.value.endsWith('/' + newOutDir)
+                            || newOutDir.endsWith('/' + o.value);
+                    });
+                    if (match) {
+                        sel.value = match.value;
+                        sel.dispatchEvent(new Event('change'));
+                    }
+                });
             }
             return;
         }
@@ -1795,6 +1826,11 @@ function stopObsStreamViewer() {
 // =============================================================================
 
 let _rltPollTimer = null;
+// Output dir of the most recent "+ New training..." RLT launch. When the
+// run ends we refresh the checkpoint dropdown and auto-select the entry
+// that matches this path, so the next launch resumes from it instead of
+// starting a fresh training.
+let _pendingNewRltOutputDir = null;
 
 function _switchBottomTab(tab) {
     document.querySelectorAll('.run-bottom-tab').forEach(b => {

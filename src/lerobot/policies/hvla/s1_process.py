@@ -622,7 +622,12 @@ def run_s1(
         from lerobot.policies.hvla.rlt.metrics import set_metrics_path
         set_metrics_path(str(rlt_state["output_dir"] / "metrics.json"))
 
-        # Load checkpoint: explicit path (--rlt-checkpoint) or auto-resume from output_dir/latest
+        # Load checkpoint: explicit path via --rlt-checkpoint only. We used to
+        # auto-resume when the output_dir had a latest/ subdir, but that
+        # silently clobbered prior metrics on a "fresh" launch and hid the
+        # fact that it was really a resume. Now: if the user wants to resume
+        # they must pass --rlt-checkpoint explicitly; otherwise a populated
+        # output_dir is an error.
         load_dir = None
         if rlt_checkpoint:
             load_dir = Path(rlt_checkpoint)
@@ -632,7 +637,14 @@ def run_s1(
         else:
             latest_dir = rlt_state["output_dir"] / "latest"
             if (latest_dir / "actor.pt").exists():
-                load_dir = latest_dir
+                raise RuntimeError(
+                    f"RLT output_dir already contains a trained checkpoint at "
+                    f"{latest_dir}. Refusing to start a fresh session here — "
+                    f"that would overwrite prior training. To resume, pass "
+                    f"--rlt-checkpoint={rlt_state['output_dir']} (or select "
+                    f"the existing checkpoint in the GUI). To start a new "
+                    f"training run, pass a different --rlt-output-dir."
+                )
 
         if load_dir and (load_dir / "actor.pt").exists():
             logger.info("RLT: Loading checkpoint from %s", load_dir)
