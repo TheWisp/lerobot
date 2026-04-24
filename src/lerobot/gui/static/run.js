@@ -1424,31 +1424,31 @@ function connectOutputSSE() {
             if (typeof window.refreshOpenedDatasets === 'function') {
                 window.refreshOpenedDatasets();
             }
-            // If the run that just ended was a "+ New training..." RLT launch,
-            // refresh the checkpoint dropdown and auto-select the entry whose
-            // path matches the output dir we just trained into. That way, the
-            // next launch naturally resumes from the newly-written checkpoint
-            // instead of silently re-starting a fresh training on top of it.
+            // Refresh the RLT checkpoint dropdown unconditionally after any
+            // RLT run so the displayed episode count reflects the latest
+            // saved checkpoint, not the value from when the dropdown was
+            // first populated. After "+ New training..." also auto-select
+            // the newly-written run dir so the next Start naturally resumes
+            // from it instead of silently re-starting a fresh training.
             const newOutDir = _pendingNewRltOutputDir;
             _pendingNewRltOutputDir = null;
-            if (newOutDir) {
-                _refreshRltCheckpoints().then(() => {
-                    const sel = document.getElementById('run-hvla-rlt-select');
-                    if (!sel) return;
-                    // Paths in the dropdown are absolute; the user's output dir
-                    // may be relative — match by suffix in either direction.
-                    const match = [...sel.options].find(o => {
-                        if (!o.value || o.value === '__new__') return false;
-                        return o.value === newOutDir
-                            || o.value.endsWith('/' + newOutDir)
-                            || newOutDir.endsWith('/' + o.value);
-                    });
-                    if (match) {
-                        sel.value = match.value;
-                        sel.dispatchEvent(new Event('change'));
-                    }
+            _refreshRltCheckpoints().then(() => {
+                if (!newOutDir) return;
+                const sel = document.getElementById('run-hvla-rlt-select');
+                if (!sel) return;
+                // Paths in the dropdown are absolute; the user's output dir
+                // may be relative — match by suffix in either direction.
+                const match = [...sel.options].find(o => {
+                    if (!o.value || o.value === '__new__') return false;
+                    return o.value === newOutDir
+                        || o.value.endsWith('/' + newOutDir)
+                        || newOutDir.endsWith('/' + o.value);
                 });
-            }
+                if (match) {
+                    sel.value = match.value;
+                    sel.dispatchEvent(new Event('change'));
+                }
+            });
             return;
         }
         if (data.overlay) {

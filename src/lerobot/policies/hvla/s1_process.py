@@ -1490,6 +1490,14 @@ def run_s1(
             infer_thread._rlt_system_active = False
             infer_thread._rlt_prev = None
             if rlt_recorder is not None:
+                # Episode may have ended while intervention was still
+                # active (operator presses 'r' to mark success without
+                # releasing intervention first — the common workflow).
+                # In that case the intervention-OFF transition never ran,
+                # so reconcile the counter and emit the watchdog log here.
+                if rlt_recorder.frames_observed > 0:
+                    rlt_state["total_transitions"] += rlt_recorder.chunks_stored
+                    rlt_recorder.log_summary()
                 rlt_recorder.reset()
             logger.info("RLT: collection PAUSED (episode end)")
 
