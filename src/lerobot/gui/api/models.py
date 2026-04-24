@@ -240,6 +240,28 @@ def _read_flat_checkpoint(ckpt_dir: Path) -> dict | None:
     }
 
 
+def _find_highest_ep_snapshot(run_dir: Path) -> Path | None:
+    """Return the ep_N/ subdir with the largest N inside ``run_dir``,
+    or None if there are none. Used to surface a single rollback point
+    in the GUI rather than enumerating every snapshot."""
+    best: tuple[int, Path] | None = None
+    try:
+        for child in run_dir.iterdir():
+            if not child.is_dir() or not child.name.startswith("ep_"):
+                continue
+            if not (child / "actor.pt").is_file():
+                continue
+            try:
+                n = int(child.name[len("ep_"):])
+            except ValueError:
+                continue
+            if best is None or n > best[0]:
+                best = (n, child)
+    except (PermissionError, OSError):
+        return None
+    return best[1] if best else None
+
+
 def _scan_source(source_path: str, max_depth: int = 2) -> list[dict]:
     """Scan a directory for training runs (dirs containing checkpoints/)."""
     root = Path(source_path)
@@ -284,14 +306,32 @@ def _scan_recursive(
         # Check if this is an RLT run dir (latest/actor.pt inside it)
         # Mirrors how training runs are detected by checkpoints/ subdir.
         if (current / "latest" / "actor.pt").is_file():
+            # Primary entry: the rolling latest/ checkpoint.
             meta = _read_rlt_checkpoint(current / "latest", base)
             if meta:
                 meta["path"] = str(current)  # run dir, not checkpoint subdir
+                meta["run_dir"] = str(current)  # output_dir target on resume
                 try:
                     meta["name"] = str(current.relative_to(base))
                 except ValueError:
                     pass
                 found.append(meta)
+            # Rollback entry: the highest-numbered ep_N/ snapshot, if any.
+            # All snapshots stay on disk for manual recovery, but only the
+            # most recent one is surfaced in the dropdown — the only one a
+            # user typically wants when latest/ is in doubt. The run_dir
+            # field keeps continued training writing to the parent.
+            highest_snap = _find_highest_ep_snapshot(current)
+            if highest_snap is not None:
+                snap_meta = _read_rlt_checkpoint(highest_snap, base)
+                if snap_meta:
+                    snap_meta["path"] = str(highest_snap)
+                    snap_meta["run_dir"] = str(current)
+                    try:
+                        snap_meta["name"] = str(highest_snap.relative_to(base))
+                    except ValueError:
+                        pass
+                    found.append(snap_meta)
             return
 
         # Recurse

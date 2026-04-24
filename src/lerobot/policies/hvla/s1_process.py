@@ -877,6 +877,12 @@ def run_s1(
 
     recorded_episodes = 0
 
+    # Tracks whether the main loop ended cleanly (normal exit or Ctrl+C).
+    # An unhandled exception leaves this False and the finally block skips
+    # the final RLT checkpoint save — partial / mid-update state shouldn't
+    # land in latest/. The user can fall back to a per-10-ep snapshot.
+    clean_exit = False
+
     try:
       while recorded_episodes < num_episodes and not events.get("stop_recording"):
         # --- Reset phase ---
@@ -1557,8 +1563,14 @@ def run_s1(
         loop_intervals.clear()
         last_send_time = None
 
+      # Reached the end of the episode loop normally (all episodes done
+      # or stop_recording was set). Mark exit as clean.
+      clean_exit = True
+
     except KeyboardInterrupt:
+        # Ctrl+C is a clean stop — state at this point is valid.
         logger.info("S1: Interrupted by user")
+        clean_exit = True
     finally:
         infer_thread.stop()
         if infer_thread.infer_times:
@@ -1582,28 +1594,40 @@ def run_s1(
                 logger.warning("S1: Failed to finalize intervention dataset: %s", e)
         if listener is not None:
             listener.stop()
-        # RLT: final save (training mode only)
+        # RLT: final save (training mode only). Skipped on unhandled
+        # exception — partial / mid-update state shouldn't land in
+        # latest/. The user falls back to a per-10-ep snapshot
+        # (output_dir/ep_N/) which only writes at clean episode-end
+        # points.
         if rlt_mode and rlt_agent is not None and not rlt_state.get("deploy"):
-            try:
-                save_dir = rlt_state["output_dir"] / "latest"
-                save_dir.mkdir(parents=True, exist_ok=True)
-                torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
-                torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
-                torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
-                torch.save({
-                    "actor_opt": rlt_agent.actor_opt.state_dict(),
-                    "critic_opt": rlt_agent.critic_opt.state_dict(),
-                    "episode": rlt_state["episode"],
-                    "total_transitions": rlt_state["total_transitions"],
-                    "total_updates": rlt_state["total_updates"],
-                    "successes": rlt_state["successes"],
-                }, save_dir / "training_state.pt")
-                rlt_replay.save(str(save_dir / "replay_buffer.pt"))
-                from lerobot.policies.hvla.rlt.metrics import save_metrics_to_file
-                save_metrics_to_file()
-                logger.info("RLT: Final checkpoint → %s", save_dir)
-            except Exception as e:
-                logger.error("RLT: Failed to save final checkpoint: %s", e)
+            if not clean_exit:
+                logger.warning(
+                    "RLT: skipping final checkpoint save due to unhandled "
+                    "exception. Resume from a per-episode snapshot "
+                    "(<output_dir>/ep_N/) instead of latest/, which is "
+                    "from the previous episode's clean save."
+                )
+            else:
+                try:
+                    save_dir = rlt_state["output_dir"] / "latest"
+                    save_dir.mkdir(parents=True, exist_ok=True)
+                    torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
+                    torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
+                    torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
+                    torch.save({
+                        "actor_opt": rlt_agent.actor_opt.state_dict(),
+                        "critic_opt": rlt_agent.critic_opt.state_dict(),
+                        "episode": rlt_state["episode"],
+                        "total_transitions": rlt_state["total_transitions"],
+                        "total_updates": rlt_state["total_updates"],
+                        "successes": rlt_state["successes"],
+                    }, save_dir / "training_state.pt")
+                    rlt_replay.save(str(save_dir / "replay_buffer.pt"))
+                    from lerobot.policies.hvla.rlt.metrics import save_metrics_to_file
+                    save_metrics_to_file()
+                    logger.info("RLT: Final checkpoint → %s", save_dir)
+                except Exception as e:
+                    logger.error("RLT: Failed to save final checkpoint: %s", e)
         _soft_land(robot)
         if teleop is not None:
             try:

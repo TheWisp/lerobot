@@ -681,6 +681,11 @@ async function _refreshRltCheckpoints() {
             opt.textContent = label;
             opt.dataset.hasReplayBuffer = ckpt.has_replay_buffer || false;
             opt.dataset.hasCritic = ckpt.has_critic || false;
+            // run_dir is the parent run directory — the dir new checkpoints
+            // should land in. For latest/ entries it equals path; for ep_N
+            // snapshots it's the snapshot's parent so further training
+            // continues into the original run dir, not into the snapshot.
+            opt.dataset.runDir = ckpt.run_dir || ckpt.path;
             sel.appendChild(opt);
         }
         // Restore selection if still valid
@@ -1242,13 +1247,19 @@ async function launchRun() {
                     }
                     // Existing checkpoint
                     const runMode = document.getElementById('run-hvla-rlt-run-mode')?.value || 'train';
+                    // For ep_N snapshot entries, run_dir points to the parent
+                    // run dir so continued training writes back into it
+                    // rather than nesting inside the snapshot. For latest/
+                    // entries run_dir equals path.
+                    const selectedOpt = rltSel.options[rltSel.selectedIndex];
+                    const runDir = selectedOpt?.dataset?.runDir || rltVal;
                     return {
                         rlt_mode: true,
                         rlt_checkpoint: rltVal,  // path to existing actor.pt directory
                         rlt_token_checkpoint: document.getElementById('run-hvla-rlt-token-ckpt')?.value?.trim() || null,
                         rlt_deploy: runMode === 'deploy',
                         rl_chunk_length: parseInt(document.getElementById('run-hvla-rlt-chunk-length')?.value) || 10,
-                        rlt_output_dir: rltVal,  // same dir for continued training
+                        rlt_output_dir: runDir,
                         rlt_start_engaged: rltStartEngaged,
                     };
                 })(),
