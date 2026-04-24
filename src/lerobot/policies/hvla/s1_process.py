@@ -756,6 +756,21 @@ def run_s1(
         rlt_replay=rlt_replay,
     )
 
+    # Instantiate the intervention recorder once per process. It owns the
+    # human-action → replay-buffer pipeline and raises on the first frame
+    # where z_rl can't be sourced from the inference thread.
+    if rlt_mode and rlt_replay is not None:
+        from lerobot.policies.hvla.rlt.intervention import InterventionRecorder
+        rlt_recorder = InterventionRecorder(
+            replay=rlt_replay,
+            policy=policy,
+            device=device,
+            chunk_length=rl_chunk_length,
+            joint_names=joint_names,
+        )
+    else:
+        rlt_recorder = None
+
     _supports_rtc = getattr(policy, "supports_rtc", False)
     _needs_ensemble = getattr(policy, "needs_temporal_ensemble", True)
     if _supports_rtc:
@@ -1102,11 +1117,10 @@ def run_s1(
                         logger.info("S1: INTERVENTION ON — inference continues (RLT), actor paused")
                         rlt_state["_episode_had_intervention"] = True
                         logger.info("RLT: collection PAUSED (intervention)")
-                        # Init human chunk accumulator
-                        rlt_state["_int_chunk_buf"] = []
-                        rlt_state["_int_chunk_z_rl"] = None
-                        rlt_state["_int_chunk_state"] = None
-                        rlt_state["_int_frame_count"] = 0
+                        # Recorder owns the human-chunk state; reset it here
+                        # so previous-intervention state can't leak in.
+                        if rlt_recorder is not None:
+                            rlt_recorder.reset()
                     else:
                         logger.info("S1: INTERVENTION ON — pausing inference, human takes over")
                         infer_thread.pause()
@@ -1235,63 +1249,22 @@ def run_s1(
                 if dataset is not None:
                     _add_frame_to_dataset(dataset, obs, action_np, joint_names, task)
 
-                # RLT: accumulate human actions into C-frame chunks for replay buffer
-                # Paper Alg 1 lines 9, 11, 12: a=a_human, ã=a_human, store transition
-                if rlt_mode and rlt_state is not None:
-                    C = rlt_state["config"].rl_chunk_length
-                    frame_idx = rlt_state["_int_frame_count"]
-
-                    # Snapshot z_rl + state at frame 0 of each C-step window
-                    if frame_idx % C == 0:
-                        # z_rl from inference thread (still running for z_rl extraction)
-                        prev = getattr(infer_thread, '_rlt_prev', None)
-                        rlt_state["_int_chunk_z_rl"] = prev["z_rl"] if prev is not None else None
-                        state_np_norm = np.array([float(obs[j]) for j in joint_names], dtype=np.float32)
-                        state_t = torch.from_numpy(state_np_norm).to(device)
-                        if policy._state_mean is not None:
-                            state_t = (state_t - policy._state_mean.to(device)) / policy._state_std.to(device)
-                        rlt_state["_int_chunk_state"] = state_t
-                        rlt_state["_int_chunk_buf"] = []
-
-                    # Normalize and accumulate human action
-                    a_t = torch.from_numpy(action_np).float()
-                    if policy._action_mean is not None:
-                        a_t = (a_t - policy._action_mean) / policy._action_std
-                    rlt_state["_int_chunk_buf"].append(a_t)
-                    rlt_state["_int_frame_count"] += 1
-
-                    # Store completed C-frame chunk
-                    if len(rlt_state["_int_chunk_buf"]) == C:
-                        human_chunk = torch.stack(rlt_state["_int_chunk_buf"])  # [C, A]
-                        z_rl_snap = rlt_state["_int_chunk_z_rl"]
-                        state_snap = rlt_state["_int_chunk_state"]
-
-                        if z_rl_snap is None:
-                            logger.warning("RLT: z_rl is None during intervention frame %d — skipping chunk", frame_idx)
-                        elif state_snap is None:
-                            logger.warning("RLT: state is None during intervention frame %d — skipping chunk", frame_idx)
-
-                        if z_rl_snap is not None and state_snap is not None:
-                            # Store previous chunk's transition
-                            prev_int = rlt_state.get("_int_prev")
-                            if prev_int is not None:
-                                rlt_replay.add(
-                                    z_rl=prev_int["z_rl"], state=prev_int["state"],
-                                    action_chunk=prev_int["action"], ref_chunk=prev_int["ref"],
-                                    reward=0.0,  # intermediate, not terminal
-                                    next_z_rl=z_rl_snap, next_state=state_snap,
-                                    next_ref_chunk=human_chunk, done=False,
-                                )
-                                rlt_state["total_transitions"] += 1
-
-                            # action = ref = human_chunk (Paper Alg 1 line 11)
-                            rlt_state["_int_prev"] = {
-                                "z_rl": z_rl_snap,
-                                "state": state_snap,
-                                "action": human_chunk,
-                                "ref": human_chunk,
-                            }
-                        rlt_state["_int_chunk_buf"] = []
+                # RLT: route human actions into the replay buffer via the
+                # recorder. Paper Alg 1 lines 9, 11, 12 during intervention.
+                # z_rl is sourced from the inference thread; the recorder
+                # asserts it is non-None at every frame so any failure to
+                # expose a fresh value upstream surfaces immediately.
+                if rlt_mode and rlt_recorder is not None:
+                    prev = getattr(infer_thread, "_rlt_prev", None)
+                    current_z_rl = prev["z_rl"] if prev is not None else None
+                    rlt_recorder.on_frame(
+                        human_action_np=action_np,
+                        current_z_rl=current_z_rl,
+                        current_obs=obs,
+                    )
+                    # ``total_transitions`` is reconciled in one batch at
+                    # intervention end. No need to poll mid-intervention —
+                    # the counter is only consumed at episode end.
 
             else:
                 # --- POLICY MODE: S1 inference controls robot ---
@@ -1323,9 +1296,10 @@ def run_s1(
                         # Resume RLT collection — actor runs again
                         infer_thread._rlt_system_active = True
                         infer_thread._rlt_prev = None  # fresh start after intervention
-                        # Clear intervention chunk state
-                        rlt_state.pop("_int_prev", None)
-                        rlt_state.pop("_int_chunk_buf", None)
+                        if rlt_recorder is not None:
+                            rlt_state["total_transitions"] += rlt_recorder.chunks_stored
+                            rlt_recorder.log_summary()
+                            rlt_recorder.reset()
                         logger.info("RLT: collection RESUMED (intervention ended)")
                     else:
                         infer_thread.resume()
@@ -1504,14 +1478,11 @@ def run_s1(
 
         # RLT: episode bookkeeping
         if rlt_mode and rlt_state is not None:
-            # Pause collection during reset + clear all state
+            # Pause collection during reset + clear recorder state.
             infer_thread._rlt_system_active = False
             infer_thread._rlt_prev = None
-            rlt_state.pop("_int_chunk_buf", None)
-            rlt_state.pop("_int_chunk_z_rl", None)
-            rlt_state.pop("_int_chunk_state", None)
-            rlt_state.pop("_int_frame_count", None)
-            rlt_state.pop("_int_prev", None)
+            if rlt_recorder is not None:
+                rlt_recorder.reset()
             logger.info("RLT: collection PAUSED (episode end)")
 
             success = rlt_state["reward_triggered"]

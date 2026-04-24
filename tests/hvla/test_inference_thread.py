@@ -425,6 +425,7 @@ class TestRLTChunkDump:
         assert r["rlt_post_ms"] == 1.59
         assert r["total_delay_ms"] == 62.5
 
+
     def test_dump_records_per_stage_timing_breakdown(self, tmp_path):
         """The per-stage fields split rlt_enc into its two components and
         add s1_denoise / actor timings so the dump carries the full journey.
@@ -695,3 +696,4 @@ class TestRLTChunkDump:
             "dump_chunks alone is not enough — _rlt_system_active must be "
             "True to gate out reset-phase records (where ep is stale -1)"
         )
+
