@@ -157,8 +157,17 @@ class TD3Agent:
         next_state: Tensor,
         next_ref_chunk: Tensor,
         done: Tensor,
-    ) -> float:
-        """Single critic gradient step. Returns loss value."""
+    ) -> tuple[float, float]:
+        """Single critic gradient step.
+
+        Returns:
+            (critic_loss, grad_norm) — grad_norm is the global L2 norm
+            measured BEFORE clipping, so monitoring shows the true step
+            magnitude. Values persistently near ``critic_grad_clip`` mean
+            the clip is triggering often (defensive); values far below
+            it mean the clip is a pure safety net and isn't constraining
+            normal learning.
+        """
         C = self.config.rl_chunk_length
         gamma = self.config.discount
 
@@ -174,10 +183,17 @@ class TD3Agent:
 
         self.critic_opt.zero_grad()
         critic_loss.backward()
+        # Clip gradient norm to bound update size per step — primary defense
+        # against Q-bootstrap explosions (see Ville Kuosmanen's RLT reproduction
+        # notes, and docs/rlt_design.md section on TD3 defenses). The returned
+        # value is the PRE-clip norm, for monitoring.
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.critic.parameters(), self.config.critic_grad_clip,
+        ).item()
         self.critic_opt.step()
         self.soft_update_target()
 
-        return critic_loss.item()
+        return critic_loss.item(), grad_norm
 
     def update_actor(
         self,

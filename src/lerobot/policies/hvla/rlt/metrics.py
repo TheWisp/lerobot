@@ -29,6 +29,7 @@ class RLTMetrics:
 
     # Time-series (append-only, bounded)
     critic_losses: list[float] = field(default_factory=list)
+    critic_grad_norms: list[float] = field(default_factory=list)
     actor_losses: list[float] = field(default_factory=list)
     actor_deltas: list[float] = field(default_factory=list)
     q_values_mean: list[float] = field(default_factory=list)
@@ -62,6 +63,7 @@ class RLTMetrics:
         total_updates: int,
         mode: str,
         critic_loss: float | None = None,
+        critic_grad_norm: float | None = None,
         actor_loss: float | None = None,
         q_mean: float | None = None,
         q_min: float | None = None,
@@ -82,6 +84,8 @@ class RLTMetrics:
 
             if critic_loss is not None:
                 self.critic_losses.append(critic_loss)
+            if critic_grad_norm is not None:
+                self.critic_grad_norms.append(critic_grad_norm)
             if actor_loss is not None:
                 self.actor_losses.append(actor_loss)
             if q_mean is not None:
@@ -100,7 +104,7 @@ class RLTMetrics:
             # Bound series length
             for series in (
                 self.actor_deltas, self.step_timestamps,
-                self.critic_losses, self.actor_losses,
+                self.critic_losses, self.critic_grad_norms, self.actor_losses,
                 self.q_values_mean, self.q_values_min, self.q_values_max,
                 self.actor_q_terms, self.actor_bc_terms,
                 self.update_rates,
@@ -195,6 +199,8 @@ class RLTMetrics:
                     "autonomous_rate_rolling": auto_rate_rolling[-200:],
                     # Training metrics (smoothed with rolling window for readability)
                     "critic_losses": self._smooth(self.critic_losses[-5000:], 20),
+                    # Unsmoothed on purpose — a one-step spike is the signal.
+                    "critic_grad_norms": self.critic_grad_norms[-5000:],
                     "actor_losses": self._smooth(self.actor_losses[-5000:], 20),
                     "actor_deltas": self._smooth(self.actor_deltas[-5000:], 20),
                     "q_values_mean": self.q_values_mean[-5000:],

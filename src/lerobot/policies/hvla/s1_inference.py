@@ -491,6 +491,7 @@ class InferenceThread:
         A = A_flat // C
 
         critic_sum, actor_sum = 0.0, 0.0
+        grad_norm_sum, grad_norm_max = 0.0, 0.0
         q_term_sum, bc_term_sum = 0.0, 0.0
         n_critic, n_actor = 0, 0
 
@@ -498,13 +499,15 @@ class InferenceThread:
             # 2 critic updates (Paper Appendix B)
             for _ in range(2):
                 b = self._rlt_replay.sample(256)
-                cl = self._rlt_agent.update_critic(
+                cl, gn = self._rlt_agent.update_critic(
                     b["z_rl"], b["state"],
                     b["action"].reshape(-1, C, A), b["ref"].reshape(-1, C, A),
                     b["reward"], b["next_z_rl"], b["next_state"],
                     b["next_ref"].reshape(-1, C, A), b["done"],
                 )
                 critic_sum += cl
+                grad_norm_sum += gn
+                grad_norm_max = max(grad_norm_max, gn)
                 n_critic += 1
             # 1 actor update (Paper Alg 1 line 17)
             b = self._rlt_replay.sample(256)
@@ -519,6 +522,7 @@ class InferenceThread:
 
         elapsed = (_time.perf_counter() - t0) * 1000
         avg_c = critic_sum / n_critic if n_critic else 0
+        avg_gn = grad_norm_sum / n_critic if n_critic else 0
         avg_a = actor_sum / n_actor if n_actor else 0
         avg_q_term = q_term_sum / n_actor if n_actor else 0
         avg_bc_term = bc_term_sum / n_actor if n_actor else 0
@@ -537,9 +541,12 @@ class InferenceThread:
         if self._rlt_state["total_updates"] % 10 < cfg.utd_ratio:
             # q_term = -Q.mean (sign depends on critic; negative when Q>0 as expected).
             # bc_term = β * ||a-ref||² (always ≥ 0, pulls actor toward S1 ref).
+            # gn_max: max pre-clip grad norm across this batch of critic steps.
+            # Persistently near cfg.critic_grad_clip = clip triggering often;
+            # a sudden spike = the defense is catching a bad update.
             logger.info(
-                "RLT grad | critic=%.4f actor=%.4f (q=%.4f bc=%.4f) | Q: mean=%.4f min=%.4f max=%.4f | updates=%d | %.0fms",
-                avg_c, avg_a, avg_q_term, avg_bc_term,
+                "RLT grad | critic=%.4f gn=%.2f/%.2f actor=%.4f (q=%.4f bc=%.4f) | Q: mean=%.4f min=%.4f max=%.4f | updates=%d | %.0fms",
+                avg_c, avg_gn, grad_norm_max, avg_a, avg_q_term, avg_bc_term,
                 q_mean, q_min, q_max,
                 self._rlt_state["total_updates"], elapsed,
             )
@@ -553,7 +560,8 @@ class InferenceThread:
             step=self._rlt_step_count, delta=0,
             buffer_size=len(self._rlt_replay) if self._rlt_replay else 0,
             total_updates=self._rlt_state["total_updates"],
-            mode="TRAIN", critic_loss=avg_c, actor_loss=avg_a,
+            mode="TRAIN", critic_loss=avg_c, critic_grad_norm=grad_norm_max,
+            actor_loss=avg_a,
             q_mean=q_mean, q_min=q_min, q_max=q_max,
             actor_q_term=avg_q_term, actor_bc_term=avg_bc_term,
             update_rate=update_rate,

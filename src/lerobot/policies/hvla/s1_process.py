@@ -708,6 +708,7 @@ def run_s1(
                         m.episode_lengths_s = [30.0] * missing + m.episode_lengths_s
                         logger.warning("RLT: HACK — backfilled %d missing timestamps/lengths", missing)
                     m.critic_losses = s.get("critic_losses", [])
+                    m.critic_grad_norms = s.get("critic_grad_norms", [])
                     m.actor_losses = s.get("actor_losses", [])
                     m.actor_deltas = s.get("actor_deltas", [])
                     m.q_values_mean = s.get("q_values_mean", [])

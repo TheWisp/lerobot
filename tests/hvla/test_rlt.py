@@ -216,6 +216,57 @@ class TestCriticInvariants:
             assert not p.requires_grad, \
                 "critic_target should have requires_grad=False"
 
+    def test_update_critic_returns_loss_and_grad_norm(self, config, device):
+        """update_critic returns (loss, grad_norm). grad_norm must be the
+        pre-clip norm so monitoring reflects the true step magnitude, not
+        the clipped value."""
+        agent = TD3Agent(config, S, A, device)
+        b = 4
+        z = torch.randn(b, D, device=device)
+        s = torch.randn(b, S, device=device)
+        a = torch.randn(b, C, A, device=device)
+        ref = torch.randn(b, C, A, device=device)
+        reward = torch.zeros(b, 1, device=device)
+        done = torch.zeros(b, 1, device=device)
+
+        result = agent.update_critic(z, s, a, ref, reward, z, s, ref, done)
+        assert isinstance(result, tuple) and len(result) == 2
+        loss, grad_norm = result
+        assert isinstance(loss, float) and loss >= 0.0
+        assert isinstance(grad_norm, float) and grad_norm >= 0.0
+
+    def test_critic_grad_clip_bounds_step_magnitude(self, config, device):
+        """With a crazy-large target Q, the pre-clip grad norm will exceed
+        the clip. The stored weight update magnitude should be bounded."""
+        config.critic_grad_clip = 1.0
+        agent = TD3Agent(config, S, A, device)
+        b = 8
+        # Use a loss-inducing setup: random inputs → nonzero loss. We check
+        # that weights move by a bounded amount even when loss is big.
+        z = torch.randn(b, D, device=device) * 100  # huge inputs → huge pred
+        s = torch.randn(b, S, device=device) * 100
+        a = torch.randn(b, C, A, device=device)
+        ref = torch.randn(b, C, A, device=device)
+        reward = torch.full((b, 1), 1000.0, device=device)  # absurd reward
+        done = torch.zeros(b, 1, device=device)
+
+        before = [p.detach().clone() for p in agent.critic.parameters()]
+        _, grad_norm = agent.update_critic(z, s, a, ref, reward, z, s, ref, done)
+        after = list(agent.critic.parameters())
+
+        # Pre-clip grad was large (sanity-check the test setup)
+        assert grad_norm > config.critic_grad_clip, \
+            f"test setup too mild: pre-clip grad_norm={grad_norm} <= clip"
+
+        # Per-param delta shouldn't exceed lr × clip (upper bound for Adam is
+        # looser but this still catches runaway). lr=3e-4, clip=1.0 → delta~3e-4.
+        max_delta = max(
+            (a_.detach() - b_).abs().max().item()
+            for a_, b_ in zip(after, before)
+        )
+        assert max_delta < 1e-2, \
+            f"weight moved {max_delta} — grad clip didn't bound the step"
+
     def test_done_masks_bootstrap(self, config, device):
         """When done=1, target Q should ignore next-state value."""
         agent = TD3Agent(config, S, A, device)

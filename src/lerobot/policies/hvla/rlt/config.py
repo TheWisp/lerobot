@@ -51,6 +51,12 @@ class RLTConfig:
     ref_action_dropout: float = 0.5       # probability of zeroing reference chunk
     utd_ratio: int = 5                    # gradient updates per new transition
     subsample_stride: int = 2             # stride for replay buffer subsampling
+    # Global-norm clip on the critic gradient before opt.step(). Caps update
+    # magnitude without cancelling direction. SB3's TD3 default is 10; Ville's
+    # reproduction uses 20 (paired with 4 critics). We start at 10 as a
+    # conservative default — logged norm from training tells us if this
+    # triggers too often (loosen) or never (blowup defense is loose; tighten).
+    critic_grad_clip: float = 10.0
 
     # --- Replay buffer ---
     replay_capacity: int = 200_000        # max transitions (~1.2GB)
