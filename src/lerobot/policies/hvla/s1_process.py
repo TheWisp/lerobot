@@ -916,11 +916,21 @@ def run_s1(
             infer_thread._rlt_prev = None
             rlt_state["_episode_had_intervention"] = False
             engaged_str = "engaged" if rlt_start_engaged else "disengaged (press E to engage)"
-            logger.info("RLT: collection RESUMED (episode start), actor %s", engaged_str)
+            # Warmup: during the first ``warmup_episodes`` the actor's output is
+            # discarded and the S1 reference is executed instead (actor + critic
+            # still train on the collected transitions). Overlay label should
+            # reflect that — otherwise "Policy + RL" is misleading since the
+            # actor isn't actually driving.
+            _in_warmup = rlt_state["config"].is_warmup(rlt_state["episode"])
             if rlt_start_engaged:
-                print("##OVERLAY:Policy + RL:#4fc3f7##", flush=True)
+                if _in_warmup:
+                    print("##OVERLAY:Policy + RL (warmup):#ffa726##", flush=True)
+                else:
+                    print("##OVERLAY:Policy + RL:#4fc3f7##", flush=True)
             else:
                 print("##OVERLAY:Policy:#2ecc71##", flush=True)
+            logger.info("RLT: collection RESUMED (episode start), actor %s%s",
+                        engaged_str, " [warmup]" if _in_warmup else "")
 
         # Ensure inference thread is running and has fresh data.
         # May have been paused by intervention in previous episode.
@@ -1308,8 +1318,13 @@ def run_s1(
                         assert not infer_thread.is_paused, \
                             "BUG: inference thread still paused after resume"
                     if rlt_mode and infer_thread._rlt_user_engaged:
-                        log_say("Policy + RL")
-                        print("##OVERLAY:Policy + RL:#4fc3f7##", flush=True)
+                        _resumed_in_warmup = rlt_state["config"].is_warmup(rlt_state["episode"])
+                        if _resumed_in_warmup:
+                            log_say("Policy + RL warmup")
+                            print("##OVERLAY:Policy + RL (warmup):#ffa726##", flush=True)
+                        else:
+                            log_say("Policy + RL")
+                            print("##OVERLAY:Policy + RL:#4fc3f7##", flush=True)
                     else:
                         log_say("Policy")
                         print("##OVERLAY:Policy:#2ecc71##", flush=True)

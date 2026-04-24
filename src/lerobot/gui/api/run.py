@@ -651,10 +651,22 @@ async def start_hvla(req: HVLARunRequest) -> dict:
 
 @router.get("/rlt-metrics")
 async def get_rlt_metrics() -> dict:
-    """Return current RLT training metrics from file (cross-process)."""
+    """Return current RLT training metrics from file (cross-process).
+
+    Reads the metrics.json that belongs to the currently-active RLT
+    session. The subprocess sets its own ``_metrics_path`` module global
+    but that's isolated to that process; the GUI process has to resolve
+    the file from ``_active_config["rlt_output_dir"]`` explicitly, or
+    else ``load_metrics_from_file`` falls back to a hardcoded default
+    path and returns stale data from whichever prior session happens to
+    have landed there.
+    """
     try:
         from lerobot.policies.hvla.rlt.metrics import load_metrics_from_file
-        data = load_metrics_from_file()
+        path = None
+        if _active_config and _active_config.get("rlt_output_dir"):
+            path = str(Path(_active_config["rlt_output_dir"]) / "metrics.json")
+        data = load_metrics_from_file(path)
         if data:
             return data
     except Exception as e:
