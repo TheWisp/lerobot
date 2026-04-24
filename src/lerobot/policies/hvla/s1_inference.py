@@ -130,6 +130,12 @@ class InferenceThread:
         self._rlt_user_engaged = True
         self._rlt_system_active = False
         self._rlt_prev: dict | None = None  # previous transition for replay buffer
+        # Latest z_rl from the most recent inference cycle. Updated
+        # unconditionally every inference — must stay fresh even when
+        # rlt_active=False, because the main thread's intervention
+        # chunker reads this to snapshot window-start z_rl while the
+        # actor is paused.
+        self._rlt_latest_z_rl: torch.Tensor | None = None
         self._rlt_step_count: int = 0
         self._rlt_last_update_time: float = 0.0  # wall-clock of last gradient call (for rate)
         self._rlt_dump_chunks: bool = False  # diagnostic: dump ref/actor chunks to jsonl
@@ -736,6 +742,11 @@ class InferenceThread:
                 _dump_pending = False
                 _dump_actor = None
                 if self._rlt_state is not None and z_rl_out is not None:
+                    # Publish the freshest z_rl unconditionally, before the
+                    # rlt_active gate. Main-thread consumers (intervention
+                    # recorder) need this to stay current even while the
+                    # actor is paused.
+                    self._rlt_latest_z_rl = z_rl_out.squeeze(0).float().detach()
                     with rlt_post_timer:
                         # Refresh live overrides (beta / sigma / dump_chunks)
                         # here, not only inside gradient_updates. Gradient updates

@@ -1261,8 +1261,10 @@ def run_s1(
                 # asserts it is non-None at every frame so any failure to
                 # expose a fresh value upstream surfaces immediately.
                 if rlt_mode and rlt_recorder is not None:
-                    prev = getattr(infer_thread, "_rlt_prev", None)
-                    current_z_rl = prev["z_rl"] if prev is not None else None
+                    # Read through the dedicated accessor. The inference
+                    # thread updates this every cycle regardless of
+                    # rlt_active, so it stays fresh during intervention.
+                    current_z_rl = infer_thread._rlt_latest_z_rl
                     rlt_recorder.on_frame(
                         human_action_np=action_np,
                         current_z_rl=current_z_rl,
