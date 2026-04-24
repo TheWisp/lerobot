@@ -1561,6 +1561,20 @@ def run_s1(
                     rlt_replay.save(str(save_dir / "replay_buffer.pt"))
                     logger.info("RLT: Saved checkpoint → %s (ep=%d, buf=%d, updates=%d)",
                                 save_dir, rlt_state["episode"], len(rlt_replay), rlt_state["total_updates"])
+                    # Every 10 episodes, mirror to a never-overwritten snapshot
+                    # alongside latest/. Lets us roll back when Q explodes or the
+                    # actor drifts, without losing the rolling latest/ state.
+                    ep = rlt_state["episode"]
+                    if ep > 0 and (ep + 1) % 10 == 0:
+                        import shutil
+                        snap_dir = rlt_state["output_dir"] / f"ep_{ep + 1}"
+                        try:
+                            if snap_dir.exists():
+                                shutil.rmtree(snap_dir)
+                            shutil.copytree(save_dir, snap_dir)
+                            logger.info("RLT: Snapshot → %s (permanent, for rollback)", snap_dir)
+                        except Exception as e:
+                            logger.error("RLT: Snapshot failed: %s", e)
                 except Exception as e:
                     logger.error("RLT: Failed to save checkpoint: %s", e)
 
