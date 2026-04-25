@@ -178,15 +178,35 @@ class RLTMetrics:
                 auto_s = sum(1 for s, a in zip(win_s, win_a) if s and a)
                 auto_rate_rolling.append(auto_s / len(win_s) if win_s else 0.0)
 
+            # All-time counterparts of the rolling-20 rates above. Surfaced
+            # alongside so consumers can pick the window they want without
+            # us having to reinterpret a misleading single number. The
+            # original three are kept for backward compatibility with the
+            # current GUI dashboard (which renders them as "recent rate").
+            n_total = max(n, 1)
+            success_count_all = sum(successes)
+            auto_succ_count_all = sum(1 for s_, a in zip(successes, autonomous) if s_ and a)
+            intervention_count_all = sum(1 for a in autonomous if not a)
+            success_rate_alltime = success_count_all / n_total
+            autonomous_rate_alltime = auto_succ_count_all / n_total
+            intervention_rate_alltime = intervention_count_all / n_total
+
             return {
                 "episode": self.episode,
                 "step_count": self.step_count,
                 "buffer_size": self.buffer_size,
                 "total_updates": self.total_updates,
                 "mode": self.mode,
+                # Rolling-20 (kept for back-compat with the GUI dashboard).
                 "success_rate": round(success_rate, 3),
                 "autonomous_rate": round(autonomous_rate, 3),
                 "intervention_rate": round(intervention_rate, 3),
+                # All-time counterparts. Use these for "how is the run
+                # going overall" and the rolling ones for "how are
+                # things lately".
+                "success_rate_alltime": round(success_rate_alltime, 3),
+                "autonomous_rate_alltime": round(autonomous_rate_alltime, 3),
+                "intervention_rate_alltime": round(intervention_rate_alltime, 3),
                 "throughput_10min": throughput,
                 "total_successes": sum(successes),
                 "total_autonomous": sum(1 for a in autonomous if a),
