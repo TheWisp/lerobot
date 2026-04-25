@@ -93,8 +93,11 @@ class ReplayBuffer:
             }
 
     def save(self, path: str) -> None:
-        """Save buffer contents to disk."""
+        """Save buffer contents to disk. Atomic via tmp+rename so a
+        crash mid-write can't leave a torn file at ``path``."""
+        import os
         with self._lock:
+            tmp = path + ".tmp"
             torch.save({
                 "size": self.size,
                 "ptr": self.ptr,
@@ -108,7 +111,8 @@ class ReplayBuffer:
                 "next_state": self._next_state[:self.capacity],
                 "next_ref": self._next_ref[:self.capacity],
                 "done": self._done[:self.capacity],
-            }, path)
+            }, tmp)
+            os.replace(tmp, path)
 
     def load(self, path: str) -> None:
         """Load buffer contents from disk. Supports same or larger capacity."""

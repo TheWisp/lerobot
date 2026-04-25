@@ -81,6 +81,24 @@ def _apply_delta_filter(action_np: np.ndarray, prev_action_np: np.ndarray,
     return action_np
 
 
+def _atomic_torch_save(obj, path) -> None:
+    """``torch.save`` with crash-safe atomicity.
+
+    Writes to ``<path>.tmp`` first, then ``os.replace``s it onto the
+    final path. Either the new file is fully present or the previous
+    one is untouched — never a half-written file. Use this for every
+    .pt write to avoid torn checkpoints if the process crashes mid-save.
+
+    On most filesystems ``os.replace`` is atomic for files in the same
+    directory, which is the case here (tmp lives in same dir).
+    """
+    import os
+    target = str(path)
+    tmp = target + ".tmp"
+    torch.save(obj, tmp)
+    os.replace(tmp, target)
+
+
 def _save_infer_drop(chunk_np: np.ndarray, obs: dict, infer_count: int, save_dir: str,
                      joint_names: list[str] | None = None):
     """Detect large jumps in any joint of predicted chunk and save obs for analysis."""
@@ -517,6 +535,35 @@ def run_s1(
     _run_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
     logging.getLogger().addHandler(_run_fh)
     logger.info("S1: Run log → %s", run_log_file)
+
+    # Route uncaught exceptions through the logger so their tracebacks
+    # land in the persistent run_*.log alongside everything else.
+    # Python's default uncaught-exception handler writes to sys.stderr,
+    # which is captured by the GUI subprocess pipe (visible live in the
+    # output panel) but does NOT flow through the FileHandler installed
+    # above. Without this, post-hoc debugging on a crash from yesterday
+    # finds the log truncated right before the actual failure.
+    import sys
+    import threading
+
+    def _log_uncaught(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        logger.error("Uncaught exception in main thread",
+                     exc_info=(exc_type, exc_value, exc_tb))
+
+    def _log_thread_uncaught(args):
+        if issubclass(args.exc_type, SystemExit):
+            return
+        logger.error(
+            "Uncaught exception in thread %s",
+            args.thread.name if args.thread else "<unknown>",
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = _log_uncaught
+    threading.excepthook = _log_thread_uncaught
 
     logger.info("S1: Starting control loop at %d FPS", fps)
 
@@ -1585,10 +1632,10 @@ def run_s1(
                 try:
                     save_dir = rlt_state["output_dir"] / "latest"
                     save_dir.mkdir(parents=True, exist_ok=True)
-                    torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
-                    torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
-                    torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
-                    torch.save({
+                    _atomic_torch_save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
+                    _atomic_torch_save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
+                    _atomic_torch_save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
+                    _atomic_torch_save({
                         "actor_opt": rlt_agent.actor_opt.state_dict(),
                         "critic_opt": rlt_agent.critic_opt.state_dict(),
                         "episode": rlt_state["episode"],
@@ -1671,10 +1718,10 @@ def run_s1(
                 try:
                     save_dir = rlt_state["output_dir"] / "latest"
                     save_dir.mkdir(parents=True, exist_ok=True)
-                    torch.save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
-                    torch.save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
-                    torch.save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
-                    torch.save({
+                    _atomic_torch_save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
+                    _atomic_torch_save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
+                    _atomic_torch_save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
+                    _atomic_torch_save({
                         "actor_opt": rlt_agent.actor_opt.state_dict(),
                         "critic_opt": rlt_agent.critic_opt.state_dict(),
                         "episode": rlt_state["episode"],
