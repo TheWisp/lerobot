@@ -192,9 +192,15 @@ class RLTMetrics:
                 "total_autonomous": sum(1 for a in autonomous if a),
                 "total_episodes": n,
                 "series": {
-                    # Per-episode records (needed for resume)
+                    # Per-episode records (needed for resume + dashboard).
+                    # ``episode_lengths_s`` and ``episode_timestamps`` were
+                    # being recorded in record_episode() but missed in this
+                    # snapshot dict, so consumers (GUI, post-hoc analysis,
+                    # resume bookkeeping) saw them as missing.
                     "episode_successes": successes[-200:],
                     "episode_autonomous": autonomous[-200:],
+                    "episode_lengths_s": lengths[-200:],
+                    "episode_timestamps": timestamps[-200:],
                     # Pre-computed rolling series (for chart, single source of truth)
                     "autonomous_rate_rolling": auto_rate_rolling[-200:],
                     # Training metrics (smoothed with rolling window for readability)

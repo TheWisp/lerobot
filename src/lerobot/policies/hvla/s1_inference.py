@@ -17,6 +17,42 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+def _slice_with_pad(
+    tensor: torch.Tensor, start: int, length: int, dim: int = 1,
+) -> torch.Tensor:
+    """Take a length-window slice along ``dim``, padding with the last
+    value if ``start + length`` overruns the tensor (constant-extrapolation,
+    similar to RTC's hold-last-value pattern). Always returns a tensor of
+    size ``length`` along ``dim``.
+
+    Logs a WARNING when padding triggers — not an assert because the
+    overrun depends on runtime values (e.g. RTC's ``expected_d`` from
+    rolling latency) and isn't a programmer error. The caller can keep
+    going on a padded slice; the only cost is some redundant frames at
+    the tail end of the actor's window.
+    """
+    n = tensor.shape[dim]
+    if start + length <= n:
+        return tensor.narrow(dim, start, length)
+    actual = max(0, n - start)
+    pad_n = length - actual
+    pieces = []
+    if actual > 0:
+        pieces.append(tensor.narrow(dim, start, actual))
+    if pad_n > 0:
+        last = tensor.narrow(dim, n - 1, 1)
+        repeat_shape = [1] * tensor.ndim
+        repeat_shape[dim] = pad_n
+        pieces.append(last.repeat(repeat_shape))
+    out = torch.cat(pieces, dim=dim) if len(pieces) > 1 else pieces[0]
+    logger.warning(
+        "slice [start=%d, len=%d] overruns dim %d size %d by %d frames; "
+        "padded with last value (RTC-style hold-last)",
+        start, length, dim, n, pad_n,
+    )
+    return out
+
+
 class _TimedBlock:
     """Measures the duration of a block of code.
 
@@ -191,7 +227,8 @@ class InferenceThread:
         """Actor runs only when both user (E key) and system (not intervening) say yes."""
         return self._rlt_user_engaged and self._rlt_system_active
 
-    def _rlt_inference_step(self, batch, actions, z_rl, obs, ref_norm=None, actor_timer=None):
+    def _rlt_inference_step(self, batch, actions, z_rl, obs, ref_norm=None,
+                            actor_timer=None, expected_d: int = 0):
         """Run RLT actor (if past warmup) and store transition.
         Called inside inference loop — one call per S1 chunk.
         Only runs when rlt_active is True (user engaged + system active).
@@ -224,16 +261,30 @@ class InferenceThread:
 
         if ref_norm is None:
             ref_norm = self._rlt_compute_ref_norm(actions)
-        # ref_norm covers the full S1 chunk (all 50 frames) so the dump can
-        # record the S1-only tail past the actor boundary. Actor input,
-        # BC comparison and replay-buffer storage only use the first C.
-        ref_norm_first_c = ref_norm[:, :C, :]
+        # ref_norm covers the full S1 chunk (all 50 frames) so the dump
+        # can record the S1-only tail past the actor boundary. Actor
+        # input, BC comparison and replay-buffer storage use the C-frame
+        # window starting at ``expected_d`` — the frames immediately
+        # AFTER the RTC prefix. The RTC prefix [0:expected_d] holds
+        # previous-chunk tail actions that the robot won't actually
+        # execute, so refining them is wasted compute and confounds
+        # training signal.
+        #
+        # ``_slice_with_pad`` rather than direct indexing because
+        # expected_d is a runtime value (rolling latency); if it ever
+        # grows enough that D+C overruns the chunk, hold-last-value
+        # padding keeps the actor running with a warning instead of
+        # crashing. With current config (D ≤ 6, C=10, chunk_size=50)
+        # this never triggers in practice.
+        D = max(0, int(expected_d))
+        actor_window_end = D + C
+        actor_ref = _slice_with_pad(ref_norm, D, C, dim=1)
 
         # Actor forward (Paper Alg 1 line 9)
         is_deploy = self._rlt_state.get("deploy", False)
         if is_warmup and not is_deploy:
             # Warmup: execute VLA reference, actor not called
-            actor_norm = ref_norm_first_c
+            actor_norm = actor_ref
         else:
             # Actor training (``_rlt_gradient_updates``) runs in fp32 with no
             # autocast; inference reaches this point from inside S1's bf16
@@ -246,15 +297,25 @@ class InferenceThread:
             _noop_cm = _TimedBlock(self._device) if actor_timer is None else actor_timer
             with torch.autocast(device_type=self._device.type, enabled=False), _noop_cm:
                 actor_norm = self._rlt_actor(
-                    z_rl.float(), state_norm.float(), ref_norm_first_c.float(),
+                    z_rl.float(), state_norm.float(), actor_ref.float(),
                     deterministic=is_deploy,  # no exploration noise in deploy mode
                 )
-            # Denormalize and replace first C actions in output
+            # Denormalize and replace the C actions starting at the
+            # post-prefix slice. With expected_d=0 (first chunk of an
+            # episode, or RTC disabled) this reduces to the legacy
+            # actions[:, :C, :] write.
             if self._policy._action_mean is not None:
                 actor_denorm = actor_norm * self._policy._action_std.to(self._device) + self._policy._action_mean.to(self._device)
             else:
                 actor_denorm = actor_norm
-            actions[:, :C, :] = actor_denorm
+            # Write [D:D+C] back into the action chunk, clamped to the
+            # chunk's actual size. Mirror of the read-side _slice_with_pad:
+            # if the actor's window extends past the action chunk's tail,
+            # discard those frames since the robot wouldn't execute them.
+            write_end = min(actor_window_end, actions.shape[1])
+            write_len = write_end - D
+            if write_len > 0:
+                actions[:, D:write_end, :] = actor_denorm[:, :write_len, :]
 
         # Expose actor output for the caller's dump helper, which also runs
         # when the actor did NOT run (rlt_active False) so A/B baseline
@@ -309,7 +370,7 @@ class InferenceThread:
                 reward=reward,
                 next_z_rl=z_rl.squeeze(0).float().detach(),
                 next_state=state_norm.squeeze(0).detach(),
-                next_ref_chunk=ref_norm_first_c.squeeze(0).detach(),
+                next_ref_chunk=actor_ref.squeeze(0).detach(),
                 done=done,
             )
             self._rlt_state["total_transitions"] += 1
@@ -318,12 +379,12 @@ class InferenceThread:
             "z_rl": z_rl.squeeze(0).float().detach(),
             "state": state_norm.squeeze(0).detach(),
             "action": actor_norm.squeeze(0).detach(),
-            "ref": ref_norm_first_c.squeeze(0).detach(),
+            "ref": actor_ref.squeeze(0).detach(),
         }
 
         # Metrics + logging. Note: step_count is advanced in the main loop
         # (so baseline / actor-off dumps also get a unique step per inference).
-        actor_delta = (actor_norm - ref_norm_first_c).abs().mean().item()
+        actor_delta = (actor_norm - actor_ref).abs().mean().item()
 
         from lerobot.policies.hvla.rlt.metrics import get_metrics, save_metrics_to_file
         is_deploy = self._rlt_state.get("deploy", False)
@@ -356,8 +417,8 @@ class InferenceThread:
         """
         cfg = self._rlt_state["config"]
         C = cfg.rl_chunk_length
-        # The actor needs at least C frames to operate on. If S1 emits fewer,
-        # downstream slices [:, :C, :] truncate silently and per-frame
+        # The actor needs at least C frames to operate on. If S1 emits
+        # fewer, downstream slices truncate silently and per-frame
         # indexing between actor output and ref desyncs.
         assert actions.shape[1] >= C, (
             f"S1 chunk length {actions.shape[1]} < RLT rl_chunk_length {C}; "
@@ -368,10 +429,10 @@ class InferenceThread:
             ref = (
                 ref - self._policy._action_mean.to(self._device)
             ) / self._policy._action_std.to(self._device)
-        # Clone must decouple ref from actions; otherwise the next line
-        # `actions[:, :C, :] = actor_denorm` (when actor runs) would
-        # overwrite the dump's ref in-place — silently misattributing actor
-        # output as "S1 reference" in every record.
+        # Clone must decouple ref from actions; otherwise the actor's
+        # later in-place write to ``actions[:, D:D+C, :]`` would overwrite
+        # the dump's ref in place — silently misattributing actor output
+        # as "S1 reference" in every record.
         assert ref.data_ptr() != actions.data_ptr(), (
             "ref aliases actions — in-place actor overwrite would "
             "corrupt the dump's ref value"
@@ -397,13 +458,16 @@ class InferenceThread:
         and the record stores ``"actor": null``. This lets A/B baseline runs
         (actor off) produce schema-compatible records alongside actor-on runs.
 
-        ``prefix_len`` is the RTC prefix size D this inference received. The
-        first D frames of ``ref`` are the clamped prefix (already-committed
-        past actions), the rest are S1's denoised continuation. Actor rewrote
-        frames [0:C], which overlaps [0:D] (prefix territory) when D < C.
+        ``prefix_len`` is the RTC prefix size D this inference received.
+        The first D frames of ``ref`` are the clamped prefix (already-
+        committed past actions); the rest are S1's denoised continuation.
+        The actor refines frames ``[D:D+C]`` of the chunk — i.e. the
+        ``actor`` field in the record corresponds to ``ref[D:D+C]``, NOT
+        ``ref[0:C]``. Analysis scripts that compare actor[i] vs ref[i]
+        should use ``ref[prefix_len + i]``.
         ``exec_idx`` is the chunk index the robot had reached when this
-        inference started — useful for reconstructing which frames actually
-        executed.
+        inference started — useful for reconstructing which frames
+        actually executed.
 
         ``rlt_enc_ms`` / ``rlt_post_ms`` / ``total_delay_ms`` are documented
         at the record construction site: total_delay is GPU-sync'd end-to-end
@@ -793,6 +857,7 @@ class InferenceThread:
                                 batch, actions, z_rl_out, obs,
                                 ref_norm=ref_norm_snapshot,
                                 actor_timer=actor_timer,
+                                expected_d=expected_d,
                             )
                         # Dump only during an active episode — system_active is
                         # cleared during reset / pre-first-episode, where the

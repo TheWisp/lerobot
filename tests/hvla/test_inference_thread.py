@@ -10,7 +10,7 @@ import time
 import numpy as np
 import torch
 
-from lerobot.policies.hvla.s1_inference import InferenceThread
+from lerobot.policies.hvla.s1_inference import InferenceThread, _slice_with_pad
 
 
 class MockS1Policy:
@@ -73,6 +73,47 @@ def _make_thread(**kwargs) -> InferenceThread:
     )
     defaults.update(kwargs)
     return InferenceThread(**defaults)
+
+
+class TestSliceWithPad:
+    """``_slice_with_pad`` — used to safely slice the actor's ``[D:D+C]``
+    window from the S1 reference chunk even when D+C overruns the chunk
+    (RTC's expected_d is dynamic, not bounded by chunk_size). Returns a
+    tensor of exactly ``length`` along the slice dim, padding with the
+    last value when needed."""
+
+    def _t(self, n: int):
+        # [1, n, 4]: distinct value per frame so we can verify which
+        # frames came from the source vs the pad.
+        return torch.arange(n, dtype=torch.float32).reshape(1, n, 1).repeat(1, 1, 4)
+
+    def test_no_overrun(self):
+        out = _slice_with_pad(self._t(50), start=2, length=3, dim=1)
+        assert out.shape == (1, 3, 4)
+        assert torch.allclose(out[0, :, 0], torch.tensor([2.0, 3.0, 4.0]))
+
+    def test_exact_fit_at_end(self):
+        # n=10, start=7, length=3 → grab frames 7,8,9 exactly; no pad.
+        out = _slice_with_pad(self._t(10), start=7, length=3, dim=1)
+        assert out.shape == (1, 3, 4)
+        assert torch.allclose(out[0, :, 0], torch.tensor([7.0, 8.0, 9.0]))
+
+    def test_overrun_pads_with_last_value(self, caplog):
+        # n=10, start=8, length=4 → frames 8,9 + 2 copies of frame 9.
+        with caplog.at_level("WARNING", logger="lerobot.policies.hvla.s1_inference"):
+            out = _slice_with_pad(self._t(10), start=8, length=4, dim=1)
+        assert out.shape == (1, 4, 4)
+        assert torch.allclose(out[0, :, 0], torch.tensor([8.0, 9.0, 9.0, 9.0]))
+        assert any("padded with last value" in r.message for r in caplog.records)
+
+    def test_start_at_or_past_end_pads_entirely(self, caplog):
+        # Defensive: D >= chunk_size somehow. Whole window is the last
+        # frame replicated; warning fires.
+        with caplog.at_level("WARNING", logger="lerobot.policies.hvla.s1_inference"):
+            out = _slice_with_pad(self._t(10), start=10, length=3, dim=1)
+        assert out.shape == (1, 3, 4)
+        # All frames should be the last value of the source.
+        assert torch.allclose(out[0, :, 0], torch.tensor([9.0, 9.0, 9.0]))
 
 
 class TestLifecycle:
