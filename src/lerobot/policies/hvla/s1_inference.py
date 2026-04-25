@@ -276,6 +276,19 @@ class InferenceThread:
         prev = self._rlt_prev
         if prev is not None and self._rlt_replay is not None:
             done = self._rlt_state.get("reward_triggered", False)
+            # Final precondition before writing: rlt_active was checked at the
+            # top of this method, but the main thread can flip
+            # _rlt_system_active between that guard and this point. If that
+            # races inside this narrow window, we'd write a transition whose
+            # "next" state is technically post-intervention-start. Assert so
+            # any future occurrence is loud — if this ever fires, the race
+            # is real and we need to add a lock around the toggle.
+            assert self.rlt_active, (
+                "RL transition store entered with rlt_active=False — main "
+                "thread flipped _rlt_system_active mid-iteration. Race "
+                "between intervention transition and replay.add(). Need a "
+                "lock around _rlt_system_active updates."
+            )
             self._rlt_replay.add(
                 z_rl=prev["z_rl"], state=prev["state"],
                 action_chunk=prev["action"], ref_chunk=prev["ref"],
