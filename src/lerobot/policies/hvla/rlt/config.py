@@ -73,6 +73,14 @@ class RLTConfig:
     # conservative default — logged norm from training tells us if this
     # triggers too often (loosen) or never (blowup defense is loose; tighten).
     critic_grad_clip: float = 10.0
+    # Reward applied to the last transition of an aborted episode (operator
+    # marks the trajectory as a "disaster — never do this"). Default -1.0
+    # gives the critic explicit discrimination between "didn't reach the
+    # goal" (reward=0) and "actively bad / OOD" (reward=-1) — the same
+    # transitions that previously read 0 are now ABORT'd to read negative,
+    # so the critic learns to drive Q DOWN on those states. Magnitude is
+    # tunable: smaller (-0.5) is gentler, larger (-2.0) is harsher.
+    abort_reward: float = -1.0
 
     # --- Replay buffer ---
     replay_capacity: int = 200_000        # max transitions (~1.2GB)

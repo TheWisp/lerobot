@@ -275,7 +275,21 @@ class InferenceThread:
 
         prev = self._rlt_prev
         if prev is not None and self._rlt_replay is not None:
-            done = self._rlt_state.get("reward_triggered", False)
+            # Three episode-end signals, in priority order:
+            #   - abort_triggered (X) → done=True, reward=cfg.abort_reward
+            #     ("disaster, never do this" — typically negative)
+            #   - reward_triggered (R) → done=True, reward=+1.0 (success)
+            #   - neither              → done=False, reward=0.0 (still in episode
+            #     OR timeout/quiet end — terminal=0 either way)
+            aborted = self._rlt_state.get("abort_triggered", False)
+            success = self._rlt_state.get("reward_triggered", False)
+            done = aborted or success
+            if aborted:
+                reward = float(self._rlt_state["config"].abort_reward)
+            elif success:
+                reward = 1.0
+            else:
+                reward = 0.0
             # Final precondition before writing: rlt_active was checked at the
             # top of this method, but the main thread can flip
             # _rlt_system_active between that guard and this point. If that
@@ -292,7 +306,7 @@ class InferenceThread:
             self._rlt_replay.add(
                 z_rl=prev["z_rl"], state=prev["state"],
                 action_chunk=prev["action"], ref_chunk=prev["ref"],
-                reward=1.0 if done else 0.0,
+                reward=reward,
                 next_z_rl=z_rl.squeeze(0).float().detach(),
                 next_state=state_norm.squeeze(0).detach(),
                 next_ref_chunk=ref_norm_first_c.squeeze(0).detach(),

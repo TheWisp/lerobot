@@ -606,6 +606,10 @@ def run_s1(
             "episode": -1,
             "total_updates": 0, "total_transitions": 0,
             "successes": [], "reward_triggered": False,
+            # Operator marked this episode as a "disaster — never do this"
+            # via the X key. Episode ends, terminal reward = config.abort_reward
+            # (default -1.0). Critic learns to push Q DOWN on these states.
+            "abort_triggered": False,
             "output_dir": Path(rlt_output_dir),
             "deploy": rlt_deploy,
         }
@@ -856,6 +860,39 @@ def run_s1(
                     except Exception:
                         pass
                     return
+                # LEFT ARROW = abort/disaster in RLT mode. Mirrors LeRobot's
+                # convention (right = next, left = retry/reset) but with
+                # RL-specific semantics: episode ends, terminal reward is
+                # cfg.abort_reward (default -1.0). Intentionally short-
+                # circuits before the original handler so we DON'T also set
+                # rerecord_episode (which would discard the trajectory from
+                # the dataset; we want it stored as a negative-reward
+                # transition, not dropped).
+                from pynput import keyboard as _kb
+                if key == _kb.Key.left:
+                    rlt_state["abort_triggered"] = True
+                    events["exit_early"] = True
+                    logger.info(
+                        "RLT: ABORT — terminal reward %.2f, ending episode",
+                        rlt_state["config"].abort_reward,
+                    )
+                    # Distinct sound: descending tone (failure cue).
+                    try:
+                        import subprocess, numpy as _np
+                        sr = 16000
+                        t = _np.linspace(0, 0.3, int(sr * 0.3), dtype=_np.float32)
+                        tone = (_np.sin(2 * _np.pi * 600 * t) * 20000).astype(_np.int16)
+                        tone2 = (_np.sin(2 * _np.pi * 300 * t[:len(t)//2]) * 20000).astype(_np.int16)
+                        sound = _np.concatenate([tone, tone2])
+                        proc = subprocess.Popen(
+                            ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+                            stdin=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                        )
+                        proc.stdin.write(sound.tobytes())
+                        proc.stdin.close()
+                    except Exception:
+                        pass
+                    return
                 if hasattr(key, 'char') and key.char == "e":
                     from lerobot.utils.utils import log_say
                     engaged = not infer_thread._rlt_user_engaged
@@ -873,6 +910,8 @@ def run_s1(
 
         listener.on_press = _rlt_on_press
         logger.info("RLT: Press 'r' = success (+1 reward, ends episode)")
+        logger.info("RLT: Press LEFT ARROW = abort/disaster (%.2f reward, ends episode)",
+                    rlt_state["config"].abort_reward)
         logger.info("RLT: Press 'e' = toggle RL actor on/off")
 
     recorded_episodes = 0
@@ -1062,10 +1101,12 @@ def run_s1(
                 logger.info("S1: Episode time limit (%.0fs) reached", episode_time_s)
                 break
 
-            # Check exit_early (right/left arrow or R key in RLT mode)
+            # Check exit_early (right/left arrow or R/X key in RLT mode)
             if events.get("exit_early"):
                 if rlt_mode and rlt_state and rlt_state.get("reward_triggered"):
                     logger.info("S1: R key — episode SUCCESS, ending early")
+                elif rlt_mode and rlt_state and rlt_state.get("abort_triggered"):
+                    logger.info("S1: X key — episode ABORTED, ending early")
                 elif events.get("rerecord_episode"):
                     logger.info("S1: Left arrow — ending episode (will rerecord)")
                 else:
@@ -1502,6 +1543,7 @@ def run_s1(
             logger.info("RLT: collection PAUSED (episode end)")
 
             success = rlt_state["reward_triggered"]
+            aborted = rlt_state.get("abort_triggered", False)
             had_intervention = rlt_state.get("_episode_had_intervention", False)
             autonomous = success and not had_intervention
             ep_duration = time.time() - episode_start
@@ -1510,7 +1552,14 @@ def run_s1(
             # NOTE: episode counter is incremented at episode start, not here.
             recent = rlt_state["successes"][-20:]
 
-            auto_label = "AUTONOMOUS" if autonomous else ("ASSISTED" if success else "FAIL")
+            if aborted:
+                auto_label = "ABORTED"
+            elif autonomous:
+                auto_label = "AUTONOMOUS"
+            elif success:
+                auto_label = "ASSISTED"
+            else:
+                auto_label = "FAIL"
             logger.info(
                 "RLT ep%d: %s (intervention=%s) | transitions=%d updates=%d "
                 "success_rate(20)=%.0f%% | %.1fs",
@@ -1529,6 +1578,7 @@ def run_s1(
             save_metrics_to_file()
 
             rlt_state["reward_triggered"] = False
+            rlt_state["abort_triggered"] = False
 
             # Save checkpoint (training mode only)
             if not rlt_state.get("deploy"):
