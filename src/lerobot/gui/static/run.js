@@ -1896,64 +1896,68 @@ function _updateRLTDashboard(data) {
     set('rlt-stat-buffer', data.buffer_size?.toLocaleString() || '0');
     set('rlt-stat-updates', data.total_updates?.toLocaleString() || '0');
 
-    const rawS = data.series || {};
-
-    // Clip all per-step series to the user-selected history length
-    const nMax = parseInt(document.getElementById('rlt-stat-history')?.value) || 1000;
-    const clip = arr => (arr && arr.length > nMax) ? arr.slice(-nMax) : (arr || []);
-    const s = {
-        ...rawS,
-        critic_losses: clip(rawS.critic_losses),
-        actor_losses: clip(rawS.actor_losses),
-        actor_deltas: clip(rawS.actor_deltas),
-        q_values_mean: clip(rawS.q_values_mean),
-        q_values_min: clip(rawS.q_values_min),
-        q_values_max: clip(rawS.q_values_max),
-        actor_q_terms: clip(rawS.actor_q_terms),
-        actor_bc_terms: clip(rawS.actor_bc_terms),
-        update_rates: clip(rawS.update_rates),
-        step_timestamps: clip(rawS.step_timestamps),
+    // Three independent groups, each with its own timestamps. The chart
+    // for each group reads from its own group sub-dict; the hover-time
+    // label per chart uses that group's timestamps. This is the layout
+    // change that fixed the actor_deltas piggyback bug — actor delta is
+    // a per-inference event, Q values / critic loss are per-grad-update,
+    // and they tick at different rates.
+    const series = data.series || {};
+    const inf = series.inferences || {deltas: [], timestamps: []};
+    const grad = series.grad_updates || {
+        critic_losses: [], critic_grad_norms: [], actor_losses: [],
+        q_values_mean: [], q_values_min: [], q_values_max: [],
+        actor_q_terms: [], actor_bc_terms: [], update_rates: [], timestamps: [],
     };
 
-    // Success rate uses episode axis, not synced with per-step charts
-    if (s.autonomous_rate_rolling && s.autonomous_rate_rolling.length > 0) {
-        _drawSparkline('rlt-chart-success', s.autonomous_rate_rolling, '#4fc3f7', 0, 1, true);
+    const nMax = parseInt(document.getElementById('rlt-stat-history')?.value) || 1000;
+    const clip = arr => (arr && arr.length > nMax) ? arr.slice(-nMax) : (arr || []);
+
+    // Success rate (episode-axis, sparkline; not part of the synced-chart group)
+    if (series.autonomous_rate_rolling && series.autonomous_rate_rolling.length > 0) {
+        _drawSparkline('rlt-chart-success', series.autonomous_rate_rolling, '#4fc3f7', 0, 1, true);
     }
 
-    // Per-step synced charts — all share the same step index as X
-    _syncedTimestamps = s.step_timestamps || [];
     _syncedLatestStep = data.total_updates || 0;
 
-    if (s.q_values_mean && s.q_values_mean.length > 0) {
+    // Per-grad-update synced charts (Q, critic loss, actor components, update rate).
+    // All share the grad_updates timestamps.
+    const gradTs = clip(grad.timestamps);
+    if (grad.q_values_mean && grad.q_values_mean.length > 0) {
         _registerSyncedChart('rlt-chart-qvalues', [
-            {data: s.q_values_min || [], color: '#2ecc71', label: 'min',
+            {data: clip(grad.q_values_min), color: '#2ecc71', label: 'min',
              bandPair: 'min', bandColor: '#2ecc71', hideLine: true},
-            {data: s.q_values_max || [], color: '#2ecc71', label: 'max',
+            {data: clip(grad.q_values_max), color: '#2ecc71', label: 'max',
              bandPair: 'max', hideLine: true},
-            {data: s.q_values_mean || [], color: '#2ecc71', label: 'mean'},
-        ]);
+            {data: clip(grad.q_values_mean), color: '#2ecc71', label: 'mean'},
+        ], gradTs);
     }
-    if (s.actor_deltas && s.actor_deltas.length > 0) {
-        _registerSyncedChart('rlt-chart-delta', [
-            {data: s.actor_deltas, color: '#e5c07b', label: 'delta'},
-        ]);
-    }
-    if (s.critic_losses && s.critic_losses.length > 0) {
+    if (grad.critic_losses && grad.critic_losses.length > 0) {
         _registerSyncedChart('rlt-chart-critic', [
-            {data: s.critic_losses, color: '#f39c12', label: 'critic'},
-        ]);
+            {data: clip(grad.critic_losses), color: '#f39c12', label: 'critic'},
+        ], gradTs);
     }
-    if ((s.actor_q_terms && s.actor_q_terms.length > 0) ||
-        (s.actor_bc_terms && s.actor_bc_terms.length > 0)) {
+    if ((grad.actor_q_terms && grad.actor_q_terms.length > 0) ||
+        (grad.actor_bc_terms && grad.actor_bc_terms.length > 0)) {
         _registerSyncedChart('rlt-chart-actor-components', [
-            {data: s.actor_q_terms || [], color: '#e06c75', label: 'q'},
-            {data: s.actor_bc_terms || [], color: '#4fc3f7', label: 'bc'},
-        ]);
+            {data: clip(grad.actor_q_terms), color: '#e06c75', label: 'q'},
+            {data: clip(grad.actor_bc_terms), color: '#4fc3f7', label: 'bc'},
+        ], gradTs);
     }
-    if (s.update_rates && s.update_rates.length > 0) {
+    if (grad.update_rates && grad.update_rates.length > 0) {
         _registerSyncedChart('rlt-chart-update-rate', [
-            {data: s.update_rates, color: '#bd93f9', label: 'rate'},
-        ]);
+            {data: clip(grad.update_rates), color: '#bd93f9', label: 'rate'},
+        ], gradTs);
+    }
+
+    // Per-inference chart (actor delta). Its own timestamps — these
+    // tick faster than grad_updates because inference fires every
+    // query interval, while grad_updates fires only when the buffer
+    // has reached the training threshold.
+    if (inf.deltas && inf.deltas.length > 0) {
+        _registerSyncedChart('rlt-chart-delta', [
+            {data: clip(inf.deltas), color: '#e5c07b', label: 'delta'},
+        ], clip(inf.timestamps));
     }
 }
 
@@ -2127,13 +2131,15 @@ function _sendRLTConfig() {
     }, 300);
 }
 
-// Registry of per-step synced charts. When the cursor hovers over any of
-// them, a vertical crosshair and value readouts appear on all.
-// Each entry: { canvas, series: [{data, color, label, percentage}], min, max, pad, W, H }
+// Registry of per-step synced charts. When the cursor hovers over any
+// chart, a vertical crosshair appears on all (right-aligned by index),
+// but each chart's hover-time label uses that chart's OWN timestamps —
+// charts can be on different time axes (per-inference vs per-grad-update)
+// and showing one chart's wall-clock time on another would be misleading.
+// Each entry: { canvas, series: [...], timestamps: [...], min, max, pad, W, H }
 const _syncedCharts = {};
-let _syncedTimestamps = [];  // shared wall-clock timestamps for per-step charts
 let _syncedLatestStep = 0;   // global step count of the rightmost (newest) data point
-let _hoverIndex = -1;        // -1 = no hover, else index into series
+let _hoverIndex = -1;        // -1 = no hover, else index into the chart's longest series
 
 function _fmtTime(ts) {
     if (!ts) return '';
@@ -2157,9 +2163,8 @@ function _syncedGlobalN() {
         for (const s of c.series) {
             if (s.data && s.data.length > maxN) maxN = s.data.length;
         }
+        if (c.timestamps && c.timestamps.length > maxN) maxN = c.timestamps.length;
     }
-    // Also account for step_timestamps, which may be longer than any chart's series
-    if (_syncedTimestamps.length > maxN) maxN = _syncedTimestamps.length;
     return maxN;
 }
 
@@ -2258,15 +2263,19 @@ function _renderSyncedChart(id) {
         ctx.fillText(label, W - 4, 12 + i * 12);
     }
 
-    // Step/time label (bottom-left) — uses global index consistently
+    // Step/time label (bottom-left) — uses THIS chart's own timestamps
+    // for the wall-clock time. Charts on different groups (e.g. actor
+    // delta = per-inference vs Q values = per-grad-update) tick at
+    // different rates; using a global timestamp series here would
+    // misrepresent the hovered point's time.
     ctx.fillStyle = '#444';
     ctx.textAlign = 'left';
     if (_hoverIndex >= 0) {
         const globalStep = _syncedLatestStep - (N - 1 - _hoverIndex);
-        // Timestamps are also right-aligned within N
-        const tsLocalIdx = _hoverIndex - (N - _syncedTimestamps.length);
-        const ts = tsLocalIdx >= 0 && tsLocalIdx < _syncedTimestamps.length
-            ? _syncedTimestamps[tsLocalIdx] : null;
+        const localTs = c.timestamps || [];
+        const tsLocalIdx = _hoverIndex - (N - localTs.length);
+        const ts = tsLocalIdx >= 0 && tsLocalIdx < localTs.length
+            ? localTs[tsLocalIdx] : null;
         const label = ts
             ? `step ${globalStep}  ${_fmtTime(ts)} (${_fmtAgo(ts)})`
             : `step ${globalStep}`;
@@ -2276,7 +2285,7 @@ function _renderSyncedChart(id) {
     }
 }
 
-function _registerSyncedChart(canvasId, seriesList) {
+function _registerSyncedChart(canvasId, seriesList, timestamps) {
     const canvas = document.getElementById(canvasId);
     if (!canvas) return;
     const valid = seriesList.filter(s => s.data && s.data.length > 0);
@@ -2294,7 +2303,8 @@ function _registerSyncedChart(canvasId, seriesList) {
     const max = Math.max(...allVals);
 
     _syncedCharts[canvasId] = {
-        canvas, series: seriesList, min, max, pad: 4,
+        canvas, series: seriesList, timestamps: timestamps || [],
+        min, max, pad: 4,
         W: rect.width, H: rect.height,
     };
 

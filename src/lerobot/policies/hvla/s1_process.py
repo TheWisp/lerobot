@@ -791,7 +791,11 @@ def run_s1(
                     logger.warning("RLT: replay buffer not loaded (replay=%s, file exists=%s)",
                                    rlt_replay is not None, (load_dir / "replay_buffer.pt").exists())
 
-            # Restore metrics
+            # Restore metrics. The aggregator's ``restore`` deserializes
+            # each group (episodes / inferences / grad_updates) atomically
+            # and logs the loaded shapes. If the file is in the legacy
+            # flat-series format (saved before the 3-group refactor),
+            # convert it here so episode-level history isn't lost.
             import json, os
             metrics_path = str(rlt_state["output_dir"] / "metrics.json")
             if os.path.exists(metrics_path):
@@ -799,35 +803,30 @@ def run_s1(
                     from lerobot.policies.hvla.rlt.metrics import get_metrics
                     with open(metrics_path) as f:
                         saved = json.load(f)
-                    m = get_metrics()
-                    m.episode = saved.get("episode", 0)
-                    s = saved.get("series", {})
-                    m.episode_successes = s.get("episode_successes", [])
-                    m.episode_autonomous = s.get("episode_autonomous", [])
-                    # HACK: backfill autonomous flags for old episodes that lack them.
-                    # Remove this once all old checkpoints are gone.
-                    if len(m.episode_autonomous) < len(m.episode_successes):
-                        missing = len(m.episode_successes) - len(m.episode_autonomous)
-                        m.episode_autonomous = [True] * missing + m.episode_autonomous
-                        logger.warning("RLT: HACK — backfilled %d missing autonomous flags as True", missing)
-                    m.episode_timestamps = s.get("episode_timestamps", [])
-                    m.episode_lengths_s = s.get("episode_lengths_s", [])
-                    if len(m.episode_timestamps) < len(m.episode_successes):
-                        missing = len(m.episode_successes) - len(m.episode_timestamps)
-                        m.episode_timestamps = [0.0] * missing + m.episode_timestamps
-                        m.episode_lengths_s = [30.0] * missing + m.episode_lengths_s
-                        logger.warning("RLT: HACK — backfilled %d missing timestamps/lengths", missing)
-                    m.critic_losses = s.get("critic_losses", [])
-                    m.critic_grad_norms = s.get("critic_grad_norms", [])
-                    m.actor_losses = s.get("actor_losses", [])
-                    m.actor_deltas = s.get("actor_deltas", [])
-                    m.q_values_mean = s.get("q_values_mean", [])
-                    m.q_values_min = s.get("q_values_min", [])
-                    m.q_values_max = s.get("q_values_max", [])
-                    m.actor_q_terms = s.get("actor_q_terms", [])
-                    m.actor_bc_terms = s.get("actor_bc_terms", [])
-                    m.update_rates = s.get("update_rates", [])
-                    logger.info("RLT: Restored metrics from %s", metrics_path)
+                    series = saved.get("series", {})
+                    if "episodes" not in series and "episode_successes" in series:
+                        # Legacy flat format. Promote per-episode keys into
+                        # the new ``episodes`` group; per-step series are
+                        # incompatible (length-divergent across siblings)
+                        # and would corrupt the grad_updates invariant if
+                        # round-tripped — drop them with a warning so the
+                        # operator knows chart history starts fresh.
+                        series = {
+                            **series,
+                            "episodes": {
+                                "successes": series.get("episode_successes", []),
+                                "autonomous": series.get("episode_autonomous", []),
+                                "timestamps": series.get("episode_timestamps", []),
+                                "lengths_s": series.get("episode_lengths_s", []),
+                            },
+                        }
+                        logger.warning(
+                            "RLT: legacy metrics format — restored episode "
+                            "history; per-step training series (Q values, "
+                            "critic loss, actor delta) start fresh.",
+                        )
+                        saved = {**saved, "series": series}
+                    get_metrics().restore(saved)
                 except Exception as e:
                     logger.warning("RLT: Failed to restore metrics: %s", e)
 

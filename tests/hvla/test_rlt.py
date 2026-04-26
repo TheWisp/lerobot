@@ -445,8 +445,8 @@ class TestMetrics:
         m = RLTMetrics()
         m._MAX_SERIES_LEN = 50
         for i in range(100):
-            m.record_step(step=i, delta=0.01, buffer_size=i, total_updates=i, mode="RL")
-        assert len(m.actor_deltas) <= 50
+            m.record_inference(step=i, delta=0.01, buffer_size=i, total_updates=i, mode="RL")
+        assert len(m.inferences) <= 50
 
     def test_save_load_roundtrip(self):
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
@@ -469,8 +469,14 @@ class TestMetrics:
         m = RLTMetrics()
         for i in range(10):
             m.record_episode(episode=i, success=True, autonomous=True, duration_s=5.0)
-            m.record_step(step=i, delta=0.01, buffer_size=i, total_updates=i, mode="RL",
-                          critic_loss=0.1, q_mean=1.0, q_min=0.5, q_max=1.5)
+            m.record_inference(step=i, delta=0.01, buffer_size=i,
+                               total_updates=i, mode="RL")
+            m.record_grad_update(
+                total_updates=i, mode="RL",
+                critic_loss=0.1, critic_grad_norm=1.0, actor_loss=-0.3,
+                q_mean=1.0, q_min=0.5, q_max=1.5,
+                actor_q_term=-0.3, actor_bc_term=0.1, update_rate=10.0,
+            )
         json.dumps(m.snapshot())  # must not raise
 
 

@@ -389,7 +389,7 @@ class InferenceThread:
         from lerobot.policies.hvla.rlt.metrics import get_metrics, save_metrics_to_file
         is_deploy = self._rlt_state.get("deploy", False)
         mode = "DEPLOY" if is_deploy else ("WARMUP" if is_warmup else "RL")
-        get_metrics().record_step(
+        get_metrics().record_inference(
             step=self._rlt_step_count, delta=actor_delta,
             buffer_size=len(self._rlt_replay) if self._rlt_replay else 0,
             total_updates=self._rlt_state["total_updates"], mode=mode,
@@ -658,11 +658,10 @@ class InferenceThread:
         # Update rate: actor updates since last call / elapsed time.
         # 0 on first call or after a long pause (intervention/reset).
         update_rate = cfg.utd_ratio / elapsed_since_last if elapsed_since_last > 0 else 0.0
-        get_metrics().record_step(
-            step=self._rlt_step_count, delta=0,
-            buffer_size=len(self._rlt_replay) if self._rlt_replay else 0,
+        get_metrics().record_grad_update(
             total_updates=self._rlt_state["total_updates"],
-            mode="TRAIN", critic_loss=avg_c, critic_grad_norm=grad_norm_max,
+            mode="TRAIN",
+            critic_loss=avg_c, critic_grad_norm=grad_norm_max,
             actor_loss=avg_a,
             q_mean=q_mean, q_min=q_min, q_max=q_max,
             actor_q_term=avg_q_term, actor_bc_term=avg_bc_term,
