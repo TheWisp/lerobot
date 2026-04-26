@@ -54,14 +54,20 @@ class RLTConfig:
                                           # Setting this to 0 disables joint jitter but
                                           # does NOT disable target policy smoothing —
                                           # that's controlled separately by target_sigma.
-    target_sigma: float = 0.02           # ε̃ in TD3: Gaussian std added to the TARGET
+    target_sigma: float = 0.1            # ε̃ in TD3: Gaussian std added to the TARGET
                                           # action inside the Bellman backup for target
                                           # policy smoothing (Fujimoto 2018). Prevents
                                           # the critic from latching onto over-estimates
                                           # of a single deterministic action. Decoupled
                                           # from exploration_sigma so that exploration=0
-                                          # doesn't also disable TD3's stability trick
-                                          # (as happened in rlt_online_v2_widened).
+                                          # doesn't also disable TD3's stability trick.
+                                          # Paper σ̃=0.2 on MuJoCo continuous control;
+                                          # 0.1 is half-paper, picked for tighter
+                                          # robotic-arm action-space tolerance. Earlier
+                                          # 0.02 (matching exploration_sigma) was way
+                                          # too narrow — covered only ~0.5° per joint,
+                                          # missed real Q-spike widths and contributed
+                                          # to the Q explosion seen in v2_widened runs.
     target_noise_clip: float = 0.5       # TD3 target noise clip: ε̃ clamped to [-c, c].
                                           # Paper default: 0.5.
     ref_action_dropout: float = 0.5       # probability of zeroing reference chunk
