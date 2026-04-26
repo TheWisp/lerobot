@@ -377,6 +377,60 @@ class TestReplayBuffer:
         finally:
             os.unlink(path)
 
+    def test_truncate_drops_only_the_tail(self, device):
+        """``truncate`` is the rollback path for the operator's "ignore
+        current episode" key. It must drop the most recent ``size -
+        target`` entries while preserving everything older."""
+        buf = ReplayBuffer(20, D, S, A, C, device)
+        for i in range(10):
+            _add_transition(buf, reward=float(i))
+        assert len(buf) == 10
+
+        dropped = buf.truncate(7)
+        assert dropped == 3
+        assert len(buf) == 7
+        # ptr must track size when no wrap has occurred (asserted in
+        # implementation). Sample-able indices are now [0, 7).
+        sample = buf.sample(50)
+        assert sample["reward"].max().item() <= 6.0 + 1e-6, \
+            f"truncate left newer entries reachable: max reward = {sample['reward'].max()}"
+
+    def test_truncate_to_zero(self, device):
+        buf = ReplayBuffer(10, D, S, A, C, device)
+        for _ in range(5):
+            _add_transition(buf)
+        buf.truncate(0)
+        assert len(buf) == 0
+        assert buf.ptr == 0
+
+    def test_truncate_to_current_is_noop(self, device):
+        buf = ReplayBuffer(10, D, S, A, C, device)
+        for _ in range(5):
+            _add_transition(buf)
+        dropped = buf.truncate(5)
+        assert dropped == 0
+        assert len(buf) == 5
+
+    def test_truncate_target_larger_than_size_raises(self, device):
+        """Programmer error — the precondition assert fires."""
+        buf = ReplayBuffer(10, D, S, A, C, device)
+        for _ in range(3):
+            _add_transition(buf)
+        with pytest.raises(AssertionError, match="out of bounds"):
+            buf.truncate(5)
+
+    def test_truncate_after_eviction_raises(self, device):
+        """Once the ring has wrapped (size == capacity and adds keep
+        coming), ``truncate`` cannot reliably restore an older state
+        because evicted slots are gone. The assert protects against
+        silent corruption."""
+        buf = ReplayBuffer(5, D, S, A, C, device)
+        for _ in range(8):  # adds past capacity — ring wraps
+            _add_transition(buf)
+        assert len(buf) == 5
+        with pytest.raises(AssertionError, match="wrapped around capacity"):
+            buf.truncate(3)
+
     def test_concurrent_add_and_sample(self, device):
         """Real access pattern: inference thread writes, gradient thread reads."""
         buf = ReplayBuffer(1000, D, S, A, C, device)

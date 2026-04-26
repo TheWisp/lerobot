@@ -76,6 +76,42 @@ class ReplayBuffer:
             self.ptr = (self.ptr + 1) % self.capacity
             self.size = min(self.size + 1, self.capacity)
 
+    def truncate(self, target_size: int) -> int:
+        """Roll back the buffer to ``target_size`` entries.
+
+        Used by the operator's "ignore current episode" key: any
+        transitions added during the current episode are dropped so the
+        episode is effectively never recorded. Returns the number of
+        entries that were discarded (for the log line).
+
+        Precondition: ``0 <= target_size <= self.size``. Calling with a
+        target larger than the current size is treated as a programmer
+        error — the asserts trip rather than silently no-op or corrupt
+        the buffer.
+
+        Limitation: only safe when no eviction has occurred since
+        ``target_size`` was captured (i.e. the buffer has not wrapped
+        around its ring). With our 200K capacity and runs in the
+        thousands, that condition holds in practice. The asserts catch
+        the case where it doesn't.
+        """
+        with self._lock:
+            assert 0 <= target_size <= self.size, (
+                f"truncate target_size={target_size} out of bounds "
+                f"[0, {self.size}]"
+            )
+            assert self.size < self.capacity or target_size == self.size, (
+                "ReplayBuffer.truncate is unsafe once the ring buffer "
+                "has wrapped around capacity. Refusing to truncate a "
+                "filled-and-evicting buffer."
+            )
+            dropped = self.size - target_size
+            self.size = target_size
+            # ptr should track size when no wrap has occurred (which is
+            # required by the assert above).
+            self.ptr = target_size
+            return dropped
+
     def sample(self, batch_size: int) -> dict[str, Tensor]:
         """Sample a random batch and move to device."""
         with self._lock:

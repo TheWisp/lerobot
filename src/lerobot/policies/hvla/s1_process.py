@@ -716,6 +716,16 @@ def run_s1(
             # via the X key. Episode ends, terminal reward = config.abort_reward
             # (default -1.0). Critic learns to push Q DOWN on these states.
             "abort_triggered": False,
+            # Operator marked this episode as "ignore — pretend it didn't
+            # happen" via DOWN ARROW. Used for OOD scenes (camera glitch,
+            # accidental scene perturbation, etc) where neither success
+            # nor abort signal would be a valid label. All transitions
+            # added during the episode are truncated from the replay
+            # buffer; episode counter and metrics are not advanced.
+            "ignore_triggered": False,
+            # Replay buffer size captured at episode start, so
+            # ignore-triggered can roll the buffer back exactly.
+            "buffer_size_at_episode_start": 0,
             "output_dir": Path(rlt_output_dir),
             "deploy": rlt_deploy,
         }
@@ -1008,6 +1018,44 @@ def run_s1(
                     color = "#4fc3f7" if engaged else "#2ecc71"
                     print(f"##OVERLAY:{label}:{color}##", flush=True)
                     return
+                # DOWN ARROW = "ignore current episode". For OOD scenes
+                # (camera glitch, accidental table bump, anything where
+                # neither success nor abort is a valid label) the
+                # operator marks this episode as never-happened. All
+                # transitions added during the episode are truncated
+                # from the replay buffer at episode end; the episode
+                # counter and metrics are not advanced. Has priority
+                # over abort/success — pressing DOWN after R or LEFT
+                # discards their effect too.
+                if key == _kb.Key.down:
+                    rlt_state["ignore_triggered"] = True
+                    events["exit_early"] = True
+                    # Mark the dataset for rerecord so the LeRobot
+                    # framework's existing dataset-rollback path
+                    # discards the recorded frames too.
+                    events["rerecord_episode"] = True
+                    logger.info(
+                        "RLT: IGNORE — episode ep%d will be discarded",
+                        rlt_state["episode"],
+                    )
+                    # Neutral two-beep cue (distinguishable from success
+                    # ascending and abort descending).
+                    try:
+                        import subprocess, numpy as _np
+                        sr = 16000
+                        t = _np.linspace(0, 0.15, int(sr * 0.15), dtype=_np.float32)
+                        tone = (_np.sin(2 * _np.pi * 500 * t) * 18000).astype(_np.int16)
+                        gap = _np.zeros(int(sr * 0.05), dtype=_np.int16)
+                        sound = _np.concatenate([tone, gap, tone])
+                        proc = subprocess.Popen(
+                            ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+                            stdin=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                        )
+                        proc.stdin.write(sound.tobytes())
+                        proc.stdin.close()
+                    except Exception:
+                        pass
+                    return
             except AttributeError:
                 pass
             if _orig_on_press is not None:
@@ -1017,6 +1065,7 @@ def run_s1(
         logger.info("RLT: Press 'r' = success (+1 reward, ends episode)")
         logger.info("RLT: Press LEFT ARROW = abort/disaster (%.2f reward, ends episode)",
                     rlt_state["config"].abort_reward)
+        logger.info("RLT: Press DOWN ARROW = ignore episode (discard transitions, no count)")
         logger.info("RLT: Press 'e' = toggle RL actor on/off")
 
     recorded_episodes = 0
@@ -1094,6 +1143,14 @@ def run_s1(
             infer_thread._rlt_user_engaged = rlt_start_engaged
             infer_thread._rlt_prev = None
             rlt_state["_episode_had_intervention"] = False
+            # Capture buffer size now so ``ignore_triggered`` can roll
+            # back exactly the transitions added during this episode.
+            # Read under lock-free is fine — only this thread + inference
+            # thread write, and inference hasn't started writing for this
+            # episode yet (rlt_system_active just turned True above).
+            rlt_state["buffer_size_at_episode_start"] = (
+                len(rlt_replay) if rlt_replay is not None else 0
+            )
             engaged_str = "engaged" if rlt_start_engaged else "disengaged (press E to engage)"
             # Warmup: during the first ``warmup_episodes`` the actor's output is
             # discarded and the S1 reference is executed instead (actor + critic
@@ -1635,59 +1692,90 @@ def run_s1(
             # Pause collection during reset + clear recorder state.
             infer_thread._rlt_system_active = False
             infer_thread._rlt_prev = None
-            if rlt_recorder is not None:
-                # Episode may have ended while intervention was still
-                # active (operator presses 'r' to mark success without
-                # releasing intervention first — the common workflow).
-                # In that case the intervention-OFF transition never ran,
-                # so reconcile the counter, emit the watchdog log, and
-                # flush a terminal transition if R/LEFT was the trigger.
-                if rlt_recorder.frames_observed > 0:
-                    rlt_state["total_transitions"] += rlt_recorder.chunks_stored
-                    rlt_recorder.log_summary()
-                    _rlt_flush_intervention_terminal(
-                        rlt_state, rlt_recorder, rlt_replay, infer_thread, obs,
-                    )
-                rlt_recorder.reset()
-            logger.info("RLT: collection PAUSED (episode end)")
 
-            success = rlt_state["reward_triggered"]
-            aborted = rlt_state.get("abort_triggered", False)
-            had_intervention = rlt_state.get("_episode_had_intervention", False)
-            autonomous = success and not had_intervention
-            ep_duration = time.time() - episode_start
-
-            rlt_state["successes"].append(success)
-            # NOTE: episode counter is incremented at episode start, not here.
-            recent = rlt_state["successes"][-20:]
-
-            if aborted:
-                auto_label = "ABORTED"
-            elif autonomous:
-                auto_label = "AUTONOMOUS"
-            elif success:
-                auto_label = "ASSISTED"
+            if rlt_state.get("ignore_triggered"):
+                # Operator pressed DOWN — discard this episode entirely.
+                # Truncate the replay buffer back to its size at episode
+                # start, drop any pending intervention chunks, decrement
+                # the episode counter so the next iteration reuses it,
+                # and skip metrics + checkpoint save. ``latest/`` stays
+                # at the previous episode's clean save.
+                pre_size = rlt_state.get("buffer_size_at_episode_start", 0)
+                if rlt_recorder is not None:
+                    rlt_recorder.reset()
+                dropped = (
+                    rlt_replay.truncate(pre_size) if rlt_replay is not None else 0
+                )
+                rlt_state["total_transitions"] -= dropped
+                # Roll back the counter that was incremented at episode start.
+                ep_ignored = rlt_state["episode"]
+                rlt_state["episode"] -= 1
+                rlt_state["reward_triggered"] = False
+                rlt_state["abort_triggered"] = False
+                rlt_state["ignore_triggered"] = False
+                rlt_state["_episode_had_intervention"] = False
+                logger.info(
+                    "RLT ep%d: IGNORED — discarded %d transitions; "
+                    "episode counter rolled back to %d (next episode reuses ep%d)",
+                    ep_ignored, dropped, rlt_state["episode"], ep_ignored,
+                )
+                # Skip the rest of the bookkeeping branch (no metrics row,
+                # no checkpoint save). The ``else`` below handles the
+                # normal episode-end path.
             else:
-                auto_label = "FAIL"
-            logger.info(
-                "RLT ep%d: %s (intervention=%s) | transitions=%d updates=%d "
-                "success_rate(20)=%.0f%% | %.1fs",
-                rlt_state["episode"], auto_label,
-                "yes" if had_intervention else "no",
-                rlt_state["total_transitions"], rlt_state["total_updates"],
-                np.mean(recent) * 100 if recent else 0,
-                ep_duration,
-            )
-            from lerobot.policies.hvla.rlt.metrics import get_metrics, save_metrics_to_file
-            get_metrics().record_episode(
-                rlt_state["episode"], success,
-                autonomous=not had_intervention,
-                duration_s=ep_duration,
-            )
-            save_metrics_to_file()
+                if rlt_recorder is not None:
+                    # Episode may have ended while intervention was still
+                    # active (operator presses 'r' to mark success without
+                    # releasing intervention first — the common workflow).
+                    # In that case the intervention-OFF transition never ran,
+                    # so reconcile the counter, emit the watchdog log, and
+                    # flush a terminal transition if R/LEFT was the trigger.
+                    if rlt_recorder.frames_observed > 0:
+                        rlt_state["total_transitions"] += rlt_recorder.chunks_stored
+                        rlt_recorder.log_summary()
+                        _rlt_flush_intervention_terminal(
+                            rlt_state, rlt_recorder, rlt_replay, infer_thread, obs,
+                        )
+                    rlt_recorder.reset()
+                logger.info("RLT: collection PAUSED (episode end)")
 
-            rlt_state["reward_triggered"] = False
-            rlt_state["abort_triggered"] = False
+                success = rlt_state["reward_triggered"]
+                aborted = rlt_state.get("abort_triggered", False)
+                had_intervention = rlt_state.get("_episode_had_intervention", False)
+                autonomous = success and not had_intervention
+                ep_duration = time.time() - episode_start
+
+                rlt_state["successes"].append(success)
+                # NOTE: episode counter is incremented at episode start, not here.
+                recent = rlt_state["successes"][-20:]
+
+                if aborted:
+                    auto_label = "ABORTED"
+                elif autonomous:
+                    auto_label = "AUTONOMOUS"
+                elif success:
+                    auto_label = "ASSISTED"
+                else:
+                    auto_label = "FAIL"
+                logger.info(
+                    "RLT ep%d: %s (intervention=%s) | transitions=%d updates=%d "
+                    "success_rate(20)=%.0f%% | %.1fs",
+                    rlt_state["episode"], auto_label,
+                    "yes" if had_intervention else "no",
+                    rlt_state["total_transitions"], rlt_state["total_updates"],
+                    np.mean(recent) * 100 if recent else 0,
+                    ep_duration,
+                )
+                from lerobot.policies.hvla.rlt.metrics import get_metrics, save_metrics_to_file
+                get_metrics().record_episode(
+                    rlt_state["episode"], success,
+                    autonomous=not had_intervention,
+                    duration_s=ep_duration,
+                )
+                save_metrics_to_file()
+
+                rlt_state["reward_triggered"] = False
+                rlt_state["abort_triggered"] = False
 
             # Save checkpoint (training mode only)
             if not rlt_state.get("deploy"):
