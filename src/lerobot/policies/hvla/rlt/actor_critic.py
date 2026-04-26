@@ -18,12 +18,24 @@ from torch import Tensor
 from lerobot.policies.hvla.rlt.config import RLTConfig
 
 
-def _build_mlp(input_dim: int, hidden_dim: int, output_dim: int, num_layers: int) -> nn.Sequential:
-    """Build a ReLU MLP with the given number of hidden layers."""
+def _build_mlp(
+    input_dim: int, hidden_dim: int, output_dim: int, num_layers: int,
+    layer_norm: bool = False,
+) -> nn.Sequential:
+    """Build a ReLU MLP with the given number of hidden layers.
+
+    When ``layer_norm`` is True, inserts ``nn.LayerNorm`` after each
+    hidden Linear and BEFORE the activation. Output Linear is left
+    unnormalized so the network's final scaling is unconstrained
+    (the output may need to span a wide dynamic range — e.g. Q values).
+    Pattern matches TD7 / BRO conventions for stable TD3-style critics.
+    """
     layers: list[nn.Module] = []
     in_d = input_dim
     for _ in range(num_layers):
         layers.append(nn.Linear(in_d, hidden_dim))
+        if layer_norm:
+            layers.append(nn.LayerNorm(hidden_dim))
         layers.append(nn.ReLU())
         in_d = hidden_dim
     layers.append(nn.Linear(in_d, output_dim))
@@ -112,8 +124,18 @@ class RLTCritic(nn.Module):
         super().__init__()
         input_dim = config.rl_token_dim + state_dim + config.rl_chunk_length * action_dim
 
+        # Critic gets LayerNorm; actor doesn't. Actor's BC anchor +
+        # zero-init keeps activations bounded by tying μ ≈ ref. Critic
+        # has no such anchor and its activations grow unboundedly when
+        # bootstrap targets drift, which is the Q-explosion failure
+        # mode. LN per-layer caps the activation magnitude regardless
+        # of what the output wants to predict, breaking the
+        # "Q grows → activations grow → gradient grows" feedback loop.
         self.q_nets = nn.ModuleList([
-            _build_mlp(input_dim, config.critic_hidden_dim, 1, config.critic_num_layers)
+            _build_mlp(
+                input_dim, config.critic_hidden_dim, 1, config.critic_num_layers,
+                layer_norm=config.critic_layer_norm,
+            )
             for _ in range(config.num_critics)
         ])
 
@@ -197,6 +219,20 @@ class TD3Agent:
             target_q = self.critic_target.min_q(next_z_rl, next_state, next_action)
             # C-step return: reward is already the C-step cumulative
             q_target = reward + (gamma ** C) * (1 - done) * target_q
+            # Clamp the bootstrap target to its theoretical bound:
+            # max return = r_max / (1 - γ^C). With ±1 sparse rewards and
+            # default γ=0.99, C=10 this is ±10.4. The critic should
+            # NEVER need to predict outside that range — anything beyond
+            # is a bootstrap artifact. Complements ``critic_grad_clip``:
+            # gradient clip caps single-step update magnitude, target
+            # clip caps the meaning the critic is asked to learn, so
+            # slow drift via accumulated small-clipped updates can't
+            # walk Q to ±∞ either.
+            if self.config.q_target_clip:
+                denom = 1.0 - gamma ** C
+                q_high = 1.0 / denom
+                q_low = -abs(self.config.abort_reward) / denom
+                q_target = q_target.clamp(q_low, q_high)
 
         qs = self.critic.forward(z_rl, state, action_chunk)
         critic_loss = sum(torch.nn.functional.mse_loss(q, q_target) for q in qs)

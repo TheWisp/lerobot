@@ -79,6 +79,21 @@ class RLTConfig:
     # conservative default — logged norm from training tells us if this
     # triggers too often (loosen) or never (blowup defense is loose; tighten).
     critic_grad_clip: float = 10.0
+    # Clamp the Bellman target value to ±|r_max|/(1-γ^C) before computing
+    # the MSE loss. Caps the "meaning" of bootstrap targets independent of
+    # gradient magnitude: even if updates are individually small (under
+    # the gradient clip), they can't accumulate into runaway Q values
+    # because the target itself is bounded. Complementary defense to
+    # critic_grad_clip — together they cage bootstrap dynamics from both
+    # the per-step magnitude side AND the destination side.
+    q_target_clip: bool = True
+    # Insert nn.LayerNorm between Linear and ReLU in each critic MLP
+    # hidden layer (output layer left unnormalized). Bounds activation
+    # magnitudes per-layer so the critic can't enter the "Q grows →
+    # activations grow → gradient grows" feedback loop. The actor does
+    # NOT use LayerNorm — its BC anchor + zero-init is the equivalent
+    # bounding mechanism. Pattern follows TD7 / BRO architectures.
+    critic_layer_norm: bool = True
     # Reward applied to the last transition of an aborted episode (operator
     # marks the trajectory as a "disaster — never do this"). Default -1.0
     # gives the critic explicit discrimination between "didn't reach the
