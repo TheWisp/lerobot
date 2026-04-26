@@ -345,3 +345,136 @@ class TestLogSummary:
             "Some intervention data was dropped" in r.message
             for r in caplog.records
         ), "drop-detection warning must fire on mismatch"
+
+
+# ============================================================================
+# flush_terminal (intervention-success / intervention-abort path)
+# ============================================================================
+
+class TestFlushTerminal:
+    """Pre-fix, episodes where the operator pressed 'r' or LEFT-ARROW
+    during intervention dropped the terminal reward — the inference
+    thread was paused so no done=True transition was written. The
+    critic only ever saw rescue episodes as r=0 timeouts.
+    flush_terminal closes that gap by writing the missing terminal
+    through the recorder."""
+
+    def test_writes_terminal_with_positive_reward(
+        self, replay, device, joint_names,
+    ):
+        rec = _make_recorder(replay, device, joint_names)
+        # Drive 2 complete windows so _prev_chunk is populated
+        for _ in range(2 * C):
+            rec.on_frame(_human_action(), _z_rl(0.4), _obs(joint_names, fill=0.4))
+        before = len(replay)
+
+        wrote = rec.flush_terminal(
+            reward=1.0,
+            current_z_rl=_z_rl(0.7),
+            current_obs=_obs(joint_names, fill=0.7),
+        )
+        assert wrote is True
+        assert len(replay) == before + 1
+        # The terminal transition must be at the most recent slot:
+        last = before  # buffer wraps but cap=100 won't here
+        assert replay._reward[last, 0].item() == 1.0
+        assert replay._done[last, 0].item() == 1.0
+        # next_state should reflect the post-rescue snapshot, not the prev.
+        assert torch.allclose(
+            replay._next_state[last], torch.full((STATE_DIM,), 0.7)
+        )
+        assert torch.allclose(
+            replay._next_z_rl[last], torch.full((Z_DIM,), 0.7)
+        )
+
+    def test_writes_terminal_with_negative_reward_for_abort(
+        self, replay, device, joint_names,
+    ):
+        rec = _make_recorder(replay, device, joint_names)
+        for _ in range(2 * C):
+            rec.on_frame(_human_action(), _z_rl(), _obs(joint_names))
+        wrote = rec.flush_terminal(
+            reward=-1.0,
+            current_z_rl=_z_rl(),
+            current_obs=_obs(joint_names),
+        )
+        assert wrote is True
+        last = len(replay) - 1
+        assert replay._reward[last, 0].item() == -1.0
+        assert replay._done[last, 0].item() == 1.0
+
+    def test_action_equals_ref_on_terminal_chunk(
+        self, replay, device, joint_names,
+    ):
+        """Same Paper Alg 1 line 11 contract as intermediate intervention
+        transitions: BC penalty must be zero on the terminal too."""
+        rec = _make_recorder(replay, device, joint_names)
+        for _ in range(2 * C):
+            rec.on_frame(_human_action(2.0), _z_rl(), _obs(joint_names))
+        rec.flush_terminal(reward=1.0, current_z_rl=_z_rl(),
+                           current_obs=_obs(joint_names))
+        last = len(replay) - 1
+        assert torch.equal(replay._action[last], replay._ref[last])
+
+    def test_no_op_when_no_complete_chunk_yet(
+        self, replay, device, joint_names, caplog,
+    ):
+        """Intervention shorter than C frames: no _prev_chunk to anchor
+        the terminal to. Returns False and logs a WARNING — better than
+        writing a corrupt transition with stale state."""
+        rec = _make_recorder(replay, device, joint_names)
+        for _ in range(C - 1):           # less than one full window
+            rec.on_frame(_human_action(), _z_rl(), _obs(joint_names))
+        before = len(replay)
+        with caplog.at_level("WARNING", logger="lerobot.policies.hvla.rlt.intervention"):
+            wrote = rec.flush_terminal(
+                reward=1.0,
+                current_z_rl=_z_rl(),
+                current_obs=_obs(joint_names),
+            )
+        assert wrote is False
+        assert len(replay) == before
+        assert any(
+            "no complete C-frame chunk yet" in r.message
+            for r in caplog.records
+        )
+
+    def test_does_not_double_increment_chunks_stored(
+        self, replay, device, joint_names,
+    ):
+        """The terminal flush is accounted for separately by the caller's
+        ``total_transitions += 1`` — it must NOT bump chunks_stored, or
+        log_summary's expected formula (frames//C - 1) would be wrong."""
+        rec = _make_recorder(replay, device, joint_names)
+        for _ in range(2 * C):
+            rec.on_frame(_human_action(), _z_rl(), _obs(joint_names))
+        before_stored = rec.chunks_stored
+        rec.flush_terminal(reward=1.0, current_z_rl=_z_rl(),
+                           current_obs=_obs(joint_names))
+        assert rec.chunks_stored == before_stored
+
+    def test_terminal_anchors_at_last_completed_window(
+        self, replay, device, joint_names,
+    ):
+        """The (s, a) of the terminal transition is taken from the most
+        recently FLUSHED window — i.e. the snapshot at frame 0 of that
+        window and the action chunk recorded over those C frames. The
+        next-state is the moment of operator R-press."""
+        rec = _make_recorder(replay, device, joint_names)
+        # Window 0 (the one that becomes _prev_chunk): z_rl=0.1 state=0.1 action=2
+        for _ in range(C):
+            rec.on_frame(_human_action(2.0), _z_rl(0.1), _obs(joint_names, fill=0.1))
+        # Window 1 in progress (incomplete): z_rl=0.2 state=0.2 action=3
+        for _ in range(C // 2):
+            rec.on_frame(_human_action(3.0), _z_rl(0.2), _obs(joint_names, fill=0.2))
+        rec.flush_terminal(reward=1.0, current_z_rl=_z_rl(0.9),
+                           current_obs=_obs(joint_names, fill=0.9))
+        last = len(replay) - 1
+        # "from" side = window 0 (snapshot + its action)
+        assert torch.allclose(replay._z_rl[last], torch.full((Z_DIM,), 0.1))
+        assert torch.allclose(replay._state[last], torch.full((STATE_DIM,), 0.1))
+        action = replay._action[last].reshape(C, A)
+        assert torch.allclose(action, torch.full((C, A), 2.0))
+        # "to" side = the operator-R moment
+        assert torch.allclose(replay._next_z_rl[last], torch.full((Z_DIM,), 0.9))
+        assert torch.allclose(replay._next_state[last], torch.full((STATE_DIM,), 0.9))

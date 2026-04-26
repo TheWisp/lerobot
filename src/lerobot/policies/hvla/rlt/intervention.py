@@ -251,3 +251,79 @@ class InterventionRecorder:
             "ref": human_chunk,
         }
         self._chunk_buf = []
+
+    def flush_terminal(
+        self,
+        reward: float,
+        current_z_rl: Tensor | None,
+        current_obs: dict,
+    ) -> bool:
+        """Write a final terminal transition to close out a rescued episode.
+
+        The inference thread is paused during intervention, so it cannot
+        record the terminal transition itself when the operator presses
+        R or LEFT-ARROW while still teleop-driving. Without this method
+        the +1 (or abort) reward never enters the replay buffer and the
+        critic learns rescue successes look like timeouts.
+
+        Anchors the terminal at the most recently completed C-frame
+        human chunk: stores ``(s_prev, a_prev, r, s_current, done=True)``
+        with action == ref == ``_prev_chunk["action"]`` (Paper Alg 1
+        line 11 — BC penalty stays zero on human data). Bootstrap then
+        propagates the terminal reward backward through the prior r=0
+        intervention transitions and the actor's failed lead-in, exactly
+        as TD3 expects.
+
+        Preconditions:
+            * ``current_z_rl is not None`` if a transition will be
+              written (asserted; same failure mode as ``on_frame``).
+            * ``current_obs`` contains every joint listed in
+              ``joint_names``.
+
+        Postconditions:
+            * If ``_prev_chunk`` is set: one transition is appended to
+              the replay buffer with ``done=True`` and the given
+              reward, and this returns ``True``. ``_chunks_stored`` is
+              not incremented — the caller is responsible for any
+              accounting (so the regular-pairing watchdog formula in
+              ``log_summary`` stays correct).
+            * If no complete C-frame window has been flushed yet
+              (intervention shorter than C frames): logs a WARNING and
+              returns ``False`` without writing.
+
+        Args:
+            reward: terminal reward (+1 for SUCCESS, ``cfg.abort_reward``
+                for ABORT).
+            current_z_rl: latest z_rl from the inference thread.
+            current_obs: robot observation dict for state extraction.
+
+        Returns:
+            True if a terminal transition was written, False if skipped.
+        """
+        if self._prev_chunk is None:
+            logger.warning(
+                "RLT: intervention ended with terminal r=%+.2f but no "
+                "complete C-frame chunk yet (%d frames observed); "
+                "reward signal lost.",
+                reward, self._frame_count,
+            )
+            return False
+        assert current_z_rl is not None, (
+            "InterventionRecorder.flush_terminal got current_z_rl=None. "
+            "The inference thread is not exposing a fresh z_rl while "
+            "intervention is active. Without it, the terminal transition "
+            "cannot be stored and ASSISTED success is silently lost."
+        )
+        next_state = self._extract_state(current_obs)
+        self._replay.add(
+            z_rl=self._prev_chunk["z_rl"],
+            state=self._prev_chunk["state"],
+            action_chunk=self._prev_chunk["action"],
+            ref_chunk=self._prev_chunk["ref"],
+            reward=float(reward),
+            next_z_rl=current_z_rl,
+            next_state=next_state,
+            next_ref_chunk=self._prev_chunk["ref"],
+            done=True,
+        )
+        return True

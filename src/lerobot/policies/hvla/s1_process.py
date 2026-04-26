@@ -99,6 +99,65 @@ def _atomic_torch_save(obj, path) -> None:
     os.replace(tmp, target)
 
 
+def _rlt_flush_intervention_terminal(rlt_state, rlt_recorder, rlt_replay, infer_thread, obs) -> None:
+    """Flush a terminal transition for an intervention-rescued episode.
+
+    When the operator presses 'r' (success) or LEFT-ARROW (abort) while
+    intervention is still active, the inference thread is paused and so
+    cannot record the terminal transition. Without this flush the +1
+    (or ``cfg.abort_reward``) is silently dropped — the critic sees
+    every intervention-rescued episode as a generic r=0 timeout. Paper
+    Alg 1 line 12 stores the transition regardless of who was driving.
+
+    Precondition:
+        ``rlt_recorder.frames_observed > 0`` (caller checks). At least
+        one complete C-frame chunk inside ``flush_terminal`` is required
+        to anchor the terminal; if intervention was shorter than C
+        frames the recorder logs a warning and no-ops.
+
+    Postcondition:
+        On success, one transition is appended to ``rlt_replay`` with
+        ``done=True`` and the operator-selected reward, and
+        ``rlt_state['total_transitions']`` is incremented by 1.
+        Buffer's most recent slot is asserted to reflect the terminal.
+        Caller-visible state (``reward_triggered``, ``abort_triggered``)
+        is unchanged — the main loop resets them later.
+    """
+    if not (rlt_state["reward_triggered"] or rlt_state.get("abort_triggered")):
+        return
+    terminal_reward = (
+        float(rlt_state["config"].abort_reward)
+        if rlt_state.get("abort_triggered")
+        else 1.0
+    )
+    if not rlt_recorder.flush_terminal(
+        reward=terminal_reward,
+        current_z_rl=infer_thread._rlt_latest_z_rl,
+        current_obs=obs,
+    ):
+        return
+    rlt_state["total_transitions"] += 1
+    # Cross-module invariant: flush_terminal claimed it wrote a
+    # done=True transition with the requested reward. The buffer's
+    # most recent slot must reflect that — catches a regression
+    # where the add path drops the done flag silently.
+    last_idx = (rlt_replay.ptr - 1) % rlt_replay.capacity
+    assert (
+        rlt_replay._done[last_idx, 0] > 0.5
+        and abs(rlt_replay._reward[last_idx, 0].item() - terminal_reward) < 1e-6
+    ), (
+        f"flush_terminal returned True but last buffer slot[{last_idx}] "
+        f"has done={rlt_replay._done[last_idx, 0].item()} "
+        f"reward={rlt_replay._reward[last_idx, 0].item():.3f} "
+        f"(expected done=1, reward={terminal_reward:+.3f})"
+    )
+    logger.info(
+        "RLT: intervention-terminal r=%+.2f flushed (%s)",
+        terminal_reward,
+        "ABORT" if rlt_state.get("abort_triggered") else "SUCCESS",
+    )
+
+
 def _save_infer_drop(chunk_np: np.ndarray, obs: dict, infer_count: int, save_dir: str,
                      joint_names: list[str] | None = None):
     """Detect large jumps in any joint of predicted chunk and save obs for analysis."""
@@ -1582,10 +1641,14 @@ def run_s1(
                 # active (operator presses 'r' to mark success without
                 # releasing intervention first — the common workflow).
                 # In that case the intervention-OFF transition never ran,
-                # so reconcile the counter and emit the watchdog log here.
+                # so reconcile the counter, emit the watchdog log, and
+                # flush a terminal transition if R/LEFT was the trigger.
                 if rlt_recorder.frames_observed > 0:
                     rlt_state["total_transitions"] += rlt_recorder.chunks_stored
                     rlt_recorder.log_summary()
+                    _rlt_flush_intervention_terminal(
+                        rlt_state, rlt_recorder, rlt_replay, infer_thread, obs,
+                    )
                 rlt_recorder.reset()
             logger.info("RLT: collection PAUSED (episode end)")
 
