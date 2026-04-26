@@ -689,13 +689,20 @@ async def get_rlt_config() -> dict:
     from lerobot.policies.hvla.rlt.config import RLTConfig
 
     defaults = RLTConfig()
+    # ``active`` lets the GUI distinguish "no session — defaults" from
+    # "session running — these are the live values". Without it the GUI
+    # silently lets users toggle the diag button before launch / after
+    # stop and the click goes nowhere (POST returns 409, frontend used
+    # to swallow it). See ``set_rlt_config``.
+    active = bool(_active_config and _active_config.get("rlt_output_dir"))
     result = {
+        "active": active,
         "beta": defaults.beta,
         "exploration_sigma": defaults.exploration_sigma,
         "target_sigma": defaults.target_sigma,
         "dump_chunks": False,
     }
-    if not _active_config or not _active_config.get("rlt_output_dir"):
+    if not active:
         return result
     override_path = Path(_active_config["rlt_output_dir"]) / "rlt_overrides.json"
     if not override_path.exists():
@@ -746,6 +753,13 @@ async def set_rlt_config(body: dict) -> dict:
             "No valid keys. Allowed: beta, exploration_sigma, target_sigma, dump_chunks",
         )
     override_path = Path(_active_config["rlt_output_dir"]) / "rlt_overrides.json"
+    # Ensure the output dir exists. The subprocess creates it inside ``run_s1``
+    # but only after model imports finish — there's a multi-second window
+    # right after launch where _active_config is set but the dir doesn't
+    # exist yet, and a Diagnostic-toggle click in that window used to fail
+    # with FileNotFoundError → 500 → red toast. Creating it here closes
+    # that window without needing to rendezvous with the subprocess.
+    override_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         # Merge with existing file so partial updates (e.g. only dump_chunks)
         # don't wipe other keys (beta, actor_sigma).

@@ -1416,6 +1416,14 @@ function connectOutputSSE() {
         if (data.done) {
             disconnectOutputSSE();
             _stopRLTPoll();
+            // Sliders only make sense during an active run — disable
+            // them. The diag button is sticky (preference persists in
+            // localStorage), so just refresh its tooltip to reflect the
+            // staged-for-next-launch semantics.
+            _setRLTSlidersEnabled(false);
+            const diagOn = document.getElementById('rlt-btn-diagnostic')
+                ?.classList.contains('active') || false;
+            _applyDiagBtnVisual(diagOn, false);
             pollRunStatus();
             // Re-scan dataset sources and refresh opened datasets
             if (typeof window.refreshExpandedSources === 'function') {
@@ -1950,23 +1958,67 @@ function _updateRLTDashboard(data) {
 }
 
 let _rltConfigTimer = null;
+// Slider live-tuning controls only make sense during an active run —
+// β / σ have no "preference" semantics, just a current value that the
+// subprocess polls. Disable them visibly when no run is active.
+// (The diag button is sticky — see _applyDiagBtnVisual.)
+function _setRLTSlidersEnabled(enabled) {
+    const tooltip = enabled ? '' : 'No active RLT training session';
+    for (const id of ['rlt-slider-beta', 'rlt-slider-sigma']) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.disabled = !enabled;
+        el.title = tooltip;
+        el.classList.toggle('disabled', !enabled);
+    }
+}
+
+// Sticky-preference model for the Diagnostic toggle: the user's intent
+// is stored in localStorage and survives across runs / page reloads.
+// If toggled while no run is active, the click is staged locally and
+// auto-applied at the start of the next run (see _initRLTSliders). If
+// toggled mid-run, both the local pref and the backend are updated.
+const _RLT_DIAG_PREF_KEY = 'rlt_dump_chunks_pref';
+
+function _readDiagPref() {
+    return localStorage.getItem(_RLT_DIAG_PREF_KEY) === '1';
+}
+
+function _writeDiagPref(on) {
+    localStorage.setItem(_RLT_DIAG_PREF_KEY, on ? '1' : '0');
+}
+
+function _applyDiagBtnVisual(on, sessionActive) {
+    const diagBtn = document.getElementById('rlt-btn-diagnostic');
+    if (!diagBtn) return;
+    diagBtn.classList.toggle('active', on);
+    diagBtn.textContent = on ? 'Diagnostic: ON' : 'Diagnostic: OFF';
+    diagBtn.title = sessionActive
+        ? ''
+        : `Will apply when training starts (currently ${on ? 'ON' : 'OFF'})`;
+}
+
 async function _initRLTSliders() {
     const controls = document.getElementById('rlt-controls');
     if (controls) controls.style.display = '';
 
     const betaSlider = document.getElementById('rlt-slider-beta');
     const sigmaSlider = document.getElementById('rlt-slider-sigma');
+    const diagBtn = document.getElementById('rlt-btn-diagnostic');
     const betaVal = document.getElementById('rlt-slider-beta-val');
     const sigmaVal = document.getElementById('rlt-slider-sigma-val');
-    const diagBtn = document.getElementById('rlt-btn-diagnostic');
 
     // Seed controls from the backend so sliders show the values actually
     // applied to the training process, not the HTML's hardcoded defaults.
     // Without this, a page reload makes the UI lie about current β / σ.
+    let sessionActive = false;
+    let serverDiag = false;
     try {
         const resp = await fetch('/api/run/rlt-config');
         if (resp.ok) {
             const cfg = await resp.json();
+            sessionActive = !!cfg.active;
+            serverDiag = !!cfg.dump_chunks;
             if (betaSlider && typeof cfg.beta === 'number') {
                 betaSlider.value = cfg.beta;
                 if (betaVal) betaVal.textContent = cfg.beta.toFixed(2);
@@ -1975,13 +2027,28 @@ async function _initRLTSliders() {
                 sigmaSlider.value = cfg.exploration_sigma;
                 if (sigmaVal) sigmaVal.textContent = cfg.exploration_sigma.toFixed(3);
             }
-            if (diagBtn) {
-                const on = !!cfg.dump_chunks;
-                diagBtn.classList.toggle('active', on);
-                diagBtn.textContent = on ? 'Diagnostic: ON' : 'Diagnostic: OFF';
-            }
         }
     } catch (e) { /* backend unreachable — keep HTML defaults */ }
+    _setRLTSlidersEnabled(sessionActive);
+
+    // Resolve diag state. Without a stored pref the button mirrors the
+    // server (or HTML default OFF when no session). With a stored pref,
+    // that's the user's intent and wins. If a session is active and the
+    // pref differs from what the server is currently applying, sync the
+    // pref to the backend now — this is how toggles staged before the
+    // run actually take effect when the run starts.
+    const havePref = localStorage.getItem(_RLT_DIAG_PREF_KEY) !== null;
+    const desired = havePref ? _readDiagPref() : serverDiag;
+    _applyDiagBtnVisual(desired, sessionActive);
+    if (sessionActive && havePref && desired !== serverDiag) {
+        try {
+            await fetch('/api/run/rlt-config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({dump_chunks: desired}),
+            });
+        } catch (e) { /* will retry on next click */ }
+    }
 
     if (betaSlider) {
         betaSlider.oninput = () => {
@@ -2009,15 +2076,36 @@ async function _initRLTSliders() {
             // this toggle, flipping the diagnostic flag on every intervention.
             diagBtn.blur();
             const on = !diagBtn.classList.contains('active');
-            diagBtn.classList.toggle('active', on);
-            diagBtn.textContent = on ? 'Diagnostic: ON' : 'Diagnostic: OFF';
+            // Persist intent BEFORE the POST so a refresh / crash mid-flight
+            // still preserves the user's choice. The POST is best-effort.
+            _writeDiagPref(on);
+            // Single POST. The server's 409 is the source of truth for
+            // "no active session" — no separate probe GET to race with the
+            // POST or to delay the click feedback. 409 → stage; 200 → live.
+            let live = false;
             try {
-                await fetch('/api/run/rlt-config', {
+                const resp = await fetch('/api/run/rlt-config', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({dump_chunks: on}),
                 });
-            } catch (e) { /* ignore */ }
+                if (resp.status === 409) {
+                    // No active session — preference is staged locally and
+                    // will auto-apply at the start of the next run via
+                    // _initRLTSliders. Silent (no toast) since this is the
+                    // documented sticky-pref path, not an error.
+                    live = false;
+                } else if (resp.ok) {
+                    live = true;
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast('Diagnostic toggle failed',
+                              err.detail || resp.statusText, 'error');
+                }
+            } catch (e) {
+                showToast('Diagnostic toggle failed', e.message, 'error');
+            }
+            _applyDiagBtnVisual(on, live);
         };
     }
 }
