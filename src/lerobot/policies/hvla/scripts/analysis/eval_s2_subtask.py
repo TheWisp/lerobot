@@ -4,7 +4,7 @@ Runs S2 with subtask_only=True on each frame, AR-decodes the subtask text,
 and compares to ground truth subtask labels from the dataset.
 
 Usage:
-    python scripts/hvla_analysis/eval_s2_subtask.py \
+    python src/lerobot/policies/hvla/scripts/analysis/eval_s2_subtask.py \
         --checkpoint ~/.cache/lerobot/converted/soarm-pi05-fast-7998-pytorch/model.safetensors \
         --dataset-dir /home/feit/.cache/huggingface/lerobot/thewisp/cylinder_ring_assembly \
         --task "assemble cylinder into ring" \

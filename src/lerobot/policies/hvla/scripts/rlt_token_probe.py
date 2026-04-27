@@ -18,7 +18,7 @@ training time), and reports relative reconstruction error:
 >10% → retrain Phase 1 from scratch before starting fresh Phase 2.
 
 Usage:
-    python scripts/rlt_token_probe.py \\
+    python src/lerobot/policies/hvla/scripts/rlt_token_probe.py \\
         --s1-checkpoint outputs/flow_s1_hvla_v6/checkpoint-40000 \\
         --rl-token-checkpoint outputs/rlt_token/latest/rl_token.pt \\
         --dataset thewisp/cylinder_ring_assembly \\

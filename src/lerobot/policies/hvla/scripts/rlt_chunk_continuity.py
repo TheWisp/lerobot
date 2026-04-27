@@ -30,7 +30,7 @@ Check 2 — RLT slice + prefix sourcing (RLT-specific).
     wrote at [0:C] need ``--legacy-actor-at-zero``).
 
 Usage:
-    python scripts/rlt_chunk_continuity.py outputs/rlt_online_v2_widened/chunk_compare.jsonl
+    python src/lerobot/policies/hvla/scripts/rlt_chunk_continuity.py outputs/rlt_online_v2_widened/chunk_compare.jsonl
 """
 from __future__ import annotations
 

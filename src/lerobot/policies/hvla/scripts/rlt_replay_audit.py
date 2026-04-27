@@ -7,7 +7,7 @@ Answers questions like:
   - What does the critic predict on a sample of transitions?
 
 Usage:
-    python scripts/rlt_replay_audit.py outputs/rlt_online_v2_widened/latest
+    python src/lerobot/policies/hvla/scripts/rlt_replay_audit.py outputs/rlt_online_v2_widened/latest
 """
 from __future__ import annotations
 

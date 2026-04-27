@@ -23,7 +23,7 @@ This saves robot state, action chunk, and camera images whenever a gripper jump 
 **Step 2: Analyze drops**
 
 ```bash
-python scripts/hvla_analysis/analyze_grip_drops.py \
+python src/lerobot/policies/hvla/scripts/analysis/analyze_grip_drops.py \
     --drop-dir /tmp/grip_drops_fresh \
     --checkpoint outputs/flow_s1_hvla_v6/checkpoint-40000/model.safetensors \
     --num-nearest 20 \

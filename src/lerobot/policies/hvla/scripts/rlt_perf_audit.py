@@ -10,8 +10,8 @@ real-time budget — especially when changing the RL token encoder
 size or the S1 backbone.
 
 Usage:
-    python scripts/rlt_perf_audit.py outputs/rlt_online_v2_widened
-    python scripts/rlt_perf_audit.py outputs/rlt_online_v2_widened --budget-ms 200
+    python src/lerobot/policies/hvla/scripts/rlt_perf_audit.py outputs/rlt_online_v2_widened
+    python src/lerobot/policies/hvla/scripts/rlt_perf_audit.py outputs/rlt_online_v2_widened --budget-ms 200
 
 Prints to stdout; no side effects.
 """

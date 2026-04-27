@@ -10,7 +10,7 @@
 # ``experiment_log.txt`` when you come back.
 #
 # Usage:
-#   nohup bash scripts/rlt_arch_experiment.sh > /dev/null 2>&1 &
+#   nohup bash src/lerobot/policies/hvla/scripts/rlt_arch_experiment.sh > /dev/null 2>&1 &
 #   tail -f outputs/rlt_token_v3_4layer/experiment_log.txt
 
 set -u
@@ -128,7 +128,7 @@ while kill -0 "$TRAIN_PID" 2>/dev/null; do
         [ -f "$ckpt/encoder.pt" ] && [ -f "$ckpt/decoder.pt" ] && [ -f "$ckpt/config.json" ] || continue
 
         log "probing checkpoint-$step ..."
-        probe_out=$(timeout 180 python scripts/rlt_token_probe.py \
+        probe_out=$(timeout 180 python src/lerobot/policies/hvla/scripts/rlt_token_probe.py \
             --s1-checkpoint "$S1_CKPT" \
             --rl-token-checkpoint "$ckpt" \
             --dataset "$DATASET" \
@@ -177,7 +177,7 @@ for ckpt in "$OUTPUT_DIR"/checkpoint-*; do
     [[ " $probed " == *" $step "* ]] && continue
     [ -f "$ckpt/encoder.pt" ] && [ -f "$ckpt/decoder.pt" ] && [ -f "$ckpt/config.json" ] || continue
     log "probing checkpoint-$step (post-training final sweep) ..."
-    probe_out=$(timeout 180 python scripts/rlt_token_probe.py \
+    probe_out=$(timeout 180 python src/lerobot/policies/hvla/scripts/rlt_token_probe.py \
         --s1-checkpoint "$S1_CKPT" \
         --rl-token-checkpoint "$ckpt" \
         --dataset "$DATASET" \

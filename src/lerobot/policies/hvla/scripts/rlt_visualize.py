@@ -28,7 +28,7 @@ Diagnostic plots (bottom row):
      newest) do +1 and -1 anchors live?
 
 Usage:
-    python scripts/rlt_visualize.py outputs/rlt_online_v2_widened/latest
+    python src/lerobot/policies/hvla/scripts/rlt_visualize.py outputs/rlt_online_v2_widened/latest
 
 Optional --tsne-perplexity (default 30), --max-mid-episode N (cap the
 mid-episode points so terminal markers don't get visually drowned).

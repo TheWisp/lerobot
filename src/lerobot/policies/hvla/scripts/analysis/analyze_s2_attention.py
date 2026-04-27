@@ -6,7 +6,7 @@ Three analyses:
   3. Encoder self-attention: how much image/state tokens attend to S2 inside obs_encoder
 
 Usage:
-    python scripts/hvla_analysis/analyze_s2_attention.py \
+    python src/lerobot/policies/hvla/scripts/analysis/analyze_s2_attention.py \
         --s1-checkpoint outputs/flow_s1_hvla_v7/checkpoint-50000 \
         --s2-latents-dir outputs/s2_latents_fast7998 \
         --device cuda

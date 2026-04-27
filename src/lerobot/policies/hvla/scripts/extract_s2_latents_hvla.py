@@ -5,7 +5,7 @@ Calls lerobot.policies.hvla.s2.S2VLMModel directly — no WebSocket server,
 no OpenPI imports.
 
 Usage:
-    python scripts/extract_s2_latents_hvla.py \
+    python src/lerobot/policies/hvla/scripts/extract_s2_latents_hvla.py \
         --checkpoint /path/to/pi05_checkpoint/model.safetensors \
         --dataset thewisp/cylinder_ring_assembly \
         --prompt "assemble cylinder into ring" \

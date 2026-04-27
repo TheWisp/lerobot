@@ -23,8 +23,8 @@ Standard format (after migration):
             last -> checkpoint-50000
 
 Usage:
-    python scripts/hvla_migrate_checkpoints.py outputs/flow_s1_hvla_v7
-    python scripts/hvla_migrate_checkpoints.py outputs/flow_s1_hvla_v7 --dry-run
+    python src/lerobot/policies/hvla/scripts/hvla_migrate_checkpoints.py outputs/flow_s1_hvla_v7
+    python src/lerobot/policies/hvla/scripts/hvla_migrate_checkpoints.py outputs/flow_s1_hvla_v7 --dry-run
 """
 
 import argparse
