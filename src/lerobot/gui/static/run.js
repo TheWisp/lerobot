@@ -949,8 +949,8 @@ function renderRunForm() {
     html += `<option value="__new__">+ New training...</option>`;
     html += `</select>`;
     // Fields shown when New is selected
-    html += `<label id="run-hvla-rlt-token-label" style="display:none">RL Token Encoder</label>`;
-    html += `<input type="text" id="run-hvla-rlt-token-ckpt" placeholder="outputs/rlt_token_v4_4layer_d2048/checkpoint-10000" style="display:none">`;
+    html += `<label id="run-hvla-rlt-token-label" style="display:none">RL Token Encoder <span style="color:#d33">*</span></label>`;
+    html += `<input type="text" id="run-hvla-rlt-token-ckpt" placeholder="outputs/rlt_token_v4_4layer_d2048/checkpoint-10000" style="display:none" title="Required: path to the trained Phase-1 RL token encoder checkpoint dir (containing encoder.pt + config.json). The actor's input dim depends on this — wrong / missing means a state_dict size mismatch crash on load.">`;
     html += `<label id="run-hvla-rlt-outdir-label" style="display:none">Output Directory</label>`;
     html += `<input type="text" id="run-hvla-rlt-output-dir" value="outputs/rlt_online" style="display:none">`;
     // Experimental knobs (NEW training only — launch-time, not runtime-tunable).
@@ -1220,6 +1220,28 @@ async function launchRun() {
             if (!hvlaTask) {
                 showToast('Error', 'Task prompt is required for HVLA', 'error');
                 return;
+            }
+            // Validate the RL Token Encoder field whenever RLT mode is selected
+            // (NEW or any existing checkpoint). The actor's input dim depends
+            // on the encoder's rl_token_dim; missing → state_dict size mismatch
+            // crash on actor.pt load.
+            {
+                const rltSelEl = document.getElementById('run-hvla-rlt-select');
+                const rltSelVal = rltSelEl?.value || '';
+                if (rltSelVal) {
+                    const tokenCkpt = document.getElementById('run-hvla-rlt-token-ckpt')?.value?.trim();
+                    if (!tokenCkpt) {
+                        showToast(
+                            'Error',
+                            'RL Token Encoder is required when RLT is enabled. ' +
+                            'Set it to the trained Phase-1 encoder dir ' +
+                            '(e.g. outputs/rlt_token_v4_4layer_d2048/checkpoint-10000).',
+                            'error',
+                        );
+                        document.getElementById('run-hvla-rlt-token-ckpt')?.focus();
+                        return;
+                    }
+                }
             }
             const recordDs = document.getElementById('run-hvla-record-dataset')?.value?.trim() || null;
             const intDs = document.getElementById('run-hvla-intervention-dataset')?.value?.trim() || null;

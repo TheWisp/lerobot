@@ -691,3 +691,71 @@ class TestGetRltConfig:
         reset_active._active_config = {"rlt_output_dir": str(tmp_path)}
         cfg = asyncio.run(get_rlt_config())
         assert cfg["beta"] == RLTConfig().beta
+
+
+# ============================================================================
+# RLT mode requires the RL Token Encoder. Caught at the API boundary so a
+# missing field never makes it to the subprocess (where it would crash deep
+# inside actor.pt state_dict load with a size mismatch). See incident
+# 9bf49910f / launch attempt of rlt_online_v2_widened on 2026-04-27.
+# ============================================================================
+
+class TestHvlaRltTokenRequired:
+    """rlt_mode=True without rlt_token_checkpoint must be rejected at the
+    API boundary with a helpful 400, not silently passed through."""
+
+    def _make_request_kwargs(self, **overrides):
+        """Minimum HVLARunRequest kwargs to exercise the validation path.
+        Real launches need more; the rejection fires before any of it
+        matters."""
+        base = {
+            "robot": _ROBOT,
+            "s1_checkpoint": "/tmp/fake_s1",
+            "task": "assemble cylinder into ring",
+            "fps": 30,
+            "rlt_mode": True,
+        }
+        base.update(overrides)
+        return base
+
+    def test_missing_token_checkpoint_raises_400(self):
+        from lerobot.gui.api.run import HVLARunRequest, start_hvla
+        req = HVLARunRequest(**self._make_request_kwargs())
+        with patch("lerobot.gui.api.run._active_process", None), \
+                pytest.raises(HTTPException) as excinfo:
+            asyncio.run(start_hvla(req))
+        assert excinfo.value.status_code == 400
+        # Must be actionable — name the field and the recipe
+        msg = str(excinfo.value.detail)
+        assert "rlt_token_checkpoint" in msg
+        assert "RL Token Encoder" in msg
+
+    def test_blank_token_checkpoint_raises_400(self):
+        """Empty string must be treated the same as None — JS may send
+        '' from a never-filled field."""
+        from lerobot.gui.api.run import HVLARunRequest, start_hvla
+        req = HVLARunRequest(**self._make_request_kwargs(
+            rlt_token_checkpoint="   "  # whitespace only
+        ))
+        with patch("lerobot.gui.api.run._active_process", None), \
+                pytest.raises(HTTPException) as excinfo:
+            asyncio.run(start_hvla(req))
+        assert excinfo.value.status_code == 400
+
+    def test_rlt_disabled_does_not_require_token(self):
+        """When rlt_mode=False, the token field is irrelevant — must
+        not be enforced (regression guard so the validation doesn't
+        leak into normal HVLA runs)."""
+        from lerobot.gui.api.run import HVLARunRequest, start_hvla
+        captured_args = []
+        req = HVLARunRequest(**self._make_request_kwargs(
+            rlt_mode=False,
+            rlt_token_checkpoint=None,
+        ))
+        with patch("lerobot.gui.api.run._active_process", None), \
+                patch("lerobot.gui.api.run._launch_subprocess",
+                      _make_fake_launch(captured_args)):
+            asyncio.run(start_hvla(req))
+        # Reached the launch path, no rejection
+        assert any("--rlt-mode" not in a for a in captured_args)
+        assert "--rlt-mode" not in captured_args

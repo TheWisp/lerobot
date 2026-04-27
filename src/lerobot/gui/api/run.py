@@ -629,9 +629,20 @@ async def start_hvla(req: HVLARunRequest) -> dict:
 
     # RLT
     if req.rlt_mode:
+        # Refuse to launch without an explicit RL Token Encoder. Every other
+        # path tried — silent warning + actor.pt load → state_dict size
+        # mismatch crash deep inside model construction. Fail fast at the
+        # request boundary instead.
+        if not req.rlt_token_checkpoint or not str(req.rlt_token_checkpoint).strip():
+            raise HTTPException(
+                400,
+                "rlt_token_checkpoint is required when rlt_mode is True. "
+                "Set the 'RL Token Encoder' field to a trained Phase-1 "
+                "encoder dir (e.g. outputs/rlt_token_v4_4layer_d2048/"
+                "checkpoint-10000). The actor's input dim depends on it.",
+            )
         args.append("--rlt-mode")
-        if req.rlt_token_checkpoint:
-            args.append(f"--rl-token-checkpoint={Path(req.rlt_token_checkpoint).expanduser()}")
+        args.append(f"--rl-token-checkpoint={Path(req.rlt_token_checkpoint).expanduser()}")
         if req.rlt_checkpoint:
             args.append(f"--rlt-checkpoint={Path(req.rlt_checkpoint).expanduser()}")
         if req.rlt_deploy:

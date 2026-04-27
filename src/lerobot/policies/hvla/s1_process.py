@@ -647,12 +647,24 @@ def run_s1(
         )
 
         # Resolve RL token encoder checkpoint:
-        # 1. Explicit --rl-token-checkpoint
-        # 2. Saved in training_state.pt of the RLT checkpoint
-        # 3. None (encoder stays random — won't work, but doesn't crash)
+        # 1. Explicit --rl-token-checkpoint (required by the GUI/API)
+        # 2. Auto-discovered from training_state.pt of the RLT checkpoint
+        #    (legacy escape hatch — only fires when the user passes an RLT
+        #    checkpoint via CLI without --rl-token-checkpoint)
+        # 3. Hard error — refuse to silently build a random encoder. The
+        #    actor's input dim depends on the encoder's rl_token_dim, so
+        #    a missing token checkpoint would let the actor build at the
+        #    default 768 dim and then crash with a state_dict size mismatch
+        #    during actor.pt load. Fail fast with an actionable message.
         resolved_token_ckpt = rl_token_checkpoint
         if not resolved_token_ckpt and rlt_checkpoint:
-            ts_path = Path(rlt_checkpoint) / "training_state.pt"
+            # Mirror the load_dir resolution below: if rlt_checkpoint is a
+            # run dir (no actor.pt at the top), look inside latest/.
+            ts_search_dir = Path(rlt_checkpoint)
+            if not (ts_search_dir / "training_state.pt").exists() \
+                    and (ts_search_dir / "latest" / "training_state.pt").exists():
+                ts_search_dir = ts_search_dir / "latest"
+            ts_path = ts_search_dir / "training_state.pt"
             if ts_path.exists():
                 try:
                     ts = torch.load(str(ts_path), weights_only=False, map_location=device)
@@ -661,33 +673,40 @@ def run_s1(
                         logger.info("RLT: Auto-discovered token encoder from checkpoint: %s", resolved_token_ckpt)
                 except Exception as e:
                     logger.warning("RLT: Failed to read token path from training state: %s", e)
+        if not resolved_token_ckpt:
+            raise RuntimeError(
+                "RLT mode requires an RL Token Encoder checkpoint. Pass "
+                "--rl-token-checkpoint=<path-to-encoder-dir> on the CLI "
+                "(or fill the 'RL Token Encoder' field in the GUI). "
+                "Example: outputs/rlt_token_v4_4layer_d2048/checkpoint-10000. "
+                "Without it the encoder would be random and the actor would "
+                "be built at the default rl_token_dim=768, crashing on "
+                "state_dict load whenever the saved actor uses a different "
+                "(e.g. widened) dim."
+            )
 
-        # Apply the trained checkpoint's architecture manifest (if any)
-        # BEFORE instantiating the encoder — otherwise state_dict load
-        # fails when the checkpoint was trained with a non-default arch
-        # (e.g. --encoder-layers 4). Legacy checkpoints with no
-        # config.json fall back to the RLTConfig defaults above.
-        if resolved_token_ckpt:
-            ckpt_path = Path(resolved_token_ckpt)
-            ckpt_dir = ckpt_path if ckpt_path.is_dir() else ckpt_path.parent
-            rlt_config = load_rlt_token_config(ckpt_dir, base=rlt_config)
+        # Apply the trained checkpoint's architecture manifest BEFORE
+        # instantiating the encoder — state_dict load fails otherwise
+        # when the checkpoint was trained with a non-default arch (e.g.
+        # widened d=2048). ``load_rlt_token_config`` raises if no
+        # config.json is present (the deprecated 2L d=768 family).
+        ckpt_path = Path(resolved_token_ckpt)
+        ckpt_dir = ckpt_path if ckpt_path.is_dir() else ckpt_path.parent
+        rlt_config = load_rlt_token_config(ckpt_dir, base=rlt_config)
 
         rl_token_encoder = RLTokenEncoder(rlt_config).to(device)
 
-        if resolved_token_ckpt:
-            enc_file = ckpt_path / "encoder.pt" if ckpt_path.is_dir() else ckpt_path
-            rl_token_encoder.load_state_dict(
-                torch.load(str(enc_file), weights_only=True, map_location=device)
-            )
-            logger.info(
-                "S1 RLT: Loaded RL token encoder from %s "
-                "(enc_layers=%d dec_layers=%d)",
-                enc_file,
-                rlt_config.token_encoder_layers,
-                rlt_config.token_decoder_layers,
-            )
-        else:
-            logger.warning("RLT: No RL token encoder checkpoint — z_rl will be random (unusable)")
+        enc_file = ckpt_path / "encoder.pt" if ckpt_path.is_dir() else ckpt_path
+        rl_token_encoder.load_state_dict(
+            torch.load(str(enc_file), weights_only=True, map_location=device)
+        )
+        logger.info(
+            "S1 RLT: Loaded RL token encoder from %s "
+            "(enc_layers=%d dec_layers=%d)",
+            enc_file,
+            rlt_config.token_encoder_layers,
+            rlt_config.token_decoder_layers,
+        )
         rl_token_encoder.eval()
         for p in rl_token_encoder.parameters():
             p.requires_grad = False
