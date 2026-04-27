@@ -955,8 +955,8 @@ function renderRunForm() {
     html += `<input type="text" id="run-hvla-rlt-output-dir" value="outputs/rlt_online" style="display:none">`;
     // Experimental knobs (NEW training only — launch-time, not runtime-tunable).
     // Architectural choices baked into the run rather than mid-training tuning.
-    html += `<label id="run-hvla-rlt-shared-noise-label" style="display:none" title="Sample exploration noise once per chunk and broadcast across C frames. Smoother joint commands than per-frame iid noise. Set at launch time only — flipping mid-training mixes noise distributions in the replay buffer.">Shared noise per chunk (experimental)</label>`;
-    html += `<input type="checkbox" id="run-hvla-rlt-shared-noise" style="display:none" title="Sample exploration noise once per chunk and broadcast across C frames. Smoother joint commands than per-frame iid noise. Set at launch time only — flipping mid-training mixes noise distributions in the replay buffer.">`;
+    html += `<label id="run-hvla-rlt-shared-noise-label" style="display:none" title="Sample exploration noise once per chunk and broadcast across C frames. Smoother joint commands than per-frame iid noise. Default ON after v2_widened ep101→120 A/B (autonomous +10pp). Uncheck to A/B back to per-frame iid noise — flipping mid-training mixes noise distributions in the replay buffer for ~10 episodes.">Shared noise per chunk</label>`;
+    html += `<input type="checkbox" id="run-hvla-rlt-shared-noise" checked style="display:none" title="Sample exploration noise once per chunk and broadcast across C frames. Smoother joint commands than per-frame iid noise. Default ON after v2_widened ep101→120 A/B (autonomous +10pp). Uncheck to A/B back to per-frame iid noise — flipping mid-training mixes noise distributions in the replay buffer for ~10 episodes.">`;
     // Fields shown when existing checkpoint selected
     html += `<label id="run-hvla-rlt-mode-label" style="display:none">Mode</label>`;
     html += `<select id="run-hvla-rlt-run-mode" style="display:none" onchange="_onRltSelectChange()">`;

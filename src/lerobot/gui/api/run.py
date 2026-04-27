@@ -172,7 +172,7 @@ class HVLARunRequest(BaseModel):
     rlt_chunk_length: int = 10
     rlt_output_dir: str = "outputs/rlt_online"
     rlt_start_engaged: bool = True
-    rlt_shared_noise_per_chunk: bool = False  # experimental: launch-time only
+    rlt_shared_noise_per_chunk: bool = True  # default after v2_widened A/B
 
 
 # ============================================================================

@@ -455,30 +455,42 @@ class TestQExplosionDefenses:
         std = noise[:, 0, :].std().item()
         assert abs(std - 0.1) < 0.03, f"shared noise std={std:.3f}, expected ~0.1"
 
-    def test_default_noise_mode_is_per_frame(self, config, device):
-        """Backward-compat: with the default config, per-frame iid
-        noise must still be active (the legacy behavior). A regression
-        that quietly turns this on by default would silently change
-        the action distribution for every existing run."""
-        # Don't set shared_noise_per_chunk — must default to False
+    def test_default_noise_mode_is_shared_per_chunk(self, config, device):
+        """Bare RLTConfig() must default to shared-noise mode after the
+        v2_widened ep101→120 A/B confirmed it improves smoothness without
+        Q regression. A regression that flips this back to per-frame
+        would silently re-introduce within-chunk jitter — locked in
+        explicitly."""
+        # Don't pass shared_noise_per_chunk to RLTConfig; the fixture
+        # also doesn't set it. We rely on the dataclass default.
+        from lerobot.policies.hvla.rlt.config import RLTConfig
+        assert RLTConfig().shared_noise_per_chunk is True
+        # Smoke check: the fixture's config still inherits the default
+        # because TestQExplosionDefenses' RLTConfig() construction
+        # doesn't override this knob.
+        assert config.shared_noise_per_chunk is True
+
+    def test_per_frame_mode_can_be_re_enabled_for_ab(self, config, device):
+        """The False path is the A/B comparison knob — it must still
+        work end-to-end so we can roll back if shared-mode regresses
+        on a new task / robot / action representation."""
+        config.exploration_sigma = 0.1
+        config.shared_noise_per_chunk = False
         agent = TD3Agent(config, S, A, device)
-        assert agent.config.shared_noise_per_chunk is False
 
         b = 32
         z = torch.randn(b, D, device=device)
         s = torch.randn(b, S, device=device)
         ref = torch.randn(b, C, A, device=device)
-
         with torch.no_grad():
             mu = agent.actor.mean(z, s, ref)
             sampled = agent.actor(z, s, ref, deterministic=False)
             noise = sampled - mu
         ref_frame = noise[:, 0:1, :]
         diff = (noise - ref_frame).abs().max().item()
-        # Per-frame noise → adjacent frames must differ noticeably
         assert diff > 0.001, (
-            f"Per-frame iid noise should produce within-chunk variation, "
-            f"but got max diff={diff}. Did the default flip to shared?"
+            f"Per-frame iid noise (shared=False) should produce within-"
+            f"chunk variation, but got max diff={diff}."
         )
 
     def test_target_smoothing_ignores_shared_noise_flag(self, config, device):
