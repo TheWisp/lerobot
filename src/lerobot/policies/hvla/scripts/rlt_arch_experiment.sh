@@ -11,11 +11,16 @@
 #
 # Usage:
 #   nohup bash src/lerobot/policies/hvla/scripts/rlt_arch_experiment.sh > /dev/null 2>&1 &
-#   tail -f outputs/rlt_token_v3_4layer/experiment_log.txt
+#   tail -f $OUTPUT_DIR/experiment_log.txt
+#
+# Canonical run from this script: outputs/rlt_token_v4_4layer_d2048
+# (4-layer encoder/decoder, d=2048; 24.9% reconstruction relative error).
+# Set OUTPUT_DIR explicitly for any subsequent experiment so v4 is
+# preserved.
 
 set -u
 
-OUTPUT_DIR=${OUTPUT_DIR:-outputs/rlt_token_v3_4layer}
+OUTPUT_DIR=${OUTPUT_DIR:-outputs/rlt_token_v5_next}
 S1_CKPT=${S1_CKPT:-/home/feit/Documents/lerobot/outputs/flow_s1_no_s2_v1/checkpoints/last/pretrained_model}
 DATASET=${DATASET:-thewisp/cylinder_ring_assembly}
 STEPS=${STEPS:-10000}

@@ -1,16 +1,24 @@
 """Phase 1: Offline RL token encoder-decoder training on demo data.
 
-Trains the RL token to compress S1's observation encoder output into a single
-768-dim vector that retains enough information to reconstruct the original
-context tokens. The frozen S1 provides the context; only the encoder-decoder
-parameters (phi) are trained.
+Trains the RL token to compress S1's observation encoder output into a
+fixed-dim vector (default 768; pair ``--rl-token-dim 2048`` with the
+4-layer encoder for the paper-style widened bottleneck) that retains
+enough information to reconstruct the original context tokens. The
+frozen S1 provides the context; only the encoder-decoder parameters
+(phi) are trained.
+
+Current canonical checkpoint: ``outputs/rlt_token_v4_4layer_d2048``
+(4-layer encoder/decoder, d=2048, 24.9% reconstruction relative
+error). See ``src/lerobot/policies/hvla/scripts/rlt_arch_experiment.sh``
+for the architecture comparison that produced it.
 
 Usage:
     python -m lerobot.policies.hvla.rlt.train_token \
         --s1-checkpoint outputs/flow_s1_no_s2_v1/checkpoints/last/pretrained_model/model.safetensors \
         --dataset-repo-id thewisp/cylinder_ring_assembly \
-        --output-dir outputs/rlt_token_v1 \
-        --steps 5000
+        --output-dir outputs/rlt_token_v5 \
+        --encoder-layers 4 --decoder-layers 4 --rl-token-dim 2048 \
+        --steps 10000
 """
 
 from __future__ import annotations

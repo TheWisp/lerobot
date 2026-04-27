@@ -749,8 +749,8 @@ class TestTokenCheckpointManifest:
         assert loaded.rl_token_dim == 512
 
     def test_missing_manifest_returns_defaults(self, tmp_path):
-        """Legacy checkpoints that predate config.json (like the ones
-        currently at outputs/rlt_token_v2/checkpoint-10000) must still load,
+        """Legacy checkpoints that predate the architecture manifest
+        (anything before the widened-bottleneck rollout) must still load,
         assumed to use the default 2-layer architecture."""
         # tmp_path is empty — no config.json
         loaded = load_rlt_token_config(tmp_path)
