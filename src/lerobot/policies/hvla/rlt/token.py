@@ -53,19 +53,30 @@ def load_rlt_token_config(
     base: RLTConfig | None = None,
 ) -> RLTConfig:
     """Return an ``RLTConfig`` whose shape fields match the saved
-    checkpoint. Falls back to ``base`` (or defaults) for checkpoints
-    without a ``config.json`` — those predate the manifest and are
-    assumed to use the default 2-layer architecture.
+    checkpoint. Reads the architecture manifest from
+    ``{ckpt_dir}/config.json``. Any non-shape fields on ``base`` are
+    preserved — callers supply a config already populated with runtime
+    fields (lr, beta, sigma) and the manifest only overrides
+    shape-affecting fields.
 
-    Any non-shape fields on ``base`` are preserved, so callers can
-    supply a config already populated with e.g. the runtime
-    ``rl_token_dim`` matching the live S1 policy; the manifest only
-    overrides shape-affecting fields.
+    Raises ``FileNotFoundError`` when no manifest is present. Legacy
+    checkpoints from the deprecated 2L d=768 architecture predate the
+    manifest format and are no longer supported — retrain with the
+    canonical 4L d=2048 recipe (see ``train_token.py`` docstring) or
+    add a ``config.json`` by hand if you really need the old arch.
     """
     cfg = base if base is not None else RLTConfig()
     config_path = Path(ckpt_dir) / "config.json"
     if not config_path.exists():
-        return cfg
+        raise FileNotFoundError(
+            f"No architecture manifest at {config_path}. Pre-manifest "
+            f"checkpoints (the deprecated 2L d=768 family) are no longer "
+            f"loadable. Retrain the token encoder with the canonical 4L "
+            f"d=2048 recipe (`python -m lerobot.policies.hvla.rlt."
+            f"train_token --encoder-layers 4 --decoder-layers 4 "
+            f"--rl-token-dim 2048 ...`) or write a config.json with the "
+            f"saved architecture's shape fields."
+        )
     arch = json.loads(config_path.read_text())
     for k, v in arch.items():
         if k in _SHAPE_FIELDS and hasattr(cfg, k):

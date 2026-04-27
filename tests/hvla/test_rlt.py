@@ -748,15 +748,27 @@ class TestTokenCheckpointManifest:
         assert loaded.token_ffn_dim == 1024
         assert loaded.rl_token_dim == 512
 
-    def test_missing_manifest_returns_defaults(self, tmp_path):
-        """Legacy checkpoints that predate the architecture manifest
-        (anything before the widened-bottleneck rollout) must still load,
-        assumed to use the default 2-layer architecture."""
+    def test_missing_manifest_raises_with_actionable_message(self, tmp_path):
+        """Pre-manifest checkpoints (the deprecated 2L d=768 family) used
+        to be loaded silently against the live RLTConfig defaults. With
+        the canonical defaults shifted to 4L d=2048, that silent fallback
+        would mis-load legacy checkpoints as the new architecture and
+        produce a tensor shape mismatch deep inside model construction.
+        Refusing up front with an actionable message is safer."""
         # tmp_path is empty — no config.json
-        loaded = load_rlt_token_config(tmp_path)
-        defaults = RLTConfig()
-        assert loaded.token_encoder_layers == defaults.token_encoder_layers == 2
-        assert loaded.token_decoder_layers == defaults.token_decoder_layers == 2
+        with pytest.raises(FileNotFoundError, match="No architecture manifest"):
+            load_rlt_token_config(tmp_path)
+
+    def test_missing_manifest_error_mentions_retrain_recipe(self, tmp_path):
+        """Operators hitting this error need to know exactly how to
+        recover — point them at the canonical retraining recipe so they
+        don't have to dig through commit history. Locks the message text
+        in so a refactor doesn't drop the recipe."""
+        with pytest.raises(FileNotFoundError) as excinfo:
+            load_rlt_token_config(tmp_path)
+        msg = str(excinfo.value)
+        assert "4L" in msg or "encoder-layers 4" in msg
+        assert "2048" in msg
 
     def test_base_preserves_non_shape_fields(self, tmp_path):
         """The loader should only override SHAPE fields, leaving runtime

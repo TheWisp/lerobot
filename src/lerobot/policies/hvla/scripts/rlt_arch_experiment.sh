@@ -27,53 +27,35 @@ STEPS=${STEPS:-10000}
 SAVE_FREQ=${SAVE_FREQ:-1000}
 ENC_LAYERS=${ENC_LAYERS:-4}
 DEC_LAYERS=${DEC_LAYERS:-4}
-# 4-layer enc/dec at batch=64 OOMs on a 32GB 5090 (activations + grads
-# ~28GB). Halve to batch=32 to fit. Different per-sample gradient variance
-# than the 2-layer batch=64 baseline, but the relative trend of
-# "does depth help?" is preserved for the early-stop decision.
-BATCH_SIZE=${BATCH_SIZE:-32}
-# Widened bottleneck (paper spec: 2048). When unset, we train at
-# whatever S1's hidden_dim is (symmetric, fits in RLTConfig default).
-# When set, the encoder gains input/output projections; memory scales
-# with d^2, so pair with a smaller BATCH_SIZE (e.g. 8-16 for d=2048).
-RL_TOKEN_DIM=${RL_TOKEN_DIM:-}
+# Default canonical: 4-layer enc/dec, d=2048 bottleneck. At this size
+# batch=64 OOMs on a 32GB 5090 even at the narrower d=768; d=2048
+# memory scales with d^2 again. batch=16 fits.
+BATCH_SIZE=${BATCH_SIZE:-16}
+# Widened bottleneck (paper spec: 2048) — now the canonical default.
+# Encoder gets an input projection (S1 hidden_dim → 2048) and decoder
+# the matching output projection. Override to "" or 768 to retrain a
+# narrower variant; pair with a larger BATCH_SIZE.
+RL_TOKEN_DIM=${RL_TOKEN_DIM:-2048}
 # PyTorch allocator: reduces fragmentation-OOMs on long training runs.
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
-# Reference curve for "previous best arch we're trying to beat".
-# - If you set BASELINE=4L in the env, compares against the 4-layer d=768
-#   run (when measuring the widened-bottleneck experiment).
-# - If BASELINE=2L (or unset), compares against the original 2-layer run.
-# Early-stop threshold is derived from whichever curve is active.
-BASELINE=${BASELINE:-2L}
+# Reference curve = "previous best arch we're trying to beat", used
+# by the early-stop logic. Single canonical curve: 4-layer d=2048
+# (outputs/rlt_token_v4_4layer_d2048/, 24.9% relative recon error at
+# 10k steps). The deprecated 2L d=768 and 4L d=768 baselines were
+# removed when the widened arch became canonical — to compare against
+# them again, recover the curves from git history.
 declare -A BASELINE_CURVE
-case "$BASELINE" in
-    2L)
-        BASELINE_CURVE[1000]=50.9
-        BASELINE_CURVE[2000]=48.0  # interpolated
-        BASELINE_CURVE[3000]=45.0
-        BASELINE_CURVE[5000]=41.4
-        BASELINE_CURVE[7000]=39.1
-        BASELINE_CURVE[10000]=36.4
-        EARLY_STOP_DEFAULT=45.0   # beat 2L @ 3k by step 2000
-        ;;
-    4L)
-        # From the 4-layer d=768 run (outputs/rlt_token_v3_4layer/).
-        BASELINE_CURVE[1000]=50.6
-        BASELINE_CURVE[2000]=44.1
-        BASELINE_CURVE[3000]=40.3
-        BASELINE_CURVE[4000]=37.1
-        BASELINE_CURVE[5000]=35.3
-        BASELINE_CURVE[6000]=32.7
-        BASELINE_CURVE[7000]=30.8
-        BASELINE_CURVE[9000]=29.4
-        BASELINE_CURVE[10000]=29.8
-        EARLY_STOP_DEFAULT=40.0   # beat 4L @ 3k by step 2000 (44->40 is a real lead)
-        ;;
-    *)
-        echo "BASELINE must be 2L or 4L, got $BASELINE" >&2
-        exit 2
-        ;;
-esac
+BASELINE_CURVE[1000]=45.7
+BASELINE_CURVE[2000]=37.8
+BASELINE_CURVE[3000]=32.9
+BASELINE_CURVE[4000]=30.7
+BASELINE_CURVE[5000]=30.1
+BASELINE_CURVE[6000]=28.3
+BASELINE_CURVE[7000]=27.0
+BASELINE_CURVE[8000]=26.8
+BASELINE_CURVE[9000]=26.0
+BASELINE_CURVE[10000]=24.9
+EARLY_STOP_DEFAULT=35.0   # beat canonical @ 3k (32.9%) by step 2000
 EARLY_STOP_STEP=2000
 EARLY_STOP_THRESHOLD=${EARLY_STOP_THRESHOLD:-$EARLY_STOP_DEFAULT}
 
@@ -142,7 +124,7 @@ while kill -0 "$TRAIN_PID" 2>/dev/null; do
         rel_err=$(echo "$probe_out" | grep 'relative error' | grep -oE '[0-9]+\.[0-9]+%' | head -1)
         base="${BASELINE_CURVE[$step]-n/a}"
         if [ -n "$rel_err" ]; then
-            log "  step=$step  4L=$rel_err   ${BASELINE}-baseline=${base}%"
+            log "  step=$step  4L=$rel_err   canonical_baseline=${base}%"
         else
             log "  step=$step  probe FAILED:"
             echo "$probe_out" | sed 's/^/    /' | tee -a "$LOG"
@@ -191,7 +173,7 @@ for ckpt in "$OUTPUT_DIR"/checkpoint-*; do
     rel_err=$(echo "$probe_out" | grep 'relative error' | grep -oE '[0-9]+\.[0-9]+%' | head -1)
     base="${BASELINE_CURVE[$step]-n/a}"
     if [ -n "$rel_err" ]; then
-        log "  step=$step  4L=$rel_err   ${BASELINE}-baseline=${base}%"
+        log "  step=$step  4L=$rel_err   canonical_baseline=${base}%"
     else
         log "  step=$step  probe FAILED"
     fi

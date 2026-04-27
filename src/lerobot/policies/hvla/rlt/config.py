@@ -14,22 +14,31 @@ class RLTConfig:
     """
 
     # --- RL Token (Phase 1) ---
-    rl_token_dim: int = 768               # bottleneck dim (matches S1 hidden_dim)
-    # Dim of S1 context tokens fed into the encoder. ``None`` means "same
-    # as rl_token_dim" (symmetric setup — the original). Set explicitly
-    # when widening the bottleneck beyond S1's hidden_dim (e.g. to match
-    # the paper's 2048). Encoder then adds an input projection
-    # (context_dim → rl_token_dim) and decoder a matching output
-    # projection so reconstruction lands back in context_dim space.
+    # Defaults track the canonical 4-layer d=2048 widened encoder
+    # (outputs/rlt_token_v4_4layer_d2048, 24.9% reconstruction relative
+    # error — see docs/rlt_v2_log.md and scripts/rlt_arch_experiment.sh).
+    # When loading a previously-trained checkpoint, ``load_rlt_token_config``
+    # overrides shape fields from the on-disk manifest, so older 2L d=768
+    # checkpoints keep loading correctly.
+    rl_token_dim: int = 2048              # bottleneck dim (paper-matched widened)
+    # Dim of S1 context tokens fed into the encoder. ``None`` is a
+    # "set me at runtime" sentinel: train_token.py overrides this to
+    # S1.hidden_dim when widening, and the manifest loader writes it
+    # explicitly into saved checkpoints. The default stays None so a
+    # bare ``RLTConfig()`` (e.g. in unit tests with small dims) gets a
+    # self-consistent symmetric encoder rather than locking in a
+    # particular S1 hidden_dim that may not match the test setup.
     context_dim: int | None = None
-    token_encoder_layers: int = 2         # small transformer encoder
-    token_decoder_layers: int = 2         # small transformer decoder
+    token_encoder_layers: int = 4         # widened-encoder default
+    token_decoder_layers: int = 4         # widened-decoder default
     token_num_heads: int = 4
     token_ffn_dim: int = 2048
     token_dropout: float = 0.1
     token_lr: float = 1e-4
-    token_train_steps: int = 5000
-    token_batch_size: int = 64
+    token_train_steps: int = 10000
+    # d=2048 with 4 layers at batch=64 OOMs on a 32GB 5090. Sized to fit;
+    # see scripts/rlt_arch_experiment.sh for the discovery process.
+    token_batch_size: int = 16
     s1_finetune_weight: float = 0.0       # alpha: 0 = freeze S1 during token training
 
     # --- Actor-Critic (Phase 2) ---
