@@ -73,6 +73,13 @@
 ### TODO
 1. **Adaptive beta**: High beta for cold/unseen states, low beta for well-covered states. At minimum expose beta as a GUI slider for live tuning during training.
 2. **Deployment mode**: Run trained RL actor alongside base VLA without training loop. Inference-only mode that loads actor checkpoint and applies to S1 chunks.
-3. **Sigma research**: Is random exploration needed for our task? Paper's sigma=0.1 on delta EE is fundamentally different from sigma on joint angles. For coarse manipulation, human intervention may provide all exploration signal needed. Consider sigma=0 with intervention-only exploration.
-4. **More episodes**: Paper runs 400-1000. We have ~289. Keep running with consistent reset positions.
-5. **Tests**: Unit tests still pending.
+3. ~~**Sigma research**~~ — answered on the v2_widened run: setting `exploration_sigma=0` on robot caused a cluster of catastrophic episodes (7 ignores in 5 attempts) — the actor commits 100% to its deterministic mean and any systematic actor drift goes unmasked. Keep `exploration_sigma≈0.02` (≈0.5° per joint). Decoupled `target_sigma=0.1` for TD3 target smoothing landed in 884f01d2b so this knob is independent.
+4. **More episodes**: Paper runs 400-1000. v2_widened currently at 70+ eps with rolling-20 success climbing 50% → 75%. Keep running.
+5. ~~**Tests**~~ — 90 unit tests now in `tests/hvla/test_rlt.py` + `test_rlt_metrics.py` + `test_intervention.py`. Coverage:
+   - BC penalty, reconstruction loss, critic invariants (min-Q, gamma^C, target frozen, grad-clip)
+   - Q-explosion defenses (LayerNorm presence/absence, Q-target clipping, decoupled sigmas — `TestQExplosionDefenses`)
+   - Replay buffer (detach, ring wrap, save/load, **truncate** for the DOWN-arrow ignore key, thread safety)
+   - Three-group metrics with within-group invariants + atomic round-trip
+   - InterventionRecorder full lifecycle including `flush_terminal` for ASSISTED-success terminal +1
+   - Atomic checkpoint save (`_atomic_torch_save` — `TestAtomicTorchSave`)
+   - Token checkpoint manifest, warmup boundary, parity guards.

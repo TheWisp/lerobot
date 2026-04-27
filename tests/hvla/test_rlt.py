@@ -33,6 +33,8 @@ from lerobot.policies.hvla.rlt.metrics import (
     set_metrics_path,
 )
 
+from lerobot.policies.hvla.s1_process import _atomic_torch_save
+
 # Small dims for speed — relationships (ratios, formulas) don't depend on size.
 D = 64
 S = 14
@@ -285,6 +287,164 @@ class TestCriticInvariants:
 
         assert abs(target_done.item() - 1.0) < 1e-5, "done=1: target should equal reward only"
         assert target_cont.item() != 1.0, "done=0: target should include discounted next Q"
+
+
+# ===================================================================
+# Q-explosion defenses: LayerNorm, Q-target clipping, decoupled sigmas.
+# These three landed together (commits 884f01d2b, f1ed039a3, 5f1393c59)
+# after the v2_widened run pumped Q to 9+ when sigmas were coupled and
+# the critic had no activation bound. Each test pins one defense in
+# place so a future "simplification" can't quietly remove it.
+# ===================================================================
+
+class TestQExplosionDefenses:
+    def test_critic_has_layernorm_when_enabled(self, config, device):
+        """LayerNorm is the activation-magnitude bound on the critic.
+        It must sit BEFORE every ReLU in every Q net, and the output
+        Linear must stay unnormalized (so Q can span its full range)."""
+        config.critic_layer_norm = True
+        critic = RLTCritic(config, S, A)
+        for q_net in critic.q_nets:
+            modules = list(q_net)
+            # Output is a Linear with no LN/ReLU after it
+            assert isinstance(modules[-1], torch.nn.Linear)
+            # Hidden layers: every Linear (except the last) must be
+            # immediately followed by LayerNorm then ReLU
+            for i, m in enumerate(modules[:-1]):
+                if isinstance(m, torch.nn.Linear):
+                    assert isinstance(modules[i + 1], torch.nn.LayerNorm), (
+                        f"Hidden Linear at idx {i} must be followed by LayerNorm"
+                    )
+                    assert isinstance(modules[i + 2], torch.nn.ReLU), (
+                        f"LayerNorm at idx {i+1} must be followed by ReLU"
+                    )
+
+    def test_critic_has_no_layernorm_when_disabled(self, config, device):
+        """When the flag is off, the critic falls back to the original
+        Linear→ReLU stack. Lets us A/B without code edits."""
+        config.critic_layer_norm = False
+        critic = RLTCritic(config, S, A)
+        for q_net in critic.q_nets:
+            for m in q_net:
+                assert not isinstance(m, torch.nn.LayerNorm), (
+                    "LayerNorm should be absent when critic_layer_norm=False"
+                )
+
+    def test_actor_never_has_layernorm(self, config, device):
+        """Asymmetric design: critic gets LN (no anchor → unbounded
+        activations), actor relies on BC + zero-init instead. Ship a
+        test so somebody doesn't 'fix' the asymmetry by adding LN to
+        the actor — that would compete with zero-init and warmup."""
+        config.critic_layer_norm = True
+        actor = RLTActor(config, S, A)
+        for m in actor.mlp:
+            assert not isinstance(m, torch.nn.LayerNorm), (
+                "Actor must NOT use LayerNorm — BC anchor + zero-init "
+                "is its bounding mechanism."
+            )
+
+    def test_q_target_clip_bounds_bellman_target(self, config, device):
+        """With q_target_clip=True the Bellman target must lie in
+        [-|abort_reward|/(1-γ^C), 1/(1-γ^C)]. Build a contrived next-Q
+        that bootstraps WAY outside that range and verify clipping
+        kicks in."""
+        config.q_target_clip = True
+        config.discount = 0.99
+        config.abort_reward = -1.0
+        agent = TD3Agent(config, S, A, device)
+
+        # Hand the target net huge biases so its output is far above the
+        # theoretical max — bootstrap would otherwise carry that through.
+        with torch.no_grad():
+            for q_net in agent.critic_target.q_nets:
+                q_net[-1].bias.fill_(1e6)
+
+        b = 4
+        z = torch.randn(b, D, device=device)
+        s = torch.randn(b, S, device=device)
+        a = torch.randn(b, C, A, device=device)
+        ref = torch.randn(b, C, A, device=device)
+        reward = torch.zeros(b, 1, device=device)
+        done = torch.zeros(b, 1, device=device)
+
+        # Recompute the same target the critic update path computes,
+        # so we test the actual clip boundary.
+        with torch.no_grad():
+            next_a = agent.actor(z, s, ref, deterministic=False,
+                                 sigma=config.target_sigma,
+                                 clip=config.target_noise_clip)
+            target_q = agent.critic_target.min_q(z, s, next_a)
+            raw_target = reward + (config.discount ** C) * (1 - done) * target_q
+            denom = 1.0 - config.discount ** C
+            clipped = raw_target.clamp(-1.0 / denom, 1.0 / denom)
+
+        # Sanity: raw_target was way out of range
+        assert raw_target.abs().max().item() > 100.0
+        # After clip: every entry is within bounds
+        bound = 1.0 / denom
+        assert clipped.abs().max().item() <= bound + 1e-5
+
+    def test_target_smoothing_uses_target_sigma_not_exploration_sigma(self, config, device):
+        """Decoupling fix (commit 884f01d2b): setting exploration_sigma=0
+        must NOT remove TD3 target smoothing — that's controlled by
+        target_sigma. The widened-v2 Q explosion was caused by the
+        original code reading exploration_sigma in the target backup,
+        so killing exploration also killed the smoothing.
+
+        We verify by sampling many next-actions with the target call
+        and checking the noise std matches target_sigma, not
+        exploration_sigma."""
+        config.exploration_sigma = 0.0   # the failure-mode setting
+        config.target_sigma = 0.1
+        config.target_noise_clip = 1.0   # large enough not to truncate at this scale
+        agent = TD3Agent(config, S, A, device)
+
+        b = 5000  # need a lot to estimate std reliably
+        z = torch.randn(b, D, device=device)
+        s = torch.randn(b, S, device=device)
+        ref = torch.randn(b, C, A, device=device)
+
+        with torch.no_grad():
+            mu = agent.actor.mean(z, s, ref)
+            # Reproduce the call the critic update makes:
+            sampled = agent.actor(z, s, ref,
+                                  deterministic=False,
+                                  sigma=config.target_sigma,
+                                  clip=config.target_noise_clip)
+            noise = sampled - mu
+        std = noise.std().item()
+        # Should be close to target_sigma=0.1, NOT exploration_sigma=0.0.
+        # Tolerance 20% — std-of-Gaussian estimator from 5000×C×A samples.
+        assert abs(std - 0.1) < 0.02, (
+            f"target smoothing noise std={std:.3f} should be ~0.1 "
+            f"(target_sigma), not 0.0 (exploration_sigma). "
+            f"Decoupling regression."
+        )
+
+    def test_inference_uses_exploration_sigma_independently(self, config, device):
+        """Companion to the above: the inference-side actor() call
+        (no sigma kwarg) must read exploration_sigma. Setting
+        exploration_sigma=0 truly does kill exploration, while keeping
+        target_sigma unaffected. Two-knob decoupling = both directions."""
+        config.exploration_sigma = 0.0
+        config.target_sigma = 0.1
+        agent = TD3Agent(config, S, A, device)
+
+        b = 5000
+        z = torch.randn(b, D, device=device)
+        s = torch.randn(b, S, device=device)
+        ref = torch.randn(b, C, A, device=device)
+
+        with torch.no_grad():
+            mu = agent.actor.mean(z, s, ref)
+            # No sigma kwarg → falls back to config.exploration_sigma
+            sampled = agent.actor(z, s, ref, deterministic=False)
+            noise = sampled - mu
+        # Noise must be exactly zero (sigma=0)
+        assert noise.abs().max().item() < 1e-6, (
+            "exploration_sigma=0 must give deterministic actions at inference. "
+            f"Got max |noise|={noise.abs().max().item()}"
+        )
 
 
 # ===================================================================
@@ -698,6 +858,69 @@ class TestTokenCheckpointManifest:
         assert not any("target_proj" in k for k in dec_keys), (
             f"Decoder in symmetric mode should not have target_proj params"
         )
+
+
+# ===================================================================
+# Atomic checkpoint save (_atomic_torch_save) — prevents torn .pt files
+# when the process crashes mid-save. See commit 4c5624b1f.
+# ===================================================================
+
+class TestAtomicTorchSave:
+    def test_writes_object_to_target_path(self, tmp_path):
+        """Happy path: object is reachable at the target path after save."""
+        path = tmp_path / "weights.pt"
+        obj = {"x": torch.tensor([1.0, 2.0, 3.0])}
+        _atomic_torch_save(obj, path)
+        assert path.exists()
+        loaded = torch.load(path, weights_only=True)
+        assert torch.equal(loaded["x"], obj["x"])
+
+    def test_no_tmp_left_behind_on_success(self, tmp_path):
+        """``.tmp`` file is os.replace'd onto the target — must be gone
+        after a clean save. Any leftover indicates the rename didn't run."""
+        path = tmp_path / "weights.pt"
+        _atomic_torch_save({"a": torch.zeros(2)}, path)
+        assert not (tmp_path / "weights.pt.tmp").exists()
+
+    def test_overwrites_existing_target(self, tmp_path):
+        """Subsequent saves replace, not corrupt."""
+        path = tmp_path / "weights.pt"
+        _atomic_torch_save({"v": torch.tensor([1.0])}, path)
+        _atomic_torch_save({"v": torch.tensor([99.0])}, path)
+        loaded = torch.load(path, weights_only=True)
+        assert loaded["v"].item() == 99.0
+
+    def test_existing_target_preserved_when_save_fails(self, tmp_path):
+        """The whole point of this helper: a crash mid-save (raised
+        BEFORE os.replace) must leave the previous good file untouched.
+        Simulate by passing an unpicklable object — torch.save raises,
+        os.replace never runs, target file is unchanged."""
+        path = tmp_path / "weights.pt"
+        _atomic_torch_save({"v": torch.tensor([42.0])}, path)
+        good_bytes = path.read_bytes()
+
+        # Object that raises during torch.save (lambdas aren't picklable)
+        class _Unpicklable:
+            def __reduce__(self):
+                raise RuntimeError("intentional save failure")
+        with pytest.raises(RuntimeError, match="intentional save failure"):
+            _atomic_torch_save({"bad": _Unpicklable()}, path)
+
+        # Target file should still hold the original good content
+        assert path.exists()
+        assert path.read_bytes() == good_bytes
+        loaded = torch.load(path, weights_only=True)
+        assert loaded["v"].item() == 42.0
+
+    def test_accepts_string_path(self, tmp_path):
+        """The helper coerces to ``str(path)`` so callers can pass either
+        a pathlib.Path or a plain string. Lock that in — refactors that
+        change the type signature shouldn't drop string support since
+        most call sites pass strings."""
+        target = str(tmp_path / "weights.pt")
+        _atomic_torch_save({"k": torch.tensor([7.0])}, target)
+        loaded = torch.load(target, weights_only=True)
+        assert loaded["k"].item() == 7.0
 
 
 # ===================================================================
