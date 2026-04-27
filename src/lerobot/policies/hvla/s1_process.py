@@ -430,6 +430,7 @@ def run_s1(
     rl_chunk_length: int = 10,
     rlt_output_dir: str = "outputs/rlt_online",
     rlt_start_engaged: bool = True,
+    rlt_shared_noise_per_chunk: bool = False,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -642,6 +643,7 @@ def run_s1(
         rlt_config = RLTConfig(
             rl_token_dim=policy.config.hidden_dim,
             rl_chunk_length=rl_chunk_length,
+            shared_noise_per_chunk=rlt_shared_noise_per_chunk,
         )
 
         # Resolve RL token encoder checkpoint:
@@ -846,9 +848,11 @@ def run_s1(
                         rlt_state["total_updates"])
         else:
             logger.info(
-                "S1 RLT: Online RL enabled — C=%d, UTD=%d, beta=%.2f, expl_sigma=%.3f, target_sigma=%.3f",
+                "S1 RLT: Online RL enabled — C=%d, UTD=%d, beta=%.2f, expl_sigma=%.3f, "
+                "target_sigma=%.3f, shared_noise_per_chunk=%s",
                 rl_chunk_length, rlt_config.utd_ratio, rlt_config.beta,
                 rlt_config.exploration_sigma, rlt_config.target_sigma,
+                rlt_config.shared_noise_per_chunk,
             )
 
     # --- Pipelined inference thread ---

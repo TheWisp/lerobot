@@ -93,6 +93,11 @@ def main():
                         help="Directory for RLT checkpoints and logs")
     parser.add_argument("--rlt-start-disengaged", action="store_true",
                         help="Start each episode with RL actor off. Press E to engage mid-episode.")
+    parser.add_argument("--rlt-shared-noise-per-chunk", action="store_true",
+                        help="Experimental: sample exploration noise once per chunk and "
+                             "broadcast across C frames (smoother joint commands than per-frame "
+                             "iid noise). Set at launch time only — flipping mid-training "
+                             "mixes noise distributions in the replay buffer.")
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -214,6 +219,7 @@ def main():
             rl_chunk_length=args.rl_chunk_length,
             rlt_output_dir=args.rlt_output_dir,
             rlt_start_engaged=not args.rlt_start_disengaged,
+            rlt_shared_noise_per_chunk=args.rlt_shared_noise_per_chunk,
         )
     finally:
         stop_event.set()

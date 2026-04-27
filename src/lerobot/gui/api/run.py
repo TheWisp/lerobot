@@ -172,6 +172,7 @@ class HVLARunRequest(BaseModel):
     rlt_chunk_length: int = 10
     rlt_output_dir: str = "outputs/rlt_online"
     rlt_start_engaged: bool = True
+    rlt_shared_noise_per_chunk: bool = False  # experimental: launch-time only
 
 
 # ============================================================================
@@ -639,6 +640,8 @@ async def start_hvla(req: HVLARunRequest) -> dict:
         args.append(f"--rlt-output-dir={req.rlt_output_dir}")
         if not req.rlt_start_engaged:
             args.append("--rlt-start-disengaged")
+        if req.rlt_shared_noise_per_chunk:
+            args.append("--rlt-shared-noise-per-chunk")
         # RLT needs multi-episode mode
         if not req.record_dataset:
             args.append(f"--num-episodes={req.num_episodes}")

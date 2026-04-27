@@ -78,6 +78,7 @@ class RLTActor(nn.Module):
         deterministic: bool = False,
         sigma: float | None = None,
         clip: float | None = None,
+        shared_noise: bool | None = None,
     ) -> Tensor:
         """
         Args:
@@ -91,6 +92,14 @@ class RLTActor(nn.Module):
                 apply TD3 target policy smoothing with a different std.
             clip: symmetric clip applied to the noise (TD3 ε̃ clip).
                 None = no clip.
+            shared_noise: when True, sample one [B, 1, A] noise tensor
+                and broadcast across all C frames — yields a slow
+                chunk-level drift instead of per-frame broadband
+                jitter. None falls back to
+                ``config.shared_noise_per_chunk``. Only affects
+                exploration paths (target smoothing always uses
+                per-position noise so the critic's bootstrap stays
+                aligned with the paper's TD3 formulation).
         Returns:
             actions: [B, C, action_dim] — direct output (paper Eq. 4)
         """
@@ -104,7 +113,14 @@ class RLTActor(nn.Module):
             return mu
 
         sigma_val = self.config.exploration_sigma if sigma is None else sigma
-        noise = torch.randn_like(mu) * sigma_val
+        share = self.config.shared_noise_per_chunk if shared_noise is None else shared_noise
+        if share:
+            # One sample per (batch element, action dim), broadcast over C
+            noise = torch.randn(B, 1, self.action_dim,
+                                device=mu.device, dtype=mu.dtype) * sigma_val
+            noise = noise.expand_as(mu)
+        else:
+            noise = torch.randn_like(mu) * sigma_val
         if clip is not None:
             noise = noise.clamp(-clip, clip)
         return mu + noise
@@ -210,11 +226,18 @@ class TD3Agent:
             # clip here, NOT exploration_sigma. These were coupled historically
             # and caused the rlt_online_v2_widened Q explosion when the user
             # set exploration_sigma=0 and inadvertently also killed smoothing.
+            # Always per-position noise — chunk-shared smoothing would
+            # collapse the critic's "what-if a different action got
+            # picked" target to a single perturbation direction per
+            # batch element, defeating the purpose. Only the
+            # exploration / execution noise is allowed to be chunk-
+            # shared (for joint smoothness).
             next_action = self.actor(
                 next_z_rl, next_state, next_ref_chunk,
                 deterministic=False,
                 sigma=self.config.target_sigma,
                 clip=self.config.target_noise_clip,
+                shared_noise=False,
             )
             target_q = self.critic_target.min_q(next_z_rl, next_state, next_action)
             # C-step return: reward is already the C-step cumulative

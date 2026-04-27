@@ -79,6 +79,18 @@ class RLTConfig:
                                           # to the Q explosion seen in v2_widened runs.
     target_noise_clip: float = 0.5       # TD3 target noise clip: ε̃ clamped to [-c, c].
                                           # Paper default: 0.5.
+    # When True, the actor's exploration noise is sampled ONCE per chunk
+    # and broadcast across all C frames (shape [B, 1, A] → [B, C, A]).
+    # The result is a slow chunk-level drift instead of per-frame
+    # broadband jitter. Same exploration "energy", much smoother joint
+    # commands. Especially helpful when actions are absolute joint
+    # targets (vs the paper's delta-EE actions, which are naturally
+    # smoother).
+    #
+    # Experimental — set at training launch time, NOT runtime-tunable.
+    # Changing it mid-training mixes two noise distributions in the
+    # replay buffer. Pair with a fresh run dir or a clear demarcation.
+    shared_noise_per_chunk: bool = False
     ref_action_dropout: float = 0.5       # probability of zeroing reference chunk
     utd_ratio: int = 5                    # gradient updates per new transition
     subsample_stride: int = 2             # stride for replay buffer subsampling

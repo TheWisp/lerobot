@@ -650,6 +650,18 @@ function _onRltSelectChange() {
         const el = document.getElementById(id);
         if (el) el.style.display = isNew ? '' : 'none';
     }
+    // Experimental launch-time knobs: visible for New AND for resumed
+    // training (so you can A/B the flag against your current checkpoint),
+    // but NOT for deploy — there's no exploration noise to share in
+    // deterministic deploy mode. Mid-training toggle does mix two noise
+    // distributions in the replay buffer; the tooltip flags that.
+    const isResumeTrain = isExisting &&
+        (document.getElementById('run-hvla-rlt-run-mode')?.value || 'train') === 'train';
+    const showShared = isNew || isResumeTrain;
+    for (const id of ['run-hvla-rlt-shared-noise-label', 'run-hvla-rlt-shared-noise']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = showShared ? '' : 'none';
+    }
     // Existing checkpoint fields
     for (const id of ['run-hvla-rlt-mode-label', 'run-hvla-rlt-run-mode']) {
         const el = document.getElementById(id);
@@ -941,9 +953,13 @@ function renderRunForm() {
     html += `<input type="text" id="run-hvla-rlt-token-ckpt" placeholder="outputs/rlt_token_v4_4layer_d2048/checkpoint-10000" style="display:none">`;
     html += `<label id="run-hvla-rlt-outdir-label" style="display:none">Output Directory</label>`;
     html += `<input type="text" id="run-hvla-rlt-output-dir" value="outputs/rlt_online" style="display:none">`;
+    // Experimental knobs (NEW training only — launch-time, not runtime-tunable).
+    // Architectural choices baked into the run rather than mid-training tuning.
+    html += `<label id="run-hvla-rlt-shared-noise-label" style="display:none" title="Sample exploration noise once per chunk and broadcast across C frames. Smoother joint commands than per-frame iid noise. Set at launch time only — flipping mid-training mixes noise distributions in the replay buffer.">Shared noise per chunk (experimental)</label>`;
+    html += `<input type="checkbox" id="run-hvla-rlt-shared-noise" style="display:none" title="Sample exploration noise once per chunk and broadcast across C frames. Smoother joint commands than per-frame iid noise. Set at launch time only — flipping mid-training mixes noise distributions in the replay buffer.">`;
     // Fields shown when existing checkpoint selected
     html += `<label id="run-hvla-rlt-mode-label" style="display:none">Mode</label>`;
-    html += `<select id="run-hvla-rlt-run-mode" style="display:none">`;
+    html += `<select id="run-hvla-rlt-run-mode" style="display:none" onchange="_onRltSelectChange()">`;
     html += `<option value="train">Train (continue learning)</option>`;
     html += `<option value="deploy">Deploy (inference only)</option>`;
     html += `</select>`;
@@ -1243,6 +1259,7 @@ async function launchRun() {
                             rl_chunk_length: parseInt(document.getElementById('run-hvla-rlt-chunk-length')?.value) || 10,
                             rlt_output_dir: document.getElementById('run-hvla-rlt-output-dir')?.value?.trim() || 'outputs/rlt_online',
                             rlt_start_engaged: rltStartEngaged,
+                            rlt_shared_noise_per_chunk: document.getElementById('run-hvla-rlt-shared-noise')?.checked === true,
                         };
                     }
                     // Existing checkpoint
@@ -1261,6 +1278,9 @@ async function launchRun() {
                         rl_chunk_length: parseInt(document.getElementById('run-hvla-rlt-chunk-length')?.value) || 10,
                         rlt_output_dir: runDir,
                         rlt_start_engaged: rltStartEngaged,
+                        // Only meaningful in train mode (deploy uses deterministic actor)
+                        rlt_shared_noise_per_chunk: runMode === 'train'
+                            && document.getElementById('run-hvla-rlt-shared-noise')?.checked === true,
                     };
                 })(),
             };

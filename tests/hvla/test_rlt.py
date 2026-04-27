@@ -421,6 +421,103 @@ class TestQExplosionDefenses:
             f"Decoupling regression."
         )
 
+    def test_shared_noise_per_chunk_collapses_to_single_sample(self, config, device):
+        """When ``shared_noise_per_chunk=True``, the per-frame
+        independent noise is replaced by a single per-batch sample
+        broadcast across the C frames. Result: action[0] - mu[0] is
+        IDENTICAL to action[1] - mu[1] ... up to action[C-1] - mu[C-1]
+        for every batch element. That's the smoothness fix we ship as
+        an experimental flag — without it, joint commands jitter at the
+        noise frequency every frame."""
+        config.exploration_sigma = 0.1
+        config.shared_noise_per_chunk = True
+        agent = TD3Agent(config, S, A, device)
+
+        b = 32
+        z = torch.randn(b, D, device=device)
+        s = torch.randn(b, S, device=device)
+        ref = torch.randn(b, C, A, device=device)
+
+        with torch.no_grad():
+            mu = agent.actor.mean(z, s, ref)
+            sampled = agent.actor(z, s, ref, deterministic=False)
+            noise = sampled - mu  # [B, C, A]
+        # All C frames must carry the SAME perturbation per (batch, action_dim)
+        ref_frame = noise[:, 0:1, :]                      # [B, 1, A]
+        diff = (noise - ref_frame).abs().max().item()
+        assert diff < 1e-5, (
+            f"shared_noise_per_chunk should broadcast one [B,1,A] sample "
+            f"across all C frames, but max within-chunk noise variation "
+            f"= {diff} (>0). Smoothness fix is broken."
+        )
+        # And the sample magnitude should still be ~sigma (sanity check
+        # we didn't accidentally zero it out)
+        std = noise[:, 0, :].std().item()
+        assert abs(std - 0.1) < 0.03, f"shared noise std={std:.3f}, expected ~0.1"
+
+    def test_default_noise_mode_is_per_frame(self, config, device):
+        """Backward-compat: with the default config, per-frame iid
+        noise must still be active (the legacy behavior). A regression
+        that quietly turns this on by default would silently change
+        the action distribution for every existing run."""
+        # Don't set shared_noise_per_chunk — must default to False
+        agent = TD3Agent(config, S, A, device)
+        assert agent.config.shared_noise_per_chunk is False
+
+        b = 32
+        z = torch.randn(b, D, device=device)
+        s = torch.randn(b, S, device=device)
+        ref = torch.randn(b, C, A, device=device)
+
+        with torch.no_grad():
+            mu = agent.actor.mean(z, s, ref)
+            sampled = agent.actor(z, s, ref, deterministic=False)
+            noise = sampled - mu
+        ref_frame = noise[:, 0:1, :]
+        diff = (noise - ref_frame).abs().max().item()
+        # Per-frame noise → adjacent frames must differ noticeably
+        assert diff > 0.001, (
+            f"Per-frame iid noise should produce within-chunk variation, "
+            f"but got max diff={diff}. Did the default flip to shared?"
+        )
+
+    def test_target_smoothing_ignores_shared_noise_flag(self, config, device):
+        """Even when shared_noise_per_chunk is enabled for execution,
+        the critic's target-smoothing path must keep per-position
+        noise. Otherwise the bootstrap target only explores one
+        perturbation direction per chunk → wrong TD3 formulation,
+        critic underestimates Q-curvature across the chunk."""
+        config.exploration_sigma = 0.1
+        config.target_sigma = 0.1
+        config.target_noise_clip = 1.0
+        config.shared_noise_per_chunk = True   # ON for execution
+        agent = TD3Agent(config, S, A, device)
+
+        b = 1000  # need many samples for std check
+        z = torch.randn(b, D, device=device)
+        s = torch.randn(b, S, device=device)
+        ref = torch.randn(b, C, A, device=device)
+
+        with torch.no_grad():
+            mu = agent.actor.mean(z, s, ref)
+            # Reproduce the exact call update_critic makes for target smoothing
+            target_sampled = agent.actor(
+                z, s, ref,
+                deterministic=False,
+                sigma=config.target_sigma,
+                clip=config.target_noise_clip,
+                shared_noise=False,
+            )
+            target_noise = target_sampled - mu
+        # Within each batch element, frames should DIFFER (per-position)
+        ref_frame = target_noise[:, 0:1, :]
+        diff = (target_noise - ref_frame).abs().max().item()
+        assert diff > 0.001, (
+            f"Target smoothing must remain per-position even when "
+            f"exploration is shared. Got diff={diff:.6f} across frames "
+            f"— looks like critic target collapsed to one sample/chunk."
+        )
+
     def test_inference_uses_exploration_sigma_independently(self, config, device):
         """Companion to the above: the inference-side actor() call
         (no sigma kwarg) must read exploration_sigma. Setting
