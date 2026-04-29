@@ -194,6 +194,25 @@ class SO107Leader(SOLeader):
         # Intervention state (toggle - press SPACE to switch between policy/teleop)
         self._intervention_active = False
         self._keyboard_listener = None
+        # Guard rails on the SPACE toggle:
+        # - ``_intervention_transition_lock``: set externally by s1_process
+        #   while a transition (servo sync, etc.) is in progress. SPACE
+        #   presses are silently ignored while True. Released after the
+        #   transition completes, so the operator can normally toggle
+        #   again. Prevents the failure mode where a 2nd SPACE press
+        #   during a 1-3s servo sync wastes the sync round-trip.
+        # - ``_last_intervention_toggle_ts``: timestamp of the most
+        #   recent accepted SPACE press. A subsequent SPACE within
+        #   ``_intervention_debounce_s`` is ignored — catches accidental
+        #   double-tap even when no transition lock is active (e.g.
+        #   intervention OFF, which is fast).
+        self._intervention_transition_lock: bool = False
+        # Init to -inf so the very first SPACE press is always far past
+        # the debounce window. Works in production (where monotonic()
+        # is in the millions of seconds anyway) and avoids surprising
+        # rejection in tests that use small synthetic ``now`` values.
+        self._last_intervention_toggle_ts: float = float("-inf")
+        self._intervention_debounce_s: float = 0.5
 
     def connect(self, calibrate: bool = True) -> None:
         """Connect and optionally setup gripper bounce if configured."""
@@ -253,21 +272,63 @@ class SO107Leader(SOLeader):
         """Disable torque on leader motors (for human control)."""
         self.bus.disable_torque()
 
+    def _try_toggle_intervention(self, now: float) -> bool:
+        """Pure decision function — called by the SPACE handler. Extracted
+        so the toggle logic (lock + debounce + flip) is unit-testable
+        without spinning up a pynput listener.
+
+        Returns True if the toggle was accepted (state flipped), False
+        if it was rejected (lock active or debounce window). Logs the
+        reason on rejection so train.log shows when the operator's key
+        press was filtered.
+        """
+        if self._intervention_transition_lock:
+            logger.info(
+                "SPACE ignored — intervention transition in progress. "
+                "Wait for the transition to complete."
+            )
+            return False
+        elapsed = now - self._last_intervention_toggle_ts
+        if elapsed < self._intervention_debounce_s:
+            logger.info(
+                "SPACE ignored — debounce (%.0fms since last toggle, "
+                "min %.0fms).",
+                elapsed * 1000.0, self._intervention_debounce_s * 1000.0,
+            )
+            return False
+        self._last_intervention_toggle_ts = now
+        self._intervention_active = not self._intervention_active
+        if self._intervention_active:
+            logger.info("INTERVENTION ON - Switched to teleop mode")
+        else:
+            logger.info("INTERVENTION OFF - Returning to policy mode")
+        return True
+
     def _start_keyboard_listener(self) -> None:
         """Start keyboard listener for intervention detection (space key)."""
+        import time as _time
         from pynput import keyboard
 
         def on_press(key):
-            if key == keyboard.Key.space:
-                self._intervention_active = not self._intervention_active
-                if self._intervention_active:
-                    logger.info("INTERVENTION ON - Switched to teleop mode")
-                else:
-                    logger.info("INTERVENTION OFF - Returning to policy mode")
+            if key != keyboard.Key.space:
+                return
+            self._try_toggle_intervention(_time.monotonic())
 
         self._keyboard_listener = keyboard.Listener(on_press=on_press)
         self._keyboard_listener.start()
         logger.info("Intervention enabled: Press SPACE to toggle between policy and teleop")
+
+    def set_intervention_transition_lock(self, locked: bool) -> None:
+        """Lock or unlock SPACE toggling during a transition.
+
+        s1_process calls this around the policy↔intervention transition
+        blocks (servo sync, torque enable/disable). While locked,
+        SPACE presses log "ignored — transition in progress" instead
+        of toggling. The lock is independent of the time-debounce —
+        an unlock followed immediately by SPACE still respects the
+        debounce window since the last accepted toggle.
+        """
+        self._intervention_transition_lock = bool(locked)
 
     def get_teleop_events(self) -> dict[str, Any]:
         """Return intervention status.

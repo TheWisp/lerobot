@@ -1348,7 +1348,13 @@ def run_s1(
             if is_intervention and teleop is not None:
                 # --- INTERVENTION MODE: human controls via leader arm ---
                 if not was_intervening:
-                    # Transition: policy → intervention
+                    # Transition: policy → intervention. Lock SPACE so
+                    # accidental double-taps during the 1-3s servo sync
+                    # don't waste a sync round-trip toggling back to
+                    # policy. Released in a finally below so the lock
+                    # never sticks even if sync raises.
+                    if hasattr(teleop, "set_intervention_transition_lock"):
+                        teleop.set_intervention_transition_lock(True)
                     if rlt_mode:
                         # RLT: keep inference running (for z_rl) but stop actor + collection
                         infer_thread._rlt_system_active = False
@@ -1457,6 +1463,10 @@ def run_s1(
                     # by send_action() once the human starts moving the leader.
                     log_say("Intervention")
                     print("##OVERLAY:Intervention:#e5c07b##", flush=True)
+                    # Servo sync + torque transfer complete — operator may
+                    # now toggle SPACE again to end intervention.
+                    if hasattr(teleop, "set_intervention_transition_lock"):
+                        teleop.set_intervention_transition_lock(False)
 
                 # Read leader arm positions and send to robot
                 act = teleop.get_action()
@@ -1510,7 +1520,12 @@ def run_s1(
             else:
                 # --- POLICY MODE: S1 inference controls robot ---
                 if was_intervening:
-                    # Transition: intervention → policy
+                    # Transition: intervention → policy. Lock SPACE
+                    # while we re-enable torque and resume inference.
+                    # Faster than the policy→intervention sync (no
+                    # servo loop) but still non-instant.
+                    if hasattr(teleop, "set_intervention_transition_lock"):
+                        teleop.set_intervention_transition_lock(True)
                     logger.info("S1: INTERVENTION OFF — resuming inference")
 
                     # Save pending intervention episode buffer
@@ -1557,6 +1572,10 @@ def run_s1(
                     else:
                         log_say("Policy")
                         print("##OVERLAY:Policy:#2ecc71##", flush=True)
+                    # Resume complete — operator may now toggle SPACE
+                    # again to re-enter intervention.
+                    if hasattr(teleop, "set_intervention_transition_lock"):
+                        teleop.set_intervention_transition_lock(False)
 
                 # 3. Read latest chunk
                 chunk, t_origin, t_obs = infer_thread.get_chunk()
