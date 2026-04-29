@@ -2109,10 +2109,26 @@ async function _initRLTSliders() {
         };
     }
 
+    // Drop focus from RLT controls after release so the operator's arrow-key
+    // taps go to the robot (← abort, → success, ↓ ignore — captured by the
+    // subprocess's OS-level listener) instead of accidentally re-tweaking
+    // whichever slider was last touched. Same problem class as the
+    // diagnostic-button SPACE-retoggle bug.
+    const _dropFocusAfterRelease = (el) => {
+        if (!el) return;
+        const blur = () => el.blur();
+        el.addEventListener('mouseup', blur);
+        el.addEventListener('touchend', blur);
+        el.addEventListener('keyup', blur);
+    };
+    _dropFocusAfterRelease(betaSlider);
+    _dropFocusAfterRelease(sigmaSlider);
+
     const historySelect = document.getElementById('rlt-stat-history');
     if (historySelect) {
         historySelect.onchange = () => _fetchRLTMetrics();
     }
+    _dropFocusAfterRelease(historySelect);
 
     if (diagBtn) {
         diagBtn.onclick = async () => {
