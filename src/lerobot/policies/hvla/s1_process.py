@@ -15,6 +15,7 @@ import torch
 import torchvision.transforms.functional as TF
 
 from lerobot.policies.hvla.ipc import SharedLatentCache, SharedImageBuffer
+from lerobot.policies.hvla.rlt.episode import EpisodeLifecycle, TerminalKind
 
 logger = logging.getLogger(__name__)
 
@@ -120,14 +121,21 @@ def _rlt_flush_intervention_terminal(rlt_state, rlt_recorder, rlt_replay, infer_
         ``done=True`` and the operator-selected reward, and
         ``rlt_state['total_transitions']`` is incremented by 1.
         Buffer's most recent slot is asserted to reflect the terminal.
-        Caller-visible state (``reward_triggered``, ``abort_triggered``)
-        is unchanged — the main loop resets them later.
+        The lifecycle's terminal flag is consumed so the next
+        ``begin()`` call doesn't trip the unconsumed-terminal assert.
     """
-    if not (rlt_state["reward_triggered"] or rlt_state.get("abort_triggered")):
+    lifecycle = rlt_state["lifecycle"]
+    # Use consume_terminal_for_storage rather than peek — calling it
+    # here marks the terminal as consumed so the next begin() doesn't
+    # raise. The intervention path is the analog of inference-thread
+    # storage for intervention-rescued episodes; consuming here is
+    # semantically correct (the helper is the storage path).
+    terminal = lifecycle.consume_terminal_for_storage()
+    if terminal is None:
         return
     terminal_reward = (
         float(rlt_state["config"].abort_reward)
-        if rlt_state.get("abort_triggered")
+        if terminal == TerminalKind.ABORT
         else 1.0
     )
     if not rlt_recorder.flush_terminal(
@@ -154,7 +162,7 @@ def _rlt_flush_intervention_terminal(rlt_state, rlt_recorder, rlt_replay, infer_
     logger.info(
         "RLT: intervention-terminal r=%+.2f flushed (%s)",
         terminal_reward,
-        "ABORT" if rlt_state.get("abort_triggered") else "SUCCESS",
+        terminal.name,
     )
 
 
@@ -732,21 +740,17 @@ def run_s1(
             # Stored value on disk = index of last completed episode.
             "episode": -1,
             "total_updates": 0, "total_transitions": 0,
-            "successes": [], "reward_triggered": False,
-            # Operator marked this episode as a "disaster — never do this"
-            # via the X key. Episode ends, terminal reward = config.abort_reward
-            # (default -1.0). Critic learns to push Q DOWN on these states.
-            "abort_triggered": False,
-            # Operator marked this episode as "ignore — pretend it didn't
-            # happen" via DOWN ARROW. Used for OOD scenes (camera glitch,
-            # accidental scene perturbation, etc) where neither success
-            # nor abort signal would be a valid label. All transitions
-            # added during the episode are truncated from the replay
-            # buffer; episode counter and metrics are not advanced.
-            "ignore_triggered": False,
-            # Replay buffer size captured at episode start, so
-            # ignore-triggered can roll the buffer back exactly.
-            "buffer_size_at_episode_start": 0,
+            "successes": [],
+            # Per-episode operator-event tracking. Replaces the prior
+            # racy ``reward_triggered`` / ``abort_triggered`` /
+            # ``ignore_triggered`` / ``_episode_had_intervention`` /
+            # ``buffer_size_at_episode_start`` flags. The bug at ep124
+            # (17 done=True transitions written instead of 1) was the
+            # racy flags being re-read by the inference thread on every
+            # cycle; EpisodeLifecycle's one-shot
+            # ``consume_terminal_for_storage`` makes that
+            # structurally impossible. See rlt/episode.py.
+            "lifecycle": EpisodeLifecycle(),
             "output_dir": Path(rlt_output_dir),
             "deploy": rlt_deploy,
         }
@@ -978,7 +982,7 @@ def run_s1(
         def _rlt_on_press(key, *args):
             try:
                 if hasattr(key, 'char') and key.char == "r":
-                    rlt_state["reward_triggered"] = True
+                    rlt_state["lifecycle"].signal_terminal(TerminalKind.SUCCESS)
                     events["exit_early"] = True
                     logger.info("RLT: SUCCESS — reward +1, ending episode")
                     # Play success sound
@@ -1008,7 +1012,7 @@ def run_s1(
                 # transition, not dropped).
                 from pynput import keyboard as _kb
                 if key == _kb.Key.left:
-                    rlt_state["abort_triggered"] = True
+                    rlt_state["lifecycle"].signal_terminal(TerminalKind.ABORT)
                     events["exit_early"] = True
                     logger.info(
                         "RLT: ABORT — terminal reward %.2f, ending episode",
@@ -1051,7 +1055,7 @@ def run_s1(
                 # over abort/success — pressing DOWN after R or LEFT
                 # discards their effect too.
                 if key == _kb.Key.down:
-                    rlt_state["ignore_triggered"] = True
+                    rlt_state["lifecycle"].signal_ignore()
                     events["exit_early"] = True
                     # Mark the dataset for rerecord so the LeRobot
                     # framework's existing dataset-rollback path
@@ -1165,14 +1169,13 @@ def run_s1(
             infer_thread._rlt_system_active = True
             infer_thread._rlt_user_engaged = rlt_start_engaged
             infer_thread._rlt_prev = None
-            rlt_state["_episode_had_intervention"] = False
-            # Capture buffer size now so ``ignore_triggered`` can roll
-            # back exactly the transitions added during this episode.
-            # Read under lock-free is fine — only this thread + inference
-            # thread write, and inference hasn't started writing for this
-            # episode yet (rlt_system_active just turned True above).
-            rlt_state["buffer_size_at_episode_start"] = (
-                len(rlt_replay) if rlt_replay is not None else 0
+            # Initialize per-episode lifecycle. ``begin`` resets all
+            # operator-event flags AND captures buffer size for IGNORE
+            # rollback. Asserts loud if the previous episode left a
+            # signaled-but-unconsumed terminal — caught early instead
+            # of silently corrupting future bookkeeping.
+            rlt_state["lifecycle"].begin(
+                buffer_size=len(rlt_replay) if rlt_replay is not None else 0,
             )
             engaged_str = "engaged" if rlt_start_engaged else "disengaged (press E to engage)"
             # Warmup: during the first ``warmup_episodes`` the actor's output is
@@ -1288,9 +1291,13 @@ def run_s1(
 
             # Check exit_early (right/left arrow or R/X key in RLT mode)
             if events.get("exit_early"):
-                if rlt_mode and rlt_state and rlt_state.get("reward_triggered"):
+                _peek = (
+                    rlt_state["lifecycle"].peek_terminal()
+                    if (rlt_mode and rlt_state) else None
+                )
+                if _peek == TerminalKind.SUCCESS:
                     logger.info("S1: R key — episode SUCCESS, ending early")
-                elif rlt_mode and rlt_state and rlt_state.get("abort_triggered"):
+                elif _peek == TerminalKind.ABORT:
                     logger.info("S1: X key — episode ABORTED, ending early")
                 elif events.get("rerecord_episode"):
                     logger.info("S1: Left arrow — ending episode (will rerecord)")
@@ -1347,7 +1354,7 @@ def run_s1(
                         infer_thread._rlt_system_active = False
                         infer_thread._rlt_prev = None
                         logger.info("S1: INTERVENTION ON — inference continues (RLT), actor paused")
-                        rlt_state["_episode_had_intervention"] = True
+                        rlt_state["lifecycle"].mark_intervention()
                         logger.info("RLT: collection PAUSED (intervention)")
                         # Recorder owns the human-chunk state; reset it here
                         # so previous-intervention state can't leak in.
@@ -1716,14 +1723,15 @@ def run_s1(
             infer_thread._rlt_system_active = False
             infer_thread._rlt_prev = None
 
-            if rlt_state.get("ignore_triggered"):
+            lifecycle = rlt_state["lifecycle"]
+            if lifecycle.is_ignored():
                 # Operator pressed DOWN — discard this episode entirely.
                 # Truncate the replay buffer back to its size at episode
                 # start, drop any pending intervention chunks, decrement
                 # the episode counter so the next iteration reuses it,
                 # and skip metrics + checkpoint save. ``latest/`` stays
                 # at the previous episode's clean save.
-                pre_size = rlt_state.get("buffer_size_at_episode_start", 0)
+                pre_size = lifecycle.buffer_size_at_start
                 if rlt_recorder is not None:
                     rlt_recorder.reset()
                 dropped = (
@@ -1733,10 +1741,7 @@ def run_s1(
                 # Roll back the counter that was incremented at episode start.
                 ep_ignored = rlt_state["episode"]
                 rlt_state["episode"] -= 1
-                rlt_state["reward_triggered"] = False
-                rlt_state["abort_triggered"] = False
-                rlt_state["ignore_triggered"] = False
-                rlt_state["_episode_had_intervention"] = False
+                lifecycle.end_episode()
                 logger.info(
                     "RLT ep%d: IGNORED — discarded %d transitions; "
                     "episode counter rolled back to %d (next episode reuses ep%d)",
@@ -1762,9 +1767,13 @@ def run_s1(
                     rlt_recorder.reset()
                 logger.info("RLT: collection PAUSED (episode end)")
 
-                success = rlt_state["reward_triggered"]
-                aborted = rlt_state.get("abort_triggered", False)
-                had_intervention = rlt_state.get("_episode_had_intervention", False)
+                # Read the (consumed-or-still-set) terminal kind for logging.
+                # peek_terminal does NOT consume — it's purely for the bookkeeping
+                # path's classification of the episode outcome.
+                terminal = lifecycle.peek_terminal()
+                success = terminal == TerminalKind.SUCCESS
+                aborted = terminal == TerminalKind.ABORT
+                had_intervention = lifecycle.had_intervention
                 autonomous = success and not had_intervention
                 ep_duration = time.time() - episode_start
 
@@ -1797,8 +1806,7 @@ def run_s1(
                 )
                 save_metrics_to_file()
 
-                rlt_state["reward_triggered"] = False
-                rlt_state["abort_triggered"] = False
+                lifecycle.end_episode()
 
             # Save checkpoint (training mode only)
             if not rlt_state.get("deploy"):

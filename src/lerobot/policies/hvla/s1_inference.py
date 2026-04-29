@@ -14,6 +14,8 @@ import time
 import numpy as np
 import torch
 
+from lerobot.policies.hvla.rlt.episode import TerminalKind
+
 logger = logging.getLogger(__name__)
 
 
@@ -336,18 +338,19 @@ class InferenceThread:
 
         prev = self._rlt_prev
         if prev is not None and self._rlt_replay is not None:
-            # Three episode-end signals, in priority order:
-            #   - abort_triggered (X) → done=True, reward=cfg.abort_reward
-            #     ("disaster, never do this" — typically negative)
-            #   - reward_triggered (R) → done=True, reward=+1.0 (success)
-            #   - neither              → done=False, reward=0.0 (still in episode
-            #     OR timeout/quiet end — terminal=0 either way)
-            aborted = self._rlt_state.get("abort_triggered", False)
-            success = self._rlt_state.get("reward_triggered", False)
-            done = aborted or success
-            if aborted:
+            # ONE-SHOT terminal consumption per episode (see
+            # rlt/episode.py and the ep124 17-aborts incident).
+            # consume_terminal_for_storage returns the terminal kind
+            # ONCE per episode — even if we fire N times during the
+            # post-keypress / pre-end_episode window, only the first
+            # call gets the kind, the rest get None and we write
+            # done=False, reward=0. Structural fix: the bug becomes
+            # impossible regardless of timing.
+            terminal = self._rlt_state["lifecycle"].consume_terminal_for_storage()
+            done = terminal is not None
+            if terminal == TerminalKind.ABORT:
                 reward = float(self._rlt_state["config"].abort_reward)
-            elif success:
+            elif terminal == TerminalKind.SUCCESS:
                 reward = 1.0
             else:
                 reward = 0.0
