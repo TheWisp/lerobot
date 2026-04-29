@@ -163,22 +163,33 @@ class EpisodeLifecycle:
         """Operator pressed R (SUCCESS) or LEFT (ABORT). First signal
         wins; subsequent signals never change the recorded outcome.
 
-        Repeat of the SAME kind is silently ignored (operator hammering
-        / held key / sticky listener — all benign).
+        Operator-driven (called from the OS keyboard listener thread),
+        so timing is asynchronous: the operator may press keys before
+        the first episode begins, between episodes during reset, or
+        after end_episode. None of those are bugs — they're normal
+        operator-key timing. The handler silently no-ops when the
+        lifecycle is inactive, leaving the keypress with no effect
+        but also no exception (which would otherwise be swallowed
+        inside the listener thread, making hotkeys appear "broken").
 
-        Conflicting kind (e.g. SUCCESS already signaled, then ABORT
-        arrives) emits a WARNING. This is the diagnostic surface for
-        the class of bugs we already lived through: the slider-focus
-        listener fix (sliders eating arrow keys), accidental
-        adjacent-key presses, future listener regressions. The
-        recorded outcome stays first-wins; the warning makes the
-        conflict visible in train.log so you can investigate.
+        When active:
+          * Repeat of the SAME kind is silently ignored (operator
+            hammering / held key / sticky listener — all benign).
+          * Conflicting kind (e.g. SUCCESS already signaled, then
+            ABORT arrives) emits a WARNING. Diagnostic surface for
+            slider-focus key duplication, accidental adjacent-key
+            presses, future listener regressions. First-wins outcome
+            stays unchanged; the warning makes the conflict visible
+            in train.log so you can investigate.
         """
         with self._lock:
-            assert self._active, (
-                f"EpisodeLifecycle.signal_terminal({kind.name}): called "
-                f"when not active. Was begin() called?"
-            )
+            if not self._active:
+                logger.debug(
+                    "EpisodeLifecycle.signal_terminal(%s): no active "
+                    "episode — keypress dropped silently.",
+                    kind.name,
+                )
+                return
             if self._terminal is None:
                 self._terminal = kind
                 logger.debug(
@@ -198,11 +209,18 @@ class EpisodeLifecycle:
     def signal_ignore(self) -> None:
         """Operator pressed DOWN. Idempotent. Independent of
         signal_terminal — both can be set; the main-thread bookkeeping
-        path lets ignore win (truncate, don't write terminal)."""
+        path lets ignore win (truncate, don't write terminal).
+
+        Operator-driven (same lifecycle as signal_terminal): silently
+        no-ops when no episode is active. Keypress timing is async and
+        not a bug if it lands outside an episode."""
         with self._lock:
-            assert self._active, (
-                "EpisodeLifecycle.signal_ignore: called when not active."
-            )
+            if not self._active:
+                logger.debug(
+                    "EpisodeLifecycle.signal_ignore: no active episode "
+                    "— keypress dropped silently."
+                )
+                return
             self._ignore = True
 
     def mark_intervention(self) -> None:

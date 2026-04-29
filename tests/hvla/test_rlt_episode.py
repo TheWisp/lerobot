@@ -31,14 +31,25 @@ class TestInitialState:
         assert lc.is_ignored() is False
         assert lc.had_intervention is False
 
-    def test_signal_outside_episode_asserts(self):
-        """Signal calls before begin() must fail loud — they would
-        otherwise silently no-op and lose the operator's intent."""
+    def test_signal_outside_episode_is_silent_no_op(self):
+        """signal_terminal / signal_ignore are operator-driven (called
+        from the OS keyboard listener thread). The operator's keypress
+        timing is async — they may press R/LEFT/DOWN before the first
+        episode begins, between episodes during reset, or after the
+        last episode ends. None of those are bugs.
+
+        Strict asserting here was a regression: AssertionError raised
+        in the listener thread gets swallowed by pynput, making
+        hotkeys appear "broken" with no log line. Lenient drop is
+        the right behavior — keypress has no effect, no exception,
+        no log noise above DEBUG."""
         lc = EpisodeLifecycle()
-        with pytest.raises(AssertionError, match="not active"):
-            lc.signal_terminal(TerminalKind.SUCCESS)
-        with pytest.raises(AssertionError, match="not active"):
-            lc.signal_ignore()
+        # Should NOT raise. State stays clean.
+        lc.signal_terminal(TerminalKind.SUCCESS)
+        lc.signal_ignore()
+        lc.signal_terminal(TerminalKind.ABORT)
+        assert lc.peek_terminal() is None
+        assert lc.is_ignored() is False
 
     def test_consume_outside_episode_returns_none(self):
         """Consume from inference thread must NOT raise — the inference
@@ -150,12 +161,20 @@ class TestEndEpisode:
         lc.end_episode()
         assert lc.active is False
 
-    def test_signal_after_end_asserts(self):
+    def test_signal_after_end_is_silent_no_op(self):
+        """Same lenient behavior in the post-end window: operator may
+        press keys after we've ended an episode but before the next
+        begin(). Silent drop, no AssertionError that would get
+        swallowed by the listener thread."""
         lc = EpisodeLifecycle()
         lc.begin(0)
         lc.end_episode()
-        with pytest.raises(AssertionError, match="not active"):
-            lc.signal_terminal(TerminalKind.SUCCESS)
+        # Must not raise
+        lc.signal_terminal(TerminalKind.SUCCESS)
+        lc.signal_ignore()
+        # State unchanged from post-end (terminal still None, not set)
+        assert lc.peek_terminal() is None
+        assert lc.is_ignored() is False
 
     def test_consume_after_end_returns_none(self):
         """Inference thread firing during the post-end window must not
@@ -215,6 +234,45 @@ class TestTerminalSignalConsume:
         lc.signal_terminal(TerminalKind.SUCCESS)
         assert lc.peek_terminal() == TerminalKind.SUCCESS
         assert lc.consume_terminal_for_storage() == TerminalKind.SUCCESS
+
+    def test_no_assertion_error_when_called_from_async_listener_path(self):
+        """Regression test for the 2026-04-29 hotkey outage. Pynput's
+        keyboard listener thread caught an AssertionError raised by
+        signal_terminal when called outside an active episode (operator
+        pressed LEFT/R/DOWN during the reset phase after one episode
+        ended and before the next began). Pynput logged the exception
+        and silently continued, making hotkeys appear "broken" with
+        no operator-visible feedback.
+
+        Lock in: calling signal_terminal / signal_ignore from a
+        listener-style context with no active episode must NEVER
+        raise. Silent no-op is the contract."""
+        lc = EpisodeLifecycle()
+        # Operator presses keys before the first begin() has fired
+        # (e.g. process started, listener attached, but main loop
+        # hasn't reached the first episode-start yet).
+        lc.signal_terminal(TerminalKind.ABORT)
+        lc.signal_terminal(TerminalKind.SUCCESS)
+        lc.signal_ignore()
+        # Begin first episode after the keypresses landed
+        lc.begin(0)
+        # State is clean — the inactive-window keypresses didn't
+        # leave residue that would corrupt this episode
+        assert lc.peek_terminal() is None
+        assert lc.is_ignored() is False
+
+        # Now end the episode and press more keys during the
+        # reset window before the next begin()
+        lc.signal_terminal(TerminalKind.SUCCESS)  # legit episode-end
+        assert lc.consume_terminal_for_storage() == TerminalKind.SUCCESS
+        lc.end_episode()
+        # Operator presses LEFT here (the original bug scenario)
+        lc.signal_terminal(TerminalKind.ABORT)
+        lc.signal_terminal(TerminalKind.ABORT)
+        lc.signal_ignore()
+        # Next episode begins cleanly
+        lc.begin(0)
+        assert lc.peek_terminal() is None
 
     def test_repeat_same_kind_is_silent(self, caplog):
         """Hammering the same terminal key (or held key, or sticky
