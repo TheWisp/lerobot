@@ -23,7 +23,7 @@ from lerobot.policies.hvla.rlt.token import (
     rl_token_reconstruction_loss,
     save_rlt_token_config,
 )
-from lerobot.policies.hvla.rlt.replay_buffer import ReplayBuffer
+from lerobot.policies.hvla.rlt.replay_buffer import ReplayBuffer, TransactionalReplayBuffer
 from lerobot.policies.hvla.rlt.metrics import (
     RLTMetrics,
     get_metrics,
@@ -728,6 +728,203 @@ class TestReplayBuffer:
         for t in threads:
             t.join()
         assert not errors, f"Thread safety violation: {errors}"
+
+
+# ===================================================================
+# TransactionalReplayBuffer — staging vs committed invariant.
+# Makes IGNORE provably zero-impact on training: discarded staged
+# transitions never enter the committed buffer and so are never
+# sampled by the grad-update path. See replay_buffer.py for the
+# rationale and the README TODO entry that motivated this.
+# ===================================================================
+
+class TestTransactionalReplayBuffer:
+    def _buf(self, capacity=100):
+        return TransactionalReplayBuffer(
+            capacity=capacity, rl_token_dim=D, state_dim=S,
+            action_dim=A, chunk_length=C, device=torch.device("cpu"),
+        )
+
+    def _add_one(self, buf, val=1.0):
+        buf.add(
+            z_rl=torch.full((D,), val),
+            state=torch.full((S,), val),
+            action_chunk=torch.full((C, A), val),
+            ref_chunk=torch.full((C, A), val),
+            reward=val,
+            next_z_rl=torch.full((D,), val),
+            next_state=torch.full((S,), val),
+            next_ref_chunk=torch.full((C, A), val),
+            done=False,
+        )
+
+    # -----------------------------------------------------------------
+    # Core invariant: staging is invisible to sample()
+    # -----------------------------------------------------------------
+
+    def test_add_goes_to_staging_not_committed(self):
+        """The defining property: a fresh `add` does NOT show up in
+        `len(buf)` (which reflects committed only). The staged item
+        should be visible via `pending_size`."""
+        buf = self._buf()
+        for _ in range(5):
+            self._add_one(buf)
+        assert len(buf) == 0, (
+            "len(buf) reflects committed; staging-only adds must NOT show"
+        )
+        assert buf.pending_size == 5
+
+    def test_sample_never_returns_staged_transitions(self):
+        """The structural guarantee. Even with staging full of
+        identifiable transitions, sample() returns nothing because
+        committed is empty. (Pre-fix this would have sampled the
+        in-progress episode's transitions before commit.)"""
+        buf = self._buf()
+        # Stage with a distinctive marker
+        for _ in range(20):
+            self._add_one(buf, val=99.0)
+        # Sample shouldn't even succeed (committed is empty)
+        # ReplayBuffer.sample with size=0 would error on torch.randint(0, 0)
+        # — that's the appropriate failure mode here too. Verify directly:
+        with pytest.raises(RuntimeError):
+            buf.sample(4)
+
+    def test_sample_returns_only_committed_after_commit(self):
+        """Commit moves staging into committed; sample() then returns
+        from there. Staging is empty post-commit."""
+        buf = self._buf()
+        for i in range(5):
+            self._add_one(buf, val=float(i))
+        n = buf.commit()
+        assert n == 5
+        assert buf.pending_size == 0
+        assert len(buf) == 5
+        # Sample now works and returns committed values
+        sample = buf.sample(3)
+        # All sampled rewards came from the committed set [0..4]
+        assert all(0.0 <= r.item() <= 4.0 for r in sample["reward"].squeeze())
+
+    def test_discard_clears_staging_without_committing(self):
+        """The IGNORE branch. Discard returns count of dropped items;
+        committed stays at its prior size; staging empties."""
+        buf = self._buf()
+        for _ in range(7):
+            self._add_one(buf)
+        n = buf.discard()
+        assert n == 7
+        assert buf.pending_size == 0
+        assert len(buf) == 0  # nothing committed
+
+    def test_commit_then_add_then_discard_is_clean(self):
+        """A realistic episode-cycle pattern: commit episode 1,
+        add transitions for episode 2, discard episode 2 (IGNORE).
+        Episode 1 must remain in committed; episode 2 must be gone."""
+        buf = self._buf()
+        # Episode 1: success
+        for _ in range(5):
+            self._add_one(buf, val=1.0)
+        buf.commit()
+        # Episode 2: ignored
+        for _ in range(8):
+            self._add_one(buf, val=2.0)
+        buf.discard()
+        # Final: only episode 1's transitions are visible
+        assert len(buf) == 5
+        assert buf.pending_size == 0
+        # Spot-check: sampled rewards are all 1.0 (no leak from ep2)
+        sample = buf.sample(5)
+        for r in sample["reward"].squeeze():
+            assert r.item() == 1.0, (
+                "Sampled reward came from discarded episode 2 — "
+                "IGNORE is leaking into training."
+            )
+
+    def test_repeated_commit_discard_cycles(self):
+        """Locks in the multi-episode steady state. 10 episodes
+        alternating commit and discard — committed should hold half."""
+        buf = self._buf(capacity=1000)
+        for ep in range(10):
+            for _ in range(3):
+                self._add_one(buf, val=float(ep))
+            if ep % 2 == 0:
+                buf.commit()
+            else:
+                buf.discard()
+        # 5 committed episodes × 3 transitions = 15
+        assert len(buf) == 15
+        assert buf.pending_size == 0
+
+    # -----------------------------------------------------------------
+    # Drop-in compat with the ReplayBuffer interface
+    # -----------------------------------------------------------------
+
+    def test_capacity_attribute_forwarded(self):
+        buf = self._buf(capacity=200)
+        assert buf.capacity == 200
+
+    def test_private_attrs_forwarded_to_committed(self):
+        """Audit scripts and cross-module asserts read ``_action``,
+        ``ptr``, ``_done``, etc. directly. After commit they should
+        reflect committed buffer state."""
+        buf = self._buf()
+        for _ in range(3):
+            self._add_one(buf, val=1.0)
+        buf.commit()
+        # __getattr__ forwards
+        assert buf.ptr == 3
+        assert buf.size == 3
+        assert buf._done.shape[0] == 100  # underlying capacity
+
+    def test_save_load_only_persists_committed(self):
+        """Staging is volatile — never serialized. Reload is committed-only."""
+        import tempfile, os
+        buf = self._buf()
+        for _ in range(4):
+            self._add_one(buf, val=1.0)
+        buf.commit()
+        # Add to staging but don't commit
+        for _ in range(7):
+            self._add_one(buf, val=2.0)
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as f:
+            path = f.name
+        try:
+            buf.save(path)
+            # Reload into a fresh buffer
+            buf2 = self._buf()
+            buf2.load(path)
+            # Only the committed 4 are restored
+            assert len(buf2) == 4
+            assert buf2.pending_size == 0  # not persisted
+        finally:
+            os.unlink(path)
+
+    # -----------------------------------------------------------------
+    # peek_last_pending — used by cross-module assertions
+    # -----------------------------------------------------------------
+
+    def test_peek_last_pending_returns_most_recent(self):
+        buf = self._buf()
+        self._add_one(buf, val=1.0)
+        self._add_one(buf, val=2.0)
+        self._add_one(buf, val=3.0)
+        last = buf.peek_last_pending()
+        assert last is not None
+        assert last["reward"] == 3.0
+
+    def test_peek_last_pending_returns_none_when_empty(self):
+        buf = self._buf()
+        assert buf.peek_last_pending() is None
+        # And after commit (drains staging)
+        self._add_one(buf)
+        buf.commit()
+        assert buf.peek_last_pending() is None
+
+    def test_peek_does_not_consume(self):
+        buf = self._buf()
+        self._add_one(buf)
+        for _ in range(10):
+            assert buf.peek_last_pending() is not None
+        assert buf.pending_size == 1  # still 1 item
 
 
 # ===================================================================

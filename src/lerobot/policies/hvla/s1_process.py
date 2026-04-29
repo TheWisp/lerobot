@@ -146,18 +146,22 @@ def _rlt_flush_intervention_terminal(rlt_state, rlt_recorder, rlt_replay, infer_
         return
     rlt_state["total_transitions"] += 1
     # Cross-module invariant: flush_terminal claimed it wrote a
-    # done=True transition with the requested reward. The buffer's
-    # most recent slot must reflect that — catches a regression
-    # where the add path drops the done flag silently.
-    last_idx = (rlt_replay.ptr - 1) % rlt_replay.capacity
+    # done=True transition with the requested reward. The most
+    # recently STAGED entry must reflect that — catches regressions
+    # where the add path drops the done flag silently. With the
+    # two-stage buffer, the terminal isn't in the committed arrays
+    # yet (it'll move there at episode end), so we inspect staging.
+    last = rlt_replay.peek_last_pending()
+    assert last is not None, (
+        "flush_terminal returned True but the buffer has no pending writes"
+    )
     assert (
-        rlt_replay._done[last_idx, 0] > 0.5
-        and abs(rlt_replay._reward[last_idx, 0].item() - terminal_reward) < 1e-6
+        bool(last["done"]) is True
+        and abs(float(last["reward"]) - terminal_reward) < 1e-6
     ), (
-        f"flush_terminal returned True but last buffer slot[{last_idx}] "
-        f"has done={rlt_replay._done[last_idx, 0].item()} "
-        f"reward={rlt_replay._reward[last_idx, 0].item():.3f} "
-        f"(expected done=1, reward={terminal_reward:+.3f})"
+        f"flush_terminal returned True but the last pending transition has "
+        f"done={last['done']} reward={last['reward']:.3f} "
+        f"(expected done=True, reward={terminal_reward:+.3f})"
     )
     logger.info(
         "RLT: intervention-terminal r=%+.2f flushed (%s)",
@@ -646,7 +650,7 @@ def run_s1(
         from lerobot.policies.hvla.rlt.config import RLTConfig
         from lerobot.policies.hvla.rlt.token import RLTokenEncoder, load_rlt_token_config
         from lerobot.policies.hvla.rlt.actor_critic import TD3Agent
-        from lerobot.policies.hvla.rlt.replay_buffer import ReplayBuffer
+        from lerobot.policies.hvla.rlt.replay_buffer import TransactionalReplayBuffer
 
         rlt_config = RLTConfig(
             rl_token_dim=policy.config.hidden_dim,
@@ -728,7 +732,7 @@ def run_s1(
             assert rlt_checkpoint, "--rlt-deploy requires --rlt-checkpoint (which actor to deploy?)"
             rlt_replay = None
         else:
-            rlt_replay = ReplayBuffer(
+            rlt_replay = TransactionalReplayBuffer(
                 rlt_config.replay_capacity, rlt_config.rl_token_dim,
                 state_dim, action_dim, rl_chunk_length, device,
             )
@@ -1745,16 +1749,17 @@ def run_s1(
             lifecycle = rlt_state["lifecycle"]
             if lifecycle.is_ignored():
                 # Operator pressed DOWN — discard this episode entirely.
-                # Truncate the replay buffer back to its size at episode
-                # start, drop any pending intervention chunks, decrement
-                # the episode counter so the next iteration reuses it,
-                # and skip metrics + checkpoint save. ``latest/`` stays
-                # at the previous episode's clean save.
-                pre_size = lifecycle.buffer_size_at_start
+                # Drop staging (transitions accumulated this episode never
+                # entered the committed buffer in the first place — the
+                # TransactionalReplayBuffer's structural guarantee), drop
+                # pending intervention chunks, decrement the episode
+                # counter so the next iteration reuses it, and skip
+                # metrics + checkpoint save. ``latest/`` stays at the
+                # previous episode's clean save.
                 if rlt_recorder is not None:
                     rlt_recorder.reset()
                 dropped = (
-                    rlt_replay.truncate(pre_size) if rlt_replay is not None else 0
+                    rlt_replay.discard() if rlt_replay is not None else 0
                 )
                 rlt_state["total_transitions"] -= dropped
                 # Roll back the counter that was incremented at episode start.
@@ -1824,6 +1829,14 @@ def run_s1(
                     duration_s=ep_duration,
                 )
                 save_metrics_to_file()
+
+                # Commit staged transitions into the committed buffer.
+                # Done AFTER metrics + log so the printed
+                # ``total_transitions`` tally matches what was accumulated
+                # during the episode. From the next episode onward,
+                # grad-update sampling sees this episode's transitions.
+                if rlt_replay is not None:
+                    rlt_replay.commit()
 
                 lifecycle.end_episode()
 

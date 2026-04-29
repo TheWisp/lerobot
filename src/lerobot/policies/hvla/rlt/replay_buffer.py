@@ -186,3 +186,185 @@ class ReplayBuffer:
     def __len__(self) -> int:
         with self._lock:
             return self.size
+
+
+class TransactionalReplayBuffer:
+    """Replay buffer with database-style transaction semantics:
+    ``add()`` writes are *pending* until ``commit()`` (= move into the
+    underlying committed buffer) or ``discard()`` (= drop them). The
+    pending writes are invisible to ``sample()`` and to ``len()`` —
+    the only externally observable state is the committed buffer.
+
+    Used here at episode granularity: each episode is one
+    transaction. ``commit()`` runs at success / abort / fail / timeout
+    (every outcome that should keep the data); ``discard()`` runs at
+    IGNORE (the operator pressed DOWN to throw out the episode).
+
+    **Invariant**: ``sample()`` returns ONLY committed transitions.
+    Pending writes are invisible to the gradient-update sampling
+    path until the transaction ends. This makes IGNORE provably
+    zero-impact on training: discarded writes never reach the
+    sampler, so the critic and actor never see them.
+
+    The previous design (``ReplayBuffer.add`` directly +
+    ``truncate(ep_start_size)`` on IGNORE) had a structural leak:
+    grad updates fired during the episode could sample the
+    in-progress transitions before the truncate call ever ran. Small
+    in expectation but non-zero.
+
+    Drop-in replacement at the public API level (``add`` / ``sample``
+    / ``__len__`` / ``capacity`` / ``save`` / ``load``). Private
+    attribute access (``_action``, ``_z_rl``, ``ptr``, etc.) forwards
+    to the committed buffer via ``__getattr__`` so existing call sites
+    that poke internals (e.g. for cross-module assertions) keep
+    working.
+
+    Cost: writes from transaction N only become sampleable after
+    ``commit()`` lands them in committed (i.e., starting in
+    transaction N+1 if commits are scoped to transactions). With
+    UTD=5 and ~25 grad updates/s wall-clock, that's ~250 grad steps
+    of staleness per transaction boundary. Acceptable trade for the
+    structural guarantee.
+    """
+
+    def __init__(
+        self,
+        capacity: int,
+        rl_token_dim: int,
+        state_dim: int,
+        action_dim: int,
+        chunk_length: int,
+        device: torch.device,
+    ):
+        self._lock = threading.Lock()
+        self._committed = ReplayBuffer(
+            capacity, rl_token_dim, state_dim, action_dim, chunk_length, device,
+        )
+        # Pending writes are a list of dicts (the kwargs that ``add``
+        # was called with). One per transition. At ~6 Hz inference and
+        # ~30s episodes, max ~180 entries per transaction — small enough
+        # that a Python list is fine. No pre-allocation pressure.
+        self._pending: list[dict] = []
+
+    # ---------------------------------------------------------------------
+    # Inference-thread / recorder-thread API
+    # ---------------------------------------------------------------------
+
+    def add(
+        self,
+        z_rl: Tensor,
+        state: Tensor,
+        action_chunk: Tensor,
+        ref_chunk: Tensor,
+        reward: float,
+        next_z_rl: Tensor,
+        next_state: Tensor,
+        next_ref_chunk: Tensor,
+        done: bool,
+    ) -> None:
+        """Append a pending transition. Does NOT touch the committed
+        buffer; ``sample()`` won't see this until ``commit()``."""
+        # Detach + cpu now so re-using the same tensor for next chunk
+        # doesn't retroactively mutate this entry. Same contract as
+        # ``ReplayBuffer.add``.
+        item = {
+            "z_rl": z_rl.detach().cpu(),
+            "state": state.detach().cpu(),
+            "action_chunk": action_chunk.detach().cpu(),
+            "ref_chunk": ref_chunk.detach().cpu(),
+            "reward": float(reward),
+            "next_z_rl": next_z_rl.detach().cpu(),
+            "next_state": next_state.detach().cpu(),
+            "next_ref_chunk": next_ref_chunk.detach().cpu(),
+            "done": bool(done),
+        }
+        with self._lock:
+            self._pending.append(item)
+
+    def sample(self, batch_size: int) -> dict[str, Tensor]:
+        """Sample from the committed buffer ONLY. Pending writes are
+        invisible to the grad-update path — this is the structural
+        guarantee."""
+        return self._committed.sample(batch_size)
+
+    # ---------------------------------------------------------------------
+    # Transaction boundary (called from main thread)
+    # ---------------------------------------------------------------------
+
+    def commit(self) -> int:
+        """Move all pending transitions into the committed buffer.
+        Called at the end of a transaction (success / abort / fail /
+        timeout — every outcome that should keep the data).
+
+        Returns the number of transitions committed. Concurrent
+        ``sample()`` calls during the loop see partial commit
+        states but each individual sample is internally consistent
+        (committed buffer's per-call lock keeps each ``add`` atomic)."""
+        with self._lock:
+            n = len(self._pending)
+            for item in self._pending:
+                self._committed.add(**item)
+            self._pending = []
+        return n
+
+    def discard(self) -> int:
+        """Drop all pending writes without committing. Called at the
+        end of a transaction that should be undone (IGNORE) — the
+        discarded transitions never enter the committed buffer and
+        so are never sampled.
+
+        Returns the number of transitions discarded (for the log)."""
+        with self._lock:
+            n = len(self._pending)
+            self._pending = []
+        return n
+
+    @property
+    def pending_size(self) -> int:
+        with self._lock:
+            return len(self._pending)
+
+    def peek_last_pending(self) -> dict | None:
+        """Return the most recently added pending transition's kwargs
+        (or None if there are no pending writes). Used by cross-module
+        assertions that need to verify the recorder wrote what it
+        claimed (e.g. ``_rlt_flush_intervention_terminal``)."""
+        with self._lock:
+            return self._pending[-1] if self._pending else None
+
+    # ---------------------------------------------------------------------
+    # Persistence — only the committed buffer is saved.
+    # Staging is per-run, per-episode, volatile by design.
+    # ---------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Save committed contents. Pending writes are intentionally
+        NOT persisted — they're volatile per-transaction state. If a
+        crash happens mid-transaction, the next run starts with no
+        pending writes and the in-progress transaction is effectively
+        lost (which is correct: we don't know its outcome yet)."""
+        self._committed.save(path)
+
+    def load(self, path: str) -> None:
+        self._committed.load(path)
+
+    def __len__(self) -> int:
+        """Length = committed size. Pending writes are invisible at
+        this level too, matching the ``sample`` invariant."""
+        return len(self._committed)
+
+    # ---------------------------------------------------------------------
+    # Forward private/public attribute access to committed for code
+    # that pokes internals (audit scripts, tests, cross-module asserts).
+    # ---------------------------------------------------------------------
+
+    def __getattr__(self, name: str):
+        # Only fires on attributes not found through normal lookup
+        # (i.e. anything not set on self). Forward to committed.
+        # Guard against recursion if _committed isn't set yet (during
+        # __init__ before assignment, or in pathological cases).
+        try:
+            committed = object.__getattribute__(self, "_committed")
+        except AttributeError as e:
+            raise AttributeError(name) from e
+        return getattr(committed, name)
