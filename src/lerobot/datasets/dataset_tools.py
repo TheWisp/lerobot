@@ -43,7 +43,11 @@ from lerobot.datasets.aggregate import (
     aggregate_videos,
     validate_all_metadata,
 )
-from lerobot.datasets.compute_stats import aggregate_stats, compute_episode_stats
+from lerobot.datasets.compute_stats import (
+    aggregate_stats,
+    compute_episode_stats,
+    compute_relative_action_stats,
+)
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import (
     DATA_DIR,
@@ -61,7 +65,7 @@ from lerobot.datasets.utils import (
     write_tasks,
 )
 from lerobot.datasets.video_utils import encode_video_frames, get_video_info
-from lerobot.utils.constants import HF_LEROBOT_HOME, OBS_IMAGE
+from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_IMAGE, OBS_STATE
 
 
 def _load_episode_with_stats(src_dataset: LeRobotDataset, episode_idx: int) -> dict:
@@ -3017,6 +3021,110 @@ def _delete_episodes_metadata_virtual(
     dataset.meta.info["total_episodes"] = len(episodes_to_keep)
     dataset.meta.info["total_frames"] -= frames_removed
     write_info(dataset.meta.info, dataset.root)
+
+
+def recompute_stats(
+    dataset: LeRobotDataset,
+    skip_image_video: bool = True,
+    relative_action: bool = False,
+    relative_exclude_joints: list[str] | None = None,
+    chunk_size: int = 50,
+    num_workers: int = 0,
+) -> LeRobotDataset:
+    """Recompute stats.json from scratch by iterating all episodes.
+
+    Args:
+        dataset: The LeRobotDataset to recompute stats for.
+        skip_image_video: If True (default), only recompute stats for numeric features
+            (action, state, etc.) and keep existing image/video stats unchanged.
+        relative_action: If True, compute action stats in relative space by
+            iterating all valid action chunks and subtracting the current state.
+            This matches the normalization distribution the model sees during
+            training with ``use_relative_actions=True``.
+        relative_exclude_joints: Joint names to exclude from relative conversion when
+            relative_action=True. These dims keep absolute stats.
+        chunk_size: Action chunk size used for relative stats computation. Should match
+            ``policy.chunk_size``. Only used when ``relative_action=True``.
+        num_workers: Number of parallel threads for relative action stats computation.
+            Values ≤1 mean single-threaded. Only used when ``relative_action=True``.
+
+    Returns:
+        The same dataset with updated stats.
+    """
+    features = dataset.meta.features
+    meta_keys = {"index", "episode_index", "task_index", "frame_index", "timestamp"}
+    numeric_features = {
+        k: v
+        for k, v in features.items()
+        if v["dtype"] not in ["image", "video", "string"] and k not in meta_keys
+    }
+
+    if skip_image_video:
+        features_to_compute = numeric_features
+    else:
+        features_to_compute = {
+            k: v for k, v in features.items() if v["dtype"] != "string" and k not in meta_keys
+        }
+
+    relative_action_stats = None
+    if relative_action and ACTION in features and OBS_STATE in features:
+        if relative_exclude_joints is None:
+            relative_exclude_joints = ["gripper"]
+        relative_action_stats = compute_relative_action_stats(
+            hf_dataset=dataset.hf_dataset,
+            features=features,
+            chunk_size=chunk_size,
+            exclude_joints=relative_exclude_joints,
+            num_workers=num_workers,
+        )
+        features_to_compute.pop(ACTION, None)
+
+    logging.info(f"Recomputing stats for features: {list(features_to_compute.keys())}")
+
+    data_dir = dataset.root / DATA_DIR
+    parquet_files = sorted(data_dir.glob("*/*.parquet"))
+    if not parquet_files:
+        raise ValueError(f"No parquet files found in {data_dir}")
+
+    all_episode_stats = []
+    numeric_keys = [k for k, v in features_to_compute.items() if v["dtype"] not in ["image", "video"]]
+
+    for parquet_path in tqdm(parquet_files, desc="Computing stats from data files"):
+        df = pd.read_parquet(parquet_path)
+
+        for ep_idx in sorted(df["episode_index"].unique()):
+            ep_df = df[df["episode_index"] == ep_idx]
+            episode_data = {}
+            for key in numeric_keys:
+                if key in ep_df.columns:
+                    values = ep_df[key].values
+                    if hasattr(values[0], "__len__"):
+                        episode_data[key] = np.stack(values)
+                    else:
+                        episode_data[key] = np.array(values)
+
+            ep_stats = compute_episode_stats(episode_data, features_to_compute)
+            all_episode_stats.append(ep_stats)
+
+    if features_to_compute and not all_episode_stats:
+        logging.warning("No episode stats computed")
+        return dataset
+
+    new_stats = aggregate_stats(all_episode_stats) if all_episode_stats else {}
+
+    if relative_action_stats is not None:
+        new_stats[ACTION] = relative_action_stats
+
+    if dataset.meta.stats:
+        for key, value in dataset.meta.stats.items():
+            if key not in new_stats:
+                new_stats[key] = value
+
+    write_stats(new_stats, dataset.root)
+    dataset.meta.stats = new_stats
+
+    logging.info("Stats recomputed successfully")
+    return dataset
 
 
 def convert_image_to_video_dataset(

@@ -208,6 +208,7 @@ from lerobot.datasets import (
     delete_episodes,
     merge_datasets,
     modify_tasks,
+    recompute_stats,
     remove_feature,
     split_dataset,
 )
@@ -268,6 +269,16 @@ class ConvertImageToVideoConfig(OperationConfig):
     num_workers: int = 4
     max_episodes_per_batch: int | None = None
     max_frames_per_batch: int | None = None
+
+
+@OperationConfig.register_subclass("recompute_stats")
+@dataclass
+class RecomputeStatsConfig(OperationConfig):
+    skip_image_video: bool = True
+    relative_action: bool = False
+    relative_exclude_joints: list[str] | None = None
+    chunk_size: int = 50
+    num_workers: int = 0
 
 
 @OperationConfig.register_subclass("info")
@@ -619,6 +630,35 @@ def handle_trim_episode(cfg: EditDatasetConfig) -> None:
         modified_dataset.push_to_hub()
 
 
+def handle_recompute_stats(cfg: EditDatasetConfig) -> None:
+    if not isinstance(cfg.operation, RecomputeStatsConfig):
+        raise ValueError("Operation config must be RecomputeStatsConfig")
+
+    dataset = LeRobotDataset(cfg.repo_id, root=cfg.root)
+
+    logging.info(f"Recomputing stats for {cfg.repo_id}")
+    if cfg.operation.relative_action:
+        logging.info(
+            f"Relative action stats enabled (chunk_size={cfg.operation.chunk_size}, "
+            f"exclude_joints={cfg.operation.relative_exclude_joints})"
+        )
+
+    recompute_stats(
+        dataset,
+        skip_image_video=cfg.operation.skip_image_video,
+        relative_action=cfg.operation.relative_action,
+        relative_exclude_joints=cfg.operation.relative_exclude_joints,
+        chunk_size=cfg.operation.chunk_size,
+        num_workers=cfg.operation.num_workers,
+    )
+
+    logging.info(f"Stats written to {dataset.root}")
+
+    if cfg.push_to_hub:
+        logging.info(f"Pushing to hub as {dataset.meta.repo_id}...")
+        dataset.push_to_hub()
+
+
 def _get_dataset_size(repo_path):
     import os
 
@@ -692,6 +732,8 @@ def edit_dataset(cfg: EditDatasetConfig) -> None:
         handle_convert_image_to_video(cfg)
     elif operation_type == "trim_episode":
         handle_trim_episode(cfg)
+    elif operation_type == "recompute_stats":
+        handle_recompute_stats(cfg)
     elif operation_type == "info":
         handle_info(cfg)
     else:

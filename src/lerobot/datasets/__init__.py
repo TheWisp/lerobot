@@ -30,6 +30,7 @@ from .dataset_tools import (
     merge_datasets,
     modify_features,
     modify_tasks,
+    recompute_stats,
     remove_feature,
     split_dataset,
 )
@@ -71,6 +72,7 @@ __all__ = [
     "merge_datasets",
     "modify_features",
     "modify_tasks",
+    "recompute_stats",
     "remove_feature",
     "resolve_delta_timestamps",
     "safe_stop_image_writer",
