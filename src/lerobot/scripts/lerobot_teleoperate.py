@@ -15,6 +15,8 @@
 """
 Simple script to control a robot from teleoperation.
 
+Requires: pip install 'lerobot[hardware]'
+
 Example:
 
 ```shell
@@ -56,10 +58,9 @@ import time
 from dataclasses import asdict, dataclass
 from pprint import pformat
 
-import rerun as rr
-
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
+from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
+from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
+from lerobot.cameras.zmq import ZMQCameraConfig  # noqa: F401
 from lerobot.configs import parser
 from lerobot.processor import (
     RobotAction,
@@ -104,7 +105,7 @@ from lerobot.teleoperators import (  # noqa: F401
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
-from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+from lerobot.utils.visualization_utils import init_rerun, log_rerun_data, shutdown_rerun
 
 
 @dataclass
@@ -156,7 +157,6 @@ def teleop_loop(
 
     display_len = max(len(key) for key in robot.action_features)
     start = time.perf_counter()
-
     while True:
         loop_start = time.perf_counter()
 
@@ -168,6 +168,9 @@ def teleop_loop(
             obs_for_stream = obs
             for step in obs_stream_steps:
                 obs_for_stream = step.observation(obs_for_stream)
+
+        if robot.name == "unitree_g1":
+            teleop.send_feedback(obs)
 
         # Get teleop action
         raw_action = teleop.get_action()
@@ -261,7 +264,7 @@ def teleoperate(cfg: TeleoperateConfig):
         pass
     finally:
         if cfg.display_data:
-            rr.rerun_shutdown()
+            shutdown_rerun()
         teleop.disconnect()
         robot.disconnect()
 

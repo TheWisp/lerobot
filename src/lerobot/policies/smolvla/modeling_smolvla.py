@@ -61,15 +61,17 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor, nn
 
-from lerobot.policies.pretrained import PreTrainedPolicy
-from lerobot.policies.rtc.modeling_rtc import RTCProcessor
-from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
-from lerobot.policies.smolvla.smolvlm_with_expert import SmolVLMWithExpertModel
-from lerobot.policies.utils import (
+from lerobot.utils.constants import ACTION, OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, OBS_STATE
+from lerobot.utils.device_utils import get_safe_dtype
+from lerobot.utils.import_utils import require_package
+
+from ..pretrained import PreTrainedPolicy
+from ..rtc.modeling_rtc import RTCProcessor
+from ..utils import (
     populate_queues,
 )
-from lerobot.utils.constants import ACTION, OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, OBS_STATE
-from lerobot.utils.utils import get_safe_dtype
+from .configuration_smolvla import SmolVLAConfig
+from .smolvlm_with_expert import SmolVLMWithExpertModel
 
 
 class ActionSelectKwargs(TypedDict, total=False):
@@ -239,6 +241,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
                     the configuration class is used.
         """
 
+        require_package("transformers", extra="smolvla")
         super().__init__(config)
         config.validate_features()
         self.config = config
@@ -375,9 +378,11 @@ class SmolVLAPolicy(PreTrainedPolicy):
         lang_tokens = batch[f"{OBS_LANGUAGE_TOKENS}"]
         lang_masks = batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
         actions = self.prepare_action(batch)
-        actions_is_pad = batch.get("actions_id_pad")
+        actions_is_pad = batch.get("action_is_pad")
         loss_dict = {}
         losses = self.model.forward(images, img_masks, lang_tokens, lang_masks, state, actions, noise, time)
+        original_action_dim = self.config.action_feature.shape[0]
+        losses = losses[:, :, :original_action_dim]
         loss_dict["losses_after_forward"] = losses.clone().mean().item()
 
         if actions_is_pad is not None:

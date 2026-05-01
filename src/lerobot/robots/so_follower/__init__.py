@@ -22,3 +22,15 @@ from .config_so_follower import (
     SOFollowerRobotConfig,
 )
 from .so_follower import SO100Follower, SO101Follower, SO107Follower, SOFollower
+
+__all__ = [
+    "SO100Follower",
+    "SO100FollowerConfig",
+    "SO101Follower",
+    "SO101FollowerConfig",
+    "SO107Follower",
+    "SO107FollowerConfig",
+    "SOFollower",
+    "SOFollowerConfig",
+    "SOFollowerRobotConfig",
+]

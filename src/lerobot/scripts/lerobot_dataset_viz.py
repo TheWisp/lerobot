@@ -15,6 +15,8 @@
 # limitations under the License.
 """ Visualize data of **all** frames of any episode of a dataset of type LeRobotDataset.
 
+Requires: pip install 'lerobot[dataset_viz]'  (includes dataset + viz extras)
+
 Note: The last frame of the episode doesn't always correspond to a final state.
 That's because our datasets are composed of transition from state to state up to
 the antepenultimate state associated to the ultimate action to arrive in the final state.
@@ -66,12 +68,11 @@ import time
 from pathlib import Path
 
 import numpy as np
-import rerun as rr
 import torch
 import torch.utils.data
 import tqdm
 
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets import LeRobotDataset
 from lerobot.utils.constants import ACTION, DONE, OBS_STATE, REWARD
 from lerobot.utils.utils import init_logging
 
@@ -117,9 +118,13 @@ def visualize_dataset(
     if mode not in ["local", "distant"]:
         raise ValueError(mode)
 
-    # spawn=True will spawn a new viewer or connect to existing one
-    should_spawn = mode == "local" and not save
-    rr.init(repo_id, recording_id=f"episode_{episode_index}", spawn=should_spawn)
+    from lerobot.utils.import_utils import require_package
+
+    require_package("rerun-sdk", extra="viz", import_name="rerun")
+    import rerun as rr
+
+    spawn_local_viewer = mode == "local" and not save
+    rr.init(f"{repo_id}/episode_{episode_index}", spawn=spawn_local_viewer)
 
     # Manually call python garbage collector after `rr.init` to avoid hanging in a blocking flush
     # when iterating on a dataloader with `num_workers` > 0
