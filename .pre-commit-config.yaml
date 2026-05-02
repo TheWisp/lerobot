@@ -84,6 +84,16 @@ repos:
       args: ["-c", "pyproject.toml"]
       additional_dependencies: ["bandit[toml]"]
 
+  ##### Local: destructive-op annotations #####
+  - repo: local
+    hooks:
+      - id: no-silent-destruct
+        name: Flag destructive filesystem ops without justification
+        entry: scripts/lint/no_silent_destruct.py
+        language: python
+        files: ^(src|scripts)/.*\.py$
+        pass_filenames: true
+
   # TODO(Steven): Uncomment when ready to use
   ##### Static Analysis & Typing #####
   - repo: https://github.com/pre-commit/mirrors-mypy
