@@ -572,7 +572,9 @@ def concatenate_video_files(
 
     input_container.close()
     output_container.close()
+    # safe-destruct: video concat: move temp → final
     shutil.move(tmp_output_video_path, output_video_path)
+    # safe-destruct: video concat: drop temp file after move
     Path(tmp_concatenate_path).unlink()
 
 
@@ -896,6 +898,7 @@ class StreamingVideoEncoder:
             # Clean up temp MP4 files
             video_path = self._video_paths.get(video_key)
             if video_path is not None and video_path.exists():
+                # safe-destruct: video encode: cleanup intermediate dir on completion
                 shutil.rmtree(str(video_path.parent), ignore_errors=True)
 
         self._cleanup()
@@ -1093,6 +1096,7 @@ class VideoEncodingManager:
         if img_dir.exists():
             png_files = list(img_dir.rglob("*.png"))
             if len(png_files) == 0:
+                # safe-destruct: video encode: drop temp images after encoding
                 shutil.rmtree(img_dir)
                 logger.debug("Cleaned up empty images directory")
             else:

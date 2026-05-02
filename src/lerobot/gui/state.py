@@ -141,6 +141,7 @@ def save_edits_to_file(root: Path, edits: list[PendingEdit]) -> None:
     if not edits:
         # No edits - remove file if it exists
         if edits_file.exists():
+            # safe-destruct: our edits metadata file
             edits_file.unlink()
             logger.info(f"Removed empty edits file: {edits_file}")
         return
@@ -193,5 +194,6 @@ def clear_edits_file(root: Path) -> None:
     """
     edits_file = root / EDITS_FILENAME
     if edits_file.exists():
+        # safe-destruct: our edits metadata file
         edits_file.unlink()
         logger.info(f"Cleared edits file: {edits_file}")

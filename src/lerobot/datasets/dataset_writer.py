@@ -75,6 +75,7 @@ def _encode_video_worker(
     encode_video_frames(
         img_dir, temp_path, fps, vcodec=vcodec, overwrite=True, encoder_threads=encoder_threads
     )
+    # safe-destruct: video encode worker: clean up its own temp img dir
     shutil.rmtree(img_dir)
     return temp_path
 
@@ -314,6 +315,7 @@ class DatasetWriter:
             tmp_videos_root = self._root / "tmp_videos"
             if tmp_videos_root.exists():
                 with contextlib.suppress(OSError):
+                    # safe-destruct: our per-camera streaming temp dir cleanup
                     tmp_videos_root.rmdir()
             # Note: encoder restart for next episode happens in clear_episode_buffer
             # when episode_data is None. For external episode_data (intervention dataset),
@@ -519,6 +521,7 @@ class DatasetWriter:
                 video_key=video_key, chunk_index=chunk_idx, file_index=file_idx
             )
             new_path.parent.mkdir(parents=True, exist_ok=True)
+            # safe-destruct: video encode: move temp → final episode video path
             shutil.move(str(ep_path), str(new_path))
         else:
             latest_ep = self._meta.latest_episode
@@ -537,6 +540,7 @@ class DatasetWriter:
                     video_key=video_key, chunk_index=chunk_idx, file_index=file_idx
                 )
                 new_path.parent.mkdir(parents=True, exist_ok=True)
+                # safe-destruct: video encode: move temp → final episode video path
                 shutil.move(str(ep_path), str(new_path))
                 latest_duration_in_s = 0.0
             else:
@@ -546,6 +550,7 @@ class DatasetWriter:
                 )
 
         # Remove temporary directory
+        # safe-destruct: video encode: drop temp parent dir after move
         shutil.rmtree(str(ep_path.parent))
 
         # Update video info (only needed when first episode is encoded)
@@ -587,6 +592,7 @@ class DatasetWriter:
             for cam_key in self._meta.image_keys:
                 img_dir = self._get_image_file_dir(episode_index, cam_key)
                 if img_dir.is_dir():
+                    # safe-destruct: clear_episode_buffer: drop our episode temp images
                     shutil.rmtree(img_dir)
 
         self.episode_buffer = self._create_episode_buffer()
@@ -663,6 +669,7 @@ class DatasetWriter:
                 logger.debug(
                     f"Cleaning up interrupted episode images for episode {episode_index}, camera {key}"
                 )
+                # safe-destruct: cleanup_interrupted_episode: drop our episode temp images
                 shutil.rmtree(img_dir)
 
     # ── Per-camera streaming encoder helpers (HEAD's path) ──

@@ -328,27 +328,20 @@ def _warmup_s1(policy, preprocessor, s1_image_keys, device, resize_to,
 
 
 def _create_or_resume_dataset(repo_id: str, fps: int, features: dict, robot_type: str):
-    """HACK: wrapper over LeRobotDataset.create that resumes if dir exists.
+    """Wrapper over LeRobotDataset.create that resumes if dir exists.
 
-    When a previous run crashes mid-creation, the dataset dir is left behind
-    and LeRobotDataset.create(exist_ok=False) refuses to overwrite.
-    This tries to resume first, falling back to delete+recreate if corrupted.
-    TODO: move this logic into LeRobotDataset itself.
+    Safety: when the directory exists, resume must succeed. If resume fails
+    (e.g. corrupted metadata), this raises rather than silently rmtree-ing the
+    user's data. The caller can manually delete the directory after backing up.
     """
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.utils.constants import HF_LEROBOT_HOME
 
     dataset_root = HF_LEROBOT_HOME / repo_id
     if dataset_root.exists():
-        try:
-            dataset = LeRobotDataset(repo_id)
-            dataset.writer.episode_buffer = dataset.writer._create_episode_buffer()
-            dataset.writer._init_video_encoders()
-            return dataset
-        except Exception as e:
-            logger.warning("Failed to resume '%s' (%s), recreating", repo_id, e)
-            import shutil
-            shutil.rmtree(dataset_root)
+        # Pass explicit root so we don't trigger a Hub probe (which can 404
+        # for local-only datasets and was the root cause of the May 2026 incident).
+        return LeRobotDataset.resume(repo_id, root=dataset_root)
 
     return LeRobotDataset.create(
         repo_id=repo_id, fps=fps, features=features,
@@ -1870,9 +1863,11 @@ def run_s1(
                         snap_dir = rlt_state["output_dir"] / f"ep_{ep + 1}"
                         try:
                             if snap_dir.exists():
+                                # safe-destruct: RLT checkpoint snapshot we just wrote — refresh
                                 shutil.rmtree(snap_dir)
                             shutil.copytree(save_dir, snap_dir)
                             logger.info("RLT: Snapshot → %s (permanent, for rollback)", snap_dir)
+                        # safe-destruct: RLT checkpoint snapshot we just wrote — refresh
                         except Exception as e:
                             logger.error("RLT: Snapshot failed: %s", e)
                 except Exception as e:

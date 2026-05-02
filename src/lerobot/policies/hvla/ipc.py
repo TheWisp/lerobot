@@ -59,6 +59,7 @@ class SharedBlock:
                     try:
                         old = multiprocessing.shared_memory.SharedMemory(name=name)
                         old.close()
+                        # safe-destruct: stale shm cleanup we created
                         old.unlink()
                     except FileNotFoundError:
                         pass
@@ -135,6 +136,7 @@ class SharedBlock:
         _orig = resource_tracker.unregister
         resource_tracker.unregister = lambda *a, **kw: None
         try:
+            # safe-destruct: shm we created, cleanup on close
             self._shm.unlink()
         except Exception:
             pass
@@ -238,8 +240,11 @@ class SharedLatentCache:
         self._subtask_block.close()
         self._confidence_block.close()
         if self._block._owner:
+            # safe-destruct: shm we created, cleanup on close
             self._block.unlink()
+            # safe-destruct: shm we created, cleanup on close
             self._subtask_block.unlink()
+            # safe-destruct: shm we created, cleanup on close
             self._confidence_block.unlink()
 
 
@@ -306,9 +311,11 @@ class SharedImageBuffer:
         for block in self._cam_blocks.values():
             block.close()
             if block._owner:
+                # safe-destruct: shm we created, cleanup on close
                 block.unlink()
         self._state_block.close()
         if self._state_block._owner:
+            # safe-destruct: shm we created, cleanup on close
             self._state_block.unlink()
 
 

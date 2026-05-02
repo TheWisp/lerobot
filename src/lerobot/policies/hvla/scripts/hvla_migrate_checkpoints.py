@@ -89,6 +89,7 @@ def migrate_run(run_dir: Path, dry_run: bool = False):
         if needs_wrapper and target_dir != ckpt:
             print(f"    Move {ckpt} → {target_dir}")
             if not dry_run:
+                # safe-destruct: explicit migration script
                 shutil.move(str(ckpt), str(target_dir))
 
         print(f"    Create {pretrained_dir}/")
@@ -102,6 +103,7 @@ def migrate_run(run_dir: Path, dry_run: bool = False):
             if src.exists():
                 print(f"    Move {fname} → pretrained_model/{fname}")
                 if not dry_run:
+                    # safe-destruct: explicit migration script
                     shutil.move(str(src), str(dst))
 
         # Create config.json
@@ -142,6 +144,7 @@ def migrate_run(run_dir: Path, dry_run: bool = False):
         if opt_src.exists():
             print(f"    Move optimizer.pt → training_state/optimizer.pt")
             if not dry_run:
+                # safe-destruct: explicit migration script
                 shutil.move(str(opt_src), str(opt_dst))
 
         # Create training_step.json
@@ -161,6 +164,7 @@ def migrate_run(run_dir: Path, dry_run: bool = False):
         if ckpt_dirs:
             last_link = ckpts_dir / "last"
             if last_link.exists() or last_link.is_symlink():
+                # safe-destruct: explicit migration script: symlink update
                 last_link.unlink()
             last_link.symlink_to(ckpt_dirs[-1].name)
             print(f"\n  Created symlink: last → {ckpt_dirs[-1].name}")

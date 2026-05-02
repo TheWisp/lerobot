@@ -1990,6 +1990,7 @@ def _estimate_frame_size_via_calibration(
     finally:
         # Clean up calibration files
         if calibration_dir.exists():
+            # safe-destruct: internal calibration scratch dir
             shutil.rmtree(calibration_dir)
 
 
@@ -2517,9 +2518,11 @@ def _trim_episode_videos(
             )
 
             # Replace original with new video
+            # safe-destruct: in-place trim: replace user video with trimmed; user-confirmed
             shutil.move(str(tmp_path), str(video_path))
         finally:
             if tmp_path.exists():
+                # safe-destruct: in-place trim: drop temp on error path
                 tmp_path.unlink()
 
 
@@ -2834,6 +2837,7 @@ def _delete_episodes_parquet_data_virtual(
 
         if len(df) == 0:
             # All data in this file was deleted - remove the file
+            # safe-destruct: in-place delete: drop empty parquet after filter
             parquet_path.unlink()
             continue
 
@@ -3002,6 +3006,7 @@ def _delete_episodes_metadata_virtual(
         df = df[mask].copy()
 
         if len(df) == 0:
+            # safe-destruct: in-place delete: drop empty parquet after filter
             parquet_path.unlink()
             continue
 
@@ -3312,6 +3317,7 @@ def convert_image_to_video_dataset(
                 )
 
                 # Clean up temporary images
+                # safe-destruct: convert_image_to_video: drop temp images after encode
                 shutil.rmtree(imgs_dir)
 
                 # Update metadata for each episode in the batch
@@ -3369,6 +3375,7 @@ def convert_image_to_video_dataset(
     finally:
         # Clean up temporary directory
         if temp_dir.exists():
+            # safe-destruct: convert_image_to_video: drop temp dir on completion
             shutil.rmtree(temp_dir)
 
     logging.info(f"Completed converting {dataset.repo_id} to video format")

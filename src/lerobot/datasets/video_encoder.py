@@ -203,6 +203,7 @@ class StreamingVideoEncoder:
 
         # Clean up temp file
         if self._tmp_video_path is not None and self._tmp_video_path.exists():
+            # safe-destruct: our own temp video, controlled path
             self._tmp_video_path.unlink()
 
     def get_sampled_frames(self) -> list[np.ndarray]:

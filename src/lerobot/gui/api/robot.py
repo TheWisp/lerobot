@@ -230,6 +230,7 @@ def _delete_profile(profiles_dir: Path, name: str) -> None:
     path = profiles_dir / f"{name}.json"
     if not path.exists():
         raise HTTPException(404, f"Profile '{name}' not found")
+    # safe-destruct: user-confirmed delete via GUI dialog
     path.unlink()
     logger.info(f"Deleted profile: {path}")
 
@@ -244,6 +245,7 @@ def _rename_profile(profiles_dir: Path, old_name: str, new_name: str) -> None:
     data = json.loads(old_path.read_text())
     data["name"] = new_name
     new_path.write_text(json.dumps(data, indent=2))
+    # safe-destruct: rename: drop old after writing new
     old_path.unlink()
     logger.info(f"Renamed profile: {old_path} -> {new_path}")
 

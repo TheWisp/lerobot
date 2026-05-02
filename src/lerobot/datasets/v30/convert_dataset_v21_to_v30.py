@@ -487,10 +487,13 @@ def convert_dataset(
 
     # Handle old_root cleanup if both old_root and root exist
     if old_root.is_dir() and root.is_dir():
+        # safe-destruct: explicit CLI migration: replace old root with new
         shutil.rmtree(str(root))
+        # safe-destruct: explicit CLI migration: rename old → new root
         shutil.move(str(old_root), str(root))
 
     if new_root.is_dir():
+        # safe-destruct: explicit CLI migration: replace existing target
         shutil.rmtree(new_root)
 
     if not use_local_dataset:
@@ -507,7 +510,9 @@ def convert_dataset(
     episodes_videos_metadata = convert_videos(root, new_root, video_file_size_in_mb)
     convert_episodes_metadata(root, new_root, episodes_metadata, episodes_videos_metadata)
 
+    # safe-destruct: explicit CLI migration: rotate old → backup
     shutil.move(str(root), str(old_root))
+    # safe-destruct: explicit CLI migration: install new in place of old
     shutil.move(str(new_root), str(root))
 
     if push_to_hub:

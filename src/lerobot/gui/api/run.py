@@ -384,6 +384,7 @@ async def _stop_debug_process() -> None:
     # Clean up log file
     if _debug_output_path is not None:
         try:
+            # safe-destruct: our debug log temp file
             _debug_output_path.unlink(missing_ok=True)
         except Exception:
             pass

@@ -380,6 +380,7 @@ def train(args):
         # Update 'last' symlink
         last_link = ckpts_dir / "last"
         if last_link.exists() or last_link.is_symlink():
+            # safe-destruct: symlink update (not user data)
             last_link.unlink()
         last_link.symlink_to(ckpt_dir.name)
 

@@ -328,7 +328,9 @@ def get_output_path(
 
         if input_path.exists():
             if backup_path.exists():
+                # safe-destruct: in-place edit, drops prior _old backup; user-confirmed
                 shutil.rmtree(backup_path)
+            # safe-destruct: in-place edit, swap to _old before write; user-confirmed
             shutil.move(input_path, backup_path)
 
     return output_repo_id, output_path

@@ -77,6 +77,7 @@ class _Block:
                 try:
                     old = _shm.SharedMemory(name=name)
                     old.close()
+                    # safe-destruct: stale shm cleanup we created
                     old.unlink()
                 except FileNotFoundError:
                     pass
@@ -134,6 +135,7 @@ class _Block:
             _orig = resource_tracker.unregister
             resource_tracker.unregister = lambda *a, **kw: None
             try:
+                # safe-destruct: shm we created, cleanup on close
                 self._shm.unlink()
             except Exception:
                 pass
