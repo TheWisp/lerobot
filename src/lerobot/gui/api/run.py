@@ -227,6 +227,34 @@ def _write_gym_manipulator_config_tmp(cfg: dict) -> str:
         return tmp.name
 
 
+def _append_sim_controls_banner(env_profile: dict) -> None:
+    """Print a one-time controls hint to the Output panel right after a sim
+    launch. gym-hil prints its own keyboard list but doesn't say two
+    crucial things: (1) you have to press Space to enable intervention
+    before any movement key works, and (2) pynput captures keystrokes
+    system-wide, so typing Enter in the browser ends the episode."""
+    fields = env_profile.get("fields", {})
+    task = str(fields.get("task", ""))
+    if not ("Keyboard" in task or "Gamepad" in task):
+        return  # Base / autonomous variant — no human input expected
+    _append_output("")
+    _append_output("=== gym-hil controls (read me) ===")
+    _append_output("• Press SPACE first to enable intervention. The arm stays still until you do.")
+    if "Keyboard" in task:
+        _append_output(
+            "• Movement: Arrows = X/Y, Shift/RShift = Z down/up, LCtrl/RCtrl = gripper close/open."
+        )
+    else:
+        _append_output("• Movement: gamepad sticks + triggers.")
+    _append_output("• End episode: Enter = success, Backspace/Esc = failure (env auto-resets).")
+    _append_output("• Stop the run: hit the Stop button — Ctrl-C only works for direct CLI use.")
+    _append_output(
+        "• ⚠ Keyboard capture is system-wide (pynput): keys from ANY focused window reach gym-hil."
+    )
+    _append_output("===================================")
+    _append_output("")
+
+
 def _detect_linux_gamepad() -> bool:
     """Return True if a gamepad/joystick is plugged in on Linux.
 
@@ -758,6 +786,7 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
         cfg_path = _write_gym_manipulator_config_tmp(cfg)
         args = ["python", "-u", "-m", "lerobot.rl.gym_manipulator", f"--config_path={cfg_path}"]
         await _launch_subprocess(args, command="teleoperate", config=req.model_dump())
+        _append_sim_controls_banner(req.env)
         return {"status": "started", "command": "teleoperate", "pid": _active_process.pid}
 
     # Real-robot path
@@ -803,6 +832,7 @@ async def start_record(req: RecordRequest) -> dict:
         cfg_path = _write_gym_manipulator_config_tmp(cfg)
         args = ["python", "-u", "-m", "lerobot.rl.gym_manipulator", f"--config_path={cfg_path}"]
         await _launch_subprocess(args, command="record", config=req.model_dump())
+        _append_sim_controls_banner(req.env)
         return {"status": "started", "command": "record", "pid": _active_process.pid}
 
     # Real-robot path

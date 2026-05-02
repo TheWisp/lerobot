@@ -216,6 +216,26 @@ function renderEnvEditor() {
             html += 'Pick a <code>*Keyboard-v0</code> or <code>*Base-v0</code> variant from the <code>task</code> dropdown for a no-hardware setup.';
             html += '</div></div>';
         }
+        // gym-hil controls + the two non-obvious gotchas (intervention
+        // toggle, system-wide keyboard capture).
+        const isKeyboardTask = task.includes("Keyboard");
+        const isGamepadTask = task.includes("Gamepad");
+        if (isKeyboardTask || isGamepadTask) {
+            html += '<div class="form-section">';
+            html += '<div class="form-section-title">Controls (read this before Launch)</div>';
+            html += '<div class="form-hint" style="line-height:1.6">';
+            html += '<b>Press <code>Space</code> first</b> to enable intervention. Until you do, the arm stays still — even if you press the movement keys. Press <code>Space</code> again to release control.<br><br>';
+            html += '<b>Movement</b> (after Space): ';
+            if (isKeyboardTask) {
+                html += 'Arrows = X/Y, <code>Shift</code> / <code>RShift</code> = Z down/up, <code>LCtrl</code> / <code>RCtrl</code> = gripper close/open.<br>';
+            } else {
+                html += 'gamepad sticks + triggers.<br>';
+            }
+            html += '<b>End episode</b>: <code>Enter</code> = success, <code>Backspace</code> or <code>Esc</code> = failure. The env auto-resets and continues.<br>';
+            html += '<b>Stop the run</b>: hit the GUI <code>Stop</code> button (the printed "Press Ctrl+C" hint is for direct CLI use, not the GUI).<br><br>';
+            html += '<span style="color:#b58900">⚠ System-wide keyboard capture.</span> gym-hil uses <code>pynput</code>, which grabs keys from the focused window — any window. Typing <code>Enter</code> in the terminal, browser, IDE, etc. will end the current episode. Be deliberate about what you type while the env is running.';
+            html += '</div></div>';
+        }
         // Show source provenance (registry vs fallback) so users can see
         // when the dropdown is stale because gym_hil isn't installed.
         if (taskInfo) {
