@@ -199,13 +199,19 @@ def _env_profile_to_gym_manipulator_cfg(
     if dataset is not None:
         cfg["dataset"] = dataset
     else:
-        # gym_manipulator's GymManipulatorConfig.dataset is required (not optional).
-        # Provide a placeholder when not recording — gym_manipulator only reads
-        # dataset.* fields when mode in {"record", "replay"}.
+        # gym_manipulator's GymManipulatorConfig.dataset is required (not
+        # optional). For teleop (mode=None) the user wants the loop to run
+        # indefinitely until they hit Stop in the GUI — but
+        # gym_manipulator's control loop is `while episode_idx <
+        # num_episodes_to_record:` regardless of mode. Setting 0 here
+        # makes the loop exit immediately (window flashes for ~6s during
+        # gym setup, then closes; rc=0 — looks like a crash). Use a very
+        # large number so the user controls termination via the Stop
+        # button.
         cfg["dataset"] = {
             "repo_id": "_unused/teleop_only",
             "task": "_unused",
-            "num_episodes_to_record": 0,
+            "num_episodes_to_record": 10**9,
         }
     return cfg
 
@@ -371,6 +377,14 @@ _output_lines: list[str] = []
 _output_event: asyncio.Event = asyncio.Event()
 _OUTPUT_MAX_LINES = 2000
 
+# Subprocess log file: written line-by-line as the subprocess produces
+# output. Persists past the subprocess exit so the user can read it after
+# things have crashed (the in-memory _output_lines buffer is reset on each
+# launch and only holds the last 2000 lines). Path stored so the GUI can
+# expose "View full log" alongside the terminal pane.
+_subprocess_log_path: Path | None = None
+_subprocess_log_fh: Any = None  # _io.TextIOWrapper, or None when no run is active
+
 
 _overlay_state: dict | None = None  # {"text": "...", "color": "..."}
 
@@ -381,8 +395,17 @@ def _append_output(line: str) -> None:
     Lines matching ##OVERLAY:text:color## are intercepted as overlay
     updates and not appended to the terminal. Any subprocess can set
     the camera-feed overlay by printing this format to stdout.
+
+    Every line (including overlay markers) is also tee'd to the
+    per-subprocess log file so post-mortem inspection is possible
+    even when the SSE stream has crashed.
     """
     global _output_lines, _overlay_state
+    # Mirror to disk before overlay filtering — keep the raw record.
+    if _subprocess_log_fh is not None:
+        with contextlib.suppress(Exception):
+            _subprocess_log_fh.write(line + "\n")
+            _subprocess_log_fh.flush()
     if line.startswith("##OVERLAY:"):
         parts = line.strip().strip("#").split(":")
         # OVERLAY:text or OVERLAY:text:color
@@ -437,9 +460,43 @@ async def _wait_for_exit() -> None:
         _active_command = None
         _active_config = None
         _close_obs_reader()
+        _close_subprocess_log()
         # NOTE: debug model is NOT stopped here — it stays warm for reuse
         logger.info(f"Process exited (rc={rc}), state cleared")
     _output_event.set()
+
+
+def _open_subprocess_log(command: str) -> None:
+    """Open a fresh log file for the upcoming subprocess.
+
+    Path: ~/.cache/huggingface/lerobot/gui/logs/subprocess_<ts>_<command>.log
+    Stored in module globals so _append_output can tee lines to it; closed
+    by _close_subprocess_log when the subprocess exits.
+    """
+    global _subprocess_log_path, _subprocess_log_fh
+    from datetime import datetime as _dt
+
+    log_dir = Path.home() / ".cache" / "huggingface" / "lerobot" / "gui" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+    _subprocess_log_path = log_dir / f"subprocess_{ts}_{command}.log"
+    try:
+        _subprocess_log_fh = open(_subprocess_log_path, "w", encoding="utf-8")  # noqa: SIM115
+    except Exception as e:
+        logger.warning(f"Could not open subprocess log {_subprocess_log_path}: {e}")
+        _subprocess_log_path = None
+        _subprocess_log_fh = None
+
+
+def _close_subprocess_log() -> None:
+    """Close the per-subprocess log file. The file stays on disk for
+    post-mortem inspection — only the handle is released."""
+    global _subprocess_log_fh
+    if _subprocess_log_fh is not None:
+        with contextlib.suppress(Exception):
+            _subprocess_log_fh.flush()
+            _subprocess_log_fh.close()
+    _subprocess_log_fh = None
 
 
 async def _launch_subprocess(
@@ -455,12 +512,17 @@ async def _launch_subprocess(
     # Close stale obs reader — the new process will create fresh shared memory
     # segments; any existing reader is mapped to old (possibly unlinked) segments.
     _close_obs_reader()
+    # Open a fresh log file before any _append_output call so the launch
+    # banner and the subprocess output land in the same file.
+    _open_subprocess_log(command)
 
     env = {**__import__("os").environ, "LEROBOT_OBS_STREAM": "1"}
     if extra_env:
         env.update(extra_env)
     cmd_str = " ".join(args)
     logger.info(f"Launching: {cmd_str}")
+    if _subprocess_log_path is not None:
+        logger.info(f"Subprocess log: {_subprocess_log_path}")
     _append_output(f"--- Starting {command} ---")
     _append_output(f"$ {cmd_str}\n")
 
@@ -1128,7 +1190,11 @@ async def stop_process() -> dict:
 @router.get("/status")
 async def get_status() -> dict:
     if _active_process is None:
-        return {"running": False, "command": None}
+        return {
+            "running": False,
+            "command": None,
+            "log_path": str(_subprocess_log_path) if _subprocess_log_path else None,
+        }
 
     returncode = _active_process.returncode
     if returncode is not None:
@@ -1136,11 +1202,40 @@ async def get_status() -> dict:
             "running": False,
             "command": _active_command,
             "returncode": returncode,
+            "log_path": str(_subprocess_log_path) if _subprocess_log_path else None,
         }
     return {
         "running": True,
         "command": _active_command,
         "pid": _active_process.pid,
+        "log_path": str(_subprocess_log_path) if _subprocess_log_path else None,
+    }
+
+
+@router.get("/log-file")
+async def read_log_file(tail_lines: int = 200) -> dict:
+    """Return the last N lines of the current/most-recent subprocess log.
+
+    The in-memory _output_lines buffer is reset on each launch and capped at
+    2000 lines; the on-disk log persists across launches so the user can
+    inspect output that was lost (e.g. when the SSE stream crashed mid-run).
+
+    Returns {path, content, truncated} where content is the tail and
+    truncated is True if more lines exist before what we returned.
+    """
+    if _subprocess_log_path is None or not _subprocess_log_path.exists():
+        raise HTTPException(404, "No subprocess log available")
+    try:
+        all_lines = _subprocess_log_path.read_text(encoding="utf-8").splitlines()
+    except Exception as e:
+        raise HTTPException(500, f"Failed to read log: {e}") from e
+    truncated = len(all_lines) > tail_lines
+    tail = all_lines[-tail_lines:] if tail_lines > 0 else all_lines
+    return {
+        "path": str(_subprocess_log_path),
+        "content": "\n".join(tail),
+        "truncated": truncated,
+        "total_lines": len(all_lines),
     }
 
 

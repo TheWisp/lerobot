@@ -871,6 +871,20 @@ class TestEnvProfileToGymManipulatorCfg:
         # GymManipulatorConfig.dataset is required even when mode is None).
         assert cfg["dataset"]["repo_id"].startswith("_unused")
 
+    def test_teleop_num_episodes_huge_enough_to_not_self_exit(self):
+        """Regression: num_episodes_to_record=0 made gym_manipulator's
+        control loop (`while episode_idx < num_episodes_to_record:`) exit
+        immediately. The sim window opened during gym setup, sat for ~6s
+        of init, then closed — looked like an instant crash from the
+        GUI side. Teleop has no inherent episode count so we set it
+        absurdly high and let the user terminate via Stop."""
+        from lerobot.gui.api.run import _env_profile_to_gym_manipulator_cfg
+
+        cfg = _env_profile_to_gym_manipulator_cfg(_ENV_KEYBOARD, mode=None)
+        # Whatever the exact number, must be large enough that it never
+        # bottoms out in normal interactive use. 1000 is the practical floor.
+        assert cfg["dataset"]["num_episodes_to_record"] >= 1000
+
     def test_record_mode_dataset_propagated(self):
         from lerobot.gui.api.run import _env_profile_to_gym_manipulator_cfg
 
@@ -1228,3 +1242,160 @@ class TestEvalEndpoint:
                 assert exc.value.status_code == 409
 
         asyncio.run(go())
+
+
+class TestSubprocessLogCapture:
+    """`_open_subprocess_log` opens a per-launch file under
+    ~/.cache/.../gui/logs/ and `_append_output` tees lines to it so the
+    user has a post-mortem record even when the SSE stream crashed.
+    Surfaced via the `log_path` field on /api/run/status and the
+    /api/run/log-file endpoint."""
+
+    def test_open_close_creates_file_then_releases_handle(self, tmp_path, monkeypatch):
+        """Open creates the file with the launch banner; close releases
+        the handle but the file persists on disk."""
+        import lerobot.gui.api.run as run_mod
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+        try:
+            run_mod._open_subprocess_log("teleop")
+            assert run_mod._subprocess_log_path is not None
+            assert run_mod._subprocess_log_path.exists()
+            assert run_mod._subprocess_log_fh is not None
+            run_mod._append_output("hello world")
+            run_mod._close_subprocess_log()
+            # Handle released, file persists with content
+            assert run_mod._subprocess_log_fh is None
+            content = run_mod._subprocess_log_path.read_text(encoding="utf-8")
+            assert "hello world" in content
+        finally:
+            # Don't leak module state into other tests
+            run_mod._close_subprocess_log()
+            run_mod._subprocess_log_path = None
+
+    def test_append_output_tees_overlay_lines_too(self, tmp_path, monkeypatch):
+        """Overlay markers (##OVERLAY:) are filtered out of the in-memory
+        terminal buffer but should still hit disk — they're useful for
+        post-mortem debugging."""
+        import lerobot.gui.api.run as run_mod
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+        try:
+            run_mod._open_subprocess_log("teleop")
+            run_mod._append_output("##OVERLAY:debug:#ff0000##")
+            run_mod._append_output("regular line")
+            run_mod._close_subprocess_log()
+            content = run_mod._subprocess_log_path.read_text(encoding="utf-8")
+            assert "##OVERLAY:debug" in content  # tee'd to disk
+            assert "regular line" in content
+            # In-memory buffer should NOT contain the overlay marker
+            assert not any("##OVERLAY" in s for s in run_mod._output_lines)
+        finally:
+            run_mod._close_subprocess_log()
+            run_mod._subprocess_log_path = None
+
+    def test_status_includes_log_path(self, tmp_path, monkeypatch):
+        """The /api/run/status response surfaces log_path so the GUI can
+        link to the file even after the subprocess has exited."""
+        from fastapi.testclient import TestClient
+
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.server import app
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        client = TestClient(app)
+
+        try:
+            run_mod._active_process = None
+            run_mod._open_subprocess_log("teleop")
+            run_mod._append_output("simulated output")
+            run_mod._close_subprocess_log()
+            r = client.get("/api/run/status")
+            assert r.status_code == 200
+            assert r.json()["log_path"] is not None
+            assert "subprocess_" in r.json()["log_path"]
+        finally:
+            run_mod._subprocess_log_path = None
+
+    def test_log_file_endpoint_404_when_no_log(self, monkeypatch):
+        """Without a launched subprocess, /api/run/log-file returns 404."""
+        from fastapi.testclient import TestClient
+
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.server import app
+
+        client = TestClient(app)
+        try:
+            run_mod._subprocess_log_path = None
+            r = client.get("/api/run/log-file")
+            assert r.status_code == 404
+        finally:
+            run_mod._subprocess_log_path = None
+
+    def test_log_file_endpoint_returns_tail(self, tmp_path, monkeypatch):
+        """The endpoint returns the last N lines + a `truncated` flag."""
+        from fastapi.testclient import TestClient
+
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.server import app
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        client = TestClient(app)
+
+        try:
+            run_mod._open_subprocess_log("teleop")
+            for i in range(50):
+                run_mod._append_output(f"line {i}")
+            run_mod._close_subprocess_log()
+            r = client.get("/api/run/log-file?tail_lines=10")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["truncated"] is True
+            assert body["total_lines"] >= 50
+            tail = body["content"].splitlines()
+            # Tail is the LAST 10 lines, in order
+            assert tail[-1] == "line 49"
+            assert "line 0" not in body["content"]
+        finally:
+            run_mod._close_subprocess_log()
+            run_mod._subprocess_log_path = None
+
+
+class TestTimeoutExcsRegression:
+    """Regression guard for the asyncio.TimeoutError vs builtin TimeoutError
+    Python-3.10 mismatch.
+
+    On Python 3.10 (the lerobot conda env's actual interpreter, despite
+    pyproject's `requires-python = ">=3.12"`) the two classes are
+    *distinct* and not even in the same hierarchy. Pyupgrade and ruff
+    UP041 rewrite any literal `asyncio.TimeoutError` token in an except
+    clause to `TimeoutError` under py311+ targets, which silently breaks
+    the SSE keepalive logic on the actual runtime — every 2s wait_for
+    timeout escapes and crashes the response generator.
+
+    These tests fail loudly if anyone simplifies _TIMEOUT_EXCS away."""
+
+    def test_constant_includes_asyncio_timeout(self):
+        """Both timeout classes must be in the catch tuple. On py3.10
+        they are distinct; on py3.11+ asyncio.TimeoutError is an alias
+        for the builtin so duplicates are harmless."""
+        from lerobot.gui.api.run import _TIMEOUT_EXCS
+
+        assert TimeoutError in _TIMEOUT_EXCS
+        assert asyncio.TimeoutError in _TIMEOUT_EXCS
+
+    def test_catches_what_wait_for_raises(self):
+        """End-to-end: asyncio.wait_for timing out is caught by the tuple.
+        This is the actual control-flow that broke in production."""
+        from lerobot.gui.api.run import _TIMEOUT_EXCS
+
+        async def go():
+            try:
+                await asyncio.wait_for(asyncio.sleep(10), timeout=0.01)
+            except _TIMEOUT_EXCS:
+                return "caught"
+            return "missed"
+
+        assert asyncio.run(go()) == "caught"
