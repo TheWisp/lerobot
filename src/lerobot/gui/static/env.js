@@ -183,11 +183,13 @@ function renderEnvEditor() {
 
     // gym_manipulator profiles need a `device` field that lives at the
     // top of GymManipulatorConfig (sibling of env), not inside env. Surface
-    // it here for convenience.
+    // it here as the same enum-alike select used elsewhere; the choices
+    // mirror _GLOBAL_FIELD_CHOICES["device"] in env.py — duplicated here
+    // because this is the only field rendered outside the schema loop.
     if (isGymManipulator) {
         const dev = currentEnvProfile.data.fields?.device ?? 'cuda';
         html += `<label for="env-field-device">device</label>`;
-        html += `<input type="text" id="env-field-device" value="${_envEsc(dev)}" placeholder="cuda or cpu">`;
+        html += _renderEnvChoiceSelect('env-field-device', dev, ['cuda', 'cpu', 'mps'], false);
     }
 
     html += '</div>';
@@ -235,10 +237,40 @@ function renderEnvEditor() {
     }
 }
 
+/** Render a <select> with one option per choice; preserve out-of-list
+ *  values as a labelled option so stale profiles don't get silently
+ *  rewritten on first save. */
+function _renderEnvChoiceSelect(id, value, choices, optional) {
+    let html = `<select id="${id}">`;
+    if (optional) {
+        const n = (value === null || value === '' || value === undefined) ? 'selected' : '';
+        html += `<option value="" ${n}>(unset)</option>`;
+    }
+    let matched = false;
+    for (const c of choices) {
+        const sel = (c === value) ? 'selected' : '';
+        if (sel) matched = true;
+        html += `<option value="${_envEsc(c)}" ${sel}>${_envEsc(c)}</option>`;
+    }
+    if (value && !matched) {
+        // Pre-existing profile carries a value not in the current registry —
+        // keep it visible (and labeled) rather than silently overwriting.
+        html += `<option value="${_envEsc(value)}" selected>${_envEsc(value)} (custom)</option>`;
+    }
+    html += '</select>';
+    return html;
+}
+
 function renderEnvFormField(field, value) {
     const id = `env-field-${field.name}`;
     const label = `<label for="${id}">${_envEsc(field.name)}${field.required ? ' *' : ''}</label>`;
     const typeStr = (field.type_str || '').toLowerCase();
+
+    // Enum-alike fields the backend marked with a choices list. Hits before
+    // the type-string fallthroughs because choices imply discrete values.
+    if (Array.isArray(field.choices) && field.choices.length > 0) {
+        return label + _renderEnvChoiceSelect(id, value, field.choices, !field.required);
+    }
 
     if (typeStr === 'bool' || typeStr === 'bool | none') {
         const t = value === true ? 'selected' : '';

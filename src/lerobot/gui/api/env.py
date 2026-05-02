@@ -59,7 +59,62 @@ def _stringify_type(annotation: Any) -> str:
     return s
 
 
-def _introspect_fields(cls: type) -> list[dict]:
+# ----- Enum-alike choices for str-typed fields ------------------------------
+#
+# TODO(literal-types): Upstream's EnvConfig subclasses type these fields as
+# plain `str` and validate allowed values inside `__post_init__`. Once they
+# migrate to `typing.Literal[...]`, `_introspect_fields` should derive
+# `choices` automatically via `typing.get_args(f.type)` (the standard Python
+# mechanism — works for any Literal-typed dataclass field). At that point
+# this hand-curated registry can be retired for fields whose types switch
+# to Literal. Keep it for any that stay plain `str`.
+#
+# Sources for each entry are the matching __post_init__ branches in
+# src/lerobot/envs/configs.py — i.e. these are the values that the config
+# would actually accept at runtime; passing anything else raises
+# ValueError or silently no-ops.
+
+# Field-name -> choices, applies regardless of env type. Use for things that
+# are universally enum-alike (gym standards, ML conventions).
+_GLOBAL_FIELD_CHOICES: dict[str, list[str]] = {
+    # Gym-standard render modes; not all envs implement all three but
+    # passing one that's unsupported is a runtime error, not silent.
+    "render_mode": ["rgb_array", "human", "rgb_array_list"],
+    # PyTorch device specs the user is likely to type. Unguarded otherwise.
+    "device": ["cuda", "cpu", "mps"],
+}
+
+# (type_name, field_name) -> choices, takes precedence over _GLOBAL above.
+# Entries are mined from the __post_init__ accept-lists of each EnvConfig
+# subclass, so values map 1:1 to "what won't crash".
+_TYPE_FIELD_CHOICES: dict[tuple[str, str], list[str]] = {
+    # AlohaEnv.__post_init__ branches on these two (configs.py:172-176).
+    ("aloha", "obs_type"): ["pixels", "pixels_agent_pos"],
+    # PushtEnv.__post_init__ branches on these two (configs.py:219-223).
+    ("pusht", "obs_type"): ["pixels_agent_pos", "environment_state_agent_pos"],
+    # LiberoEnv.__post_init__ raises on anything outside this set
+    # (configs.py:356-399).
+    ("libero", "obs_type"): ["pixels", "pixels_agent_pos"],
+    # libero comment at configs.py:353: 'or "absolute"'.
+    ("libero", "control_mode"): ["relative", "absolute"],
+    # MetaworldEnv.__post_init__ raises on anything outside this set
+    # (configs.py:468-476).
+    ("metaworld", "obs_type"): ["pixels", "pixels_agent_pos"],
+}
+
+
+def _choices_for(type_name: str, field_name: str) -> list[str] | None:
+    """Return enum-alike choices for a (type, field), or None if unknown.
+
+    Type-specific entries override globals. None means free-form text.
+    """
+    specific = _TYPE_FIELD_CHOICES.get((type_name, field_name))
+    if specific is not None:
+        return specific
+    return _GLOBAL_FIELD_CHOICES.get(field_name)
+
+
+def _introspect_fields(cls: type, type_name: str | None = None) -> list[dict]:
     result = []
     for f in dataclasses.fields(cls):
         if f.name in _SKIP_FIELDS:
@@ -70,14 +125,16 @@ def _introspect_fields(cls: type) -> list[dict]:
         default = None
         if f.default is not dataclasses.MISSING:
             default = f.default
-        result.append(
-            {
-                "name": f.name,
-                "type_str": _stringify_type(f.type),
-                "required": required,
-                "default": default,
-            }
-        )
+        entry: dict[str, Any] = {
+            "name": f.name,
+            "type_str": _stringify_type(f.type),
+            "required": required,
+            "default": default,
+        }
+        choices = _choices_for(type_name, f.name) if type_name else None
+        if choices is not None:
+            entry["choices"] = list(choices)
+        result.append(entry)
     return result
 
 
@@ -93,7 +150,7 @@ async def get_env_schemas() -> list[dict]:
         schemas.append(
             {
                 "type_name": type_name,
-                "fields": _introspect_fields(config_cls),
+                "fields": _introspect_fields(config_cls, type_name=type_name),
             }
         )
     return schemas

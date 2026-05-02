@@ -296,3 +296,80 @@ class TestIntrospectFields:
         assert len(fields) > 0
         for f in fields:
             assert set(f.keys()) >= {"name", "type_str", "required", "default"}
+
+
+class TestFieldChoices:
+    """Tests for the per-(type, field) enum-alike choices registry. Until
+    upstream types these fields as `Literal[...]` we hand-curate them; the
+    schema response surfaces a `choices` list when applicable."""
+
+    def test_global_render_mode_appears_for_aloha(self):
+        """render_mode is a global enum-alike, expect it on every env type
+        that declares the field."""
+        client = TestClient(app)
+        schemas = client.get("/api/env/schemas").json()
+        aloha = next(s for s in schemas if s["type_name"] == "aloha")
+        rm = next(f for f in aloha["fields"] if f["name"] == "render_mode")
+        assert "choices" in rm
+        assert rm["choices"] == ["rgb_array", "human", "rgb_array_list"]
+
+    def test_global_device_for_isaaclab_arena(self):
+        """device is a real field on IsaaclabArenaEnv (one of the few env
+        types that surface it inside EnvConfig). gym_manipulator's device
+        lives one level up on GymManipulatorConfig and is NOT in this
+        schema — it's added by the frontend."""
+        client = TestClient(app)
+        schemas = client.get("/api/env/schemas").json()
+        ila = next(s for s in schemas if s["type_name"] == "isaaclab_arena")
+        device = next(f for f in ila["fields"] if f["name"] == "device")
+        assert device["choices"] == ["cuda", "cpu", "mps"]
+
+    def test_per_type_obs_type_differs_between_envs(self):
+        """obs_type's allowed values differ per env type — pusht has
+        environment_state_agent_pos which the others don't."""
+        client = TestClient(app)
+        schemas = {s["type_name"]: s for s in client.get("/api/env/schemas").json()}
+        aloha_obs = next(f for f in schemas["aloha"]["fields"] if f["name"] == "obs_type")
+        pusht_obs = next(f for f in schemas["pusht"]["fields"] if f["name"] == "obs_type")
+        libero_obs = next(f for f in schemas["libero"]["fields"] if f["name"] == "obs_type")
+
+        assert aloha_obs["choices"] == ["pixels", "pixels_agent_pos"]
+        assert pusht_obs["choices"] == ["pixels_agent_pos", "environment_state_agent_pos"]
+        assert libero_obs["choices"] == ["pixels", "pixels_agent_pos"]
+
+        # The per-type registry must take precedence over the global one
+        # (which doesn't define obs_type — but the assertion documents
+        # the precedence rule).
+        assert pusht_obs["choices"] != aloha_obs["choices"]
+
+    def test_libero_control_mode_choices(self):
+        """libero's control_mode comments out 'or "absolute"' — captured."""
+        client = TestClient(app)
+        schemas = {s["type_name"]: s for s in client.get("/api/env/schemas").json()}
+        cm = next(f for f in schemas["libero"]["fields"] if f["name"] == "control_mode")
+        assert cm["choices"] == ["relative", "absolute"]
+
+    def test_no_choices_field_for_freeform_strings(self):
+        """Free-form fields like task and camera_name must NOT have a
+        choices list — no premature enumeration. (`task` is dropdown'd
+        via the live registry endpoint, not this static registry.)"""
+        client = TestClient(app)
+        schemas = {s["type_name"]: s for s in client.get("/api/env/schemas").json()}
+        gm = next(f for f in schemas["gym_manipulator"]["fields"] if f["name"] == "task")
+        assert "choices" not in gm
+
+    def test_choices_for_helper_precedence(self):
+        """Per-type entry beats global entry for the same field name."""
+        # If we ever add obs_type to _GLOBAL_FIELD_CHOICES, the per-type
+        # entries must still win. Sanity-check the helper directly so
+        # the precedence rule has a unit guard, not just integration.
+        with patch.dict(env_module._GLOBAL_FIELD_CHOICES, {"obs_type": ["GLOBAL"]}, clear=False):
+            # Per-type entry beats global one
+            assert env_module._choices_for("aloha", "obs_type") == ["pixels", "pixels_agent_pos"]
+            # Type with no specific entry falls through to the (mocked) global
+            assert env_module._choices_for("gym_manipulator", "obs_type") == ["GLOBAL"]
+
+    def test_choices_for_unknown_returns_none(self):
+        """Unknown (type, field) returns None — caller knows it's free-form."""
+        assert env_module._choices_for("aloha", "task") is None
+        assert env_module._choices_for("nonsense_type", "obs_type") is None
