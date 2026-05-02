@@ -1093,3 +1093,138 @@ class TestSimDispatchEndToEnd:
                 assert "Keyboard" in str(exc.value.detail)
 
         asyncio.run(go())
+
+
+# ============================================================================
+# Eval endpoint (sim, lerobot-eval)
+# ============================================================================
+
+
+class TestEvalEndpoint:
+    """`/api/run/eval` dispatches to upstream `lerobot-eval` with
+    `--env.<field>` flags from the env profile + `--policy.path` + `--eval.*`."""
+
+    def test_eval_basic_dispatch(self):
+        from lerobot.gui.api.run import EvalRequest, start_eval
+
+        captured_args = []
+
+        async def go():
+            req = EvalRequest(
+                env=_ENV_KEYBOARD,
+                policy_path="/tmp/fake_ckpt",
+                n_episodes=10,
+                batch_size=4,
+            )
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+            ):
+                await start_eval(req)
+
+        asyncio.run(go())
+        assert captured_args[0] == "lerobot-eval"
+        assert "--env.type=gym_manipulator" in captured_args
+        assert "--env.task=PandaPickCubeKeyboard-v0" in captured_args
+        assert "--env.fps=10" in captured_args
+        assert any(a.startswith("--policy.path=") for a in captured_args)
+        assert "--eval.n_episodes=10" in captured_args
+        assert "--eval.batch_size=4" in captured_args
+        assert "--eval.use_async_envs=true" in captured_args
+        assert "--seed=1000" in captured_args  # default seed
+
+    def test_eval_drops_device_field(self):
+        """`device` is on GymManipulatorConfig (the gym_manipulator-binary
+        config), not on EnvConfig (the eval-binary config). It must be
+        filtered so draccus doesn't reject it as an unknown field."""
+        from lerobot.gui.api.run import EvalRequest, start_eval
+
+        captured_args = []
+
+        async def go():
+            req = EvalRequest(env=_ENV_KEYBOARD, policy_path="/tmp/fake")
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+            ):
+                await start_eval(req)
+
+        asyncio.run(go())
+        assert not any(a.startswith("--env.device=") for a in captured_args)
+
+    def test_eval_async_envs_off(self):
+        from lerobot.gui.api.run import EvalRequest, start_eval
+
+        captured_args = []
+
+        async def go():
+            req = EvalRequest(env=_ENV_KEYBOARD, policy_path="/tmp/fake", use_async_envs=False)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+            ):
+                await start_eval(req)
+
+        asyncio.run(go())
+        assert "--eval.use_async_envs=false" in captured_args
+
+    def test_eval_with_output_dir(self):
+        from lerobot.gui.api.run import EvalRequest, start_eval
+
+        captured_args = []
+
+        async def go():
+            req = EvalRequest(
+                env=_ENV_KEYBOARD,
+                policy_path="/tmp/fake",
+                output_dir="/tmp/eval_out",
+            )
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+            ):
+                await start_eval(req)
+
+        asyncio.run(go())
+        assert "--output_dir=/tmp/eval_out" in captured_args
+
+    def test_eval_trust_remote_code_for_envhub(self):
+        """Hub envs require explicit trust_remote_code=True."""
+        from lerobot.gui.api.run import EvalRequest, start_eval
+
+        captured_args = []
+
+        async def go():
+            req = EvalRequest(
+                env=_ENV_KEYBOARD,
+                policy_path="/tmp/fake",
+                trust_remote_code=True,
+            )
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+            ):
+                await start_eval(req)
+
+        asyncio.run(go())
+        assert "--trust_remote_code=true" in captured_args
+
+    def test_eval_no_active_process_guard(self):
+        """Eval endpoint honours the 'one process at a time' rule."""
+        from lerobot.gui.api.run import EvalRequest, start_eval
+
+        running = AsyncMock()
+        running.returncode = None
+        running.pid = 1234
+
+        async def go():
+            req = EvalRequest(env=_ENV_KEYBOARD, policy_path="/tmp/fake")
+            with (
+                patch("lerobot.gui.api.run._active_process", running),
+                patch("lerobot.gui.api.run._active_command", "teleoperate"),
+            ):
+                with pytest.raises(HTTPException) as exc:
+                    await start_eval(req)
+                assert exc.value.status_code == 409
+
+        asyncio.run(go())

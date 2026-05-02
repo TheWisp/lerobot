@@ -58,7 +58,8 @@ def set_app_state(state: AppState) -> None:
 def _get_known_fields(profile_type: str, prefix: str) -> set[str] | None:
     """Return the set of valid field names for a config type, or None if unknown.
 
-    Imports all robot/teleoperator modules to ensure config subclasses are registered.
+    Imports all robot/teleoperator/env modules to ensure config subclasses
+    are registered. Supported prefixes: "robot", "teleop", "env".
     """
     import dataclasses
     import importlib
@@ -69,7 +70,19 @@ def _get_known_fields(profile_type: str, prefix: str) -> set[str] | None:
     from lerobot.robots.config import RobotConfig
     from lerobot.teleoperators.config import TeleoperatorConfig
 
-    # Trigger registration of all config subclasses
+    if prefix == "env":
+        # EnvConfig subclasses are all registered by importing
+        # lerobot.envs.configs once. No deep package walk needed.
+        import lerobot.envs.configs  # noqa: F401  registers subclasses
+        from lerobot.envs.configs import EnvConfig
+
+        choices = EnvConfig.get_known_choices()
+        config_cls = choices.get(profile_type)
+        if config_cls is None:
+            return None
+        return {f.name for f in dataclasses.fields(config_cls)}
+
+    # Trigger registration of all robot / teleop config subclasses
     pkg = lerobot.robots if prefix == "robot" else lerobot.teleoperators
     for _importer, modname, _ispkg in pkgutil.walk_packages(pkg.__path__, prefix=pkg.__name__ + "."):
         with contextlib.suppress(Exception):
@@ -295,6 +308,24 @@ class ReplayRequest(BaseModel):
     # No fps: replay must always pace at the dataset's recording fps. Upstream
     # `lerobot-replay` declares `cfg.dataset.fps` but its loop paces by
     # `dataset.fps` directly, so the field is dead config.
+
+
+class EvalRequest(BaseModel):
+    """Sim-only policy evaluation via lerobot-eval.
+
+    `env` is mandatory — we don't surface real-robot eval in the GUI yet.
+    `policy_path` is mandatory — eval must point at a checkpoint
+    directory (something Policy.from_pretrained can load).
+    """
+
+    env: dict[str, Any]
+    policy_path: str
+    n_episodes: int = 50
+    batch_size: int = 0  # 0 = auto-tune from CPU cores
+    use_async_envs: bool = True
+    seed: int | None = 1000
+    output_dir: str | None = None  # defaults to outputs/eval/<date>/<job>
+    trust_remote_code: bool = False  # required for EnvHub / hub-env types
 
 
 class HVLARunRequest(BaseModel):
@@ -781,6 +812,56 @@ async def start_replay(req: ReplayRequest) -> dict:
 
     await _launch_subprocess(args, command="replay", config=req.model_dump())
     return {"status": "started", "command": "replay", "pid": _active_process.pid}
+
+
+@router.post("/eval")
+async def start_eval(req: EvalRequest) -> dict:
+    """Sim policy evaluation via lerobot-eval.
+
+    Dispatches to upstream `lerobot-eval` with `--env.<...>` flags built
+    from the env profile, plus `--policy.path` and `--eval.<...>`.
+
+    Real-robot eval is also possible upstream (with EnvConfig=gym_manipulator
+    name=real_robot wrapping a real Robot) but we don't surface it in the
+    GUI yet — sim eval is the unblocked path.
+    """
+    _ensure_no_active_process()
+
+    if not req.env:
+        raise HTTPException(400, "env profile required for eval")
+    if not req.policy_path:
+        raise HTTPException(400, "policy_path required for eval")
+
+    # Light eval-specific input check: a Gamepad task in eval would be a
+    # user error (the policy drives, not the human). Don't block — just
+    # log a warning for visibility.
+    task = str(req.env.get("fields", {}).get("task", ""))
+    if "Gamepad" in task:
+        logger.warning(
+            "Eval with a Gamepad task variant ('%s') is unusual — eval "
+            "is policy-driven and human gamepad input is ignored. Consider "
+            "PandaPickCubeBase-v0 instead.",
+            task,
+        )
+
+    args = ["lerobot-eval"]
+    # Env profile -> --env.<field>=value (filtered by EnvConfig schema; the
+    # `device` field common in our env profiles is for GymManipulatorConfig
+    # not EnvConfig, so it's silently dropped here).
+    args.extend(_profile_to_cli_args(req.env, "env", include_cameras=False))
+    args.append(f"--policy.path={Path(req.policy_path).expanduser()}")
+    args.append(f"--eval.n_episodes={req.n_episodes}")
+    args.append(f"--eval.batch_size={req.batch_size}")
+    args.append(f"--eval.use_async_envs={'true' if req.use_async_envs else 'false'}")
+    if req.seed is not None:
+        args.append(f"--seed={req.seed}")
+    if req.output_dir:
+        args.append(f"--output_dir={req.output_dir}")
+    if req.trust_remote_code:
+        args.append("--trust_remote_code=true")
+
+    await _launch_subprocess(args, command="eval", config=req.model_dump())
+    return {"status": "started", "command": "eval", "pid": _active_process.pid}
 
 
 @router.post("/hvla")

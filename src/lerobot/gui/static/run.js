@@ -75,11 +75,11 @@ async function selectWorkflow(workflow) {
         b.classList.toggle('active', b.dataset.workflow === workflow);
     });
     // Toggle visibility of workflow sections (no re-render)
-    for (const wf of ['teleop', 'replay', 'policy']) {
+    for (const wf of ['teleop', 'replay', 'policy', 'eval']) {
         const section = document.getElementById(`run-section-${wf}`);
         if (section) section.style.display = (wf === workflow) ? '' : 'none';
     }
-    if (workflow === 'policy' || workflow === 'teleop') {
+    if (workflow === 'policy' || workflow === 'teleop' || workflow === 'eval') {
         await _ensureModelDataLoaded();
     }
 }
@@ -801,7 +801,7 @@ function refreshRunProfileSelects() {
         const sel = document.getElementById(id);
         if (sel) { const prev = sel.value; sel.innerHTML = robotOpts; sel.value = prev; }
     }
-    for (const id of ['run-teleop-env', 'run-replay-env']) {
+    for (const id of ['run-teleop-env', 'run-replay-env', 'run-eval-env']) {
         const sel = document.getElementById(id);
         if (sel) { const prev = sel.value; sel.innerHTML = envOpts; sel.value = prev; }
     }
@@ -1098,6 +1098,37 @@ function renderRunForm() {
     html += '</div>'; // end standard fields
     html += '</div>'; // end policy section
 
+    // ---- Eval workflow section (sim only) ----
+    html += `<div id="run-section-eval" style="${selectedWorkflow === 'eval' ? '' : 'display:none'}">`;
+    html += '<div class="form-grid">';
+    html += `<label>Environment</label>`;
+    html += `<select id="run-eval-env">${_envProfileOptions()}</select>`;
+    html += `<label>Checkpoint</label>`;
+    html += `<select id="run-eval-checkpoint">${_modelCheckpointOptions()}</select>`;
+    html += `<label>Episodes</label>`;
+    html += `<input type="number" id="run-eval-episodes" value="50" min="1">`;
+    html += `<label>Batch size</label>`;
+    html += `<div><input type="number" id="run-eval-batch-size" value="0" min="0">`;
+    html += `<div class="form-hint">0 = auto-tune from CPU cores</div></div>`;
+    html += `<label>Async envs</label>`;
+    html += `<div style="text-align:left"><input type="checkbox" id="run-eval-async" checked></div>`;
+    html += `<label>Seed</label>`;
+    html += `<input type="number" id="run-eval-seed" value="1000">`;
+    html += `<label>Output dir</label>`;
+    html += `<input type="text" id="run-eval-output-dir" placeholder="(default: outputs/eval/&lt;date&gt;)">`;
+    html += `<label>Trust remote code</label>`;
+    html += `<div style="text-align:left"><input type="checkbox" id="run-eval-trust-remote-code">`;
+    html += `<div class="form-hint">Required for EnvHub / hub-loaded envs (executes remote Python)</div></div>`;
+    html += '</div>';
+    html += '<div class="form-section">';
+    html += '<div class="form-hint" style="line-height:1.6">';
+    html += '<b>Sim-only.</b> Runs <code>lerobot-eval</code> with the selected EnvConfig + policy checkpoint. ';
+    html += 'Real-robot eval is possible upstream but deliberately not surfaced here — sim is where eval is reproducible.<br>';
+    html += '<b>HVLA checkpoints will not work today</b> against gym-hil (action-space + DOF mismatch — see TODO.md). ';
+    html += 'For HVLA, use a real robot via the Policy tab.';
+    html += '</div></div>';
+    html += '</div>'; // end eval section
+
     form.innerHTML = html;
     _toggleHvlaRecordFields();
 }
@@ -1253,7 +1284,54 @@ async function _launchEnvWorkflow() {
     return true;
 }
 
+/** Eval is sim-only and has its own form with no Source toggle. Dispatch
+ *  goes directly to /api/run/eval. */
+async function _launchEvalWorkflow() {
+    const envSel = document.getElementById('run-eval-env');
+    if (!envSel?.value) {
+        showToast('Error', 'Select an environment profile', 'error');
+        return;
+    }
+    const envData = await _getEnvProfileData(envSel.value);
+    if (!envData) {
+        showToast('Error', `Env profile "${envSel.value}" not found`, 'error');
+        return;
+    }
+    const ckptSel = document.getElementById('run-eval-checkpoint');
+    if (!ckptSel?.value) {
+        showToast('Error', 'Select a model checkpoint', 'error');
+        return;
+    }
+    const body = {
+        env: envData,
+        policy_path: ckptSel.value,
+        n_episodes: parseInt(document.getElementById('run-eval-episodes')?.value) || 50,
+        batch_size: parseInt(document.getElementById('run-eval-batch-size')?.value) || 0,
+        use_async_envs: document.getElementById('run-eval-async')?.checked !== false,
+        seed: parseInt(document.getElementById('run-eval-seed')?.value) || null,
+        output_dir: document.getElementById('run-eval-output-dir')?.value?.trim() || null,
+        trust_remote_code: document.getElementById('run-eval-trust-remote-code')?.checked === true,
+    };
+    try {
+        const res = await fetch('/api/run/eval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        await pollRunStatus();
+        await connectOutputSSE();
+    } catch (e) {
+        showToast('Error', e.message, 'error');
+    }
+}
+
 async function launchRun() {
+    // Eval is sim-only — handle before the source toggle / robot logic.
+    if (selectedWorkflow === 'eval') {
+        await _launchEvalWorkflow();
+        return;
+    }
     // Sim env path — short-circuit before robot/camera FPS logic, which
     // dereferences robotData fields that don't exist for sim.
     const source = _getWorkflowSource(selectedWorkflow);
