@@ -800,3 +800,296 @@ class TestTimeoutExcsRegression:
             return "missed"
 
         assert asyncio.run(go()) == "caught"
+# ============================================================================
+# Sim env dispatch (gym-hil via gym_manipulator)
+# ============================================================================
+
+_ENV_KEYBOARD = {
+    "type": "gym_manipulator",
+    "name": "test_kb",
+    "fields": {
+        "name": "gym_hil",
+        "task": "PandaPickCubeKeyboard-v0",
+        "fps": 10,
+        "device": "cuda",
+    },
+}
+_ENV_GAMEPAD = {
+    "type": "gym_manipulator",
+    "name": "test_gp",
+    "fields": {
+        "name": "gym_hil",
+        "task": "PandaPickCubeGamepad-v0",
+        "fps": 10,
+        "device": "cuda",
+    },
+}
+
+
+class TestEnsureOneSource:
+    """`_ensure_one_source` enforces robot XOR env at request boundary."""
+
+    def test_robot_only(self):
+        from lerobot.gui.api.run import _ensure_one_source
+
+        assert _ensure_one_source({"type": "x"}, None) == "robot"
+
+    def test_env_only(self):
+        from lerobot.gui.api.run import _ensure_one_source
+
+        assert _ensure_one_source(None, {"type": "gym_manipulator"}) == "env"
+
+    def test_both_set_rejected(self):
+        from lerobot.gui.api.run import _ensure_one_source
+
+        with pytest.raises(HTTPException) as exc:
+            _ensure_one_source({"type": "x"}, {"type": "gym_manipulator"})
+        assert exc.value.status_code == 400
+        assert "not both" in str(exc.value.detail)
+
+    def test_neither_set_rejected(self):
+        from lerobot.gui.api.run import _ensure_one_source
+
+        with pytest.raises(HTTPException) as exc:
+            _ensure_one_source(None, None)
+        assert exc.value.status_code == 400
+
+
+class TestEnvProfileToGymManipulatorCfg:
+    """`_env_profile_to_gym_manipulator_cfg` shape, defaults, and the
+    discriminator-stripping behaviour that makes draccus accept the env dict."""
+
+    def test_basic_teleop_no_dataset(self):
+        from lerobot.gui.api.run import _env_profile_to_gym_manipulator_cfg
+
+        cfg = _env_profile_to_gym_manipulator_cfg(_ENV_KEYBOARD, mode=None)
+        assert cfg["mode"] is None
+        assert cfg["device"] == "cuda"
+        assert cfg["env"]["task"] == "PandaPickCubeKeyboard-v0"
+        assert cfg["env"]["fps"] == 10
+        # Placeholder dataset for non-recording mode (gym_manipulator's
+        # GymManipulatorConfig.dataset is required even when mode is None).
+        assert cfg["dataset"]["repo_id"].startswith("_unused")
+
+    def test_record_mode_dataset_propagated(self):
+        from lerobot.gui.api.run import _env_profile_to_gym_manipulator_cfg
+
+        ds = {
+            "repo_id": "user/sim_demo",
+            "task": "pick_cube",
+            "num_episodes_to_record": 5,
+            "push_to_hub": False,
+            "resume": False,
+        }
+        cfg = _env_profile_to_gym_manipulator_cfg(_ENV_KEYBOARD, mode="record", dataset=ds)
+        assert cfg["mode"] == "record"
+        assert cfg["dataset"] == ds
+
+    def test_type_discriminator_stripped(self):
+        """GymManipulatorConfig.env is typed as the concrete
+        HILSerlRobotEnvConfig, so draccus would reject a `type` field
+        inside it. The helper must strip the registry discriminator."""
+        from lerobot.gui.api.run import _env_profile_to_gym_manipulator_cfg
+
+        cfg = _env_profile_to_gym_manipulator_cfg(_ENV_KEYBOARD, mode=None)
+        assert "type" not in cfg["env"]
+
+    def test_device_lifted_to_top_level(self):
+        """`device` lives at the top of GymManipulatorConfig, not inside env."""
+        from lerobot.gui.api.run import _env_profile_to_gym_manipulator_cfg
+
+        profile = {**_ENV_KEYBOARD, "fields": {**_ENV_KEYBOARD["fields"], "device": "cpu"}}
+        cfg = _env_profile_to_gym_manipulator_cfg(profile, mode=None)
+        assert cfg["device"] == "cpu"
+        assert "device" not in cfg["env"]
+
+    def test_default_device_cuda_when_absent(self):
+        from lerobot.gui.api.run import _env_profile_to_gym_manipulator_cfg
+
+        profile = {
+            "type": "gym_manipulator",
+            "name": "x",
+            "fields": {"task": "PandaPickCubeBase-v0"},
+        }  # no device
+        cfg = _env_profile_to_gym_manipulator_cfg(profile, mode=None)
+        assert cfg["device"] == "cuda"
+
+    def test_non_gym_manipulator_type_rejected(self):
+        """Other env types (aloha, libero, ...) are not wired to the
+        gym_manipulator binary yet — the helper must refuse them with a
+        400 instead of silently producing a config that won't parse."""
+        from lerobot.gui.api.run import _env_profile_to_gym_manipulator_cfg
+
+        profile = {"type": "libero", "name": "x", "fields": {}}
+        with pytest.raises(HTTPException) as exc:
+            _env_profile_to_gym_manipulator_cfg(profile, mode=None)
+        assert exc.value.status_code == 400
+
+
+class TestCheckEnvInputCompat:
+    """`_check_env_input_compat` refuses Gamepad tasks when no controller is
+    detected, so users don't see gym-hil's silent rc=0 exit as a 'crash'."""
+
+    def test_gamepad_task_no_controller_rejected(self):
+        from lerobot.gui.api.run import _check_env_input_compat
+
+        with patch("lerobot.gui.api.run._detect_linux_gamepad", return_value=False):
+            with pytest.raises(HTTPException) as exc:
+                _check_env_input_compat(_ENV_GAMEPAD)
+            assert exc.value.status_code == 400
+            msg = str(exc.value.detail)
+            assert "Gamepad" in msg
+            assert "Keyboard" in msg  # must point user at the fallback task
+
+    def test_gamepad_task_with_controller_passes(self):
+        from lerobot.gui.api.run import _check_env_input_compat
+
+        with patch("lerobot.gui.api.run._detect_linux_gamepad", return_value=True):
+            _check_env_input_compat(_ENV_GAMEPAD)  # should not raise
+
+    def test_keyboard_task_always_passes(self):
+        """Keyboard tasks have no hardware dependency — must work even
+        when no gamepad is present."""
+        from lerobot.gui.api.run import _check_env_input_compat
+
+        with patch("lerobot.gui.api.run._detect_linux_gamepad", return_value=False):
+            _check_env_input_compat(_ENV_KEYBOARD)  # should not raise
+
+    def test_base_task_always_passes(self):
+        """The autonomous-only Base variant has no input device at all."""
+        from lerobot.gui.api.run import _check_env_input_compat
+
+        profile = {**_ENV_KEYBOARD, "fields": {**_ENV_KEYBOARD["fields"], "task": "PandaPickCubeBase-v0"}}
+        with patch("lerobot.gui.api.run._detect_linux_gamepad", return_value=False):
+            _check_env_input_compat(profile)
+
+
+class TestSimDispatchEndToEnd:
+    """End-to-end: a request with an `env` field dispatches to the
+    gym_manipulator binary, not the lerobot-* scripts."""
+
+    def test_teleoperate_env_dispatches_to_gym_manipulator(self):
+        captured_args = []
+
+        async def go():
+            req = TeleoperateRequest(env=_ENV_KEYBOARD, fps=10)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+                patch("lerobot.gui.api.run._detect_linux_gamepad", return_value=True),
+            ):
+                await start_teleoperate(req)
+
+        asyncio.run(go())
+        # Dispatch is to gym_manipulator, NOT lerobot-teleoperate.
+        joined = " ".join(captured_args)
+        assert "lerobot.rl.gym_manipulator" in joined
+        assert "lerobot-teleoperate" not in joined
+        # Config path passed via --config_path
+        assert any("--config_path=" in a for a in captured_args)
+
+    def test_teleoperate_env_no_robot_args(self):
+        """Sim path must not pass any --robot.* args (they would fail draccus)."""
+        captured_args = []
+
+        async def go():
+            req = TeleoperateRequest(env=_ENV_KEYBOARD, fps=10)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+                patch("lerobot.gui.api.run._detect_linux_gamepad", return_value=True),
+            ):
+                await start_teleoperate(req)
+
+        asyncio.run(go())
+        assert not any("--robot." in a for a in captured_args)
+        assert not any("--teleop." in a for a in captured_args)
+
+    def test_record_env_writes_dataset_into_config(self):
+        """Sim record passes dataset.* via the config file, not CLI flags
+        like the real-robot path. Verify the JSON written to the temp file
+        contains the dataset block."""
+        import json as _json
+        from pathlib import Path
+
+        captured_args = []
+
+        async def go():
+            req = RecordRequest(
+                env=_ENV_KEYBOARD,
+                repo_id="user/sim_demo",
+                single_task="pick the cube",
+                num_episodes=3,
+            )
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+                patch("lerobot.gui.api.run._detect_linux_gamepad", return_value=True),
+            ):
+                await start_record(req)
+
+        asyncio.run(go())
+        # Find the --config_path arg, read the JSON it points to
+        cfg_arg = next(a for a in captured_args if a.startswith("--config_path="))
+        cfg_path = cfg_arg.split("=", 1)[1]
+        cfg = _json.loads(Path(cfg_path).read_text())
+        assert cfg["mode"] == "record"
+        assert cfg["dataset"]["repo_id"] == "user/sim_demo"
+        assert cfg["dataset"]["num_episodes_to_record"] == 3
+
+    def test_replay_env_passes_replay_episode(self):
+        """Sim replay sets dataset.replay_episode (gym_manipulator's
+        DatasetConfig field), not --dataset.episode like the real-robot path."""
+        import json as _json
+        from pathlib import Path
+
+        captured_args = []
+
+        async def go():
+            req = ReplayRequest(env=_ENV_KEYBOARD, repo_id="user/sim_demo", episode=2)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+                patch("lerobot.gui.api.run._detect_linux_gamepad", return_value=True),
+            ):
+                await start_replay(req)
+
+        asyncio.run(go())
+        cfg_arg = next(a for a in captured_args if a.startswith("--config_path="))
+        cfg = _json.loads(Path(cfg_arg.split("=", 1)[1]).read_text())
+        assert cfg["mode"] == "replay"
+        assert cfg["dataset"]["replay_episode"] == 2
+
+    def test_real_robot_path_still_works(self):
+        """Regression guard: existing real-robot dispatch is untouched
+        when the request omits `env` and provides `robot`+`teleop`."""
+        captured_args = []
+
+        async def go():
+            req = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP, fps=30)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+            ):
+                await start_teleoperate(req)
+
+        asyncio.run(go())
+        assert captured_args[0] == "lerobot-teleoperate"
+        assert not any("gym_manipulator" in a for a in captured_args)
+
+    def test_gamepad_task_without_controller_rejected_at_endpoint(self):
+        """Defensive: even if frontend skips the env-editor warning, the
+        teleop endpoint refuses gamepad tasks when no controller present."""
+
+        async def go():
+            req = TeleoperateRequest(env=_ENV_GAMEPAD, fps=10)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._detect_linux_gamepad", return_value=False),
+            ):
+                with pytest.raises(HTTPException) as exc:
+                    await start_teleoperate(req)
+                assert exc.value.status_code == 400
+                assert "Keyboard" in str(exc.value.detail)
+
+        asyncio.run(go())
