@@ -208,6 +208,44 @@ def _write_gym_manipulator_config_tmp(cfg: dict) -> str:
         return tmp.name
 
 
+def _detect_linux_gamepad() -> bool:
+    """Return True if a gamepad/joystick is plugged in on Linux.
+
+    Checks for /dev/input/js* device nodes — that's how the Linux joystick
+    subsystem (and gym-hil's pygame backend) discovers controllers. On
+    non-Linux platforms returns True (we can't detect cheaply, don't
+    false-positive).
+    """
+    import platform
+
+    if platform.system() != "Linux":
+        return True
+    return any(Path("/dev/input").glob("js*"))
+
+
+def _check_env_input_compat(env_profile: dict) -> None:
+    """Refuse to launch if the gym-hil task requires hardware that's missing.
+
+    gym-hil's Gamepad task variants exit cleanly with rc=0 within ~6s when
+    no controller is plugged in (gym-hil prints "No gamepad detected" then
+    bails out of its control loop). To the GUI this looks like an instant
+    crash; the MuJoCo window flashes and disappears with no visible error.
+    Catch this at the request boundary so the user gets a clear 400 instead.
+    """
+    fields = env_profile.get("fields", {})
+    task = str(fields.get("task", ""))
+    if "Gamepad" in task and not _detect_linux_gamepad():
+        raise HTTPException(
+            400,
+            f"No gamepad detected on /dev/input/js*. The selected task "
+            f"'{task}' requires a USB controller — without one, gym-hil "
+            f"prints 'No gamepad detected' and the sim exits silently in "
+            f"~6 seconds (rc=0). Either plug in a gamepad, or switch the "
+            f"env profile's `task` to PandaPickCubeKeyboard-v0 (works on "
+            f"any laptop) or PandaPickCubeBase-v0 (autonomous-only).",
+        )
+
+
 # ============================================================================
 # Request models
 # ============================================================================
@@ -622,6 +660,7 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
         # Sim teleop — gym_manipulator with no --mode just spins the env loop.
         # gym-hil's gamepad/keyboard task variants embed their own teleop;
         # the `teleop` field in the request is ignored on this path.
+        _check_env_input_compat(req.env)
         cfg = _env_profile_to_gym_manipulator_cfg(req.env, mode=None)
         cfg_path = _write_gym_manipulator_config_tmp(cfg)
         args = ["python", "-u", "-m", "lerobot.rl.gym_manipulator", f"--config_path={cfg_path}"]
@@ -657,6 +696,7 @@ async def start_record(req: RecordRequest) -> dict:
         # Sim record — gym_manipulator --mode record. Demos are collected via
         # gym-hil's built-in gamepad/keyboard task variants; req.teleop is
         # ignored on this path.
+        _check_env_input_compat(req.env)
         dataset = {
             "repo_id": req.repo_id,
             "task": req.single_task,
@@ -715,6 +755,7 @@ async def start_replay(req: ReplayRequest) -> dict:
     source = _ensure_one_source(req.robot, req.env)
 
     if source == "env":
+        _check_env_input_compat(req.env)
         dataset = {
             "repo_id": req.repo_id,
             "task": "_replay",

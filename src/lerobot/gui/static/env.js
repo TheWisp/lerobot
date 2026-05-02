@@ -140,16 +140,28 @@ function renderEnvEditor() {
 
     html += '</div>';
 
-    // gym-hil hint
+    // gym-hil hint + Gamepad warning when applicable
     if (currentEnvProfile.data.type === 'gym_manipulator') {
+        const task = String(currentEnvProfile.data.fields?.task || '');
+        if (task.includes('Gamepad')) {
+            // Loud warning: gym-hil's Gamepad variants exit cleanly with rc=0
+            // within ~6s when no controller is plugged in — looks like an
+            // instant crash from the GUI side. Surface this *before* launch.
+            html += '<div class="form-section" style="border:1px solid #b58900; background:rgba(181,137,0,0.08); padding:10px;">';
+            html += '<div class="form-section-title" style="color:#b58900">⚠ Gamepad task selected</div>';
+            html += '<div class="form-hint" style="line-height:1.6">';
+            html += 'This task <b>requires a USB gamepad</b>. Without one, gym-hil prints "No gamepad detected" and the sim exits silently in ~6 seconds (rc=0). The Launch button will refuse with a 400 if no controller is plugged in.<br><br>';
+            html += 'For a no-hardware setup, switch <code>task</code> to <code>PandaPickCubeKeyboard-v0</code> (keyboard inside the MuJoCo window) or <code>PandaPickCubeBase-v0</code> (autonomous-only).';
+            html += '</div></div>';
+        }
         html += '<div class="form-section">';
         html += '<div class="form-section-title">Quick reference: gym-hil tasks</div>';
         html += '<div class="form-hint" style="line-height:1.6">';
         html += 'Set <code>name = gym_hil</code> and <code>task</code> to one of:<br>';
-        html += '&nbsp;&bull; <code>PandaPickCubeBase-v0</code> &mdash; baseline (no human input)<br>';
-        html += '&nbsp;&bull; <code>PandaPickCubeGamepad-v0</code> &mdash; gamepad teleop<br>';
-        html += '&nbsp;&bull; <code>PandaPickCubeKeyboard-v0</code> &mdash; keyboard teleop<br>';
-        html += 'MuJoCo viewer opens as a separate desktop window. Suggested fps: 10.';
+        html += '&nbsp;&bull; <code>PandaPickCubeBase-v0</code> &mdash; baseline, no human input<br>';
+        html += '&nbsp;&bull; <code>PandaPickCubeKeyboard-v0</code> &mdash; keyboard teleop (recommended for first run)<br>';
+        html += '&nbsp;&bull; <code>PandaPickCubeGamepad-v0</code> &mdash; gamepad teleop (requires USB controller)<br>';
+        html += 'MuJoCo viewer opens as a separate desktop window — focus it to send keyboard/gamepad input. Suggested fps: 10.';
         html += '</div></div>';
     }
 
