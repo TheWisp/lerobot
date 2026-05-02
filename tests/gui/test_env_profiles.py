@@ -216,6 +216,88 @@ class TestEnvProfileCRUD:
 # ============================================================================
 
 
+class TestRoundTripIntegrity:
+    """The backend must not drop, invent, or silently coerce profile fields
+    on a CRUD round-trip. The frontend's dirty detection compares the
+    saved-from-API state against the freshly-collected form state — any
+    asymmetry here makes it look dirty when it shouldn't be."""
+
+    def test_minimal_profile_unchanged_on_round_trip(self, tmp_env_profiles_dir):
+        """A profile with only the absolute-minimum fields must come back
+        with exactly the same fields. No defaults injected, no fields
+        dropped."""
+        client = TestClient(app)
+        original = {
+            "type": "gym_manipulator",
+            "name": "minimal",
+            "fields": {"name": "gym_hil", "task": "PandaPickCubeKeyboard-v0"},
+        }
+        client.post("/api/env/profiles", json=original)
+        body = client.get("/api/env/profiles/minimal").json()
+        # Strict equality on the user-controlled keys.
+        assert body["type"] == original["type"]
+        assert body["name"] == original["name"]
+        assert body["fields"] == original["fields"], (
+            f"fields changed on round-trip: sent {original['fields']}, got {body['fields']}"
+        )
+
+    def test_full_profile_unchanged_on_round_trip(self, tmp_env_profiles_dir):
+        """All field types preserved exactly."""
+        client = TestClient(app)
+        original = {
+            "type": "gym_manipulator",
+            "name": "full",
+            "fields": {
+                "name": "gym_hil",
+                "task": "PandaPickCubeGamepad-v0",
+                "fps": 7,
+                "device": "cpu",
+                "max_parallel_tasks": 2,
+                "disable_env_checker": False,
+            },
+        }
+        client.post("/api/env/profiles", json=original)
+        body = client.get("/api/env/profiles/full").json()
+        assert body["fields"] == original["fields"]
+
+    def test_update_then_read_returns_updated(self, tmp_env_profiles_dir):
+        """PUT followed by GET must return the PUT body exactly. Without
+        this guarantee the frontend can't reliably show 'no unsaved
+        changes' after a successful save."""
+        client = TestClient(app)
+        client.post(
+            "/api/env/profiles",
+            json={
+                "type": "gym_manipulator",
+                "name": "p",
+                "fields": {"task": "PandaPickCubeBase-v0"},
+            },
+        )
+        updated = {
+            "type": "gym_manipulator",
+            "name": "p",
+            "fields": {"task": "PandaPickCubeKeyboard-v0", "fps": 15},
+        }
+        client.put("/api/env/profiles/p", json=updated)
+        body = client.get("/api/env/profiles/p").json()
+        assert body["fields"] == updated["fields"]
+
+    def test_empty_fields_dict_preserved(self, tmp_env_profiles_dir):
+        """An empty `fields: {}` must round-trip as empty, not be
+        silently filled with schema defaults."""
+        client = TestClient(app)
+        client.post(
+            "/api/env/profiles",
+            json={
+                "type": "gym_manipulator",
+                "name": "empty",
+                "fields": {},
+            },
+        )
+        body = client.get("/api/env/profiles/empty").json()
+        assert body["fields"] == {}
+
+
 class TestRegisteredTasks:
     """`/api/env/registered-tasks` enumerates gym tasks for a namespace,
     falling back to a hardcoded list when the package can't be imported."""

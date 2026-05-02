@@ -109,6 +109,18 @@ function renderTeleopProfileList() {
 // ============================================================================
 
 async function selectProfile(kind, name) {
+    // Guard against silent loss when switching with unsaved edits in flight.
+    // Idempotent re-click of the same profile shouldn't prompt.
+    const isSameProfile = currentProfile
+        && currentProfile.kind === kind
+        && currentProfile.name === name;
+    if (currentProfile && !isSameProfile && _isDirty()) {
+        const ok = confirm(
+            `"${currentProfile.name}" has unsaved changes. ` +
+            `Discard them and switch to "${name}"?`
+        );
+        if (!ok) return;
+    }
     const endpoint = kind === 'robot' ? '/api/robot/profiles' : '/api/robot/teleop-profiles';
     try {
         const res = await fetch(`${endpoint}/${encodeURIComponent(name)}`);
@@ -244,16 +256,6 @@ function changeProfileType(newType) {
 // Dirty tracking
 // ============================================================================
 
-function _serializeProfile(data) {
-    return JSON.stringify({
-        type: data.type,
-        name: data.name,
-        fields: data.fields || {},
-        cameras: data.cameras || {},
-        rest_position: data.rest_position || {},
-    });
-}
-
 function _collectFormFields() {
     const schemas = currentProfile.kind === 'robot' ? robotSchemas : teleopSchemas;
     const schema = schemas?.find(s => s.type_name === currentProfile.data.type);
@@ -268,14 +270,48 @@ function _collectFormFields() {
     return fields;
 }
 
+/** Drop fields whose value equals the schema default — without this the
+ *  dirty checker fires on first render of any profile that doesn't
+ *  override every field, because the form pre-populates with defaults
+ *  that don't appear in the saved JSON. Both sides of the comparison
+ *  must be normalized identically. */
+function _normalizeFields(fields, schema) {
+    const out = {};
+    const defaults = {};
+    if (schema) for (const f of schema.fields) defaults[f.name] = f.default;
+    for (const [k, v] of Object.entries(fields || {})) {
+        if (k in defaults && defaults[k] !== undefined && defaults[k] !== null && v === defaults[k]) continue;
+        out[k] = v;
+    }
+    return out;
+}
+
+/** Stable, key-sorted JSON for cross-state equality. JSON.stringify uses
+ *  insertion order, which differs between freshly-loaded saved data and
+ *  freshly-collected current form data even when contents match. */
+function _stableJSON(obj) {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return JSON.stringify(obj);
+    const keys = Object.keys(obj).sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + _stableJSON(obj[k])).join(',') + '}';
+}
+
 function _isDirty() {
     if (!currentProfile || !savedProfileData) return false;
-    const current = _serializeProfile({
-        ...currentProfile.data,
-        name: currentProfile.name,
-        fields: _collectFormFields(),
-    });
-    return current !== _serializeProfile(savedProfileData);
+    if (currentProfile.name !== savedProfileData.name) return true;
+    if (currentProfile.data.type !== savedProfileData.type) return true;
+    const schemas = currentProfile.kind === 'robot' ? robotSchemas : teleopSchemas;
+    const schema = schemas?.find(s => s.type_name === currentProfile.data.type);
+    const cur = {
+        fields: _normalizeFields(_collectFormFields(), schema),
+        cameras: currentProfile.data.cameras || {},
+        rest_position: currentProfile.data.rest_position || {},
+    };
+    const persisted = {
+        fields: _normalizeFields(savedProfileData.fields, schema),
+        cameras: savedProfileData.cameras || {},
+        rest_position: savedProfileData.rest_position || {},
+    };
+    return _stableJSON(cur) !== _stableJSON(persisted);
 }
 
 function _updateDirtyState() {

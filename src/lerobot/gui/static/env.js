@@ -98,6 +98,15 @@ function renderEnvProfileList() {
 }
 
 async function selectEnvProfile(name) {
+    // Guard against silent loss when switching with unsaved edits in flight.
+    // Don't prompt when re-selecting the same profile (idempotent click).
+    if (currentEnvProfile && currentEnvProfile.name !== name && _isEnvDirty()) {
+        const ok = confirm(
+            `"${currentEnvProfile.name}" has unsaved changes. ` +
+            `Discard them and switch to "${name}"?`
+        );
+        if (!ok) return;
+    }
     try {
         const res = await fetch(`/api/env/profiles/${encodeURIComponent(name)}`);
         if (!res.ok) throw new Error(await res.text());
@@ -343,22 +352,47 @@ function _collectEnvFormFields() {
     return fields;
 }
 
-function _serializeEnvProfile(data) {
-    return JSON.stringify({
-        type: data.type,
-        name: data.name,
-        fields: data.fields || {},
-    });
+/** Drop fields whose value equals the schema default. Without this, the
+ *  dirty checker fires the moment a profile is rendered: the form
+ *  pre-populates every schema field with its default, _collectEnvFormFields
+ *  reads those defaults back, and they don't appear in the saved profile
+ *  (which only stores fields the user explicitly set). The fix is to
+ *  normalize both sides identically before comparison — implicit defaults
+ *  on either side are equivalent to absence. */
+function _normalizeEnvFields(fields, schema) {
+    const out = {};
+    const defaults = {};
+    if (schema) for (const f of schema.fields) defaults[f.name] = f.default;
+    for (const [k, v] of Object.entries(fields || {})) {
+        if (k in defaults && defaults[k] !== undefined && defaults[k] !== null && v === defaults[k]) continue;
+        out[k] = v;
+    }
+    // device is a gym_manipulator-only field rendered outside the schema
+    // loop (lives at GymManipulatorConfig top level, not inside EnvConfig).
+    // "cuda" is the implicit default we ship in newEnvProfile + the form;
+    // dropping it keeps profiles that don't override it from looking dirty.
+    if (out.device === 'cuda') delete out.device;
+    return out;
+}
+
+/** Stable, key-sorted JSON for cross-state equality — JSON.stringify alone
+ *  reflects insertion order, which differs between freshly-loaded saved
+ *  data and freshly-collected current form data even when the contents
+ *  match. */
+function _stableJSON(obj) {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return JSON.stringify(obj);
+    const keys = Object.keys(obj).sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + _stableJSON(obj[k])).join(',') + '}';
 }
 
 function _isEnvDirty() {
     if (!currentEnvProfile || !savedEnvProfileData) return false;
-    const current = _serializeEnvProfile({
-        ...currentEnvProfile.data,
-        name: currentEnvProfile.name,
-        fields: _collectEnvFormFields(),
-    });
-    return current !== _serializeEnvProfile(savedEnvProfileData);
+    if (currentEnvProfile.name !== savedEnvProfileData.name) return true;
+    if (currentEnvProfile.data.type !== savedEnvProfileData.type) return true;
+    const schema = envSchemas?.find(s => s.type_name === currentEnvProfile.data.type);
+    const cur = _normalizeEnvFields(_collectEnvFormFields(), schema);
+    const persisted = _normalizeEnvFields(savedEnvProfileData.fields, schema);
+    return _stableJSON(cur) !== _stableJSON(persisted);
 }
 
 function _updateEnvDirtyState() {
