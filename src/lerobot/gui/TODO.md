@@ -87,10 +87,11 @@ See [docs/model_tab.md](docs/model_tab.md) for full design.
 
 ## Run Tab
 
+- [Mid] **File log misses ASGI / uvicorn errors**. `setup_logging()` in `gui/server.py` configures only the `lerobot.gui.*` namespace and sets `propagate=False`, so anything that raises in uvicorn / starlette / FastAPI handlers (unhandled ASGI exceptions, SSE generator failures, stream errors) prints only to the terminal that started the server — never to `~/.cache/huggingface/lerobot/gui/logs/server_*.log`. Surfaced when the gym-hil sim work hit a Python-3.10 `asyncio.TimeoutError` regression in the SSE keepalive: the file log showed only "Process exited rc=0", the actual traceback was console-only. Fix: also attach the file handler to `logging.getLogger("uvicorn.error")` and `logging.getLogger("uvicorn")`, or pass a `log_config` to `uvicorn.run` that mirrors stdout/stderr to the same rotating file. Inline TODO in `server.py:setup_logging` near the `propagate=False` line.
 - [Low] Text output freezes after a while — teleoperate uses ANSI cursor-up in piped stdout
 - [Low] Rerun web viewer has ~200ms visual lag (Rerun 0.26 limitation)
 - [Low] Replay FPS setting doesn't seem to affect playback speed — remove if not useful
-- [Low] **SIGKILL during HVLA shutdown leaks semaphores**. When stopping S1 inference (or any HVLA run) via the GUI's stop button, the SIGTERM → SIGKILL grace window in `gui/api/run.py` is too short for the full cleanup chain (robots, OpenCV cameras, RealSense, ObservationStream shm). RealSense in particular can take 1-2s to close. Visible as `resource_tracker: There appear to be N leaked semaphore objects` and `Process exited with code -9`. Cosmetic only — kernel reclaims the resources when the process dies — but noisy. Two fixes: (1) extend the grace window to ~15s for HVLA processes, (2) parallelize camera disconnects in `s1_process.py` cleanup, or call `obs_stream.cleanup()` *before* camera disconnects so the shm is released first.
+- [Low] **SIGKILL during HVLA shutdown leaks semaphores**. When stopping S1 inference (or any HVLA run) via the GUI's stop button, the SIGTERM → SIGKILL grace window in `gui/api/run.py` is too short for the full cleanup chain (robots, OpenCV cameras, RealSense, ObservationStream shm). RealSense in particular can take 1-2s to close. Visible as `resource_tracker: There appear to be N leaked semaphore objects` and `Process exited with code -9`. Cosmetic only — kernel reclaims the resources when the process dies — but noisy. Two fixes: (1) extend the grace window to ~15s for HVLA processes, (2) parallelize camera disconnects in `s1_process.py` cleanup, or call `obs_stream.cleanup()` _before_ camera disconnects so the shm is released first.
 - [High] **RLT metrics pipeline is wasteful end-to-end**. Two compounding issues: (1) Training subprocess rewrites the entire `metrics.json` (~150KB for 5000 points × 8 series) on every save, even when only a few new points were appended — atomic write via `.tmp` + `os.replace` on each episode end and every 100 inference steps. (2) GUI polls `/api/run/rlt-metrics` every 2s and gets the same full snapshot back, of which ~99.6% is unchanged from the previous poll. Fine on localhost, wasteful otherwise. Options: append-only JSONL or shared memory on the write side; SSE push of only new points or cursor-based polling (`?since_step=N`) on the read side. Frontend maintains a local buffer.
 - [Mid] **RLT dashboard chart smoothing**. Per-inference series like `actor_deltas` have per-sample noise comparable to the actual trend (e.g. δ raw σ ≈ 0.015 per sample vs a real β-driven shift of 0.018 — z=17.8 over 500 samples but invisible in any single-sample view). The dashboard plots raw values, so genuine learning signals get hidden. Add a smoothing toggle / moving-average overlay (window picker: raw / 50 / 200 / 500), or always show both the raw line (light) and a smoothed line (bold). Same applies to `q_values_*`, `critic_losses`, `actor_q_term`, `actor_bc_term` — all have per-grad-step noise. Cheap if the smoothing happens in JS over the buffered series the dashboard already pulls.
 
@@ -136,6 +137,7 @@ Live overlay during teleop/record showing how the current state compares to the 
   - `robot.js`: `ensureRobotProfilesLoaded()` / `ensureTeleopProfilesLoaded()`. Remove the inline fetches in `run.js:23-35`.
 
   Invariant after refactor: `s.expanded` references appear only in render/toggle code. Periodic check:
+
   ```bash
   grep -nE "if.*\.expanded" src/lerobot/gui/static/*.js | grep -vE "render|toggle|html"
   # Should match nothing.
@@ -182,8 +184,9 @@ Live overlay during teleop/record showing how the current state compares to the 
 ## Workflow
 
 To work on this TODO autonomously:
+
 1. Read the TODO.md
 2. Find the next incomplete task and implement it
 3. Commit your changes
 4. Update TODO with what you did
-ONLY DO ONE TASK AT A TIME.
+   ONLY DO ONE TASK AT A TIME.

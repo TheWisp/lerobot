@@ -165,6 +165,17 @@ def setup_logging(log_dir: Path | None = None) -> Path:
     gui_logger.addHandler(console_handler)
     gui_logger.addHandler(file_handler)
 
+    # TODO(file-log-coverage): uvicorn / starlette ASGI errors do not reach
+    # this file log. They use the `uvicorn.error` logger and print to stdout/
+    # stderr; with `propagate=False` above we explicitly cut them off from
+    # the root logger, so unhandled ASGI tracebacks (e.g. an SSE generator
+    # raising) are visible only in the terminal that started the server.
+    # That made debugging the gym-hil/Python-3.10 `asyncio.TimeoutError`
+    # regression require copy-pasting the console — the file log showed
+    # only "Process exited rc=0". Fix direction: also attach
+    # `file_handler` to logging.getLogger("uvicorn.error") and
+    # logging.getLogger("uvicorn") (or wrap uvicorn's logging config with
+    # a `log_config` dict that points at this file).
     gui_logger.info(f"Logging to {log_file}")
 
     return log_dir
