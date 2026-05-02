@@ -1982,6 +1982,11 @@ async function pollRunStatus() {
     try {
         const res = await fetch('/api/run/status');
         const status = await res.json();
+        // Expose globally so other tabs (notably app.js's data-tab keydown)
+        // can suppress their hotkeys while a sim subprocess is running --
+        // gym-hil's pynput keyboard listener captures keys system-wide,
+        // so any GUI shortcut on the same key fires alongside it.
+        window._runStatus = status;
         updateRunUI(status.running);
 
         // If running but no SSE, reconnect

@@ -1238,10 +1238,19 @@ async def stop_process() -> dict:
 
 @router.get("/status")
 async def get_status() -> dict:
+    # is_sim distinguishes sim subprocesses (gym_manipulator) from
+    # real-robot ones. The frontend uses it to suppress GUI keyboard
+    # hotkeys while sim is running, because gym-hil's pynput listener
+    # captures keys system-wide and any GUI hotkey on the same key
+    # would fire alongside it (e.g. arrow keys in the Data tab navigate
+    # episodes while you're trying to move the arm).
+    is_sim = bool(_active_config and _active_config.get("env") is not None)
+
     if _active_process is None:
         return {
             "running": False,
             "command": None,
+            "is_sim": False,
             "log_path": str(_subprocess_log_path) if _subprocess_log_path else None,
         }
 
@@ -1251,12 +1260,14 @@ async def get_status() -> dict:
             "running": False,
             "command": _active_command,
             "returncode": returncode,
+            "is_sim": is_sim,
             "log_path": str(_subprocess_log_path) if _subprocess_log_path else None,
         }
     return {
         "running": True,
         "command": _active_command,
         "pid": _active_process.pid,
+        "is_sim": is_sim,
         "log_path": str(_subprocess_log_path) if _subprocess_log_path else None,
     }
 

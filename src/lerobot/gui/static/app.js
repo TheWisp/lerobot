@@ -700,6 +700,14 @@ function switchTab(tabName) {
 
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    // Suppress all GUI keyboard shortcuts while a sim subprocess is
+    // running. gym-hil's pynput listener captures keys system-wide
+    // (regardless of focused window), so e.g. arrow keys we'd use to
+    // navigate dataset episodes in the Data tab also fire on the sim
+    // side as movement -- and our Space-for-play / Enter-for-X collide
+    // with gym-hil's intervention toggle / episode-end keys. While
+    // sim is active, the user's keyboard belongs to gym-hil, not us.
+    if (window._runStatus?.running && window._runStatus?.is_sim) return;
     // Only handle data-tab shortcuts when data tab is active
     const activeTab = document.querySelector('.tab.active')?.dataset.tab;
     if (activeTab !== 'data') return;

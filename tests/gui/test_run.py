@@ -1384,6 +1384,74 @@ class TestSubprocessLogCapture:
             run_mod._subprocess_log_path = None
 
 
+class TestStatusIsSimFlag:
+    """`/api/run/status` exposes is_sim so the frontend knows to suppress
+    its keyboard hotkeys while a sim subprocess is running -- gym-hil's
+    pynput listener captures keys system-wide and any GUI hotkey on the
+    same key fires alongside it (arrow keys advance Data-tab episodes
+    while you're trying to move the arm)."""
+
+    def test_idle_is_sim_false(self):
+        from fastapi.testclient import TestClient
+
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.server import app
+
+        run_mod._active_process = None
+        run_mod._active_command = None
+        run_mod._active_config = None
+        client = TestClient(app)
+        body = client.get("/api/run/status").json()
+        assert body["is_sim"] is False
+        assert body["running"] is False
+
+    def test_sim_subprocess_is_sim_true(self):
+        from fastapi.testclient import TestClient
+
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.server import app
+
+        proc = AsyncMock()
+        proc.pid = 1234
+        proc.returncode = None
+        run_mod._active_process = proc
+        run_mod._active_command = "teleoperate"
+        run_mod._active_config = {"env": {"type": "gym_manipulator"}}
+        try:
+            client = TestClient(app)
+            body = client.get("/api/run/status").json()
+            assert body["is_sim"] is True
+            assert body["running"] is True
+        finally:
+            run_mod._active_process = None
+            run_mod._active_command = None
+            run_mod._active_config = None
+
+    def test_real_robot_subprocess_is_sim_false(self):
+        """Real-robot teleop has no system-wide keyboard capture, so
+        is_sim must be False — the GUI's hotkeys can stay armed."""
+        from fastapi.testclient import TestClient
+
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.server import app
+
+        proc = AsyncMock()
+        proc.pid = 1234
+        proc.returncode = None
+        run_mod._active_process = proc
+        run_mod._active_command = "teleoperate"
+        run_mod._active_config = {"robot": {"type": "so107_follower"}}
+        try:
+            client = TestClient(app)
+            body = client.get("/api/run/status").json()
+            assert body["is_sim"] is False
+            assert body["running"] is True
+        finally:
+            run_mod._active_process = None
+            run_mod._active_command = None
+            run_mod._active_config = None
+
+
 class TestTimeoutExcsRegression:
     """Regression guard for the asyncio.TimeoutError vs builtin TimeoutError
     Python-3.10 mismatch.
