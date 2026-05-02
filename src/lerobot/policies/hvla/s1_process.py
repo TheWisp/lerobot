@@ -964,7 +964,7 @@ def run_s1(
     # RLT always needs multi-episode mode
     multi_episode = num_episodes > 1 or episode_time_s > 0 or rlt_mode
     if multi_episode:
-        from lerobot.utils.control_utils import init_keyboard_listener
+        from lerobot.common.control_utils import init_keyboard_listener
         listener, events = init_keyboard_listener()
         logger.info("S1: Rollout mode — %d episodes, %.0fs/episode, %.0fs reset",
                     num_episodes, episode_time_s, reset_time_s)
