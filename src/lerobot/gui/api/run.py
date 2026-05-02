@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -22,10 +23,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/run", tags=["run"])
 
-_app_state: "AppState" = None  # type: ignore
+_app_state: AppState = None  # type: ignore
 
 
-def set_app_state(state: "AppState") -> None:
+def set_app_state(state: AppState) -> None:
     global _app_state
     _app_state = state
 
@@ -52,10 +53,8 @@ def _get_known_fields(profile_type: str, prefix: str) -> set[str] | None:
     # Trigger registration of all config subclasses
     pkg = lerobot.robots if prefix == "robot" else lerobot.teleoperators
     for _importer, modname, _ispkg in pkgutil.walk_packages(pkg.__path__, prefix=pkg.__name__ + "."):
-        try:
+        with contextlib.suppress(Exception):
             importlib.import_module(modname)
-        except Exception:
-            pass
 
     base_cls = RobotConfig if prefix == "robot" else TeleoperatorConfig
     choices = base_cls.get_known_choices()
@@ -167,8 +166,8 @@ class HVLARunRequest(BaseModel):
     # RLT (RL Token)
     rlt_mode: bool = False
     rlt_token_checkpoint: str | None = None  # Phase 1: RL token encoder
-    rlt_checkpoint: str | None = None        # Phase 2: existing actor checkpoint dir
-    rlt_deploy: bool = False                 # True = inference only, no training
+    rlt_checkpoint: str | None = None  # Phase 2: existing actor checkpoint dir
+    rlt_deploy: bool = False  # True = inference only, no training
     rlt_chunk_length: int = 10
     rlt_output_dir: str = "outputs/rlt_online"
     rlt_start_engaged: bool = True
@@ -262,10 +261,9 @@ async def _wait_for_exit() -> None:
     _output_event.set()
 
 
-
-
-async def _launch_subprocess(args: list[str], command: str, config: dict,
-                             extra_env: dict[str, str] | None = None) -> None:
+async def _launch_subprocess(
+    args: list[str], command: str, config: dict, extra_env: dict[str, str] | None = None
+) -> None:
     """Launch a subprocess and start reading its output."""
     global _active_process, _active_command, _active_config, _output_lines, _stream_tasks
 
@@ -307,7 +305,10 @@ async def _launch_debug_s2(config: DebugModelConfig) -> None:
     await _stop_debug_process()
 
     args = [
-        "python", "-u", "-m", "lerobot.policies.hvla.s2_standalone",
+        "python",
+        "-u",
+        "-m",
+        "lerobot.policies.hvla.s2_standalone",
         f"--checkpoint={Path(config.checkpoint).expanduser() / 'model.safetensors'}"
         if not config.checkpoint.endswith(".safetensors")
         else f"--checkpoint={Path(config.checkpoint).expanduser()}",
@@ -316,8 +317,12 @@ async def _launch_debug_s2(config: DebugModelConfig) -> None:
     if config.decode_subtask:
         args.append("--decode-subtask")
 
-    # Write output to a dedicated log file (not mixed with main process output)
-    _debug_output_path = Path(tempfile.mktemp(prefix="lerobot_debug_model_", suffix=".log"))
+    # Write output to a dedicated log file (not mixed with main process output).
+    # mkstemp -> path-only: the fd is closed immediately, then the subprocess
+    # opens the path with O_TRUNC. Avoids mktemp's TOCTOU race.
+    _fd, _log_path = tempfile.mkstemp(prefix="lerobot_debug_model_", suffix=".log")
+    os.close(_fd)
+    _debug_output_path = Path(_log_path)
     _debug_output_lines = []
 
     env = {**__import__("os").environ}
@@ -374,7 +379,7 @@ async def _stop_debug_process() -> None:
         _debug_process.terminate()
         try:
             await asyncio.wait_for(_debug_process.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _debug_process.kill()
             await _debug_process.wait()
     _debug_process = None
@@ -383,11 +388,9 @@ async def _stop_debug_process() -> None:
         _debug_read_task = None
     # Clean up log file
     if _debug_output_path is not None:
-        try:
+        with contextlib.suppress(Exception):
             # safe-destruct: our debug log temp file
             _debug_output_path.unlink(missing_ok=True)
-        except Exception:
-            pass
         _debug_output_path = None
 
 
@@ -450,7 +453,7 @@ async def debug_output_sse():
             # Wait for new data or timeout (keepalive)
             try:
                 await asyncio.wait_for(_debug_output_event.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 yield ": keepalive\n\n"
 
     return StreamingResponse(
@@ -480,6 +483,7 @@ async def debug_subtask() -> dict:
     if _s2_subtask_cache is None:
         try:
             from lerobot.policies.hvla.ipc import SharedLatentCache
+
             _s2_subtask_cache = SharedLatentCache(create=False)
         except FileNotFoundError:
             return {"subtask": ""}
@@ -513,8 +517,7 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
             await _launch_debug_s2(req.debug_model)
         extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
 
-    await _launch_subprocess(args, command="teleoperate", config=req.model_dump(),
-                             extra_env=extra_env)
+    await _launch_subprocess(args, command="teleoperate", config=req.model_dump(), extra_env=extra_env)
     return {"status": "started", "command": "teleoperate", "pid": _active_process.pid}
 
 
@@ -554,8 +557,7 @@ async def start_record(req: RecordRequest) -> dict:
             await _launch_debug_s2(req.debug_model)
         extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
 
-    await _launch_subprocess(args, command="record", config=req.model_dump(),
-                             extra_env=extra_env)
+    await _launch_subprocess(args, command="record", config=req.model_dump(), extra_env=extra_env)
     return {"status": "started", "command": "record", "pid": _active_process.pid}
 
 
@@ -591,15 +593,17 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             flat["cameras"] = robot_config["cameras"]
         robot_config = flat
 
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, prefix="hvla_robot_")
-    tmp.write(json.dumps(robot_config, indent=2))
-    tmp.close()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, prefix="hvla_robot_") as tmp:
+        tmp.write(json.dumps(robot_config, indent=2))
+        tmp_name = tmp.name
 
     args = [
-        "python", "-m", "lerobot.policies.hvla.launch",
+        "python",
+        "-m",
+        "lerobot.policies.hvla.launch",
         f"--s1-checkpoint={req.s1_checkpoint}",
         f"--task={req.task}",
-        f"--robot-config={tmp.name}",
+        f"--robot-config={tmp_name}",
         f"--fps={req.fps}",
         f"--s1-type={req.s1_type}",
     ]
@@ -621,10 +625,12 @@ async def start_hvla(req: HVLARunRequest) -> dict:
 
     # Teleop for intervention / inverse follow
     if req.teleop:
-        teleop_tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, prefix="hvla_teleop_")
-        teleop_tmp.write(json.dumps(req.teleop, indent=2))
-        teleop_tmp.close()
-        args.append(f"--teleop-config={teleop_tmp.name}")
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, prefix="hvla_teleop_"
+        ) as teleop_tmp:
+            teleop_tmp.write(json.dumps(req.teleop, indent=2))
+            teleop_tmp_name = teleop_tmp.name
+        args.append(f"--teleop-config={teleop_tmp_name}")
     if req.intervention_dataset:
         args.append(f"--intervention-dataset={req.intervention_dataset}")
 
@@ -678,6 +684,7 @@ async def get_rlt_metrics() -> dict:
     """
     try:
         from lerobot.policies.hvla.rlt.metrics import load_metrics_from_file
+
         path = None
         if _active_config and _active_config.get("rlt_output_dir"):
             path = str(Path(_active_config["rlt_output_dir"]) / "metrics.json")
@@ -686,9 +693,17 @@ async def get_rlt_metrics() -> dict:
             return data
     except Exception as e:
         logger.warning("RLT metrics read failed: %s", e)
-    return {"episode": 0, "step_count": 0, "buffer_size": 0,
-            "total_updates": 0, "mode": "IDLE", "success_rate": 0,
-            "total_successes": 0, "total_episodes": 0, "series": {}}
+    return {
+        "episode": 0,
+        "step_count": 0,
+        "buffer_size": 0,
+        "total_updates": 0,
+        "mode": "IDLE",
+        "success_rate": 0,
+        "total_successes": 0,
+        "total_episodes": 0,
+        "series": {},
+    }
 
 
 @router.get("/rlt-config")
@@ -701,6 +716,7 @@ async def get_rlt_config() -> dict:
     session is active.
     """
     import json as _json
+
     from lerobot.policies.hvla.rlt.config import RLTConfig
 
     defaults = RLTConfig()
@@ -742,6 +758,7 @@ async def get_rlt_config() -> dict:
 async def set_rlt_config(body: dict) -> dict:
     """Write RLT config overrides for the training subprocess to pick up."""
     import json as _json
+
     if not _active_config or not _active_config.get("rlt_output_dir"):
         raise HTTPException(409, "No active RLT session")
     # Validate: only known keys, numeric values in range. Legacy "actor_sigma"
@@ -780,11 +797,8 @@ async def set_rlt_config(body: dict) -> dict:
         # don't wipe other keys (beta, actor_sigma).
         existing = {}
         if override_path.exists():
-            try:
-                with open(override_path) as f:
-                    existing = _json.load(f)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception), open(override_path) as f:
+                existing = _json.load(f)
         merged = {**existing, **filtered}
         tmp = str(override_path) + ".tmp"
         with open(tmp, "w") as f:
@@ -794,7 +808,7 @@ async def set_rlt_config(body: dict) -> dict:
         return {"status": "ok", **filtered}
     except Exception as e:
         logger.warning("RLT config write failed: %s", e)
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)) from e
 
 
 @router.post("/stop")
@@ -809,7 +823,7 @@ async def stop_process() -> dict:
         _active_process.send_signal(signal.SIGINT)
         try:
             await asyncio.wait_for(_active_process.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _active_process.kill()
             await _active_process.wait()
     except ProcessLookupError:
@@ -852,7 +866,9 @@ async def stream_output() -> StreamingResponse:
         sent_overlay = None  # track last overlay sent to avoid duplicates
         proc_at_start = _active_process
 
-        logger.info(f"SSE: connected, buffered={len(_output_lines)} lines, process={'running' if proc_at_start and proc_at_start.returncode is None else 'none/done'}")
+        logger.info(
+            f"SSE: connected, buffered={len(_output_lines)} lines, process={'running' if proc_at_start and proc_at_start.returncode is None else 'none/done'}"
+        )
 
         # Send existing buffered lines first
         while sent_lines < len(_output_lines):
@@ -880,13 +896,15 @@ async def stream_output() -> StreamingResponse:
                     line = _output_lines[sent_lines]
                     yield f"data: {json.dumps({'line': line})}\n\n"
                     sent_lines += 1
-                logger.info(f"SSE: done (process={'exited rc='+str(_active_process.returncode) if _active_process else 'None'}, sent={sent_lines} lines)")
+                logger.info(
+                    f"SSE: done (process={'exited rc=' + str(_active_process.returncode) if _active_process else 'None'}, sent={sent_lines} lines)"
+                )
                 yield f"data: {json.dumps({'done': True})}\n\n"
                 return
 
             try:
                 await asyncio.wait_for(_output_event.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 yield ": keepalive\n\n"
 
     return StreamingResponse(
@@ -904,7 +922,7 @@ _obs_reader = None  # ObservationStreamReader | None
 _obs_reader_meta_ino: int | None = None  # inode of /dev/shm/lerobot_obs_meta at attach time
 _jpeg_cache: dict[str, tuple[int, bytes]] = {}  # cam_key → (seq, jpeg_bytes)
 
-_OBS_META_SHM_PATH = "/dev/shm/lerobot_obs_meta"
+_OBS_META_SHM_PATH = "/dev/shm/lerobot_obs_meta"  # nosec B108  # POSIX shared memory (well-known path)
 
 
 def _get_obs_reader():
