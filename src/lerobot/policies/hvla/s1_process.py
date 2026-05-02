@@ -335,14 +335,15 @@ def _create_or_resume_dataset(repo_id: str, fps: int, features: dict, robot_type
     This tries to resume first, falling back to delete+recreate if corrupted.
     TODO: move this logic into LeRobotDataset itself.
     """
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset, HF_LEROBOT_HOME
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.utils.constants import HF_LEROBOT_HOME
 
     dataset_root = HF_LEROBOT_HOME / repo_id
     if dataset_root.exists():
         try:
             dataset = LeRobotDataset(repo_id)
-            dataset.episode_buffer = dataset.create_episode_buffer()
-            dataset._init_video_encoders()
+            dataset.writer.episode_buffer = dataset.writer._create_episode_buffer()
+            dataset.writer._init_video_encoders()
             return dataset
         except Exception as e:
             logger.warning("Failed to resume '%s' (%s), recreating", repo_id, e)
@@ -1257,16 +1258,16 @@ def run_s1(
                     raise RuntimeError("BUG: intervention still active after reset_intervention()")
                 logger.info("S1: Intervention state confirmed OFF")
         if int_dataset is not None:
-            int_dataset.episode_buffer = int_dataset.create_episode_buffer()
+            int_dataset.writer.episode_buffer = int_dataset.writer._create_episode_buffer()
             # Restart video encoders for the new intervention episode.
             # Discard any active encoder from previous episode first.
-            for enc in int_dataset.video_encoders.values():
+            for enc in int_dataset.writer.video_encoders.values():
                 if enc._episode_active:
                     enc.discard()
-            if int_dataset.video_encoders:
-                int_dataset._start_video_encoders()
+            if int_dataset.writer.video_encoders:
+                int_dataset.writer._start_video_encoders()
             # Verify encoders are ready
-            for key, enc in int_dataset.video_encoders.items():
+            for key, enc in int_dataset.writer.video_encoders.items():
                 assert enc._episode_active, \
                     f"BUG: int_dataset video encoder '{key}' not active at episode start"
 
@@ -1533,16 +1534,16 @@ def run_s1(
                     logger.info("S1: INTERVENTION OFF — resuming inference")
 
                     # Save pending intervention episode buffer
-                    if int_dataset is not None and int_dataset.episode_buffer is not None and int_dataset.episode_buffer.get("size", 0) > 0:
+                    if int_dataset is not None and int_dataset.writer.episode_buffer is not None and int_dataset.writer.episode_buffer.get("size", 0) > 0:
                         import copy
-                        pending_int_episodes.append(copy.deepcopy(int_dataset.episode_buffer))
-                        int_dataset.episode_buffer = int_dataset.create_episode_buffer()
-                        for enc in int_dataset.video_encoders.values():
+                        pending_int_episodes.append(copy.deepcopy(int_dataset.writer.episode_buffer))
+                        int_dataset.writer.episode_buffer = int_dataset.writer._create_episode_buffer()
+                        for enc in int_dataset.writer.video_encoders.values():
                             if enc._episode_active:
                                 enc.discard()
-                        if int_dataset.video_encoders:
-                            int_dataset._start_video_encoders()
-                        for key, enc in int_dataset.video_encoders.items():
+                        if int_dataset.writer.video_encoders:
+                            int_dataset.writer._start_video_encoders()
+                        for key, enc in int_dataset.writer.video_encoders.items():
                             assert enc._episode_active, \
                                 f"BUG: int_dataset encoder '{key}' not active after restart"
 
@@ -1716,10 +1717,10 @@ def run_s1(
         # --- End of recording phase for this episode ---
         # Collect any remaining intervention buffer
         if int_dataset is not None:
-            if int_dataset.episode_buffer is not None and int_dataset.episode_buffer.get("size", 0) > 0:
+            if int_dataset.writer.episode_buffer is not None and int_dataset.writer.episode_buffer.get("size", 0) > 0:
                 import copy
-                pending_int_episodes.append(copy.deepcopy(int_dataset.episode_buffer))
-                int_dataset.episode_buffer = int_dataset.create_episode_buffer()
+                pending_int_episodes.append(copy.deepcopy(int_dataset.writer.episode_buffer))
+                int_dataset.writer.episode_buffer = int_dataset.writer._create_episode_buffer()
 
         if dataset is not None and step_count > 0:
             try:
@@ -1899,7 +1900,7 @@ def run_s1(
                         recorded_episodes, np.mean(infer_thread.infer_times), s2_info)
         if dataset is not None:
             try:
-                if dataset.episode_buffer is not None and dataset.episode_buffer.get("size", 0) > 0:
+                if dataset.writer.episode_buffer is not None and dataset.writer.episode_buffer.get("size", 0) > 0:
                     dataset.save_episode()
                     logger.info("S1: Final partial episode saved")
                 dataset.finalize()

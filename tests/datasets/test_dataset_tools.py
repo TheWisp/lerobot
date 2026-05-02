@@ -1333,7 +1333,7 @@ def test_convert_image_to_video_dataset_subset_episodes(tmp_path):
 
 def test_trim_episode_start_basic(sample_dataset):
     """Test trimming frames from the start of an episode."""
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     # Ensure episodes are loaded
     if sample_dataset.meta.episodes is None:
@@ -1350,7 +1350,7 @@ def test_trim_episode_start_basic(sample_dataset):
 
     # Reload to see changes
     sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
-    sample_dataset.hf_dataset = sample_dataset.load_hf_dataset()
+    sample_dataset._ensure_reader().load_and_activate()
 
     # Verify episode length decreased
     new_length = sample_dataset.meta.episodes[0]["length"]
@@ -1362,7 +1362,7 @@ def test_trim_episode_start_basic(sample_dataset):
 
 def test_trim_episode_end_basic(sample_dataset):
     """Test trimming frames from the end of an episode."""
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     # Ensure episodes are loaded
     if sample_dataset.meta.episodes is None:
@@ -1378,7 +1378,7 @@ def test_trim_episode_end_basic(sample_dataset):
 
     # Reload to see changes
     sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
-    sample_dataset.hf_dataset = sample_dataset.load_hf_dataset()
+    sample_dataset._ensure_reader().load_and_activate()
 
     new_length = sample_dataset.meta.episodes[0]["length"]
     assert new_length == original_length - frames_to_trim
@@ -1387,7 +1387,7 @@ def test_trim_episode_end_basic(sample_dataset):
 
 def test_trim_episode_both_ends(sample_dataset):
     """Test trimming frames from both ends of an episode."""
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     # Ensure episodes are loaded
     if sample_dataset.meta.episodes is None:
@@ -1404,7 +1404,7 @@ def test_trim_episode_both_ends(sample_dataset):
 
     # Reload to see changes
     sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
-    sample_dataset.hf_dataset = sample_dataset.load_hf_dataset()
+    sample_dataset._ensure_reader().load_and_activate()
 
     new_length = sample_dataset.meta.episodes[0]["length"]
     assert new_length == original_length - frames_to_trim
@@ -1413,7 +1413,7 @@ def test_trim_episode_both_ends(sample_dataset):
 
 def test_trim_episode_preserves_other_episodes(sample_dataset):
     """Test that trimming one episode doesn't change other episodes' lengths."""
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     # Ensure episodes are loaded
     if sample_dataset.meta.episodes is None:
@@ -1441,7 +1441,7 @@ def test_trim_episode_preserves_other_episodes(sample_dataset):
 
 def test_trim_episode_shifts_subsequent_global_indices(sample_dataset):
     """Test that global indices are shifted for subsequent episodes."""
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     # Ensure episodes are loaded
     if sample_dataset.meta.episodes is None:
@@ -1467,7 +1467,7 @@ def test_trim_episode_shifts_subsequent_global_indices(sample_dataset):
 
 def test_trim_episode_resets_timestamps(sample_dataset):
     """Test that timestamps are reset to start at 0 after trimming start."""
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     trim_duration = 0.2
 
@@ -1476,7 +1476,7 @@ def test_trim_episode_resets_timestamps(sample_dataset):
 
     # Reload to see changes
     sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
-    sample_dataset.hf_dataset = sample_dataset.load_hf_dataset()
+    sample_dataset._ensure_reader().load_and_activate()
 
     # Get first frame of episode 0
     ep0_from = sample_dataset.meta.episodes[0]["dataset_from_index"]
@@ -1498,7 +1498,7 @@ def test_trim_episode_invalid_index(sample_dataset):
 
 def test_trim_episode_trim_too_much(sample_dataset):
     """Test error when trying to trim more than episode length."""
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     # Ensure episodes are loaded
     if sample_dataset.meta.episodes is None:
@@ -1523,7 +1523,7 @@ def test_trim_episode_negative_duration(sample_dataset):
 
 def test_trim_episode_no_op(sample_dataset):
     """Test that zero trim amounts returns dataset unchanged."""
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     # Ensure episodes are loaded
     if sample_dataset.meta.episodes is None:
@@ -1574,7 +1574,7 @@ def test_trim_episode_reloadable(sample_dataset):
 def test_trim_episode_with_video(tmp_path):
     """Test trimming an episode from a video dataset."""
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     # Load pusht which has videos
     source_dataset = LeRobotDataset("lerobot/pusht", episodes=[0, 1])

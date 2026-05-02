@@ -382,7 +382,7 @@ def record_loop(
     # Reset intervention buffer with correct episode_index for this main episode
     # (buffer created at end of previous record_loop has stale episode_index)
     if intervention_dataset is not None:
-        intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
+        intervention_dataset.writer.episode_buffer = intervention_dataset.writer._create_episode_buffer()
 
     # Track intervention state for transition detection
     was_intervening = False
@@ -429,12 +429,12 @@ def record_loop(
             # Transition: intervention → policy (user pressed SPACE again)
             if was_intervening:
                 # Defer saving: copy buffer now, save all at end of main episode (avoids lag)
-                if intervention_dataset is not None and intervention_dataset.episode_buffer is not None and intervention_dataset.episode_buffer.get("size", 0) > 0:
-                    pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.episode_buffer))
+                if intervention_dataset is not None and intervention_dataset.writer.episode_buffer is not None and intervention_dataset.writer.episode_buffer.get("size", 0) > 0:
+                    pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.writer.episode_buffer))
                     # Reset buffer for next intervention, pre-assign episode_index to avoid collision
-                    intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
+                    intervention_dataset.writer.episode_buffer = intervention_dataset.writer._create_episode_buffer()
                     next_ep_idx = intervention_dataset.num_episodes + len(pending_intervention_episodes)
-                    intervention_dataset.episode_buffer["episode_index"] = next_ep_idx
+                    intervention_dataset.writer.episode_buffer["episode_index"] = next_ep_idx
 
                 policy.reset()
                 preprocessor.reset()
@@ -674,16 +674,16 @@ def record_loop(
     # Collect pending intervention episodes to return (saved after main episode)
     if intervention_dataset is not None:
         # Add current buffer to pending if it has frames (intervention was active at episode end)
-        if intervention_dataset.episode_buffer is not None and intervention_dataset.episode_buffer.get("size", 0) > 0:
-            pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.episode_buffer))
-            intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
+        if intervention_dataset.writer.episode_buffer is not None and intervention_dataset.writer.episode_buffer.get("size", 0) > 0:
+            pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.writer.episode_buffer))
+            intervention_dataset.writer.episode_buffer = intervention_dataset.writer._create_episode_buffer()
 
         # On re-record, discard and reset buffer for next attempt
         if events.get("rerecord_episode", False):
             if pending_intervention_episodes:
                 logging.info(f"Discarding {len(pending_intervention_episodes)} intervention episode(s) for re-record")
             pending_intervention_episodes = []
-            intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
+            intervention_dataset.writer.episode_buffer = intervention_dataset.writer._create_episode_buffer()
 
     return pending_intervention_episodes
 
@@ -753,20 +753,9 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
                 encoder_threads=cfg.dataset.encoder_threads,
                 record_images=cfg.dataset.record_images,
+                image_writer_processes=cfg.dataset.num_image_writer_processes if cfg.dataset.record_images and num_cameras > 0 else 0,
+                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * num_cameras if cfg.dataset.record_images and num_cameras > 0 else 0,
             )
-
-            if cfg.dataset.record_images and num_cameras > 0:
-                dataset.start_image_writer(
-                    num_processes=cfg.dataset.num_image_writer_processes,
-                    num_threads=cfg.dataset.num_image_writer_threads_per_camera * num_cameras,
-                )
-            # HACK: LeRobotDataset.__init__ (resume path) doesn't call
-            # _init_video_encoders() or create episode_buffer, unlike create().
-            # Without this, our per-camera streaming encoder is never set up
-            # and recording falls back to slow PNG-then-encode.
-            # TODO: move this into LeRobotDataset.__init__ for a clean setup.
-            dataset.episode_buffer = dataset.create_episode_buffer()
-            dataset._init_video_encoders()
             sanity_check_dataset_robot_compatibility(dataset, robot, cfg.dataset.fps, dataset_features)
         else:
             # Create empty dataset or load existing saved episodes
@@ -791,20 +780,15 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         # Create or resume intervention dataset if requested (for correction data)
         if cfg.intervention_repo_id is not None:
             if cfg.resume:
-                intervention_dataset = LeRobotDataset(
+                num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
+                intervention_dataset = LeRobotDataset.resume(
                     cfg.intervention_repo_id,
                     root=cfg.dataset.root,
                     batch_encoding_size=cfg.dataset.video_encoding_batch_size,
                     vcodec=cfg.dataset.vcodec,
+                    image_writer_processes=cfg.dataset.num_image_writer_processes if num_cameras > 0 else 0,
+                    image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * num_cameras if num_cameras > 0 else 0,
                 )
-                if hasattr(robot, "cameras") and len(robot.cameras) > 0:
-                    intervention_dataset.start_image_writer(
-                        num_processes=cfg.dataset.num_image_writer_processes,
-                        num_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
-                    )
-                # Initialize episode buffer and streaming video encoders for recording
-                intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
-                intervention_dataset._init_video_encoders()
                 logging.info(f"Resumed intervention dataset: {cfg.intervention_repo_id} ({intervention_dataset.num_episodes} episodes)")
             else:
                 intervention_dataset = LeRobotDataset.create(
@@ -943,9 +927,9 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         # Restart video encoders for the next intervention episode.
                         # save_episode(episode_data=...) skips clear_episode_buffer(),
                         # so encoders are left in a finished state.
-                        if intervention_dataset.video_encoders:
-                            intervention_dataset.episode_buffer = intervention_dataset.create_episode_buffer()
-                            intervention_dataset._start_video_encoders()
+                        if intervention_dataset.writer.video_encoders:
+                            intervention_dataset.writer.episode_buffer = intervention_dataset.writer._create_episode_buffer()
+                            intervention_dataset.writer._start_video_encoders()
 
                     _t_after_save = _time.monotonic()
                     logging.info(

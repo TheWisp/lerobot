@@ -19,7 +19,7 @@ import pandas as pd
 import pytest
 
 from lerobot.datasets.dataset_tools import trim_episode_by_frames
-from lerobot.datasets.utils import load_episodes
+from lerobot.datasets.io_utils import load_episodes
 
 
 def get_all_video_frames(video_path: Path) -> list[np.ndarray]:

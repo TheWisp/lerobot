@@ -647,16 +647,15 @@ def control_loop(
 
         if cfg.dataset.resume:
             # Resume recording on an existing dataset
-            dataset = LeRobotDataset(
+            num_cameras = (
+                len(env.robot.cameras) if hasattr(env, "robot") and hasattr(env.robot, "cameras") else 0
+            )
+            dataset = LeRobotDataset.resume(
                 cfg.dataset.repo_id,
                 root=cfg.dataset.root,
+                image_writer_processes=0,
+                image_writer_threads=4 * num_cameras if num_cameras > 0 else 0,
             )
-
-            if hasattr(env, "robot") and hasattr(env.robot, "cameras") and len(env.robot.cameras) > 0:
-                dataset.start_image_writer(
-                    num_processes=0,
-                    num_threads=4 * len(env.robot.cameras),
-                )
         else:
             # Create new dataset
             dataset = LeRobotDataset.create(

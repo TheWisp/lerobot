@@ -34,8 +34,8 @@ import pytest
 from lerobot.datasets.aggregate import aggregate_datasets
 from lerobot.datasets.dataset_tools import delete_episodes, trim_episode_by_frames
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import (
-    get_hf_features_from_features,
+from lerobot.datasets.feature_utils import get_hf_features_from_features
+from lerobot.datasets.io_utils import (
     hf_transform_to_torch,
     load_episodes,
     load_info,
@@ -188,9 +188,7 @@ def test_multiple_trims_then_delete(tmp_path, lerobot_dataset_factory):
     if hf_datasets is not None:
         hf_datasets.disable_caching()
         try:
-            features = get_hf_features_from_features(ds.meta.features)
-            ds.hf_dataset = load_nested_dataset(merged_root / "data", features=features)
-            ds.hf_dataset.set_transform(hf_transform_to_torch)
+            ds._ensure_reader().load_and_activate()
         finally:
             hf_datasets.enable_caching()
 

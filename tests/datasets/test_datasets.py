@@ -461,7 +461,10 @@ def test_cleanup_interrupted_episode_removes_image_temp_dirs(tmp_path, empty_ler
         "video": {"dtype": "video", "shape": DUMMY_HWC, "names": ["height", "width", "channels"]},
     }
     ds = empty_lerobot_dataset_factory(
-        root=tmp_path / "interrupted", features=features, streaming_encoding=False
+        root=tmp_path / "interrupted",
+        features=features,
+        streaming_encoding=False,
+        use_per_camera_streaming=False,
     )
     # Add one frame without saving episode simulating an interruption
     ds.add_frame(
@@ -550,15 +553,15 @@ def test_streaming_video_stats_correctness(tmp_path, empty_lerobot_dataset_facto
         ds.add_frame({vid_key: frame, "task": "test_task"})
 
     # Finish encoders so reservoir samples are ready
-    ds._finish_video_encoders()
+    ds.writer._finish_video_encoders()
 
     # --- In-memory stats (running stats + reservoir quantiles) ---
-    in_memory_stats = ds._compute_video_stats_in_memory()
+    in_memory_stats = ds.writer._compute_video_stats_in_memory()
     assert vid_key in in_memory_stats, "Video key missing from in-memory stats"
 
     # --- Ground truth: numpy computation on the same frames the encoder saw ---
     # Use the downsampled reservoir frames (same data the running stats accumulated)
-    reservoir_frames = ds.video_encoders[vid_key].get_sampled_frames()
+    reservoir_frames = ds.writer.video_encoders[vid_key].get_sampled_frames()
     gt_images = np.stack(reservoir_frames).astype(np.float64).transpose(0, 3, 1, 2)  # (N,C,H,W)
     gt_mean = gt_images.mean(axis=(0, 2, 3), keepdims=True).squeeze(0) / 255.0
     gt_std = gt_images.std(axis=(0, 2, 3), keepdims=True).squeeze(0) / 255.0
@@ -641,7 +644,7 @@ def test_streaming_video_stats_reservoir_quality(tmp_path, empty_lerobot_dataset
         all_frames.append(frame)
         ds.add_frame({vid_key: frame, "task": "test_task"})
 
-    ds._finish_video_encoders()
+    ds.writer._finish_video_encoders()
 
     # --- Ground truth: numpy float64 computation on ALL 900 frames ---
     # Note: we compute ground truth directly in float64, NOT via get_feature_stats,
@@ -658,7 +661,7 @@ def test_streaming_video_stats_reservoir_quality(tmp_path, empty_lerobot_dataset
     gt_q_stats = {k: np.squeeze(v / 255.0, axis=0) for k, v in gt_q_stats.items() if k.startswith("q")}
 
     # --- New path: exact running stats + reservoir quantiles ---
-    computed_stats = ds._compute_video_stats_in_memory()
+    computed_stats = ds.writer._compute_video_stats_in_memory()
     assert vid_key in computed_stats
 
     # --- Verify mean/std/min/max are EXACT (from running stats over all frames) ---
@@ -691,9 +694,9 @@ def test_streaming_video_stats_single_frame(tmp_path, empty_lerobot_dataset_fact
 
     frame = np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8)
     ds.add_frame({vid_key: frame, "task": "test_task"})
-    ds._finish_video_encoders()
+    ds.writer._finish_video_encoders()
 
-    stats = ds._compute_video_stats_in_memory()
+    stats = ds.writer._compute_video_stats_in_memory()
     assert vid_key in stats, "Video key missing from stats"
     # With a single frame, min == max == mean, std ~= 0
     for stat_key in ["min", "max", "mean", "std", "count"]:
@@ -795,7 +798,7 @@ def test_save_episode_data_then_add_frame(tmp_path, empty_lerobot_dataset_factor
     ds.save_episode()  # calls clear_episode_buffer → restarts encoders
 
     # Build an external episode buffer (mimics intervention recording pattern)
-    ext_buffer = ds.create_episode_buffer()
+    ext_buffer = ds.writer._create_episode_buffer()
     for _ in range(3):
         frame = {
             vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
@@ -804,13 +807,13 @@ def test_save_episode_data_then_add_frame(tmp_path, empty_lerobot_dataset_factor
         }
         ds.add_frame(frame)
     # Snapshot the buffer before save_episode pops size/task
-    ext_buffer = ds.episode_buffer.copy()
+    ext_buffer = ds.writer.episode_buffer.copy()
 
     ds.save_episode()  # save episode 1 normally to advance metadata
 
     # Now save an episode via episode_data (like the intervention dataset does).
     # This skips clear_episode_buffer(), leaving encoders finished.
-    ext_buffer2 = ds.create_episode_buffer()
+    ext_buffer2 = ds.writer._create_episode_buffer()
     for i in range(4):
         frame = {
             vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
@@ -824,8 +827,8 @@ def test_save_episode_data_then_add_frame(tmp_path, empty_lerobot_dataset_factor
                 continue
             ext_buffer2[key].append(frame[key])
         # Also push to encoder so it has data
-        if ds.video_encoders and vid_key in ds.video_encoders:
-            ds.video_encoders[vid_key].push_frame(frame[vid_key])
+        if ds.writer.video_encoders and vid_key in ds.writer.video_encoders:
+            ds.writer.video_encoders[vid_key].push_frame(frame[vid_key])
         ext_buffer2["frame_index"].append(i)
         ext_buffer2["timestamp"].append(i / ds.fps)
 
@@ -833,9 +836,9 @@ def test_save_episode_data_then_add_frame(tmp_path, empty_lerobot_dataset_factor
 
     # After save_episode(episode_data=...), encoders are finished but NOT restarted.
     # Manually restart them (matching the fix in lerobot_record.py).
-    if ds.video_encoders:
-        ds.episode_buffer = ds.create_episode_buffer()
-        ds._start_video_encoders()
+    if ds.writer.video_encoders:
+        ds.writer.episode_buffer = ds.writer._create_episode_buffer()
+        ds.writer._start_video_encoders()
 
     # This must NOT raise "No active episode. Call start_episode() first."
     ds.add_frame({

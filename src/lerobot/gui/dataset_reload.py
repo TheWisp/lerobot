@@ -26,7 +26,7 @@ def reload_metadata(dataset: "LeRobotDataset", root: Path | None = None) -> None
         dataset: the LeRobotDataset to mutate.
         root: root path override. Defaults to ``dataset.root``.
     """
-    from lerobot.datasets.utils import load_episodes, load_info, load_stats, load_tasks
+    from lerobot.datasets.io_utils import load_episodes, load_info, load_stats, load_tasks
 
     r = Path(root) if root is not None else dataset.root
     dataset.meta.info = load_info(r)
@@ -41,7 +41,7 @@ def ensure_episodes_loaded(dataset: "LeRobotDataset", root: Path | None = None) 
     Cheap no-op if already loaded. Used by endpoints that need episode info
     immediately (e.g., counting, indexing) without paying for the full reload.
     """
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     if dataset.meta.episodes is None:
         r = Path(root) if root is not None else dataset.root
@@ -63,11 +63,8 @@ def reload_hf_dataset(dataset: "LeRobotDataset", root: Path | None = None) -> No
 
     import datasets as hf_datasets
 
-    from lerobot.datasets.utils import (
-        get_hf_features_from_features,
-        hf_transform_to_torch,
-        load_nested_dataset,
-    )
+    from lerobot.datasets.feature_utils import get_hf_features_from_features
+    from lerobot.datasets.io_utils import hf_transform_to_torch, load_nested_dataset
 
     r = Path(root) if root is not None else dataset.root
 

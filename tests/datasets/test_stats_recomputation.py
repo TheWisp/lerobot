@@ -31,7 +31,7 @@ from lerobot.datasets.dataset_tools import (
     trim_episode_virtual,
     verify_dataset,
 )
-from lerobot.datasets.utils import load_stats
+from lerobot.datasets.io_utils import load_stats
 
 
 @pytest.fixture
@@ -331,7 +331,7 @@ class TestBatchedStatsRecomputation:
         After trim:  ep0=0.2, ep1=0.5, ep2=0.8, ep3=1.0 (all 10 frames each)
                      mean = (0.2+0.5+0.8+1.0)/4 = 0.625
         """
-        from lerobot.datasets.utils import load_episodes
+        from lerobot.datasets.io_utils import load_episodes
 
         stats_before = load_stats(batch_dataset.root)
         assert stats_before is not None
@@ -375,7 +375,7 @@ class TestBatchedStatsRecomputation:
 
     def test_batch_trim_then_delete_deferred(self, batch_dataset):
         """Trim + delete with recompute_stats=False, single reaggregate at end."""
-        from lerobot.datasets.utils import load_episodes
+        from lerobot.datasets.io_utils import load_episodes
 
         # Trim ep 0 to keep only high half (0.2), skip reaggregate
         trim_episode_virtual(

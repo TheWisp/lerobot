@@ -34,7 +34,7 @@ def test_ensure_episodes_loaded_no_op_when_already_loaded(fake_dataset):
     """If episodes are already populated, don't call load_episodes again."""
     fake_dataset.meta.episodes = {0: {"length": 100}}
 
-    with patch("lerobot.datasets.utils.load_episodes") as mock_load:
+    with patch("lerobot.datasets.io_utils.load_episodes") as mock_load:
         from lerobot.gui.dataset_reload import ensure_episodes_loaded
         ensure_episodes_loaded(fake_dataset)
 
@@ -46,7 +46,7 @@ def test_ensure_episodes_loaded_calls_load_when_none(fake_dataset):
     """If episodes is None, load from disk."""
     fake_dataset.meta.episodes = None
 
-    with patch("lerobot.datasets.utils.load_episodes") as mock_load:
+    with patch("lerobot.datasets.io_utils.load_episodes") as mock_load:
         mock_load.return_value = {0: {"length": 50}}
         from lerobot.gui.dataset_reload import ensure_episodes_loaded
         ensure_episodes_loaded(fake_dataset)
@@ -60,7 +60,7 @@ def test_ensure_episodes_loaded_custom_root(fake_dataset):
     fake_dataset.meta.episodes = None
     custom_root = Path("/other/root")
 
-    with patch("lerobot.datasets.utils.load_episodes") as mock_load:
+    with patch("lerobot.datasets.io_utils.load_episodes") as mock_load:
         mock_load.return_value = {}
         from lerobot.gui.dataset_reload import ensure_episodes_loaded
         ensure_episodes_loaded(fake_dataset, root=custom_root)
@@ -70,10 +70,10 @@ def test_ensure_episodes_loaded_custom_root(fake_dataset):
 
 def test_reload_metadata_refreshes_all_four_fields(fake_dataset):
     """reload_metadata must call load_info, load_episodes, load_stats, load_tasks."""
-    with patch("lerobot.datasets.utils.load_info") as m_info, \
-         patch("lerobot.datasets.utils.load_episodes") as m_eps, \
-         patch("lerobot.datasets.utils.load_stats") as m_stats, \
-         patch("lerobot.datasets.utils.load_tasks") as m_tasks:
+    with patch("lerobot.datasets.io_utils.load_info") as m_info, \
+         patch("lerobot.datasets.io_utils.load_episodes") as m_eps, \
+         patch("lerobot.datasets.io_utils.load_stats") as m_stats, \
+         patch("lerobot.datasets.io_utils.load_tasks") as m_tasks:
         m_info.return_value = {"marker": "new_info"}
         m_eps.return_value = {0: {"length": 10}}
         m_stats.return_value = {"marker": "new_stats"}
@@ -106,9 +106,9 @@ def test_reload_hf_dataset_clears_cache_and_reloads(fake_dataset):
 
     with patch("datasets.disable_caching") as m_disable, \
          patch("datasets.enable_caching") as m_enable, \
-         patch("lerobot.datasets.utils.get_hf_features_from_features") as m_feats, \
-         patch("lerobot.datasets.utils.load_nested_dataset") as m_load, \
-         patch("lerobot.datasets.utils.hf_transform_to_torch") as m_transform:
+         patch("lerobot.datasets.feature_utils.get_hf_features_from_features") as m_feats, \
+         patch("lerobot.datasets.io_utils.load_nested_dataset") as m_load, \
+         patch("lerobot.datasets.io_utils.hf_transform_to_torch") as m_transform:
         m_feats.return_value = {"mock_features": True}
         new_hf = MagicMock()
         m_load.return_value = new_hf
@@ -130,9 +130,9 @@ def test_reload_hf_dataset_reenables_caching_on_error(fake_dataset):
 
     with patch("datasets.disable_caching"), \
          patch("datasets.enable_caching") as m_enable, \
-         patch("lerobot.datasets.utils.get_hf_features_from_features"), \
-         patch("lerobot.datasets.utils.load_nested_dataset", side_effect=RuntimeError("boom")), \
-         patch("lerobot.datasets.utils.hf_transform_to_torch"):
+         patch("lerobot.datasets.feature_utils.get_hf_features_from_features"), \
+         patch("lerobot.datasets.io_utils.load_nested_dataset", side_effect=RuntimeError("boom")), \
+         patch("lerobot.datasets.io_utils.hf_transform_to_torch"):
         from lerobot.gui.dataset_reload import reload_hf_dataset
 
         with pytest.raises(RuntimeError, match="boom"):

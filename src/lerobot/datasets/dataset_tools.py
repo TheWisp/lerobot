@@ -49,20 +49,22 @@ from lerobot.datasets.compute_stats import (
     compute_relative_action_stats,
 )
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+from lerobot.datasets.io_utils import (
+    get_parquet_file_size_in_mb,
+    load_episodes,
+    load_info,
+    load_stats,
+    write_info,
+    write_stats,
+    write_tasks,
+)
 from lerobot.datasets.utils import (
     DATA_DIR,
     DEFAULT_CHUNK_SIZE,
     DEFAULT_DATA_FILE_SIZE_IN_MB,
     DEFAULT_DATA_PATH,
     DEFAULT_EPISODES_PATH,
-    get_parquet_file_size_in_mb,
-    load_episodes,
-    load_info,
-    load_stats,
     update_chunk_file_indices,
-    write_info,
-    write_stats,
-    write_tasks,
 )
 from lerobot.datasets.video_utils import encode_video_frames, get_video_info
 from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_IMAGE, OBS_STATE
@@ -196,7 +198,7 @@ def _recompute_episode_stats_from_data(
         episode_index: Index of the episode to recompute stats for
         features: The dataset's features dict
     """
-    from lerobot.datasets.utils import flatten_dict
+    from lerobot.utils.utils import flatten_dict
 
     # Load the episode's data from data parquet
     data_dir = local_dir / DATA_DIR
@@ -587,11 +589,6 @@ def merge_into(
     target.meta.episodes = load_episodes(target.root)
     target.meta.stats = load_stats(target.root)
 
-    from lerobot.datasets.utils import (
-        get_hf_features_from_features,
-        hf_transform_to_torch,
-        load_nested_dataset,
-    )
     import datasets as hf_datasets
 
     if target.hf_dataset is not None:
@@ -602,10 +599,13 @@ def merge_into(
 
     hf_datasets.disable_caching()
     try:
-        features = get_hf_features_from_features(target.meta.features)
-        target.hf_dataset = load_nested_dataset(target.root / "data", features=features)
-        target.hf_dataset.set_transform(hf_transform_to_torch)
-        target._lazy_loading = False
+        # Re-load the reader's hf_dataset; the facade's hf_dataset is a property
+        # that delegates to reader.hf_dataset.
+        if target.reader is not None:
+            target.reader.load_and_activate()
+        else:
+            # Fallback: instantiate a fresh reader for write-mode datasets
+            target._ensure_reader().load_and_activate()
     finally:
         hf_datasets.enable_caching()
 
@@ -1412,7 +1412,7 @@ def _copy_and_reindex_episodes_metadata(
         data_metadata: Dict mapping new episode index to its data file metadata
         video_metadata: Optional dict mapping new episode index to its video metadata
     """
-    from lerobot.datasets.utils import flatten_dict
+    from lerobot.utils.utils import flatten_dict
 
     if src_dataset.meta.episodes is None:
         src_dataset.meta.episodes = load_episodes(src_dataset.meta.root)
@@ -1505,7 +1505,8 @@ def _write_parquet(df: pd.DataFrame, path: Path, meta: LeRobotDatasetMetadata) -
 
     This ensures images are properly embedded and the file can be loaded correctly by HF datasets.
     """
-    from lerobot.datasets.utils import embed_images, get_hf_features_from_features
+    from lerobot.datasets.feature_utils import get_hf_features_from_features
+    from lerobot.datasets.io_utils import embed_images
 
     hf_features = get_hf_features_from_features(meta.features)
     ep_dataset = datasets.Dataset.from_dict(df.to_dict(orient="list"), features=hf_features, split="train")

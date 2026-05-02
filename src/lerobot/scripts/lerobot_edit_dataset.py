@@ -617,7 +617,7 @@ def handle_trim_episode(cfg: EditDatasetConfig) -> None:
     )
 
     # Reload metadata to show updated info
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     modified_dataset.meta.episodes = load_episodes(modified_dataset.root)
 

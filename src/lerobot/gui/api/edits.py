@@ -265,7 +265,7 @@ async def _apply_edits_locked(dataset_id: str):
         reaggregate_dataset_stats,
         trim_episode_virtual,
     )
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     edits = _app_state.get_edits_for_dataset(dataset_id)
     if not edits:

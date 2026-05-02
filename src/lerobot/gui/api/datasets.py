@@ -118,8 +118,8 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
     # Metadata changed - reload metadata AND HuggingFace dataset
     import datasets as hf_datasets
 
-    from lerobot.datasets.utils import (
-        get_hf_features_from_features,
+    from lerobot.datasets.feature_utils import get_hf_features_from_features
+    from lerobot.datasets.io_utils import (
         hf_transform_to_torch,
         load_episodes,
         load_info,
@@ -720,7 +720,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
     import datasets as hf_datasets
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    from lerobot.datasets.utils import load_episodes
+    from lerobot.datasets.io_utils import load_episodes
 
     try:
         if request.local_path:
@@ -910,7 +910,7 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
     episodes = dataset.meta.episodes
 
     if episodes is None:
-        from lerobot.datasets.utils import load_episodes
+        from lerobot.datasets.io_utils import load_episodes
 
         episodes = load_episodes(dataset.root)
         dataset.meta.episodes = episodes
@@ -969,7 +969,7 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
     # Get episode metadata
     episodes = dataset.meta.episodes
     if episodes is None:
-        from lerobot.datasets.utils import load_episodes
+        from lerobot.datasets.io_utils import load_episodes
 
         episodes = load_episodes(dataset.root)
         dataset.meta.episodes = episodes
@@ -1105,7 +1105,7 @@ async def get_frames_batch(
     # Get episode metadata
     episodes = dataset.meta.episodes
     if episodes is None:
-        from lerobot.datasets.utils import load_episodes
+        from lerobot.datasets.io_utils import load_episodes
 
         episodes = load_episodes(dataset.root)
         dataset.meta.episodes = episodes

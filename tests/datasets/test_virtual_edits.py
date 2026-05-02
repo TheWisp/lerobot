@@ -28,7 +28,7 @@ import pandas as pd
 import pytest
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import load_episodes, load_info
+from lerobot.datasets.io_utils import load_episodes, load_info
 
 
 @pytest.fixture
@@ -209,7 +209,7 @@ class TestVirtualTrim:
         )
 
         # Reload dataset
-        video_dataset.hf_dataset = video_dataset.load_hf_dataset()
+        video_dataset._ensure_reader().load_and_activate()
 
         assert len(video_dataset.hf_dataset) == original_total_rows - frames_removed
 
@@ -296,7 +296,7 @@ class TestVirtualDelete:
 
         delete_episodes_virtual(video_dataset, episode_indices=[1])
 
-        video_dataset.hf_dataset = video_dataset.load_hf_dataset()
+        video_dataset._ensure_reader().load_and_activate()
 
         assert len(video_dataset.hf_dataset) == original_total_rows - ep1_length
 
@@ -549,7 +549,7 @@ class TestMultiFileDatasetEdits:
 
         delete_episodes_virtual(multifile_dataset, episode_indices=[2])
 
-        multifile_dataset.hf_dataset = multifile_dataset.load_hf_dataset()
+        multifile_dataset._ensure_reader().load_and_activate()
 
         indices = [item["index"].item() for item in multifile_dataset.hf_dataset]
         expected_indices = list(range(len(indices)))
@@ -571,7 +571,7 @@ class TestMultiFileDatasetEdits:
             end_frame=ep_length - 5,
         )
 
-        multifile_dataset.hf_dataset = multifile_dataset.load_hf_dataset()
+        multifile_dataset._ensure_reader().load_and_activate()
 
         indices = [item["index"].item() for item in multifile_dataset.hf_dataset]
         expected_indices = list(range(len(indices)))
