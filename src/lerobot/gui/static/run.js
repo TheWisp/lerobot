@@ -728,6 +728,18 @@ async function _ensureModelDataLoaded() {
     if (typeof loadModelSources === 'function') {
         await loadModelSources();
     }
+    // loadModelSources only scans sources whose `expanded` flag is true.
+    // The policy tab needs models regardless of UI expansion state, so if
+    // we're still empty after loadModelSources, scan every source.
+    if (
+        typeof modelSourceData !== 'undefined' &&
+        !Object.keys(modelSourceData).length &&
+        typeof modelSources !== 'undefined' &&
+        modelSources.length &&
+        typeof scanModelSource === 'function'
+    ) {
+        await Promise.all(modelSources.map(s => scanModelSource(s.path)));
+    }
     // Re-render checkpoint selectors after data is loaded
     const sel = document.getElementById('run-policy-checkpoint');
     if (sel) sel.innerHTML = _modelCheckpointOptions();
