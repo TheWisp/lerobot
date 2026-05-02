@@ -928,6 +928,27 @@ class TestEnvProfileToGymManipulatorCfg:
         cfg = _env_profile_to_gym_manipulator_cfg(profile, mode=None)
         assert cfg["device"] == "cuda"
 
+    def test_real_robot_name_rejected_with_helpful_msg(self):
+        """Regression: a profile with `name=real_robot` (the
+        HILSerlRobotEnvConfig schema default) routes gym_manipulator's
+        make_robot_env down the hardware path, which asserts
+        `cfg.robot is not None` and dies. From the GUI side this manifests
+        as a cryptic AssertionError. Refuse at the request boundary with
+        an actionable error pointing at the fix."""
+        from lerobot.gui.api.run import _env_profile_to_gym_manipulator_cfg
+
+        broken = {
+            "type": "gym_manipulator",
+            "name": "p",
+            "fields": {"name": "real_robot", "task": "PandaPickCubeKeyboard-v0"},
+        }
+        with pytest.raises(HTTPException) as exc:
+            _env_profile_to_gym_manipulator_cfg(broken, mode=None)
+        assert exc.value.status_code == 400
+        msg = str(exc.value.detail)
+        assert "real_robot" in msg
+        assert "gym_hil" in msg
+
     def test_non_gym_manipulator_type_rejected(self):
         """Other env types (aloha, libero, ...) are not wired to the
         gym_manipulator binary yet — the helper must refuse them with a

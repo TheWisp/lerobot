@@ -182,6 +182,25 @@ def _env_profile_to_gym_manipulator_cfg(
         )
 
     fields = dict(env_profile.get("fields", {}))
+    # The HILSerlRobotEnvConfig.name field is a discriminator that
+    # gym_manipulator's make_robot_env reads:
+    # - "gym_hil" (or any non-"real_robot" value) -> sim path, gym.make.
+    # - "real_robot" (the schema default!) -> hardware path, asserts
+    #   cfg.robot != None and dies for a sim profile.
+    # Schema-default-driven form rendering can leave name="real_robot"
+    # in older profiles (configs.py:313). Refuse loudly with a fix
+    # recipe rather than letting the subprocess crash with an
+    # uninformative AssertionError.
+    if fields.get("name") == "real_robot":
+        raise HTTPException(
+            400,
+            "Env profile has `name='real_robot'`, which routes "
+            "gym_manipulator down the real-robot path (and then asserts "
+            "cfg.robot != None). For sim, set `name='gym_hil'` in the "
+            "env editor (it's a dropdown). If you have a stale profile "
+            "on disk, edit ~/.config/lerobot/envs/<profile>.json and "
+            'change "name": "real_robot" to "name": "gym_hil".',
+        )
     # `device` lives at the top of GymManipulatorConfig, not inside env.
     device = fields.pop("device", "cuda")
 

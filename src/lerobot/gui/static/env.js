@@ -322,10 +322,28 @@ function renderEnvFormField(field, value) {
         ${!field.required ? 'placeholder="(optional)"' : ''}>`;
 }
 
+/** Sensible starter fields for a fresh profile of this type. Without
+ *  this, fields={} causes the form to render schema defaults — which
+ *  for HILSerlRobotEnvConfig means name="real_robot", and saving that
+ *  routes gym_manipulator down the hardware path that asserts
+ *  cfg.robot != None and dies. Mirrors the seed in newEnvProfile so
+ *  type-change and new-profile paths agree. */
+function _defaultEnvFields(type) {
+    if (type === 'gym_manipulator') {
+        return {
+            name: 'gym_hil',
+            task: 'PandaPickCubeKeyboard-v0',
+            fps: 10,
+            device: 'cuda',
+        };
+    }
+    return {};
+}
+
 function changeEnvProfileType(newType) {
     if (!currentEnvProfile) return;
     currentEnvProfile.data.type = newType;
-    currentEnvProfile.data.fields = {};
+    currentEnvProfile.data.fields = _defaultEnvFields(newType);
     renderEnvEditor();
     _updateEnvDirtyState();
 }
@@ -438,7 +456,7 @@ async function newEnvProfile() {
     const profile = {
         type: defaultType,
         name: name.trim(),
-        fields: { name: 'gym_hil', task: 'PandaPickCubeGamepad-v0', fps: 10, device: 'cuda' },
+        fields: _defaultEnvFields(defaultType),
     };
     try {
         const res = await fetch('/api/env/profiles', {

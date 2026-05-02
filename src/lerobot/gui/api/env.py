@@ -100,6 +100,15 @@ _TYPE_FIELD_CHOICES: dict[tuple[str, str], list[str]] = {
     # MetaworldEnv.__post_init__ raises on anything outside this set
     # (configs.py:468-476).
     ("metaworld", "obs_type"): ["pixels", "pixels_agent_pos"],
+    # HILSerlRobotEnvConfig.name discriminates: "real_robot" makes
+    # make_robot_env (gym_manipulator.py:333) take the hardware path,
+    # which asserts cfg.robot is not None and dies for our sim profiles.
+    # Any other value is treated as a gym package name (gym.make uses
+    # `{name}/{task}` as the env id). The GUI's Environment tab is
+    # sim-only, so "real_robot" is the wrong answer here — surface only
+    # the gym packages we've wired through. Today that's just gym_hil;
+    # extend as more packages get consumable env types.
+    ("gym_manipulator", "name"): ["gym_hil"],
 }
 
 
