@@ -100,6 +100,84 @@ async def get_env_schemas() -> list[dict]:
 
 
 # ============================================================================
+# Registered-task discovery
+# ============================================================================
+
+# Hardcoded fallback list, used when the package can't be imported or
+# registration somehow fails. Captured 2026-05-02 from gym_hil 0.1.13. We'd
+# rather show the dropdown with known options than silently disable it; if
+# upstream adds tasks the live registry path will pick them up automatically.
+_FALLBACK_TASKS: dict[str, list[str]] = {
+    "gym_hil": [
+        "PandaPickCubeBase-v0",
+        "PandaPickCubeViewer-v0",
+        "PandaPickCube-v0",
+        "PandaPickCubeGamepad-v0",
+        "PandaPickCubeKeyboard-v0",
+        "PandaArrangeBoxesBase-v0",
+        "PandaArrangeBoxesViewer-v0",
+        "PandaArrangeBoxes-v0",
+        "PandaArrangeBoxesGamepad-v0",
+        "PandaArrangeBoxesKeyboard-v0",
+    ],
+}
+
+
+@router.get("/registered-tasks")
+async def list_registered_tasks(name: str = "gym_hil") -> dict:
+    """Enumerate gym tasks registered under a namespace, e.g. 'gym_hil'.
+
+    The env profile's `task` field stores the ID *without* the namespace
+    prefix (gym_manipulator prepends it as `gym.make(f"{name}/{task}")`),
+    so this endpoint returns just the suffixes — exactly what the
+    dropdown binds to.
+
+    Falls back to ``_FALLBACK_TASKS`` when the package isn't installed or
+    its import fails, so the dropdown stays usable. The response shape
+    includes a `source` field ("registry" | "fallback") so the frontend
+    can flag the degraded path if it wants to.
+    """
+    import importlib
+
+    fallback = list(_FALLBACK_TASKS.get(name, []))
+    prefix = f"{name}/"
+
+    try:
+        importlib.import_module(name)
+    except ImportError as e:
+        return {
+            "name": name,
+            "source": "fallback",
+            "tasks": fallback,
+            "warning": f"package '{name}' is not installed ({e})",
+        }
+    except Exception as e:  # pragma: no cover - plugin import-time bug
+        logger.exception("registered-tasks: import of '%s' failed", name)
+        return {"name": name, "source": "fallback", "tasks": fallback, "warning": str(e)}
+
+    try:
+        import gymnasium as gym
+    except ImportError as e:
+        # gymnasium is a hard dep of lerobot; this branch is defensive.
+        return {
+            "name": name,
+            "source": "fallback",
+            "tasks": fallback,
+            "warning": f"gymnasium not importable ({e})",
+        }
+
+    ids = sorted(k.removeprefix(prefix) for k in gym.envs.registry if k.startswith(prefix))
+    if not ids:
+        return {
+            "name": name,
+            "source": "fallback",
+            "tasks": fallback,
+            "warning": f"package '{name}' imported but registered no envs",
+        }
+    return {"name": name, "source": "registry", "tasks": ids}
+
+
+# ============================================================================
 # Profile CRUD
 # ============================================================================
 

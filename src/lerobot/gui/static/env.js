@@ -15,6 +15,10 @@ let envProfiles = [];
 let currentEnvProfile = null; // {name, data}
 let savedEnvProfileData = null;
 let envTabInitialized = false;
+// Cache of registered tasks per namespace ("gym_hil" -> {source, tasks, warning?}).
+// Filled lazily on first render of a profile that wants the task dropdown so
+// the editor can render synchronously after the cache hit.
+let envTaskCache = {};
 
 // ============================================================================
 // Initialization
@@ -45,6 +49,25 @@ async function loadEnvProfiles() {
     }
     renderEnvProfileList();
     if (typeof refreshRunProfileSelects === 'function') refreshRunProfileSelects();
+}
+
+/** Fetch and cache the registered-tasks list for a namespace ("gym_hil").
+ *  Re-renders the editor on success so the task dropdown picks up live data. */
+async function _ensureEnvTasksLoaded(name) {
+    if (!name) return;
+    if (envTaskCache[name]) return;
+    try {
+        const res = await fetch(`/api/env/registered-tasks?name=${encodeURIComponent(name)}`);
+        if (!res.ok) return;
+        envTaskCache[name] = await res.json();
+        // Refresh editor so the (now-populated) dropdown shows up if this
+        // profile is the one being viewed.
+        if (currentEnvProfile && currentEnvProfile.data?.fields?.name === name) {
+            renderEnvEditor();
+        }
+    } catch (e) {
+        console.warn('failed to load registered-tasks for', name, e);
+    }
 }
 
 // ============================================================================
@@ -122,17 +145,46 @@ function renderEnvEditor() {
     }
     html += '</select>';
 
+    // For gym_manipulator profiles we render the `task` field as a
+    // dropdown sourced from /api/env/registered-tasks for the current
+    // namespace. Other env types and other fields render as before.
+    const isGymManipulator = currentEnvProfile.data.type === 'gym_manipulator';
+    const namespace = isGymManipulator ? (currentEnvProfile.data.fields?.name || 'gym_hil') : null;
+    const taskInfo = namespace ? envTaskCache[namespace] : null;
+    if (namespace && !taskInfo) {
+        // Kick off load; renderEnvEditor will be re-called on completion
+        // (handled inside _ensureEnvTasksLoaded).
+        _ensureEnvTasksLoaded(namespace);
+    }
+
     if (schema) {
         for (const field of schema.fields) {
             const value = currentEnvProfile.data.fields?.[field.name] ?? field.default ?? '';
-            html += renderEnvFormField(field, value);
+            if (field.name === 'task' && isGymManipulator && taskInfo?.tasks?.length) {
+                html += `<label for="env-field-task">task${field.required ? ' *' : ''}</label>`;
+                html += `<select id="env-field-task">`;
+                let matched = false;
+                for (const t of taskInfo.tasks) {
+                    const sel = (t === value) ? 'selected' : '';
+                    if (sel) matched = true;
+                    html += `<option value="${_envEsc(t)}" ${sel}>${_envEsc(t)}</option>`;
+                }
+                // Stored value not in the live list — keep it visible so the
+                // user can tell it's stale rather than silently overwriting.
+                if (value && !matched) {
+                    html += `<option value="${_envEsc(value)}" selected>${_envEsc(value)} (not registered)</option>`;
+                }
+                html += `</select>`;
+            } else {
+                html += renderEnvFormField(field, value);
+            }
         }
     }
 
     // gym_manipulator profiles need a `device` field that lives at the
     // top of GymManipulatorConfig (sibling of env), not inside env. Surface
     // it here for convenience.
-    if (currentEnvProfile.data.type === 'gym_manipulator') {
+    if (isGymManipulator) {
         const dev = currentEnvProfile.data.fields?.device ?? 'cuda';
         html += `<label for="env-field-device">device</label>`;
         html += `<input type="text" id="env-field-device" value="${_envEsc(dev)}" placeholder="cuda or cpu">`;
@@ -140,29 +192,32 @@ function renderEnvEditor() {
 
     html += '</div>';
 
-    // gym-hil hint + Gamepad warning when applicable
-    if (currentEnvProfile.data.type === 'gym_manipulator') {
+    // Loud warning: gym-hil's Gamepad variants exit cleanly with rc=0
+    // within ~6s when no controller is plugged in — looks like an instant
+    // crash from the GUI side. Surface this *before* launch.
+    if (isGymManipulator) {
         const task = String(currentEnvProfile.data.fields?.task || '');
         if (task.includes('Gamepad')) {
-            // Loud warning: gym-hil's Gamepad variants exit cleanly with rc=0
-            // within ~6s when no controller is plugged in — looks like an
-            // instant crash from the GUI side. Surface this *before* launch.
             html += '<div class="form-section" style="border:1px solid #b58900; background:rgba(181,137,0,0.08); padding:10px;">';
             html += '<div class="form-section-title" style="color:#b58900">⚠ Gamepad task selected</div>';
             html += '<div class="form-hint" style="line-height:1.6">';
             html += 'This task <b>requires a USB gamepad</b>. Without one, gym-hil prints "No gamepad detected" and the sim exits silently in ~6 seconds (rc=0). The Launch button will refuse with a 400 if no controller is plugged in.<br><br>';
-            html += 'For a no-hardware setup, switch <code>task</code> to <code>PandaPickCubeKeyboard-v0</code> (keyboard inside the MuJoCo window) or <code>PandaPickCubeBase-v0</code> (autonomous-only).';
+            html += 'Pick a <code>*Keyboard-v0</code> or <code>*Base-v0</code> variant from the <code>task</code> dropdown for a no-hardware setup.';
             html += '</div></div>';
         }
-        html += '<div class="form-section">';
-        html += '<div class="form-section-title">Quick reference: gym-hil tasks</div>';
-        html += '<div class="form-hint" style="line-height:1.6">';
-        html += 'Set <code>name = gym_hil</code> and <code>task</code> to one of:<br>';
-        html += '&nbsp;&bull; <code>PandaPickCubeBase-v0</code> &mdash; baseline, no human input<br>';
-        html += '&nbsp;&bull; <code>PandaPickCubeKeyboard-v0</code> &mdash; keyboard teleop (recommended for first run)<br>';
-        html += '&nbsp;&bull; <code>PandaPickCubeGamepad-v0</code> &mdash; gamepad teleop (requires USB controller)<br>';
-        html += 'MuJoCo viewer opens as a separate desktop window — focus it to send keyboard/gamepad input. Suggested fps: 10.';
-        html += '</div></div>';
+        // Show source provenance (registry vs fallback) so users can see
+        // when the dropdown is stale because gym_hil isn't installed.
+        if (taskInfo) {
+            html += '<div class="form-section">';
+            html += '<div class="form-section-title">Tasks registered for ' + _envEsc(namespace) + '</div>';
+            html += '<div class="form-hint" style="line-height:1.6">';
+            if (taskInfo.source === 'registry') {
+                html += `<code>${taskInfo.tasks.length}</code> task${taskInfo.tasks.length === 1 ? '' : 's'} discovered from <code>gymnasium.envs.registry</code>. The dropdown above will reflect any tasks the package adds.`;
+            } else {
+                html += `<span style="color:#b58900">⚠ Using built-in fallback list</span> — ${_envEsc(taskInfo.warning || 'package import failed')}.`;
+            }
+            html += '</div></div>';
+        }
     }
 
     // Save bar

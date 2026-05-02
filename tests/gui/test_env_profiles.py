@@ -5,6 +5,7 @@ that backs the GUI's Environment tab.
 """
 
 import json
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -213,6 +214,63 @@ class TestEnvProfileCRUD:
 # ============================================================================
 # Field introspection
 # ============================================================================
+
+
+class TestRegisteredTasks:
+    """`/api/env/registered-tasks` enumerates gym tasks for a namespace,
+    falling back to a hardcoded list when the package can't be imported."""
+
+    def test_gym_hil_returns_registry_path(self):
+        """gym_hil is installed in the project's lerobot env, so the live
+        gym registry path must populate; source must be 'registry'."""
+        client = TestClient(app)
+        r = client.get("/api/env/registered-tasks?name=gym_hil")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["name"] == "gym_hil"
+        assert body["source"] == "registry"
+        assert len(body["tasks"]) >= 10  # 10 known as of gym_hil 0.1.13
+        # Suffix-only (no namespace prefix); the env-profile task field
+        # binds to these directly because gym_manipulator prepends the
+        # namespace when calling gym.make.
+        assert all("/" not in t for t in body["tasks"])
+        assert "PandaPickCubeKeyboard-v0" in body["tasks"]
+
+    def test_default_name_is_gym_hil(self):
+        client = TestClient(app)
+        r = client.get("/api/env/registered-tasks")
+        assert r.json()["name"] == "gym_hil"
+
+    def test_unknown_package_returns_empty_fallback(self):
+        """Unknown name is not in _FALLBACK_TASKS, so we should get an
+        empty list with a warning. The frontend can surface the warning
+        instead of showing an empty dropdown silently."""
+        client = TestClient(app)
+        r = client.get("/api/env/registered-tasks?name=definitely_not_a_real_pkg")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["source"] == "fallback"
+        assert body["tasks"] == []
+        assert "not installed" in body["warning"]
+
+    def test_known_package_uninstalled_uses_fallback_list(self):
+        """If gym_hil were uninstalled, we'd want the dropdown still
+        populated with the captured-at-build-time list. Simulate by
+        patching importlib.import_module to raise."""
+        import importlib
+
+        def fake_import(name):
+            raise ImportError(f"simulated: {name} not installed")
+
+        client = TestClient(app)
+        with patch.object(importlib, "import_module", fake_import):
+            r = client.get("/api/env/registered-tasks?name=gym_hil")
+        body = r.json()
+        assert body["source"] == "fallback"
+        # gym_hil has a populated _FALLBACK_TASKS entry — degraded but usable.
+        assert len(body["tasks"]) == 10
+        assert "PandaPickCubeKeyboard-v0" in body["tasks"]
+        assert "warning" in body
 
 
 class TestIntrospectFields:
