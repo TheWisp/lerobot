@@ -676,6 +676,10 @@ function switchTab(tabName) {
     if (tabName === 'robot' && typeof robotTabInit === 'function') {
         robotTabInit();
     }
+    // Notify env tab
+    if (tabName === 'env' && typeof envTabInit === 'function') {
+        envTabInit();
+    }
     // Notify run tab
     if (tabName === 'run' && typeof runTabInit === 'function') {
         runTabInit();

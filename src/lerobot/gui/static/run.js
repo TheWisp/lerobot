@@ -33,6 +33,13 @@ async function runTabInit() {
             teleopProfiles = await res.json();
         } catch (e) { /* ignore */ }
     }
+    // Env profiles for sim source toggle
+    if (typeof envProfiles !== 'undefined' && !envProfiles.length) {
+        try {
+            const res = await fetch('/api/env/profiles');
+            envProfiles = await res.json();
+        } catch (e) { /* ignore */ }
+    }
 
     initSplitHandle();
     renderRunForm();
@@ -104,6 +111,42 @@ function _teleopProfileOptions() {
     return teleopProfiles.map(p =>
         `<option value="${_esc(p.name)}">${_esc(p.name)} (${_esc(p.type || '?')})</option>`
     ).join('');
+}
+
+function _envProfileOptions() {
+    // envProfiles is global from env.js
+    if (typeof envProfiles === 'undefined' || !envProfiles.length) {
+        return '<option value="">No env profiles</option>';
+    }
+    return envProfiles.map(p =>
+        `<option value="${_esc(p.name)}">${_esc(p.name)} (${_esc(p.type || '?')})</option>`
+    ).join('');
+}
+
+/** Helper to fetch env profile data (parallel to _getProfileData for robot/teleop). */
+async function _getEnvProfileData(name) {
+    if (!name) return null;
+    try {
+        const res = await fetch(`/api/env/profiles/${encodeURIComponent(name)}`);
+        if (!res.ok) return null;
+        return await res.json();
+    } catch (e) {
+        return null;
+    }
+}
+
+/** Toggle visibility of robot vs env rows for a given workflow section. */
+function _onSourceChange(workflow) {
+    const sel = document.getElementById(`run-${workflow}-source`);
+    if (!sel) return;
+    const isEnv = sel.value === 'env';
+    const robotRow = document.getElementById(`run-${workflow}-robot-row`);
+    const envRow = document.getElementById(`run-${workflow}-env-row`);
+    if (robotRow) robotRow.style.display = isEnv ? 'none' : '';
+    if (envRow) envRow.style.display = isEnv ? '' : 'none';
+    // Teleop is real-robot only on the prototype (gym-hil bundles its own teleop)
+    const teleopRow = document.getElementById(`run-${workflow}-teleop-row`);
+    if (teleopRow) teleopRow.style.display = isEnv ? 'none' : '';
 }
 
 // ---- Dataset name resolution ----
@@ -753,9 +796,14 @@ function refreshRunProfileSelects() {
     if (!_runFormRendered) return;
     const robotOpts = _robotProfileOptions();
     const teleopOpts = _teleopProfileOptions();
+    const envOpts = _envProfileOptions();
     for (const id of ['run-teleop-robot', 'run-replay-robot', 'run-policy-robot']) {
         const sel = document.getElementById(id);
         if (sel) { const prev = sel.value; sel.innerHTML = robotOpts; sel.value = prev; }
+    }
+    for (const id of ['run-teleop-env', 'run-replay-env']) {
+        const sel = document.getElementById(id);
+        if (sel) { const prev = sel.value; sel.innerHTML = envOpts; sel.value = prev; }
     }
     const teleopSel = document.getElementById('run-teleop-teleop');
     if (teleopSel) { const prev = teleopSel.value; teleopSel.innerHTML = teleopOpts; teleopSel.value = prev; }
@@ -829,10 +877,28 @@ function renderRunForm() {
     // ---- Teleop workflow section ----
     html += `<div id="run-section-teleop" style="${selectedWorkflow === 'teleop' ? '' : 'display:none'}">`;
     html += '<div class="form-grid">';
+    html += `<label>Source</label>`;
+    html += `<select id="run-teleop-source" onchange="_onSourceChange('teleop')">`;
+    html += `<option value="robot" selected>Real Robot</option>`;
+    html += `<option value="env">Sim Environment</option>`;
+    html += `</select>`;
+    html += '</div>';
+    // Robot row (default)
+    html += `<div id="run-teleop-robot-row" class="form-grid">`;
     html += `<label>Robot</label>`;
     html += `<select id="run-teleop-robot">${_robotProfileOptions()}</select>`;
+    html += `</div>`;
+    // Teleop row (real-robot only)
+    html += `<div id="run-teleop-teleop-row" class="form-grid">`;
     html += `<label>Teleop</label>`;
     html += `<select id="run-teleop-teleop">${_teleopProfileOptions()}</select>`;
+    html += `</div>`;
+    // Env row (hidden by default)
+    html += `<div id="run-teleop-env-row" class="form-grid" style="display:none">`;
+    html += `<label>Environment</label>`;
+    html += `<select id="run-teleop-env">${_envProfileOptions()}</select>`;
+    html += `</div>`;
+    html += '<div class="form-grid">';
     html += `<label>FPS</label>`;
     html += `<input type="number" id="run-teleop-fps" value="60" min="1" max="200">`;
     html += '</div>';
@@ -893,8 +959,21 @@ function renderRunForm() {
     // ---- Replay workflow section ----
     html += `<div id="run-section-replay" style="${selectedWorkflow === 'replay' ? '' : 'display:none'}">`;
     html += '<div class="form-grid">';
+    html += `<label>Source</label>`;
+    html += `<select id="run-replay-source" onchange="_onSourceChange('replay')">`;
+    html += `<option value="robot" selected>Real Robot</option>`;
+    html += `<option value="env">Sim Environment</option>`;
+    html += `</select>`;
+    html += '</div>';
+    html += `<div id="run-replay-robot-row" class="form-grid">`;
     html += `<label>Robot</label>`;
     html += `<select id="run-replay-robot">${_robotProfileOptions()}</select>`;
+    html += `</div>`;
+    html += `<div id="run-replay-env-row" class="form-grid" style="display:none">`;
+    html += `<label>Environment</label>`;
+    html += `<select id="run-replay-env">${_envProfileOptions()}</select>`;
+    html += `</div>`;
+    html += '<div class="form-grid">';
     html += `<label>Episode</label>`;
     html += `<select id="run-replay-episode" onchange="_onReplayEpisodeChange()">${_episodeOptions()}</select>`;
     html += '</div>';
@@ -1060,7 +1139,129 @@ function _getActiveFpsInputId() {
     return `run-${selectedWorkflow}-fps`;
 }
 
+/** Read the Source select for a workflow ("robot" | "env"). Defaults to "robot"
+ *  if no Source select exists (e.g. policy workflow doesn't have one yet). */
+function _getWorkflowSource(workflow) {
+    const sel = document.getElementById(`run-${workflow}-source`);
+    return sel ? sel.value : 'robot';
+}
+
+/** Sim-env launch path for teleop / record / replay. Returns true if we
+ *  handled the request, false to fall through to the real-robot code. */
+async function _launchEnvWorkflow() {
+    const wf = selectedWorkflow;
+    if (wf === 'policy') return false;  // HVLA-on-sim is a separate piece of work
+
+    const envSel = document.getElementById(`run-${wf}-env`);
+    if (!envSel?.value) {
+        showToast('Error', 'Select an environment profile', 'error');
+        return true;  // we own this branch — don't fall through
+    }
+    const envData = await _getEnvProfileData(envSel.value);
+    if (!envData) {
+        showToast('Error', `Env profile "${envSel.value}" not found`, 'error');
+        return true;
+    }
+
+    let endpoint, body;
+    if (wf === 'teleop') {
+        const datasetSel = document.getElementById('run-teleop-record-dataset');
+        const datasetVal = datasetSel?.value || '';
+        const fps = parseInt(document.getElementById('run-teleop-fps')?.value) || 30;
+        if (datasetVal === '') {
+            // Sim teleop — no recording
+            endpoint = '/api/run/teleoperate';
+            body = { env: envData, fps };
+        } else {
+            // Sim recording — gym_manipulator handles the dataset write
+            const taskSel = document.getElementById('run-teleop-task-select');
+            const taskCustom = document.getElementById('run-teleop-task-custom');
+            const singleTask = (taskSel?.value === '__new_task__')
+                ? taskCustom?.value?.trim()
+                : taskSel?.value?.trim();
+            if (!singleTask) {
+                showToast('Error', 'Task description is required for recording', 'error');
+                return true;
+            }
+            let repoId, root = null, resume = false;
+            if (datasetVal === '__new__') {
+                repoId = document.getElementById('run-teleop-new-dataset-name')?.value?.trim();
+                if (!repoId) {
+                    showToast('Error', 'Enter a name for the new dataset', 'error');
+                    return true;
+                }
+            } else {
+                const dsId = datasetVal.replace('existing:', '');
+                const d = (window.datasets || {})[dsId];
+                if (!d) {
+                    showToast('Error', 'Selected dataset not found', 'error');
+                    return true;
+                }
+                repoId = _resolveDatasetRepoId(d);
+                root = d.root;
+                resume = true;
+            }
+            endpoint = '/api/run/record';
+            body = {
+                env: envData,
+                repo_id: repoId,
+                root,
+                single_task: singleTask,
+                fps,
+                episode_time_s: parseFloat(document.getElementById('run-teleop-episode-time')?.value) || 60,
+                reset_time_s: parseFloat(document.getElementById('run-teleop-reset-time')?.value) || 60,
+                num_episodes: parseInt(document.getElementById('run-teleop-num-episodes')?.value) || 50,
+                resume,
+            };
+        }
+    } else if (wf === 'replay') {
+        const episodeSel = document.getElementById('run-replay-episode');
+        if (!episodeSel?.value) {
+            showToast('Error', 'Select an episode to replay', 'error');
+            return true;
+        }
+        const [dsId, epIdx] = episodeSel.value.split(':');
+        const d = (window.datasets || {})[dsId];
+        if (!d) {
+            showToast('Error', 'Selected dataset not found', 'error');
+            return true;
+        }
+        endpoint = '/api/run/replay';
+        body = {
+            env: envData,
+            repo_id: _resolveDatasetRepoId(d),
+            root: d.root,
+            episode: parseInt(epIdx),
+            fps: parseInt(document.getElementById('run-replay-fps')?.value) || 30,
+        };
+    } else {
+        return false;
+    }
+
+    try {
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        await pollRunStatus();
+        await connectOutputSSE();
+    } catch (e) {
+        showToast('Error', e.message, 'error');
+    }
+    return true;
+}
+
 async function launchRun() {
+    // Sim env path — short-circuit before robot/camera FPS logic, which
+    // dereferences robotData fields that don't exist for sim.
+    const source = _getWorkflowSource(selectedWorkflow);
+    if (source === 'env') {
+        await _launchEnvWorkflow();
+        return;
+    }
+
     const robotSelect = document.getElementById(_getActiveRobotSelectId());
     if (!robotSelect || !robotSelect.value) {
         showToast('Error', 'Select a robot profile', 'error');

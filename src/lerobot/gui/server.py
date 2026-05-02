@@ -25,7 +25,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from lerobot.gui.api import datasets, edits, models, playback, robot, run
+from lerobot.gui.api import datasets, edits, env, models, playback, robot, run
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
@@ -77,8 +77,10 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up subprocesses on server shutdown."""
-    from lerobot.gui.api.run import _stop_debug_process, _active_process
     import signal
+
+    from lerobot.gui.api.run import _active_process, _stop_debug_process
+
     # Stop debug model process
     await _stop_debug_process()
     # Stop active process (teleop/record/etc.)
@@ -86,6 +88,7 @@ async def shutdown_event():
         _active_process.send_signal(signal.SIGINT)
         try:
             import asyncio
+
             await asyncio.wait_for(_active_process.wait(), timeout=5.0)
         except Exception:
             _active_process.kill()
@@ -96,6 +99,7 @@ app.include_router(datasets.router)
 app.include_router(playback.router)
 app.include_router(edits.router)
 app.include_router(robot.router)
+app.include_router(env.router)
 app.include_router(run.router)
 app.include_router(models.router)
 

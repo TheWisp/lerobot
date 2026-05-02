@@ -13,6 +13,7 @@
         <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
+        <button class="tab" data-tab="env" onclick="switchTab('env')">Environment</button>
         <span id="hf-auth-indicator" style="margin-left:auto; font-size:11px; color:var(--text-secondary, #666); padding-right:12px; cursor:default;" title="HuggingFace Hub login status"></span>
     </div>
 
@@ -242,6 +243,36 @@
         </div>
     </div>
 
+    <!-- Environment tab (sim) -->
+    <div class="tab-content" id="tab-env">
+        <div class="layout">
+            <div class="sidebar" id="env-sidebar">
+                <div class="sidebar-header">
+                    <h1>Environment Setup</h1>
+                </div>
+                <div class="robot-section">
+                    <div class="section-header">
+                        <span>Env Profiles</span>
+                        <button class="btn-small" onclick="newEnvProfile()">+ New</button>
+                    </div>
+                    <div class="profile-list" id="env-profile-list">
+                        <div style="padding: 8px 12px; color: #666; font-size: 12px;">No profiles</div>
+                    </div>
+                </div>
+                <div class="robot-section">
+                    <div style="padding: 8px 12px; color: #888; font-size: 11px; line-height: 1.5;">
+                        Sim environments (gym-hil, libero, etc.) for teleop / recording / replay / eval. Currently only <code>gym_manipulator</code> (gym-hil) is wired through to live teleop &amp; recording. Others will land with the eval workflow.
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-resize-handle"></div>
+            <div class="main" id="env-main">
+                <div class="empty-state" id="env-empty">Select or create an environment profile</div>
+                <div class="robot-editor" id="env-editor" style="display:none;"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Robot tab -->
     <div class="tab-content" id="tab-robot">
         <div class="layout">
@@ -340,7 +371,8 @@
 
     <script src="/static/app.js?v=26"></script>
     <script src="/static/robot.js?v=18"></script>
-    <script src="/static/run.js?v=39"></script>
+    <script src="/static/env.js?v=1"></script>
+    <script src="/static/run.js?v=40"></script>
     <script src="/static/model.js?v=3"></script>
 </body>
 </html>

@@ -121,6 +121,94 @@ def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bo
 
 
 # ============================================================================
+# Sim env dispatch
+# ============================================================================
+
+
+def _ensure_one_source(robot: dict | None, env: dict | None) -> str:
+    """Validate that exactly one of robot / env is set. Returns "robot" or "env".
+
+    Real robot and sim env are mutually exclusive — they target different
+    binaries (lerobot-* vs gym_manipulator) and pass through completely
+    different config schemas. Mixing them is always a frontend bug.
+    """
+    has_robot = bool(robot)
+    has_env = bool(env)
+    if has_robot and has_env:
+        raise HTTPException(400, "Specify either 'robot' or 'env', not both")
+    if not has_robot and not has_env:
+        raise HTTPException(400, "Specify either 'robot' (real) or 'env' (sim)")
+    return "robot" if has_robot else "env"
+
+
+def _env_profile_to_gym_manipulator_cfg(
+    env_profile: dict,
+    *,
+    mode: str | None,
+    dataset: dict | None = None,
+) -> dict:
+    """Build a GymManipulatorConfig dict from an env profile + run params.
+
+    Profile shape: ``{type, name, fields}`` where ``type`` is the EnvConfig
+    registry key (currently only "gym_manipulator" is wired through) and
+    ``fields`` flat-merges into the env config.
+
+    Returns a dict matching ``GymManipulatorConfig`` (env / dataset / mode /
+    device) suitable for `python -m lerobot.rl.gym_manipulator --config_path`.
+
+    Pre: env_profile has "type" and "fields" keys; mode is None | "record" | "replay".
+    """
+    assert env_profile.get("type"), "env profile missing 'type'"
+    if env_profile["type"] != "gym_manipulator":
+        raise HTTPException(
+            400,
+            f"Env type '{env_profile['type']}' is not yet supported for live "
+            f"teleop/record/replay (only 'gym_manipulator' / gym-hil is wired). "
+            f"Other env types will be available once eval/train workflows are "
+            f"added to the GUI.",
+        )
+
+    fields = dict(env_profile.get("fields", {}))
+    # `device` lives at the top of GymManipulatorConfig, not inside env.
+    device = fields.pop("device", "cuda")
+
+    # GymManipulatorConfig.env is typed as the concrete HILSerlRobotEnvConfig,
+    # so draccus does NOT expect a `type` discriminator inside the env dict —
+    # it would reject the field as unknown. The discriminator only matters
+    # for fields typed as the abstract EnvConfig base.
+    env_cfg: dict[str, Any] = dict(fields)
+
+    cfg: dict[str, Any] = {
+        "env": env_cfg,
+        "mode": mode,
+        "device": device,
+    }
+    if dataset is not None:
+        cfg["dataset"] = dataset
+    else:
+        # gym_manipulator's GymManipulatorConfig.dataset is required (not optional).
+        # Provide a placeholder when not recording — gym_manipulator only reads
+        # dataset.* fields when mode in {"record", "replay"}.
+        cfg["dataset"] = {
+            "repo_id": "_unused/teleop_only",
+            "task": "_unused",
+            "num_episodes_to_record": 0,
+        }
+    return cfg
+
+
+def _write_gym_manipulator_config_tmp(cfg: dict) -> str:
+    """Write a GymManipulatorConfig dict to a temp JSON and return the path."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, prefix="gym_manipulator_cfg_"
+    ) as tmp:
+        tmp.write(json.dumps(cfg, indent=2))
+        return tmp.name
+
+
+# ============================================================================
 # Request models
 # ============================================================================
 
@@ -133,15 +221,17 @@ class DebugModelConfig(BaseModel):
 
 
 class TeleoperateRequest(BaseModel):
-    robot: dict[str, Any]
-    teleop: dict[str, Any]
+    robot: dict[str, Any] | None = None
+    teleop: dict[str, Any] | None = None
+    env: dict[str, Any] | None = None  # sim env profile; mutually exclusive with robot
     fps: int = 60
     debug_model: DebugModelConfig | None = None
 
 
 class RecordRequest(BaseModel):
-    robot: dict[str, Any]
+    robot: dict[str, Any] | None = None
     teleop: dict[str, Any] | None = None
+    env: dict[str, Any] | None = None  # sim env profile; mutually exclusive with robot
     repo_id: str
     root: str | None = None
     policy_path: str | None = None
@@ -159,7 +249,8 @@ class RecordRequest(BaseModel):
 
 
 class ReplayRequest(BaseModel):
-    robot: dict[str, Any]
+    robot: dict[str, Any] | None = None
+    env: dict[str, Any] | None = None  # sim env profile; mutually exclusive with robot
     repo_id: str
     root: str | None = None
     episode: int
@@ -525,6 +616,21 @@ async def debug_subtask() -> dict:
 @router.post("/teleoperate")
 async def start_teleoperate(req: TeleoperateRequest) -> dict:
     _ensure_no_active_process()
+    source = _ensure_one_source(req.robot, req.env)
+
+    if source == "env":
+        # Sim teleop — gym_manipulator with no --mode just spins the env loop.
+        # gym-hil's gamepad/keyboard task variants embed their own teleop;
+        # the `teleop` field in the request is ignored on this path.
+        cfg = _env_profile_to_gym_manipulator_cfg(req.env, mode=None)
+        cfg_path = _write_gym_manipulator_config_tmp(cfg)
+        args = ["python", "-u", "-m", "lerobot.rl.gym_manipulator", f"--config_path={cfg_path}"]
+        await _launch_subprocess(args, command="teleoperate", config=req.model_dump())
+        return {"status": "started", "command": "teleoperate", "pid": _active_process.pid}
+
+    # Real-robot path
+    if not req.teleop:
+        raise HTTPException(400, "teleop profile required for real-robot teleop")
 
     args = ["lerobot-teleoperate"]
     args.extend(_profile_to_cli_args(req.robot, "robot"))
@@ -545,7 +651,28 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
 @router.post("/record")
 async def start_record(req: RecordRequest) -> dict:
     _ensure_no_active_process()
+    source = _ensure_one_source(req.robot, req.env)
 
+    if source == "env":
+        # Sim record — gym_manipulator --mode record. Demos are collected via
+        # gym-hil's built-in gamepad/keyboard task variants; req.teleop is
+        # ignored on this path.
+        dataset = {
+            "repo_id": req.repo_id,
+            "task": req.single_task,
+            "num_episodes_to_record": req.num_episodes,
+            "push_to_hub": False,
+            "resume": req.resume,
+        }
+        if req.root:
+            dataset["root"] = req.root
+        cfg = _env_profile_to_gym_manipulator_cfg(req.env, mode="record", dataset=dataset)
+        cfg_path = _write_gym_manipulator_config_tmp(cfg)
+        args = ["python", "-u", "-m", "lerobot.rl.gym_manipulator", f"--config_path={cfg_path}"]
+        await _launch_subprocess(args, command="record", config=req.model_dump())
+        return {"status": "started", "command": "record", "pid": _active_process.pid}
+
+    # Real-robot path
     if req.teleop is None and req.policy_path is None:
         raise HTTPException(400, "Either teleop or policy_path must be provided")
 
@@ -585,10 +712,25 @@ async def start_record(req: RecordRequest) -> dict:
 @router.post("/replay")
 async def start_replay(req: ReplayRequest) -> dict:
     _ensure_no_active_process()
+    source = _ensure_one_source(req.robot, req.env)
 
-    # Note: --dataset.fps is intentionally omitted — `lerobot-replay` declares
-    # it as config but ignores it (the loop paces by `dataset.fps` directly),
-    # so passing it from the GUI was dead wiring.
+    if source == "env":
+        dataset = {
+            "repo_id": req.repo_id,
+            "task": "_replay",
+            "replay_episode": req.episode,
+        }
+        if req.root:
+            dataset["root"] = req.root
+        cfg = _env_profile_to_gym_manipulator_cfg(req.env, mode="replay", dataset=dataset)
+        cfg_path = _write_gym_manipulator_config_tmp(cfg)
+        args = ["python", "-u", "-m", "lerobot.rl.gym_manipulator", f"--config_path={cfg_path}"]
+        await _launch_subprocess(args, command="replay", config=req.model_dump())
+        return {"status": "started", "command": "replay", "pid": _active_process.pid}
+
+    # Real-robot path. Note: --dataset.fps is intentionally omitted —
+    # `lerobot-replay` declares it as config but ignores it (the loop paces
+    # by `dataset.fps` directly), so passing it from the GUI was dead wiring.
     args = ["lerobot-replay"]
     args.extend(_profile_to_cli_args(req.robot, "robot"))
     args.append(f"--dataset.repo_id={req.repo_id}")
