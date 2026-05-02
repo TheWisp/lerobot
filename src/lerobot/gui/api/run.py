@@ -23,6 +23,25 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/run", tags=["run"])
 
+# Tuple of timeout-error classes to catch from `asyncio.wait_for(...)`.
+#
+# Why this exists: pyupgrade and ruff UP041 ("timeout-error-alias") rewrite
+# any literal `asyncio.TimeoutError` token in the source to `TimeoutError`
+# under py311+ targets, and pyproject.toml declares
+# `requires-python = ">=3.12"`. But the project's actual conda env runs
+# Python 3.10 (per CLAUDE.md / project memory), where
+# `asyncio.TimeoutError` is still a *distinct* class from builtin
+# `TimeoutError` — the alias only landed in 3.11. So a naive
+# `except asyncio.TimeoutError:` (or even
+# `except (TimeoutError, asyncio.TimeoutError):`) gets rewritten to
+# `except TimeoutError:`, which then doesn't catch on 3.10 and the SSE
+# keepalive crashes with an unhandled traceback every 2s.
+#
+# Resolution: the except clauses reference _TIMEOUT_EXCS by name so no
+# rewriteable literal `asyncio.TimeoutError` token appears in an except
+# context. The constant assignment itself isn't a UP041 target.
+_TIMEOUT_EXCS: tuple[type[BaseException], ...] = (TimeoutError, asyncio.TimeoutError)
+
 _app_state: AppState = None  # type: ignore
 
 
@@ -379,7 +398,7 @@ async def _stop_debug_process() -> None:
         _debug_process.terminate()
         try:
             await asyncio.wait_for(_debug_process.wait(), timeout=5.0)
-        except TimeoutError:
+        except _TIMEOUT_EXCS:
             _debug_process.kill()
             await _debug_process.wait()
     _debug_process = None
@@ -453,7 +472,7 @@ async def debug_output_sse():
             # Wait for new data or timeout (keepalive)
             try:
                 await asyncio.wait_for(_debug_output_event.wait(), timeout=5.0)
-            except TimeoutError:
+            except _TIMEOUT_EXCS:
                 yield ": keepalive\n\n"
 
     return StreamingResponse(
@@ -823,7 +842,7 @@ async def stop_process() -> dict:
         _active_process.send_signal(signal.SIGINT)
         try:
             await asyncio.wait_for(_active_process.wait(), timeout=5.0)
-        except TimeoutError:
+        except _TIMEOUT_EXCS:
             _active_process.kill()
             await _active_process.wait()
     except ProcessLookupError:
@@ -904,7 +923,7 @@ async def stream_output() -> StreamingResponse:
 
             try:
                 await asyncio.wait_for(_output_event.wait(), timeout=2.0)
-            except TimeoutError:
+            except _TIMEOUT_EXCS:
                 yield ": keepalive\n\n"
 
     return StreamingResponse(

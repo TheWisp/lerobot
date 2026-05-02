@@ -18,7 +18,6 @@ from lerobot.gui.api.run import (
     start_teleoperate,
 )
 
-
 # ============================================================================
 # _profile_to_cli_args
 # ============================================================================
@@ -416,8 +415,11 @@ class TestUnifiedFps:
 
         async def run():
             req = RecordRequest(
-                robot=_ROBOT, teleop=_TELEOP,
-                repo_id="user/ds", single_task="task", fps=25,
+                robot=_ROBOT,
+                teleop=_TELEOP,
+                repo_id="user/ds",
+                single_task="task",
+                fps=25,
             )
             with (
                 patch("lerobot.gui.api.run._active_process", None),
@@ -510,8 +512,6 @@ class TestObsReaderCleanupOnLaunch:
             close_called = True
             original_close()
 
-        captured_args = []
-
         async def run():
             req = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP, fps=30)
             with (
@@ -520,7 +520,7 @@ class TestObsReaderCleanupOnLaunch:
                 patch(
                     "lerobot.gui.api.run._launch_subprocess",
                     wraps=run_module._launch_subprocess,
-                ) as mock_launch,
+                ),
                 patch("asyncio.create_subprocess_exec") as mock_exec,
             ):
                 mock_proc = AsyncMock()
@@ -548,14 +548,14 @@ class TestObsReaderCleanupOnLaunch:
             patch("os.stat") as mock_stat,
             patch(
                 "lerobot.robots.obs_stream.ObservationStreamReader",
-            ) as MockReader,
+            ) as mock_reader_cls,
         ):
             # Current inode is different — stream was recreated
             mock_stat.return_value.st_ino = 2000
             new_reader = AsyncMock()
             new_reader.obs_scalar_keys = ["j.pos"]
             new_reader.image_keys = {}
-            MockReader.return_value = new_reader
+            mock_reader_cls.return_value = new_reader
 
             result = run_module._get_obs_reader()
 
@@ -615,6 +615,7 @@ class TestGetRltConfig:
     @pytest.fixture
     def reset_active(self):
         import lerobot.gui.api.run as run_module
+
         prev = run_module._active_config
         run_module._active_config = None
         yield run_module
@@ -623,8 +624,8 @@ class TestGetRltConfig:
     def test_no_active_session_returns_defaults(self, reset_active):
         """Before any RLT session starts, endpoint returns RLTConfig defaults.
         Without this the GUI would crash trying to read undefined state."""
-        from lerobot.policies.hvla.rlt.config import RLTConfig
         from lerobot.gui.api.run import get_rlt_config
+        from lerobot.policies.hvla.rlt.config import RLTConfig
 
         cfg = asyncio.run(get_rlt_config())
         defaults = RLTConfig()
@@ -653,9 +654,7 @@ class TestGetRltConfig:
         ``exploration_sigma`` so mid-session upgrades don't drop the value."""
         from lerobot.gui.api.run import get_rlt_config
 
-        (tmp_path / "rlt_overrides.json").write_text(
-            json.dumps({"beta": 0.5, "actor_sigma": 0.0})
-        )
+        (tmp_path / "rlt_overrides.json").write_text(json.dumps({"beta": 0.5, "actor_sigma": 0.0}))
         reset_active._active_config = {"rlt_output_dir": str(tmp_path)}
         cfg = asyncio.run(get_rlt_config())
         assert cfg["exploration_sigma"] == 0.0
@@ -700,6 +699,7 @@ class TestGetRltConfig:
 # 9bf49910f / launch attempt of rlt_online_v2_widened on 2026-04-27.
 # ============================================================================
 
+
 class TestHvlaRltTokenRequired:
     """rlt_mode=True without rlt_token_checkpoint must be rejected at the
     API boundary with a helpful 400, not silently passed through."""
@@ -720,9 +720,9 @@ class TestHvlaRltTokenRequired:
 
     def test_missing_token_checkpoint_raises_400(self):
         from lerobot.gui.api.run import HVLARunRequest, start_hvla
+
         req = HVLARunRequest(**self._make_request_kwargs())
-        with patch("lerobot.gui.api.run._active_process", None), \
-                pytest.raises(HTTPException) as excinfo:
+        with patch("lerobot.gui.api.run._active_process", None), pytest.raises(HTTPException) as excinfo:
             asyncio.run(start_hvla(req))
         assert excinfo.value.status_code == 400
         # Must be actionable — name the field and the recipe
@@ -734,11 +734,13 @@ class TestHvlaRltTokenRequired:
         """Empty string must be treated the same as None — JS may send
         '' from a never-filled field."""
         from lerobot.gui.api.run import HVLARunRequest, start_hvla
-        req = HVLARunRequest(**self._make_request_kwargs(
-            rlt_token_checkpoint="   "  # whitespace only
-        ))
-        with patch("lerobot.gui.api.run._active_process", None), \
-                pytest.raises(HTTPException) as excinfo:
+
+        req = HVLARunRequest(
+            **self._make_request_kwargs(
+                rlt_token_checkpoint="   "  # whitespace only
+            )
+        )
+        with patch("lerobot.gui.api.run._active_process", None), pytest.raises(HTTPException) as excinfo:
             asyncio.run(start_hvla(req))
         assert excinfo.value.status_code == 400
 
@@ -747,15 +749,53 @@ class TestHvlaRltTokenRequired:
         not be enforced (regression guard so the validation doesn't
         leak into normal HVLA runs)."""
         from lerobot.gui.api.run import HVLARunRequest, start_hvla
+
         captured_args = []
-        req = HVLARunRequest(**self._make_request_kwargs(
-            rlt_mode=False,
-            rlt_token_checkpoint=None,
-        ))
-        with patch("lerobot.gui.api.run._active_process", None), \
-                patch("lerobot.gui.api.run._launch_subprocess",
-                      _make_fake_launch(captured_args)):
+        req = HVLARunRequest(
+            **self._make_request_kwargs(
+                rlt_mode=False,
+                rlt_token_checkpoint=None,
+            )
+        )
+        with (
+            patch("lerobot.gui.api.run._active_process", None),
+            patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+        ):
             asyncio.run(start_hvla(req))
         # Reached the launch path, no rejection
         assert any("--rlt-mode" not in a for a in captured_args)
         assert "--rlt-mode" not in captured_args
+
+
+class TestTimeoutExcsRegression:
+    """Regression guard for the asyncio.TimeoutError vs builtin TimeoutError
+    Python-3.10 mismatch.
+
+    On Python 3.10 (the lerobot conda env's actual interpreter, despite
+    pyproject's ``requires-python = ">=3.12"``) the two classes are
+    *distinct* and not even in the same hierarchy. Pyupgrade and ruff
+    UP041 rewrite any literal ``asyncio.TimeoutError`` token in an except
+    clause to ``TimeoutError`` under py311+ targets, which silently
+    breaks the SSE keepalive on the actual runtime — every 2s wait_for
+    timeout escapes and crashes the response generator.
+
+    These tests fail loudly if anyone simplifies _TIMEOUT_EXCS away."""
+
+    def test_constant_includes_asyncio_timeout(self):
+        from lerobot.gui.api.run import _TIMEOUT_EXCS
+
+        assert TimeoutError in _TIMEOUT_EXCS
+        assert asyncio.TimeoutError in _TIMEOUT_EXCS
+
+    def test_catches_what_wait_for_raises(self):
+        """End-to-end: asyncio.wait_for timing out is caught by the tuple."""
+        from lerobot.gui.api.run import _TIMEOUT_EXCS
+
+        async def go():
+            try:
+                await asyncio.wait_for(asyncio.sleep(10), timeout=0.01)
+            except _TIMEOUT_EXCS:
+                return "caught"
+            return "missed"
+
+        assert asyncio.run(go()) == "caught"
