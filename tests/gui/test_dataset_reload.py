@@ -88,51 +88,52 @@ def test_reload_metadata_refreshes_all_four_fields(fake_dataset):
     assert fake_dataset.meta.tasks == {"marker": "new_tasks"}
 
 
-def test_reload_hf_dataset_noop_when_none(fake_dataset):
-    """Skip reload when hf_dataset is None (lazy dataset)."""
-    fake_dataset.hf_dataset = None
+def test_reload_hf_dataset_noop_when_reader_inactive(fake_dataset):
+    """Skip reload when reader is None or its hf_dataset is None (lazy dataset)."""
+    fake_dataset.reader = None
 
-    # Should not raise even without mocking load_nested_dataset
     from lerobot.gui.dataset_reload import reload_hf_dataset
+    reload_hf_dataset(fake_dataset)  # must not raise
+
+    # Reader-with-no-hf_dataset is also a no-op
+    fake_dataset.reader = MagicMock()
+    fake_dataset.reader.hf_dataset = None
     reload_hf_dataset(fake_dataset)
+    fake_dataset.reader.load_and_activate.assert_not_called()
 
-    assert fake_dataset.hf_dataset is None
 
+def test_reload_hf_dataset_routes_through_reader(fake_dataset):
+    """When reader.hf_dataset exists, cleanup cache, disable caching, call
+    ``reader.load_and_activate()``, re-enable caching.
 
-def test_reload_hf_dataset_clears_cache_and_reloads(fake_dataset):
-    """When hf_dataset exists, cleanup cache, disable caching, reload, re-enable."""
+    Regression: pre-fix, this helper tried `dataset.hf_dataset = ...` which
+    raises AttributeError on the post-refactor read-only property.
+    """
     mock_hf = MagicMock()
-    fake_dataset.hf_dataset = mock_hf
+    fake_dataset.reader = MagicMock()
+    fake_dataset.reader.hf_dataset = mock_hf
+    fake_dataset.reader.root = fake_dataset.root
 
     with patch("datasets.disable_caching") as m_disable, \
-         patch("datasets.enable_caching") as m_enable, \
-         patch("lerobot.datasets.feature_utils.get_hf_features_from_features") as m_feats, \
-         patch("lerobot.datasets.io_utils.load_nested_dataset") as m_load, \
-         patch("lerobot.datasets.io_utils.hf_transform_to_torch") as m_transform:
-        m_feats.return_value = {"mock_features": True}
-        new_hf = MagicMock()
-        m_load.return_value = new_hf
-
+         patch("datasets.enable_caching") as m_enable:
         from lerobot.gui.dataset_reload import reload_hf_dataset
         reload_hf_dataset(fake_dataset)
 
     mock_hf.cleanup_cache_files.assert_called_once()
     m_disable.assert_called_once()
     m_enable.assert_called_once()
-    m_load.assert_called_once_with(fake_dataset.root / "data", features={"mock_features": True})
-    assert fake_dataset.hf_dataset is new_hf
-    assert fake_dataset._lazy_loading is False
+    fake_dataset.reader.load_and_activate.assert_called_once()
 
 
 def test_reload_hf_dataset_reenables_caching_on_error(fake_dataset):
-    """If load_nested_dataset raises, caching must still be re-enabled."""
-    fake_dataset.hf_dataset = MagicMock()
+    """If reader.load_and_activate() raises, caching must still be re-enabled."""
+    fake_dataset.reader = MagicMock()
+    fake_dataset.reader.hf_dataset = MagicMock()
+    fake_dataset.reader.root = fake_dataset.root
+    fake_dataset.reader.load_and_activate.side_effect = RuntimeError("boom")
 
     with patch("datasets.disable_caching"), \
-         patch("datasets.enable_caching") as m_enable, \
-         patch("lerobot.datasets.feature_utils.get_hf_features_from_features"), \
-         patch("lerobot.datasets.io_utils.load_nested_dataset", side_effect=RuntimeError("boom")), \
-         patch("lerobot.datasets.io_utils.hf_transform_to_torch"):
+         patch("datasets.enable_caching") as m_enable:
         from lerobot.gui.dataset_reload import reload_hf_dataset
 
         with pytest.raises(RuntimeError, match="boom"):

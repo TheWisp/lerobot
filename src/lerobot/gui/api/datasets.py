@@ -118,12 +118,9 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
     # Metadata changed - reload metadata AND HuggingFace dataset
     import datasets as hf_datasets
 
-    from lerobot.datasets.feature_utils import get_hf_features_from_features
     from lerobot.datasets.io_utils import (
-        hf_transform_to_torch,
         load_episodes,
         load_info,
-        load_nested_dataset,
         load_stats,
         load_tasks,
     )
@@ -149,11 +146,13 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
         dataset.meta.tasks = load_tasks(root)
         _dataset_info_mtime[dataset_id] = current_mtime
 
-        # CRITICAL: Also reload the HuggingFace dataset
-        # Otherwise frame indices will be misaligned with the new metadata
-        if dataset.hf_dataset is not None:
+        # CRITICAL: Also reload the HuggingFace dataset.
+        # Post-refactor, hf_dataset is owned by DatasetReader. Direct assignment
+        # to dataset.hf_dataset is rejected (read-only property), so route through
+        # the reader's load_and_activate() public reload entry.
+        if dataset.reader is not None and dataset.reader.hf_dataset is not None:
             try:
-                num_cleaned = dataset.hf_dataset.cleanup_cache_files()
+                num_cleaned = dataset.reader.hf_dataset.cleanup_cache_files()
                 if num_cleaned > 0:
                     logger.info(f"Cleaned up {num_cleaned} HF cache files")
             except Exception as e:
@@ -173,10 +172,8 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
         # Reload HF dataset with caching disabled
         hf_datasets.disable_caching()
         try:
-            features = get_hf_features_from_features(dataset.meta.features)
-            dataset.hf_dataset = load_nested_dataset(root / "data", features=features)
-            dataset.hf_dataset.set_transform(hf_transform_to_torch)
-            dataset._lazy_loading = False
+            if dataset.reader is not None:
+                dataset.reader.load_and_activate()
         finally:
             hf_datasets.enable_caching()
 

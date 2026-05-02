@@ -51,36 +51,36 @@ def ensure_episodes_loaded(dataset: "LeRobotDataset", root: Path | None = None) 
 def reload_hf_dataset(dataset: "LeRobotDataset", root: Path | None = None) -> None:
     """Reload the HuggingFace Arrow dataset from parquet files in-place.
 
-    Clears any cached Arrow files first, disables dataset caching during
-    load to force fresh data, then re-enables caching. Sets
-    ``_lazy_loading=False`` to prevent the lazy-load path from overwriting
-    the freshly-loaded data with stale cache.
+    Routes through ``DatasetReader.load_and_activate()`` (the post-refactor
+    public reload entry point). Clears the Arrow cache first and disables
+    HF dataset caching during the load to force fresh data.
 
-    Safe no-op if ``dataset.hf_dataset is None`` (lazy datasets).
+    Safe no-op if the reader is not yet active (lazy / write-only datasets).
     """
-    if dataset.hf_dataset is None:
+    # The reader is the only authoritative holder of hf_dataset post-refactor.
+    # If it hasn't been created or activated, there's nothing to reload.
+    if dataset.reader is None or dataset.reader.hf_dataset is None:
         return
 
     import datasets as hf_datasets
 
-    from lerobot.datasets.feature_utils import get_hf_features_from_features
-    from lerobot.datasets.io_utils import hf_transform_to_torch, load_nested_dataset
-
     r = Path(root) if root is not None else dataset.root
 
     try:
-        num_cleaned = dataset.hf_dataset.cleanup_cache_files()
+        num_cleaned = dataset.reader.hf_dataset.cleanup_cache_files()
         if num_cleaned > 0:
             logger.info("Cleaned up %d HF cache files", num_cleaned)
     except Exception as e:
         logger.warning("Could not cleanup HF cache files: %s", e)
 
+    # If the caller passed a different root than the dataset's, propagate it
+    # so the reader reads from the right place.
+    if root is not None and r != dataset.reader.root:
+        dataset.reader.root = r
+
     hf_datasets.disable_caching()
     try:
-        features = get_hf_features_from_features(dataset.meta.features)
-        dataset.hf_dataset = load_nested_dataset(r / "data", features=features)
-        dataset.hf_dataset.set_transform(hf_transform_to_torch)
-        dataset._lazy_loading = False
+        dataset.reader.load_and_activate()
     finally:
         hf_datasets.enable_caching()
 
