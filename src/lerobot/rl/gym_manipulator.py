@@ -687,6 +687,7 @@ def control_loop(
 
     episode_idx = 0
     episode_step = 0
+    episode_nonzero_actions = 0  # for the all-zero-episode guard below
     episode_start_time = time.perf_counter()
 
     # Always finalize the dataset on exit (normal termination, KeyboardInterrupt,
@@ -742,6 +743,16 @@ def control_loop(
                     frame["task"] = cfg.dataset.task
                     dataset.add_frame(frame)
 
+                # Track whether the user actually drove the arm. A correctly
+                # recorded teleop episode should have many non-zero frames; an
+                # all-zero episode means gym-hil's intervention flag was off the
+                # whole time (typically: SPACE never engaged, or the arm was
+                # moved via mujoco viewer mouse-drag which bypasses env.step).
+                # We warn at save time rather than block, since legitimate
+                # autonomous-rollout episodes can also be near-zero.
+                if not torch.allclose(action_to_record, torch.zeros_like(action_to_record)):
+                    episode_nonzero_actions += 1
+
             episode_step += 1
 
             # Handle episode termination
@@ -759,8 +770,29 @@ def control_loop(
                         dataset.clear_episode_buffer()
                         episode_idx -= 1
                     else:
-                        logging.info(f"Saving episode {episode_idx}")
+                        # Loud warning if the entire episode was no-op actions —
+                        # almost always a recording-flow bug (e.g. gym-hil's
+                        # intervention toggle never engaged) rather than legit
+                        # data. Print to BOTH stdout (so it shows in the GUI
+                        # subprocess log) and as a logging warning.
+                        if episode_nonzero_actions == 0:
+                            msg = (
+                                f"⚠ Episode {episode_idx} recorded with ALL-ZERO actions "
+                                f"({episode_step} frames, every frame [0,0,0,0]). The arm did "
+                                f"NOT receive any teleop input. Common causes: SPACE never "
+                                f"engaged intervention; arm was moved via mujoco viewer "
+                                f"mouse-drag (bypasses env.step); or recording started before "
+                                f"the keyboard listener was ready. The saved episode will be "
+                                f"useless for training/replay."
+                            )
+                            print(msg, flush=True)
+                            logging.warning(msg)
+                        logging.info(
+                            f"Saving episode {episode_idx} "
+                            f"({episode_nonzero_actions}/{episode_step} non-zero frames)"
+                        )
                         dataset.save_episode()
+                episode_nonzero_actions = 0
 
                 # Reset for new episode
                 obs, info = env.reset()
