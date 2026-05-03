@@ -19,6 +19,11 @@ let envTabInitialized = false;
 // Filled lazily on first render of a profile that wants the task dropdown so
 // the editor can render synchronously after the cache hit.
 let envTaskCache = {};
+// Cache of task-instructions per task-id. Backend (env.py:get_task_instructions)
+// is the single source of truth for controls / behaviour / docs URLs; we
+// fetch from /api/env/task-instructions and render the resulting dict.
+// Caching keeps the editor render synchronous on repeat visits.
+let envTaskInstructionsCache = {};
 
 // ============================================================================
 // Initialization
@@ -68,6 +73,59 @@ async function _ensureEnvTasksLoaded(name) {
     } catch (e) {
         console.warn('failed to load registered-tasks for', name, e);
     }
+}
+
+/** Fetch and cache the structured controls / behaviour / docs bundle for
+ *  a given task. Renderer reads from the cache so the editor render
+ *  itself is synchronous; the first miss triggers a fetch + re-render. */
+async function _ensureTaskInstructionsLoaded(task) {
+    if (!task) return;
+    if (envTaskInstructionsCache[task]) return;
+    try {
+        const res = await fetch(`/api/env/task-instructions?task=${encodeURIComponent(task)}`);
+        if (!res.ok) return;
+        envTaskInstructionsCache[task] = await res.json();
+        if (currentEnvProfile && String(currentEnvProfile.data?.fields?.task || '') === task) {
+            renderEnvEditor();
+        }
+    } catch (e) {
+        console.warn('failed to load task-instructions for', task, e);
+    }
+}
+
+/** Render the controls / behaviour / docs from the backend dict.
+ *  Single flat section; no hardcoded keymap text. */
+function _renderTaskInstructions(info) {
+    if (!info) return '';
+    let html = '<div class="form-section">';
+    html += '<div class="form-section-title">Task instructions</div>';
+    html += '<div class="form-hint" style="line-height:1.6">';
+
+    if (info.controls) {
+        const c = info.controls;
+        const iv = c.intervention || {};
+        const verb = iv.model === 'toggle' ? 'Press' : 'Hold';
+        html += `<b>${verb} <code>${_envEsc(iv.label)}</code></b> to engage intervention`;
+        if (iv.note) html += ` — ${_envEsc(iv.note)}`;
+        html += '<br>';
+        for (const m of c.movement || []) {
+            html += `&nbsp;&bull; <code>${_envEsc(m.keys)}</code> = ${_envEsc(m.function)}<br>`;
+        }
+        for (const e of c.episode_end || []) {
+            html += `&nbsp;&bull; <code>${_envEsc(e.key)}</code> → ${_envEsc(e.result)}<br>`;
+        }
+        if (c.controller_note) html += `<small style="color:#999">${_envEsc(c.controller_note)}</small><br>`;
+        html += '<br>';
+    }
+    for (const b of info.behaviour || []) html += `${_envEsc(b)}<br>`;
+    for (const w of info.global_warnings || []) html += `<span style="color:#b58900">⚠ ${_envEsc(w)}</span><br>`;
+    if ((info.docs || []).length) html += '<br>';
+    for (const d of info.docs || []) {
+        html += `<a href="${_envEsc(d.url)}" target="_blank" rel="noopener">${_envEsc(d.label)}</a><br>`;
+    }
+
+    html += '</div></div>';
+    return html;
 }
 
 // ============================================================================
@@ -216,56 +274,20 @@ function renderEnvEditor() {
             html += 'Pick a <code>*Keyboard-v0</code> or <code>*Base-v0</code> variant from the <code>task</code> dropdown for a no-hardware setup.';
             html += '</div></div>';
         }
-        // gym-hil controls — only for variants that take human input.
-        // Keyboard and Gamepad have *fundamentally different* intervention
-        // models (toggle vs hold) and entirely different keymaps, so split
-        // the rendering rather than papering over with shared text.
-        const isKeyboardTask = task.includes("Keyboard");
-        const isGamepadTask = task.includes("Gamepad");
-        if (isKeyboardTask) {
-            html += '<div class="form-section">';
-            html += '<div class="form-section-title">Keyboard controls (read this before Launch)</div>';
-            html += '<div class="form-hint" style="line-height:1.6">';
-            html += '<b>Press <code>Space</code> first</b> to enable intervention — Space <i>toggles</i> (every press flips on/off, no LED to tell you which state you\'re in). The arm stays still until you toggle on.<br><br>';
-            html += '<b>Movement</b> (after Space): Arrows = X/Y, <code>Shift</code> / <code>RShift</code> = Z down/up, <code>LCtrl</code> / <code>RCtrl</code> = gripper close/open.<br>';
-            html += '<b>End episode</b>: <code>Enter</code> = success, <code>Esc</code> = failure (despite the printed help text saying "ESC: Exit", it actually ends the episode). <code>r</code> = rerecord. The env <i>also</i> auto-ends on natural success (cube lifted &gt;10cm) or if the cube goes off-table.<br>';
-            html += '<b>Stop the run</b>: hit the GUI <code>Stop</code> button (the printed "Press Ctrl+C" hint is for direct CLI use, not the GUI).<br><br>';
-            html += '<span style="color:#b58900">⚠ System-wide keyboard capture.</span> gym-hil uses <code>pynput</code>, which grabs keys from the focused window — any window. Typing <code>Enter</code> in the terminal, browser, IDE, etc. will end the current episode. Be deliberate about what you type while the env is running.';
-            html += '</div></div>';
-        } else if (isGamepadTask) {
-            // Defaults below are Logitech F310 button labels; gym-hil maps
-            // by name via controller_config.json so PS/Xbox controllers
-            // get their own labels. We can't know the user's controller
-            // here, so we name the *function* and the F310 label in
-            // parentheses.
-            html += '<div class="form-section">';
-            html += '<div class="form-section-title">Gamepad controls (read this before Launch)</div>';
-            html += '<div class="form-hint" style="line-height:1.6">';
-            html += '<b>Hold <code>RB</code></b> (right shoulder button) to engage intervention. This is hold-to-engage, not a toggle — release RB and the arm goes back to autonomous. Different from the keyboard variant.<br><br>';
-            html += '<b>Movement</b> (while holding RB): Left analog stick = X/Y, right stick (vertical) = Z, <code>LT</code> = close gripper, <code>RT</code> = open gripper.<br>';
-            html += '<b>End episode</b>: <code>Y</code> / Triangle = success, <code>A</code> / Cross = failure, <code>X</code> / Square = rerecord, <code>B</code> / Circle = exit. The env <i>also</i> auto-ends on natural success (cube lifted &gt;10cm) or if the cube goes off-table.<br>';
-            html += '<b>Stop the run</b>: hit the GUI <code>Stop</code> button.<br><br>';
-            html += '<span style="color:#999">Button labels above are Logitech F310 defaults. gym-hil reads button mappings from <code>controller_config.json</code> in the gym-hil package — PS / Xbox controllers map to their own labels but the same functions.</span>';
-            html += '</div></div>';
+        // Controls / behaviour rules / docs come from /api/env/task-instructions —
+        // single source of truth in env.py:get_task_instructions(). The same
+        // dict drives the runtime banner in run.py, so the two surfaces
+        // can never disagree about whether intervention is hold-vs-toggle,
+        // whether Esc is documented as "Exit" or "failure", etc.
+        if (task) {
+            if (!envTaskInstructionsCache[task]) {
+                _ensureTaskInstructionsLoaded(task);
+            }
+            const taskInstructions = envTaskInstructionsCache[task];
+            if (taskInstructions) {
+                html += _renderTaskInstructions(taskInstructions);
+            }
         }
-
-        // Behaviour reference — termination rules, reward, action space
-        // apply to ALL gym-hil variants (autonomous and human-input
-        // alike). A user setting up an autonomous policy eval against
-        // PandaPickCubeBase-v0 needs to know about the bounds-termination
-        // and the +10cm success threshold just as much as a teleop user.
-        // Render this independently of human-input gating.
-        const srcUrl = _gymHilSourceUrl(task);
-        html += '<div class="form-section">';
-        html += '<div class="form-section-title">Behaviour reference</div>';
-        html += '<div class="form-hint" style="line-height:1.6">';
-        html += 'gym-hil envs have implicit termination / reward rules not surfaced in the form. ';
-        html += 'For PickCube: success when the cube is lifted &gt;10cm; episode also ends if the cube is bumped off-table. ';
-        html += 'For ArrangeBoxes: similar — see source. To read the exact rules:<br>';
-        html += `&nbsp;&bull; <a href="${_envEsc(srcUrl)}" target="_blank" rel="noopener">📖 Source for this task family</a> on GitHub<br>`;
-        html += `&nbsp;&bull; <a href="https://github.com/huggingface/gym-hil" target="_blank" rel="noopener">gym-hil package</a> README<br>`;
-        html += `&nbsp;&bull; <a href="https://huggingface.co/docs/lerobot/hilserl_sim" target="_blank" rel="noopener">LeRobot HIL-SERL sim guide</a>`;
-        html += '</div></div>';
         // Show source provenance (registry vs fallback) so users can see
         // when the dropdown is stale because gym_hil isn't installed.
         if (taskInfo) {
@@ -354,19 +376,6 @@ function renderEnvFormField(field, value) {
     const display = (value === null || value === undefined) ? '' : String(value);
     return label + `<input type="text" id="${id}" value="${_envEsc(display)}"
         ${!field.required ? 'placeholder="(optional)"' : ''}>`;
-}
-
-/** Map a gym-hil task id (e.g. "PandaPickCubeKeyboard-v0") to the GitHub
- *  source URL of the env class that implements it. Lets us surface a
- *  "📖 Source" link the user can click to read termination / reward /
- *  bounds rules — these aren't documented anywhere user-facing today,
- *  they live as Python in the gym-hil package. */
-function _gymHilSourceUrl(task) {
-    const t = String(task || "");
-    const repo = "https://github.com/huggingface/gym-hil/blob/main";
-    if (t.includes("PandaPickCube")) return `${repo}/gym_hil/envs/panda_pick_gym_env.py`;
-    if (t.includes("PandaArrangeBoxes")) return `${repo}/gym_hil/envs/panda_arrange_boxes_gym_env.py`;
-    return `${repo}/gym_hil/envs/`;
 }
 
 /** Sensible starter fields for a fresh profile of this type. Without

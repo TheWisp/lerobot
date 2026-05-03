@@ -1292,7 +1292,7 @@ class TestSimBanner:
             {"type": "gym_manipulator", "fields": {"task": "PandaPickCubeKeyboard-v0"}},
             command="teleoperate",
         )
-        assert self._has(lines, "SPACE first")  # controls
+        assert self._has(lines, "engage intervention")  # controls
         assert self._has(lines, "Arrows = X/Y")  # keyboard-specific
         assert self._has(lines, "off-table")  # behaviour rules
         assert self._has(lines, "panda_pick_gym_env.py")  # source URL
@@ -1304,7 +1304,7 @@ class TestSimBanner:
             {"type": "gym_manipulator", "fields": {"task": "PandaPickCubeKeyboard-v0"}},
             command="replay",
         )
-        assert not self._has(lines, "SPACE first")
+        assert not self._has(lines, "engage intervention")
         assert self._has(lines, "human input is ignored")
         assert self._has(lines, "off-table")  # behaviour rules still there
         assert self._has(lines, "panda_pick_gym_env.py")
@@ -1314,7 +1314,7 @@ class TestSimBanner:
             {"type": "gym_manipulator", "fields": {"task": "PandaPickCubeKeyboard-v0"}},
             command="eval",
         )
-        assert not self._has(lines, "SPACE first")
+        assert not self._has(lines, "engage intervention")
         assert self._has(lines, "human input is ignored")
         assert self._has(lines, "panda_pick_gym_env.py")
 
@@ -1327,7 +1327,7 @@ class TestSimBanner:
                 {"type": "gym_manipulator", "fields": {"task": "PandaPickCubeBase-v0"}},
                 command=command,
             )
-            assert not self._has(lines, "SPACE first"), f"{command}: should not show controls"
+            assert not self._has(lines, "engage intervention"), f"{command}: should not show controls"
             assert self._has(lines, "off-table"), f"{command}: behaviour rules missing"
             assert self._has(lines, "panda_pick_gym_env.py"), f"{command}: docs missing"
 

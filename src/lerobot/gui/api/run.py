@@ -263,56 +263,57 @@ def _gym_hil_source_url(task: str) -> str:
 
 
 def _append_sim_controls_banner(env_profile: dict, *, command: str) -> None:
-    """One-stop banner for sim launches: behaviour rules + docs URLs always;
-    human-input controls only when the task variant takes them and the
-    command is interactive (teleop / record).
+    """One-stop banner for sim launches, formatted from the same task
+    instructions data the env editor renders from
+    (`env.get_task_instructions`). Single source of truth — if a button
+    label changes in gym-hil, edit the dict in env.py once and both
+    surfaces (this banner + the env-editor controls panel) pick it up.
 
-    Single source of truth for all four sim entry points
-    (`start_teleoperate`, `start_record`, `start_replay`, `start_eval`)
-    so the user gets consistent guidance regardless of which workflow
-    spawned the gym_manipulator subprocess. Skip silently for non-
-    gym_manipulator profiles since we don't have curated docs URLs for
-    aloha / libero / metaworld / EnvHub yet.
+    Behaviour rules + docs URLs always render. Human-input controls
+    only when the task variant takes them AND the command is
+    interactive (teleop / record). Skip silently for non-
+    gym_manipulator profiles — get_task_instructions still returns
+    docs but we have nothing curated for aloha / libero / etc. yet.
     """
     if env_profile.get("type") != "gym_manipulator":
         return
+
+    from lerobot.gui.api.env import get_task_instructions
+
     fields = env_profile.get("fields", {})
     task = str(fields.get("task", ""))
-    has_human_input = "Keyboard" in task or "Gamepad" in task
-    # Controls only matter where a human is actually steering the arm.
-    # Replay plays back recorded actions; eval lets the policy drive.
-    show_controls = has_human_input and command in {"teleoperate", "record"}
+    info = get_task_instructions(task)
+    show_controls = info["controls"] is not None and command in {"teleoperate", "record"}
 
     _append_output("")
     _append_output(f"=== gym-hil sim ({task or '?'}, mode={command}) ===")
 
     if show_controls:
-        _append_output("• Press SPACE first to enable intervention. The arm stays still until you do.")
-        if "Keyboard" in task:
-            _append_output(
-                "• Movement: Arrows = X/Y, Shift/RShift = Z down/up, LCtrl/RCtrl = gripper close/open."
-            )
-        else:
-            _append_output("• Movement: gamepad sticks + triggers.")
-        _append_output("• End episode: Enter = success, Esc = failure (env auto-resets).")
-        _append_output(
-            "• ⚠ Keyboard capture is system-wide (pynput): keys from ANY focused window reach gym-hil."
-        )
+        ctrl = info["controls"]
+        iv = ctrl["intervention"]
+        verb = "Press" if iv["model"] == "toggle" else "Hold"
+        _append_output(f"• {verb} {iv['label']} to engage intervention — {iv['note']}")
+        for m in ctrl["movement"]:
+            _append_output(f"• Movement: {m['keys']} = {m['function']}")
+        for e in ctrl["episode_end"]:
+            _append_output(f"• End episode: {e['key']} = {e['result']}")
+        if "controller_note" in ctrl:
+            _append_output(f"  ({ctrl['controller_note']})")
     else:
-        # Replay or eval — the human shouldn't drive. Be explicit so the
-        # user doesn't waste time pressing Space and wondering why nothing
-        # responds.
-        _append_output(f"• {command}: the recorded actions / policy drive the arm — human input is ignored.")
+        # Replay / eval — recorded actions or the policy drive the arm.
+        # Be explicit so the user doesn't press Space and wonder why
+        # nothing responds.
+        _append_output(f"• {command}: recorded actions / policy drives the arm — human input is ignored.")
 
-    # Behaviour rules apply to every gym-hil run, autonomous or not.
-    _append_output("• ⚠ Episode auto-ends on natural success (cube lifted >10cm) or if the cube")
-    _append_output("    goes off-table (out-of-bounds). Easy to trigger by bumping the cube.")
+    for line in info["behaviour"]:
+        _append_output(f"• {line}")
+    for warning in info["global_warnings"]:
+        _append_output(f"• ⚠ {warning}")
     _append_output("• Stop the run: hit the Stop button — Ctrl-C only works for direct CLI use.")
     _append_output("")
-    _append_output("Docs (most behaviour rules aren't in prose — read the source):")
-    _append_output(f"  • This task's env source: {_gym_hil_source_url(task)}")
-    _append_output("  • gym-hil package:        https://github.com/huggingface/gym-hil")
-    _append_output("  • LeRobot HIL-SERL guide: https://huggingface.co/docs/lerobot/hilserl_sim")
+    _append_output("Docs (behaviour rules live in source, not prose — read the file):")
+    for d in info["docs"]:
+        _append_output(f"  • {d['label']}: {d['url']}")
     _append_output("===================================")
     _append_output("")
 
