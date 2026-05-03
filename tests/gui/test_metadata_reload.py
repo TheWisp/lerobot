@@ -122,9 +122,7 @@ class TestMetadataReloadOnReopen:
             mock_ds.meta.episodes = [{"length": 100} for _ in range(216)]
 
         async def run():
-            with patch.object(
-                datasets_module, "_check_and_reload_metadata", side_effect=simulate_reload
-            ):
+            with patch.object(datasets_module, "_check_and_reload_metadata", side_effect=simulate_reload):
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app), base_url="http://test"
                 ) as client:
@@ -194,9 +192,7 @@ class TestListEpisodesReloadsMetadata:
             mock_ds.meta.episodes = [{"length": 50} for _ in range(8)]
 
         async def run():
-            with patch.object(
-                datasets_module, "_check_and_reload_metadata", side_effect=simulate_reload
-            ):
+            with patch.object(datasets_module, "_check_and_reload_metadata", side_effect=simulate_reload):
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app), base_url="http://test"
                 ) as client:
@@ -204,5 +200,83 @@ class TestListEpisodesReloadsMetadata:
                     assert resp.status_code == 200
                     episodes = resp.json()
                     assert len(episodes) == 8
+
+        asyncio.run(run())
+
+
+class TestListEpisodesActionStats:
+    """The per-episode action stats must reach the GUI so each affected
+    episode can be flagged in the timeline list — not just one aggregate
+    warning at the top of the panel. The API exposes raw characteristics
+    (min/max/mean/std per action component); the frontend derives flags
+    like all-zero / static / jittery on top, so new checks can land
+    without touching the API."""
+
+    def test_action_stats_per_episode(self, app_with_state):
+        from lerobot.gui.api.datasets import EpisodeActionStats
+
+        app, state = app_with_state
+        dataset_id = "test/action_stats"
+        mock_ds = _make_mock_dataset(4)
+        mock_ds.meta.episodes = [{"length": 50, "tasks": ["pick"]} for _ in range(4)]
+        state.datasets[dataset_id] = mock_ds
+
+        # Mix: episodes 1 and 3 are all-zero, episodes 0 and 2 have real
+        # action variation. Frontend will derive its own flags on top.
+        zero = EpisodeActionStats(
+            min=[0.0, 0.0, 0.0, 0.0],
+            max=[0.0, 0.0, 0.0, 0.0],
+            mean=[0.0, 0.0, 0.0, 0.0],
+            std=[0.0, 0.0, 0.0, 0.0],
+        )
+        nonzero = EpisodeActionStats(
+            min=[-0.5, -0.3, -0.2, 0.0],
+            max=[0.5, 0.3, 0.2, 2.0],
+            mean=[0.01, 0.02, 0.0, 1.0],
+            std=[0.2, 0.1, 0.08, 0.5],
+        )
+        cache = {0: nonzero, 1: zero, 2: nonzero, 3: zero}
+
+        async def run():
+            with (
+                patch.object(datasets_module, "_check_and_reload_metadata"),
+                patch.dict(datasets_module._episode_action_stats, {dataset_id: cache}),
+            ):
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://test"
+                ) as client:
+                    resp = await client.get(f"/api/datasets/{dataset_id}/episodes")
+                    assert resp.status_code == 200
+                    episodes = resp.json()
+                    by_idx = {ep["episode_index"]: ep["action_stats"] for ep in episodes}
+                    # Stats round-trip cleanly per episode.
+                    assert by_idx[1]["max"] == [0.0, 0.0, 0.0, 0.0]
+                    assert by_idx[2]["max"] == [0.5, 0.3, 0.2, 2.0]
+                    assert by_idx[2]["std"] == [0.2, 0.1, 0.08, 0.5]
+
+        asyncio.run(run())
+
+    def test_action_stats_absent_for_dataset_without_action_feature(self, app_with_state):
+        """When the dataset has no action feature (or stats not pre-computed),
+        action_stats is None and the frontend renders no quality badge."""
+        app, state = app_with_state
+        dataset_id = "test/no_action"
+        mock_ds = _make_mock_dataset(2)
+        mock_ds.meta.episodes = [{"length": 50, "tasks": ["pick"]} for _ in range(2)]
+        state.datasets[dataset_id] = mock_ds
+
+        async def run():
+            with (
+                patch.object(datasets_module, "_check_and_reload_metadata"),
+                # Empty stats dict → no episode has stats → all None
+                patch.dict(datasets_module._episode_action_stats, {dataset_id: {}}),
+            ):
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://test"
+                ) as client:
+                    resp = await client.get(f"/api/datasets/{dataset_id}/episodes")
+                    assert resp.status_code == 200
+                    episodes = resp.json()
+                    assert all(ep["action_stats"] is None for ep in episodes)
 
         asyncio.run(run())

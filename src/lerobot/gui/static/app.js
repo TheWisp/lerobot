@@ -251,6 +251,21 @@ function isEpisodeTrimmed(datasetId, epIdx) {
     return pendingEdits.some(e => e.dataset_id === datasetId && e.episode_index === epIdx && e.edit_type === 'trim');
 }
 
+// Derive episode quality flags from the per-component action stats the
+// API exposes (min, max, mean, std arrays — pre-computed at record time).
+// Backend just surfaces the raw characteristics; consumers decide what
+// counts as a problem. New checks can land here without touching the API.
+function _episodeActionFlags(stats) {
+    if (!stats) return { allZero: false };  // unknown — render no badges
+    const absMaxOfMin = Math.max(...stats.min.map(Math.abs));
+    const absMaxOfMax = Math.max(...stats.max.map(Math.abs));
+    return {
+        allZero: absMaxOfMin === 0 && absMaxOfMax === 0,
+        // Future: static = Math.max(...stats.std) === 0
+        // Future: jittery = mean(stats.std) > some_threshold
+    };
+}
+
 function renderTree() {
     const container = document.getElementById('tree-container');
     if (Object.keys(datasets).length === 0) {
@@ -282,7 +297,16 @@ function renderTree() {
             const isActive = currentDataset === id && currentEpisode === ep.episode_index;
             const isDeleted = isEpisodeDeleted(id, ep.episode_index);
             const isTrimmed = isEpisodeTrimmed(id, ep.episode_index);
-            const hasQualityWarning = ep.video_extra_frames !== 0;
+            const hasVideoMismatch = ep.video_extra_frames !== 0;
+            // Derive action-quality flags from the raw per-component stats
+            // exposed by the API. New checks (static, saturated, jittery)
+            // can be added here without touching the backend — the API just
+            // surfaces the raw characteristics.
+            const actionFlags = _episodeActionFlags(ep.action_stats);
+            const hasZeroActions = actionFlags.allZero;
+            // "quality-warning" is the unified visual state for any per-episode
+            // quality issue. The tooltip distinguishes the cause.
+            const hasQualityWarning = hasVideoMismatch || hasZeroActions;
             const classes = ['tree-header'];
             if (isActive) classes.push('active');
             if (isDeleted) classes.push('deleted');
@@ -294,16 +318,34 @@ function renderTree() {
             else if (hasQualityWarning) icon = '⚠️';
 
             let meta = `${ep.length} frames`;
-            if (hasQualityWarning) {
+            if (hasVideoMismatch) {
                 const sign = ep.video_extra_frames > 0 ? '+' : '';
                 meta += ` (${sign}${ep.video_extra_frames})`;
             }
+            if (hasZeroActions) meta += ' (zero actions)';
+
+            // Compose tooltip across all warnings on this episode.
+            const tipParts = [];
+            if (hasVideoMismatch) {
+                tipParts.push(
+                    ep.video_extra_frames > 0
+                        ? `Video-data mismatch: ${ep.video_extra_frames} extra frames (re-recording artifact)`
+                        : `Video-data mismatch: ${Math.abs(ep.video_extra_frames)} missing frames (truncated video)`
+                );
+            }
+            if (hasZeroActions) {
+                tipParts.push(
+                    'Action column is identically zero across every frame — almost always a recording-flow bug ' +
+                    '(intervention flag never engaged during teleop). Episode is useless for training/replay.'
+                );
+            }
+            const titleAttr = tipParts.length ? `title="${tipParts.join('\n\n').replace(/"/g, '&quot;')}"` : '';
 
             html += `
                 <div class="${classes.join(' ')}"
                      onclick="selectEpisode('${id}', ${ep.episode_index}, ${ep.video_length || ep.length})"
                      oncontextmenu="showContextMenu(event, '${id}', ${ep.episode_index})"
-                     ${hasQualityWarning ? `title="Video-data mismatch: ${ep.video_extra_frames > 0 ? ep.video_extra_frames + ' extra frames (re-recording artifact)' : Math.abs(ep.video_extra_frames) + ' missing frames (truncated video)'}"` : ''}>
+                     ${titleAttr}>
                     <span class="tree-toggle"></span>
                     <span class="tree-icon">${icon}</span>
                     <span class="tree-label">Episode ${ep.episode_index}</span>

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
@@ -93,6 +94,59 @@ def _get_episode_start_index(dataset_id: str, episode_idx: int) -> int:
 def _invalidate_episode_start_indices(dataset_id: str) -> None:
     """Clear cached episode start indices when metadata changes."""
     _episode_start_indices.pop(dataset_id, None)
+    _episode_action_stats.pop(dataset_id, None)
+
+
+# Cache of per-episode action stats keyed by dataset_id. Surfaced via
+# EpisodeInfo.action_stats so the GUI (and any other consumer) can apply
+# generic quality heuristics — all-zero, static, saturated, jittery — on
+# top of the same raw characteristics.
+_episode_action_stats: dict[str, dict[int, EpisodeActionStats]] = {}
+
+
+def _load_episode_action_stats(dataset_root: Path) -> dict[int, EpisodeActionStats]:
+    """Load per-episode action stats from the dataset's episode metadata
+    parquet files.
+
+    LeRobot stores ``stats/action/{min,max,mean,std,count,q*}`` per episode
+    at record time, so we don't need to rescan the data parquet — we just
+    read the four summary keys from ``meta/episodes/*.parquet``.
+    Falls back to an empty dict if the dataset has no action feature or
+    the stats columns aren't present (older datasets, partially-built
+    datasets); callers treat ``None`` action_stats as "unknown, render
+    no badge".
+    """
+    out: dict[int, EpisodeActionStats] = {}
+    episodes_dir = Path(dataset_root) / "meta" / "episodes"
+    if not episodes_dir.exists():
+        return out
+    parquet_paths = sorted(episodes_dir.rglob("*.parquet"))
+    if not parquet_paths:
+        return out
+
+    stat_cols = ["stats/action/min", "stats/action/max", "stats/action/mean", "stats/action/std"]
+    for path in parquet_paths:
+        try:
+            df = pd.read_parquet(path, columns=["episode_index", *stat_cols])
+        except (KeyError, ValueError):
+            # `action` feature absent, or stats not pre-computed — bail
+            # silently for the whole dataset rather than per-file, so we
+            # don't half-populate the cache.
+            return {}
+        except Exception as e:
+            logger.warning(f"action-stats: skipping unreadable {path.name}: {e}")
+            continue
+        for _, row in df.iterrows():
+            try:
+                out[int(row["episode_index"])] = EpisodeActionStats(
+                    min=list(row["stats/action/min"]),
+                    max=list(row["stats/action/max"]),
+                    mean=list(row["stats/action/mean"]),
+                    std=list(row["stats/action/std"]),
+                )
+            except (TypeError, ValueError):
+                continue
+    return out
 
 
 def _check_and_reload_metadata(dataset_id: str) -> bool:
@@ -697,6 +751,31 @@ class DatasetInfo(BaseModel):
     warnings: list[str] = []  # Non-critical warnings (stale stats, etc.)
 
 
+class EpisodeActionStats(BaseModel):
+    """Per-component summary statistics for an episode's recorded action.
+
+    These mirror the per-episode stats LeRobot already stores in
+    ``meta/episodes/*.parquet`` under ``stats/action/{min,max,mean,std}``,
+    pre-computed at record time — we just expose them in the per-episode
+    response so consumers (GUI, tests, future tooling) can apply quality
+    heuristics generically rather than each one re-scanning the data
+    parquet. Examples of derivable checks:
+
+    * ``all-zero``  → ``max(|min|) == 0 AND max(|max|) == 0``
+    * ``static``    → ``max(std) == 0`` (action never changed)
+    * ``saturated`` → some component pinned to action-space bounds
+    * ``jittery``   → ``mean(std)`` unusually high relative to peers
+
+    None of those checks are baked into the API — the GUI decides which
+    visual treatment to apply, based on these raw characteristics.
+    """
+
+    min: list[float]
+    max: list[float]
+    mean: list[float]
+    std: list[float]
+
+
 class EpisodeInfo(BaseModel):
     """Summary info about an episode."""
 
@@ -706,6 +785,12 @@ class EpisodeInfo(BaseModel):
     task: str | None = None
     video_extra_frames: int = 0  # Frame count difference (positive=extra, negative=missing)
     video_length: int = 0  # Total video frame count (0 = same as length)
+    action_stats: EpisodeActionStats | None = None
+    # Per-component action stats from dataset metadata (pre-computed at
+    # record time). None when the dataset has no action feature, or stats
+    # aren't present in the episode metadata (older / partially-built
+    # datasets). Consumers derive quality flags from these — see
+    # EpisodeActionStats docs.
 
 
 @router.get("")
@@ -932,6 +1017,15 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
         episodes = load_episodes(dataset.root)
         dataset.meta.episodes = episodes
 
+    # Per-episode action stats from dataset metadata (pre-computed at
+    # record time). Cached until metadata mtime changes — the cache is
+    # invalidated alongside _episode_start_indices by the metadata-reload
+    # path. Returns an empty dict for datasets without an action feature
+    # or pre-computed stats; consumers treat that as "unknown".
+    if dataset_id not in _episode_action_stats:
+        _episode_action_stats[dataset_id] = _load_episode_action_stats(Path(dataset.root))
+    action_stats_by_ep = _episode_action_stats[dataset_id]
+
     result = []
     for i in range(dataset.meta.total_episodes):
         ep = episodes[i]
@@ -958,6 +1052,7 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
                 task=task,
                 video_extra_frames=video_extra_frames,
                 video_length=video_length,
+                action_stats=action_stats_by_ep.get(i),
             )
         )
 
