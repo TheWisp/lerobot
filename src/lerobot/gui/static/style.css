@@ -387,6 +387,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .btn-tiny:hover { background: #0f3460; color: #eee; }
 .btn-tiny.btn-accent { border-color: #4fc3f7; color: #4fc3f7; }
 .btn-tiny.btn-accent:hover { background: #4fc3f7; color: #111; }
+.btn-tiny:disabled, .btn-tiny.btn-accent:disabled { opacity: 0.4; cursor: not-allowed; border-color: #2a2a3a; color: #555; background: transparent; }
+.btn-tiny:disabled:hover, .btn-tiny.btn-accent:disabled:hover { background: transparent; color: #555; }
 
 /* Merge diff panel */
 .merge-diff-header { font-weight: bold; color: #e5c07b; margin-bottom: 6px; font-size: 12px; }

@@ -570,10 +570,28 @@ async function _unloadDebugModel() {
 let _debugModelLoaded = false;
 
 function _updateDebugButtons() {
-    const loadBtn = document.querySelector('[onclick="_loadDebugModel()"]');
-    const unloadBtn = document.querySelector('[onclick="_unloadDebugModel()"]');
-    if (loadBtn) loadBtn.disabled = _debugModelLoading || _debugModelLoaded;
-    if (unloadBtn) unloadBtn.disabled = _debugModelLoading || !_debugModelLoaded;
+    const loadBtn = document.getElementById('run-debug-load-btn');
+    const unloadBtn = document.getElementById('run-debug-unload-btn');
+    const sel = document.getElementById('run-teleop-debug-model');
+    const hasSelection = !!sel?.value;
+
+    // Load: enabled only when (a) not currently loading, (b) not already
+    // loaded, and (c) a model is selected. Without (c) the button used to be
+    // clickable and would just throw a toast — disable upfront so the
+    // affordance matches the actual enabled state.
+    const loadEnabled = !_debugModelLoading && !_debugModelLoaded && hasSelection;
+    // Unload: enabled only when something is currently loaded (and not
+    // currently loading/unloading).
+    const unloadEnabled = !_debugModelLoading && _debugModelLoaded;
+
+    if (loadBtn) {
+        loadBtn.disabled = !loadEnabled;
+        loadBtn.classList.toggle('btn-accent', loadEnabled);
+    }
+    if (unloadBtn) {
+        unloadBtn.disabled = !unloadEnabled;
+        unloadBtn.classList.toggle('btn-accent', unloadEnabled);
+    }
     _showModelPanel(_debugModelLoaded);
 }
 
@@ -599,6 +617,8 @@ function _onDebugModelChange() {
     const opt = sel.selectedOptions[0];
     const policyType = opt?.dataset?.policyType || '';
     s2Fields.style.display = policyType === 'hvla_s2_vlm' ? '' : 'none';
+    // Selection drives the Load button's enabled state.
+    _updateDebugButtons();
 }
 
 function _getSelectedPolicyType() {
@@ -864,9 +884,18 @@ function renderRunForm() {
     html += `<input type="number" id="run-teleop-reset-time" value="60" min="0">`;
     html += '</div>';
     html += '</div>';
-    // Debug model (optional — runs alongside teleop for live prediction display)
+    // Debug model (optional — runs alongside teleop for live inspection of
+    // model output while the human drives. Distinct from a Policy run, which
+    // hands the arm to the model.)
     html += '<div class="form-section">';
     html += '<div class="form-section-title">Debug model</div>';
+    html += '<div class="form-hint" style="margin-bottom:8px;">';
+    html += 'Mount a model alongside teleop so its output (text, images, ';
+    html += 'subtask predictions, latents, etc.) is logged for inspection ';
+    html += 'while <em>you</em> drive the arm. Unlike Policy, the model ';
+    html += 'never sends actions — this is for verifying what a model ';
+    html += '<em>sees</em> on real human-driven trajectories.';
+    html += '</div>';
     html += '<div class="form-grid">';
     html += `<label>Model</label>`;
     html += `<select id="run-teleop-debug-model" onchange="_onDebugModelChange()">`;
@@ -874,8 +903,11 @@ function renderRunForm() {
     html += _modelCheckpointOptions();
     html += `</select>`;
     html += `<label></label>`;
-    html += `<div><button class="btn-tiny btn-accent" onclick="_loadDebugModel()">Load</button> `;
-    html += `<button class="btn-tiny" onclick="_unloadDebugModel()">Unload</button> `;
+    // Buttons start disabled; _updateDebugButtons() flips state based on
+    // selection + load status. Keeps consistent with the Launch/Stop pattern:
+    // exactly one is enabled+highlighted at any time.
+    html += `<div><button id="run-debug-load-btn" class="btn-tiny" onclick="_loadDebugModel()" disabled>Load</button> `;
+    html += `<button id="run-debug-unload-btn" class="btn-tiny" onclick="_unloadDebugModel()" disabled>Unload</button> `;
     html += `<span id="run-debug-model-status" class="form-hint">Not loaded</span></div>`;
     html += `</div>`;
     // HVLA S2 specific fields (shown when S2 checkpoint selected)
@@ -1021,6 +1053,10 @@ function renderRunForm() {
 
     form.innerHTML = html;
     _toggleHvlaRecordFields();
+    // Refresh debug-model state after the form is in the DOM. Without this,
+    // both Load and Unload buttons stay in their default disabled state and
+    // the user can't tell whether a model is currently loaded across re-renders.
+    _refreshDebugModelStatus();
 }
 
 // ============================================================================
