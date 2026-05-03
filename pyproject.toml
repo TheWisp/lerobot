@@ -195,11 +195,24 @@ groot = [
 sarm = ["lerobot[transformers-dep]", "pydantic>=2.0.0,<3.0.0", "faker>=33.0.0,<35.0.0", "lerobot[matplotlib-dep]", "lerobot[qwen-vl-utils-dep]"]
 xvla = ["lerobot[transformers-dep]"]
 hilserl = ["lerobot[transformers-dep]", "gym-hil>=0.1.13,<0.2.0", "lerobot[grpcio-dep]", "lerobot[placo-dep]"]
+# HVLA (fork-only). Imported under src/lerobot/policies/hvla/. Mirrors what
+# transformers / matplotlib / sentencepiece / scikit-learn the modules
+# under that subtree actually `import`. Add `lerobot[hvla]` to your
+# install if you want to run HVLA training/inference.
+hvla = [
+    "lerobot[transformers-dep]",
+    "lerobot[matplotlib-dep]",
+    "sentencepiece>=0.2.0,<1.0.0",
+    "scikit-learn>=1.5.0,<2.0.0",
+]
 
 # Features
 async = ["lerobot[grpcio-dep]", "lerobot[matplotlib-dep]"]
 peft = ["lerobot[transformers-dep]", "lerobot[peft-dep]"]
-gui = ["fastapi>=0.115.0,<1.0.0", "uvicorn>=0.30.0,<1.0.0"]
+# GUI (fork-only). pydantic is already pulled in transitively by fastapi
+# but is imported directly under src/lerobot/gui/api/, so declare it
+# explicitly — keeps the install resilient if fastapi ever swaps backend.
+gui = ["fastapi>=0.115.0,<1.0.0", "uvicorn>=0.30.0,<1.0.0", "pydantic>=2.0.0,<3.0.0"]
 
 # Development
 dev = ["pre-commit>=3.7.0,<5.0.0", "debugpy>=1.8.1,<1.9.0", "lerobot[grpcio-dep]", "grpcio-tools==1.73.1", "mypy>=1.19.1", "ruff>=0.14.1", "lerobot[notebook]"]
@@ -245,6 +258,8 @@ all = [
     # "lerobot[groot]", TODO(Steven): Gr00t requires specific installation instructions for flash-attn
     "lerobot[xvla]",
     "lerobot[hilserl]",
+    "lerobot[hvla]",
+    "lerobot[gui]",
     "lerobot[async]",
     "lerobot[dev]",
     "lerobot[test]",
