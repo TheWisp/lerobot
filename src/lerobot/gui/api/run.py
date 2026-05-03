@@ -404,7 +404,8 @@ class ReplayRequest(BaseModel):
     episode: int
     # No fps: replay must always pace at the dataset's recording fps. Upstream
     # `lerobot-replay` declares `cfg.dataset.fps` but its loop paces by
-    # `dataset.fps` directly, so the field is dead config.
+    # `dataset.fps` directly, so the field is dead config. For sim replay we
+    # override the env profile's fps with the dataset's at dispatch time below.
 
 
 class EvalRequest(BaseModel):
@@ -950,6 +951,19 @@ async def start_replay(req: ReplayRequest) -> dict:
         if req.root:
             dataset["root"] = req.root
         cfg = _env_profile_to_gym_manipulator_cfg(req.env, mode="replay", dataset=dataset)
+        # Override env.fps with the dataset's recorded fps. gym_manipulator's
+        # `replay_trajectory` paces by `cfg.env.fps`; if the user's env profile
+        # says e.g. 30 but the data was recorded at 10, replay would play 3×
+        # too fast and the physics would integrate differently than recording.
+        try:
+            from lerobot.datasets.io_utils import load_info
+            from lerobot.utils.constants import HF_LEROBOT_HOME
+
+            ds_root = Path(req.root) if req.root else HF_LEROBOT_HOME / req.repo_id
+            ds_fps = int(load_info(ds_root)["fps"])
+            cfg["env"]["fps"] = ds_fps
+        except Exception as e:
+            logger.warning(f"Could not read dataset fps for replay; using env profile fps. ({e})")
         cfg_path = _write_gym_manipulator_config_tmp(cfg)
         args = ["python", "-u", "-m", "lerobot.rl.gym_manipulator", f"--config_path={cfg_path}"]
         await _launch_subprocess(args, command="replay", config=req.model_dump())

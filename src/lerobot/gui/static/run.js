@@ -1293,7 +1293,6 @@ async function _launchEnvWorkflow() {
             repo_id: _resolveDatasetRepoId(d),
             root: d.root,
             episode: parseInt(epIdx),
-            fps: parseInt(document.getElementById('run-replay-fps')?.value) || 30,
         };
     } else {
         return false;
