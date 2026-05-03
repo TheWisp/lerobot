@@ -23,6 +23,7 @@ This module provides utilities for:
 - Merging datasets (wrapper around aggregate functionality)
 """
 
+import contextlib
 import logging
 import shutil
 from collections.abc import Callable
@@ -48,7 +49,6 @@ from lerobot.datasets.compute_stats import (
     compute_episode_stats,
     compute_relative_action_stats,
 )
-from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.io_utils import (
     get_parquet_file_size_in_mb,
     load_episodes,
@@ -58,6 +58,7 @@ from lerobot.datasets.io_utils import (
     write_stats,
     write_tasks,
 )
+from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import (
     DATA_DIR,
     DEFAULT_CHUNK_SIZE,
@@ -485,7 +486,7 @@ def _compute_next_file_indices(
         chunks = [int(episodes[i][chunk_col]) for i in range(len(episodes))]
         files = [int(episodes[i][file_col]) for i in range(len(episodes))]
         max_chunk = max(chunks)
-        max_file = max(f for c, f in zip(chunks, files) if c == max_chunk)
+        max_file = max(f for c, f in zip(chunks, files, strict=True) if c == max_chunk)
         return update_chunk_file_indices(max_chunk, max_file, chunk_size)
 
     next_data_chunk, next_data_file = _next_idx("data/chunk_index", "data/file_index")
@@ -496,9 +497,7 @@ def _compute_next_file_indices(
 
     videos_idx = {}
     for key in target_meta.video_keys:
-        next_vid_chunk, next_vid_file = _next_idx(
-            f"videos/{key}/chunk_index", f"videos/{key}/file_index"
-        )
+        next_vid_chunk, next_vid_file = _next_idx(f"videos/{key}/chunk_index", f"videos/{key}/file_index")
         videos_idx[key] = {
             "chunk": next_vid_chunk,
             "file": next_vid_file,
@@ -560,13 +559,19 @@ def merge_into(
 
     if dst_meta.video_keys:
         videos_idx = aggregate_videos(
-            src_meta, dst_meta, videos_idx,
-            dst_meta.video_files_size_in_mb, dst_meta.chunks_size,
+            src_meta,
+            dst_meta,
+            videos_idx,
+            dst_meta.video_files_size_in_mb,
+            dst_meta.chunks_size,
         )
 
     data_idx = aggregate_data(
-        src_meta, dst_meta, data_idx,
-        dst_meta.data_files_size_in_mb, dst_meta.chunks_size,
+        src_meta,
+        dst_meta,
+        data_idx,
+        dst_meta.data_files_size_in_mb,
+        dst_meta.chunks_size,
     )
 
     meta_idx = aggregate_metadata(src_meta, dst_meta, meta_idx, data_idx, videos_idx)
@@ -592,10 +597,8 @@ def merge_into(
     import datasets as hf_datasets
 
     if target.hf_dataset is not None:
-        try:
+        with contextlib.suppress(Exception):
             target.hf_dataset.cleanup_cache_files()
-        except Exception:
-            pass
 
     hf_datasets.disable_caching()
     try:
@@ -785,6 +788,7 @@ def remove_feature(
         repo_id=repo_id,
     )
 
+
 def rename_feature(
     dataset: LeRobotDataset,
     old_name: str,
@@ -867,6 +871,7 @@ def rename_feature(
     logging.info(f"✓ Feature renamed successfully: {old_name} -> {new_name}")
     return new_dataset
 
+
 def swap_features(
     dataset: LeRobotDataset,
     feature1: str,
@@ -934,6 +939,7 @@ def swap_features(
 
     logging.info(f"✓ Features swapped successfully: {feature1} <-> {feature2}")
     return dataset
+
 
 def _fractions_to_episode_indices(
     total_episodes: int,
@@ -2968,7 +2974,11 @@ def repair_episode_indices(dataset_root: Path) -> int:
         data_files = sorted(data_dir.rglob("*.parquet"))
         for data_path in tqdm(data_files, desc="Repairing data indices"):
             df = pd.read_parquet(data_path)
-            if "index" not in df.columns or "episode_index" not in df.columns or "frame_index" not in df.columns:
+            if (
+                "index" not in df.columns
+                or "episode_index" not in df.columns
+                or "frame_index" not in df.columns
+            ):
                 continue
 
             # Compute correct global index for each row
@@ -3591,7 +3601,9 @@ def verify_dataset(
     if expected_total_tasks > 0:
         tasks_path = dataset_root / "meta" / "tasks.parquet"
         if not tasks_path.exists():
-            result.add_warning("structure", f"Missing meta/tasks.parquet (expected {expected_total_tasks} tasks)")
+            result.add_warning(
+                "structure", f"Missing meta/tasks.parquet (expected {expected_total_tasks} tasks)"
+            )
 
     # Identify video keys from features
     video_keys = [k for k, v in features.items() if v.get("dtype") == "video"]
@@ -3637,8 +3649,8 @@ def verify_dataset(
             "episodes",
             "Episode indices are not sequential 0..N-1",
             {
-                "missing": sorted(list(missing))[:10],
-                "extra": sorted(list(extra))[:10],
+                "missing": sorted(missing)[:10],
+                "extra": sorted(extra)[:10],
                 "duplicates": duplicates,
             },
         )
@@ -3731,8 +3743,7 @@ def verify_dataset(
     if actual_frame_count != expected_total_frames:
         result.add_error(
             "data",
-            f"Row count mismatch: data has {actual_frame_count} rows, "
-            f"info.json says {expected_total_frames}",
+            f"Row count mismatch: data has {actual_frame_count} rows, info.json says {expected_total_frames}",
         )
 
     # Check required columns exist
@@ -3773,7 +3784,9 @@ def verify_dataset(
             # Check for gaps
             gaps = np.where(np.diff(sorted_indices) > 1)[0]
             if len(gaps) > 0:
-                result.add_error("data", f"Index column has {len(gaps)} gap(s)", {"first_gap_at": int(gaps[0])})
+                result.add_error(
+                    "data", f"Index column has {len(gaps)} gap(s)", {"first_gap_at": int(gaps[0])}
+                )
 
     # Check episode_index values are valid
     data_episode_indices = set(data["episode_index"].unique())
@@ -3782,7 +3795,7 @@ def verify_dataset(
     if invalid_episodes:
         result.add_error(
             "data",
-            f"Data contains invalid episode indices: {sorted(list(invalid_episodes))[:10]}",
+            f"Data contains invalid episode indices: {sorted(invalid_episodes)[:10]}",
         )
 
     # Check task_index values are valid
@@ -3838,7 +3851,7 @@ def verify_dataset(
             if frame_index_errors <= 3:
                 result.add_error(
                     "data",
-                    f"Episode {ep_idx}: frame_index not sequential 0..{len(ep_data)-1}",
+                    f"Episode {ep_idx}: frame_index not sequential 0..{len(ep_data) - 1}",
                     {"actual_range": f"{frame_indices.min()}-{frame_indices.max()}"},
                 )
 
@@ -3869,7 +3882,9 @@ def verify_dataset(
         if not videos_dir.exists():
             result.add_error("videos", "Missing videos directory but dataset has video features")
         else:
-            video_path_template = info.get("video_path", "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4")
+            video_path_template = info.get(
+                "video_path", "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4"
+            )
             video_file_missing = 0
             video_timestamp_errors = 0
 
@@ -3939,7 +3954,9 @@ def verify_dataset(
             if video_file_missing > 3:
                 result.add_warning("videos", f"... and {video_file_missing - 3} more missing video files")
             if video_timestamp_errors > 3:
-                result.add_warning("videos", f"... and {video_timestamp_errors - 3} more timestamp mismatches")
+                result.add_warning(
+                    "videos", f"... and {video_timestamp_errors - 3} more timestamp mismatches"
+                )
 
     # ==========================================================================
     # 6. Verify stats.json consistency with per-episode stats
