@@ -216,8 +216,9 @@ function renderEnvEditor() {
             html += 'Pick a <code>*Keyboard-v0</code> or <code>*Base-v0</code> variant from the <code>task</code> dropdown for a no-hardware setup.';
             html += '</div></div>';
         }
-        // gym-hil controls + the two non-obvious gotchas (intervention
-        // toggle, system-wide keyboard capture).
+        // gym-hil controls — only render for variants that take human
+        // input. The Base/Viewer/-v0 variants are autonomous-only; they
+        // don't have a Space-toggle / movement story to explain.
         const isKeyboardTask = task.includes("Keyboard");
         const isGamepadTask = task.includes("Gamepad");
         if (isKeyboardTask || isGamepadTask) {
@@ -235,22 +236,25 @@ function renderEnvEditor() {
             html += '<b>Stop the run</b>: hit the GUI <code>Stop</code> button (the printed "Press Ctrl+C" hint is for direct CLI use, not the GUI).<br><br>';
             html += '<span style="color:#b58900">⚠ System-wide keyboard capture.</span> gym-hil uses <code>pynput</code>, which grabs keys from the focused window — any window. Typing <code>Enter</code> in the terminal, browser, IDE, etc. will end the current episode. Be deliberate about what you type while the env is running.';
             html += '</div></div>';
-
-            // Docs / source links — gym-hil's behaviour rules (success
-            // threshold, out-of-bounds termination, reward shape) live in
-            // the env class source, with no user-facing prose. Linking
-            // straight to the relevant file is the most useful pointer
-            // we can give without re-documenting upstream code.
-            const srcUrl = _gymHilSourceUrl(task);
-            html += '<div class="form-section">';
-            html += '<div class="form-section-title">Behaviour reference</div>';
-            html += '<div class="form-hint" style="line-height:1.6">';
-            html += 'gym-hil envs have implicit termination / reward rules not surfaced in the form (e.g. PickCube terminates when the cube is lifted &gt;10cm <i>or</i> bumped off-table). To read them:<br>';
-            html += `&nbsp;&bull; <a href="${_envEsc(srcUrl)}" target="_blank" rel="noopener">📖 Source for this task family</a> on GitHub<br>`;
-            html += `&nbsp;&bull; <a href="https://github.com/huggingface/gym-hil" target="_blank" rel="noopener">gym-hil package</a> README<br>`;
-            html += `&nbsp;&bull; <a href="https://huggingface.co/docs/lerobot/hilserl_sim" target="_blank" rel="noopener">LeRobot HIL-SERL sim guide</a>`;
-            html += '</div></div>';
         }
+
+        // Behaviour reference — termination rules, reward, action space
+        // apply to ALL gym-hil variants (autonomous and human-input
+        // alike). A user setting up an autonomous policy eval against
+        // PandaPickCubeBase-v0 needs to know about the bounds-termination
+        // and the +10cm success threshold just as much as a teleop user.
+        // Render this independently of human-input gating.
+        const srcUrl = _gymHilSourceUrl(task);
+        html += '<div class="form-section">';
+        html += '<div class="form-section-title">Behaviour reference</div>';
+        html += '<div class="form-hint" style="line-height:1.6">';
+        html += 'gym-hil envs have implicit termination / reward rules not surfaced in the form. ';
+        html += 'For PickCube: success when the cube is lifted &gt;10cm; episode also ends if the cube is bumped off-table. ';
+        html += 'For ArrangeBoxes: similar — see source. To read the exact rules:<br>';
+        html += `&nbsp;&bull; <a href="${_envEsc(srcUrl)}" target="_blank" rel="noopener">📖 Source for this task family</a> on GitHub<br>`;
+        html += `&nbsp;&bull; <a href="https://github.com/huggingface/gym-hil" target="_blank" rel="noopener">gym-hil package</a> README<br>`;
+        html += `&nbsp;&bull; <a href="https://huggingface.co/docs/lerobot/hilserl_sim" target="_blank" rel="noopener">LeRobot HIL-SERL sim guide</a>`;
+        html += '</div></div>';
         // Show source provenance (registry vs fallback) so users can see
         // when the dropdown is stale because gym_hil isn't installed.
         if (taskInfo) {

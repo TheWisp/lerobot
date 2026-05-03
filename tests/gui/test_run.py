@@ -1265,6 +1265,92 @@ class TestEvalEndpoint:
         asyncio.run(go())
 
 
+class TestSimBanner:
+    """`_append_sim_controls_banner` is the single source of truth for the
+    Output-panel banner across all four sim launch paths (teleop / record
+    / replay / eval). Controls render only when a human drives; behaviour
+    rules + docs URLs render for every gym_manipulator profile regardless
+    of variant or command.
+
+    Non-gym_manipulator env types silently no-op (we don't have curated
+    docs URLs for aloha / libero / metaworld / EnvHub yet)."""
+
+    def _run(self, profile, command):
+        """Run banner against a fresh _output_lines buffer; return the
+        captured lines."""
+        import lerobot.gui.api.run as run_mod
+
+        run_mod._output_lines.clear()
+        run_mod._append_sim_controls_banner(profile, command=command)
+        return list(run_mod._output_lines)
+
+    def _has(self, lines, needle):
+        return any(needle in line for line in lines)
+
+    def test_keyboard_teleop_full_banner(self):
+        lines = self._run(
+            {"type": "gym_manipulator", "fields": {"task": "PandaPickCubeKeyboard-v0"}},
+            command="teleoperate",
+        )
+        assert self._has(lines, "SPACE first")  # controls
+        assert self._has(lines, "Arrows = X/Y")  # keyboard-specific
+        assert self._has(lines, "off-table")  # behaviour rules
+        assert self._has(lines, "panda_pick_gym_env.py")  # source URL
+
+    def test_keyboard_replay_no_controls(self):
+        """Replay plays back recorded actions — Space-first hint would be
+        misleading. Banner still emits behaviour rules + docs."""
+        lines = self._run(
+            {"type": "gym_manipulator", "fields": {"task": "PandaPickCubeKeyboard-v0"}},
+            command="replay",
+        )
+        assert not self._has(lines, "SPACE first")
+        assert self._has(lines, "human input is ignored")
+        assert self._has(lines, "off-table")  # behaviour rules still there
+        assert self._has(lines, "panda_pick_gym_env.py")
+
+    def test_keyboard_eval_no_controls(self):
+        lines = self._run(
+            {"type": "gym_manipulator", "fields": {"task": "PandaPickCubeKeyboard-v0"}},
+            command="eval",
+        )
+        assert not self._has(lines, "SPACE first")
+        assert self._has(lines, "human input is ignored")
+        assert self._has(lines, "panda_pick_gym_env.py")
+
+    def test_base_variant_no_controls_but_has_docs(self):
+        """Autonomous variants don't take human input; controls suppressed
+        but behaviour + docs still useful for understanding what the env
+        does."""
+        for command in ["teleoperate", "record", "replay", "eval"]:
+            lines = self._run(
+                {"type": "gym_manipulator", "fields": {"task": "PandaPickCubeBase-v0"}},
+                command=command,
+            )
+            assert not self._has(lines, "SPACE first"), f"{command}: should not show controls"
+            assert self._has(lines, "off-table"), f"{command}: behaviour rules missing"
+            assert self._has(lines, "panda_pick_gym_env.py"), f"{command}: docs missing"
+
+    def test_arrange_boxes_routes_to_correct_source(self):
+        lines = self._run(
+            {"type": "gym_manipulator", "fields": {"task": "PandaArrangeBoxesKeyboard-v0"}},
+            command="teleoperate",
+        )
+        assert self._has(lines, "panda_arrange_boxes_gym_env.py")
+        assert not self._has(lines, "panda_pick_gym_env.py")
+
+    def test_non_gym_manipulator_silent(self):
+        """We don't yet curate docs for aloha / libero / metaworld /
+        EnvHub. Banner skips silently rather than emitting wrong URLs."""
+        for env_type in ["aloha", "pusht", "libero", "metaworld"]:
+            for command in ["teleoperate", "record", "replay", "eval"]:
+                lines = self._run(
+                    {"type": env_type, "fields": {"task": "Whatever-v0"}},
+                    command=command,
+                )
+                assert lines == [], f"{env_type}/{command} should be silent"
+
+
 class TestSubprocessLogCapture:
     """`_open_subprocess_log` opens a per-launch file under
     ~/.cache/.../gui/logs/ and `_append_output` tees lines to it so the

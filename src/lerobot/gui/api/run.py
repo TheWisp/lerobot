@@ -262,32 +262,52 @@ def _gym_hil_source_url(task: str) -> str:
     return f"{repo}/gym_hil/envs/"
 
 
-def _append_sim_controls_banner(env_profile: dict) -> None:
-    """Print a one-time controls hint to the Output panel right after a sim
-    launch. gym-hil prints its own keyboard list but doesn't say two
-    crucial things: (1) you have to press Space to enable intervention
-    before any movement key works, and (2) pynput captures keystrokes
-    system-wide, so typing Enter in the browser ends the episode."""
+def _append_sim_controls_banner(env_profile: dict, *, command: str) -> None:
+    """One-stop banner for sim launches: behaviour rules + docs URLs always;
+    human-input controls only when the task variant takes them and the
+    command is interactive (teleop / record).
+
+    Single source of truth for all four sim entry points
+    (`start_teleoperate`, `start_record`, `start_replay`, `start_eval`)
+    so the user gets consistent guidance regardless of which workflow
+    spawned the gym_manipulator subprocess. Skip silently for non-
+    gym_manipulator profiles since we don't have curated docs URLs for
+    aloha / libero / metaworld / EnvHub yet.
+    """
+    if env_profile.get("type") != "gym_manipulator":
+        return
     fields = env_profile.get("fields", {})
     task = str(fields.get("task", ""))
-    if not ("Keyboard" in task or "Gamepad" in task):
-        return  # Base / autonomous variant — no human input expected
+    has_human_input = "Keyboard" in task or "Gamepad" in task
+    # Controls only matter where a human is actually steering the arm.
+    # Replay plays back recorded actions; eval lets the policy drive.
+    show_controls = has_human_input and command in {"teleoperate", "record"}
+
     _append_output("")
-    _append_output("=== gym-hil controls (read me) ===")
-    _append_output("• Press SPACE first to enable intervention. The arm stays still until you do.")
-    if "Keyboard" in task:
+    _append_output(f"=== gym-hil sim ({task or '?'}, mode={command}) ===")
+
+    if show_controls:
+        _append_output("• Press SPACE first to enable intervention. The arm stays still until you do.")
+        if "Keyboard" in task:
+            _append_output(
+                "• Movement: Arrows = X/Y, Shift/RShift = Z down/up, LCtrl/RCtrl = gripper close/open."
+            )
+        else:
+            _append_output("• Movement: gamepad sticks + triggers.")
+        _append_output("• End episode: Enter = success, Esc = failure (env auto-resets).")
         _append_output(
-            "• Movement: Arrows = X/Y, Shift/RShift = Z down/up, LCtrl/RCtrl = gripper close/open."
+            "• ⚠ Keyboard capture is system-wide (pynput): keys from ANY focused window reach gym-hil."
         )
     else:
-        _append_output("• Movement: gamepad sticks + triggers.")
-    _append_output("• End episode: Enter = success, Esc = failure (env auto-resets).")
-    _append_output("• ⚠ Episode ALSO auto-ends on natural success (cube lifted >10cm) or if the")
-    _append_output("    cube goes off-table (out-of-bounds). Easy to trigger by bumping the cube.")
+        # Replay or eval — the human shouldn't drive. Be explicit so the
+        # user doesn't waste time pressing Space and wondering why nothing
+        # responds.
+        _append_output(f"• {command}: the recorded actions / policy drive the arm — human input is ignored.")
+
+    # Behaviour rules apply to every gym-hil run, autonomous or not.
+    _append_output("• ⚠ Episode auto-ends on natural success (cube lifted >10cm) or if the cube")
+    _append_output("    goes off-table (out-of-bounds). Easy to trigger by bumping the cube.")
     _append_output("• Stop the run: hit the Stop button — Ctrl-C only works for direct CLI use.")
-    _append_output(
-        "• ⚠ Keyboard capture is system-wide (pynput): keys from ANY focused window reach gym-hil."
-    )
     _append_output("")
     _append_output("Docs (most behaviour rules aren't in prose — read the source):")
     _append_output(f"  • This task's env source: {_gym_hil_source_url(task)}")
@@ -828,7 +848,7 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
         cfg_path = _write_gym_manipulator_config_tmp(cfg)
         args = ["python", "-u", "-m", "lerobot.rl.gym_manipulator", f"--config_path={cfg_path}"]
         await _launch_subprocess(args, command="teleoperate", config=req.model_dump())
-        _append_sim_controls_banner(req.env)
+        _append_sim_controls_banner(req.env, command="teleoperate")
         return {"status": "started", "command": "teleoperate", "pid": _active_process.pid}
 
     # Real-robot path
@@ -874,7 +894,7 @@ async def start_record(req: RecordRequest) -> dict:
         cfg_path = _write_gym_manipulator_config_tmp(cfg)
         args = ["python", "-u", "-m", "lerobot.rl.gym_manipulator", f"--config_path={cfg_path}"]
         await _launch_subprocess(args, command="record", config=req.model_dump())
-        _append_sim_controls_banner(req.env)
+        _append_sim_controls_banner(req.env, command="record")
         return {"status": "started", "command": "record", "pid": _active_process.pid}
 
     # Real-robot path
@@ -932,6 +952,7 @@ async def start_replay(req: ReplayRequest) -> dict:
         cfg_path = _write_gym_manipulator_config_tmp(cfg)
         args = ["python", "-u", "-m", "lerobot.rl.gym_manipulator", f"--config_path={cfg_path}"]
         await _launch_subprocess(args, command="replay", config=req.model_dump())
+        _append_sim_controls_banner(req.env, command="replay")
         return {"status": "started", "command": "replay", "pid": _active_process.pid}
 
     # Real-robot path. Note: --dataset.fps is intentionally omitted —
@@ -995,6 +1016,10 @@ async def start_eval(req: EvalRequest) -> dict:
         args.append("--trust_remote_code=true")
 
     await _launch_subprocess(args, command="eval", config=req.model_dump())
+    # Same banner as the other sim entry points; for non-gym_manipulator
+    # env types it silently no-ops (we don't have curated docs URLs for
+    # aloha / libero / metaworld / EnvHub yet).
+    _append_sim_controls_banner(req.env, command="eval")
     return {"status": "started", "command": "eval", "pid": _active_process.pid}
 
 
