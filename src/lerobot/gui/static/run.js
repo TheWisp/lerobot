@@ -147,6 +147,18 @@ function _onSourceChange(workflow) {
     // Teleop is real-robot only on the prototype (gym-hil bundles its own teleop)
     const teleopRow = document.getElementById(`run-${workflow}-teleop-row`);
     if (teleopRow) teleopRow.style.display = isEnv ? 'none' : '';
+
+    // Teleop-specific: FPS / Episode Duration / Reset Duration apply to
+    // lerobot-record only. For sim, fps comes from cfg.env.fps and gym
+    // uses step counts + instant reset. Hide them and show a sim hint.
+    if (workflow === 'teleop') {
+        const fpsRow = document.getElementById('run-teleop-fps-row');
+        const realOnlyRows = document.getElementById('run-teleop-real-only-rows');
+        const simHint = document.getElementById('run-teleop-sim-only-hint');
+        if (fpsRow) fpsRow.style.display = isEnv ? 'none' : '';
+        if (realOnlyRows) realOnlyRows.style.display = isEnv ? 'none' : '';
+        if (simHint) simHint.style.display = isEnv ? '' : 'none';
+    }
 }
 
 // ---- Dataset name resolution ----
@@ -898,7 +910,10 @@ function renderRunForm() {
     html += `<label>Environment</label>`;
     html += `<select id="run-teleop-env">${_envProfileOptions()}</select>`;
     html += `</div>`;
-    html += '<div class="form-grid">';
+    // FPS only applies to the real-robot teleop / record path (lerobot-record's
+    // dataset.fps). For sim, gym_manipulator uses cfg.env.fps from the env
+    // profile and ignores this. Hide when source=env.
+    html += `<div id="run-teleop-fps-row" class="form-grid">`;
     html += `<label>FPS</label>`;
     html += `<input type="number" id="run-teleop-fps" value="60" min="1" max="200">`;
     html += '</div>';
@@ -915,8 +930,13 @@ function renderRunForm() {
     html += `<div><input type="text" id="run-teleop-new-dataset-name" placeholder="my_new_dataset" oninput="_checkNewDatasetConflict()">`;
     html += `<div class="dataset-conflict-warning" id="run-teleop-dataset-conflict" style="display:none;"></div></div>`;
     html += `</div>`;
-    // Record fields (hidden when None selected)
-    html += `<div id="run-teleop-record-fields" class="form-grid" style="display:none;">`;
+    // Record fields (hidden when None dataset selected). Split the
+    // grid: Task / Episodes apply to both real & sim; Episode Duration
+    // and Reset Duration are real-robot-only (lerobot-record uses time
+    // bounds; gym_manipulator uses step counts via cfg.env.max_episode_steps
+    // and gym.reset() is instant).
+    html += `<div id="run-teleop-record-fields" style="display:none;">`;
+    html += `<div class="form-grid">`;
     html += `<label>Task</label>`;
     html += `<div>`;
     html += `<select id="run-teleop-task-select" onchange="_onTaskSelectChange()"><option value="" selected>Pick up the cube</option></select>`;
@@ -924,10 +944,20 @@ function renderRunForm() {
     html += `</div>`;
     html += `<label>Episodes</label>`;
     html += `<input type="number" id="run-teleop-num-episodes" value="50" min="1">`;
+    html += `</div>`;
+    html += `<div id="run-teleop-real-only-rows" class="form-grid">`;
     html += `<label>Episode Duration</label>`;
     html += `<input type="number" id="run-teleop-episode-time" value="60" min="1">`;
     html += `<label>Reset Duration</label>`;
     html += `<input type="number" id="run-teleop-reset-time" value="60" min="0">`;
+    html += `</div>`;
+    html += `<div id="run-teleop-sim-only-hint" class="form-section" style="display:none;">`;
+    html += `<div class="form-hint" style="line-height:1.6;">`;
+    html += `<b>Sim recording:</b> uses fps + max_episode_steps from the env profile. `;
+    html += `Episodes also auto-end on natural success (cube lifted &gt;10cm) or if the cube goes out of bounds. `;
+    html += `Press <code>Enter</code> for manual success, <code>Esc</code> for failure. `;
+    html += `<code>env.reset()</code> is instant — no reset duration.`;
+    html += `</div></div>`;
     html += '</div>';
     html += '</div>';
     // Debug model (optional — runs alongside teleop for live prediction display)

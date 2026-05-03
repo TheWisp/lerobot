@@ -228,11 +228,14 @@ function renderFormField(field, value) {
         </select>`;
     }
 
-    if (typeStr.includes('int') && !typeStr.includes('dict') && !typeStr.includes('|')) {
+    // Match exact int / float types AND their `T | None` Optional
+    // variants. The previous `includes('int') && !includes('|')`
+    // heuristic excluded the | None case and rendered as text input,
+    // which then persisted user-typed numbers as strings.
+    if (typeStr === 'int' || typeStr === 'int | none') {
         return label + `<input type="number" id="${id}" value="${value ?? ''}" step="1">`;
     }
-
-    if (typeStr.includes('float') && !typeStr.includes('dict') && !typeStr.includes('|')) {
+    if (typeStr === 'float' || typeStr === 'float | none') {
         return label + `<input type="number" id="${id}" value="${value ?? ''}" step="any">`;
     }
 
@@ -464,11 +467,13 @@ function parseFieldValue(field, rawValue) {
         if (rawValue === 'false') return false;
         return null;
     }
-    if (typeStr.includes('int') && !typeStr.includes('dict') && !typeStr.includes('|')) {
+    // Symmetric to renderFormField above: handle the `T | None`
+    // Optional variants too, otherwise optional ints persist as strings.
+    if (typeStr === 'int' || typeStr === 'int | none') {
         const n = parseInt(rawValue, 10);
         return isNaN(n) ? null : n;
     }
-    if (typeStr.includes('float') && !typeStr.includes('dict') && !typeStr.includes('|')) {
+    if (typeStr === 'float' || typeStr === 'float | none') {
         const n = parseFloat(rawValue);
         return isNaN(n) ? null : n;
     }

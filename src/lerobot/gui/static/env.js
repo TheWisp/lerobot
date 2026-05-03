@@ -311,10 +311,14 @@ function renderEnvFormField(field, value) {
             <option value="false" ${f}>false</option>
         </select>`;
     }
-    if (typeStr.includes('int') && !typeStr.includes('dict') && !typeStr.includes('|')) {
+    // Render exact int/float types AND their `T | None` Optional variants
+    // as <input type="number">. The previous heuristic excluded the | None
+    // case and rendered as text, which silently saved the value as a
+    // string (the parser bug above is the symmetric counterpart).
+    if (typeStr === 'int' || typeStr === 'int | none') {
         return label + `<input type="number" id="${id}" value="${value ?? ''}" step="1">`;
     }
-    if (typeStr.includes('float') && !typeStr.includes('dict') && !typeStr.includes('|')) {
+    if (typeStr === 'float' || typeStr === 'float | none') {
         return label + `<input type="number" id="${id}" value="${value ?? ''}" step="any">`;
     }
     const display = (value === null || value === undefined) ? '' : String(value);
@@ -364,11 +368,17 @@ function _envParseValue(field, raw) {
         if (raw === 'false') return false;
         return null;
     }
-    if (t.includes('int') && !t.includes('|')) {
+    // Match exact int / float types AND their `T | None` Optional variants.
+    // The previous heuristic (`includes('int') && !includes('|')`) wrongly
+    // excluded `int | None`, causing optional ints (e.g. max_episode_steps)
+    // to fall through to the string catch-all and persist as "1500"
+    // instead of 1500. draccus coerced the string back to int silently
+    // on read, but the JSON on disk was wrong.
+    if (t === 'int' || t === 'int | none') {
         const n = parseInt(raw);
         return isNaN(n) ? null : n;
     }
-    if (t.includes('float') && !t.includes('|')) {
+    if (t === 'float' || t === 'float | none') {
         const n = parseFloat(raw);
         return isNaN(n) ? null : n;
     }

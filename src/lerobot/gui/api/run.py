@@ -265,7 +265,9 @@ def _append_sim_controls_banner(env_profile: dict) -> None:
         )
     else:
         _append_output("• Movement: gamepad sticks + triggers.")
-    _append_output("• End episode: Enter = success, Backspace/Esc = failure (env auto-resets).")
+    _append_output("• End episode: Enter = success, Esc = failure (env auto-resets).")
+    _append_output("• ⚠ Episode ALSO auto-ends on natural success (cube lifted >10cm) or if the")
+    _append_output("    cube goes off-table (out-of-bounds). Easy to trigger by bumping the cube.")
     _append_output("• Stop the run: hit the Stop button — Ctrl-C only works for direct CLI use.")
     _append_output(
         "• ⚠ Keyboard capture is system-wide (pynput): keys from ANY focused window reach gym-hil."
