@@ -1212,31 +1212,52 @@ async def visualize_episode(dataset_id: str, episode_idx: int) -> dict[str, str]
     if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
         raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
 
-    # Build the command
+    # Build the command.
+    # 1) Use `sys.executable -m` instead of the `lerobot-dataset-viz` console
+    #    script. PATH-based resolution picks up whichever env's bin/ comes first
+    #    — typically the *base* conda env (Python 3.12) rather than the lerobot
+    #    env (Python 3.10) running the GUI, which ships incompatible torch /
+    #    torchcodec versions and crashes the viewer with an opaque
+    #    `NotImplementedError: torchcodec_ns::_convert_to_tensor` at decode time.
+    # 2) `--display-compressed-images` is a store_true flag (no value) since the
+    #    upstream refactor — passing "False" as the next argv makes argparse
+    #    treat "False" as an unknown positional and crash silently. Default
+    #    (uncompressed) is what we want for the standalone Rerun viewer.
+    import sys as _sys
+
     cmd = [
-        "lerobot-dataset-viz",
+        _sys.executable,
+        "-m",
+        "lerobot.scripts.lerobot_dataset_viz",
         "--repo-id",
         dataset.repo_id,
         "--episode-index",
         str(episode_idx),
         "--root",
         str(dataset.root),
-        "--display-compressed-images",
-        "False",
     ]
 
     logger.info(f"Launching Rerun viz: {' '.join(cmd)}")
 
-    # Launch in background (don't wait for it)
+    # Tee stdout/stderr to a per-launch log so silent crashes don't disappear.
+    log_dir = Path.home() / ".cache" / "huggingface" / "lerobot" / "gui" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime as _dt
+
+    log_path = log_dir / f"rerun_viz_{_dt.now().strftime('%Y%m%d_%H%M%S')}_ep{episode_idx}.log"
+    log_fh = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 - subprocess owns the handle until exit
+
     try:
         subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
             start_new_session=True,
         )
     except Exception as e:
+        log_fh.close()
         raise HTTPException(status_code=500, detail=f"Failed to launch visualizer: {e}") from e
+    logger.info(f"Rerun viz log: {log_path}")
 
     return {"status": "ok", "message": f"Launched Rerun for episode {episode_idx}"}
 
