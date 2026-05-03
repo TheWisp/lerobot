@@ -244,6 +244,172 @@ async def list_registered_tasks(name: str = "gym_hil") -> dict:
 
 
 # ============================================================================
+# Task instructions: single source of truth for controls + behaviour + docs.
+#
+# Both the env editor (env.js renders HTML) and the runtime banner
+# (run.py prints text) read from `get_task_instructions(task)` so the
+# two surfaces can never drift. If gym-hil renames a button or changes
+# its termination rules, fix it once here.
+# ============================================================================
+
+
+_GYM_HIL_REPO = "https://github.com/huggingface/gym-hil"
+_GYM_HIL_REPO_BLOB = f"{_GYM_HIL_REPO}/blob/main"
+_LEROBOT_HILSERL_DOCS = "https://huggingface.co/docs/lerobot/hilserl_sim"
+
+
+def _gym_hil_source_url(task: str) -> str:
+    """Map a gym-hil task id to the GitHub URL of its env class.
+
+    Behaviour rules — termination triggers, success thresholds, reward
+    shaping — live in this Python file with no user-facing prose.
+    Pointing at the source is the most useful link we can give without
+    re-documenting upstream code.
+    """
+    if "PandaPickCube" in task:
+        return f"{_GYM_HIL_REPO_BLOB}/gym_hil/envs/panda_pick_gym_env.py"
+    if "PandaArrangeBoxes" in task:
+        return f"{_GYM_HIL_REPO_BLOB}/gym_hil/envs/panda_arrange_boxes_gym_env.py"
+    return f"{_GYM_HIL_REPO_BLOB}/gym_hil/envs/"
+
+
+# Per-task-family termination/reward summaries. Mined from each env's
+# step()/_is_success()/_compute_reward() implementations. Source-of-truth
+# is still the URL we link, but a one-line summary is easier to skim.
+_TASK_FAMILY_BEHAVIOUR: dict[str, list[str]] = {
+    "PandaPickCube": [
+        "Natural success: cube lifted >10cm above its starting Z (terminates with reward=1).",
+        "Out-of-bounds: cube knocked off-table beyond sampling bounds (terminates).",
+        "Step cap: configurable via the profile's max_episode_steps field.",
+    ],
+    "PandaArrangeBoxes": [
+        "Termination + reward rules vary by reward_type (sparse / dense). See source for the exact",
+        "success condition; out-of-bounds termination applies to the manipulated objects.",
+        "Step cap: configurable via the profile's max_episode_steps field.",
+    ],
+}
+
+
+def _task_family(task: str) -> str | None:
+    if "PandaPickCube" in task:
+        return "PandaPickCube"
+    if "PandaArrangeBoxes" in task:
+        return "PandaArrangeBoxes"
+    return None
+
+
+def get_task_instructions(task: str) -> dict:
+    """Single source of truth for per-task controls / behaviour / docs.
+
+    Returns a dict shaped:
+      {
+        "task": str,
+        "input_type": "keyboard" | "gamepad" | None,  # None for autonomous variants
+        "controls": {...} | None,
+        "behaviour": [str, ...],   # natural termination rules
+        "docs": [{"label": str, "url": str}, ...],
+        "global_warnings": [str, ...],  # e.g. system-wide pynput capture
+      }
+
+    Empty/unknown task returns the dict with input_type=None and a
+    generic gym-hil package URL.
+    """
+    task = str(task or "")
+    family = _task_family(task)
+
+    is_keyboard = "Keyboard" in task
+    is_gamepad = "Gamepad" in task
+
+    controls: dict[str, Any] | None = None
+    if is_keyboard:
+        controls = {
+            "intervention": {
+                "model": "toggle",
+                "label": "Space",
+                "note": (
+                    "every press flips on/off; no LED indicator. The arm stays still until you toggle on."
+                ),
+            },
+            "movement": [
+                {"keys": "Arrows", "function": "X/Y plane"},
+                {"keys": "Shift / RShift", "function": "Z down/up"},
+                {"keys": "LCtrl / RCtrl", "function": "gripper close/open"},
+            ],
+            "episode_end": [
+                {"key": "Enter", "result": "success"},
+                {
+                    "key": "Esc",
+                    "result": (
+                        "failure (despite the printed 'ESC: Exit' label, it actually ends the episode)"
+                    ),
+                },
+                {"key": "r", "result": "rerecord"},
+            ],
+        }
+    elif is_gamepad:
+        controls = {
+            "intervention": {
+                "model": "hold",
+                "label": "RB",
+                "note": "hold-to-engage, not a toggle — release RB and the arm goes back to autonomous",
+            },
+            "movement": [
+                {"keys": "Left analog stick", "function": "X/Y plane"},
+                {"keys": "Right analog stick (vertical)", "function": "Z"},
+                {"keys": "LT / RT", "function": "gripper close/open"},
+            ],
+            "episode_end": [
+                {"key": "Y / Triangle", "result": "success"},
+                {"key": "A / Cross", "result": "failure"},
+                {"key": "X / Square", "result": "rerecord"},
+                {"key": "B / Circle", "result": "exit"},
+            ],
+            "controller_note": (
+                "Button labels are Logitech F310 defaults; gym-hil reads mappings from "
+                "controller_config.json so PS/Xbox controllers map to their own labels but the "
+                "same functions."
+            ),
+        }
+
+    behaviour = list(_TASK_FAMILY_BEHAVIOUR.get(family or "", []))
+
+    global_warnings: list[str] = []
+    if is_keyboard:
+        global_warnings.append(
+            "System-wide keyboard capture (pynput): keys from any focused window reach gym-hil. "
+            "Typing Enter / Esc in the terminal, browser, or IDE will end the current episode."
+        )
+
+    docs = [
+        {"label": "📖 Source for this task family", "url": _gym_hil_source_url(task)},
+        {"label": "gym-hil package", "url": _GYM_HIL_REPO},
+        {"label": "LeRobot HIL-SERL sim guide", "url": _LEROBOT_HILSERL_DOCS},
+    ]
+
+    return {
+        "task": task,
+        "input_type": "keyboard" if is_keyboard else ("gamepad" if is_gamepad else None),
+        "controls": controls,
+        "behaviour": behaviour,
+        "docs": docs,
+        "global_warnings": global_warnings,
+    }
+
+
+@router.get("/task-instructions")
+async def get_task_instructions_endpoint(task: str = "") -> dict:
+    """Return the structured controls / behaviour / docs bundle for a task.
+
+    Frontend (env editor) renders HTML from this; backend (run.py
+    runtime banner) reads the same data internally. Single source of
+    truth so the two surfaces can't disagree on whether intervention
+    is hold-vs-toggle, whether Esc is documented as 'Exit' or
+    'failure', etc.
+    """
+    return get_task_instructions(task)
+
+
+# ============================================================================
 # Profile CRUD
 # ============================================================================
 

@@ -216,25 +216,36 @@ function renderEnvEditor() {
             html += 'Pick a <code>*Keyboard-v0</code> or <code>*Base-v0</code> variant from the <code>task</code> dropdown for a no-hardware setup.';
             html += '</div></div>';
         }
-        // gym-hil controls — only render for variants that take human
-        // input. The Base/Viewer/-v0 variants are autonomous-only; they
-        // don't have a Space-toggle / movement story to explain.
+        // gym-hil controls — only for variants that take human input.
+        // Keyboard and Gamepad have *fundamentally different* intervention
+        // models (toggle vs hold) and entirely different keymaps, so split
+        // the rendering rather than papering over with shared text.
         const isKeyboardTask = task.includes("Keyboard");
         const isGamepadTask = task.includes("Gamepad");
-        if (isKeyboardTask || isGamepadTask) {
+        if (isKeyboardTask) {
             html += '<div class="form-section">';
-            html += '<div class="form-section-title">Controls (read this before Launch)</div>';
+            html += '<div class="form-section-title">Keyboard controls (read this before Launch)</div>';
             html += '<div class="form-hint" style="line-height:1.6">';
-            html += '<b>Press <code>Space</code> first</b> to enable intervention. Until you do, the arm stays still — even if you press the movement keys. Press <code>Space</code> again to release control.<br><br>';
-            html += '<b>Movement</b> (after Space): ';
-            if (isKeyboardTask) {
-                html += 'Arrows = X/Y, <code>Shift</code> / <code>RShift</code> = Z down/up, <code>LCtrl</code> / <code>RCtrl</code> = gripper close/open.<br>';
-            } else {
-                html += 'gamepad sticks + triggers.<br>';
-            }
-            html += '<b>End episode</b>: <code>Enter</code> = success, <code>Esc</code> = failure. The env <i>also</i> auto-ends on natural success (cube lifted &gt;10cm) or if the cube goes off-table.<br>';
+            html += '<b>Press <code>Space</code> first</b> to enable intervention — Space <i>toggles</i> (every press flips on/off, no LED to tell you which state you\'re in). The arm stays still until you toggle on.<br><br>';
+            html += '<b>Movement</b> (after Space): Arrows = X/Y, <code>Shift</code> / <code>RShift</code> = Z down/up, <code>LCtrl</code> / <code>RCtrl</code> = gripper close/open.<br>';
+            html += '<b>End episode</b>: <code>Enter</code> = success, <code>Esc</code> = failure (despite the printed help text saying "ESC: Exit", it actually ends the episode). <code>r</code> = rerecord. The env <i>also</i> auto-ends on natural success (cube lifted &gt;10cm) or if the cube goes off-table.<br>';
             html += '<b>Stop the run</b>: hit the GUI <code>Stop</code> button (the printed "Press Ctrl+C" hint is for direct CLI use, not the GUI).<br><br>';
             html += '<span style="color:#b58900">⚠ System-wide keyboard capture.</span> gym-hil uses <code>pynput</code>, which grabs keys from the focused window — any window. Typing <code>Enter</code> in the terminal, browser, IDE, etc. will end the current episode. Be deliberate about what you type while the env is running.';
+            html += '</div></div>';
+        } else if (isGamepadTask) {
+            // Defaults below are Logitech F310 button labels; gym-hil maps
+            // by name via controller_config.json so PS/Xbox controllers
+            // get their own labels. We can't know the user's controller
+            // here, so we name the *function* and the F310 label in
+            // parentheses.
+            html += '<div class="form-section">';
+            html += '<div class="form-section-title">Gamepad controls (read this before Launch)</div>';
+            html += '<div class="form-hint" style="line-height:1.6">';
+            html += '<b>Hold <code>RB</code></b> (right shoulder button) to engage intervention. This is hold-to-engage, not a toggle — release RB and the arm goes back to autonomous. Different from the keyboard variant.<br><br>';
+            html += '<b>Movement</b> (while holding RB): Left analog stick = X/Y, right stick (vertical) = Z, <code>LT</code> = close gripper, <code>RT</code> = open gripper.<br>';
+            html += '<b>End episode</b>: <code>Y</code> / Triangle = success, <code>A</code> / Cross = failure, <code>X</code> / Square = rerecord, <code>B</code> / Circle = exit. The env <i>also</i> auto-ends on natural success (cube lifted &gt;10cm) or if the cube goes off-table.<br>';
+            html += '<b>Stop the run</b>: hit the GUI <code>Stop</code> button.<br><br>';
+            html += '<span style="color:#999">Button labels above are Logitech F310 defaults. gym-hil reads button mappings from <code>controller_config.json</code> in the gym-hil package — PS / Xbox controllers map to their own labels but the same functions.</span>';
             html += '</div></div>';
         }
 
