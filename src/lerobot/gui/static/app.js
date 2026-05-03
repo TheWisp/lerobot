@@ -742,6 +742,22 @@ function navigateEpisode(direction) {
 }
 
 // Context menu
+// Position a context menu so it stays inside the viewport. The menu must
+// already be `visible` (or have its dimensions otherwise readable) before
+// calling — we measure with getBoundingClientRect after a forced layout.
+function _positionContextMenu(menu, clientX, clientY) {
+    const margin = 4;
+    const rect = menu.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    let left = clientX;
+    let top = clientY;
+    if (left + rect.width + margin > vw) left = Math.max(margin, vw - rect.width - margin);
+    if (top + rect.height + margin > vh) top = Math.max(margin, vh - rect.height - margin);
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+}
+
 function showContextMenu(e, datasetId, episodeIndex) {
     e.preventDefault();
     e.stopPropagation();
@@ -759,9 +775,9 @@ function showContextMenu(e, datasetId, episodeIndex) {
         if (action === 'cleartrim') item.style.display = isTrimmed ? 'block' : 'none';
     });
 
-    menu.style.left = e.clientX + 'px';
-    menu.style.top = e.clientY + 'px';
+    // Make visible BEFORE measuring so getBoundingClientRect returns real dims.
     menu.classList.add('visible');
+    _positionContextMenu(menu, e.clientX, e.clientY);
 }
 
 function hideContextMenu() {
@@ -802,9 +818,8 @@ function showFolderContextMenu(e, path, isModelRun) {
     if (hubUpload) hubUpload.style.display = isOpenedDataset ? '' : 'none';
     if (hubDownload) hubDownload.style.display = isOpenedDataset ? '' : 'none';
     if (hubSep) hubSep.style.display = isOpenedDataset ? '' : 'none';
-    menu.style.left = e.clientX + 'px';
-    menu.style.top = e.clientY + 'px';
     menu.classList.add('visible');
+    _positionContextMenu(menu, e.clientX, e.clientY);
 }
 
 function folderContextAction(action) {
