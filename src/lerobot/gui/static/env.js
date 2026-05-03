@@ -314,7 +314,50 @@ function renderEnvEditor() {
     const form = document.getElementById('env-editor-form');
     if (form) {
         form.addEventListener('input', _updateEnvDirtyState);
-        form.addEventListener('change', _updateEnvDirtyState);
+        form.addEventListener('change', _onEnvFormChange);
+    }
+}
+
+/** Form `change` handler. Pushes the changed value back into the model
+ *  (`currentEnvProfile.data.fields`) so subsequent renders read fresh
+ *  state, then either re-renders the editor (when the change affects
+ *  *what* the editor displays — task or name) or just updates the
+ *  dirty bar (everything else).
+ *
+ *  Without the push-back, the form was the only source of truth for
+ *  user edits until save, and any re-render before save would show
+ *  stale model data — which is why the Task Instructions panel
+ *  didn't refresh when the user changed the task dropdown. */
+function _onEnvFormChange(e) {
+    if (!currentEnvProfile) return;
+    const id = e.target?.id || '';
+    if (id.startsWith('env-field-')) {
+        const fieldName = id.slice('env-field-'.length);
+        const schema = envSchemas?.find(s => s.type_name === currentEnvProfile.data.type);
+        const fieldDef = schema?.fields?.find(f => f.name === fieldName);
+        currentEnvProfile.data.fields = currentEnvProfile.data.fields || {};
+        if (fieldDef) {
+            const v = _envParseValue(fieldDef, e.target.value);
+            if (v === null) delete currentEnvProfile.data.fields[fieldName];
+            else currentEnvProfile.data.fields[fieldName] = v;
+        } else {
+            // Fields rendered outside the schema loop (e.g. gym_manipulator's
+            // `device`). Persist as a string trim — good enough for the
+            // currently-supported set; revisit if more out-of-schema fields
+            // appear.
+            const v = String(e.target.value || '').trim();
+            if (v) currentEnvProfile.data.fields[fieldName] = v;
+            else delete currentEnvProfile.data.fields[fieldName];
+        }
+    }
+    // Re-render only when the change is one the editor's view depends on
+    // (changing task picks new instructions; changing name swaps the
+    // task list namespace). Re-rendering on every keystroke would lose
+    // input focus, so other fields just update the dirty bar.
+    if (id === 'env-field-task' || id === 'env-field-name') {
+        renderEnvEditor();
+    } else {
+        _updateEnvDirtyState();
     }
 }
 
