@@ -49,11 +49,32 @@ def compute_per_sample_loss(policy, batch, config):
         batch = dict(batch)
         batch["observation.images"] = [batch[key] for key in config.image_features]
 
+    context = policy.model.encode_observations(batch)
+    return _per_sample_loss_from_context(policy, batch, context, config)
+
+
+def compute_per_sample_loss_from_context(policy, batch, config):
+    """Per-sample loss with context already pre-computed by the caller.
+
+    Used by online flash-DAgger: the encoder is frozen (only decoder LoRA),
+    so encoding the same obs every fit step is wasted compute. Caller supplies
+    ``batch["context"]`` (the output of ``encode_observations``) and we skip
+    straight to the decoder.
+
+    Limitation: this skips the encoder entirely, so any fine-tuning of the
+    encoder (visual or obs encoder) is impossible on this code path. Decoder-
+    only LoRA is the recipe validated by phases B–F.
+    """
+    assert "context" in batch, "compute_per_sample_loss_from_context requires pre-computed 'context' in batch"
+    context = batch["context"]
+    return _per_sample_loss_from_context(policy, batch, context, config)
+
+
+def _per_sample_loss_from_context(policy, batch, context, config):
+    """Shared decoder-side loss given precomputed context."""
     actions = batch["action"]
     B, T, A = actions.shape
     device = actions.device
-
-    context = policy.model.encode_observations(batch)
 
     t_beta = (
         torch.distributions.Beta(

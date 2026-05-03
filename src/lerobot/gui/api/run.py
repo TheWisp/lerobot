@@ -193,6 +193,14 @@ class HVLARunRequest(BaseModel):
     rlt_output_dir: str = "outputs/rlt_online"
     rlt_start_engaged: bool = True
     rlt_shared_noise_per_chunk: bool = True  # default after v2_widened A/B
+    # Flash-DAgger (online DAgger via LoRA; orthogonal to RLT)
+    flash_dagger_mode: bool = False
+    flash_dagger_train_repo_id: str | None = None  # required for "old" replay slot
+    flash_dagger_output_dir: str = "outputs/flash_dagger_online"
+    flash_dagger_rank: int = 16
+    flash_dagger_steps: int = 100
+    flash_dagger_old_pct: float = 0.10
+    flash_dagger_flashed_pct: float = 0.25
 
 
 # ============================================================================
@@ -685,6 +693,40 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             args.append("--rlt-shared-noise-per-chunk")
         # RLT needs multi-episode mode
         if not req.record_dataset:
+            args.append(f"--num-episodes={req.num_episodes}")
+            args.append(f"--episode-time-s={req.episode_time_s}")
+            args.append(f"--reset-time-s={req.reset_time_s}")
+
+    # Flash-DAgger
+    if req.flash_dagger_mode:
+        if req.s1_type != "flow":
+            raise HTTPException(
+                400,
+                f"flash_dagger_mode is only supported for s1_type='flow' in v0; got s1_type='{req.s1_type}'",
+            )
+        if not req.flash_dagger_train_repo_id or not str(req.flash_dagger_train_repo_id).strip():
+            raise HTTPException(
+                400,
+                "flash_dagger_train_repo_id is required when flash_dagger_mode is True. "
+                "It supplies the 'old' replay slot in the three-way batch mix; "
+                "without it the LoRA forgets prior training data.",
+            )
+        if req.flash_dagger_old_pct + req.flash_dagger_flashed_pct >= 1.0:
+            raise HTTPException(
+                400,
+                f"flash_dagger_old_pct + flash_dagger_flashed_pct must leave room for new_pct: "
+                f"{req.flash_dagger_old_pct} + {req.flash_dagger_flashed_pct} >= 1.0",
+            )
+        args.append("--flash-dagger-mode")
+        args.append(f"--flash-dagger-train-repo-id={req.flash_dagger_train_repo_id}")
+        args.append(f"--flash-dagger-output-dir={req.flash_dagger_output_dir}")
+        args.append(f"--flash-dagger-rank={req.flash_dagger_rank}")
+        args.append(f"--flash-dagger-steps={req.flash_dagger_steps}")
+        args.append(f"--flash-dagger-old-pct={req.flash_dagger_old_pct}")
+        args.append(f"--flash-dagger-flashed-pct={req.flash_dagger_flashed_pct}")
+        # Flash-DAgger needs multi-episode mode (fits at episode-end boundaries).
+        # Skip if RLT already added these knobs above.
+        if not req.record_dataset and not req.rlt_mode:
             args.append(f"--num-episodes={req.num_episodes}")
             args.append(f"--episode-time-s={req.episode_time_s}")
             args.append(f"--reset-time-s={req.reset_time_s}")

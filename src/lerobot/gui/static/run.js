@@ -795,6 +795,24 @@ function _onRltSelectChange() {
     _toggleHvlaRecordFields();
 }
 
+function _onFlashDaggerToggle() {
+    // Mirror the RLT pattern: single checkbox toggles visibility of all
+    // flash-DAgger config fields. Keeps the form quiet when not in use.
+    const enabled = document.getElementById('run-hvla-fd-enable')?.checked === true;
+    const ids = [
+        'run-hvla-fd-train-label', 'run-hvla-fd-train-repo-id',
+        'run-hvla-fd-outdir-label', 'run-hvla-fd-output-dir',
+        'run-hvla-fd-rank-label', 'run-hvla-fd-rank',
+        'run-hvla-fd-steps-label', 'run-hvla-fd-steps',
+        'run-hvla-fd-old-pct-label', 'run-hvla-fd-old-pct',
+        'run-hvla-fd-flashed-pct-label', 'run-hvla-fd-flashed-pct',
+    ];
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = enabled ? '' : 'none';
+    }
+}
+
 async function _refreshRltCheckpoints() {
     try {
         const res = await fetch('/api/models/rlt-checkpoints');
@@ -1118,6 +1136,33 @@ function renderRunForm() {
     html += `<input type="number" id="run-hvla-rlt-chunk-length" value="10" min="1" max="50" style="display:none">`;
     html += `<label id="run-hvla-rlt-start-label" style="display:none">Start with RL active</label>`;
     html += `<input type="checkbox" id="run-hvla-rlt-start-engaged" checked style="display:none">`;
+    html += '</div>';
+    html += '</div>';
+    // ---- Flash-DAgger section (online DAgger via LoRA; orthogonal to RLT) ----
+    html += '<div class="form-section">';
+    html += '<div class="form-section-title">Online Training</div>';
+    html += '<div class="form-grid">';
+    html += `<label title="Train the policy on operator corrections during teleop. After each episode, the system fine-tunes on the human-controlled portions, applies the update, and continues. The original policy is preserved so a bad correction can be discarded without losing what was already learned.">Enable</label>`;
+    html += `<input type="checkbox" id="run-hvla-fd-enable" onchange="_onFlashDaggerToggle()">`;
+    // Tooltips on labels (not just inputs) — hovering the label is more discoverable.
+    const _fdTrainTip = "The original training dataset this policy was trained on. A small slice is mixed into every training batch so the policy doesn't forget what it already knows while learning your new corrections.";
+    const _fdOutdirTip = "Folder for saved adapter snapshots, training metrics (summary.jsonl), and per-step loss curves. Each correction cycle gets its own snapshot.";
+    const _fdRankTip = "Capacity of the correction adapter. Higher = more flexible but bigger to store/sync; 16 is a balanced default. 4 is fine for simple corrections (~5% quality cost). Wall-time is roughly the same across values.";
+    const _fdStepsTip = "Number of training updates run per episode. More steps fit more aggressively but take longer; 100 is a safe default. Each update sees one mixed batch.";
+    const _fdOldTip = "Fraction of each training batch drawn from the original training data. Protects the policy from losing prior skills while it adapts. Lowering this toward 0 risks forgetting a lot — empirically, 0% caused ~3× drift on previously good behavior.";
+    const _fdFlashedTip = "Fraction of each training batch drawn from corrections you've already taught earlier in this session. Helps past corrections stick instead of being overwritten by newer ones.";
+    html += `<label id="run-hvla-fd-train-label" style="display:none" title="${_fdTrainTip}">Train Repo ID${_REQ}</label>`;
+    html += `<input type="text" id="run-hvla-fd-train-repo-id" placeholder="thewisp/cylinder_ring_assembly_merged_raw" style="display:none" title="${_fdTrainTip}">`;
+    html += `<label id="run-hvla-fd-outdir-label" style="display:none" title="${_fdOutdirTip}">Output Directory</label>`;
+    html += `<input type="text" id="run-hvla-fd-output-dir" value="outputs/flash_dagger_online" style="display:none" title="${_fdOutdirTip}">`;
+    html += `<label id="run-hvla-fd-rank-label" style="display:none" title="${_fdRankTip}">LoRA Rank</label>`;
+    html += `<input type="number" id="run-hvla-fd-rank" value="16" min="1" max="64" style="display:none" title="${_fdRankTip}">`;
+    html += `<label id="run-hvla-fd-steps-label" style="display:none" title="${_fdStepsTip}">Fit Steps</label>`;
+    html += `<input type="number" id="run-hvla-fd-steps" value="100" min="10" max="1000" style="display:none" title="${_fdStepsTip}">`;
+    html += `<label id="run-hvla-fd-old-pct-label" style="display:none" title="${_fdOldTip}">Old % (replay)</label>`;
+    html += `<input type="number" id="run-hvla-fd-old-pct" value="0.10" min="0" max="0.5" step="0.05" style="display:none" title="${_fdOldTip}">`;
+    html += `<label id="run-hvla-fd-flashed-pct-label" style="display:none" title="${_fdFlashedTip}">Flashed % (rehearsal)</label>`;
+    html += `<input type="number" id="run-hvla-fd-flashed-pct" value="0.25" min="0" max="0.5" step="0.05" style="display:none" title="${_fdFlashedTip}">`;
     html += '</div>';
     html += '</div>';
     html += '</div>';
@@ -1462,6 +1507,20 @@ async function launchRun() {
                         // Only meaningful in train mode (deploy uses deterministic actor)
                         rlt_shared_noise_per_chunk: runMode === 'train'
                             && document.getElementById('run-hvla-rlt-shared-noise')?.checked === true,
+                    };
+                })(),
+                ...(() => {
+                    // Flash-DAgger: orthogonal to RLT — can be enabled with or without it.
+                    const enabled = document.getElementById('run-hvla-fd-enable')?.checked === true;
+                    if (!enabled) return {};
+                    return {
+                        flash_dagger_mode: true,
+                        flash_dagger_train_repo_id: document.getElementById('run-hvla-fd-train-repo-id')?.value?.trim() || null,
+                        flash_dagger_output_dir: document.getElementById('run-hvla-fd-output-dir')?.value?.trim() || 'outputs/flash_dagger_online',
+                        flash_dagger_rank: parseInt(document.getElementById('run-hvla-fd-rank')?.value) || 16,
+                        flash_dagger_steps: parseInt(document.getElementById('run-hvla-fd-steps')?.value) || 100,
+                        flash_dagger_old_pct: parseFloat(document.getElementById('run-hvla-fd-old-pct')?.value) || 0.10,
+                        flash_dagger_flashed_pct: parseFloat(document.getElementById('run-hvla-fd-flashed-pct')?.value) || 0.25,
                     };
                 })(),
             };
@@ -1945,9 +2004,14 @@ async function startObsStreamViewer() {
     const container = document.getElementById('rerun-viewer');
     if (!container) return;
 
-    // Poll until the stream becomes available (robot needs time to connect)
+    // Poll until the stream becomes available. Robot connect alone is ~10s,
+    // but flash-DAgger pre-encoding (5000-frame replay pool + 500-frame
+    // forget-val pool) measured ~135s on the test rig before the
+    // ObservationStream even starts. Use a 5-minute timeout so the viewer
+    // still attaches under that path; only gives up if startup is truly
+    // broken.
     let attempts = 0;
-    const maxAttempts = 30; // 30 × 500ms = 15s
+    const maxAttempts = 600; // 600 × 500ms = 5 minutes
     while (attempts < maxAttempts) {
         try {
             const res = await fetch('/api/run/obs-stream/meta');
@@ -1959,7 +2023,17 @@ async function startObsStreamViewer() {
     }
 
     if (!obsStreamMeta?.available) {
-        console.warn('Observation stream not available after timeout');
+        const msg = `Camera view: observation stream did not appear after ${maxAttempts * 0.5}s. ` +
+            `Check the subprocess output for errors during robot/camera connect or flash-DAgger pre-encoding.`;
+        console.error(msg);
+        // Update the placeholder so the failure is visible in-context, not just in DevTools.
+        const ph = document.getElementById('rerun-placeholder');
+        if (ph) {
+            ph.textContent = `⚠ Camera view unavailable — obs stream did not appear after ${maxAttempts * 0.5}s. ` +
+                `See the subprocess output panel for startup errors.`;
+            ph.style.color = '#f44';
+        }
+        showToast('Camera view', `Observation stream did not appear after ${maxAttempts * 0.5}s`, 'error');
         return;
     }
 

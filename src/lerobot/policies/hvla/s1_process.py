@@ -478,6 +478,14 @@ def run_s1(
     rlt_output_dir: str = "outputs/rlt_online",
     rlt_start_engaged: bool = True,
     rlt_shared_noise_per_chunk: bool = False,
+    # Flash-DAgger parameters (orthogonal to RLT — can run with or without it)
+    flash_dagger_mode: bool = False,
+    flash_dagger_train_repo_id: str | None = None,
+    flash_dagger_output_dir: str = "outputs/flash_dagger_online",
+    flash_dagger_rank: int = 16,
+    flash_dagger_steps: int = 100,
+    flash_dagger_old_pct: float = 0.10,
+    flash_dagger_flashed_pct: float = 0.25,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -571,6 +579,75 @@ def run_s1(
     torch.backends.cudnn.benchmark = True
 
     logger.info("S1: Policy loaded (%s). Image keys: %s", s1_type, s1_image_keys)
+
+    # --- Flash-DAgger setup (must run BEFORE torch.compile so the
+    # compiled graph captures the LoRA-wrapped decoder layers; otherwise
+    # dynamo retraces on the first eval pass and hits the freshly-attached
+    # parameters as a graph break / device mismatch). ---
+    flash_dagger_system = None
+    if flash_dagger_mode:
+        if s1_type != "flow":
+            raise ValueError(
+                f"flash_dagger_mode is only supported for s1_type='flow' in v0; got s1_type='{s1_type}'"
+            )
+        if not flash_dagger_train_repo_id:
+            raise ValueError(
+                "flash_dagger_mode=True requires --flash-dagger-train-repo-id "
+                "(needed for the 'old' replay slot to protect against forgetting)"
+            )
+        from pathlib import Path as _Path
+
+        from lerobot.policies.hvla.flash_dagger import FlashDaggerConfig, FlashDaggerSystem
+        from lerobot.policies.hvla.scripts.flash_dagger_phase_b import build_dataset
+
+        # Resolve the checkpoint dir the same way the offline driver does.
+        _ckpt_root = _Path(s1_checkpoint)
+        _ckpt_dir = _ckpt_root / "pretrained_model"
+        if not _ckpt_dir.is_dir():
+            _ckpt_dir = _ckpt_root
+        _norm_path = _ckpt_dir / "norm_stats.pt"
+        if not _norm_path.exists():
+            raise FileNotFoundError(
+                f"flash_dagger_mode requires norm_stats.pt under the checkpoint "
+                f"(searched {_ckpt_root} and {_ckpt_root / 'pretrained_model'})"
+            )
+        _norm_stats = torch.load(_norm_path, map_location="cpu", weights_only=True)
+        logger.info(
+            "[flash-DAgger] loading training dataset for replay pool: %s",
+            flash_dagger_train_repo_id,
+        )
+        _, _train_ds, _, _, _ = build_dataset(
+            flash_dagger_train_repo_id,
+            config,
+            _norm_stats,
+        )
+        _fd_config = FlashDaggerConfig(
+            rank=flash_dagger_rank,
+            steps=flash_dagger_steps,
+            old_pct=flash_dagger_old_pct,
+            flashed_pct=flash_dagger_flashed_pct,
+            output_dir=_Path(flash_dagger_output_dir),
+        )
+        flash_dagger_system = FlashDaggerSystem(
+            policy=policy,
+            s1_config=config,
+            train_dataset=_train_ds,
+            config=_fd_config,
+            device=device,
+            s1_image_keys=s1_image_keys,
+            resize_to=resize_images,
+            shared_cache=shared_cache,
+            s2_latent_key=S2_LATENT_KEY,
+        )
+        logger.info(
+            "[flash-DAgger] system ready (rank=%d steps=%d mix=%.0f/%.0f/%.0f, output=%s)",
+            flash_dagger_rank,
+            flash_dagger_steps,
+            100 * flash_dagger_old_pct,
+            100 * flash_dagger_flashed_pct,
+            100 * (1 - flash_dagger_old_pct - flash_dagger_flashed_pct),
+            flash_dagger_output_dir,
+        )
 
     # torch.compile is opt-in via --compile-s1 flag.
     # DINOv2 attention layers are not compatible with torch.compile out of the box.
@@ -1500,6 +1577,8 @@ def run_s1(
                         else:
                             logger.info("S1: INTERVENTION ON — pausing inference, human takes over")
                             infer_thread.pause()
+                        if flash_dagger_system is not None:
+                            flash_dagger_system.on_intervention_start()
 
                         # Measure initial leader-follower delta before any sync
                         leader_pos_before = teleop.get_action()
@@ -1659,6 +1738,14 @@ def run_s1(
                         # intervention end. No need to poll mid-intervention —
                         # the counter is only consumed at episode end.
 
+                    if flash_dagger_system is not None:
+                        # NOTE: v0 captures raw obs + action_np. Format-matching
+                        # against the training dataset (image preprocessing,
+                        # action/state normalization) is handled inside the
+                        # FlashDaggerSystem at fit time — see system.py.
+                        _act_t = torch.as_tensor(action_np, dtype=torch.float32)
+                        flash_dagger_system.on_tick(obs, _act_t)
+
                 else:
                     # --- POLICY MODE: S1 inference controls robot ---
                     if was_intervening:
@@ -1710,6 +1797,8 @@ def run_s1(
                             assert not infer_thread.is_paused, (
                                 "BUG: inference thread still paused after resume"
                             )
+                        if flash_dagger_system is not None:
+                            flash_dagger_system.on_intervention_end()
                         if rlt_mode and infer_thread._rlt_user_engaged:
                             _resumed_in_warmup = rlt_state["config"].is_warmup(rlt_state["episode"])
                             if _resumed_in_warmup:
@@ -2065,6 +2154,36 @@ def run_s1(
                     except Exception as e:
                         logger.error("RLT: Failed to save checkpoint: %s", e)
 
+            # Flash-DAgger: episode boundary. If RLT is on, gate on the
+            # lifecycle's terminal (skip on abort/ignore). Without RLT, no
+            # built-in success signal — fit always; bad demos are caught by
+            # the forget-drift tripwire inside the system.
+            if flash_dagger_system is not None:
+                _fd_success = True
+                if rlt_mode and rlt_state is not None:
+                    _fd_lifecycle = rlt_state["lifecycle"]
+                    if _fd_lifecycle.is_ignored():
+                        _fd_success = False
+                    else:
+                        _term = _fd_lifecycle.peek_terminal()
+                        _fd_success = (_term == TerminalKind.SUCCESS) if _term is not None else True
+                # Pause the InferenceThread for the duration of the fit so
+                # it can't read LoRA weights mid-update (race) or fight us
+                # over policy.train()/eval() mode toggling.
+                _fd_was_paused = infer_thread.is_paused
+                if not _fd_was_paused:
+                    infer_thread.pause()
+                try:
+                    flash_dagger_system.on_episode_end(
+                        episode=recorded_episodes,
+                        success=_fd_success,
+                    )
+                except Exception as e:
+                    logger.error("[flash-DAgger] on_episode_end failed: %s", e, exc_info=True)
+                finally:
+                    if not _fd_was_paused:
+                        infer_thread.resume()
+
             # Reset tracking state for next episode
             prev_action_np = None
             action_deltas.clear()
@@ -2115,6 +2234,14 @@ def run_s1(
         if listener is not None:
             with _shutdown_phase("listener_stop", shutdown_totals):
                 listener.stop()
+        # Flash-DAgger: end-of-session log line. LoRAs are written per-cycle;
+        # nothing to flush here in v0.
+        if flash_dagger_system is not None:
+            with _shutdown_phase("flash_dagger_shutdown", shutdown_totals):
+                try:
+                    flash_dagger_system.shutdown()
+                except Exception as e:
+                    logger.error("[flash-DAgger] shutdown failed: %s", e, exc_info=True)
         # RLT: final save (training mode only). Skipped on unhandled
         # exception — partial / mid-update state shouldn't land in
         # latest/. The user falls back to a per-10-ep snapshot

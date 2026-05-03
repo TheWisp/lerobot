@@ -203,17 +203,22 @@ class FlowMatchingS1Model(nn.Module):
         for layer in self.decoder_layers:
             # nn.TransformerDecoderLayer stores cross-attention as multihead_attn
             mha = layer.multihead_attn
-            # Project context through K,V weights (in_proj contains Q,K,V stacked)
-            # For nn.MultiheadAttention with batch_first=True:
-            #   in_proj_weight is [3*d, d], split into Q, K, V
-            d = mha.embed_dim
-            w = mha.in_proj_weight  # [3*d, d]
-            b = mha.in_proj_bias  # [3*d]
-            # K = context @ W_K^T + b_K, V = context @ W_V^T + b_V
-            k = F.linear(context, w[d : 2 * d], b[d : 2 * d] if b is not None else None)
-            v = F.linear(context, w[2 * d : 3 * d], b[2 * d : 3 * d] if b is not None else None)
-            # Reshape for multi-head: [B, N, D] → [B, N, nhead, head_dim] → [B*nhead, N, head_dim]
-            # Actually, keep as [B, N, D] — we'll handle heads in the forward
+            if hasattr(mha, "in_proj_weight"):
+                # Vanilla nn.MultiheadAttention: project context through the
+                # packed Q,K,V weight, slicing out K and V.
+                d = mha.embed_dim
+                w = mha.in_proj_weight  # [3*d, d]
+                b = mha.in_proj_bias  # [3*d]
+                k = F.linear(context, w[d : 2 * d], b[d : 2 * d] if b is not None else None)
+                v = F.linear(context, w[2 * d : 3 * d], b[2 * d : 3 * d] if b is not None else None)
+            else:
+                # LoRA-wrapped MHA: separate q/k/v projection modules. Calling
+                # them directly applies both the base weight AND the LoRA
+                # delta, which is the correct behavior — the cached KV must
+                # reflect any current LoRA state so it stays consistent with
+                # the LoRA-aware forward path.
+                k = mha.k_proj(context)
+                v = mha.v_proj(context)
             cached_kv.append((k, v))
         return cached_kv
 
@@ -268,9 +273,16 @@ class FlowMatchingS1Model(nn.Module):
                 # Cross-attention with pre-computed K,V
                 ck, cv = cached_kv[i]
                 mha = layer.multihead_attn
-                q = F.linear(
-                    x, mha.in_proj_weight[:d], mha.in_proj_bias[:d] if mha.in_proj_bias is not None else None
-                )
+                if hasattr(mha, "in_proj_weight"):
+                    # Vanilla MHA: slice Q from packed in_proj weight.
+                    q = F.linear(
+                        x,
+                        mha.in_proj_weight[:d],
+                        mha.in_proj_bias[:d] if mha.in_proj_bias is not None else None,
+                    )
+                else:
+                    # LoRA-wrapped: q_proj already applies base + LoRA delta.
+                    q = mha.q_proj(x)
                 nhead = mha.num_heads
                 head_dim = d // nhead
                 q = q.reshape(B, T, nhead, head_dim).transpose(1, 2)

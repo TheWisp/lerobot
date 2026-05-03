@@ -37,8 +37,14 @@ class LoRALinear(nn.Module):
         self.rank = rank
         self.scaling = alpha / rank
 
-        self.lora_A = nn.Parameter(torch.empty(rank, base.in_features))
-        self.lora_B = nn.Parameter(torch.zeros(base.out_features, rank))
+        # Match base.weight's device + dtype so the wrapper is co-located
+        # with the layer it adapts (caller doesn't need to .to() after
+        # apply_lora_to_decoder; otherwise the new params land on CPU and
+        # forward fails with a device-mismatch error on the GPU policy).
+        device = base.weight.device
+        dtype = base.weight.dtype
+        self.lora_A = nn.Parameter(torch.empty(rank, base.in_features, device=device, dtype=dtype))
+        self.lora_B = nn.Parameter(torch.zeros(base.out_features, rank, device=device, dtype=dtype))
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
 
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
@@ -69,11 +75,17 @@ class LoRAMultiheadAttention(nn.Module):
         self.head_dim = d // self.num_heads
         self.dropout_p = base.dropout
 
-        # Slice packed in_proj_weight [3d, d] → separate Q, K, V linears
+        # Slice packed in_proj_weight [3d, d] → separate Q, K, V linears.
+        # Match the base's device/dtype so the wrapped projections land on
+        # the same device as the policy (default `nn.Linear()` is CPU,
+        # which causes a device-mismatch error when the rest of the
+        # policy is on CUDA).
         has_bias = base.in_proj_bias is not None
-        q_proj = nn.Linear(d, d, bias=has_bias)
-        k_proj = nn.Linear(d, d, bias=has_bias)
-        v_proj = nn.Linear(d, d, bias=has_bias)
+        device = base.in_proj_weight.device
+        dtype = base.in_proj_weight.dtype
+        q_proj = nn.Linear(d, d, bias=has_bias, device=device, dtype=dtype)
+        k_proj = nn.Linear(d, d, bias=has_bias, device=device, dtype=dtype)
+        v_proj = nn.Linear(d, d, bias=has_bias, device=device, dtype=dtype)
         with torch.no_grad():
             w = base.in_proj_weight.data
             q_proj.weight.copy_(w[:d])

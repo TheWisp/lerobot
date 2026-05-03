@@ -179,6 +179,53 @@ def main():
         "iid noise). Set at launch time only — flipping mid-training "
         "mixes noise distributions in the replay buffer.",
     )
+    # --- Flash-DAgger (online LoRA correction at episode end) ---
+    parser.add_argument(
+        "--flash-dagger-mode",
+        action="store_true",
+        help="Enable flash-DAgger: capture intervention frames during teleop, "
+        "run a synchronous LoRA fit at episode end, hot-swap into the live "
+        "policy. Frozen base means a bad fit can be peeled back. Orthogonal "
+        "to --rlt-mode; both can be active.",
+    )
+    parser.add_argument(
+        "--flash-dagger-train-repo-id",
+        type=str,
+        default=None,
+        help="HF repo id for the training dataset (required when "
+        "--flash-dagger-mode). Used as the 'old' replay slot in the three-way "
+        "batch mix to protect against forgetting prior training data.",
+    )
+    parser.add_argument(
+        "--flash-dagger-output-dir",
+        type=str,
+        default="outputs/flash_dagger_online",
+        help="Directory for flash-DAgger LoRA checkpoints + metrics (summary.jsonl, curves/, layer_diag/).",
+    )
+    parser.add_argument(
+        "--flash-dagger-rank",
+        type=int,
+        default=16,
+        help="LoRA rank (default 16; phase E/F validated; r=4 viable at ~5pp quality discount).",
+    )
+    parser.add_argument(
+        "--flash-dagger-steps",
+        type=int,
+        default=100,
+        help="Optimizer steps per episode-end fit cycle (default 100; matches phase-D recipe).",
+    )
+    parser.add_argument(
+        "--flash-dagger-old-pct",
+        type=float,
+        default=0.10,
+        help="Fraction of each batch sampled from training-dataset replay (default 0.10; 0% → +283%% drift per phase B).",
+    )
+    parser.add_argument(
+        "--flash-dagger-flashed-pct",
+        type=float,
+        default=0.25,
+        help="Fraction of each batch sampled from prior corrections in this session (default 0.25; phase-D recipe).",
+    )
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -306,6 +353,13 @@ def main():
             rlt_output_dir=args.rlt_output_dir,
             rlt_start_engaged=not args.rlt_start_disengaged,
             rlt_shared_noise_per_chunk=args.rlt_shared_noise_per_chunk,
+            flash_dagger_mode=args.flash_dagger_mode,
+            flash_dagger_train_repo_id=args.flash_dagger_train_repo_id,
+            flash_dagger_output_dir=args.flash_dagger_output_dir,
+            flash_dagger_rank=args.flash_dagger_rank,
+            flash_dagger_steps=args.flash_dagger_steps,
+            flash_dagger_old_pct=args.flash_dagger_old_pct,
+            flash_dagger_flashed_pct=args.flash_dagger_flashed_pct,
         )
     finally:
         stop_event.set()
