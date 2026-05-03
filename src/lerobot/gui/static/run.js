@@ -75,6 +75,110 @@ async function selectWorkflow(workflow) {
     if (workflow === 'policy' || workflow === 'teleop') {
         await _ensureModelDataLoaded();
     }
+    _updateLaunchButton();
+}
+
+// ============================================================================
+// Launch-button validation
+// ============================================================================
+//
+// Each workflow / policy type has its own required-field rules. We keep
+// them as small per-{workflow,policy} validator functions in registries
+// so adding a new policy or workflow stays local — no editing of one big
+// `if/else if` chain. Each validator returns either `null` (ready) or a
+// string reason (not ready, shown as the Launch button tooltip).
+
+// Helper for validators: read trimmed value from a form input/select.
+function _val(id) {
+    return document.getElementById(id)?.value?.trim() || '';
+}
+
+// Per-policy-type validators. Add a new entry here when adding a new
+// policy with its own required fields.
+const _POLICY_VALIDATORS = {
+    hvla_flow_s1: () => {
+        if (!_val('run-hvla-task')) {
+            return 'HVLA needs a task prompt — describe what the robot should do.';
+        }
+        // RLT mode (when selected) needs the Phase-1 token encoder dir;
+        // without it actor.pt loads with a state-dict size mismatch.
+        if (_val('run-hvla-rlt-select') && !_val('run-hvla-rlt-token-ckpt')) {
+            return 'RLT mode needs an RL Token Encoder checkpoint dir.';
+        }
+        return null;
+    },
+    // Vanilla (non-HVLA) policies have no extra required fields beyond the
+    // checkpoint that's already validated up-stream — no entry needed.
+};
+
+// Per-workflow validators. Each gets called only after the workflow's
+// universal prerequisites (robot profile, plus workflow's own primary
+// selector — episode for replay, checkpoint for policy, teleop for teleop)
+// pass.
+const _WORKFLOW_VALIDATORS = {
+    teleop: () => {
+        if (!_val('run-teleop-teleop')) return 'Select a teleop profile.';
+        // Recording sub-fields apply only when a dataset is selected;
+        // pure teleop runs without them.
+        const datasetVal = _val('run-teleop-record-dataset');
+        if (datasetVal === '') return null;
+        const taskSelVal = document.getElementById('run-teleop-task-select')?.value;
+        const task = (taskSelVal === '__new_task__')
+            ? _val('run-teleop-task-custom')
+            : (taskSelVal || '').trim();
+        if (!task) return 'Recording requires a task description.';
+        if (datasetVal === '__new__' && !_val('run-teleop-new-dataset-name')) {
+            return 'Enter a name for the new dataset.';
+        }
+        return null;
+    },
+    replay: () => {
+        if (!_val('run-replay-episode')) {
+            return 'Select an episode to replay (open a dataset first if the list is empty).';
+        }
+        return null;
+    },
+    policy: () => {
+        if (!_val('run-policy-checkpoint')) return 'Select a model checkpoint.';
+        // Delegate to the per-policy-type registry. Picks up whatever the
+        // currently selected checkpoint declares its policy_type to be.
+        const policyType = _getSelectedPolicyType();
+        const policyValidator = _POLICY_VALIDATORS[policyType];
+        if (policyValidator) {
+            const reason = policyValidator();
+            if (reason) return reason;
+        }
+        return null;
+    },
+};
+
+let _isRunning = false;
+
+function _validateLaunch() {
+    if (_isRunning) {
+        return { ready: false, reason: 'A process is already running — Stop it first.' };
+    }
+    // Robot profile is the universal prerequisite for every workflow.
+    if (!_val(_getActiveRobotSelectId())) {
+        return { ready: false, reason: 'Select a robot profile.' };
+    }
+    const workflowValidator = _WORKFLOW_VALIDATORS[selectedWorkflow];
+    if (!workflowValidator) {
+        // Unknown workflow — let it through; backend will reject if invalid.
+        return { ready: true, reason: '' };
+    }
+    const reason = workflowValidator();
+    return reason ? { ready: false, reason } : { ready: true, reason: '' };
+}
+
+function _updateLaunchButton() {
+    const btn = document.getElementById('run-launch-btn');
+    if (!btn) return;
+    const { ready, reason } = _validateLaunch();
+    btn.disabled = !ready;
+    // Native `title` shows on hover; gives the missing-field hint without
+    // needing extra inline text below the button.
+    btn.title = reason;
 }
 
 // ============================================================================
@@ -1057,6 +1161,12 @@ function renderRunForm() {
     // both Load and Unload buttons stay in their default disabled state and
     // the user can't tell whether a model is currently loaded across re-renders.
     _refreshDebugModelStatus();
+    // Re-validate the Launch button now that the form's IDs exist again,
+    // and re-validate on every input/change inside the form so the button
+    // tracks selections continuously rather than failing at click-time.
+    form.addEventListener('input', _updateLaunchButton);
+    form.addEventListener('change', _updateLaunchButton);
+    _updateLaunchButton();
 }
 
 // ============================================================================
@@ -1756,12 +1866,11 @@ async function pollRunStatus() {
 // ============================================================================
 
 function updateRunUI(isRunning) {
-    const launchBtn = document.getElementById('run-launch-btn');
+    _isRunning = isRunning;  // mirror for _validateLaunch
     const stopBtn = document.getElementById('run-stop-btn');
     const formInputs = document.querySelectorAll('#run-form input, #run-form select');
     const workflowBtns = document.querySelectorAll('.workflow-btn');
 
-    if (launchBtn) launchBtn.disabled = isRunning;
     if (stopBtn) stopBtn.disabled = !isRunning;
 
     formInputs.forEach(el => el.disabled = isRunning);
@@ -1772,6 +1881,10 @@ function updateRunUI(isRunning) {
         indicator.textContent = isRunning ? 'Running' : 'Idle';
         indicator.className = isRunning ? 'run-status running' : 'run-status idle';
     }
+    // Launch button is now state-driven via _updateLaunchButton (running
+    // state + form validity). Don't unconditionally disable it here —
+    // _validateLaunch handles the "running" case via _isRunning.
+    _updateLaunchButton();
 }
 
 // ============================================================================
