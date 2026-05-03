@@ -316,6 +316,13 @@ function renderEnvEditor() {
         form.addEventListener('input', _updateEnvDirtyState);
         form.addEventListener('change', _onEnvFormChange);
     }
+    // Re-evaluate dirty state on every render. The 'editor-actions' bar
+    // is rendered with display:none and only shown by _updateEnvDirtyState
+    // when the model differs from saved -- so without this call,
+    // re-rendering after an in-place edit (e.g. task change pushed into
+    // the model by _onEnvFormChange) would hide the Save / Discard
+    // buttons even though there ARE unsaved changes.
+    _updateEnvDirtyState();
 }
 
 /** Form `change` handler. Pushes the changed value back into the model
