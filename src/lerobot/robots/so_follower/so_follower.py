@@ -199,7 +199,7 @@ class SOFollower(Robot):
                 # No cache available, initialize with zeros
                 logger.error("Motor sync_read failed and no cache available, using zeros")
                 log_say("Motor read failed, no cache available", play_sounds=True, blocking=False)
-                return {motor: 0.0 for motor in self.bus.motors}
+                return dict.fromkeys(self.bus.motors, 0.0)
 
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:

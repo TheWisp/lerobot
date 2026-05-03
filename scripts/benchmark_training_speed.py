@@ -29,7 +29,7 @@ from lerobot.configs.types import FeatureType
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.policies.act_vlm.configuration_act_vlm import ACTWithVLMConfig
-from lerobot.policies.act_vlm.modeling_act_vlm import ACTWithVLMPolicy, S2_LATENT_KEY
+from lerobot.policies.act_vlm.modeling_act_vlm import S2_LATENT_KEY, ACTWithVLMPolicy
 from lerobot.policies.factory import make_pre_post_processors
 
 logging.basicConfig(level=logging.WARNING)
@@ -83,9 +83,9 @@ def make_delta_timestamps(delta_indices, fps):
 
 
 def run_benchmark(args, label, resize_to=None, use_dino=False, freeze_dino=True):
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  Benchmarking: {label}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     device = torch.device(args.device)
 
@@ -111,7 +111,7 @@ def run_benchmark(args, label, resize_to=None, use_dino=False, freeze_dino=True)
 
     n_params = sum(p.numel() for p in policy.parameters())
     n_trainable = sum(p.numel() for p in policy.parameters() if p.requires_grad)
-    print(f"  params: {n_trainable/1e6:.1f}M trainable / {n_params/1e6:.1f}M total")
+    print(f"  params: {n_trainable / 1e6:.1f}M trainable / {n_params / 1e6:.1f}M total")
 
     preprocessor, _ = make_pre_post_processors(cfg, dataset_stats=dataset_metadata.stats)
 
@@ -201,9 +201,12 @@ def run_benchmark(args, label, resize_to=None, use_dino=False, freeze_dino=True)
             t_wall_list.append(t_wall)
 
         status = "WARMUP" if i < args.warmup else f"step {i - args.warmup + 1}/{args.steps}"
-        print(f"  [{status}] wall={t_wall:.0f}ms | data={t_data:.0f}ms pre={t_pre:.0f}ms fwd={t_fwd:.0f}ms bwd={t_bwd:.0f}ms | loss={loss.item():.4f}")
+        print(
+            f"  [{status}] wall={t_wall:.0f}ms | data={t_data:.0f}ms pre={t_pre:.0f}ms fwd={t_fwd:.0f}ms bwd={t_bwd:.0f}ms | loss={loss.item():.4f}"
+        )
 
-    def avg(lst): return sum(lst) / len(lst) if lst else 0
+    def avg(lst):
+        return sum(lst) / len(lst) if lst else 0
 
     # Token count
     if use_dino and resize_to:
@@ -220,15 +223,21 @@ def run_benchmark(args, label, resize_to=None, use_dino=False, freeze_dino=True)
     print(f"\n  --- {label} SUMMARY (avg over {args.steps} steps, batch_size={args.batch_size}) ---")
     print(f"  {token_info}")
     print(f"  wall-clock: {avg(t_wall_list):.1f}ms/step  →  {sps:.1f} samples/sec")
-    print(f"  data      : {avg(t_data_list):.1f}ms  ({100*avg(t_data_list)/avg(t_wall_list):.0f}%)")
-    print(f"  pre+resize: {avg(t_pre_list):.1f}ms  ({100*avg(t_pre_list)/avg(t_wall_list):.0f}%)")
-    print(f"  fwd       : {avg(t_fwd_list):.1f}ms  ({100*avg(t_fwd_list)/avg(t_wall_list):.0f}%)")
-    print(f"  bwd       : {avg(t_bwd_list):.1f}ms  ({100*avg(t_bwd_list)/avg(t_wall_list):.0f}%)")
-    print(f"  compute   : {avg(t_fwd_list)+avg(t_bwd_list):.1f}ms  (fwd+bwd only)")
+    print(f"  data      : {avg(t_data_list):.1f}ms  ({100 * avg(t_data_list) / avg(t_wall_list):.0f}%)")
+    print(f"  pre+resize: {avg(t_pre_list):.1f}ms  ({100 * avg(t_pre_list) / avg(t_wall_list):.0f}%)")
+    print(f"  fwd       : {avg(t_fwd_list):.1f}ms  ({100 * avg(t_fwd_list) / avg(t_wall_list):.0f}%)")
+    print(f"  bwd       : {avg(t_bwd_list):.1f}ms  ({100 * avg(t_bwd_list) / avg(t_wall_list):.0f}%)")
+    print(f"  compute   : {avg(t_fwd_list) + avg(t_bwd_list):.1f}ms  (fwd+bwd only)")
 
-    return {"label": label, "wall": avg(t_wall_list), "data": avg(t_data_list),
-            "pre": avg(t_pre_list), "fwd": avg(t_fwd_list), "bwd": avg(t_bwd_list),
-            "sps": sps}
+    return {
+        "label": label,
+        "wall": avg(t_wall_list),
+        "data": avg(t_data_list),
+        "pre": avg(t_pre_list),
+        "fwd": avg(t_fwd_list),
+        "bwd": avg(t_bwd_list),
+        "sps": sps,
+    }
 
 
 def main():
@@ -251,13 +260,19 @@ def main():
 
     results.append(run_benchmark(args, "ResNet18 224x224", resize_to=(224, 224)))
     results.append(run_benchmark(args, "ResNet18 480x480", resize_to=(480, 480)))
-    results.append(run_benchmark(args, "DINOv2-S frozen 224x224", resize_to=(224, 224), use_dino=True, freeze_dino=True))
-    results.append(run_benchmark(args, "DINOv2-S unfrozen 224x224", resize_to=(224, 224), use_dino=True, freeze_dino=False))
-    #results.append(run_benchmark(args, "DINOv2-S unfrozen 448x448", resize_to=(448, 448), use_dino=True, freeze_dino=False))
+    results.append(
+        run_benchmark(args, "DINOv2-S frozen 224x224", resize_to=(224, 224), use_dino=True, freeze_dino=True)
+    )
+    results.append(
+        run_benchmark(
+            args, "DINOv2-S unfrozen 224x224", resize_to=(224, 224), use_dino=True, freeze_dino=False
+        )
+    )
+    # results.append(run_benchmark(args, "DINOv2-S unfrozen 448x448", resize_to=(448, 448), use_dino=True, freeze_dino=False))
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  COMPARISON (batch_size={args.batch_size}, num_workers={args.num_workers})")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     baseline_wall = results[0]["wall"]
     for r in results:
         speedup = baseline_wall / r["wall"] if r["wall"] > 0 else 0

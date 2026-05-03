@@ -9,6 +9,7 @@ started.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 
@@ -69,27 +70,25 @@ def test_apply_edits_partial_failure_does_not_corrupt(
 
     dataset_id = "test_ds"
     gui_app_state.datasets[dataset_id] = dataset
-    gui_app_state.pending_edits.extend([
-        PendingEdit(edit_type="delete", dataset_id=dataset_id, episode_index=999),
-        PendingEdit(
-            edit_type="trim",
-            dataset_id=dataset_id,
-            episode_index=0,
-            params={"start_frame": 9999, "end_frame": 99999},
-        ),
-    ])
+    gui_app_state.pending_edits.extend(
+        [
+            PendingEdit(edit_type="delete", dataset_id=dataset_id, episode_index=999),
+            PendingEdit(
+                edit_type="trim",
+                dataset_id=dataset_id,
+                episode_index=0,
+                params={"start_frame": 9999, "end_frame": 99999},
+            ),
+        ]
+    )
     monkeypatch.setattr(edits_module, "_app_state", gui_app_state)
 
-    try:
+    with contextlib.suppress(Exception):
         asyncio.run(_apply_edits_locked(dataset_id))
-    except Exception:
-        pass
 
     after = snapshot_tree(dataset.root)
     removed = set(snapshot) - set(after)
-    unrelated_removed = [
-        f for f in removed if "episode_000000" not in f and "ep0" not in f
-    ]
+    unrelated_removed = [f for f in removed if "episode_000000" not in f and "ep0" not in f]
     assert not unrelated_removed, (
         f"Files unrelated to the failed edits were removed: {sorted(unrelated_removed)[:10]}"
     )

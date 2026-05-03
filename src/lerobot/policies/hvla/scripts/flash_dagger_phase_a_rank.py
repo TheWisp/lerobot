@@ -55,10 +55,14 @@ def compute_per_sample_loss(policy, batch, config):
 
     context = policy.model.encode_observations(batch)
 
-    t_beta = torch.distributions.Beta(
-        config.time_sampling_beta_alpha,
-        config.time_sampling_beta_beta,
-    ).sample((B,)).to(device)
+    t_beta = (
+        torch.distributions.Beta(
+            config.time_sampling_beta_alpha,
+            config.time_sampling_beta_beta,
+        )
+        .sample((B,))
+        .to(device)
+    )
     t_flow = t_beta * (config.time_max - config.time_min) + config.time_min
 
     noise = torch.randn_like(actions)
@@ -129,16 +133,24 @@ def override_norm_stats(dataset, ckpt_norm):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--checkpoint", required=True,
-                        help="Path to checkpoint dir (must contain pretrained_model/)")
-    parser.add_argument("--eval-repo-id", required=True,
-                        help="LeRobot repo_id of eval dataset (e.g. eval/eval_cylinder_ring_assembly_apr_24)")
+    parser.add_argument(
+        "--checkpoint", required=True, help="Path to checkpoint dir (must contain pretrained_model/)"
+    )
+    parser.add_argument(
+        "--eval-repo-id",
+        required=True,
+        help="LeRobot repo_id of eval dataset (e.g. eval/eval_cylinder_ring_assembly_apr_24)",
+    )
     parser.add_argument("--output-csv", default="eval_episode_loss.csv")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--epochs", type=int, default=3,
-                        help="Stochastic averaging passes (more = lower variance, linear cost)")
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=3,
+        help="Stochastic averaging passes (more = lower variance, linear cost)",
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -156,9 +168,13 @@ def main():
     # Load checkpoint config
     with open(ckpt_dir / "config.json") as f:
         ckpt_cfg = json.load(f)
-    logger.info("Checkpoint config: chunk=%d, hidden=%d, dec_layers=%d, rtc_max_delay=%d",
-                ckpt_cfg["chunk_size"], ckpt_cfg["hidden_dim"],
-                ckpt_cfg["num_decoder_layers"], ckpt_cfg["rtc_max_delay"])
+    logger.info(
+        "Checkpoint config: chunk=%d, hidden=%d, dec_layers=%d, rtc_max_delay=%d",
+        ckpt_cfg["chunk_size"],
+        ckpt_cfg["hidden_dim"],
+        ckpt_cfg["num_decoder_layers"],
+        ckpt_cfg["rtc_max_delay"],
+    )
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
@@ -183,8 +199,10 @@ def main():
     logger.info("Eval dataset: %d episodes, %d frames", n_episodes, n_frames)
 
     dataset = FlowMatchingDataset(
-        eval_dataset, s2_latents=None,
-        chunk_size=config.chunk_size, max_delay_seconds=0.0,
+        eval_dataset,
+        s2_latents=None,
+        chunk_size=config.chunk_size,
+        max_delay_seconds=0.0,
         resize_to=(224, 224),
         image_keys=list(config.image_features.keys()),
     )
@@ -196,7 +214,7 @@ def main():
     # Episode lookup: sample_idx → episode_idx
     ep_lookup = np.zeros(n_frames, dtype=np.int64)
     for ep_idx in range(n_episodes):
-        ep_lookup[ep_starts[ep_idx]:ep_ends[ep_idx]] = ep_idx
+        ep_lookup[ep_starts[ep_idx] : ep_ends[ep_idx]] = ep_idx
 
     # Build model and load weights
     logger.info("Building model (DINOv2 may download on first run)...")
@@ -205,6 +223,7 @@ def main():
     logger.info("Model params: %.1fM", total_params / 1e6)
 
     import safetensors.torch as sft
+
     state_dict = sft.load_file(str(ckpt_dir / "model.safetensors"))
     missing, unexpected = policy.load_state_dict(state_dict, strict=False)
     if missing:
@@ -214,8 +233,12 @@ def main():
     policy.eval()
 
     loader = DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.num_workers, pin_memory=True, drop_last=False,
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        drop_last=False,
     )
 
     ep_loss_sum = np.zeros(n_episodes, dtype=np.float64)
@@ -224,8 +247,9 @@ def main():
     use_amp = device.type == "cuda"
 
     for epoch in range(args.epochs):
-        logger.info("Epoch %d/%d — accumulating per-episode losses (%d batches)",
-                    epoch + 1, args.epochs, len(loader))
+        logger.info(
+            "Epoch %d/%d — accumulating per-episode losses (%d batches)", epoch + 1, args.epochs, len(loader)
+        )
         t_start = time.time()
         with torch.no_grad():
             for batch_i, batch in enumerate(loader):
@@ -249,8 +273,7 @@ def main():
 
                 if (batch_i + 1) % 50 == 0 or (batch_i + 1) == len(loader):
                     rate = (batch_i + 1) * args.batch_size / max(time.time() - t_start, 1e-6)
-                    logger.info("  batch %d/%d (%.0f frames/s)",
-                                batch_i + 1, len(loader), rate)
+                    logger.info("  batch %d/%d (%.0f frames/s)", batch_i + 1, len(loader), rate)
         logger.info("Epoch %d done in %.1fs", epoch + 1, time.time() - t_start)
 
     ep_mean_loss = ep_loss_sum / ep_loss_count.clip(min=1)
@@ -263,19 +286,28 @@ def main():
         f.write("rank,episode_idx,mean_loss,n_frames,n_samples\n")
         for rank, ep_idx in enumerate(order):
             n_frames_ep = ep_ends[ep_idx] - ep_starts[ep_idx]
-            f.write(f"{rank},{ep_idx},{ep_mean_loss[ep_idx]:.6f},"
-                    f"{n_frames_ep},{ep_loss_count[ep_idx]}\n")
+            f.write(f"{rank},{ep_idx},{ep_mean_loss[ep_idx]:.6f},{n_frames_ep},{ep_loss_count[ep_idx]}\n")
     logger.info("Saved ranked losses → %s", output_path)
 
     # Summary
-    logger.info("Loss distribution: min=%.4f, median=%.4f, max=%.4f, max/median=%.2fx",
-                ep_mean_loss.min(), np.median(ep_mean_loss), ep_mean_loss.max(),
-                ep_mean_loss.max() / max(np.median(ep_mean_loss), 1e-6))
+    logger.info(
+        "Loss distribution: min=%.4f, median=%.4f, max=%.4f, max/median=%.2fx",
+        ep_mean_loss.min(),
+        np.median(ep_mean_loss),
+        ep_mean_loss.max(),
+        ep_mean_loss.max() / max(np.median(ep_mean_loss), 1e-6),
+    )
     logger.info("Top 5 hardest episodes (candidates for flash-DAgger):")
     for rank, ep_idx in enumerate(order[:5]):
         n_frames_ep = ep_ends[ep_idx] - ep_starts[ep_idx]
-        logger.info("  rank=%d ep=%d loss=%.4f frames=%d (~%.1fs @ 30Hz)",
-                    rank, ep_idx, ep_mean_loss[ep_idx], n_frames_ep, n_frames_ep / 30.0)
+        logger.info(
+            "  rank=%d ep=%d loss=%.4f frames=%d (~%.1fs @ 30Hz)",
+            rank,
+            ep_idx,
+            ep_mean_loss[ep_idx],
+            n_frames_ep,
+            n_frames_ep / 30.0,
+        )
     logger.info("Bottom 3 easiest episodes (sanity check):")
     for ep_idx in order[-3:]:
         logger.info("  ep=%d loss=%.4f", ep_idx, ep_mean_loss[ep_idx])

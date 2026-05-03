@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def encode_frame_to_jpeg(frame: "torch.Tensor", quality: int = 85) -> bytes:
+def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85) -> bytes:
     """Convert a torch tensor frame to JPEG bytes.
 
     Uses torchvision.io.encode_jpeg for fast encoding (libjpeg-turbo),
@@ -101,18 +101,13 @@ class FrameCache:
         with self.lock:
             return key in self.cache
 
-    def is_episode_cached(
-        self, dataset_id: str, episode_idx: int, ep_length: int, camera_key: str
-    ) -> bool:
+    def is_episode_cached(self, dataset_id: str, episode_idx: int, ep_length: int, camera_key: str) -> bool:
         """Check if all frames of an episode are cached for a given camera.
 
         Uses a single lock acquisition to check all frames efficiently.
         """
         with self.lock:
-            return all(
-                (dataset_id, episode_idx, fi, camera_key) in self.cache
-                for fi in range(ep_length)
-            )
+            return all((dataset_id, episode_idx, fi, camera_key) in self.cache for fi in range(ep_length))
 
     def get(self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str) -> bytes | None:
         """Get a cached frame if available.

@@ -708,9 +708,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # Default: per-camera streaming on (HEAD's behavior). Disabled when upstream's
         # multi-camera streaming_encoding is explicitly True, or when batched/no-images.
         if use_per_camera_streaming is None:
-            use_per_camera_streaming = (
-                not streaming_encoding and record_images and batch_encoding_size == 1
-            )
+            use_per_camera_streaming = not streaming_encoding and record_images and batch_encoding_size == 1
         obj.writer = DatasetWriter(
             meta=obj.meta,
             root=obj.root,
@@ -822,9 +820,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             )
         # Default: per-camera streaming on, unless upstream's streaming_encoding flag is set.
         if use_per_camera_streaming is None:
-            use_per_camera_streaming = (
-                not streaming_encoding and record_images and batch_encoding_size == 1
-            )
+            use_per_camera_streaming = not streaming_encoding and record_images and batch_encoding_size == 1
         obj.writer = DatasetWriter(
             meta=obj.meta,
             root=obj.root,

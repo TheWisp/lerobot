@@ -21,8 +21,6 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fixtures.dataset_snapshot import snapshot_tree
-
 
 @pytest.fixture
 def real_dataset(tmp_path, lerobot_dataset_factory):

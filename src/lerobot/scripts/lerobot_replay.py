@@ -58,19 +58,19 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from pprint import pformat
 
+from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
+from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
 from lerobot.configs import parser
 from lerobot.datasets import LeRobotDataset
 from lerobot.processor import (
     make_default_robot_action_processor,
 )
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
     bi_openarm_follower,
-    bi_so_follower,
     bi_so107_follower,
+    bi_so_follower,
     earthrover_mini_plus,
     hope_jr,
     koch_follower,
@@ -124,7 +124,10 @@ def replay(cfg: ReplayConfig):
 
     # Build obs stream processor chain: robot processors + stream writer at the end
     from lerobot.robots.obs_stream import make_obs_stream_writer_step
-    obs_stream_steps = list(robot.get_observation_processor_steps() if hasattr(robot, "get_observation_processor_steps") else [])
+
+    obs_stream_steps = list(
+        robot.get_observation_processor_steps() if hasattr(robot, "get_observation_processor_steps") else []
+    )
     obs_stream_writer = make_obs_stream_writer_step()
     if obs_stream_writer is not None:
         obs_stream_steps.append(obs_stream_writer)

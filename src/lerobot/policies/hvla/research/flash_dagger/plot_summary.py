@@ -20,7 +20,7 @@ EP_LABELS = {
 
 fig, axes = plt.subplots(1, 3, figsize=(14, 5), sharex=True, sharey=True)
 
-for ax, rp in zip(axes, REPLAY_PCTS):
+for ax, rp in zip(axes, REPLAY_PCTS, strict=False):
     for ep in EPISODES:
         path = CURVE_DIR / f"ep{ep}_rp{rp:03d}_curve.csv"
         df = pd.read_csv(path)
@@ -47,21 +47,30 @@ axes[0].legend(loc="upper right", fontsize=9, framealpha=0.95)
 # Annotation: "good corner" in the bottom-left of leftmost panel
 axes[0].annotate(
     "ideal\n(both losses low)",
-    xy=(0.012, 0.012), xytext=(0.07, 0.01),
-    fontsize=9, color="#2a7a2a", ha="left", va="bottom",
-    arrowprops=dict(arrowstyle="->", color="#2a7a2a", lw=1.2),
+    xy=(0.012, 0.012),
+    xytext=(0.07, 0.01),
+    fontsize=9,
+    color="#2a7a2a",
+    ha="left",
+    va="bottom",
+    arrowprops={"arrowstyle": "->", "color": "#2a7a2a", "lw": 1.2},
 )
 
 # Direction-of-training annotation on rightmost panel
 axes[2].annotate(
     "training\n(○ start → ● end)",
-    xy=(0.27, 0.10), xytext=(0.18, 0.10),
-    fontsize=9, color="#444", ha="left", va="center",
+    xy=(0.27, 0.10),
+    xytext=(0.18, 0.10),
+    fontsize=9,
+    color="#444",
+    ha="left",
+    va="center",
 )
 
 fig.suptitle(
     "Flash-DAgger LoRA: training trajectory in (new, old) loss space — 100 steps, rank 16",
-    fontsize=12, y=1.00,
+    fontsize=12,
+    y=1.00,
 )
 plt.tight_layout()
 

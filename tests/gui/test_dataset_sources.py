@@ -4,14 +4,11 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from lerobot.gui.api.datasets import (
     _read_sources,
     _scan_source,
     _write_sources,
 )
-
 
 # ============================================================================
 # _read_sources / _write_sources
@@ -40,8 +37,10 @@ class TestReadSources:
             ],
         }
         fake_file.write_text(json.dumps(data))
-        with patch("lerobot.gui.api.datasets.SOURCES_FILE", fake_file), \
-             patch("lerobot.gui.api.datasets.HF_LEROBOT_HOME", Path(hf_home)):
+        with (
+            patch("lerobot.gui.api.datasets.SOURCES_FILE", fake_file),
+            patch("lerobot.gui.api.datasets.HF_LEROBOT_HOME", Path(hf_home)),
+        ):
             sources = _read_sources()
         assert len(sources) == 2
         assert sources[1]["path"] == "/tmp/extra"
@@ -58,8 +57,10 @@ class TestReadSources:
             ],
         }
         fake_file.write_text(json.dumps(data))
-        with patch("lerobot.gui.api.datasets.SOURCES_FILE", fake_file), \
-             patch("lerobot.gui.api.datasets.HF_LEROBOT_HOME", Path(hf_home)):
+        with (
+            patch("lerobot.gui.api.datasets.SOURCES_FILE", fake_file),
+            patch("lerobot.gui.api.datasets.HF_LEROBOT_HOME", Path(hf_home)),
+        ):
             sources = _read_sources()
         assert len(sources) == 2
         assert sources[0]["path"] == hf_home  # default inserted first
@@ -95,8 +96,10 @@ class TestWriteSources:
             {"path": hf_home, "removable": False, "expanded": True},
             {"path": "/tmp/extra", "removable": True, "expanded": False},
         ]
-        with patch("lerobot.gui.api.datasets.SOURCES_FILE", fake_file), \
-             patch("lerobot.gui.api.datasets.HF_LEROBOT_HOME", Path(hf_home)):
+        with (
+            patch("lerobot.gui.api.datasets.SOURCES_FILE", fake_file),
+            patch("lerobot.gui.api.datasets.HF_LEROBOT_HOME", Path(hf_home)),
+        ):
             _write_sources(original)
             result = _read_sources()
         assert len(result) == 2
@@ -200,11 +203,15 @@ class TestScanSource:
         ds_dir = tmp_path / "no_robot"
         meta_dir = ds_dir / "meta"
         meta_dir.mkdir(parents=True)
-        (meta_dir / "info.json").write_text(json.dumps({
-            "total_episodes": 5,
-            "total_frames": 100,
-            "fps": 10,
-        }))
+        (meta_dir / "info.json").write_text(
+            json.dumps(
+                {
+                    "total_episodes": 5,
+                    "total_frames": 100,
+                    "fps": 10,
+                }
+            )
+        )
         result = _scan_source(str(tmp_path))
         assert len(result) == 1
         assert result[0]["robot_type"] == ""

@@ -29,11 +29,13 @@ logger = logging.getLogger(__name__)
 def load_s2_model(checkpoint: str, device: str):
     from lerobot.policies.hvla.s2.config import S2VLMConfig
     from lerobot.policies.hvla.s2.model import S2VLMModel
+
     config = S2VLMConfig()
     model = S2VLMModel.from_pretrained(checkpoint, config)
     model.to(device).eval()
-    logger.info("S2 VLM loaded on %s (%dM params)",
-                device, sum(p.numel() for p in model.parameters()) // 1_000_000)
+    logger.info(
+        "S2 VLM loaded on %s (%dM params)", device, sum(p.numel() for p in model.parameters()) // 1_000_000
+    )
     return model, config
 
 
@@ -50,14 +52,14 @@ def main():
     parser.add_argument("--dataset-dir", required=True)
     parser.add_argument("--task", default="assemble cylinder into ring")
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--stride", type=int, default=10,
-                        help="Evaluate every N-th frame (1=all, 10=10%% sample)")
-    parser.add_argument("--max-frames", type=int, default=0,
-                        help="Max frames to evaluate (0=all)")
-    parser.add_argument("--random-sample", action="store_true",
-                        help="Randomly sample frames instead of fixed stride")
-    parser.add_argument("--seed", type=int, default=None,
-                        help="Random seed for reproducible sampling")
+    parser.add_argument(
+        "--stride", type=int, default=10, help="Evaluate every N-th frame (1=all, 10=10%% sample)"
+    )
+    parser.add_argument("--max-frames", type=int, default=0, help="Max frames to evaluate (0=all)")
+    parser.add_argument(
+        "--random-sample", action="store_true", help="Randomly sample frames instead of fixed stride"
+    )
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible sampling")
     parser.add_argument("--image-keys", default="base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb,base_1_rgb")
     args = parser.parse_args()
 
@@ -72,7 +74,10 @@ def main():
 
     # Pre-tokenize prompt (subtask_only=True for AR subtask decoding)
     token_ids, token_mask = tokenizer.tokenize_prompt(
-        args.task, low_prompt="", state=None, subtask_only=True,
+        args.task,
+        low_prompt="",
+        state=None,
+        subtask_only=True,
     )
     lang_tokens = torch.from_numpy(token_ids).unsqueeze(0).long().to(args.device)
     lang_masks = torch.from_numpy(token_mask).unsqueeze(0).bool().to(args.device)
@@ -88,7 +93,7 @@ def main():
     subtask_counts = Counter(df["subtask"].tolist())
     logger.info("Ground truth subtask distribution:")
     for st, count in subtask_counts.most_common():
-        logger.info("  \"%s\": %d frames (%.1f%%)", st, count, 100 * count / n_frames)
+        logger.info('  "%s": %d frames (%.1f%%)', st, count, 100 * count / n_frames)
 
     # LeRobot image key → S2 camera key mapping
     IMAGE_KEY_MAP = {
@@ -104,6 +109,7 @@ def main():
     # Evaluation loop — random sample or fixed stride
     if args.random_sample:
         import random
+
         if args.seed is not None:
             random.seed(args.seed)
         n_sample = args.max_frames if args.max_frames > 0 else n_frames // args.stride
@@ -112,7 +118,7 @@ def main():
     else:
         indices = list(range(0, n_frames, args.stride))
         if args.max_frames > 0:
-            indices = indices[:args.max_frames]
+            indices = indices[: args.max_frames]
         logger.info("\nEvaluating %d frames (stride=%d)...", len(indices), args.stride)
 
     results = []  # (idx, gt_subtask, pred_subtask, match)
@@ -135,14 +141,19 @@ def main():
                 images[s2_key] = img
 
         image_tensors, image_masks = preprocess_images(
-            images, image_keys=image_keys, resolution=config.image_resolution,
+            images,
+            image_keys=image_keys,
+            resolution=config.image_resolution,
             device=args.device,
         )
 
         t0 = time.perf_counter()
         with torch.no_grad():
             _, subtask_tokens, _, _token_log_probs = model.extract_prefix_latent_and_subtask(
-                image_tensors, image_masks, lang_tokens, lang_masks,
+                image_tensors,
+                image_masks,
+                lang_tokens,
+                lang_masks,
                 temperature=config.subtask_temperature,
             )
         elapsed_ms = (time.perf_counter() - t0) * 1000
@@ -175,10 +186,19 @@ def main():
             correct = sum(1 for r in results if r[3])
             total = len(results)
             eta_min = avg_ms * (len(indices) - eval_i) / 1000 / 60
-            logger.info("  [%d/%d] acc=%.1f%% (%d/%d) | %.0fms/frame | ETA: %.1fmin | last: \"%s\" → \"%s\" %s",
-                        eval_i + 1, len(indices), 100 * correct / total, correct, total,
-                        avg_ms, eta_min, gt_subtask, pred_clean,
-                        "✓" if exact_match else "✗")
+            logger.info(
+                '  [%d/%d] acc=%.1f%% (%d/%d) | %.0fms/frame | ETA: %.1fmin | last: "%s" → "%s" %s',
+                eval_i + 1,
+                len(indices),
+                100 * correct / total,
+                correct,
+                total,
+                avg_ms,
+                eta_min,
+                gt_subtask,
+                pred_clean,
+                "✓" if exact_match else "✗",
+            )
 
     # Final results
     total_exact = sum(1 for r in results if r[3])
@@ -193,7 +213,9 @@ def main():
     logger.info("Avg inference: %.0fms/frame", np.mean(timings))
     logger.info("")
     logger.info("Overall exact accuracy:    %d / %d = %.1f%%", total_exact, total, 100 * total_exact / total)
-    logger.info("Overall contains accuracy: %d / %d = %.1f%%", total_contains, total, 100 * total_contains / total)
+    logger.info(
+        "Overall contains accuracy: %d / %d = %.1f%%", total_contains, total, 100 * total_contains / total
+    )
 
     logger.info("\nPer-subtask breakdown:")
     logger.info("  %-30s  %8s  %8s  %s", "Ground Truth", "Accuracy", "N", "Top Predictions")
@@ -208,7 +230,7 @@ def main():
     logger.info("\nPrediction distribution (all):")
     all_preds = Counter(r[2].split(";")[0].strip().lower() for r in results)
     for pred, count in all_preds.most_common(10):
-        logger.info("  \"%s\": %d (%.1f%%)", pred, count, 100 * count / total)
+        logger.info('  "%s": %d (%.1f%%)', pred, count, 100 * count / total)
 
 
 if __name__ == "__main__":

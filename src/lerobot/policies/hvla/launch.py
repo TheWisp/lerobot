@@ -18,7 +18,7 @@ import multiprocessing
 import os
 import signal
 
-from lerobot.policies.hvla.ipc import SharedLatentCache, SharedImageBuffer
+from lerobot.policies.hvla.ipc import SharedImageBuffer, SharedLatentCache
 from lerobot.policies.hvla.logging_utils import setup_process_logging
 
 logger = logging.getLogger(__name__)
@@ -27,8 +27,11 @@ logger = logging.getLogger(__name__)
 def main():
     parser = argparse.ArgumentParser(description="HVLA dual-system inference (local, no server)")
     parser.add_argument("--s1-checkpoint", required=True)
-    parser.add_argument("--s2-checkpoint", default=None,
-                        help="Path to S2 checkpoint (not needed with --attach-s2 or --zero-s2)")
+    parser.add_argument(
+        "--s2-checkpoint",
+        default=None,
+        help="Path to S2 checkpoint (not needed with --attach-s2 or --zero-s2)",
+    )
     parser.add_argument("--task", required=True)
     parser.add_argument("--robot-config", default=None)
     parser.add_argument("--fps", type=int, default=30)
@@ -38,66 +41,144 @@ def main():
     parser.add_argument("--n-action-steps", type=int, default=None)
     parser.add_argument("--decode-subtask", action="store_true")
     parser.add_argument("--norm-stats", default=None)
-    parser.add_argument("--s2-image-keys", nargs="+",
-                        default=["base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb", "base_1_rgb"])
+    parser.add_argument(
+        "--s2-image-keys",
+        nargs="+",
+        default=["base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb", "base_1_rgb"],
+    )
     parser.add_argument("--zero-s2", action="store_true")
-    parser.add_argument("--compile-s1", action="store_true", default=True,
-                        help="torch.compile S1 denoise_step (default: on, ~2ms savings)")
-    parser.add_argument("--no-compile-s1", dest="compile_s1", action="store_false",
-                        help="Disable torch.compile for S1")
-    parser.add_argument("--s1-type", choices=["act", "flow"], default="act",
-                        help="S1 policy type: 'act' (ACTWithVLM, default) or 'flow' (flow matching with RTC)")
-    parser.add_argument("--s2-throttle-ms", type=int, default=100,
-                        help="Sleep ms after each S2 query to yield GPU to S1 (0=no throttle)")
-    parser.add_argument("--osc-skip", action="store_true",
-                        help="Enable both-arms oscillation skip: when both arms are flat, "
-                             "jump ahead in chunk to where movement starts")
-    parser.add_argument("--denoise-steps", type=int, default=None,
-                        help="Number of flow matching denoising steps (default: 10 from config)")
-    parser.add_argument("--s1-query-interval", type=int, default=2,
-                        help="Number of action steps to wait before re-querying S1. "
-                             "E.g. 20 = execute 20 actions (~660ms at 30fps) from current "
-                             "chunk before next inference. 0 = query as fast as possible.")
-    parser.add_argument("--max-step-delta", type=float, default=None,
-                        help="Max degrees any joint can change per frame (e.g. 10). Prevents sudden jumps.")
-    parser.add_argument("--save-grip-drops", type=str, default=None,
-                        help="Directory to save observations when grip drops are detected (for offline analysis)")
-    parser.add_argument("--record-dataset", type=str, default=None,
-                        help="Record inference episode to LeRobotDataset (e.g. 'user/hvla_ep1'). "
-                             "Saves obs+actions each frame, commits on shutdown.")
-    parser.add_argument("--num-episodes", type=int, default=1,
-                        help="Number of rollout episodes to record (default: 1 = single run)")
-    parser.add_argument("--episode-time-s", type=float, default=0,
-                        help="Max seconds per episode (0 = run until Ctrl+C)")
-    parser.add_argument("--reset-time-s", type=float, default=20,
-                        help="Seconds to wait during reset phase between episodes (default: 20)")
-    parser.add_argument("--teleop-config", type=str, default=None,
-                        help="Path to teleop profile JSON for intervention / inverse follow. "
-                             "When set, SPACE toggles between policy and human control.")
-    parser.add_argument("--intervention-dataset", type=str, default=None,
-                        help="Record intervention fragments to a separate LeRobotDataset "
-                             "(e.g. 'user/hvla_interventions')")
+    parser.add_argument(
+        "--compile-s1",
+        action="store_true",
+        default=True,
+        help="torch.compile S1 denoise_step (default: on, ~2ms savings)",
+    )
+    parser.add_argument(
+        "--no-compile-s1", dest="compile_s1", action="store_false", help="Disable torch.compile for S1"
+    )
+    parser.add_argument(
+        "--s1-type",
+        choices=["act", "flow"],
+        default="act",
+        help="S1 policy type: 'act' (ACTWithVLM, default) or 'flow' (flow matching with RTC)",
+    )
+    parser.add_argument(
+        "--s2-throttle-ms",
+        type=int,
+        default=100,
+        help="Sleep ms after each S2 query to yield GPU to S1 (0=no throttle)",
+    )
+    parser.add_argument(
+        "--osc-skip",
+        action="store_true",
+        help="Enable both-arms oscillation skip: when both arms are flat, "
+        "jump ahead in chunk to where movement starts",
+    )
+    parser.add_argument(
+        "--denoise-steps",
+        type=int,
+        default=None,
+        help="Number of flow matching denoising steps (default: 10 from config)",
+    )
+    parser.add_argument(
+        "--s1-query-interval",
+        type=int,
+        default=2,
+        help="Number of action steps to wait before re-querying S1. "
+        "E.g. 20 = execute 20 actions (~660ms at 30fps) from current "
+        "chunk before next inference. 0 = query as fast as possible.",
+    )
+    parser.add_argument(
+        "--max-step-delta",
+        type=float,
+        default=None,
+        help="Max degrees any joint can change per frame (e.g. 10). Prevents sudden jumps.",
+    )
+    parser.add_argument(
+        "--save-grip-drops",
+        type=str,
+        default=None,
+        help="Directory to save observations when grip drops are detected (for offline analysis)",
+    )
+    parser.add_argument(
+        "--record-dataset",
+        type=str,
+        default=None,
+        help="Record inference episode to LeRobotDataset (e.g. 'user/hvla_ep1'). "
+        "Saves obs+actions each frame, commits on shutdown.",
+    )
+    parser.add_argument(
+        "--num-episodes",
+        type=int,
+        default=1,
+        help="Number of rollout episodes to record (default: 1 = single run)",
+    )
+    parser.add_argument(
+        "--episode-time-s", type=float, default=0, help="Max seconds per episode (0 = run until Ctrl+C)"
+    )
+    parser.add_argument(
+        "--reset-time-s",
+        type=float,
+        default=20,
+        help="Seconds to wait during reset phase between episodes (default: 20)",
+    )
+    parser.add_argument(
+        "--teleop-config",
+        type=str,
+        default=None,
+        help="Path to teleop profile JSON for intervention / inverse follow. "
+        "When set, SPACE toggles between policy and human control.",
+    )
+    parser.add_argument(
+        "--intervention-dataset",
+        type=str,
+        default=None,
+        help="Record intervention fragments to a separate LeRobotDataset (e.g. 'user/hvla_interventions')",
+    )
     # --- RLT (online RL) ---
-    parser.add_argument("--rlt-mode", action="store_true",
-                        help="Enable RLT online RL: actor MLP refines S1 chunks. "
-                             "Press R for success (+1 reward, ends episode).")
-    parser.add_argument("--rl-token-checkpoint", type=str, default=None,
-                        help="Path to trained RL token encoder checkpoint (Phase 1)")
-    parser.add_argument("--rlt-checkpoint", type=str, default=None,
-                        help="Path to existing RLT actor checkpoint dir (resumes training or deploys)")
-    parser.add_argument("--rlt-deploy", action="store_true",
-                        help="Deploy mode: actor forward only, no training loop")
-    parser.add_argument("--rl-chunk-length", type=int, default=10,
-                        help="RL action chunk length C (default: 10)")
-    parser.add_argument("--rlt-output-dir", type=str, default="outputs/rlt_online",
-                        help="Directory for RLT checkpoints and logs")
-    parser.add_argument("--rlt-start-disengaged", action="store_true",
-                        help="Start each episode with RL actor off. Press E to engage mid-episode.")
-    parser.add_argument("--rlt-shared-noise-per-chunk", action="store_true",
-                        help="Experimental: sample exploration noise once per chunk and "
-                             "broadcast across C frames (smoother joint commands than per-frame "
-                             "iid noise). Set at launch time only — flipping mid-training "
-                             "mixes noise distributions in the replay buffer.")
+    parser.add_argument(
+        "--rlt-mode",
+        action="store_true",
+        help="Enable RLT online RL: actor MLP refines S1 chunks. "
+        "Press R for success (+1 reward, ends episode).",
+    )
+    parser.add_argument(
+        "--rl-token-checkpoint",
+        type=str,
+        default=None,
+        help="Path to trained RL token encoder checkpoint (Phase 1)",
+    )
+    parser.add_argument(
+        "--rlt-checkpoint",
+        type=str,
+        default=None,
+        help="Path to existing RLT actor checkpoint dir (resumes training or deploys)",
+    )
+    parser.add_argument(
+        "--rlt-deploy", action="store_true", help="Deploy mode: actor forward only, no training loop"
+    )
+    parser.add_argument(
+        "--rl-chunk-length", type=int, default=10, help="RL action chunk length C (default: 10)"
+    )
+    parser.add_argument(
+        "--rlt-output-dir",
+        type=str,
+        default="outputs/rlt_online",
+        help="Directory for RLT checkpoints and logs",
+    )
+    parser.add_argument(
+        "--rlt-start-disengaged",
+        action="store_true",
+        help="Start each episode with RL actor off. Press E to engage mid-episode.",
+    )
+    parser.add_argument(
+        "--rlt-shared-noise-per-chunk",
+        action="store_true",
+        help="Experimental: sample exploration noise once per chunk and "
+        "broadcast across C frames (smoother joint commands than per-frame "
+        "iid noise). Set at launch time only — flipping mid-training "
+        "mixes noise distributions in the replay buffer.",
+    )
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -119,15 +200,20 @@ def main():
             shared_cache = SharedLatentCache(create=False, name=SharedLatentCache.SHM_NAME)
             shared_images = SharedImageBuffer(camera_keys=s2_image_keys, create=False)
             s2_attached = True
-            logger.info("Attached to existing S2 (latent count=%d, age=%.0fms)",
-                        shared_cache.count, shared_cache.age_ms)
+            logger.info(
+                "Attached to existing S2 (latent count=%d, age=%.0fms)",
+                shared_cache.count,
+                shared_cache.age_ms,
+            )
         except FileNotFoundError:
             # No existing S2 — need to spawn one
             if args.s2_checkpoint is None:
-                logger.error("No S2 process found and no --s2-checkpoint provided.\n"
-                             "Either start S2 first:\n"
-                             "  python -m lerobot.policies.hvla.s2_standalone --checkpoint ... --task ...\n"
-                             "Or provide --s2-checkpoint to spawn one.")
+                logger.error(
+                    "No S2 process found and no --s2-checkpoint provided.\n"
+                    "Either start S2 first:\n"
+                    "  python -m lerobot.policies.hvla.s2_standalone --checkpoint ... --task ...\n"
+                    "Or provide --s2-checkpoint to spawn one."
+                )
                 return
             logger.info("No existing S2 found, will spawn from checkpoint")
             shared_cache = SharedLatentCache(create=True)

@@ -86,7 +86,7 @@ class PaligemmaTokenizer:
         else:
             if n > self._max_len:
                 logger.warning("Token length %d exceeds max_len %d, truncating", n, self._max_len)
-            tokens = tokens[:self._max_len]
+            tokens = tokens[: self._max_len]
             mask = [True] * self._max_len
 
         return (

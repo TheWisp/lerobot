@@ -12,12 +12,8 @@ from lerobot.robots.obs_stream import (
     ENV_VAR,
     ObservationStream,
     ObservationStreamReader,
-    _active_robot_id,
-    _active_stream,
-    _connect_depth,
 )
 from lerobot.robots.robot import Robot
-
 
 # ============================================================================
 # Fixtures

@@ -624,7 +624,9 @@ def handle_trim_episode(cfg: EditDatasetConfig) -> None:
     modified_dataset.meta.episodes = load_episodes(modified_dataset.root)
 
     logging.info(f"Dataset modified at {dataset.root}")
-    logging.info(f"Episode {episode_index} new length: {modified_dataset.meta.episodes[episode_index]['length']} frames")
+    logging.info(
+        f"Episode {episode_index} new length: {modified_dataset.meta.episodes[episode_index]['length']} frames"
+    )
     logging.info(f"Total frames: {modified_dataset.meta.total_frames}")
 
     if cfg.push_to_hub:

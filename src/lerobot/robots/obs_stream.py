@@ -21,14 +21,15 @@ Torn-read protection via sequence counters (same pattern as policies.hvla.ipc).
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import logging
 import multiprocessing.shared_memory as _shm
-from multiprocessing import resource_tracker
 import os
 import struct
 import time
+from multiprocessing import resource_tracker
 
 import numpy as np
 
@@ -124,10 +125,8 @@ class _Block:
         return data, ts  # best-effort
 
     def cleanup(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self._shm.close()
-        except Exception:
-            pass
         if self._owner:
             # Suppress unregister inside unlink() — we never registered,
             # so unregister would send a message that causes KeyError in
@@ -185,9 +184,7 @@ class ObservationStream:
             h, w = dims[0], dims[1]
             c = dims[2] if len(dims) > 2 else 3
             safe = cam_key.replace("/", "_")
-            self._img_blocks[cam_key] = _Block(
-                f"{SHM_PREFIX}img_{safe}", h * w * c, create=True
-            )
+            self._img_blocks[cam_key] = _Block(f"{SHM_PREFIX}img_{safe}", h * w * c, create=True)
 
         logger.info(
             "ObservationStream started: %d obs scalars, %d action scalars, %d cameras",
@@ -241,20 +238,14 @@ class ObservationStreamReader:
         self.action_keys: list[str] = meta["action_keys"]
         self.image_keys: dict[str, list[int]] = meta["image_keys"]
 
-        self._obs_block = _Block(
-            f"{SHM_PREFIX}obs", len(self.obs_scalar_keys) * 4, create=False
-        )
-        self._act_block = _Block(
-            f"{SHM_PREFIX}act", len(self.action_keys) * 4, create=False
-        )
+        self._obs_block = _Block(f"{SHM_PREFIX}obs", len(self.obs_scalar_keys) * 4, create=False)
+        self._act_block = _Block(f"{SHM_PREFIX}act", len(self.action_keys) * 4, create=False)
         self._img_blocks: dict[str, _Block] = {}
         for cam_key, dims in self.image_keys.items():
             safe = cam_key.replace("/", "_")
             h, w = dims[0], dims[1]
             c = dims[2] if len(dims) > 2 else 3
-            self._img_blocks[cam_key] = _Block(
-                f"{SHM_PREFIX}img_{safe}", h * w * c, create=False
-            )
+            self._img_blocks[cam_key] = _Block(f"{SHM_PREFIX}img_{safe}", h * w * c, create=False)
 
     def read_obs(self) -> tuple[dict[str, float], float] | None:
         """Returns (obs_dict, timestamp) or None if no data."""
@@ -336,9 +327,11 @@ class ObservationStreamWriterStep:
         if self._s2_joint_names is None:
             try:
                 from lerobot.policies.hvla.ipc import DEFAULT_S2_CAM_KEY_MAP
+
                 self._s2_cam_key_map = DEFAULT_S2_CAM_KEY_MAP
-                self._s2_joint_names = [k for k, v in obs.items()
-                                        if isinstance(v, (int, float)) and not k.startswith("_")]
+                self._s2_joint_names = [
+                    k for k, v in obs.items() if isinstance(v, (int, float)) and not k.startswith("_")
+                ]
                 for cam_name in self._s2_cam_key_map:
                     img = obs.get(cam_name)
                     if img is not None:
@@ -359,23 +352,29 @@ class ObservationStreamWriterStep:
         """Try to attach to S2's SharedImageBuffer. No-op if not found."""
         try:
             from lerobot.policies.hvla.ipc import SharedImageBuffer
+
             s2_image_keys = tuple(self._s2_cam_key_map.values())
             self._s2_buffer = SharedImageBuffer(
-                camera_keys=s2_image_keys, height=self._s2_height, width=self._s2_width,
-                create=False, state_dim=max(len(self._s2_joint_names), 32),
+                camera_keys=s2_image_keys,
+                height=self._s2_height,
+                width=self._s2_width,
+                create=False,
+                state_dim=max(len(self._s2_joint_names), 32),
             )
-            logger.info("Attached to S2 SharedImageBuffer (%dx%d, %d joints)",
-                        self._s2_width, self._s2_height, len(self._s2_joint_names))
+            logger.info(
+                "Attached to S2 SharedImageBuffer (%dx%d, %d joints)",
+                self._s2_width,
+                self._s2_height,
+                len(self._s2_joint_names),
+            )
         except FileNotFoundError:
             logger.debug("S2 SharedImageBuffer not found yet, will retry")
 
     def observation(self, observation: dict) -> dict:
         """Write observation to stream(s) and pass through unchanged."""
         if _active_stream is not None:
-            try:
+            with contextlib.suppress(Exception):
                 _active_stream.write_obs(observation)
-            except Exception:
-                pass
         if self._s2_enabled:
             self._ensure_s2_buffer(observation)
             if self._s2_buffer is not None:
@@ -386,7 +385,9 @@ class ObservationStreamWriterStep:
                 else:
                     try:
                         self._s2_buffer.write_images(
-                            observation, self._s2_cam_key_map, self._s2_joint_names,
+                            observation,
+                            self._s2_cam_key_map,
+                            self._s2_joint_names,
                         )
                     except Exception:
                         self._s2_buffer = None
@@ -406,7 +407,7 @@ class ObservationStreamWriterStep:
 
 def _shm_exists(name: str) -> bool:
     """Check if a named shared memory segment exists via /dev/shm (no syscall overhead)."""
-    return os.path.exists(f"/dev/shm/{name}")
+    return os.path.exists(f"/dev/shm/{name}")  # nosec B108  /dev/shm is the POSIX shared-memory FS, not a temp dir.
 
 
 def make_obs_stream_writer_step() -> ObservationStreamWriterStep | None:
@@ -435,9 +436,7 @@ def _maybe_start_stream(robot) -> None:
         _active_stream = None
         _active_robot_id = None
     try:
-        _active_stream = ObservationStream(
-            robot.observation_features, robot.action_features
-        )
+        _active_stream = ObservationStream(robot.observation_features, robot.action_features)
         _active_robot_id = id(robot)
     except Exception:
         logger.warning("Failed to create ObservationStream", exc_info=True)

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 from typing import TYPE_CHECKING
@@ -31,10 +32,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["playback"])
 
 # Will be set by server.py
-_app_state: "AppState" = None  # type: ignore
+_app_state: AppState = None  # type: ignore
 
 
-def set_app_state(state: "AppState") -> None:
+def set_app_state(state: AppState) -> None:
     """Set the application state for WebSocket handlers."""
     global _app_state
     _app_state = state
@@ -85,6 +86,7 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
         if ds is None:
             return {}
         from lerobot.gui.dataset_reload import ensure_episodes_loaded
+
         ensure_episodes_loaded(ds)
         return ds.meta.episodes
 
@@ -194,7 +196,9 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
                 # Start or switch playback
                 ds = get_dataset()
                 if ds is None:
-                    await websocket.send_json({"type": "error", "message": f"Dataset {dataset_id} no longer available"})
+                    await websocket.send_json(
+                        {"type": "error", "message": f"Dataset {dataset_id} no longer available"}
+                    )
                     break
 
                 new_episode = cmd.get("episode", episode_idx)
@@ -206,7 +210,9 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
                     current_frame = 0
 
                     if episode_idx < 0 or episode_idx >= ds.meta.total_episodes:
-                        await websocket.send_json({"type": "error", "message": f"Invalid episode: {episode_idx}"})
+                        await websocket.send_json(
+                            {"type": "error", "message": f"Invalid episode: {episode_idx}"}
+                        )
                         continue
 
                 if new_camera and new_camera in ds.meta.camera_keys:
@@ -217,10 +223,8 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
                 # Cancel existing play task
                 if play_task and not play_task.done():
                     play_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await play_task
-                    except asyncio.CancelledError:
-                        pass
 
                 await send_status()
                 play_task = asyncio.create_task(play_loop())
@@ -229,10 +233,8 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
                 playing = False
                 if play_task and not play_task.done():
                     play_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await play_task
-                    except asyncio.CancelledError:
-                        pass
                 await send_status()
 
             elif command == "resume":
@@ -250,10 +252,8 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
                     playing = False
                     if play_task and not play_task.done():
                         play_task.cancel()
-                        try:
+                        with contextlib.suppress(asyncio.CancelledError):
                             await play_task
-                        except asyncio.CancelledError:
-                            pass
 
                 await send_frame(frame_idx)
                 await send_status()
@@ -267,10 +267,8 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
                 playing = False
                 if play_task and not play_task.done():
                     play_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await play_task
-                    except asyncio.CancelledError:
-                        pass
                 current_frame = 0
                 await send_status()
 

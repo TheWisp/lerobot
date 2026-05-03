@@ -5,6 +5,7 @@
 We have Pi0.5 running at ~840ms/query (~1.2Hz) as a monolithic VLA. Profiling showed the bottleneck is prefix encoding (4 images through SigLIP + Gemma LLM = ~600ms) — irreducible without model changes. We also have ACT trained on single tasks for the same robot.
 
 **Goal**: Build a temporally hierarchical dual-system where:
+
 - **S2**: Pi0.5 at ~1Hz extracts a scene-understanding latent (reuse existing server)
 - **S1**: DINOv2-S + modified ACT at ~30-140Hz for reactive control, conditioned on cached S2 latent
 
@@ -21,6 +22,7 @@ Inspired by Figure's Helix and OpenHelix's empirical findings on dual-system VLA
 **File**: `~/Documents/openpi_subtask/src/openpi/models/pi05.py`
 
 In `sample_low_level_task()` (line 377), after the LLM forward pass:
+
 ```python
 (prefix_out, _), kv_cache = self.PaliGemma.llm(...)
 # prefix_out shape: [B, seq_len, 2048]
@@ -39,6 +41,7 @@ Add `extract_latent()` method that prepares observation (same as `infer()`), cal
 **File**: `~/Documents/openpi_subtask/scripts/async_pi05/async_pi05_websocket_server.py`
 
 When request contains `"mode": "extract_latent"`, skip action generation, return:
+
 ```json
 {"status": "success", "s2_latent": [2048 floats], "timing": {"prefix_ms": ...}}
 ```
@@ -52,6 +55,7 @@ When request contains `"mode": "extract_latent"`, skip action generation, return
 - Save all latents as `s2_latents.npy` shape `[N_frames, 2048]`
 
 ### Verification
+
 - Single frame → server returns 2048-dim vector, no NaN
 - Extraction time ~600ms (same as prefix encoding, no AR overhead)
 - Batch 100 frames, confirm consistent shapes
@@ -84,6 +88,7 @@ class ACTWithVLMConfig(ACTConfig):
 Key changes from ACT (`src/lerobot/policies/act/modeling_act.py`):
 
 **S2 projector** (in `__init__`):
+
 ```python
 self.s2_projector = nn.Sequential(
     nn.Linear(config.s2_latent_dim, config.s2_projector_hidden_dim),
@@ -93,6 +98,7 @@ self.s2_projector = nn.Sequential(
 ```
 
 **Injection point** — line 459 of ACT, where encoder tokens are assembled:
+
 ```python
 # Original: encoder_in_tokens = [self.encoder_latent_input_proj(latent_sample)]
 # New: prepend S2 token before the VAE latent token
@@ -106,6 +112,7 @@ encoder_in_tokens = [
 The S2 token enters the encoder sequence alongside state and image tokens. The transformer's self-attention naturally integrates it. This is the same pattern ACT already uses for its VAE latent.
 
 **Optional DINOv2 backbone** (replaces ResNet18):
+
 ```python
 # In __init__:
 self.backbone = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
@@ -132,6 +139,7 @@ Same as ACT processor, plus handles `s2_latent` feature (pass-through normalizat
 Add `act_vlm` entries in `get_policy_class()`, `make_policy_config()`, and `make_pre_post_processors()`.
 
 ### Verification
+
 - Instantiate policy, forward with dummy batch including `s2_latent: torch.randn(1, 2048)` → output shape `(1, chunk_size, 14)`
 - Trainable params: ~15-20M (ACT transformer + projectors, DINOv2 frozen)
 - Forward pass: <10ms on GPU
@@ -155,10 +163,10 @@ class LeRobotDatasetWithLatents(Dataset):
 
 ### 3B. Training stages
 
-| Stage | What trains | Data | Compute |
-|-------|------------|------|---------|
-| **Pre-align** (optional) | S2 projector MLP only | latents + actions | Minutes, 1 GPU |
-| **Main training** | Projector + ACT + CVAE | latents + images + actions | Hours, same as ACT |
+| Stage                    | What trains            | Data                       | Compute            |
+| ------------------------ | ---------------------- | -------------------------- | ------------------ |
+| **Pre-align** (optional) | S2 projector MLP only  | latents + actions          | Minutes, 1 GPU     |
+| **Main training**        | Projector + ACT + CVAE | latents + images + actions | Hours, same as ACT |
 
 - Freeze DINOv2-S backbone
 - S2 latents are precomputed (from Phase 1D), loaded from disk
@@ -171,6 +179,7 @@ class LeRobotDatasetWithLatents(Dataset):
 - Compare against vanilla ACT on same data
 
 ### Verification
+
 - Training loss decreases on 100-episode subset
 - L1 loss after 10k steps ≤ vanilla ACT on same data
 - Ablation shows S2 conditioning matters
@@ -195,6 +204,7 @@ Main S1 loop (~30Hz+):
 ```
 
 **Timing budget**:
+
 - DINOv2-S: 2 × 5ms = 10ms
 - ACT forward: ~2ms
 - Overhead: ~3ms
@@ -203,6 +213,7 @@ Main S1 loop (~30Hz+):
 **Graceful degradation**: If S2 disconnects, S1 continues with last cached latent.
 
 ### Verification
+
 - S1 latency <15ms per step
 - S2 updates arrive async without blocking S1
 - Robot moves smoothly; S2 latent updates don't cause jerks
@@ -212,18 +223,18 @@ Main S1 loop (~30Hz+):
 
 ## File Summary
 
-| File | Action | Phase |
-|------|--------|-------|
-| `openpi_subtask/src/openpi/models/pi05.py` | Add `extract_prefix_latent()` | 1A |
-| `openpi_subtask/scripts/async_pi05/async_pi05_inference.py` | Add `extract_latent()` | 1B |
-| `openpi_subtask/scripts/async_pi05/async_pi05_websocket_server.py` | Add `"mode": "extract_latent"` | 1C |
-| `lerobot/scripts/extract_s2_latents.py` | **New** — batch extraction | 1D |
-| `lerobot/src/lerobot/policies/act_vlm/__init__.py` | **New** | 2 |
-| `lerobot/src/lerobot/policies/act_vlm/configuration_act_vlm.py` | **New** — config | 2A |
-| `lerobot/src/lerobot/policies/act_vlm/modeling_act_vlm.py` | **New** — model | 2B |
-| `lerobot/src/lerobot/policies/act_vlm/processor_act_vlm.py` | **New** — processor | 2C |
-| `lerobot/src/lerobot/policies/factory.py` | Register act_vlm | 2D |
-| `lerobot/dual_system_infer.py` | **New** — inference loop | 4 |
+| File                                                               | Action                         | Phase |
+| ------------------------------------------------------------------ | ------------------------------ | ----- |
+| `openpi_subtask/src/openpi/models/pi05.py`                         | Add `extract_prefix_latent()`  | 1A    |
+| `openpi_subtask/scripts/async_pi05/async_pi05_inference.py`        | Add `extract_latent()`         | 1B    |
+| `openpi_subtask/scripts/async_pi05/async_pi05_websocket_server.py` | Add `"mode": "extract_latent"` | 1C    |
+| `lerobot/scripts/extract_s2_latents.py`                            | **New** — batch extraction     | 1D    |
+| `lerobot/src/lerobot/policies/act_vlm/__init__.py`                 | **New**                        | 2     |
+| `lerobot/src/lerobot/policies/act_vlm/configuration_act_vlm.py`    | **New** — config               | 2A    |
+| `lerobot/src/lerobot/policies/act_vlm/modeling_act_vlm.py`         | **New** — model                | 2B    |
+| `lerobot/src/lerobot/policies/act_vlm/processor_act_vlm.py`        | **New** — processor            | 2C    |
+| `lerobot/src/lerobot/policies/factory.py`                          | Register act_vlm               | 2D    |
+| `lerobot/dual_system_infer.py`                                     | **New** — inference loop       | 4     |
 
 ## Dependencies
 

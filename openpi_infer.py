@@ -22,6 +22,7 @@ Usage:
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import signal
@@ -31,21 +32,22 @@ from pathlib import Path
 import draccus
 import numpy as np
 
-# Register draccus ChoiceRegistry subclasses before any decode calls
-from lerobot.robots import bi_so107_follower  # noqa: F401
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
 
-from lerobot.robots import make_robot_from_config
+# Register draccus ChoiceRegistry subclasses before any decode calls
+from lerobot.robots import (
+    bi_so107_follower,  # noqa: F401
+    make_robot_from_config,
+)
 from lerobot.robots.config import RobotConfig
 from lerobot.utils.control_utils import init_keyboard_listener
-
 from lerobot.utils.utils import init_logging, log_say
 
 try:
     import websockets
 except ImportError:
-    raise ImportError("websockets is required: pip install websockets")
+    raise ImportError("websockets is required: pip install websockets") from None
 
 
 # --------------- Constants ---------------
@@ -80,6 +82,7 @@ ROBOT_CONFIG_FILE = CONFIG_DIR / "robot_config.json"
 
 
 # --------------- Helpers ---------------
+
 
 def build_request(robot_obs: dict, task: str) -> dict:
     """Build a JSON-serializable request for the async server."""
@@ -138,10 +141,8 @@ def soft_land(robot, duration_s=4.0, steps=20):
             torque_value = int(1000 * (1.0 - (i + 1) / steps))
             for bus in buses:
                 for motor_name in bus.motors:
-                    try:
+                    with contextlib.suppress(Exception):
                         bus.write("Torque_Limit", motor_name, torque_value, normalize=False)
-                    except Exception:
-                        pass
             time.sleep(step_delay)
 
         logging.info("Soft landing complete")
@@ -155,13 +156,12 @@ def restore_torque(robot):
         arm = getattr(robot, arm_name, None)
         if arm is not None:
             for motor_name in arm.bus.motors:
-                try:
+                with contextlib.suppress(Exception):
                     arm.bus.write("Torque_Limit", motor_name, 1000, normalize=False)
-                except Exception:
-                    pass
 
 
 # --------------- Main ---------------
+
 
 async def control_loop(robot, events, args):
     """Async control loop: connect to server, query model, execute actions."""
@@ -233,12 +233,18 @@ async def control_loop(robot, events, args):
                 timing = response.get("timing", {})
 
                 t_parts = []
-                for k in ("decode_images_ms", "normalize_state_ms", "subtask_ms", "action_ms", "unnormalize_ms"):
+                for k in (
+                    "decode_images_ms",
+                    "normalize_state_ms",
+                    "subtask_ms",
+                    "action_ms",
+                    "unnormalize_ms",
+                ):
                     v = timing.get(k)
                     if v is not None and v > 0:
-                        t_parts.append(f"{k.replace('_ms','')}={v:.0f}ms")
+                        t_parts.append(f"{k.replace('_ms', '')}={v:.0f}ms")
                 logging.info(
-                    f"[Query {query_count}] subtask=\"{subtask}\" | "
+                    f'[Query {query_count}] subtask="{subtask}" | '
                     f"server: {timing.get('total_ms', 0):.0f}ms ({', '.join(t_parts)}) | "
                     f"roundtrip: {query_ms:.0f}ms"
                 )
@@ -247,7 +253,7 @@ async def control_loop(robot, events, args):
                     logging.warning("No actions returned, skipping")
                     continue
 
-                action_buffer = actions_to_dicts(actions)[:args.action_horizon]
+                action_buffer = actions_to_dicts(actions)[: args.action_horizon]
                 chunk_step = 0
 
                 if query_count <= 3:
@@ -276,13 +282,22 @@ def main():
     parser.add_argument("--host", default="localhost", help="OpenPI server host")
     parser.add_argument("--port", type=int, default=8765, help="OpenPI server port")
     parser.add_argument("--task", required=True, help="High-level task prompt")
-    parser.add_argument("--action-horizon", type=int, default=ACTION_HORIZON,
-                        help="Steps to execute per action chunk (default: 40)")
+    parser.add_argument(
+        "--action-horizon",
+        type=int,
+        default=ACTION_HORIZON,
+        help="Steps to execute per action chunk (default: 40)",
+    )
     parser.add_argument("--fps", type=int, default=FPS, help="Control loop FPS (default: 30)")
-    parser.add_argument("--prefetch-at", type=int, default=PREFETCH_AT,
-                        help="Fire prefetch query at this step within a chunk (default: 25)")
-    parser.add_argument("--robot-config", type=str, default=str(ROBOT_CONFIG_FILE),
-                        help="Path to robot config JSON")
+    parser.add_argument(
+        "--prefetch-at",
+        type=int,
+        default=PREFETCH_AT,
+        help="Fire prefetch query at this step within a chunk (default: 25)",
+    )
+    parser.add_argument(
+        "--robot-config", type=str, default=str(ROBOT_CONFIG_FILE), help="Path to robot config JSON"
+    )
     args = parser.parse_args()
 
     init_logging()

@@ -21,12 +21,10 @@ Root cause: aggregate.py update_meta_data() line 133-134 just adds offsets:
 This should use src_to_dst mapping like data files do (line 136+).
 """
 
-import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
-import pytest
 
 from lerobot.datasets.aggregate import aggregate_datasets
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -155,9 +153,7 @@ def test_merge_datasets_with_multiple_meta_files(tmp_path, lerobot_dataset_facto
         ep = ds_merged.meta.episodes[ep_idx]
         chunk_idx = int(ep["meta/episodes/chunk_index"])
         file_idx = int(ep["meta/episodes/file_index"])
-        meta_path = ds_merged.root / DEFAULT_EPISODES_PATH.format(
-            chunk_index=chunk_idx, file_index=file_idx
-        )
+        meta_path = ds_merged.root / DEFAULT_EPISODES_PATH.format(chunk_index=chunk_idx, file_index=file_idx)
         rel_path = str(meta_path.relative_to(ds_merged.root))
         referenced_files.add(rel_path)
 
@@ -167,7 +163,9 @@ def test_merge_datasets_with_multiple_meta_files(tmp_path, lerobot_dataset_facto
     print(f"Files referenced by metadata: {sorted(referenced_files)}")
 
     # Show file_index distribution
-    file_indices = [int(ds_merged.meta.episodes[i]["meta/episodes/file_index"]) for i in range(ds_merged.num_episodes)]
+    file_indices = [
+        int(ds_merged.meta.episodes[i]["meta/episodes/file_index"]) for i in range(ds_merged.num_episodes)
+    ]
     print(f"File indices in metadata: {sorted(set(file_indices))} (unique values)")
     print(f"File index counts: {[(i, file_indices.count(i)) for i in sorted(set(file_indices))]}")
 
@@ -190,7 +188,7 @@ def test_merge_datasets_with_multiple_meta_files(tmp_path, lerobot_dataset_facto
 
     # Verify iteration works
     count = 0
-    for item in ds_merged:
+    for _item in ds_merged:
         count += 1
     expected = ds_a.num_frames + ds_b.num_frames
     assert count == expected, f"Expected {expected} frames, got {count}"

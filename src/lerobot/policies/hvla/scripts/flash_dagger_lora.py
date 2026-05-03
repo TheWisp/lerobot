@@ -77,13 +77,13 @@ class LoRAMultiheadAttention(nn.Module):
         with torch.no_grad():
             w = base.in_proj_weight.data
             q_proj.weight.copy_(w[:d])
-            k_proj.weight.copy_(w[d:2 * d])
-            v_proj.weight.copy_(w[2 * d:])
+            k_proj.weight.copy_(w[d : 2 * d])
+            v_proj.weight.copy_(w[2 * d :])
             if has_bias:
                 b = base.in_proj_bias.data
                 q_proj.bias.copy_(b[:d])
-                k_proj.bias.copy_(b[d:2 * d])
-                v_proj.bias.copy_(b[2 * d:])
+                k_proj.bias.copy_(b[d : 2 * d])
+                v_proj.bias.copy_(b[2 * d :])
 
         self.q_proj = LoRALinear(q_proj, rank, alpha)
         self.k_proj = LoRALinear(k_proj, rank, alpha)
@@ -127,7 +127,9 @@ class LoRAMultiheadAttention(nn.Module):
             attn_bias = attn_mask if attn_bias is None else attn_bias + attn_mask
 
         attn_out = F.scaled_dot_product_attention(
-            q, k, v,
+            q,
+            k,
+            v,
             attn_mask=attn_bias,
             dropout_p=self.dropout_p if self.training else 0.0,
             is_causal=is_causal,

@@ -6,16 +6,18 @@ Covers:
   - Status reflects actual state
   - Lock prevents concurrent load/unload
 """
-import asyncio
-import pytest
 
-from unittest.mock import AsyncMock, patch, MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 @pytest.fixture(autouse=True)
 def _reset_state():
     """Reset debug model state between tests."""
     import lerobot.gui.api.run as run_mod
+
     run_mod._debug_process = None
     # Reset the lock (may be held from a failed test)
     run_mod._debug_lock = asyncio.Lock()
@@ -45,10 +47,12 @@ def _run(coro):
 class TestLoadGuards:
     def test_load_when_already_loaded_returns_409(self):
         import lerobot.gui.api.run as run_mod
+
         run_mod._debug_process = _make_fake_process(alive=True)
 
-        from lerobot.gui.api.run import load_debug_model, DebugModelConfig
         from fastapi import HTTPException
+
+        from lerobot.gui.api.run import DebugModelConfig, load_debug_model
 
         config = DebugModelConfig(checkpoint="/fake/path", policy_type="hvla_s2_vlm", task="test")
         with pytest.raises(HTTPException) as exc_info:
@@ -56,8 +60,9 @@ class TestLoadGuards:
         assert exc_info.value.status_code == 409
 
     def test_load_unsupported_type_returns_400(self):
-        from lerobot.gui.api.run import load_debug_model, DebugModelConfig
         from fastapi import HTTPException
+
+        from lerobot.gui.api.run import DebugModelConfig, load_debug_model
 
         config = DebugModelConfig(checkpoint="/fake/path", policy_type="unknown_type", task="test")
         with pytest.raises(HTTPException) as exc_info:
@@ -68,26 +73,32 @@ class TestLoadGuards:
 class TestUnloadGuards:
     def test_unload_when_not_loaded(self):
         from lerobot.gui.api.run import unload_debug_model
+
         result = _run(unload_debug_model())
         assert result["status"] == "not_loaded"
 
     def test_unload_already_exited_process(self):
         import lerobot.gui.api.run as run_mod
+
         run_mod._debug_process = _make_fake_process(alive=False)
 
         from lerobot.gui.api.run import unload_debug_model
+
         result = _run(unload_debug_model())
         assert result["status"] == "not_loaded"
 
     def test_unload_running_process(self):
         import lerobot.gui.api.run as run_mod
+
         run_mod._debug_process = _make_fake_process(alive=True)
 
         from lerobot.gui.api.run import unload_debug_model
 
-        with patch.object(run_mod, '_stop_debug_process', new_callable=AsyncMock) as mock_stop:
+        with patch.object(run_mod, "_stop_debug_process", new_callable=AsyncMock) as mock_stop:
+
             async def _do_stop():
                 run_mod._debug_process = None
+
             mock_stop.side_effect = _do_stop
             result = _run(unload_debug_model())
         assert result["status"] == "unloaded"
@@ -97,24 +108,29 @@ class TestUnloadGuards:
 class TestStatus:
     def test_status_not_loaded(self):
         from lerobot.gui.api.run import debug_model_status
+
         result = _run(debug_model_status())
         assert result["loaded"] is False
         assert result["pid"] is None
 
     def test_status_loaded(self):
         import lerobot.gui.api.run as run_mod
+
         run_mod._debug_process = _make_fake_process(alive=True)
 
         from lerobot.gui.api.run import debug_model_status
+
         result = _run(debug_model_status())
         assert result["loaded"] is True
         assert result["pid"] == 12345
 
     def test_status_after_process_exits(self):
         import lerobot.gui.api.run as run_mod
+
         run_mod._debug_process = _make_fake_process(alive=False)
 
         from lerobot.gui.api.run import debug_model_status
+
         result = _run(debug_model_status())
         assert result["loaded"] is False
 
@@ -122,9 +138,10 @@ class TestStatus:
 class TestConcurrency:
     def test_concurrent_loads_one_succeeds_one_409(self):
         """Two simultaneous loads — first succeeds, second gets 409."""
-        import lerobot.gui.api.run as run_mod
-        from lerobot.gui.api.run import load_debug_model, DebugModelConfig
         from fastapi import HTTPException
+
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.api.run import DebugModelConfig, load_debug_model
 
         config = DebugModelConfig(checkpoint="/fake/path", policy_type="hvla_s2_vlm", task="test")
 
@@ -139,7 +156,8 @@ class TestConcurrency:
         results = []
 
         async def _test():
-            with patch.object(run_mod, '_launch_debug_s2', side_effect=_fake_launch):
+            with patch.object(run_mod, "_launch_debug_s2", side_effect=_fake_launch):
+
                 async def try_load():
                     try:
                         r = await load_debug_model(config)

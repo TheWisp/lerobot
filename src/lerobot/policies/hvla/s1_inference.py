@@ -20,7 +20,10 @@ logger = logging.getLogger(__name__)
 
 
 def _slice_with_pad(
-    tensor: torch.Tensor, start: int, length: int, dim: int = 1,
+    tensor: torch.Tensor,
+    start: int,
+    length: int,
+    dim: int = 1,
 ) -> torch.Tensor:
     """Take a length-window slice along ``dim``, padding with the last
     value if ``start + length`` overruns the tensor (constant-extrapolation,
@@ -50,7 +53,11 @@ def _slice_with_pad(
     logger.warning(
         "slice [start=%d, len=%d] overruns dim %d size %d by %d frames; "
         "padded with last value (RTC-style hold-last)",
-        start, length, dim, n, pad_n,
+        start,
+        length,
+        dim,
+        n,
+        pad_n,
     )
     return out
 
@@ -181,7 +188,7 @@ class InferenceThread:
         # Last actor output, used by the dump path. Reset every inference so
         # a stale tensor from a previous step can never leak into a record
         # (would produce a wrong 'actor' field if rlt_active flipped off).
-        self._rlt_last_actor_norm: "torch.Tensor | None" = None
+        self._rlt_last_actor_norm: torch.Tensor | None = None
         # Rolling per-inference timing of the RLT portion (token encoder +
         # actor + dump). Separated from S1's time so we can verify RLT's
         # contribution to inference latency — which feeds RTC's expected_d.
@@ -229,8 +236,9 @@ class InferenceThread:
         """Actor runs only when both user (E key) and system (not intervening) say yes."""
         return self._rlt_user_engaged and self._rlt_system_active
 
-    def _rlt_inference_step(self, batch, actions, z_rl, obs, ref_norm=None,
-                            actor_timer=None, expected_d: int = 0):
+    def _rlt_inference_step(
+        self, batch, actions, z_rl, obs, ref_norm=None, actor_timer=None, expected_d: int = 0
+    ):
         """Run RLT actor (if past warmup) and store transition.
         Called inside inference loop — one call per S1 chunk.
         Only runs when rlt_active is True (user engaged + system active).
@@ -259,7 +267,9 @@ class InferenceThread:
             state_t = torch.from_numpy(state_np).unsqueeze(0).to(self._device)
         state_norm = state_t.float()
         if self._policy._state_mean is not None:
-            state_norm = (state_t.float() - self._policy._state_mean.to(self._device)) / self._policy._state_std.to(self._device)
+            state_norm = (
+                state_t.float() - self._policy._state_mean.to(self._device)
+            ) / self._policy._state_std.to(self._device)
 
         if ref_norm is None:
             ref_norm = self._rlt_compute_ref_norm(actions)
@@ -299,7 +309,9 @@ class InferenceThread:
             _noop_cm = _TimedBlock(self._device) if actor_timer is None else actor_timer
             with torch.autocast(device_type=self._device.type, enabled=False), _noop_cm:
                 actor_norm = self._rlt_actor(
-                    z_rl.float(), state_norm.float(), actor_ref.float(),
+                    z_rl.float(),
+                    state_norm.float(),
+                    actor_ref.float(),
                     deterministic=is_deploy,  # no exploration noise in deploy mode
                 )
             # Denormalize and replace the C actions starting at the
@@ -307,7 +319,9 @@ class InferenceThread:
             # episode, or RTC disabled) this reduces to the legacy
             # actions[:, :C, :] write.
             if self._policy._action_mean is not None:
-                actor_denorm = actor_norm * self._policy._action_std.to(self._device) + self._policy._action_mean.to(self._device)
+                actor_denorm = actor_norm * self._policy._action_std.to(
+                    self._device
+                ) + self._policy._action_mean.to(self._device)
             else:
                 actor_denorm = actor_norm
             # Write [D:D+C] back into the action chunk, clamped to the
@@ -368,8 +382,10 @@ class InferenceThread:
                 "lock around _rlt_system_active updates."
             )
             self._rlt_replay.add(
-                z_rl=prev["z_rl"], state=prev["state"],
-                action_chunk=prev["action"], ref_chunk=prev["ref"],
+                z_rl=prev["z_rl"],
+                state=prev["state"],
+                action_chunk=prev["action"],
+                ref_chunk=prev["ref"],
                 reward=reward,
                 next_z_rl=z_rl.squeeze(0).float().detach(),
                 next_state=state_norm.squeeze(0).detach(),
@@ -390,17 +406,22 @@ class InferenceThread:
         actor_delta = (actor_norm - actor_ref).abs().mean().item()
 
         from lerobot.policies.hvla.rlt.metrics import get_metrics, save_metrics_to_file
+
         is_deploy = self._rlt_state.get("deploy", False)
         mode = "DEPLOY" if is_deploy else ("WARMUP" if is_warmup else "RL")
         get_metrics().record_inference(
-            step=self._rlt_step_count, delta=actor_delta,
+            step=self._rlt_step_count,
+            delta=actor_delta,
             buffer_size=len(self._rlt_replay) if self._rlt_replay else 0,
-            total_updates=self._rlt_state["total_updates"], mode=mode,
+            total_updates=self._rlt_state["total_updates"],
+            mode=mode,
         )
         if self._rlt_step_count % 100 == 0:
             logger.info(
                 "RLT step %d [%s] | delta=%.3f | buf=%d | updates=%d",
-                self._rlt_step_count, mode, actor_delta,
+                self._rlt_step_count,
+                mode,
+                actor_delta,
                 len(self._rlt_replay) if self._rlt_replay else 0,
                 self._rlt_state["total_updates"],
             )
@@ -429,23 +450,27 @@ class InferenceThread:
         )
         ref = actions.clone().float()
         if self._policy._action_mean is not None:
-            ref = (
-                ref - self._policy._action_mean.to(self._device)
-            ) / self._policy._action_std.to(self._device)
+            ref = (ref - self._policy._action_mean.to(self._device)) / self._policy._action_std.to(
+                self._device
+            )
         # Clone must decouple ref from actions; otherwise the actor's
         # later in-place write to ``actions[:, D:D+C, :]`` would overwrite
         # the dump's ref in place — silently misattributing actor output
         # as "S1 reference" in every record.
         assert ref.data_ptr() != actions.data_ptr(), (
-            "ref aliases actions — in-place actor overwrite would "
-            "corrupt the dump's ref value"
+            "ref aliases actions — in-place actor overwrite would corrupt the dump's ref value"
         )
         return ref
 
     def _rlt_write_dump_record(
-        self, ref_norm, actor_norm, is_rlt_active: bool,
-        prefix_len: int = 0, exec_idx: int | None = None,
-        rlt_enc_ms: float | None = None, rlt_post_ms: float | None = None,
+        self,
+        ref_norm,
+        actor_norm,
+        is_rlt_active: bool,
+        prefix_len: int = 0,
+        exec_idx: int | None = None,
+        rlt_enc_ms: float | None = None,
+        rlt_post_ms: float | None = None,
         total_delay_ms: float | None = None,
         obs_to_infer_ms: float | None = None,
         enc_obs_ms: float | None = None,
@@ -494,11 +519,14 @@ class InferenceThread:
         try:
             import json as _json
             import time as _t
+
             record = {
                 "t": _t.time(),
                 "step": self._rlt_step_count,
                 "ep": self._rlt_state.get("episode", 0),
-                "ref": ref_norm.squeeze(0).detach().cpu().tolist() if ref_norm.dim() > 2 else ref_norm.detach().cpu().tolist(),
+                "ref": ref_norm.squeeze(0).detach().cpu().tolist()
+                if ref_norm.dim() > 2
+                else ref_norm.detach().cpu().tolist(),
                 "actor": actor_norm.detach().cpu().tolist() if actor_norm is not None else None,
                 "deploy": self._rlt_state.get("deploy", False),
                 "rlt_active": bool(is_rlt_active),
@@ -539,6 +567,7 @@ class InferenceThread:
         """Check for GUI config overrides (beta, sigma sliders).
         Called each gradient step — cost is one stat() syscall (~1us)."""
         import json as _json
+
         override_path = self._rlt_state["output_dir"] / "rlt_overrides.json"
         try:
             mtime = override_path.stat().st_mtime
@@ -579,14 +608,12 @@ class InferenceThread:
         Paper Alg 1 lines 13-18: runs every step including warmup.
         """
         import time as _time
+
         t0 = _time.perf_counter()
 
         # Compute wall-clock update rate = UTD / elapsed since last call.
         # First call or long gap: rate = 0 (treat as non-training time).
-        if self._rlt_last_update_time > 0:
-            elapsed_since_last = t0 - self._rlt_last_update_time
-        else:
-            elapsed_since_last = 0.0
+        elapsed_since_last = t0 - self._rlt_last_update_time if self._rlt_last_update_time > 0 else 0.0
         self._rlt_last_update_time = t0
 
         self._rlt_check_config_overrides()
@@ -605,10 +632,15 @@ class InferenceThread:
             for _ in range(2):
                 b = self._rlt_replay.sample(256)
                 cl, gn = self._rlt_agent.update_critic(
-                    b["z_rl"], b["state"],
-                    b["action"].reshape(-1, C, A), b["ref"].reshape(-1, C, A),
-                    b["reward"], b["next_z_rl"], b["next_state"],
-                    b["next_ref"].reshape(-1, C, A), b["done"],
+                    b["z_rl"],
+                    b["state"],
+                    b["action"].reshape(-1, C, A),
+                    b["ref"].reshape(-1, C, A),
+                    b["reward"],
+                    b["next_z_rl"],
+                    b["next_state"],
+                    b["next_ref"].reshape(-1, C, A),
+                    b["done"],
                 )
                 critic_sum += cl
                 grad_norm_sum += gn
@@ -617,7 +649,9 @@ class InferenceThread:
             # 1 actor update (Paper Alg 1 line 17)
             b = self._rlt_replay.sample(256)
             al, q_term, bc_term = self._rlt_agent.update_actor(
-                b["z_rl"], b["state"], b["ref"].reshape(-1, C, A),
+                b["z_rl"],
+                b["state"],
+                b["ref"].reshape(-1, C, A),
             )
             actor_sum += al
             q_term_sum += q_term
@@ -636,7 +670,8 @@ class InferenceThread:
         with torch.no_grad():
             b = self._rlt_replay.sample(min(256, len(self._rlt_replay)))
             qs = self._rlt_agent.critic.min_q(
-                b["z_rl"], b["state"],
+                b["z_rl"],
+                b["state"],
                 b["action"].reshape(-1, C, A),
             )
             q_mean = qs.mean().item()
@@ -651,23 +686,36 @@ class InferenceThread:
             # a sudden spike = the defense is catching a bad update.
             logger.info(
                 "RLT grad | critic=%.4f gn=%.2f/%.2f actor=%.4f (q=%.4f bc=%.4f) | Q: mean=%.4f min=%.4f max=%.4f | updates=%d | %.0fms",
-                avg_c, avg_gn, grad_norm_max, avg_a, avg_q_term, avg_bc_term,
-                q_mean, q_min, q_max,
-                self._rlt_state["total_updates"], elapsed,
+                avg_c,
+                avg_gn,
+                grad_norm_max,
+                avg_a,
+                avg_q_term,
+                avg_bc_term,
+                q_mean,
+                q_min,
+                q_max,
+                self._rlt_state["total_updates"],
+                elapsed,
             )
 
         # Update metrics with Q values
         from lerobot.policies.hvla.rlt.metrics import get_metrics
+
         # Update rate: actor updates since last call / elapsed time.
         # 0 on first call or after a long pause (intervention/reset).
         update_rate = cfg.utd_ratio / elapsed_since_last if elapsed_since_last > 0 else 0.0
         get_metrics().record_grad_update(
             total_updates=self._rlt_state["total_updates"],
             mode="TRAIN",
-            critic_loss=avg_c, critic_grad_norm=grad_norm_max,
+            critic_loss=avg_c,
+            critic_grad_norm=grad_norm_max,
             actor_loss=avg_a,
-            q_mean=q_mean, q_min=q_min, q_max=q_max,
-            actor_q_term=avg_q_term, actor_bc_term=avg_bc_term,
+            q_mean=q_mean,
+            q_min=q_min,
+            q_max=q_max,
+            actor_q_term=avg_q_term,
+            actor_bc_term=avg_bc_term,
             update_rate=update_rate,
         )
 
@@ -727,7 +775,7 @@ class InferenceThread:
     def _loop(self) -> None:
         """Background loop: wait for obs → prep batch → infer → publish chunk."""
         from lerobot.policies.hvla.s1.protocol import ACTION_PREFIX_KEY
-        from lerobot.policies.hvla.s1_process import obs_to_s1_batch, _save_infer_drop
+        from lerobot.policies.hvla.s1_process import _save_infer_drop, obs_to_s1_batch
 
         while self._running.is_set():
             # Pause gate: block here during intervention
@@ -751,8 +799,12 @@ class InferenceThread:
 
             # Prepare batch (CPU resize + GPU transfer)
             batch = obs_to_s1_batch(
-                obs, self._s1_image_keys, self._shared_cache,
-                self._s2_latent_key, self._device, resize_to=self._resize_to,
+                obs,
+                self._s1_image_keys,
+                self._shared_cache,
+                self._s2_latent_key,
+                self._device,
+                resize_to=self._resize_to,
             )
             batch = self._preprocessor(batch)
 
@@ -772,8 +824,7 @@ class InferenceThread:
                         expected_d = round(np.mean(self.inference_delays[-10:]) * self._fps)
                     else:
                         expected_d = 3
-                    expected_d = max(1, min(expected_d, self._rtc_max_delay,
-                                           len(old_chunk) - exec_idx))
+                    expected_d = max(1, min(expected_d, self._rtc_max_delay, len(old_chunk) - exec_idx))
 
                     prefix = old_chunk[exec_idx : exec_idx + expected_d]
                     batch[ACTION_PREFIX_KEY] = torch.from_numpy(prefix).unsqueeze(0).to(self._device)
@@ -856,7 +907,10 @@ class InferenceThread:
                         ref_norm_snapshot = self._rlt_compute_ref_norm(actions)
                         if self.rlt_active:
                             self._rlt_inference_step(
-                                batch, actions, z_rl_out, obs,
+                                batch,
+                                actions,
+                                z_rl_out,
+                                obs,
                                 ref_norm=ref_norm_snapshot,
                                 actor_timer=actor_timer,
                                 expected_d=expected_d,
@@ -868,9 +922,7 @@ class InferenceThread:
                         # Snapshot the dump args now; the actual write happens
                         # after t_infer_end so the record can carry real timing.
                         _dump_pending = self._rlt_dump_chunks and self._rlt_system_active
-                        _dump_actor = (
-                            self._rlt_last_actor_norm if self.rlt_active else None
-                        )
+                        _dump_actor = self._rlt_last_actor_norm if self.rlt_active else None
 
             # Force GPU to finish before stamping t_infer_end. Without this,
             # t_infer_end captures CPU dispatch time while GPU is still
@@ -913,7 +965,8 @@ class InferenceThread:
             if self._rlt_state is not None and z_rl_out is not None and _dump_pending:
                 obs_to_infer_ms = (t_infer_start - t_obs) * 1000
                 self._rlt_write_dump_record(
-                    ref_norm_snapshot, _dump_actor,
+                    ref_norm_snapshot,
+                    _dump_actor,
                     is_rlt_active=self.rlt_active,
                     prefix_len=current_prefix_len,
                     exec_idx=exec_idx,
@@ -935,14 +988,18 @@ class InferenceThread:
                 obs_to_infer_ms = (t_infer_start - t_obs) * 1000
                 prefix_drift = None
                 if current_prefix_len > 0:
-                    inner_model = self._policy.model if hasattr(self._policy, 'model') else self._policy
-                    prefix_drift = getattr(inner_model, '_last_prefix_drift', None)
+                    inner_model = self._policy.model if hasattr(self._policy, "model") else self._policy
+                    prefix_drift = getattr(inner_model, "_last_prefix_drift", None)
                 logger.info(
                     "S1 RTC diag | expected_d=%d actual_d=%d prefix_len=%d "
                     "| obs→infer=%.0fms infer=%.0fms total=%.0fms "
                     "| prefix_drift=%s exec_idx=%s",
-                    expected_d, actual_d_frames, current_prefix_len,
-                    obs_to_infer_ms, infer_ms, total_delay * 1000,
+                    expected_d,
+                    actual_d_frames,
+                    current_prefix_len,
+                    obs_to_infer_ms,
+                    infer_ms,
+                    total_delay * 1000,
                     f"{prefix_drift:.4f}" if prefix_drift is not None else "N/A",
                     exec_idx,
                 )
@@ -956,11 +1013,13 @@ class InferenceThread:
                 best_offset = 0
                 best_err = float("inf")
                 errors = []
-                for offset in range(max(0, scan_center - 3), min(len(old_chunk_for_align) - 1, scan_center + 8)):
+                for offset in range(
+                    max(0, scan_center - 3), min(len(old_chunk_for_align) - 1, scan_center + 8)
+                ):
                     n = min(8, len(chunk_np), len(old_chunk_for_align) - offset)
                     if n <= 0:
                         continue
-                    err = np.mean(np.abs(chunk_np[:n] - old_chunk_for_align[offset:offset + n]))
+                    err = np.mean(np.abs(chunk_np[:n] - old_chunk_for_align[offset : offset + n]))
                     errors.append(f"{offset}={err:.1f}")
                     if err < best_err:
                         best_err = err
@@ -968,7 +1027,10 @@ class InferenceThread:
                 if len(errors) > 0 and (len(self.infer_times) <= 5 or len(self.infer_times) % 50 == 0):
                     logger.info(
                         "S1 RTC align | exec_idx=%d best=%d (err=%.2f) | %s",
-                        exec_idx, best_offset, best_err, " ".join(errors),
+                        exec_idx,
+                        best_offset,
+                        best_err,
+                        " ".join(errors),
                     )
 
             # Grip drop diagnostics
@@ -977,6 +1039,7 @@ class InferenceThread:
                 infer_count = len(self.infer_times)
                 if infer_count % 50 == 0:
                     import os
+
                     ctrl_dir = os.path.join(self._grip_drop_save_dir, f"control_{infer_count}")
                     os.makedirs(ctrl_dir, exist_ok=True)
                     state_arr = np.array([float(obs.get(j, 0)) for j in self._joint_names])
@@ -987,7 +1050,7 @@ class InferenceThread:
             with self._chunk_lock:
                 self._chunk_data = chunk_np
                 self._chunk_t_obs = t_obs
-                if self._supports_rtc and exec_idx is not None and 't_exec_idx' in dir():
+                if self._supports_rtc and exec_idx is not None and "t_exec_idx" in dir():
                     self._chunk_t_origin = t_exec_idx
                 else:
                     self._chunk_t_origin = t_obs
@@ -996,9 +1059,11 @@ class InferenceThread:
 
             # Query interval: use idle time for RLT gradient updates
             if self._query_interval_s > 0 and self._running.is_set():
-                if (self._rlt_state is not None
-                        and self._rlt_replay is not None
-                        and len(self._rlt_replay) >= 256):
+                if (
+                    self._rlt_state is not None
+                    and self._rlt_replay is not None
+                    and len(self._rlt_replay) >= 256
+                ):
                     self._rlt_gradient_updates()
                     # Sleep remaining time if updates were faster than query interval
                     elapsed_since_infer = time.perf_counter() - t_infer_end

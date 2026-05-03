@@ -11,6 +11,7 @@ Usage:
   python multistage_infer.py
 """
 
+import contextlib
 import json
 import logging
 import signal
@@ -19,26 +20,27 @@ from pathlib import Path
 
 import draccus
 
-# Register draccus ChoiceRegistry subclasses before any decode/from_pretrained calls
-from lerobot.policies.act.configuration_act import ACTConfig  # noqa: F401
-from lerobot.robots import bi_so107_follower  # noqa: F401
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
-
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.pipeline_features import aggregate_pipeline_dataset_features, create_initial_features
 from lerobot.datasets.utils import build_dataset_frame, combine_feature_dicts
+
+# Register draccus ChoiceRegistry subclasses before any decode/from_pretrained calls
+from lerobot.policies.act.configuration_act import ACTConfig  # noqa: F401
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.utils import make_robot_action
 from lerobot.processor import make_default_processors
-from lerobot.robots import make_robot_from_config
+from lerobot.robots import (
+    bi_so107_follower,  # noqa: F401
+    make_robot_from_config,
+)
 from lerobot.robots.config import RobotConfig
 from lerobot.utils.constants import OBS_STR
 from lerobot.utils.control_utils import init_keyboard_listener, predict_action
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import get_safe_torch_device, init_logging, log_say
-
 
 # --------------- Configuration ---------------
 
@@ -122,10 +124,8 @@ def soft_land(robot, duration_s=4.0, steps=20):
             torque_value = int(1000 * (1.0 - (i + 1) / steps))
             for bus in buses:
                 for motor_name in bus.motors:
-                    try:
+                    with contextlib.suppress(Exception):
                         bus.write("Torque_Limit", motor_name, torque_value, normalize=False)
-                    except Exception:
-                        pass
             time.sleep(step_delay)
 
         logging.info("Soft landing complete")
@@ -170,10 +170,8 @@ def main():
         arm = getattr(robot, arm_name, None)
         if arm is not None:
             for motor_name in arm.bus.motors:
-                try:
+                with contextlib.suppress(Exception):
                     arm.bus.write("Torque_Limit", motor_name, 1000, normalize=False)
-                except Exception:
-                    pass
 
     listener, events = init_keyboard_listener()
 
@@ -211,11 +209,11 @@ def main():
         stage_idx = 0
         while stage_idx < len(STAGES):
             stage = STAGES[stage_idx]
-            logging.info(f"\n{'='*60}")
+            logging.info(f"\n{'=' * 60}")
             logging.info(f"STAGE {stage_idx + 1}/{len(STAGES)}: {stage['name']}")
-            logging.info(f"{'='*60}")
+            logging.info(f"{'=' * 60}")
             print(f"\n>>> STAGE {stage_idx + 1}/{len(STAGES)}: {stage['name']}")
-            print(f"    Press -> to advance, <- to retry, ESC to abort\n")
+            print("    Press -> to advance, <- to retry, ESC to abort\n")
 
             result = run_stage_preloaded(
                 stage=stage,

@@ -25,11 +25,11 @@ All edits are non-destructive until you hit **Save Changes**.
 python -m lerobot.gui [--host HOST] [--port PORT] [--cache-size SIZE]
 ```
 
-| Argument | Default | Description |
-|---|---|---|
-| `--host` | `127.0.0.1` | Bind address. Use `0.0.0.0` for network access. |
-| `--port` | `8000` | TCP port. |
-| `--cache-size` | `1GB` | In-memory frame cache budget (`500MB`, `1GB`, etc.). |
+| Argument       | Default     | Description                                          |
+| -------------- | ----------- | ---------------------------------------------------- |
+| `--host`       | `127.0.0.1` | Bind address. Use `0.0.0.0` for network access.      |
+| `--port`       | `8000`      | TCP port.                                            |
+| `--cache-size` | `1GB`       | In-memory frame cache budget (`500MB`, `1GB`, etc.). |
 
 ## Dataset Playback
 
@@ -41,15 +41,15 @@ python -m lerobot.gui [--host HOST] [--port PORT] [--cache-size SIZE]
 
 ### Keyboard Shortcuts
 
-| Key | Action |
-|---|---|
-| `Space` | Play / pause |
-| `←` / `→` | Previous / next frame |
-| `Shift+←` / `Shift+→` | Jump 10 frames |
-| `↑` / `↓` | Previous / next episode |
-| `Home` / `End` | First / last frame |
-| `Delete` | Toggle episode deletion |
-| `r` | Reset trim |
+| Key                   | Action                  |
+| --------------------- | ----------------------- |
+| `Space`               | Play / pause            |
+| `←` / `→`             | Previous / next frame   |
+| `Shift+←` / `Shift+→` | Jump 10 frames          |
+| `↑` / `↓`             | Previous / next episode |
+| `Home` / `End`        | First / last frame      |
+| `Delete`              | Toggle episode deletion |
+| `r`                   | Reset trim              |
 
 ## Episode Deletion
 

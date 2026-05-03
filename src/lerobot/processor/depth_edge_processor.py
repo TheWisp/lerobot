@@ -235,7 +235,9 @@ class DepthEdgeOverlayProcessorStep(ObservationProcessorStep):
             processed_frame = self.process_frame_with_depth(rgb_frame, depth_frame)
             new_observation[self.camera_key] = processed_frame
         except Exception as e:
-            logger.warning(f"DepthEdgeOverlayProcessor failed for {self.camera_key}: {e}. Using original frame.")
+            logger.warning(
+                f"DepthEdgeOverlayProcessor failed for {self.camera_key}: {e}. Using original frame."
+            )
             # Fail-safe: return original frame on error
 
         # Remove depth frame from observations after processing

@@ -110,7 +110,6 @@ def main():
     # Swap features
     output_dir = Path(args.output_dir) if args.output_dir else None
 
-
     # Use swap_features
     new_dataset = swap_features(
         dataset=dataset,
@@ -127,7 +126,9 @@ def main():
     logging.info(f"Episodes: {new_dataset.meta.total_episodes}")
     logging.info(f"Frames: {new_dataset.meta.total_frames}")
     logging.info("\nVerify the changes with:")
-    logging.info(f"  lerobot-dataset-viz --repo-id {new_dataset.repo_id} --root {new_dataset.root} --mode local")
+    logging.info(
+        f"  lerobot-dataset-viz --repo-id {new_dataset.repo_id} --root {new_dataset.root} --mode local"
+    )
 
 
 if __name__ == "__main__":

@@ -21,7 +21,6 @@ from lerobot.gui.api.robot import (
     _write_profile,
 )
 
-
 # ============================================================================
 # _stringify_type
 # ============================================================================
@@ -37,7 +36,8 @@ class TestStringifyType:
         assert _stringify_type(bool) == "bool"
 
     def test_optional_type(self):
-        result = _stringify_type(Optional[str])
+        # Deliberately testing Optional[X] handling, not the | None form.
+        result = _stringify_type(Optional[str])  # noqa: UP045
         # Should not contain 'typing.' prefix
         assert "typing." not in result
         assert "str" in result
@@ -284,10 +284,13 @@ class TestCollectAllPortAssignments:
             patch("lerobot.gui.api.robot._ensure_configs_loaded"),
         ):
             # Need to patch the local imports inside the function
-            with patch.dict("sys.modules", {
-                "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
-                "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
-            }):
+            with patch.dict(
+                "sys.modules",
+                {
+                    "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
+                    "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
+                },
+            ):
                 assignments = _collect_all_port_assignments()
 
         assert len(assignments) == 1
@@ -298,12 +301,12 @@ class TestCollectAllPortAssignments:
 
     def test_extracts_ports_from_both_kinds(self, tmp_path):
         robot_dir, teleop_dir = self._setup_dirs(tmp_path)
-        (robot_dir / "arm.json").write_text(json.dumps(
-            {"name": "arm", "type": "fake_robot", "fields": {"port": "/dev/ttyACM0"}}
-        ))
-        (teleop_dir / "leader.json").write_text(json.dumps(
-            {"name": "leader", "type": "fake_teleop", "fields": {"port": "/dev/ttyACM1"}}
-        ))
+        (robot_dir / "arm.json").write_text(
+            json.dumps({"name": "arm", "type": "fake_robot", "fields": {"port": "/dev/ttyACM0"}})
+        )
+        (teleop_dir / "leader.json").write_text(
+            json.dumps({"name": "leader", "type": "fake_teleop", "fields": {"port": "/dev/ttyACM1"}})
+        )
 
         mock_robot_base = MagicMock()
         mock_robot_base.get_known_choices.return_value = {"fake_robot": _FakeRobotConfig}
@@ -314,10 +317,13 @@ class TestCollectAllPortAssignments:
             patch("lerobot.gui.api.robot.ROBOT_PROFILES_DIR", robot_dir),
             patch("lerobot.gui.api.robot.TELEOP_PROFILES_DIR", teleop_dir),
             patch("lerobot.gui.api.robot._ensure_configs_loaded"),
-            patch.dict("sys.modules", {
-                "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
-                "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
-            }),
+            patch.dict(
+                "sys.modules",
+                {
+                    "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
+                    "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
+                },
+            ),
         ):
             assignments = _collect_all_port_assignments()
 
@@ -327,9 +333,9 @@ class TestCollectAllPortAssignments:
 
     def test_skips_unknown_type(self, tmp_path):
         robot_dir, teleop_dir = self._setup_dirs(tmp_path)
-        (robot_dir / "mystery.json").write_text(json.dumps(
-            {"name": "mystery", "type": "unknown_type", "fields": {"port": "/dev/ttyACM0"}}
-        ))
+        (robot_dir / "mystery.json").write_text(
+            json.dumps({"name": "mystery", "type": "unknown_type", "fields": {"port": "/dev/ttyACM0"}})
+        )
 
         mock_robot_base = MagicMock()
         mock_robot_base.get_known_choices.return_value = {"fake_robot": _FakeRobotConfig}
@@ -340,10 +346,13 @@ class TestCollectAllPortAssignments:
             patch("lerobot.gui.api.robot.ROBOT_PROFILES_DIR", robot_dir),
             patch("lerobot.gui.api.robot.TELEOP_PROFILES_DIR", teleop_dir),
             patch("lerobot.gui.api.robot._ensure_configs_loaded"),
-            patch.dict("sys.modules", {
-                "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
-                "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
-            }),
+            patch.dict(
+                "sys.modules",
+                {
+                    "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
+                    "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
+                },
+            ),
         ):
             assignments = _collect_all_port_assignments()
 
@@ -351,9 +360,9 @@ class TestCollectAllPortAssignments:
 
     def test_skips_empty_port_value(self, tmp_path):
         robot_dir, teleop_dir = self._setup_dirs(tmp_path)
-        (robot_dir / "noport.json").write_text(json.dumps(
-            {"name": "noport", "type": "fake_robot", "fields": {"port": ""}}
-        ))
+        (robot_dir / "noport.json").write_text(
+            json.dumps({"name": "noport", "type": "fake_robot", "fields": {"port": ""}})
+        )
 
         mock_robot_base = MagicMock()
         mock_robot_base.get_known_choices.return_value = {"fake_robot": _FakeRobotConfig}
@@ -364,10 +373,13 @@ class TestCollectAllPortAssignments:
             patch("lerobot.gui.api.robot.ROBOT_PROFILES_DIR", robot_dir),
             patch("lerobot.gui.api.robot.TELEOP_PROFILES_DIR", teleop_dir),
             patch("lerobot.gui.api.robot._ensure_configs_loaded"),
-            patch.dict("sys.modules", {
-                "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
-                "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
-            }),
+            patch.dict(
+                "sys.modules",
+                {
+                    "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
+                    "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
+                },
+            ),
         ):
             assignments = _collect_all_port_assignments()
 
@@ -375,9 +387,9 @@ class TestCollectAllPortAssignments:
 
     def test_skips_non_port_fields(self, tmp_path):
         robot_dir, teleop_dir = self._setup_dirs(tmp_path)
-        (robot_dir / "noport.json").write_text(json.dumps(
-            {"name": "noport", "type": "no_port", "fields": {"baudrate": 115200}}
-        ))
+        (robot_dir / "noport.json").write_text(
+            json.dumps({"name": "noport", "type": "no_port", "fields": {"baudrate": 115200}})
+        )
 
         mock_robot_base = MagicMock()
         mock_robot_base.get_known_choices.return_value = {"no_port": _NoPortConfig}
@@ -388,10 +400,13 @@ class TestCollectAllPortAssignments:
             patch("lerobot.gui.api.robot.ROBOT_PROFILES_DIR", robot_dir),
             patch("lerobot.gui.api.robot.TELEOP_PROFILES_DIR", teleop_dir),
             patch("lerobot.gui.api.robot._ensure_configs_loaded"),
-            patch.dict("sys.modules", {
-                "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
-                "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
-            }),
+            patch.dict(
+                "sys.modules",
+                {
+                    "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
+                    "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
+                },
+            ),
         ):
             assignments = _collect_all_port_assignments()
 
@@ -410,10 +425,13 @@ class TestCollectAllPortAssignments:
             patch("lerobot.gui.api.robot.ROBOT_PROFILES_DIR", robot_dir),
             patch("lerobot.gui.api.robot.TELEOP_PROFILES_DIR", teleop_dir),
             patch("lerobot.gui.api.robot._ensure_configs_loaded"),
-            patch.dict("sys.modules", {
-                "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
-                "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
-            }),
+            patch.dict(
+                "sys.modules",
+                {
+                    "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
+                    "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
+                },
+            ),
         ):
             assignments = _collect_all_port_assignments()
 

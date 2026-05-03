@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 import logging
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/robot", tags=["robot"])
 
 # Module-level state (same pattern as datasets.py)
-_app_state: "AppState" = None  # type: ignore
+_app_state: AppState = None  # type: ignore
 
 # Config directories
 ROBOT_PROFILES_DIR = Path.home() / ".config" / "lerobot" / "robots"
@@ -38,7 +39,7 @@ _preview_camera_info: list[dict] = []
 _rest_recording_robot = None
 
 
-def set_app_state(state: "AppState") -> None:
+def set_app_state(state: AppState) -> None:
     global _app_state
     _app_state = state
 
@@ -91,6 +92,7 @@ def _ensure_configs_loaded():
     ]
 
     import importlib
+
     for module_name in _config_modules:
         try:
             importlib.import_module(module_name)
@@ -125,8 +127,7 @@ def _introspect_fields(cls: type) -> list[dict]:
         if f.name in _SKIP_FIELDS:
             continue
         required = (
-            f.default is dataclasses.MISSING
-            and f.default_factory is dataclasses.MISSING  # type: ignore[arg-type]
+            f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING  # type: ignore[arg-type]
         )
         default = None
         if f.default is not dataclasses.MISSING:
@@ -135,12 +136,14 @@ def _introspect_fields(cls: type) -> list[dict]:
             # Don't call factory, just indicate it has a default
             default = None
 
-        result.append({
-            "name": f.name,
-            "type_str": _stringify_type(f.type),
-            "required": required,
-            "default": default,
-        })
+        result.append(
+            {
+                "name": f.name,
+                "type_str": _stringify_type(f.type),
+                "required": required,
+                "default": default,
+            }
+        )
     return result
 
 
@@ -148,14 +151,17 @@ def _introspect_fields(cls: type) -> list[dict]:
 async def get_robot_schemas() -> list[dict]:
     """Return field schemas for all registered robot config types."""
     from lerobot.robots.config import RobotConfig
+
     _ensure_configs_loaded()
 
     schemas = []
     for type_name, config_cls in sorted(RobotConfig.get_known_choices().items()):
-        schemas.append({
-            "type_name": type_name,
-            "fields": _introspect_fields(config_cls),
-        })
+        schemas.append(
+            {
+                "type_name": type_name,
+                "fields": _introspect_fields(config_cls),
+            }
+        )
     return schemas
 
 
@@ -163,20 +169,24 @@ async def get_robot_schemas() -> list[dict]:
 async def get_teleop_schemas() -> list[dict]:
     """Return field schemas for all registered teleoperator config types."""
     from lerobot.teleoperators.config import TeleoperatorConfig
+
     _ensure_configs_loaded()
 
     schemas = []
     for type_name, config_cls in sorted(TeleoperatorConfig.get_known_choices().items()):
-        schemas.append({
-            "type_name": type_name,
-            "fields": _introspect_fields(config_cls),
-        })
+        schemas.append(
+            {
+                "type_name": type_name,
+                "fields": _introspect_fields(config_cls),
+            }
+        )
     return schemas
 
 
 # ============================================================================
 # Profile CRUD
 # ============================================================================
+
 
 class ProfileData(BaseModel):
     type: str
@@ -200,10 +210,12 @@ def _list_profiles(profiles_dir: Path) -> list[dict]:
     for f in sorted(profiles_dir.glob("*.json")):
         try:
             data = json.loads(f.read_text())
-            profiles.append({
-                "name": data.get("name", f.stem),
-                "type": data.get("type", "unknown"),
-            })
+            profiles.append(
+                {
+                    "name": data.get("name", f.stem),
+                    "type": data.get("type", "unknown"),
+                }
+            )
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"Failed to read profile {f}: {e}")
     return profiles
@@ -216,7 +228,7 @@ def _read_profile(profiles_dir: Path, name: str) -> dict:
     try:
         return json.loads(path.read_text())
     except json.JSONDecodeError as e:
-        raise HTTPException(500, f"Failed to parse profile: {e}")
+        raise HTTPException(500, f"Failed to parse profile: {e}") from e
 
 
 def _write_profile(profiles_dir: Path, data: ProfileData) -> None:
@@ -330,6 +342,7 @@ async def rename_teleop_profile(name: str, req: RenameRequest) -> dict:
 # Camera detection and preview
 # ============================================================================
 
+
 def _detect_and_open_cameras() -> list[dict]:
     """Detect cameras and open them for live preview. Runs in thread pool.
 
@@ -357,7 +370,8 @@ def _detect_and_open_cameras() -> list[dict]:
             cam_id = cam_info.get("id")
             try:
                 config = RealSenseCameraConfig(
-                    serial_number_or_name=str(cam_id), color_mode=ColorMode.BGR,
+                    serial_number_or_name=str(cam_id),
+                    color_mode=ColorMode.BGR,
                 )
                 camera = RealSenseCamera(config)
                 camera.connect(warmup=True)
@@ -394,7 +408,8 @@ def _detect_and_open_cameras() -> list[dict]:
                         continue
             try:
                 config = OpenCVCameraConfig(
-                    index_or_path=cam_id, color_mode=ColorMode.BGR,
+                    index_or_path=cam_id,
+                    color_mode=ColorMode.BGR,
                 )
                 camera = OpenCVCamera(config)
                 camera.connect(warmup=True)
@@ -414,10 +429,8 @@ def _close_preview_cameras() -> None:
     """Disconnect all preview cameras."""
     global _preview_cameras, _preview_camera_info
     for cam in _preview_cameras:
-        try:
+        with contextlib.suppress(Exception):
             cam.disconnect()
-        except Exception:
-            pass
     _preview_cameras.clear()
     _preview_camera_info.clear()
 
@@ -442,7 +455,7 @@ async def get_camera_frame(index: int) -> Response:
         _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return Response(content=jpeg.tobytes(), media_type="image/jpeg")
     except Exception as e:
-        raise HTTPException(500, f"Failed to read camera frame: {e}")
+        raise HTTPException(500, f"Failed to read camera frame: {e}") from e
 
 
 @router.post("/stop-cameras")
@@ -456,6 +469,7 @@ async def stop_cameras() -> dict:
 # Port scanning and arm identification
 # ============================================================================
 
+
 @router.get("/ports")
 async def scan_ports() -> list[dict]:
     """Scan for USB serial ports (ttyACM*, ttyUSB* on Linux).
@@ -467,19 +481,24 @@ async def scan_ports() -> list[dict]:
     ports = []
     try:
         from serial.tools import list_ports
+
         for port_info in sorted(list_ports.comports(), key=lambda p: p.device):
             # Filter to USB serial ports only
             dev = port_info.device
             devname = Path(dev).name
-            if not (devname.startswith("ttyACM") or devname.startswith("ttyUSB")):
-                if platform.system() == "Linux":
-                    continue  # Skip non-USB ports on Linux
-            ports.append({
-                "path": dev,
-                "name": port_info.description or devname,
-                "manufacturer": port_info.manufacturer or "",
-                "vid_pid": f"{port_info.vid:04x}:{port_info.pid:04x}" if port_info.vid else "",
-            })
+            if (
+                not (devname.startswith("ttyACM") or devname.startswith("ttyUSB"))
+                and platform.system() == "Linux"
+            ):
+                continue  # Skip non-USB ports on Linux
+            ports.append(
+                {
+                    "path": dev,
+                    "name": port_info.description or devname,
+                    "manufacturer": port_info.manufacturer or "",
+                    "vid_pid": f"{port_info.vid:04x}:{port_info.pid:04x}" if port_info.vid else "",
+                }
+            )
     except ImportError:
         # Fallback: glob for USB serial devices
         if platform.system() == "Linux":
@@ -523,10 +542,8 @@ def _wiggle_shoulder(port: str) -> dict:
         return {"status": "error", "port": port, "message": str(e)}
     finally:
         if bus:
-            try:
+            with contextlib.suppress(Exception):
                 bus.disconnect()
-            except Exception:
-                pass
 
 
 def _collect_all_port_assignments() -> list[dict]:
@@ -536,6 +553,7 @@ def _collect_all_port_assignments() -> list[dict]:
     """
     from lerobot.robots.config import RobotConfig
     from lerobot.teleoperators.config import TeleoperatorConfig
+
     _ensure_configs_loaded()
 
     assignments = []
@@ -565,12 +583,14 @@ def _collect_all_port_assignments() -> list[dict]:
                 if "port" in field.name and "str" in _stringify_type(field.type).lower():
                     port_value = fields_data.get(field.name)
                     if port_value and isinstance(port_value, str) and port_value.strip():
-                        assignments.append({
-                            "port": port_value.strip(),
-                            "profile_name": profile_name,
-                            "profile_kind": kind,
-                            "field_name": field.name,
-                        })
+                        assignments.append(
+                            {
+                                "port": port_value.strip(),
+                                "profile_name": profile_name,
+                                "profile_kind": kind,
+                                "field_name": field.name,
+                            }
+                        )
 
     return assignments
 
@@ -597,7 +617,7 @@ async def open_in_file_manager(body: dict) -> dict:
     try:
         _subprocess.Popen(["xdg-open", str(profiles_dir)])
     except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="xdg-open not found")
+        raise HTTPException(status_code=500, detail="xdg-open not found") from None
 
     return {"status": "ok"}
 
@@ -623,12 +643,14 @@ def _make_robot_from_profile(profile: dict):
     """
     from lerobot.robots.config import RobotConfig
     from lerobot.robots.utils import make_robot_from_config
+
     _ensure_configs_loaded()
 
     config_dict = {"type": profile["type"]}
     config_dict.update(profile.get("fields", {}))
 
     import draccus
+
     config = draccus.decode(RobotConfig, config_dict)
     return make_robot_from_config(config)
 

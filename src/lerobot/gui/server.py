@@ -77,8 +77,10 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up subprocesses on server shutdown."""
-    from lerobot.gui.api.run import _stop_debug_process, _active_process
     import signal
+
+    from lerobot.gui.api.run import _active_process, _stop_debug_process
+
     # Stop debug model process
     await _stop_debug_process()
     # Stop active process (teleop/record/etc.)
@@ -86,6 +88,7 @@ async def shutdown_event():
         _active_process.send_signal(signal.SIGINT)
         try:
             import asyncio
+
             await asyncio.wait_for(_active_process.wait(), timeout=5.0)
         except Exception:
             _active_process.kill()

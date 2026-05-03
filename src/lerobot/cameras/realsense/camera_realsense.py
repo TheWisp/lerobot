@@ -329,9 +329,7 @@ class RealSenseCamera(Camera):
                 rs.stream.color, self.capture_width, self.capture_height, rs.format.rgb8, self.fps
             )
             if self.use_depth:
-                rs_config.enable_stream(
-                    rs.stream.depth, 848, 480, rs.format.z16, self.fps
-                )
+                rs_config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, self.fps)
         else:
             rs_config.enable_stream(rs.stream.color)
             if self.use_depth:
@@ -496,9 +494,7 @@ class RealSenseCamera(Camera):
             raise RuntimeError(f"{self} read thread is not running.")
 
         if not self.new_frame_event.wait(timeout=timeout_ms / 1000.0):
-            raise TimeoutError(
-                f"Timed out waiting for frame from {self} after {timeout_ms} ms."
-            )
+            raise TimeoutError(f"Timed out waiting for frame from {self} after {timeout_ms} ms.")
 
         with self.frame_lock:
             color_frame = self.latest_color_frame

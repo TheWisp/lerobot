@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def reload_metadata(dataset: "LeRobotDataset", root: Path | None = None) -> None:
+def reload_metadata(dataset: LeRobotDataset, root: Path | None = None) -> None:
     """Reload all metadata files (info, episodes, stats, tasks) in-place.
 
     Args:
@@ -35,7 +35,7 @@ def reload_metadata(dataset: "LeRobotDataset", root: Path | None = None) -> None
     dataset.meta.tasks = load_tasks(r)
 
 
-def ensure_episodes_loaded(dataset: "LeRobotDataset", root: Path | None = None) -> None:
+def ensure_episodes_loaded(dataset: LeRobotDataset, root: Path | None = None) -> None:
     """Ensure ``dataset.meta.episodes`` is populated (lazy datasets skip it).
 
     Cheap no-op if already loaded. Used by endpoints that need episode info
@@ -48,7 +48,7 @@ def ensure_episodes_loaded(dataset: "LeRobotDataset", root: Path | None = None) 
         dataset.meta.episodes = load_episodes(r)
 
 
-def reload_hf_dataset(dataset: "LeRobotDataset", root: Path | None = None) -> None:
+def reload_hf_dataset(dataset: LeRobotDataset, root: Path | None = None) -> None:
     """Reload the HuggingFace Arrow dataset from parquet files in-place.
 
     Routes through ``DatasetReader.load_and_activate()`` (the post-refactor
@@ -85,7 +85,7 @@ def reload_hf_dataset(dataset: "LeRobotDataset", root: Path | None = None) -> No
         hf_datasets.enable_caching()
 
 
-def reload_dataset_from_disk(dataset: "LeRobotDataset", root: Path | None = None) -> None:
+def reload_dataset_from_disk(dataset: LeRobotDataset, root: Path | None = None) -> None:
     """Full in-place reload: metadata + HuggingFace dataset.
 
     This is what you want after edits or hub downloads — everything that

@@ -26,6 +26,7 @@ See also ``tests/hvla/test_rlt_episode.py`` for the invariants this
 class enforces and the threading test that locks in the race-free
 behavior.
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,7 +44,7 @@ class TerminalKind(Enum):
     """
 
     SUCCESS = auto()  # operator pressed R; reward = +1.0
-    ABORT = auto()    # operator pressed LEFT; reward = config.abort_reward
+    ABORT = auto()  # operator pressed LEFT; reward = config.abort_reward
 
 
 logger = logging.getLogger(__name__)
@@ -116,15 +117,8 @@ class EpisodeLifecycle:
                 "begin() on an active lifecycle would silently overwrite "
                 "in-progress state."
             )
-            assert buffer_size >= 0, (
-                f"EpisodeLifecycle.begin: buffer_size must be >= 0, got "
-                f"{buffer_size}."
-            )
-            if (
-                self._terminal is not None
-                and not self._terminal_consumed
-                and not self._ignore
-            ):
+            assert buffer_size >= 0, f"EpisodeLifecycle.begin: buffer_size must be >= 0, got {buffer_size}."
+            if self._terminal is not None and not self._terminal_consumed and not self._ignore:
                 raise AssertionError(
                     f"EpisodeLifecycle.begin: previous episode signaled "
                     f"terminal {self._terminal.name} but it was never "
@@ -185,16 +179,13 @@ class EpisodeLifecycle:
         with self._lock:
             if not self._active:
                 logger.debug(
-                    "EpisodeLifecycle.signal_terminal(%s): no active "
-                    "episode — keypress dropped silently.",
+                    "EpisodeLifecycle.signal_terminal(%s): no active episode — keypress dropped silently.",
                     kind.name,
                 )
                 return
             if self._terminal is None:
                 self._terminal = kind
-                logger.debug(
-                    "EpisodeLifecycle: terminal %s signaled", kind.name
-                )
+                logger.debug("EpisodeLifecycle: terminal %s signaled", kind.name)
             elif self._terminal != kind:
                 logger.warning(
                     "EpisodeLifecycle: %s signaled but %s was already "
@@ -202,7 +193,9 @@ class EpisodeLifecycle:
                     "either operator key confusion or an upstream listener "
                     "bug (e.g. UI element eating an arrow key). Episode "
                     "outcome is unaffected.",
-                    kind.name, self._terminal.name, self._terminal.name,
+                    kind.name,
+                    self._terminal.name,
+                    self._terminal.name,
                 )
             # else: same kind repeated — silent no-op (benign)
 
@@ -216,10 +209,7 @@ class EpisodeLifecycle:
         not a bug if it lands outside an episode."""
         with self._lock:
             if not self._active:
-                logger.debug(
-                    "EpisodeLifecycle.signal_ignore: no active episode "
-                    "— keypress dropped silently."
-                )
+                logger.debug("EpisodeLifecycle.signal_ignore: no active episode — keypress dropped silently.")
                 return
             self._ignore = True
 
@@ -234,8 +224,7 @@ class EpisodeLifecycle:
         """
         with self._lock:
             assert self._active, (
-                "EpisodeLifecycle.mark_intervention: called when not "
-                "active. Was begin() called?"
+                "EpisodeLifecycle.mark_intervention: called when not active. Was begin() called?"
             )
             self._had_intervention = True
 
@@ -294,9 +283,7 @@ class EpisodeLifecycle:
         of this class's API — fail loud rather than silently masking it.
         """
         with self._lock:
-            assert (
-                self._terminal is not None or not self._terminal_consumed
-            ), (
+            assert self._terminal is not None or not self._terminal_consumed, (
                 "EpisodeLifecycle invariant violated: _terminal_consumed=True "
                 "but _terminal=None. Internal state was corrupted outside "
                 "the public API."

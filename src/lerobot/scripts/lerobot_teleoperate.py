@@ -72,8 +72,8 @@ from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
     bi_openarm_follower,
-    bi_so_follower,
     bi_so107_follower,
+    bi_so_follower,
     earthrover_mini_plus,
     hope_jr,
     koch_follower,
@@ -88,8 +88,8 @@ from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
     bi_openarm_leader,
-    bi_so_leader,
     bi_so107_leader,
+    bi_so_leader,
     gamepad,
     homunculus,
     keyboard,
@@ -214,10 +214,7 @@ def teleoperate(cfg: TeleoperateConfig):
     logging.info(pformat(asdict(cfg)))
     if cfg.display_data:
         init_rerun(session_name="teleoperation", ip=cfg.display_ip, port=cfg.display_port)
-    _is_remote = (
-        cfg.display_ip is not None
-        and cfg.display_ip not in ("127.0.0.1", "localhost", "::1")
-    )
+    _is_remote = cfg.display_ip is not None and cfg.display_ip not in ("127.0.0.1", "localhost", "::1")
     display_compressed_images = (
         True
         if (cfg.display_data and _is_remote and cfg.display_port is not None)
@@ -239,6 +236,7 @@ def teleoperate(cfg: TeleoperateConfig):
     # The stream writer handles both ObservationStream (GUI viewer) and optionally
     # SharedImageBuffer (S2 debug model) based on env vars.
     from lerobot.robots.obs_stream import make_obs_stream_writer_step
+
     obs_stream_steps = list(robot.get_observation_processor_steps() or [])
     obs_stream_writer = make_obs_stream_writer_step()
     if obs_stream_writer is not None:

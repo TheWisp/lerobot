@@ -108,13 +108,13 @@ updates, no exploration noise.
 
 Intervention requires a [teleop config](../launch.py) (`--teleop-config`).
 
-| Key | Action |
-|-----|--------|
-| **R** | Mark success (+1 reward, ends episode) |
-| **SPACE** | Toggle intervention (human takes over / releases) |
-| **Right arrow** | End episode (failure), advance to next |
-| **Left arrow** | End episode, re-record |
-| **ESC** | Stop |
+| Key             | Action                                            |
+| --------------- | ------------------------------------------------- |
+| **R**           | Mark success (+1 reward, ends episode)            |
+| **SPACE**       | Toggle intervention (human takes over / releases) |
+| **Right arrow** | End episode (failure), advance to next            |
+| **Left arrow**  | End episode, re-record                            |
+| **ESC**         | Stop                                              |
 
 ## Live Tuning
 
@@ -182,33 +182,33 @@ Frozen S1 encoder ──→ context [1025, 768]
 
 Defined in [`RLTConfig`](config.py). Tunable live via GUI sliders where noted.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `beta` | 0.1 | BC regularizer weight (live tunable) |
-| `exploration_sigma` | 0.02 | Noise std added to executed action — joint jitter (live tunable) |
-| `target_sigma` | 0.02 | Noise std for TD3 target policy smoothing (live tunable) |
-| `target_noise_clip` | 0.5 | Symmetric clip on target smoothing noise (TD3) |
-| `rl_chunk_length` | 10 | Action chunk length C |
-| `utd_ratio` | 5 | Gradient updates per transition |
-| `discount` | 0.99 | Gamma for TD target |
-| `tau` | 0.005 | Soft target update rate |
-| `critic_grad_clip` | 10.0 | Global-norm clip on critic gradient |
-| `replay_capacity` | 200,000 | Max replay buffer transitions |
-| `warmup_episodes` | 10 | Episodes before actor is used |
+| Parameter           | Default | Description                                                      |
+| ------------------- | ------- | ---------------------------------------------------------------- |
+| `beta`              | 0.1     | BC regularizer weight (live tunable)                             |
+| `exploration_sigma` | 0.02    | Noise std added to executed action — joint jitter (live tunable) |
+| `target_sigma`      | 0.02    | Noise std for TD3 target policy smoothing (live tunable)         |
+| `target_noise_clip` | 0.5     | Symmetric clip on target smoothing noise (TD3)                   |
+| `rl_chunk_length`   | 10      | Action chunk length C                                            |
+| `utd_ratio`         | 5       | Gradient updates per transition                                  |
+| `discount`          | 0.99    | Gamma for TD target                                              |
+| `tau`               | 0.005   | Soft target update rate                                          |
+| `critic_grad_clip`  | 10.0    | Global-norm clip on critic gradient                              |
+| `replay_capacity`   | 200,000 | Max replay buffer transitions                                    |
+| `warmup_episodes`   | 10      | Episodes before actor is used                                    |
 
 ## Code Map
 
-| File | Purpose |
-|------|---------|
-| [`config.py`](config.py) | All hyperparameters (`RLTConfig` dataclass) |
-| [`token.py`](token.py) | RL token encoder/decoder (Phase 1) |
-| [`train_token.py`](train_token.py) | Phase 1 training script |
-| [`actor_critic.py`](actor_critic.py) | Actor, Critic, TD3Agent (Phase 2) |
-| [`replay_buffer.py`](replay_buffer.py) | Thread-safe ring buffer |
-| [`metrics.py`](metrics.py) | Training metrics + GUI dashboard data |
+| File                                       | Purpose                                                             |
+| ------------------------------------------ | ------------------------------------------------------------------- |
+| [`config.py`](config.py)                   | All hyperparameters (`RLTConfig` dataclass)                         |
+| [`token.py`](token.py)                     | RL token encoder/decoder (Phase 1)                                  |
+| [`train_token.py`](train_token.py)         | Phase 1 training script                                             |
+| [`actor_critic.py`](actor_critic.py)       | Actor, Critic, TD3Agent (Phase 2)                                   |
+| [`replay_buffer.py`](replay_buffer.py)     | Thread-safe ring buffer                                             |
+| [`metrics.py`](metrics.py)                 | Training metrics + GUI dashboard data                               |
 | [`../s1_inference.py`](../s1_inference.py) | Inference thread: actor forward, gradient updates, config overrides |
-| [`../s1_process.py`](../s1_process.py) | Main loop: episode management, intervention, checkpointing |
-| [`../launch.py`](../launch.py) | CLI entry point with RLT flags |
+| [`../s1_process.py`](../s1_process.py)     | Main loop: episode management, intervention, checkpointing          |
+| [`../launch.py`](../launch.py)             | CLI entry point with RLT flags                                      |
 
 ## Tests
 

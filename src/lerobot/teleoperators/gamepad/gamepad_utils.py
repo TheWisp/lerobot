@@ -18,7 +18,6 @@ import logging
 from typing import TYPE_CHECKING
 
 from lerobot.utils.import_utils import _hidapi_available, _pygame_available, require_package
-
 from lerobot.utils.utils import log_say
 
 from ..utils import TeleopEvents
@@ -359,8 +358,7 @@ class GamepadControllerHID(InputController):
         for device in devices:
             device_name = device["product_string"]
             if any(
-                controller in device_name
-                for controller in ["Logitech", "Xbox", "PS4", "PS5", "DualSense"]
+                controller in device_name for controller in ["Logitech", "Xbox", "PS4", "PS5", "DualSense"]
             ):
                 return device
 

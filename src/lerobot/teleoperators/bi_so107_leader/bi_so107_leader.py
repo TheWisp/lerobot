@@ -21,7 +21,6 @@ from typing import Any
 from lerobot.teleoperators.so_leader import SO107Leader, SO107LeaderConfig
 
 from ..teleoperator import Teleoperator
-from ..utils import TeleopEvents
 from .config_bi_so107_leader import BiSO107LeaderConfig
 
 logger = logging.getLogger(__name__)

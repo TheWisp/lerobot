@@ -8,8 +8,8 @@ import logging
 
 import numpy as np
 import torch
-from torch import Tensor
 import torchvision.transforms.functional as TF
+from torch import Tensor
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +69,9 @@ def preprocess_images(
 
         # Resize on CPU (small tensor → fast GPU transfer)
         if img.shape[1:] != resolution:
-            img = TF.resize(img, list(resolution),
-                            interpolation=TF.InterpolationMode.BILINEAR, antialias=True)
+            img = TF.resize(
+                img, list(resolution), interpolation=TF.InterpolationMode.BILINEAR, antialias=True
+            )
 
         # Normalize: uint8 [0,255] → float [-1, 1]
         if img.dtype == torch.uint8:

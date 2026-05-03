@@ -40,13 +40,10 @@ from torch.utils.data import DataLoader
 from lerobot.policies.hvla.scripts.flash_dagger_lora import apply_lora_to_decoder
 from lerobot.policies.hvla.scripts.flash_dagger_phase_a_rank import (
     compute_per_sample_loss,
-    override_norm_stats,
-    patch_episode_data_index,
 )
 from lerobot.policies.hvla.scripts.flash_dagger_phase_b import (
     FlashMixDataset,
     build_dataset,
-    collate,
     eval_loss_on_indices,
     make_collate_fn,
     split_episode,
@@ -63,7 +60,9 @@ def main():
     parser.add_argument("--train-repo-id", required=True)
     parser.add_argument("--output-dir", default="outputs/flash_dagger/phase_c")
     parser.add_argument(
-        "--episodes", type=int, nargs="+",
+        "--episodes",
+        type=int,
+        nargs="+",
         default=[247, 76, 174, 235, 245, 141, 147, 276, 309, 177],
         help="Ordered list of episodes to flash sequentially.",
     )
@@ -71,8 +70,7 @@ def main():
     parser.add_argument("--rank", type=int, default=16)
     parser.add_argument("--alpha", type=float, default=32.0)
     parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--steps", type=int, default=60,
-                        help="Training steps per episode iteration.")
+    parser.add_argument("--steps", type=int, default=60, help="Training steps per episode iteration.")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--eval-passes", type=int, default=2)
     parser.add_argument("--forget-val-size", type=int, default=500)
@@ -100,9 +98,10 @@ def main():
     with open(ckpt_dir / "config.json") as f:
         ckpt_cfg = json.load(f)
 
+    import safetensors.torch as sft
+
     from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
     from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
-    import safetensors.torch as sft
 
     config = FlowMatchingS1Config(
         chunk_size=ckpt_cfg["chunk_size"],
@@ -153,11 +152,13 @@ def main():
     t0 = time.time()
     for ep in args.episodes:
         _, va = splits[ep]
-        baselines[ep] = eval_loss_on_indices(policy, eval_ds, va, config,
-                                             args.batch_size, device, passes=args.eval_passes)
+        baselines[ep] = eval_loss_on_indices(
+            policy, eval_ds, va, config, args.batch_size, device, passes=args.eval_passes
+        )
         logger.info("  ep %d baseline fit_val = %.4f", ep, baselines[ep])
-    baselines["forget"] = eval_loss_on_indices(policy, train_ds, forget_val_indices, config,
-                                               args.batch_size, device, passes=args.eval_passes)
+    baselines["forget"] = eval_loss_on_indices(
+        policy, train_ds, forget_val_indices, config, args.batch_size, device, passes=args.eval_passes
+    )
     logger.info("  forget baseline = %.4f (%.1fs)", baselines["forget"], time.time() - t0)
     policy.train()
 
@@ -165,28 +166,42 @@ def main():
     rows: list[dict] = []  # one row per (iteration, eval_target)
     for i, ep in enumerate(args.episodes, start=1):
         tr, va = splits[ep]
-        logger.info("--- Iteration %d/%d: training on episode %d (%d train frames) ---",
-                    i, len(args.episodes), ep, len(tr))
+        logger.info(
+            "--- Iteration %d/%d: training on episode %d (%d train frames) ---",
+            i,
+            len(args.episodes),
+            ep,
+            len(tr),
+        )
 
         mix_ds = FlashMixDataset(
-            fresh_ds=eval_ds, fresh_indices=tr,
-            replay_ds=train_ds, replay_indices=replay_pool,
+            fresh_ds=eval_ds,
+            fresh_indices=tr,
+            replay_ds=train_ds,
+            replay_indices=replay_pool,
             replay_pct=args.replay_pct,
             length=args.steps * args.batch_size,
         )
         loader = DataLoader(
-            mix_ds, batch_size=args.batch_size, shuffle=False,
-            num_workers=args.num_workers, pin_memory=True, drop_last=True,
+            mix_ds,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            drop_last=True,
             collate_fn=make_collate_fn(config),
         )
 
         # Reset optimizer + LR schedule (each correction is a "fresh" flash)
         opt = torch.optim.AdamW(
             [p for p in policy.parameters() if p.requires_grad],
-            lr=args.lr, weight_decay=0.0,
+            lr=args.lr,
+            weight_decay=0.0,
         )
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-            opt, T_max=args.steps, eta_min=args.lr * 0.05,
+            opt,
+            T_max=args.steps,
+            eta_min=args.lr * 0.05,
         )
 
         t_start = time.time()
@@ -202,8 +217,7 @@ def main():
                 loss = losses.mean()
             opt.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                [p for p in policy.parameters() if p.requires_grad], 1.0)
+            torch.nn.utils.clip_grad_norm_([p for p in policy.parameters() if p.requires_grad], 1.0)
             opt.step()
             sched.step()
             running_loss += loss.item()
@@ -213,8 +227,9 @@ def main():
 
         train_elapsed = time.time() - t_start
         avg_train_loss = running_loss / max(running_n, 1)
-        logger.info("  trained %d steps in %.1fs (avg train_loss=%.4f)",
-                    args.steps, train_elapsed, avg_train_loss)
+        logger.info(
+            "  trained %d steps in %.1fs (avg train_loss=%.4f)", args.steps, train_elapsed, avg_train_loss
+        )
 
         # Eval held-out fit_val for ALL episodes seen so far + forget set
         t_eval = time.time()
@@ -222,52 +237,68 @@ def main():
         for ep_seen in args.episodes[:i]:
             _, va_seen = splits[ep_seen]
             per_ep_losses[ep_seen] = eval_loss_on_indices(
-                policy, eval_ds, va_seen, config,
-                args.batch_size, device, passes=args.eval_passes,
+                policy,
+                eval_ds,
+                va_seen,
+                config,
+                args.batch_size,
+                device,
+                passes=args.eval_passes,
             )
         forget_loss = eval_loss_on_indices(
-            policy, train_ds, forget_val_indices, config,
-            args.batch_size, device, passes=args.eval_passes,
+            policy,
+            train_ds,
+            forget_val_indices,
+            config,
+            args.batch_size,
+            device,
+            passes=args.eval_passes,
         )
         eval_elapsed = time.time() - t_eval
 
         # Log compact one-line summary
-        diag = per_ep_losses[ep]   # just-trained episode (diagonal)
-        worst_old = max((per_ep_losses[e] for e in args.episodes[:i - 1]), default=0.0)
-        avg_old = (
-            np.mean([per_ep_losses[e] for e in args.episodes[:i - 1]]) if i > 1 else 0.0
-        )
+        diag = per_ep_losses[ep]  # just-trained episode (diagonal)
+        worst_old = max((per_ep_losses[e] for e in args.episodes[: i - 1]), default=0.0)
+        avg_old = np.mean([per_ep_losses[e] for e in args.episodes[: i - 1]]) if i > 1 else 0.0
         logger.info(
             "  iter=%d ep=%d | new_fit=%.4f (Δ%+.0f%%) | old_avg=%.4f | old_worst=%.4f | forget=%.4f (Δ%+.0f%%) | eval %.1fs",
-            i, ep,
-            diag, 100 * (diag - baselines[ep]) / max(baselines[ep], 1e-6),
-            avg_old, worst_old,
-            forget_loss, 100 * (forget_loss - baselines["forget"]) / max(baselines["forget"], 1e-6),
+            i,
+            ep,
+            diag,
+            100 * (diag - baselines[ep]) / max(baselines[ep], 1e-6),
+            avg_old,
+            worst_old,
+            forget_loss,
+            100 * (forget_loss - baselines["forget"]) / max(baselines["forget"], 1e-6),
             eval_elapsed,
         )
 
         # Persist row per (iteration, episode_evaluated)
         for ep_eval, loss_val in per_ep_losses.items():
-            rows.append({
+            rows.append(
+                {
+                    "iter": i,
+                    "trained_ep": ep,
+                    "eval_ep": ep_eval,
+                    "loss": loss_val,
+                    "baseline": baselines[ep_eval],
+                    "delta_pct": 100 * (loss_val - baselines[ep_eval]) / max(baselines[ep_eval], 1e-6),
+                    "added_at_iter": args.episodes.index(ep_eval) + 1,
+                    "age_iters": i - (args.episodes.index(ep_eval) + 1),
+                }
+            )
+        rows.append(
+            {
                 "iter": i,
                 "trained_ep": ep,
-                "eval_ep": ep_eval,
-                "loss": loss_val,
-                "baseline": baselines[ep_eval],
-                "delta_pct": 100 * (loss_val - baselines[ep_eval]) / max(baselines[ep_eval], 1e-6),
-                "added_at_iter": args.episodes.index(ep_eval) + 1,
-                "age_iters": i - (args.episodes.index(ep_eval) + 1),
-            })
-        rows.append({
-            "iter": i,
-            "trained_ep": ep,
-            "eval_ep": "forget",
-            "loss": forget_loss,
-            "baseline": baselines["forget"],
-            "delta_pct": 100 * (forget_loss - baselines["forget"]) / max(baselines["forget"], 1e-6),
-            "added_at_iter": 0,
-            "age_iters": -1,
-        })
+                "eval_ep": "forget",
+                "loss": forget_loss,
+                "baseline": baselines["forget"],
+                "delta_pct": 100 * (forget_loss - baselines["forget"]) / max(baselines["forget"], 1e-6),
+                "added_at_iter": 0,
+                "age_iters": -1,
+            }
+        )
 
         del opt, sched, loader, mix_ds
 
@@ -285,7 +316,9 @@ def main():
         forget = next(r["loss"] for r in iter_rows if r["eval_ep"] == "forget")
         logger.info(
             "  %2d | %4d | %.4f | %.4f | %.4f | %.4f",
-            i, ep, new,
+            i,
+            ep,
+            new,
             np.mean(olds) if olds else 0.0,
             np.max(olds) if olds else 0.0,
             forget,

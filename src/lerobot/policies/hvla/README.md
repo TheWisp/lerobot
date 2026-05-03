@@ -33,6 +33,7 @@ cd ~/Documents/openpi_subtask && .venv/bin/python scripts/run_conversion.py
 Output: `~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch/model.safetensors`
 
 Available checkpoints (public):
+
 - [`KeWangRobotics/soarm-pi05-state-11997`](https://huggingface.co/KeWangRobotics/soarm-pi05-state-11997) — Pi0.5 base (state-based)
 - [`KeWangRobotics/soarm-pi05-fast-7998`](https://huggingface.co/KeWangRobotics/soarm-pi05-fast-7998) — Pi0.5 with FAST tokens
 
@@ -132,6 +133,7 @@ python -m lerobot.policies.hvla.launch \
 ```
 
 No `--temporal-ensemble-coeff` needed — RTC provides chunk continuity natively. Key flags:
+
 - `--denoise-steps N`: override denoising steps (default 10, min usable ~5, max quality ~15)
 - `--s1-query-interval N`: re-query every N actions (default 2, ~67ms). Lower = fresher chunks, higher = more of each chunk executed
 - `--no-compile-s1`: disable torch.compile if needed (on by default, ~2ms savings)
@@ -145,6 +147,7 @@ S2 auto-discovery: the launcher first tries to attach to an existing S2 process 
 ### 3c. Persistent S2 (recommended for iteration)
 
 Start S2 once in a separate terminal — it stays hot between S1 restarts:
+
 ```bash
 # Terminal 1: start S2 (one-time, stays running)
 python -m lerobot.policies.hvla.s2_standalone \
@@ -189,25 +192,28 @@ src/lerobot/policies/hvla/
 ## Design Decisions
 
 ### S2 is VLM-only
+
 S2 uses PaliGemma (SigLIP + Gemma 2B) for scene understanding. The Pi0.5 action expert is NOT loaded — S1 generates all actions. This saves ~40% GPU memory and decouples the action policy from the VLM. S2 loads from any Pi0.5 safetensors checkpoint — action expert keys are filtered out at load time.
 
 ### Latent interface: 2048-dim, single token
 
 S2 → S1 communication is a single [2048] float32 vector (PaliGemma's hidden dim), mean-pooled from the VLM's prefix features. S1 projects it down via MLP: 2048→1024→512.
 
-| System | Latent dim | Projection |
-|--------|-----------|------------|
-| OpenHelix | 512 | Linear from 4096 |
-| Dual Process VLA | 4096 | MLP |
-| RoboDual | 256 + 8 tokens | Perceiver |
-| **Ours** | **2048** | MLP: 2048→1024→512 in S1 |
+| System           | Latent dim     | Projection               |
+| ---------------- | -------------- | ------------------------ |
+| OpenHelix        | 512            | Linear from 4096         |
+| Dual Process VLA | 4096           | MLP                      |
+| RoboDual         | 256 + 8 tokens | Perceiver                |
+| **Ours**         | **2048**       | MLP: 2048→1024→512 in S1 |
 
 ### Action decoder: bidirectional attention (v6)
+
 Pi0's action expert uses bidirectional self-attention so all chunk positions "negotiate" and commit to one mode. Our v5 (causal) showed within-chunk gripper oscillation. v6 switches to bidirectional (`tgt_mask=None`), matching Pi0. Requires retraining — not a drop-in change.
 
 ### S1 training: pre-extract S2 latents
 
 S2 latents are pre-extracted offline rather than computed during S1 training:
+
 - S2 inference (50ms/frame) on the same GPU as S1 training causes contention
 - DataLoader workers can't efficiently share a GPU model
 - Extraction is one-time: ~2.5h for 186k frames, produces ~1.5GB .npy file
@@ -218,36 +224,39 @@ S2 latents are pre-extracted offline rather than computed during S1 training:
 v1-v4 shifted the S2 latent backward by k frames (k ~ Uniform(0, 15) at 30fps = 0-500ms) to simulate S2 staleness, with an age embedding MLP so S1 knows how stale the latent is. In practice, this caused S1 to learn to ignore the latent entirely. v5+ trains with aligned latents (k=0, no age embedding), matching the original ACT setup that worked. The age embedding MLP still exists in the model but is disabled (`use_s2_age_embedding=False`).
 
 ### Shared memory IPC
+
 `SharedLatentCache` uses `torch.Tensor.share_memory_()` backed by `/dev/shm`. Each process manages its own CUDA context — no GPU contention from IPC. The [2048] float32 latent (8KB) transfers in <0.1ms.
 
 ## Performance
 
 ### S1 Flow Matching (v6, 10 denoise steps, compiled)
 
-| Component | Latency | Notes |
-|-----------|---------|-------|
-| S2 latent extraction | ~81ms | VLM-only, no action expert |
-| S1 obs prep (4 cameras) | ~6ms | cv2.resize on CPU, then GPU transfer |
+| Component               | Latency | Notes                                      |
+| ----------------------- | ------- | ------------------------------------------ |
+| S2 latent extraction    | ~81ms   | VLM-only, no action expert                 |
+| S1 obs prep (4 cameras) | ~6ms    | cv2.resize on CPU, then GPU transfer       |
 | S1 inference (10 steps) | 22-42ms | bf16 + KV cache + batched DINOv2 + compile |
-| IPC round-trip | <0.1ms | CPU shared memory |
-| Robot send_action | <1ms | Feetech serial, non-blocking |
+| IPC round-trip          | <0.1ms  | CPU shared memory                          |
+| Robot send_action       | <1ms    | Feetech serial, non-blocking               |
 
 Typical S1 loop interval: ~34ms (~29Hz). Inference spikes to ~59ms under S2 GPU contention.
 
 ### Optimization stack (cumulative)
-| Optimization | Inference time | Savings |
-|-------------|---------------|---------|
-| Baseline (fp32, 15 steps) | ~95ms | — |
-| + TF32 matmul | ~54ms | 41ms |
-| + bf16 autocast | ~25ms | 29ms |
-| + Cross-attention KV cache | ~14ms (isolated) | 11ms |
-| + Batched DINOv2 (4 cameras) | marginal | ~1ms |
-| + torch.compile (denoise_step) | ~2ms saved | ~2ms |
-| Real-world (10 steps, w/ S2) | 22-42ms | — |
+
+| Optimization                   | Inference time   | Savings |
+| ------------------------------ | ---------------- | ------- |
+| Baseline (fp32, 15 steps)      | ~95ms            | —       |
+| + TF32 matmul                  | ~54ms            | 41ms    |
+| + bf16 autocast                | ~25ms            | 29ms    |
+| + Cross-attention KV cache     | ~14ms (isolated) | 11ms    |
+| + Batched DINOv2 (4 cameras)   | marginal         | ~1ms    |
+| + torch.compile (denoise_step) | ~2ms saved       | ~2ms    |
+| Real-world (10 steps, w/ S2)   | 22-42ms          | —       |
 
 ## TODO
 
 ### High priority
+
 - [x] **[CRITICAL] RLT state normalization mismatch** — fixed in 480efb41c via `FlowMatchingS1Policy.prepare_batch_for_encode_observations`. Parity test `test_policy_prepare_batch_normalizes_state` locks in the invariant. Old actor/critic checkpoint renamed to `latest.buggy_pre_fixes_20260423/` for safekeeping; fresh Phase-2 training required.
 - [x] **[RLT] Image preprocessing parity** — fixed in 78da63e8d. `obs_to_s1_batch` now uses `TF.resize(bilinear, antialias=True)` matching `FlowMatchingDataset`. Policy-owned preprocessing refactor still pending (ACT-VLM has a different training pipeline — xfail-tagged).
 - [x] **[RLT] Actor forward dtype** — fixed in ccbdf7dee. Actor call wrapped in `torch.autocast(enabled=False)` with explicit fp32 cast. Parity test `test_actor_receives_fp32_inputs_at_inference` verifies.
@@ -272,6 +281,7 @@ Typical S1 loop interval: ~34ms (~29Hz). Inference spikes to ~59ms under S2 GPU 
 - [ ] Pre-decode and cache training images to avoid repeated video decode (main training bottleneck)
 
 ### Medium priority
+
 - [ ] **Image resize: switch to BICUBIC to match DINOv2 original pretraining** (currently BILINEAR + antialias everywhere in our pipeline). DINOv2 was pretrained on LVD-142M with PIL-style bicubic, so feeding it bilinear-resized images leaves ~1% feature quality on the table. Low priority: requires full S1 retrain (backbone has fine-tuned to bilinear). The inference-vs-training consistency bug is unrelated and must be fixed regardless (see CRITICAL entries above).
 - [ ] **Training DataLoader optimization** — GPU drops to 10% for ~2s every ~7s (video decode stall). Candidates: `persistent_workers=True` + `prefetch_factor=3` in DataLoader, pre-decode images to memmap. Needs benchmarking to measure actual improvement.
 - [ ] `torch.compile` for S1 training (mode=default, skip DINOv2 — needs investigation)
@@ -281,6 +291,7 @@ Typical S1 loop interval: ~34ms (~29Hz). Inference spikes to ~59ms under S2 GPU 
 - [ ] Corrupt JPEG data — "premature end of data segment" from OpenCV cameras (not seen recently, may be resolved)
 
 ### Done
+
 - [x] Intervention / inverse follow (`--teleop-config`, `--intervention-dataset`)
 - [x] Inference episode recording to LeRobotDataset (`--record-dataset`)
 - [x] Robot-agnostic control loop (joint names derived from robot, no hardcoded SO107)
@@ -297,6 +308,7 @@ Typical S1 loop interval: ~34ms (~29Hz). Inference spikes to ~59ms under S2 GPU 
 - [x] Soft landing with hold-position during torque ramp-down
 
 ### Future
+
 - [ ] Co-training S1 + S2 (currently sequential: extract latents → train S1)
 - [ ] Adaptive action horizon (short chunks for precision, long for transit)
 - [ ] Switch S1 to using Pi0-style action expert architecture (proven at scale, matches Ψ₀)

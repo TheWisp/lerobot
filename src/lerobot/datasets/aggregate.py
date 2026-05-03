@@ -526,10 +526,7 @@ def aggregate_data(src_meta, dst_meta, data_idx, data_files_size_in_mb, chunk_si
 
         # Align source columns to match destination schema (handles force-merge
         # where features differ: pad missing columns, drop extras)
-        dst_parquet_cols = [
-            k for k, v in dst_meta.features.items()
-            if v.get("dtype") not in ("video",)
-        ]
+        dst_parquet_cols = [k for k, v in dst_meta.features.items() if v.get("dtype") not in ("video",)]
         for col in dst_parquet_cols:
             if col not in df.columns:
                 feat = dst_meta.features[col]
@@ -626,10 +623,7 @@ def aggregate_metadata(src_meta, dst_meta, meta_idx, data_idx, videos_idx):
             sim_dst_sizes[dst_key] = src_size
         else:
             # Check if we need to rotate based on size
-            if dst_path.exists():
-                current_dst_size = get_parquet_file_size_in_mb(dst_path)
-            else:
-                current_dst_size = 0
+            current_dst_size = get_parquet_file_size_in_mb(dst_path) if dst_path.exists() else 0
             current_dst_size += sim_dst_sizes.get(dst_key, 0)
 
             if current_dst_size + src_size >= DEFAULT_DATA_FILE_SIZE_IN_MB:

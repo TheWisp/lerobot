@@ -11,11 +11,10 @@ import math
 
 import torch
 from torch import Tensor, nn
-
 from transformers.models.auto import CONFIG_MAPPING
 
-from lerobot.policies.pi_gemma import PaliGemmaForConditionalGenerationWithPiGemma
 from lerobot.policies.hvla.s2.config import S2VLMConfig
+from lerobot.policies.pi_gemma import PaliGemmaForConditionalGenerationWithPiGemma
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +260,7 @@ class S2VLMModel(nn.Module):
         # AR decode subtask from KV cache
         device = prefix_embs.device
         last_valid_idx = int(torch.where(prefix_pad_masks[0])[0][-1].item())
-        logits = self.deembed(prefix_out[:, last_valid_idx:last_valid_idx + 1])
+        logits = self.deembed(prefix_out[:, last_valid_idx : last_valid_idx + 1])
         next_token = self._sample_token(logits[:, 0], temperature)
 
         prefix_valid_len = int(prefix_pad_masks[0].sum().item())
@@ -276,7 +275,7 @@ class S2VLMModel(nn.Module):
 
         # Top-k for first token + log-prob of chosen token
         first_topk = torch.topk(logits[0, 0], k=min(5, logits.shape[-1]))
-        topk_per_step.append(list(zip(first_topk.indices.tolist(), first_topk.values.tolist())))
+        topk_per_step.append(list(zip(first_topk.indices.tolist(), first_topk.values.tolist(), strict=False)))
         first_log_probs = torch.log_softmax(logits[0, 0].float(), dim=-1)
         token_log_probs.append(first_log_probs[next_token[0, 0]].item())
 
@@ -305,7 +304,9 @@ class S2VLMModel(nn.Module):
 
             logits = self.deembed(ar_out[:, -1:])
             step_topk = torch.topk(logits[0, 0], k=min(5, logits.shape[-1]))
-            topk_per_step.append(list(zip(step_topk.indices.tolist(), step_topk.values.tolist())))
+            topk_per_step.append(
+                list(zip(step_topk.indices.tolist(), step_topk.values.tolist(), strict=False))
+            )
             next_token = self._sample_token(logits[:, 0], temperature)
             step_log_probs = torch.log_softmax(logits[0, 0].float(), dim=-1)
             token_log_probs.append(step_log_probs[next_token[0, 0]].item())
@@ -337,8 +338,11 @@ class S2VLMModel(nn.Module):
 
         # Filter out action expert keys
         skip_prefixes = (
-            "gemma_expert", "action_in_proj", "action_out_proj",
-            "time_mlp", "state_proj",
+            "gemma_expert",
+            "action_in_proj",
+            "action_out_proj",
+            "time_mlp",
+            "state_proj",
         )
 
         # Remap keys: checkpoint may use "paligemma_with_expert.paligemma.*"
@@ -350,9 +354,9 @@ class S2VLMModel(nn.Module):
             # Strip wrapper prefix if present
             new_k = k
             if new_k.startswith("paligemma_with_expert.paligemma."):
-                new_k = "paligemma." + new_k[len("paligemma_with_expert.paligemma."):]
+                new_k = "paligemma." + new_k[len("paligemma_with_expert.paligemma.") :]
             elif new_k.startswith("paligemma_with_expert."):
-                new_k = new_k[len("paligemma_with_expert."):]
+                new_k = new_k[len("paligemma_with_expert.") :]
             vlm_keys[new_k] = v
 
         missing, unexpected = model.load_state_dict(vlm_keys, strict=False)
@@ -364,6 +368,7 @@ class S2VLMModel(nn.Module):
         skipped_count = len(state_dict) - len(vlm_keys)
         logger.info(
             "Loaded %d VLM params, skipped %d action expert params",
-            len(vlm_keys), skipped_count,
+            len(vlm_keys),
+            skipped_count,
         )
         return model

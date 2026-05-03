@@ -19,7 +19,10 @@ from lerobot.policies.hvla.rlt.config import RLTConfig
 
 
 def _build_mlp(
-    input_dim: int, hidden_dim: int, output_dim: int, num_layers: int,
+    input_dim: int,
+    hidden_dim: int,
+    output_dim: int,
+    num_layers: int,
     layer_norm: bool = False,
 ) -> nn.Sequential:
     """Build a ReLU MLP with the given number of hidden layers.
@@ -104,10 +107,10 @@ class RLTActor(nn.Module):
             actions: [B, C, action_dim] — direct output (paper Eq. 4)
         """
         B = z_rl.shape[0]
-        ref_flat = ref_chunk.reshape(B, -1)                    # [B, C*A]
-        x = torch.cat([z_rl, state, ref_flat], dim=-1)         # [B, D+S+C*A]
-        mu = self.mlp(x)                                       # [B, C*A]
-        mu = mu.reshape(B, self.chunk_length, self.action_dim) # [B, C, A]
+        ref_flat = ref_chunk.reshape(B, -1)  # [B, C*A]
+        x = torch.cat([z_rl, state, ref_flat], dim=-1)  # [B, D+S+C*A]
+        mu = self.mlp(x)  # [B, C*A]
+        mu = mu.reshape(B, self.chunk_length, self.action_dim)  # [B, C, A]
 
         if deterministic:
             return mu
@@ -116,8 +119,7 @@ class RLTActor(nn.Module):
         share = self.config.shared_noise_per_chunk if shared_noise is None else shared_noise
         if share:
             # One sample per (batch element, action dim), broadcast over C
-            noise = torch.randn(B, 1, self.action_dim,
-                                device=mu.device, dtype=mu.dtype) * sigma_val
+            noise = torch.randn(B, 1, self.action_dim, device=mu.device, dtype=mu.dtype) * sigma_val
             noise = noise.expand_as(mu)
         else:
             noise = torch.randn_like(mu) * sigma_val
@@ -147,13 +149,18 @@ class RLTCritic(nn.Module):
         # mode. LN per-layer caps the activation magnitude regardless
         # of what the output wants to predict, breaking the
         # "Q grows → activations grow → gradient grows" feedback loop.
-        self.q_nets = nn.ModuleList([
-            _build_mlp(
-                input_dim, config.critic_hidden_dim, 1, config.critic_num_layers,
-                layer_norm=config.critic_layer_norm,
-            )
-            for _ in range(config.num_critics)
-        ])
+        self.q_nets = nn.ModuleList(
+            [
+                _build_mlp(
+                    input_dim,
+                    config.critic_hidden_dim,
+                    1,
+                    config.critic_num_layers,
+                    layer_norm=config.critic_layer_norm,
+                )
+                for _ in range(config.num_critics)
+            ]
+        )
 
     def forward(self, z_rl: Tensor, state: Tensor, action_chunk: Tensor) -> list[Tensor]:
         """
@@ -193,7 +200,7 @@ class TD3Agent:
     @torch.no_grad()
     def soft_update_target(self):
         tau = self.config.tau
-        for p, pt in zip(self.critic.parameters(), self.critic_target.parameters()):
+        for p, pt in zip(self.critic.parameters(), self.critic_target.parameters(), strict=False):
             pt.data.lerp_(p.data, tau)
 
     def update_critic(
@@ -233,7 +240,9 @@ class TD3Agent:
             # exploration / execution noise is allowed to be chunk-
             # shared (for joint smoothness).
             next_action = self.actor(
-                next_z_rl, next_state, next_ref_chunk,
+                next_z_rl,
+                next_state,
+                next_ref_chunk,
                 deterministic=False,
                 sigma=self.config.target_sigma,
                 clip=self.config.target_noise_clip,
@@ -241,7 +250,7 @@ class TD3Agent:
             )
             target_q = self.critic_target.min_q(next_z_rl, next_state, next_action)
             # C-step return: reward is already the C-step cumulative
-            q_target = reward + (gamma ** C) * (1 - done) * target_q
+            q_target = reward + (gamma**C) * (1 - done) * target_q
             # Clamp the bootstrap target to its theoretical bound:
             # max return = r_max / (1 - γ^C). With ±1 sparse rewards and
             # default γ=0.99, C=10 this is ±10.4. The critic should
@@ -252,7 +261,7 @@ class TD3Agent:
             # slow drift via accumulated small-clipped updates can't
             # walk Q to ±∞ either.
             if self.config.q_target_clip:
-                denom = 1.0 - gamma ** C
+                denom = 1.0 - gamma**C
                 q_high = 1.0 / denom
                 q_low = -abs(self.config.abort_reward) / denom
                 q_target = q_target.clamp(q_low, q_high)
@@ -267,7 +276,8 @@ class TD3Agent:
         # notes, and docs/rlt_design.md section on TD3 defenses). The returned
         # value is the PRE-clip norm, for monitoring.
         grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.critic.parameters(), self.config.critic_grad_clip,
+            self.critic.parameters(),
+            self.config.critic_grad_clip,
         ).item()
         self.critic_opt.step()
         self.soft_update_target()
@@ -293,8 +303,9 @@ class TD3Agent:
 
         # Reference action dropout: zero out ref_chunk with probability p
         if self.config.ref_action_dropout > 0:
-            mask = (torch.rand(z_rl.shape[0], 1, 1, device=z_rl.device)
-                    > self.config.ref_action_dropout).float()
+            mask = (
+                torch.rand(z_rl.shape[0], 1, 1, device=z_rl.device) > self.config.ref_action_dropout
+            ).float()
             ref_input = ref_chunk * mask
         else:
             ref_input = ref_chunk

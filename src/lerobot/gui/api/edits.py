@@ -29,10 +29,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/edits", tags=["edits"])
 
 # Will be set by server.py
-_app_state: "AppState" = None  # type: ignore
+_app_state: AppState = None  # type: ignore
 
 
-def set_app_state(state: "AppState") -> None:
+def set_app_state(state: AppState) -> None:
     """Set the application state for edit handlers."""
     global _app_state
     _app_state = state
@@ -93,10 +93,7 @@ class PendingEditsResponse(BaseModel):
 @router.get("", response_model=PendingEditsResponse)
 async def list_pending_edits(dataset_id: str | None = None):
     """List all pending edits, optionally filtered by dataset."""
-    if dataset_id:
-        edits = _app_state.get_edits_for_dataset(dataset_id)
-    else:
-        edits = _app_state.pending_edits
+    edits = _app_state.get_edits_for_dataset(dataset_id) if dataset_id else _app_state.pending_edits
 
     return PendingEditsResponse(
         edits=[
@@ -165,7 +162,8 @@ async def set_episode_trim(request: TrimRequest):
 
     if request.start_frame < 0 or request.end_frame > episode_length:
         raise HTTPException(
-            status_code=400, detail=f"Invalid trim range: {request.start_frame}-{request.end_frame} (length={episode_length})"
+            status_code=400,
+            detail=f"Invalid trim range: {request.start_frame}-{request.end_frame} (length={episode_length})",
         )
 
     if request.start_frame >= request.end_frame:
@@ -175,7 +173,11 @@ async def set_episode_trim(request: TrimRequest):
     _app_state.pending_edits = [
         e
         for e in _app_state.pending_edits
-        if not (e.dataset_id == request.dataset_id and e.episode_index == request.episode_index and e.edit_type == "trim")
+        if not (
+            e.dataset_id == request.dataset_id
+            and e.episode_index == request.episode_index
+            and e.edit_type == "trim"
+        )
     ]
 
     # Only add trim if it's not the full range
@@ -187,7 +189,9 @@ async def set_episode_trim(request: TrimRequest):
             params={"start_frame": request.start_frame, "end_frame": request.end_frame},
         )
         _app_state.add_edit(edit)
-        logger.info(f"Set trim for episode {request.episode_index}: frames {request.start_frame}-{request.end_frame}")
+        logger.info(
+            f"Set trim for episode {request.episode_index}: frames {request.start_frame}-{request.end_frame}"
+        )
 
     _save_edits_for_dataset(request.dataset_id)
 
@@ -225,7 +229,9 @@ async def discard_edits(dataset_id: str | None = None):
         for ds_id in _app_state.datasets:
             _require_unlocked(ds_id)
 
-    count = len(_app_state.pending_edits if dataset_id is None else _app_state.get_edits_for_dataset(dataset_id))
+    count = len(
+        _app_state.pending_edits if dataset_id is None else _app_state.get_edits_for_dataset(dataset_id)
+    )
 
     # Clear the edits file(s)
     if dataset_id:
@@ -233,7 +239,7 @@ async def discard_edits(dataset_id: str | None = None):
             clear_edits_file(_app_state.datasets[dataset_id].root)
     else:
         # Clear all datasets' edit files
-        for ds_id, dataset in _app_state.datasets.items():
+        for dataset in _app_state.datasets.values():
             clear_edits_file(dataset.root)
 
     _app_state.clear_edits(dataset_id)
@@ -278,7 +284,9 @@ async def _apply_edits_locked(dataset_id: str):
 
     # Sort edits: apply trims first (they modify in place), then deletes
     trim_edits = [e for e in edits if e.edit_type == "trim"]
-    delete_edits = sorted([e for e in edits if e.edit_type == "delete"], key=lambda e: e.episode_index, reverse=True)
+    delete_edits = sorted(
+        [e for e in edits if e.edit_type == "delete"], key=lambda e: e.episode_index, reverse=True
+    )
 
     # Apply trims (these modify in-place)
     for edit in trim_edits:
@@ -304,7 +312,9 @@ async def _apply_edits_locked(dataset_id: str):
             # Reload metadata to see changes
             dataset.meta.episodes = load_episodes(original_root)
             applied += 1
-            logger.info(f"Applied trim to episode {edit.episode_index}: keeping frames {start_frame}-{end_frame - 1}")
+            logger.info(
+                f"Applied trim to episode {edit.episode_index}: keeping frames {start_frame}-{end_frame - 1}"
+            )
         except Exception as e:
             errors.append(f"Trim episode {edit.episode_index}: {e}")
             logger.exception(f"Failed to trim episode {edit.episode_index}")
@@ -350,8 +360,9 @@ async def _apply_edits_locked(dataset_id: str):
     # Invalidate all dataset-scoped caches. Edits change episode lengths,
     # so the cumulative-sum cache (_episode_start_indices) must also be
     # dropped — otherwise subsequent frame lookups use stale offsets.
-    from lerobot.gui.cache_invalidation import invalidate_caches
     from lerobot.gui.api.datasets import _invalidate_episode_start_indices
+    from lerobot.gui.cache_invalidation import invalidate_caches
+
     invalidate_caches(_app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices)
 
     # Reload dataset from disk to get updated metadata
@@ -362,7 +373,9 @@ async def _apply_edits_locked(dataset_id: str):
         old_dataset = _app_state.datasets[dataset_id]
         logger.info(f"Reloading dataset from {old_dataset.root}")
         reload_dataset_from_disk(old_dataset)
-        logger.info(f"Reloaded dataset {dataset_id}: {old_dataset.meta.total_episodes} episodes, {old_dataset.meta.total_frames} frames")
+        logger.info(
+            f"Reloaded dataset {dataset_id}: {old_dataset.meta.total_episodes} episodes, {old_dataset.meta.total_frames} frames"
+        )
 
     except Exception as e:
         logger.exception(f"Failed to reload dataset after edits: {e}")
@@ -408,11 +421,13 @@ def _validate_merge_compat(source_meta, target_meta) -> list[dict]:
     if target_meta.fps != source_meta.fps:
         mismatches.append({"field": "fps", "target": target_meta.fps, "source": source_meta.fps})
     if target_meta.robot_type != source_meta.robot_type:
-        mismatches.append({
-            "field": "robot_type",
-            "target": target_meta.robot_type,
-            "source": source_meta.robot_type,
-        })
+        mismatches.append(
+            {
+                "field": "robot_type",
+                "target": target_meta.robot_type,
+                "source": source_meta.robot_type,
+            }
+        )
     tf = target_meta.features
     sf = source_meta.features
     if tf != sf:
@@ -422,12 +437,14 @@ def _validate_merge_compat(source_meta, target_meta) -> list[dict]:
         for k in sorted(set(tf.keys()) & set(sf.keys())):
             if tf[k] != sf[k]:
                 shared_diff[k] = {"target": tf[k], "source": sf[k]}
-        mismatches.append({
-            "field": "features",
-            "target_only": target_only,
-            "source_only": source_only,
-            "shared_diff": shared_diff,
-        })
+        mismatches.append(
+            {
+                "field": "features",
+                "target_only": target_only,
+                "source_only": source_only,
+                "shared_diff": shared_diff,
+            }
+        )
     return mismatches
 
 
@@ -452,7 +469,6 @@ async def validate_merge(request: MergeIntoRequest):
 @router.post("/merge-into")
 async def merge_into_dataset(request: MergeIntoRequest):
     """Merge all episodes from source dataset into target dataset in-place."""
-    from lerobot.datasets.dataset_tools import merge_into
 
     source_id = request.source_dataset_id
     target_id = request.target_dataset_id
@@ -473,9 +489,8 @@ async def merge_into_dataset(request: MergeIntoRequest):
     if target_lock.locked() or source_lock.locked():
         raise HTTPException(status_code=423, detail="One or both datasets are busy")
 
-    async with target_lock:
-        async with source_lock:
-            return await _merge_into_locked(source_id, target_id, force=request.force)
+    async with target_lock, source_lock:
+        return await _merge_into_locked(source_id, target_id, force=request.force)
 
 
 async def _merge_into_locked(source_id: str, target_id: str, *, force: bool = False):
@@ -497,22 +512,20 @@ async def _merge_into_locked(source_id: str, target_id: str, *, force: bool = Fa
 
         merge_into(target_ds, source_ds, skip_validation=force)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.exception(f"Merge failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Merge failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Merge failed: {e}") from e
 
     # Invalidate caches for the merge target (new episodes added — the
     # cumulative-sum cache must be dropped so subsequent frame lookups
     # pick up the grown dataset).
-    from lerobot.gui.cache_invalidation import invalidate_caches
     from lerobot.gui.api.datasets import _invalidate_episode_start_indices
+    from lerobot.gui.cache_invalidation import invalidate_caches
+
     invalidate_caches(_app_state, target_id, invalidate_episode_indices=_invalidate_episode_start_indices)
 
-    logger.info(
-        f"Merge complete: {target_ds.num_episodes} episodes, "
-        f"{target_ds.num_frames} frames in target"
-    )
+    logger.info(f"Merge complete: {target_ds.num_episodes} episodes, {target_ds.num_frames} frames in target")
 
     return {
         "status": "ok",

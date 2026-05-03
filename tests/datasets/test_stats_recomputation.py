@@ -217,7 +217,7 @@ class TestTrimEpisodeVirtualStats:
         stats_before = load_stats(trim_dataset.root)
         assert stats_before is not None
         # Overall mean should be about (0.0*10 + 1.0*10 + 0.5*10) / 30 = 0.5
-        action_mean_before = stats_before["action"]["mean"]
+        stats_before["action"]["mean"]
 
         # Trim episode 0: keep only last 10 frames (all value 1.0)
         trim_episode_virtual(trim_dataset, episode_index=0, start_frame=10, end_frame=20)
@@ -278,8 +278,7 @@ class TestVerifyDatasetStats:
         # Should have a warning about stats inconsistency
         stats_warnings = [w for w in result.warnings if "stats" in w.category.lower()]
         assert len(stats_warnings) > 0, (
-            f"verify_dataset should warn about corrupted stats.json, "
-            f"but got warnings: {result.warnings}"
+            f"verify_dataset should warn about corrupted stats.json, but got warnings: {result.warnings}"
         )
 
     def test_verify_passes_with_correct_stats(self, stats_dataset):
@@ -288,8 +287,7 @@ class TestVerifyDatasetStats:
 
         stats_warnings = [w for w in result.warnings if "stats" in w.category.lower()]
         assert len(stats_warnings) == 0, (
-            f"verify_dataset should not warn about correct stats, "
-            f"but got warnings: {stats_warnings}"
+            f"verify_dataset should not warn about correct stats, but got warnings: {stats_warnings}"
         )
 
 
@@ -309,16 +307,19 @@ class TestBatchedStatsRecomputation:
             "action": {"dtype": "float32", "shape": (2,), "names": None},
         }
         dataset = empty_lerobot_dataset_factory(
-            root=tmp_path / "batch_dataset", features=features,
+            root=tmp_path / "batch_dataset",
+            features=features,
         )
         specs = [(0.0, 0.2), (0.3, 0.5), (0.6, 0.8), (1.0, 1.0)]
         for lo, hi in specs:
             for i in range(20):
                 val = lo if i < 10 else hi
-                dataset.add_frame({
-                    "action": np.full(2, val, dtype=np.float32),
-                    "task": "test",
-                })
+                dataset.add_frame(
+                    {
+                        "action": np.full(2, val, dtype=np.float32),
+                        "task": "test",
+                    }
+                )
             dataset.save_episode()
         dataset.finalize()
         return dataset
@@ -379,14 +380,19 @@ class TestBatchedStatsRecomputation:
 
         # Trim ep 0 to keep only high half (0.2), skip reaggregate
         trim_episode_virtual(
-            batch_dataset, episode_index=0,
-            start_frame=10, end_frame=20, recompute_stats=False,
+            batch_dataset,
+            episode_index=0,
+            start_frame=10,
+            end_frame=20,
+            recompute_stats=False,
         )
         batch_dataset.meta.episodes = load_episodes(batch_dataset.root)
 
         # Delete ep 3 (all 1.0 values), skip reaggregate
         delete_episodes_virtual(
-            batch_dataset, episode_indices=[3], recompute_stats=False,
+            batch_dataset,
+            episode_indices=[3],
+            recompute_stats=False,
         )
         batch_dataset.meta.episodes = load_episodes(batch_dataset.root)
 

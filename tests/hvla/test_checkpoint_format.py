@@ -7,8 +7,8 @@ Verifies:
   - config.json values are read correctly
   - GUI model scanner can discover HVLA checkpoints
 """
+
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -54,19 +54,25 @@ class TestStandardCheckpointFormat:
         training_state_dir.mkdir(parents=True)
 
         sft.save_file(dict(policy.state_dict()), str(pretrained_dir / "model.safetensors"))
-        torch.save({"action_mean": torch.zeros(4), "action_std": torch.ones(4)},
-                    str(pretrained_dir / "norm_stats.pt"))
-        (pretrained_dir / "config.json").write_text(json.dumps({
-            "type": "hvla_flow_s1",
-            "action_dim": 4,
-            "state_dim": 4,
-            "chunk_size": 10,
-            "hidden_dim": 64,
-            "num_heads": 4,
-            "num_encoder_layers": 1,
-            "num_decoder_layers": 1,
-            "s2_latent_dim": 32,
-        }))
+        torch.save(
+            {"action_mean": torch.zeros(4), "action_std": torch.ones(4)},
+            str(pretrained_dir / "norm_stats.pt"),
+        )
+        (pretrained_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "type": "hvla_flow_s1",
+                    "action_dim": 4,
+                    "state_dim": 4,
+                    "chunk_size": 10,
+                    "hidden_dim": 64,
+                    "num_heads": 4,
+                    "num_encoder_layers": 1,
+                    "num_decoder_layers": 1,
+                    "s2_latent_dim": 32,
+                }
+            )
+        )
         (training_state_dir / "training_step.json").write_text(json.dumps({"step": 100}))
 
         # Verify structure
@@ -83,15 +89,28 @@ class TestStandardCheckpointFormat:
         pretrained_dir = tmp_path / "pretrained_model"
         pretrained_dir.mkdir()
         sft.save_file(dict(policy.state_dict()), str(pretrained_dir / "model.safetensors"))
-        torch.save({"action_mean": torch.zeros(4), "action_std": torch.ones(4)},
-                    str(pretrained_dir / "norm_stats.pt"))
-        (pretrained_dir / "config.json").write_text(json.dumps({
-            "type": "hvla_flow_s1",
-            "action_dim": 4, "state_dim": 4, "chunk_size": 10,
-            "hidden_dim": 64, "num_heads": 4, "dim_feedforward": 128,
-            "num_encoder_layers": 1, "num_decoder_layers": 1,
-            "s2_latent_dim": 32, "s2_proj_hidden": 16, "use_dino_backbone": False,
-        }))
+        torch.save(
+            {"action_mean": torch.zeros(4), "action_std": torch.ones(4)},
+            str(pretrained_dir / "norm_stats.pt"),
+        )
+        (pretrained_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "type": "hvla_flow_s1",
+                    "action_dim": 4,
+                    "state_dim": 4,
+                    "chunk_size": 10,
+                    "hidden_dim": 64,
+                    "num_heads": 4,
+                    "dim_feedforward": 128,
+                    "num_encoder_layers": 1,
+                    "num_decoder_layers": 1,
+                    "s2_latent_dim": 32,
+                    "s2_proj_hidden": 16,
+                    "use_dino_backbone": False,
+                }
+            )
+        )
 
         # Load by passing the parent directory
         loaded = FlowMatchingS1Policy.from_pretrained(str(tmp_path))
@@ -106,8 +125,9 @@ class TestStandardCheckpointFormat:
 
         policy = FlowMatchingS1Policy(small_config)
         sft.save_file(dict(policy.state_dict()), str(tmp_path / "model.safetensors"))
-        torch.save({"action_mean": torch.zeros(4), "action_std": torch.ones(4)},
-                    str(tmp_path / "norm_stats.pt"))
+        torch.save(
+            {"action_mean": torch.zeros(4), "action_std": torch.ones(4)}, str(tmp_path / "norm_stats.pt")
+        )
 
         # Load by passing directory (no pretrained_model/ subdir)
         loaded = FlowMatchingS1Policy.from_pretrained(str(tmp_path), config=small_config)
@@ -132,15 +152,26 @@ class TestStandardCheckpointFormat:
         pretrained_dir = tmp_path / "pretrained_model"
         pretrained_dir.mkdir()
         sft.save_file(dict(policy.state_dict()), str(pretrained_dir / "model.safetensors"))
-        (pretrained_dir / "config.json").write_text(json.dumps({
-            "type": "hvla_flow_s1",
-            "action_dim": 4, "state_dim": 4, "chunk_size": 10,
-            "hidden_dim": 64, "num_heads": 4, "dim_feedforward": 128,
-            "num_encoder_layers": 1, "num_decoder_layers": 1,
-            "s2_latent_dim": 32, "s2_proj_hidden": 16, "use_dino_backbone": False,
-            "num_inference_steps": 5,
-            "rtc_max_delay": 3,
-        }))
+        (pretrained_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "type": "hvla_flow_s1",
+                    "action_dim": 4,
+                    "state_dim": 4,
+                    "chunk_size": 10,
+                    "hidden_dim": 64,
+                    "num_heads": 4,
+                    "dim_feedforward": 128,
+                    "num_encoder_layers": 1,
+                    "num_decoder_layers": 1,
+                    "s2_latent_dim": 32,
+                    "s2_proj_hidden": 16,
+                    "use_dino_backbone": False,
+                    "num_inference_steps": 5,
+                    "rtc_max_delay": 3,
+                }
+            )
+        )
 
         # Load without providing config — should read from config.json
         loaded = FlowMatchingS1Policy.from_pretrained(str(tmp_path))
@@ -160,17 +191,28 @@ class TestStandardCheckpointFormat:
         pretrained_dir = tmp_path / "pretrained_model"
         pretrained_dir.mkdir()
         sft.save_file(dict(policy.state_dict()), str(pretrained_dir / "model.safetensors"))
-        (pretrained_dir / "config.json").write_text(json.dumps({
-            "type": "hvla_flow_s1",
-            "action_dim": 4, "state_dim": 4, "chunk_size": 10,
-            "hidden_dim": 64, "num_heads": 4, "dim_feedforward": 128,
-            "num_encoder_layers": 1, "num_decoder_layers": 1,
-            "s2_latent_dim": 32, "s2_proj_hidden": 16, "use_dino_backbone": False,
-        }))
+        (pretrained_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "type": "hvla_flow_s1",
+                    "action_dim": 4,
+                    "state_dim": 4,
+                    "chunk_size": 10,
+                    "hidden_dim": 64,
+                    "num_heads": 4,
+                    "dim_feedforward": 128,
+                    "num_encoder_layers": 1,
+                    "num_decoder_layers": 1,
+                    "s2_latent_dim": 32,
+                    "s2_proj_hidden": 16,
+                    "use_dino_backbone": False,
+                }
+            )
+        )
 
         loaded = FlowMatchingS1Policy.from_pretrained(str(tmp_path))
         for (name, p_orig), (_, p_loaded) in zip(
-            policy.named_parameters(), loaded.named_parameters()
+            policy.named_parameters(), loaded.named_parameters(), strict=False
         ):
             assert torch.equal(p_orig, p_loaded), f"Mismatch in {name}"
 
@@ -190,6 +232,7 @@ class TestGUIScanner:
         training_state.mkdir()
 
         import safetensors.torch as sft
+
         policy = FlowMatchingS1Policy(small_config)
         sft.save_file(dict(policy.state_dict()), str(pretrained / "model.safetensors"))
         (pretrained / "config.json").write_text(json.dumps({"type": "hvla_flow_s1"}))
@@ -209,7 +252,9 @@ class TestMigratedCheckpointLoads:
     """Test that the actually migrated v7 checkpoint loads correctly (integration test)."""
 
     @pytest.mark.skipif(
-        not Path("outputs/flow_s1_hvla_v7/checkpoints/checkpoint-50000/pretrained_model/model.safetensors").exists(),
+        not Path(
+            "outputs/flow_s1_hvla_v7/checkpoints/checkpoint-50000/pretrained_model/model.safetensors"
+        ).exists(),
         reason="Migrated v7 checkpoint not available",
     )
     def test_load_migrated_v7(self):

@@ -90,7 +90,8 @@ class TestTrimReplacement:
 
         # Simulate replacement: remove existing trim for episode 0
         app_state.pending_edits = [
-            e for e in app_state.pending_edits
+            e
+            for e in app_state.pending_edits
             if not (e.dataset_id == "ds_a" and e.episode_index == 0 and e.edit_type == "trim")
         ]
         # Add new trim for episode 0
@@ -98,7 +99,8 @@ class TestTrimReplacement:
 
         # Verify only one trim for episode 0
         trims_ep0 = [
-            e for e in app_state.get_edits_for_dataset("ds_a")
+            e
+            for e in app_state.get_edits_for_dataset("ds_a")
             if e.edit_type == "trim" and e.episode_index == 0
         ]
         assert len(trims_ep0) == 1
@@ -115,16 +117,14 @@ class TestTrimReplacement:
 
         # Replace trim for episode 0 only
         app_state.pending_edits = [
-            e for e in app_state.pending_edits
+            e
+            for e in app_state.pending_edits
             if not (e.dataset_id == "ds_a" and e.episode_index == 0 and e.edit_type == "trim")
         ]
         app_state.add_edit(PendingEdit("trim", "ds_a", 0, {"start_frame": 10, "end_frame": 40}))
 
         # Episode 1's trim should be unchanged
-        trims_ep1 = [
-            e for e in app_state.pending_edits
-            if e.episode_index == 1 and e.edit_type == "trim"
-        ]
+        trims_ep1 = [e for e in app_state.pending_edits if e.episode_index == 1 and e.edit_type == "trim"]
         assert len(trims_ep1) == 1
         assert trims_ep1[0].params["start_frame"] == 5
 
@@ -385,7 +385,7 @@ class TestEditPersistence:
         loaded_edits = load_edits_from_file(tmp_path, "ds_a")
 
         assert len(loaded_edits) == 4
-        for i, (orig, loaded) in enumerate(zip(original_edits, loaded_edits)):
+        for i, (orig, loaded) in enumerate(zip(original_edits, loaded_edits, strict=False)):
             assert loaded.edit_type == orig.edit_type, f"Edit {i} type mismatch"
             assert loaded.episode_index == orig.episode_index, f"Edit {i} episode mismatch"
             assert loaded.params == orig.params, f"Edit {i} params mismatch"
@@ -420,7 +420,10 @@ class TestLockingEndpoints:
         "path,json_body",
         [
             ("/api/edits/delete", {"dataset_id": "ds_locked", "episode_index": 0}),
-            ("/api/edits/trim", {"dataset_id": "ds_locked", "episode_index": 0, "start_frame": 0, "end_frame": 10}),
+            (
+                "/api/edits/trim",
+                {"dataset_id": "ds_locked", "episode_index": 0, "start_frame": 0, "end_frame": 10},
+            ),
             ("/api/edits/discard", None),
         ],
         ids=["delete", "trim", "discard"],
@@ -429,11 +432,13 @@ class TestLockingEndpoints:
         app, _state, lock = locked_app
 
         async def run():
-            async with lock:
-                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-                    params = {"dataset_id": "ds_locked"} if path == "/api/edits/discard" else None
-                    resp = await client.post(path, json=json_body, params=params)
-                    assert resp.status_code == 423
+            async with (
+                lock,
+                httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client,
+            ):
+                params = {"dataset_id": "ds_locked"} if path == "/api/edits/discard" else None
+                resp = await client.post(path, json=json_body, params=params)
+                assert resp.status_code == 423
 
         asyncio.run(run())
 
@@ -443,10 +448,12 @@ class TestLockingEndpoints:
         state.datasets["ds_locked"] = MagicMock()
 
         async def run():
-            async with lock:
-                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-                    resp = await client.post("/api/edits/apply", params={"dataset_id": "ds_locked"})
-                    assert resp.status_code == 423
+            async with (
+                lock,
+                httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client,
+            ):
+                resp = await client.post("/api/edits/apply", params={"dataset_id": "ds_locked"})
+                assert resp.status_code == 423
 
         asyncio.run(run())
 
@@ -455,10 +462,12 @@ class TestLockingEndpoints:
         state.add_edit(PendingEdit("delete", "ds_locked", 0))
 
         async def run():
-            async with lock:
-                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-                    resp = await client.delete("/api/edits/0")
-                    assert resp.status_code == 423
+            async with (
+                lock,
+                httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client,
+            ):
+                resp = await client.delete("/api/edits/0")
+                assert resp.status_code == 423
 
         asyncio.run(run())
 
@@ -467,7 +476,9 @@ class TestLockingEndpoints:
         app, _state, _lock = locked_app
 
         async def run():
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
                 resp = await client.post(
                     "/api/edits/delete",
                     json={"dataset_id": "ds_locked", "episode_index": 0},

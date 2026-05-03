@@ -12,7 +12,6 @@ from typing import Protocol, runtime_checkable
 import torch
 from torch import Tensor
 
-
 # Batch keys for S2 conditioning
 S2_LATENT_KEY = "observation.s2_latent"
 S2_AGE_KEY = "observation.s2_latent_age"
@@ -75,8 +74,6 @@ class S1Policy(Protocol):
         """Reset episode state (ensembler, action queue, denoising state, etc)."""
         ...
 
-    def to(self, device: torch.device | str) -> "S1Policy":
-        ...
+    def to(self, device: torch.device | str) -> S1Policy: ...
 
-    def eval(self) -> "S1Policy":
-        ...
+    def eval(self) -> S1Policy: ...

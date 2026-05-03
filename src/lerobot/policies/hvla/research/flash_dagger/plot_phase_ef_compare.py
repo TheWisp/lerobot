@@ -83,8 +83,11 @@ axes[3].set_ylim(0.01, 0.06)
 axes[3].legend()
 axes[3].grid(True, alpha=0.3)
 
-fig.suptitle("Phase E (r=16) vs Phase F (r=4) — same N=30 episodes, same 10/25/65 mix, 60 steps/iter",
-             fontsize=11, y=1.00)
+fig.suptitle(
+    "Phase E (r=16) vs Phase F (r=4) — same N=30 episodes, same 10/25/65 mix, 60 steps/iter",
+    fontsize=11,
+    y=1.00,
+)
 plt.tight_layout()
 out = HERE / "phase_ef_compare.png"
 plt.savefig(out, dpi=140, bbox_inches="tight")
@@ -92,10 +95,16 @@ print(f"Saved {out}")
 
 print()
 print("=== r=4 vs r=16 summary ===")
-print(f"new-fit (last-5):   r=16 {fit_e[-5:].mean():.1f}%  vs  r=4 {fit_f[-5:].mean():.1f}%   "
-      f"(gap {fit_e[-5:].mean() - fit_f[-5:].mean():+.1f}pp)")
-print(f"old_avg (last-5):   r=16 {old_e[-5:].mean():.4f}  vs  r=4 {old_f[-5:].mean():.4f}   "
-      f"(gap {(old_f[-5:].mean()/old_e[-5:].mean()-1)*100:+.0f}%)")
-print(f"old_worst (peak):   r=16 {max_e.max():.4f}  vs  r=4 {max_f.max():.4f}   "
-      f"(gap {(max_f.max()/max_e.max()-1)*100:+.0f}%)")
+print(
+    f"new-fit (last-5):   r=16 {fit_e[-5:].mean():.1f}%  vs  r=4 {fit_f[-5:].mean():.1f}%   "
+    f"(gap {fit_e[-5:].mean() - fit_f[-5:].mean():+.1f}pp)"
+)
+print(
+    f"old_avg (last-5):   r=16 {old_e[-5:].mean():.4f}  vs  r=4 {old_f[-5:].mean():.4f}   "
+    f"(gap {(old_f[-5:].mean() / old_e[-5:].mean() - 1) * 100:+.0f}%)"
+)
+print(
+    f"old_worst (peak):   r=16 {max_e.max():.4f}  vs  r=4 {max_f.max():.4f}   "
+    f"(gap {(max_f.max() / max_e.max() - 1) * 100:+.0f}%)"
+)
 print(f"forget (last-5):    r=16 {fgt_e[-5:].mean():.4f}  vs  r=4 {fgt_f[-5:].mean():.4f}")

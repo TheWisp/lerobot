@@ -22,9 +22,7 @@ def snapshot_tree(root: Path) -> dict[str, int]:
     if not root.exists():
         return {}
     return {
-        str(p.relative_to(root).as_posix()): p.stat().st_size
-        for p in sorted(root.rglob("*"))
-        if p.is_file()
+        str(p.relative_to(root).as_posix()): p.stat().st_size for p in sorted(root.rglob("*")) if p.is_file()
     }
 
 
@@ -40,12 +38,6 @@ def assert_no_data_loss(before: dict[str, int], after: dict[str, int]) -> None:
         raise AssertionError(
             f"DESTRUCTIVE REGRESSION: {len(removed)} file(s) removed: {sorted(removed)[:10]}"
         )
-    shrunk = [
-        (k, before[k], after[k])
-        for k in before
-        if k in after and after[k] < before[k]
-    ]
+    shrunk = [(k, before[k], after[k]) for k in before if k in after and after[k] < before[k]]
     if shrunk:
-        raise AssertionError(
-            f"DESTRUCTIVE REGRESSION: {len(shrunk)} file(s) shrunk: {shrunk[:5]}"
-        )
+        raise AssertionError(f"DESTRUCTIVE REGRESSION: {len(shrunk)} file(s) shrunk: {shrunk[:5]}")

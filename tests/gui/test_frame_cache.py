@@ -13,8 +13,6 @@
 # limitations under the License.
 """Tests for the FrameCache class."""
 
-import pytest
-
 from lerobot.gui.frame_cache import FrameCache
 
 

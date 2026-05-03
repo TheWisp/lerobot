@@ -77,7 +77,9 @@ def move_to_rest_position(
     num_steps = max(1, int(duration_s * steps_per_second))
     dt = duration_s / num_steps
 
-    logger.info("Moving to rest position over %.1fs (%d steps at %d Hz)", duration_s, num_steps, steps_per_second)
+    logger.info(
+        "Moving to rest position over %.1fs (%d steps at %d Hz)", duration_s, num_steps, steps_per_second
+    )
 
     for step in range(1, num_steps + 1):
         start_t = time.perf_counter()

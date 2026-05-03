@@ -62,8 +62,10 @@ def build_dataset(repo_id, config, ckpt_norm, image_size=(224, 224), video_backe
     ld = LeRobotDataset(repo_id, video_backend=video_backend)
     n_episodes, ep_starts, ep_ends = patch_episode_data_index(ld)
     ds = FlowMatchingDataset(
-        ld, s2_latents=None,
-        chunk_size=config.chunk_size, max_delay_seconds=0.0,
+        ld,
+        s2_latents=None,
+        chunk_size=config.chunk_size,
+        max_delay_seconds=0.0,
         resize_to=image_size,
         image_keys=list(config.image_features.keys()),
     )
@@ -160,10 +162,7 @@ def collate(dataset, indices, config=None):
     the train collate behavior so eval and train see identical batch shapes.
     """
     samples = [dataset[i] for i in indices]
-    if config is not None:
-        wanted = _wanted_keys(config)
-    else:
-        wanted = set(samples[0].keys())
+    wanted = _wanted_keys(config) if config is not None else set(samples[0].keys())
     out = {}
     for k in samples[0]:
         if k not in wanted:
@@ -184,7 +183,7 @@ def eval_loss_on_indices(policy, dataset, indices, config, batch_size, device, p
     n = 0
     for _ in range(passes):
         for i in range(0, len(indices), batch_size):
-            chunk = indices[i:i + batch_size]
+            chunk = indices[i : i + batch_size]
             batch = collate(dataset, chunk, config=config)
             batch = {
                 k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
@@ -256,9 +255,10 @@ def main():
     with open(ckpt_dir / "config.json") as f:
         ckpt_cfg = json.load(f)
 
+    import safetensors.torch as sft
+
     from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
     from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
-    import safetensors.torch as sft
 
     config = FlowMatchingS1Config(
         chunk_size=ckpt_cfg["chunk_size"],
@@ -284,8 +284,7 @@ def main():
     rng = random.Random(args.seed)
     forget_val_indices = sorted(rng.sample(range(len(train_ds)), args.forget_val_size))
     replay_pool = rng.sample(range(len(train_ds)), min(args.replay_pool_size, len(train_ds)))
-    logger.info("Forget-val: %d frames | Replay pool: %d frames",
-                len(forget_val_indices), len(replay_pool))
+    logger.info("Forget-val: %d frames | Replay pool: %d frames", len(forget_val_indices), len(replay_pool))
 
     state_dict_path = ckpt_dir / "model.safetensors"
     state_dict = sft.load_file(str(state_dict_path))
@@ -295,8 +294,9 @@ def main():
 
     for ep_idx in args.episodes:
         train_idx, val_idx = split_episode(eval_starts, eval_ends, ep_idx, val_pct=0.2, seed=args.seed)
-        logger.info("=== Episode %d: %d fit-train / %d fit-val frames ===",
-                    ep_idx, len(train_idx), len(val_idx))
+        logger.info(
+            "=== Episode %d: %d fit-train / %d fit-val frames ===", ep_idx, len(train_idx), len(val_idx)
+        )
 
         # Baseline: original checkpoint (no LoRA) on this episode + forget set
         logger.info("Computing baseline losses (no LoRA)...")
@@ -305,14 +305,29 @@ def main():
         baseline_policy.eval()
 
         t0 = time.time()
-        b_fit_val = eval_loss_on_indices(baseline_policy, eval_ds, val_idx, config,
-                                         args.batch_size, device, passes=args.eval_passes)
-        b_fit_train = eval_loss_on_indices(baseline_policy, eval_ds, train_idx, config,
-                                           args.batch_size, device, passes=args.eval_passes)
-        b_forget = eval_loss_on_indices(baseline_policy, train_ds, forget_val_indices, config,
-                                        args.batch_size, device, passes=args.eval_passes)
-        logger.info("Baseline ep=%d: fit_val=%.4f fit_train=%.4f forget=%.4f (%.1fs)",
-                    ep_idx, b_fit_val, b_fit_train, b_forget, time.time() - t0)
+        b_fit_val = eval_loss_on_indices(
+            baseline_policy, eval_ds, val_idx, config, args.batch_size, device, passes=args.eval_passes
+        )
+        b_fit_train = eval_loss_on_indices(
+            baseline_policy, eval_ds, train_idx, config, args.batch_size, device, passes=args.eval_passes
+        )
+        b_forget = eval_loss_on_indices(
+            baseline_policy,
+            train_ds,
+            forget_val_indices,
+            config,
+            args.batch_size,
+            device,
+            passes=args.eval_passes,
+        )
+        logger.info(
+            "Baseline ep=%d: fit_val=%.4f fit_train=%.4f forget=%.4f (%.1fs)",
+            ep_idx,
+            b_fit_val,
+            b_fit_train,
+            b_forget,
+            time.time() - t0,
+        )
         baselines[ep_idx] = {"fit_val": b_fit_val, "fit_train": b_fit_train, "forget": b_forget}
 
         del baseline_policy
@@ -320,8 +335,14 @@ def main():
 
         for replay_pct in args.replay_pcts:
             cfg_name = f"ep{ep_idx}_rp{int(round(replay_pct * 100)):03d}"
-            logger.info("--- Config %s (replay=%.2f, rank=%d, lr=%.0e, steps=%d) ---",
-                        cfg_name, replay_pct, args.rank, args.lr, args.steps)
+            logger.info(
+                "--- Config %s (replay=%.2f, rank=%d, lr=%.0e, steps=%d) ---",
+                cfg_name,
+                replay_pct,
+                args.rank,
+                args.lr,
+                args.steps,
+            )
 
             # Fresh policy + LoRA
             policy = FlowMatchingS1Policy(config).to(device)
@@ -329,37 +350,52 @@ def main():
             n_lora, n_total = apply_lora_to_decoder(policy, rank=args.rank, alpha=args.alpha)
             policy.to(device)
             policy.train()
-            logger.info("LoRA params: %.2fM trainable / %.1fM total (%.2f%%)",
-                        n_lora / 1e6, n_total / 1e6, 100 * n_lora / n_total)
+            logger.info(
+                "LoRA params: %.2fM trainable / %.1fM total (%.2f%%)",
+                n_lora / 1e6,
+                n_total / 1e6,
+                100 * n_lora / n_total,
+            )
 
             mix_ds = FlashMixDataset(
-                fresh_ds=eval_ds, fresh_indices=train_idx,
-                replay_ds=train_ds, replay_indices=replay_pool,
+                fresh_ds=eval_ds,
+                fresh_indices=train_idx,
+                replay_ds=train_ds,
+                replay_indices=replay_pool,
                 replay_pct=replay_pct,
                 length=args.steps * args.batch_size,
             )
             loader = DataLoader(
-                mix_ds, batch_size=args.batch_size, shuffle=False,
-                num_workers=args.num_workers, pin_memory=True, drop_last=True,
+                mix_ds,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=args.num_workers,
+                pin_memory=True,
+                drop_last=True,
                 collate_fn=make_collate_fn(config),
             )
 
             opt = torch.optim.AdamW(
                 [p for p in policy.parameters() if p.requires_grad],
-                lr=args.lr, weight_decay=0.0,
+                lr=args.lr,
+                weight_decay=0.0,
             )
             sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-                opt, T_max=args.steps, eta_min=args.lr * 0.05,
+                opt,
+                T_max=args.steps,
+                eta_min=args.lr * 0.05,
             )
 
-            curve_rows: list[dict] = [{
-                "step": 0,
-                "train_loss": float("nan"),
-                "fit_val_loss": b_fit_val,
-                "fit_train_loss": b_fit_train,
-                "forget_val_loss": b_forget,
-                "lr": opt.param_groups[0]["lr"],
-            }]
+            curve_rows: list[dict] = [
+                {
+                    "step": 0,
+                    "train_loss": float("nan"),
+                    "fit_val_loss": b_fit_val,
+                    "fit_train_loss": b_fit_train,
+                    "forget_val_loss": b_forget,
+                    "lr": opt.param_groups[0]["lr"],
+                }
+            ]
 
             t_start = time.time()
             data_iter = iter(loader)
@@ -388,32 +424,48 @@ def main():
                 running_train_n += 1
 
                 if step % args.eval_freq == 0 or step == args.steps:
-                    fit_val = eval_loss_on_indices(policy, eval_ds, val_idx, config,
-                                                   args.batch_size, device, passes=args.eval_passes)
-                    fit_train = eval_loss_on_indices(policy, eval_ds, train_idx, config,
-                                                     args.batch_size, device, passes=args.eval_passes)
-                    forget = eval_loss_on_indices(policy, train_ds, forget_val_indices, config,
-                                                  args.batch_size, device, passes=args.eval_passes)
+                    fit_val = eval_loss_on_indices(
+                        policy, eval_ds, val_idx, config, args.batch_size, device, passes=args.eval_passes
+                    )
+                    fit_train = eval_loss_on_indices(
+                        policy, eval_ds, train_idx, config, args.batch_size, device, passes=args.eval_passes
+                    )
+                    forget = eval_loss_on_indices(
+                        policy,
+                        train_ds,
+                        forget_val_indices,
+                        config,
+                        args.batch_size,
+                        device,
+                        passes=args.eval_passes,
+                    )
                     cur_lr = opt.param_groups[0]["lr"]
                     elapsed = time.time() - t_start
                     avg_train = running_train_loss / max(running_train_n, 1)
                     logger.info(
                         "  step %d/%d | train=%.4f | fit_val=%.4f (Δ%+.1f%%) | "
                         "fit_train=%.4f | forget=%.4f (Δ%+.1f%%) | lr=%.0e | %.1fs",
-                        step, args.steps, avg_train, fit_val,
+                        step,
+                        args.steps,
+                        avg_train,
+                        fit_val,
                         100 * (fit_val - b_fit_val) / max(b_fit_val, 1e-6),
-                        fit_train, forget,
+                        fit_train,
+                        forget,
                         100 * (forget - b_forget) / max(b_forget, 1e-6),
-                        cur_lr, elapsed,
+                        cur_lr,
+                        elapsed,
                     )
-                    curve_rows.append({
-                        "step": step,
-                        "train_loss": avg_train,
-                        "fit_val_loss": fit_val,
-                        "fit_train_loss": fit_train,
-                        "forget_val_loss": forget,
-                        "lr": cur_lr,
-                    })
+                    curve_rows.append(
+                        {
+                            "step": step,
+                            "train_loss": avg_train,
+                            "fit_val_loss": fit_val,
+                            "fit_train_loss": fit_train,
+                            "forget_val_loss": forget,
+                            "lr": cur_lr,
+                        }
+                    )
                     running_train_loss = 0.0
                     running_train_n = 0
 
@@ -422,20 +474,22 @@ def main():
             logger.info("Saved curve → %s", curve_csv)
 
             final = curve_rows[-1]
-            summary_rows.append({
-                "episode": ep_idx,
-                "replay_pct": replay_pct,
-                "rank": args.rank,
-                "lr": args.lr,
-                "steps": args.steps,
-                "baseline_fit_val": b_fit_val,
-                "baseline_forget": b_forget,
-                "final_train_loss": final["train_loss"],
-                "final_fit_val": final["fit_val_loss"],
-                "final_forget": final["forget_val_loss"],
-                "fit_drop_pct": 100 * (1 - final["fit_val_loss"] / max(b_fit_val, 1e-6)),
-                "forget_drift_pct": 100 * (final["forget_val_loss"] / max(b_forget, 1e-6) - 1),
-            })
+            summary_rows.append(
+                {
+                    "episode": ep_idx,
+                    "replay_pct": replay_pct,
+                    "rank": args.rank,
+                    "lr": args.lr,
+                    "steps": args.steps,
+                    "baseline_fit_val": b_fit_val,
+                    "baseline_forget": b_forget,
+                    "final_train_loss": final["train_loss"],
+                    "final_fit_val": final["fit_val_loss"],
+                    "final_forget": final["forget_val_loss"],
+                    "fit_drop_pct": 100 * (1 - final["fit_val_loss"] / max(b_fit_val, 1e-6)),
+                    "forget_drift_pct": 100 * (final["forget_val_loss"] / max(b_forget, 1e-6) - 1),
+                }
+            )
 
             del policy, opt, sched, loader, mix_ds, data_iter
             torch.cuda.empty_cache()
@@ -447,10 +501,15 @@ def main():
     logger.info("=== Sweep summary ===")
     logger.info("ep   | replay% | fit_drop% | forget_drift% | final_fit_val | final_forget")
     for r in summary_rows:
-        logger.info("  %3d | %6.0f%% | %+8.1f%% | %+12.1f%% | %12.4f | %12.4f",
-                    r["episode"], r["replay_pct"] * 100,
-                    r["fit_drop_pct"], r["forget_drift_pct"],
-                    r["final_fit_val"], r["final_forget"])
+        logger.info(
+            "  %3d | %6.0f%% | %+8.1f%% | %+12.1f%% | %12.4f | %12.4f",
+            r["episode"],
+            r["replay_pct"] * 100,
+            r["fit_drop_pct"],
+            r["forget_drift_pct"],
+            r["final_fit_val"],
+            r["final_forget"],
+        )
 
 
 if __name__ == "__main__":

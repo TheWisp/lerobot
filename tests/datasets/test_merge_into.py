@@ -13,7 +13,7 @@ import torch
 
 from lerobot.datasets.dataset_tools import delete_episodes, merge_into, trim_episode_by_frames
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import DEFAULT_DATA_PATH, DEFAULT_EPISODES_PATH, DEFAULT_VIDEO_PATH
+from lerobot.datasets.utils import DEFAULT_EPISODES_PATH
 from tests.fixtures.constants import DUMMY_REPO_ID
 
 
@@ -53,9 +53,7 @@ def assert_video_files_exist(ds):
 
 def assert_episode_indices_contiguous(ds):
     indices = [int(ds.meta.episodes[i]["episode_index"]) for i in range(ds.num_episodes)]
-    assert indices == list(range(ds.num_episodes)), (
-        f"Episode indices not contiguous: {indices}"
-    )
+    assert indices == list(range(ds.num_episodes)), f"Episode indices not contiguous: {indices}"
 
 
 def assert_frame_counts_match(ds):
@@ -88,9 +86,7 @@ def run_integrity_checks(ds, expected_episodes, expected_frames, has_videos):
     assert ds.num_episodes == expected_episodes, (
         f"Expected {expected_episodes} episodes, got {ds.num_episodes}"
     )
-    assert ds.num_frames == expected_frames, (
-        f"Expected {expected_frames} frames, got {ds.num_frames}"
-    )
+    assert ds.num_frames == expected_frames, f"Expected {expected_frames} frames, got {ds.num_frames}"
     assert_meta_files_exist(ds)
     assert_data_files_exist(ds)
     assert_episode_indices_contiguous(ds)
@@ -119,16 +115,21 @@ def collect_file_hashes(root: Path) -> dict[str, str]:
 
 
 class TestMergeInto:
-
     def test_basic_merge_into(self, tmp_path, lerobot_dataset_factory):
         """Basic in-place merge with image-only datasets."""
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=5, total_frames=250, use_videos=False,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=5,
+            total_frames=250,
+            use_videos=False,
         )
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=4, total_frames=200, use_videos=False,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=4,
+            total_frames=200,
+            use_videos=False,
         )
 
         expected_eps = ds_a.num_episodes + ds_b.num_episodes
@@ -140,12 +141,18 @@ class TestMergeInto:
     def test_merge_into_with_video(self, tmp_path, lerobot_dataset_factory):
         """In-place merge with video datasets."""
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=5, total_frames=250, use_videos=True,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=5,
+            total_frames=250,
+            use_videos=True,
         )
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=4, total_frames=200, use_videos=True,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=4,
+            total_frames=200,
+            use_videos=True,
         )
 
         expected_eps = ds_a.num_episodes + ds_b.num_episodes
@@ -157,12 +164,18 @@ class TestMergeInto:
     def test_merge_into_preserves_existing_files(self, tmp_path, lerobot_dataset_factory):
         """Verify target's existing data and video files are untouched after merge."""
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=5, total_frames=250, use_videos=True,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=5,
+            total_frames=250,
+            use_videos=True,
         )
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=3, total_frames=150, use_videos=True,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=3,
+            total_frames=150,
+            use_videos=True,
         )
 
         # Hash all data/video files before merge
@@ -175,9 +188,7 @@ class TestMergeInto:
         hashes_after = collect_file_hashes(tmp_path / "ds_a")
         for rel_path, original_hash in hashes_before.items():
             assert rel_path in hashes_after, f"Original file disappeared: {rel_path}"
-            assert hashes_after[rel_path] == original_hash, (
-                f"Original file was modified: {rel_path}"
-            )
+            assert hashes_after[rel_path] == original_hash, f"Original file was modified: {rel_path}"
 
         # Verify new files were added
         new_files = set(hashes_after.keys()) - set(hashes_before.keys())
@@ -186,16 +197,25 @@ class TestMergeInto:
     def test_merge_into_chained(self, tmp_path, lerobot_dataset_factory):
         """Merge B into A, then C into A — the core multi-source workflow."""
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=4, total_frames=200, use_videos=True,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=4,
+            total_frames=200,
+            use_videos=True,
         )
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=3, total_frames=150, use_videos=True,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=3,
+            total_frames=150,
+            use_videos=True,
         )
         ds_c = lerobot_dataset_factory(
-            root=tmp_path / "ds_c", repo_id=f"{DUMMY_REPO_ID}_c",
-            total_episodes=5, total_frames=250, use_videos=True,
+            root=tmp_path / "ds_c",
+            repo_id=f"{DUMMY_REPO_ID}_c",
+            total_episodes=5,
+            total_frames=250,
+            use_videos=True,
         )
 
         total_eps = ds_a.num_episodes + ds_b.num_episodes + ds_c.num_episodes
@@ -212,13 +232,19 @@ class TestMergeInto:
     def test_merge_into_different_tasks(self, tmp_path, lerobot_dataset_factory):
         """Source has tasks not in target — verify task merging preserves indices."""
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=4, total_frames=200, use_videos=False,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=4,
+            total_frames=200,
+            use_videos=False,
             multi_task=True,
         )
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=4, total_frames=200, use_videos=False,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=4,
+            total_frames=200,
+            use_videos=False,
             multi_task=True,
         )
 
@@ -231,20 +257,24 @@ class TestMergeInto:
 
         # All tasks from both datasets should be present
         result_tasks = set(result.meta.tasks.index)
-        assert a_tasks_before | b_tasks == result_tasks, (
-            f"Expected union of tasks, got {result_tasks}"
-        )
+        assert a_tasks_before | b_tasks == result_tasks, f"Expected union of tasks, got {result_tasks}"
         run_integrity_checks(result, expected_eps, expected_frames, has_videos=False)
 
     def test_merge_into_content_integrity(self, tmp_path, lerobot_dataset_factory):
         """Frame-by-frame comparison: target data unchanged, source data appended correctly."""
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=3, total_frames=150, use_videos=True,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=3,
+            total_frames=150,
+            use_videos=True,
         )
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=2, total_frames=100, use_videos=True,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=2,
+            total_frames=100,
+            use_videos=True,
         )
 
         # Snapshot target's first and last frames before merge
@@ -302,12 +332,18 @@ class TestMergeInto:
     def test_merge_into_after_trim_and_delete(self, tmp_path, lerobot_dataset_factory):
         """Curate source (trim + delete) before merging into target."""
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=5, total_frames=250, use_videos=True,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=5,
+            total_frames=250,
+            use_videos=True,
         )
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=6, total_frames=300, use_videos=True,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=6,
+            total_frames=300,
+            use_videos=True,
         )
 
         a_frames = ds_a.num_frames
@@ -326,7 +362,8 @@ class TestMergeInto:
             mv.return_value = "v3.0"
             ms.return_value = str(tmp_path / "ds_b_edited")
             ds_b_edited = delete_episodes(
-                ds_b, episode_indices=[2],
+                ds_b,
+                episode_indices=[2],
                 output_dir=tmp_path / "ds_b_edited",
                 repo_id=f"{DUMMY_REPO_ID}_b_edited",
             )
@@ -347,12 +384,18 @@ class TestMergeInto:
     def test_merge_into_with_file_rotation(self, tmp_path, lerobot_dataset_factory):
         """Small file limits force multiple new files during merge — stress test index tracking."""
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=8, total_frames=400, use_videos=True,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=8,
+            total_frames=400,
+            use_videos=True,
         )
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=6, total_frames=300, use_videos=True,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=6,
+            total_frames=300,
+            use_videos=True,
         )
 
         expected_eps = ds_a.num_episodes + ds_b.num_episodes
@@ -371,6 +414,4 @@ class TestMergeInto:
 
         # Verify new data files were added
         a_data_files_after = list((tmp_path / "ds_a" / "data").rglob("*.parquet"))
-        assert len(a_data_files_after) > len(a_data_files_before), (
-            "Merge should have added new data files"
-        )
+        assert len(a_data_files_after) > len(a_data_files_before), "Merge should have added new data files"

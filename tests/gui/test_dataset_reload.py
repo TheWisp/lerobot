@@ -36,6 +36,7 @@ def test_ensure_episodes_loaded_no_op_when_already_loaded(fake_dataset):
 
     with patch("lerobot.datasets.io_utils.load_episodes") as mock_load:
         from lerobot.gui.dataset_reload import ensure_episodes_loaded
+
         ensure_episodes_loaded(fake_dataset)
 
     mock_load.assert_not_called()
@@ -49,6 +50,7 @@ def test_ensure_episodes_loaded_calls_load_when_none(fake_dataset):
     with patch("lerobot.datasets.io_utils.load_episodes") as mock_load:
         mock_load.return_value = {0: {"length": 50}}
         from lerobot.gui.dataset_reload import ensure_episodes_loaded
+
         ensure_episodes_loaded(fake_dataset)
 
     mock_load.assert_called_once_with(fake_dataset.root)
@@ -63,6 +65,7 @@ def test_ensure_episodes_loaded_custom_root(fake_dataset):
     with patch("lerobot.datasets.io_utils.load_episodes") as mock_load:
         mock_load.return_value = {}
         from lerobot.gui.dataset_reload import ensure_episodes_loaded
+
         ensure_episodes_loaded(fake_dataset, root=custom_root)
 
     mock_load.assert_called_once_with(custom_root)
@@ -70,16 +73,19 @@ def test_ensure_episodes_loaded_custom_root(fake_dataset):
 
 def test_reload_metadata_refreshes_all_four_fields(fake_dataset):
     """reload_metadata must call load_info, load_episodes, load_stats, load_tasks."""
-    with patch("lerobot.datasets.io_utils.load_info") as m_info, \
-         patch("lerobot.datasets.io_utils.load_episodes") as m_eps, \
-         patch("lerobot.datasets.io_utils.load_stats") as m_stats, \
-         patch("lerobot.datasets.io_utils.load_tasks") as m_tasks:
+    with (
+        patch("lerobot.datasets.io_utils.load_info") as m_info,
+        patch("lerobot.datasets.io_utils.load_episodes") as m_eps,
+        patch("lerobot.datasets.io_utils.load_stats") as m_stats,
+        patch("lerobot.datasets.io_utils.load_tasks") as m_tasks,
+    ):
         m_info.return_value = {"marker": "new_info"}
         m_eps.return_value = {0: {"length": 10}}
         m_stats.return_value = {"marker": "new_stats"}
         m_tasks.return_value = {"marker": "new_tasks"}
 
         from lerobot.gui.dataset_reload import reload_metadata
+
         reload_metadata(fake_dataset)
 
     assert fake_dataset.meta.info == {"marker": "new_info"}
@@ -93,6 +99,7 @@ def test_reload_hf_dataset_noop_when_reader_inactive(fake_dataset):
     fake_dataset.reader = None
 
     from lerobot.gui.dataset_reload import reload_hf_dataset
+
     reload_hf_dataset(fake_dataset)  # must not raise
 
     # Reader-with-no-hf_dataset is also a no-op
@@ -114,9 +121,9 @@ def test_reload_hf_dataset_routes_through_reader(fake_dataset):
     fake_dataset.reader.hf_dataset = mock_hf
     fake_dataset.reader.root = fake_dataset.root
 
-    with patch("datasets.disable_caching") as m_disable, \
-         patch("datasets.enable_caching") as m_enable:
+    with patch("datasets.disable_caching") as m_disable, patch("datasets.enable_caching") as m_enable:
         from lerobot.gui.dataset_reload import reload_hf_dataset
+
         reload_hf_dataset(fake_dataset)
 
     mock_hf.cleanup_cache_files.assert_called_once()
@@ -132,8 +139,7 @@ def test_reload_hf_dataset_reenables_caching_on_error(fake_dataset):
     fake_dataset.reader.root = fake_dataset.root
     fake_dataset.reader.load_and_activate.side_effect = RuntimeError("boom")
 
-    with patch("datasets.disable_caching"), \
-         patch("datasets.enable_caching") as m_enable:
+    with patch("datasets.disable_caching"), patch("datasets.enable_caching") as m_enable:
         from lerobot.gui.dataset_reload import reload_hf_dataset
 
         with pytest.raises(RuntimeError, match="boom"):
@@ -144,9 +150,12 @@ def test_reload_hf_dataset_reenables_caching_on_error(fake_dataset):
 
 def test_reload_dataset_from_disk_calls_both(fake_dataset):
     """reload_dataset_from_disk = reload_metadata + reload_hf_dataset."""
-    with patch("lerobot.gui.dataset_reload.reload_metadata") as m_meta, \
-         patch("lerobot.gui.dataset_reload.reload_hf_dataset") as m_hf:
+    with (
+        patch("lerobot.gui.dataset_reload.reload_metadata") as m_meta,
+        patch("lerobot.gui.dataset_reload.reload_hf_dataset") as m_hf,
+    ):
         from lerobot.gui.dataset_reload import reload_dataset_from_disk
+
         reload_dataset_from_disk(fake_dataset)
 
     m_meta.assert_called_once_with(fake_dataset, root=None)
@@ -157,9 +166,12 @@ def test_reload_dataset_from_disk_passes_custom_root(fake_dataset):
     """Custom root is forwarded to both helpers."""
     custom = Path("/other/root")
 
-    with patch("lerobot.gui.dataset_reload.reload_metadata") as m_meta, \
-         patch("lerobot.gui.dataset_reload.reload_hf_dataset") as m_hf:
+    with (
+        patch("lerobot.gui.dataset_reload.reload_metadata") as m_meta,
+        patch("lerobot.gui.dataset_reload.reload_hf_dataset") as m_hf,
+    ):
         from lerobot.gui.dataset_reload import reload_dataset_from_disk
+
         reload_dataset_from_disk(fake_dataset, root=custom)
 
     m_meta.assert_called_once_with(fake_dataset, root=custom)

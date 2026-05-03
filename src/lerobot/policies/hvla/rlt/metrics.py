@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 # Group classes — each enforces its own length invariant on every mutation.
 # =============================================================================
 
+
 @dataclass
 class EpisodeGroup:
     """One entry per ``record_episode`` call.
@@ -57,7 +58,11 @@ class EpisodeGroup:
     lengths_s: list[float] = field(default_factory=list)
 
     def append(
-        self, *, success: bool, autonomous: bool, duration_s: float,
+        self,
+        *,
+        success: bool,
+        autonomous: bool,
+        duration_s: float,
     ) -> None:
         self.successes.append(bool(success))
         self.autonomous.append(bool(autonomous))
@@ -67,9 +72,7 @@ class EpisodeGroup:
 
     def _check_invariant(self) -> None:
         n = len(self.successes)
-        assert (
-            n == len(self.autonomous) == len(self.timestamps) == len(self.lengths_s)
-        ), (
+        assert n == len(self.autonomous) == len(self.timestamps) == len(self.lengths_s), (
             f"EpisodeGroup invariant violated: successes={n} "
             f"autonomous={len(self.autonomous)} "
             f"timestamps={len(self.timestamps)} lengths_s={len(self.lengths_s)}"
@@ -95,7 +98,7 @@ class EpisodeGroup:
         }
 
     @classmethod
-    def deserialize(cls, data: dict) -> "EpisodeGroup":
+    def deserialize(cls, data: dict) -> EpisodeGroup:
         g = cls()
         g.successes = [bool(x) for x in data.get("successes", [])]
         g.autonomous = [bool(x) for x in data.get("autonomous", [])]
@@ -106,16 +109,21 @@ class EpisodeGroup:
         # the shorter ones with neutral defaults so the invariant holds.
         # Loud warning so the operator knows history is partially fabricated.
         n = max(
-            len(g.successes), len(g.autonomous),
-            len(g.timestamps), len(g.lengths_s),
+            len(g.successes),
+            len(g.autonomous),
+            len(g.timestamps),
+            len(g.lengths_s),
         )
         if any(len(s) != n for s in (g.successes, g.autonomous, g.timestamps, g.lengths_s)):
             logger.warning(
                 "EpisodeGroup deserialize: mismatched lengths — "
                 "successes=%d autonomous=%d timestamps=%d lengths_s=%d; "
                 "padding shorter series to %d (front-padded with defaults).",
-                len(g.successes), len(g.autonomous),
-                len(g.timestamps), len(g.lengths_s), n,
+                len(g.successes),
+                len(g.autonomous),
+                len(g.timestamps),
+                len(g.lengths_s),
+                n,
             )
             if len(g.successes) < n:
                 g.successes = [True] * (n - len(g.successes)) + g.successes
@@ -147,8 +155,7 @@ class InferenceGroup:
     def _check_invariant(self) -> None:
         n = len(self.deltas)
         assert n == len(self.timestamps), (
-            f"InferenceGroup invariant violated: "
-            f"deltas={n} timestamps={len(self.timestamps)}"
+            f"InferenceGroup invariant violated: deltas={n} timestamps={len(self.timestamps)}"
         )
 
     def truncate(self, max_len: int) -> None:
@@ -167,7 +174,7 @@ class InferenceGroup:
         }
 
     @classmethod
-    def deserialize(cls, data: dict) -> "InferenceGroup":
+    def deserialize(cls, data: dict) -> InferenceGroup:
         g = cls()
         g.deltas = [float(x) for x in data.get("deltas", [])]
         g.timestamps = [float(x) for x in data.get("timestamps", [])]
@@ -176,7 +183,9 @@ class InferenceGroup:
             logger.warning(
                 "InferenceGroup deserialize: deltas=%d timestamps=%d; "
                 "padding shorter to %d (front-padded with 0.0).",
-                len(g.deltas), len(g.timestamps), n,
+                len(g.deltas),
+                len(g.timestamps),
+                n,
             )
             if len(g.deltas) < n:
                 g.deltas = [0.0] * (n - len(g.deltas)) + g.deltas
@@ -205,7 +214,8 @@ class GradUpdateGroup:
     timestamps: list[float] = field(default_factory=list)
 
     def append(
-        self, *,
+        self,
+        *,
         critic_loss: float,
         critic_grad_norm: float,
         actor_loss: float,
@@ -230,9 +240,15 @@ class GradUpdateGroup:
 
     def _all_series(self) -> tuple[list, ...]:
         return (
-            self.critic_losses, self.critic_grad_norms, self.actor_losses,
-            self.q_values_mean, self.q_values_min, self.q_values_max,
-            self.actor_q_terms, self.actor_bc_terms, self.update_rates,
+            self.critic_losses,
+            self.critic_grad_norms,
+            self.actor_losses,
+            self.q_values_mean,
+            self.q_values_min,
+            self.q_values_max,
+            self.actor_q_terms,
+            self.actor_bc_terms,
+            self.update_rates,
             self.timestamps,
         )
 
@@ -279,7 +295,7 @@ class GradUpdateGroup:
         }
 
     @classmethod
-    def deserialize(cls, data: dict) -> "GradUpdateGroup":
+    def deserialize(cls, data: dict) -> GradUpdateGroup:
         g = cls()
         g.critic_losses = [float(x) for x in data.get("critic_losses", [])]
         g.critic_grad_norms = [float(x) for x in data.get("critic_grad_norms", [])]
@@ -296,9 +312,9 @@ class GradUpdateGroup:
         if len(set(lens)) != 1:
             n = min(lens)  # truncate to the shortest, drop suffixes
             logger.warning(
-                "GradUpdateGroup deserialize: mismatched lengths %s; "
-                "trimming all to common minimum %d.",
-                lens, n,
+                "GradUpdateGroup deserialize: mismatched lengths %s; trimming all to common minimum %d.",
+                lens,
+                n,
             )
             g.critic_losses = g.critic_losses[:n]
             g.critic_grad_norms = g.critic_grad_norms[:n]
@@ -317,6 +333,7 @@ class GradUpdateGroup:
 # =============================================================================
 # Aggregator
 # =============================================================================
+
 
 @dataclass
 class RLTMetrics:
@@ -354,7 +371,9 @@ class RLTMetrics:
         with self._lock:
             self.episode = episode
             self.episodes.append(
-                success=success, autonomous=autonomous, duration_s=duration_s,
+                success=success,
+                autonomous=autonomous,
+                duration_s=duration_s,
             )
             self.episodes.truncate(self._MAX_SERIES_LEN)
 
@@ -418,44 +437,39 @@ class RLTMetrics:
             successes = list(self.episodes.successes)
             autonomous = list(self.episodes.autonomous)
             timestamps = list(self.episodes.timestamps)
-            lengths = list(self.episodes.lengths_s)
+            list(self.episodes.lengths_s)
             n = len(successes)
 
             # Rolling-20 rates (kept for the dashboard's "recent" tile)
             recent_s = successes[-20:]
             success_rate = sum(recent_s) / len(recent_s) if recent_s else 0.0
-            recent_pairs = list(zip(successes[-20:], autonomous[-20:]))
+            recent_pairs = list(zip(successes[-20:], autonomous[-20:], strict=False))
             auto_succ_recent = sum(1 for s, a in recent_pairs if s and a)
-            autonomous_rate = (
-                auto_succ_recent / len(recent_pairs) if recent_pairs else 0.0
-            )
+            autonomous_rate = auto_succ_recent / len(recent_pairs) if recent_pairs else 0.0
             recent_a = autonomous[-20:]
-            intervention_rate = (
-                1.0 - (sum(recent_a) / len(recent_a)) if recent_a else 0.0
-            )
+            intervention_rate = 1.0 - (sum(recent_a) / len(recent_a)) if recent_a else 0.0
 
             # Throughput: autonomous successes per 10 min of active time
             now = time.time()
             window_start = now - 600
             throughput = sum(
-                1 for s, a, t in zip(successes, autonomous, timestamps)
+                1
+                for s, a, t in zip(successes, autonomous, timestamps, strict=False)
                 if t >= window_start and s and a
             )
 
             # Pre-computed rolling autonomous rate (for the chart)
             auto_rate_rolling = []
             for i in range(n):
-                win_s = successes[max(0, i - 19): i + 1]
-                win_a = autonomous[max(0, i - 19): i + 1]
-                auto_s = sum(1 for s, a in zip(win_s, win_a) if s and a)
+                win_s = successes[max(0, i - 19) : i + 1]
+                win_a = autonomous[max(0, i - 19) : i + 1]
+                auto_s = sum(1 for s, a in zip(win_s, win_a, strict=False) if s and a)
                 auto_rate_rolling.append(auto_s / len(win_s) if win_s else 0.0)
 
             # All-time rates
             n_total = max(n, 1)
             success_count_all = sum(successes)
-            auto_succ_count_all = sum(
-                1 for s_, a in zip(successes, autonomous) if s_ and a
-            )
+            auto_succ_count_all = sum(1 for s_, a in zip(successes, autonomous, strict=False) if s_ and a)
             intervention_count_all = sum(1 for a in autonomous if not a)
 
             return {
@@ -514,8 +528,11 @@ class RLTMetrics:
             logger.info(
                 "RLT metrics restored: episodes=%d inferences=%d grad_updates=%d "
                 "(episode=%d, total_updates=%d)",
-                len(self.episodes), len(self.inferences), len(self.grad_updates),
-                self.episode, self.total_updates,
+                len(self.episodes),
+                len(self.inferences),
+                len(self.grad_updates),
+                self.episode,
+                self.total_updates,
             )
 
 
@@ -545,6 +562,7 @@ def save_metrics_to_file() -> None:
     file doesn't go unnoticed."""
     import json
     import os
+
     if _global_metrics is None or _metrics_path is None:
         return
     try:
@@ -558,15 +576,18 @@ def save_metrics_to_file() -> None:
         # ERROR not WARNING because metrics drive operator decisions.
         logger.error(
             "RLT metrics save FAILED (file is now stale): %s: %s",
-            type(e).__name__, e,
+            type(e).__name__,
+            e,
         )
 
 
 def load_metrics_from_file(path: str | None = None) -> dict:
     import json
+
     p = path or _metrics_path
     if not p:
         import os
+
         for candidate in ["outputs/rlt_online/metrics.json"]:
             if os.path.exists(candidate):
                 p = candidate

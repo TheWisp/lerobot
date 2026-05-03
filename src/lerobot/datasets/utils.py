@@ -20,7 +20,6 @@ import logging
 from collections import deque
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Generic, TypeVar
 
 import datasets
 import numpy as np
@@ -379,10 +378,7 @@ class LookAheadError(Exception):
     pass
 
 
-T = TypeVar("T")
-
-
-class Backtrackable(Generic[T]):
+class Backtrackable[T]:
     """Wrap any iterator/iterable so you can step back up to ``history`` items
     and look ahead up to ``lookahead`` items.
 

@@ -36,8 +36,6 @@ from torch.utils.data import DataLoader
 from lerobot.policies.hvla.scripts.flash_dagger_lora import apply_lora_to_decoder
 from lerobot.policies.hvla.scripts.flash_dagger_phase_a_rank import (
     compute_per_sample_loss,
-    override_norm_stats,
-    patch_episode_data_index,
 )
 from lerobot.policies.hvla.scripts.flash_dagger_phase_b import (
     build_dataset,
@@ -67,10 +65,14 @@ class ThreeWayMixDataset(torch.utils.data.Dataset):
 
     def __init__(
         self,
-        old_ds, old_indices,
-        flashed_ds, flashed_indices_per_ep: list[list[int]],
-        new_ds, new_indices,
-        old_pct: float, flashed_pct: float,
+        old_ds,
+        old_indices,
+        flashed_ds,
+        flashed_indices_per_ep: list[list[int]],
+        new_ds,
+        new_indices,
+        old_pct: float,
+        flashed_pct: float,
         length: int,
     ):
         self.old_ds = old_ds
@@ -114,7 +116,9 @@ def main():
     parser.add_argument("--train-repo-id", required=True)
     parser.add_argument("--output-dir", default="outputs/flash_dagger/phase_d")
     parser.add_argument(
-        "--episodes", type=int, nargs="+",
+        "--episodes",
+        type=int,
+        nargs="+",
         default=[247, 76, 174, 235, 245, 141, 147, 276, 309, 177],
     )
     parser.add_argument("--old-pct", type=float, default=0.10)
@@ -150,9 +154,10 @@ def main():
     with open(ckpt_dir / "config.json") as f:
         ckpt_cfg = json.load(f)
 
+    import safetensors.torch as sft
+
     from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
     from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
-    import safetensors.torch as sft
 
     config = FlowMatchingS1Config(
         chunk_size=ckpt_cfg["chunk_size"],
@@ -192,19 +197,25 @@ def main():
     policy.to(device)
     policy.train()
     logger.info("LoRA params: %.2fM / %.1fM (%.2f%%)", n_lora / 1e6, n_total / 1e6, 100 * n_lora / n_total)
-    logger.info("Mix ratios: old=%.2f flashed=%.2f new=%.2f",
-                args.old_pct, args.flashed_pct, 1 - args.old_pct - args.flashed_pct)
+    logger.info(
+        "Mix ratios: old=%.2f flashed=%.2f new=%.2f",
+        args.old_pct,
+        args.flashed_pct,
+        1 - args.old_pct - args.flashed_pct,
+    )
 
     logger.info("=== Baselines ===")
     policy.eval()
     baselines: dict[int | str, float] = {}
     for ep in args.episodes:
         _, va = splits[ep]
-        baselines[ep] = eval_loss_on_indices(policy, eval_ds, va, config,
-                                             args.batch_size, device, passes=args.eval_passes)
+        baselines[ep] = eval_loss_on_indices(
+            policy, eval_ds, va, config, args.batch_size, device, passes=args.eval_passes
+        )
         logger.info("  ep %d baseline = %.4f", ep, baselines[ep])
-    baselines["forget"] = eval_loss_on_indices(policy, train_ds, forget_val_indices, config,
-                                               args.batch_size, device, passes=args.eval_passes)
+    baselines["forget"] = eval_loss_on_indices(
+        policy, train_ds, forget_val_indices, config, args.batch_size, device, passes=args.eval_passes
+    )
     logger.info("  forget baseline = %.4f", baselines["forget"])
     policy.train()
 
@@ -213,28 +224,45 @@ def main():
 
     for i, ep in enumerate(args.episodes, start=1):
         tr, va = splits[ep]
-        logger.info("--- Iteration %d/%d: ep=%d (%d train) | flashed-pool=%d episodes ---",
-                    i, len(args.episodes), ep, len(tr), len(flashed_train_pools))
+        logger.info(
+            "--- Iteration %d/%d: ep=%d (%d train) | flashed-pool=%d episodes ---",
+            i,
+            len(args.episodes),
+            ep,
+            len(tr),
+            len(flashed_train_pools),
+        )
 
         mix_ds = ThreeWayMixDataset(
-            old_ds=train_ds, old_indices=replay_pool,
-            flashed_ds=eval_ds, flashed_indices_per_ep=flashed_train_pools,
-            new_ds=eval_ds, new_indices=tr,
-            old_pct=args.old_pct, flashed_pct=args.flashed_pct,
+            old_ds=train_ds,
+            old_indices=replay_pool,
+            flashed_ds=eval_ds,
+            flashed_indices_per_ep=flashed_train_pools,
+            new_ds=eval_ds,
+            new_indices=tr,
+            old_pct=args.old_pct,
+            flashed_pct=args.flashed_pct,
             length=args.steps * args.batch_size,
         )
         loader = DataLoader(
-            mix_ds, batch_size=args.batch_size, shuffle=False,
-            num_workers=args.num_workers, pin_memory=True, drop_last=True,
+            mix_ds,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            drop_last=True,
             collate_fn=make_collate_fn(config),
         )
 
         opt = torch.optim.AdamW(
             [p for p in policy.parameters() if p.requires_grad],
-            lr=args.lr, weight_decay=0.0,
+            lr=args.lr,
+            weight_decay=0.0,
         )
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-            opt, T_max=args.steps, eta_min=args.lr * 0.05,
+            opt,
+            T_max=args.steps,
+            eta_min=args.lr * 0.05,
         )
 
         t_start = time.time()
@@ -250,8 +278,7 @@ def main():
                 loss = losses.mean()
             opt.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                [p for p in policy.parameters() if p.requires_grad], 1.0)
+            torch.nn.utils.clip_grad_norm_([p for p in policy.parameters() if p.requires_grad], 1.0)
             opt.step()
             sched.step()
             running_loss += loss.item()
@@ -260,56 +287,78 @@ def main():
                 break
 
         train_elapsed = time.time() - t_start
-        logger.info("  trained %d steps in %.1fs (avg train_loss=%.4f)",
-                    args.steps, train_elapsed, running_loss / max(running_n, 1))
+        logger.info(
+            "  trained %d steps in %.1fs (avg train_loss=%.4f)",
+            args.steps,
+            train_elapsed,
+            running_loss / max(running_n, 1),
+        )
 
         t_eval = time.time()
         per_ep_losses: dict[int, float] = {}
         for ep_seen in args.episodes[:i]:
             _, va_seen = splits[ep_seen]
             per_ep_losses[ep_seen] = eval_loss_on_indices(
-                policy, eval_ds, va_seen, config,
-                args.batch_size, device, passes=args.eval_passes,
+                policy,
+                eval_ds,
+                va_seen,
+                config,
+                args.batch_size,
+                device,
+                passes=args.eval_passes,
             )
         forget_loss = eval_loss_on_indices(
-            policy, train_ds, forget_val_indices, config,
-            args.batch_size, device, passes=args.eval_passes,
+            policy,
+            train_ds,
+            forget_val_indices,
+            config,
+            args.batch_size,
+            device,
+            passes=args.eval_passes,
         )
 
         diag = per_ep_losses[ep]
-        olds = [per_ep_losses[e] for e in args.episodes[:i - 1]]
+        olds = [per_ep_losses[e] for e in args.episodes[: i - 1]]
         avg_old = float(np.mean(olds)) if olds else 0.0
         worst_old = float(np.max(olds)) if olds else 0.0
         logger.info(
             "  iter=%d ep=%d | new_fit=%.4f (Δ%+.0f%%) | old_avg=%.4f | old_worst=%.4f | forget=%.4f (Δ%+.0f%%) | eval %.1fs",
-            i, ep,
-            diag, 100 * (diag - baselines[ep]) / max(baselines[ep], 1e-6),
-            avg_old, worst_old,
-            forget_loss, 100 * (forget_loss - baselines["forget"]) / max(baselines["forget"], 1e-6),
+            i,
+            ep,
+            diag,
+            100 * (diag - baselines[ep]) / max(baselines[ep], 1e-6),
+            avg_old,
+            worst_old,
+            forget_loss,
+            100 * (forget_loss - baselines["forget"]) / max(baselines["forget"], 1e-6),
             time.time() - t_eval,
         )
 
         for ep_eval, loss_val in per_ep_losses.items():
-            rows.append({
+            rows.append(
+                {
+                    "iter": i,
+                    "trained_ep": ep,
+                    "eval_ep": ep_eval,
+                    "loss": loss_val,
+                    "baseline": baselines[ep_eval],
+                    "delta_pct": 100 * (loss_val - baselines[ep_eval]) / max(baselines[ep_eval], 1e-6),
+                    "added_at_iter": args.episodes.index(ep_eval) + 1,
+                    "age_iters": i - (args.episodes.index(ep_eval) + 1),
+                }
+            )
+        rows.append(
+            {
                 "iter": i,
                 "trained_ep": ep,
-                "eval_ep": ep_eval,
-                "loss": loss_val,
-                "baseline": baselines[ep_eval],
-                "delta_pct": 100 * (loss_val - baselines[ep_eval]) / max(baselines[ep_eval], 1e-6),
-                "added_at_iter": args.episodes.index(ep_eval) + 1,
-                "age_iters": i - (args.episodes.index(ep_eval) + 1),
-            })
-        rows.append({
-            "iter": i,
-            "trained_ep": ep,
-            "eval_ep": "forget",
-            "loss": forget_loss,
-            "baseline": baselines["forget"],
-            "delta_pct": 100 * (forget_loss - baselines["forget"]) / max(baselines["forget"], 1e-6),
-            "added_at_iter": 0,
-            "age_iters": -1,
-        })
+                "eval_ep": "forget",
+                "loss": forget_loss,
+                "baseline": baselines["forget"],
+                "delta_pct": 100 * (forget_loss - baselines["forget"]) / max(baselines["forget"], 1e-6),
+                "added_at_iter": 0,
+                "age_iters": -1,
+            }
+        )
 
         # Add the just-trained episode's TRAIN portion to the flashed pool
         # (val portion stays held-out; it's only used for eval).
@@ -317,13 +366,19 @@ def main():
 
         del opt, sched, loader, mix_ds
 
-    csv_path = output_dir / f"capacity_curves_old{int(args.old_pct*100):02d}_fl{int(args.flashed_pct*100):02d}.csv"
+    csv_path = (
+        output_dir
+        / f"capacity_curves_old{int(args.old_pct * 100):02d}_fl{int(args.flashed_pct * 100):02d}.csv"
+    )
     write_csv(csv_path, rows)
     logger.info("Saved curves → %s", csv_path)
 
-    logger.info("=== Phase D summary (old=%.0f%% flashed=%.0f%% new=%.0f%%) ===",
-                100 * args.old_pct, 100 * args.flashed_pct,
-                100 * (1 - args.old_pct - args.flashed_pct))
+    logger.info(
+        "=== Phase D summary (old=%.0f%% flashed=%.0f%% new=%.0f%%) ===",
+        100 * args.old_pct,
+        100 * args.flashed_pct,
+        100 * (1 - args.old_pct - args.flashed_pct),
+    )
     logger.info("iter | trained_ep | new_fit | old_avg | old_worst | forget")
     for i, ep in enumerate(args.episodes, start=1):
         iter_rows = [r for r in rows if r["iter"] == i]
@@ -332,7 +387,9 @@ def main():
         forget = next(r["loss"] for r in iter_rows if r["eval_ep"] == "forget")
         logger.info(
             "  %2d | %4d | %.4f | %.4f | %.4f | %.4f",
-            i, ep, new,
+            i,
+            ep,
+            new,
             float(np.mean(olds)) if olds else 0.0,
             float(np.max(olds)) if olds else 0.0,
             forget,

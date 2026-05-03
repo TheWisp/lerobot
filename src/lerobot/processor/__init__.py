@@ -25,7 +25,6 @@ from lerobot.types import (
 
 from .batch_processor import AddBatchDimensionProcessorStep
 from .camera_processor import TopCameraProcessorStep
-from .depth_edge_processor import DepthEdgeOverlayProcessorStep
 from .converters import (
     batch_to_transition,
     create_transition,
@@ -41,6 +40,7 @@ from .converters import (
     transition_to_robot_action,
 )
 from .delta_action_processor import MapDeltaActionToRobotActionStep, MapTensorToDeltaActionDictStep
+from .depth_edge_processor import DepthEdgeOverlayProcessorStep
 from .device_processor import DeviceProcessorStep
 from .env_processor import IsaaclabArenaProcessorStep, LiberoProcessorStep
 from .factory import (

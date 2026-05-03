@@ -46,18 +46,16 @@ def test_create_or_resume_does_not_destroy_on_corrupted_metadata(tmp_path, monke
 
     # Redirect HF_LEROBOT_HOME so dataset_root is what `_create_or_resume_dataset` finds.
     monkeypatch.setattr(
-        "lerobot.utils.constants.HF_LEROBOT_HOME", tmp_path,
+        "lerobot.utils.constants.HF_LEROBOT_HOME",
+        tmp_path,
     )
     # The s1_process module captures this constant inside the function — patch its lookup too.
-    import lerobot.policies.hvla.s1_process as s1_process_mod
 
     from lerobot.policies.hvla.s1_process import _create_or_resume_dataset
 
     # The function must raise rather than silently destroy the dataset.
     with pytest.raises(Exception):
-        _create_or_resume_dataset(
-            repo_id=repo_id, fps=30, features={}, robot_type="test"
-        )
+        _create_or_resume_dataset(repo_id=repo_id, fps=30, features={}, robot_type="test")
 
     # Files must still exist — none removed, none shrunk.
     assert_no_data_loss(snapshot, snapshot_tree(dataset_root))

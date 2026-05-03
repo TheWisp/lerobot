@@ -73,14 +73,13 @@ import copy
 import logging
 import subprocess
 import time
-
-import numpy as np
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from pprint import pformat
 from typing import Any
 
+import numpy as np
 import torch
 
 from lerobot.cameras import CameraConfig  # noqa: F401
@@ -123,8 +122,8 @@ from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
     bi_openarm_follower,
-    bi_so_follower,
     bi_so107_follower,
+    bi_so_follower,
     earthrover_mini_plus,
     hope_jr,
     koch_follower,
@@ -140,8 +139,8 @@ from lerobot.teleoperators import (  # noqa: F401
     TeleoperatorConfig,
     TeleopEvents,
     bi_openarm_leader,
-    bi_so_leader,
     bi_so107_leader,
+    bi_so_leader,
     homunculus,
     koch_leader,
     make_teleoperator_from_config,
@@ -425,14 +424,27 @@ def record_loop(
         is_record_frame = True
 
         # Get action from policy, teleop, or intervention
-        if policy is not None and preprocessor is not None and postprocessor is not None and not is_intervention:
+        if (
+            policy is not None
+            and preprocessor is not None
+            and postprocessor is not None
+            and not is_intervention
+        ):
             # Transition: intervention → policy (user pressed SPACE again)
             if was_intervening:
                 # Defer saving: copy buffer now, save all at end of main episode (avoids lag)
-                if intervention_dataset is not None and intervention_dataset.writer.episode_buffer is not None and intervention_dataset.writer.episode_buffer.get("size", 0) > 0:
-                    pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.writer.episode_buffer))
+                if (
+                    intervention_dataset is not None
+                    and intervention_dataset.writer.episode_buffer is not None
+                    and intervention_dataset.writer.episode_buffer.get("size", 0) > 0
+                ):
+                    pending_intervention_episodes.append(
+                        copy.deepcopy(intervention_dataset.writer.episode_buffer)
+                    )
                     # Reset buffer for next intervention, pre-assign episode_index to avoid collision
-                    intervention_dataset.writer.episode_buffer = intervention_dataset.writer._create_episode_buffer()
+                    intervention_dataset.writer.episode_buffer = (
+                        intervention_dataset.writer._create_episode_buffer()
+                    )
                     next_ep_idx = intervention_dataset.num_episodes + len(pending_intervention_episodes)
                     intervention_dataset.writer.episode_buffer["episode_index"] = next_ep_idx
 
@@ -443,7 +455,9 @@ def record_loop(
                     try:
                         teleop.enable_torque()
                     except ConnectionError as e:
-                        logging.warning(f"Failed to enable torque on leader: {e}. Release the arm and try again.")
+                        logging.warning(
+                            f"Failed to enable torque on leader: {e}. Release the arm and try again."
+                        )
                 log_say("Policy", play_sounds)
 
             # With interpolation: only call policy when interpolator needs new action
@@ -527,10 +541,7 @@ def record_loop(
                     beep_proc = None
                     while True:
                         pos = teleop.get_action()
-                        max_err = max(
-                            abs(pos.get(k, 0) - target[k])
-                            for k in target
-                        )
+                        max_err = max(abs(pos.get(k, 0) - target[k]) for k in target)
                         if max_err < settle_tolerance:
                             if beep_proc is not None:
                                 beep_proc.terminate()
@@ -606,7 +617,9 @@ def record_loop(
 
             # Record to intervention dataset (correction data)
             if intervention_dataset is not None:
-                int_action_frame = build_dataset_frame(intervention_dataset.features, act_processed_teleop, prefix=ACTION)
+                int_action_frame = build_dataset_frame(
+                    intervention_dataset.features, act_processed_teleop, prefix=ACTION
+                )
                 int_frame = {**observation_frame, **int_action_frame, "task": single_task}
                 intervention_dataset.add_frame(int_frame)
 
@@ -674,14 +687,19 @@ def record_loop(
     # Collect pending intervention episodes to return (saved after main episode)
     if intervention_dataset is not None:
         # Add current buffer to pending if it has frames (intervention was active at episode end)
-        if intervention_dataset.writer.episode_buffer is not None and intervention_dataset.writer.episode_buffer.get("size", 0) > 0:
+        if (
+            intervention_dataset.writer.episode_buffer is not None
+            and intervention_dataset.writer.episode_buffer.get("size", 0) > 0
+        ):
             pending_intervention_episodes.append(copy.deepcopy(intervention_dataset.writer.episode_buffer))
             intervention_dataset.writer.episode_buffer = intervention_dataset.writer._create_episode_buffer()
 
         # On re-record, discard and reset buffer for next attempt
         if events.get("rerecord_episode", False):
             if pending_intervention_episodes:
-                logging.info(f"Discarding {len(pending_intervention_episodes)} intervention episode(s) for re-record")
+                logging.info(
+                    f"Discarding {len(pending_intervention_episodes)} intervention episode(s) for re-record"
+                )
             pending_intervention_episodes = []
             intervention_dataset.writer.episode_buffer = intervention_dataset.writer._create_episode_buffer()
 
@@ -694,10 +712,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     logging.info(pformat(asdict(cfg)))
     if cfg.display_data:
         init_rerun(session_name="recording", ip=cfg.display_ip, port=cfg.display_port)
-    _is_remote = (
-        cfg.display_ip is not None
-        and cfg.display_ip not in ("127.0.0.1", "localhost", "::1")
-    )
+    _is_remote = cfg.display_ip is not None and cfg.display_ip not in ("127.0.0.1", "localhost", "::1")
     display_compressed_images = (
         True
         if (cfg.display_data and _is_remote and cfg.display_port is not None)
@@ -718,6 +733,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
     # Append obs stream writer as the last step (writes processed obs to shared memory)
     from lerobot.robots.obs_stream import make_obs_stream_writer_step
+
     obs_stream_step = make_obs_stream_writer_step()
     if obs_stream_step is not None:
         robot_observation_processor.steps.append(obs_stream_step)
@@ -753,8 +769,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
                 encoder_threads=cfg.dataset.encoder_threads,
                 record_images=cfg.dataset.record_images,
-                image_writer_processes=cfg.dataset.num_image_writer_processes if cfg.dataset.record_images and num_cameras > 0 else 0,
-                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * num_cameras if cfg.dataset.record_images and num_cameras > 0 else 0,
+                image_writer_processes=cfg.dataset.num_image_writer_processes
+                if cfg.dataset.record_images and num_cameras > 0
+                else 0,
+                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * num_cameras
+                if cfg.dataset.record_images and num_cameras > 0
+                else 0,
             )
             sanity_check_dataset_robot_compatibility(dataset, robot, cfg.dataset.fps, dataset_features)
         else:
@@ -767,8 +787,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 robot_type=robot.name,
                 features=dataset_features,
                 use_videos=cfg.dataset.video,
-                image_writer_processes=cfg.dataset.num_image_writer_processes if cfg.dataset.record_images else 0,
-                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras) if cfg.dataset.record_images else 0,
+                image_writer_processes=cfg.dataset.num_image_writer_processes
+                if cfg.dataset.record_images
+                else 0,
+                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras)
+                if cfg.dataset.record_images
+                else 0,
                 batch_encoding_size=cfg.dataset.video_encoding_batch_size,
                 vcodec=cfg.dataset.vcodec,
                 streaming_encoding=cfg.dataset.streaming_encoding,
@@ -787,9 +811,13 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     batch_encoding_size=cfg.dataset.video_encoding_batch_size,
                     vcodec=cfg.dataset.vcodec,
                     image_writer_processes=cfg.dataset.num_image_writer_processes if num_cameras > 0 else 0,
-                    image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * num_cameras if num_cameras > 0 else 0,
+                    image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * num_cameras
+                    if num_cameras > 0
+                    else 0,
                 )
-                logging.info(f"Resumed intervention dataset: {cfg.intervention_repo_id} ({intervention_dataset.num_episodes} episodes)")
+                logging.info(
+                    f"Resumed intervention dataset: {cfg.intervention_repo_id} ({intervention_dataset.num_episodes} episodes)"
+                )
             else:
                 intervention_dataset = LeRobotDataset.create(
                     cfg.intervention_repo_id,
@@ -867,7 +895,9 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         dataset_ctx = VideoEncodingManager(dataset) if cfg.dataset.record_images else nullcontext()
         with dataset_ctx:
             # Use nested context manager for intervention dataset if it exists
-            intervention_ctx = VideoEncodingManager(intervention_dataset) if intervention_dataset else nullcontext()
+            intervention_ctx = (
+                VideoEncodingManager(intervention_dataset) if intervention_dataset else nullcontext()
+            )
             with intervention_ctx:
                 recorded_episodes = 0
 
@@ -898,6 +928,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     )
 
                     import time as _time
+
                     _t_between = _time.monotonic()
 
                     # Execute a few seconds without recording to give time to manually reset the environment
@@ -923,19 +954,23 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     if intervention_dataset is not None and pending_intervention_episodes:
                         for ep_buffer in pending_intervention_episodes:
                             intervention_dataset.save_episode(episode_data=ep_buffer)
-                            logging.info(f"Saved intervention episode {intervention_dataset.num_episodes - 1}")
+                            logging.info(
+                                f"Saved intervention episode {intervention_dataset.num_episodes - 1}"
+                            )
                         # Restart video encoders for the next intervention episode.
                         # save_episode(episode_data=...) skips clear_episode_buffer(),
                         # so encoders are left in a finished state.
                         if intervention_dataset.writer.video_encoders:
-                            intervention_dataset.writer.episode_buffer = intervention_dataset.writer._create_episode_buffer()
+                            intervention_dataset.writer.episode_buffer = (
+                                intervention_dataset.writer._create_episode_buffer()
+                            )
                             intervention_dataset.writer._start_video_encoders()
 
                     _t_after_save = _time.monotonic()
                     logging.info(
-                        f"between-episode timing: reset_phase={_t_after_reset-_t_between:.1f}s, "
-                        f"save_episode={_t_after_save-_t_after_reset:.1f}s, "
-                        f"total={_t_after_save-_t_between:.1f}s"
+                        f"between-episode timing: reset_phase={_t_after_reset - _t_between:.1f}s, "
+                        f"save_episode={_t_after_save - _t_after_reset:.1f}s, "
+                        f"total={_t_after_save - _t_between:.1f}s"
                     )
                     recorded_episodes += 1
     finally:

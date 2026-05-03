@@ -6,13 +6,10 @@ Extends ACT with:
 2. Optional DINOv2-S backbone: Replaces ResNet18 for faster, higher-quality visual features
 """
 
-import math
 from collections import deque
-from collections.abc import Callable
 from itertools import chain
 
 import einops
-import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812
 import torchvision
@@ -26,7 +23,6 @@ from lerobot.policies.act.modeling_act import (
     ACTSinusoidalPositionEmbedding2d,
     ACTTemporalEnsembler,
     create_sinusoidal_pos_embedding,
-    get_activation_fn,
 )
 from lerobot.policies.act_vlm.configuration_act_vlm import ACTWithVLMConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
@@ -182,7 +178,8 @@ class ACTWithVLM(nn.Module):
                     self.config.robot_state_feature.shape[0], config.dim_model
                 )
             self.vae_encoder_action_input_proj = nn.Linear(
-                self.config.action_feature.shape[0], config.dim_model,
+                self.config.action_feature.shape[0],
+                config.dim_model,
             )
             self.vae_encoder_latent_output_proj = nn.Linear(config.dim_model, config.latent_dim * 2)
             num_input_token_encoder = 1 + config.chunk_size
@@ -207,11 +204,11 @@ class ACTWithVLM(nn.Module):
                     # Wrap each ViT block with gradient checkpointing to reduce
                     # activation memory during backward (~40% savings).
                     from torch.utils.checkpoint import checkpoint
+
                     for block in self.dino_backbone.blocks:
                         original_forward = block.forward
-                        block.forward = (
-                            lambda x, _fwd=original_forward:
-                            checkpoint(_fwd, x, use_reentrant=False)
+                        block.forward = lambda x, _fwd=original_forward: checkpoint(
+                            _fwd, x, use_reentrant=False
                         )
                 self.dino_proj = nn.Linear(config.dino_output_dim, config.dim_model)
                 # Learnable position embedding for DINOv2 patch tokens
@@ -223,7 +220,9 @@ class ACTWithVLM(nn.Module):
                     weights=config.pretrained_backbone_weights,
                     norm_layer=FrozenBatchNorm2d,
                 )
-                self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
+                self.backbone = IntermediateLayerGetter(
+                    backbone_model, return_layers={"layer4": "feature_map"}
+                )
 
         # --- Transformer encoder/decoder ---
         self.encoder = ACTEncoder(config)
@@ -303,7 +302,9 @@ class ACTWithVLM(nn.Module):
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
         if self.config.use_vae and self.training:
-            assert ACTION in batch, "actions must be provided when using the variational objective in training mode."
+            assert ACTION in batch, (
+                "actions must be provided when using the variational objective in training mode."
+            )
 
         batch_size = batch[OBS_IMAGES][0].shape[0] if OBS_IMAGES in batch else batch[OBS_ENV_STATE].shape[0]
 
@@ -313,8 +314,10 @@ class ACTWithVLM(nn.Module):
         else:
             # Graceful degradation: zero latent if not provided
             s2_latent = torch.zeros(
-                batch_size, self.config.s2_latent_dim,
-                dtype=torch.float32, device=next(self.parameters()).device,
+                batch_size,
+                self.config.s2_latent_dim,
+                dtype=torch.float32,
+                device=next(self.parameters()).device,
             )
 
         s2_token = self.s2_projector(s2_latent)  # [B, dim_model]
@@ -328,9 +331,7 @@ class ACTWithVLM(nn.Module):
 
         # --- VAE encoder (same as ACT) ---
         if self.config.use_vae and ACTION in batch and self.training:
-            cls_embed = einops.repeat(
-                self.vae_encoder_cls_embed.weight, "1 d -> b 1 d", b=batch_size
-            )
+            cls_embed = einops.repeat(self.vae_encoder_cls_embed.weight, "1 d -> b 1 d", b=batch_size)
             if self.config.robot_state_feature:
                 robot_state_embed = self.vae_encoder_robot_state_input_proj(batch[OBS_STATE])
                 robot_state_embed = robot_state_embed.unsqueeze(1)
@@ -361,9 +362,9 @@ class ACTWithVLM(nn.Module):
             latent_sample = mu + log_sigma_x2.div(2).exp() * torch.randn_like(mu)
         else:
             mu = log_sigma_x2 = None
-            latent_sample = torch.zeros(
-                [batch_size, self.config.latent_dim], dtype=torch.float32
-            ).to(s2_latent.device)
+            latent_sample = torch.zeros([batch_size, self.config.latent_dim], dtype=torch.float32).to(
+                s2_latent.device
+            )
 
         # --- Assemble encoder input tokens ---
         # Token order: [s2_token, vae_latent, (state), (env_state), image_features...]

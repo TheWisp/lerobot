@@ -9,6 +9,7 @@ back to policy mode, wasting the entire sync round-trip. After the
 fix, presses during the transition window are rejected; quick
 double-taps are also caught by the time-debounce.
 """
+
 from __future__ import annotations
 
 from lerobot.teleoperators.so_leader.so_leader import SO107Leader
@@ -35,11 +36,13 @@ class _FakeLeader:
 # Happy path — toggle works when no guard is active
 # ============================================================================
 
+
 def test_first_press_toggles_on():
     leader = _FakeLeader()
     accepted = leader._try_toggle_intervention(now=10.0)
     assert accepted is True
     assert leader._intervention_active is True
+
 
 def test_second_press_after_debounce_toggles_off():
     leader = _FakeLeader(debounce_s=0.5)
@@ -48,6 +51,7 @@ def test_second_press_after_debounce_toggles_off():
     accepted = leader._try_toggle_intervention(now=11.0)
     assert accepted is True
     assert leader._intervention_active is False
+
 
 def test_three_presses_with_gaps_toggle_each_time():
     leader = _FakeLeader(debounce_s=0.5)
@@ -61,6 +65,7 @@ def test_three_presses_with_gaps_toggle_each_time():
 # ============================================================================
 # Transition lock — the primary fix for the ep124-style waste
 # ============================================================================
+
 
 class TestTransitionLock:
     def test_press_during_lock_rejected(self):
@@ -77,10 +82,10 @@ class TestTransitionLock:
         toggle. Subtle but important — ensures debounce semantics stay
         consistent."""
         leader = _FakeLeader(debounce_s=0.5)
-        leader._try_toggle_intervention(now=0.0)            # ON
+        leader._try_toggle_intervention(now=0.0)  # ON
         leader._intervention_transition_lock = True
-        leader._try_toggle_intervention(now=10.0)            # rejected
-        leader._try_toggle_intervention(now=10.001)          # rejected
+        leader._try_toggle_intervention(now=10.0)  # rejected
+        leader._try_toggle_intervention(now=10.001)  # rejected
         leader._intervention_transition_lock = False
         # Now press at t=10.1 — that's 10.1s since last accepted toggle
         # at t=0, well past the 0.5s debounce → must be accepted.
@@ -104,6 +109,7 @@ class TestTransitionLock:
 # ============================================================================
 # Debounce — the secondary fix for accidental double-tap
 # ============================================================================
+
 
 class TestDebounce:
     def test_press_within_debounce_window_rejected(self):
@@ -135,10 +141,7 @@ class TestDebounce:
         """A 5x rapid tap (e.g. accidental key-spam) should produce one
         toggle, not five."""
         leader = _FakeLeader(debounce_s=0.5)
-        results = [
-            leader._try_toggle_intervention(now=0.0 + i * 0.01)
-            for i in range(5)
-        ]
+        results = [leader._try_toggle_intervention(now=0.0 + i * 0.01) for i in range(5)]
         assert results == [True, False, False, False, False]
         assert leader._intervention_active is True
 
@@ -146,6 +149,7 @@ class TestDebounce:
 # ============================================================================
 # Combined — both guards active at once
 # ============================================================================
+
 
 class TestCombined:
     def test_lock_takes_precedence_over_debounce(self):

@@ -122,9 +122,7 @@ class DatasetWriter:
                 ``streaming_encoder``.
         """
         if streaming_encoder is not None and use_per_camera_streaming:
-            raise ValueError(
-                "Pass either 'streaming_encoder' or 'use_per_camera_streaming=True', not both."
-            )
+            raise ValueError("Pass either 'streaming_encoder' or 'use_per_camera_streaming=True', not both.")
 
         self._meta = meta
         self._root = root
@@ -692,9 +690,7 @@ class DatasetWriter:
         if not self._meta.video_keys:
             return
         for video_key in self._meta.video_keys:
-            self.video_encoders[video_key] = OurStreamingVideoEncoder(
-                fps=self._meta.fps, vcodec=self._vcodec
-            )
+            self.video_encoders[video_key] = OurStreamingVideoEncoder(fps=self._meta.fps, vcodec=self._vcodec)
         self._start_video_encoders()
 
     def _start_video_encoders(self) -> None:

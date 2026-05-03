@@ -20,7 +20,7 @@ class RLTConfig:
     # When loading a previously-trained checkpoint, ``load_rlt_token_config``
     # overrides shape fields from the on-disk manifest, so older 2L d=768
     # checkpoints keep loading correctly.
-    rl_token_dim: int = 2048              # bottleneck dim (paper-matched widened)
+    rl_token_dim: int = 2048  # bottleneck dim (paper-matched widened)
     # Dim of S1 context tokens fed into the encoder. ``None`` is a
     # "set me at runtime" sentinel: train_token.py overrides this to
     # S1.hidden_dim when widening, and the manifest loader writes it
@@ -29,8 +29,8 @@ class RLTConfig:
     # self-consistent symmetric encoder rather than locking in a
     # particular S1 hidden_dim that may not match the test setup.
     context_dim: int | None = None
-    token_encoder_layers: int = 4         # widened-encoder default
-    token_decoder_layers: int = 4         # widened-decoder default
+    token_encoder_layers: int = 4  # widened-encoder default
+    token_decoder_layers: int = 4  # widened-decoder default
     token_num_heads: int = 4
     token_ffn_dim: int = 2048
     token_dropout: float = 0.1
@@ -39,46 +39,46 @@ class RLTConfig:
     # d=2048 with 4 layers at batch=64 OOMs on a 32GB 5090. Sized to fit;
     # see scripts/rlt_arch_experiment.sh for the discovery process.
     token_batch_size: int = 16
-    s1_finetune_weight: float = 0.0       # alpha: 0 = freeze S1 during token training
+    s1_finetune_weight: float = 0.0  # alpha: 0 = freeze S1 during token training
 
     # --- Actor-Critic (Phase 2) ---
-    actor_hidden_dim: int = 256           # 2-layer MLP hidden size
+    actor_hidden_dim: int = 256  # 2-layer MLP hidden size
     actor_num_layers: int = 2
     critic_hidden_dim: int = 256
     critic_num_layers: int = 2
-    num_critics: int = 2                  # TD3 ensemble size
+    num_critics: int = 2  # TD3 ensemble size
 
-    rl_chunk_length: int = 10             # C: RL action chunk length
+    rl_chunk_length: int = 10  # C: RL action chunk length
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
-    discount: float = 0.99               # gamma
-    tau: float = 0.005                    # target network soft update rate
-    beta: float = 0.1                     # BC regularizer weight (paper uses 1.0 with delta EE)
-    exploration_sigma: float = 0.02      # ε_expl in TD3: Gaussian std added to the ACTION
-                                          # the robot executes. Drives exploration and
-                                          # shows up as joint jitter. Paper uses 0.1 with
-                                          # delta EE (~1cm); joint angles have ~24° std,
-                                          # so 0.02 ≈ 0.5° jitter.
-                                          #
-                                          # Setting this to 0 disables joint jitter but
-                                          # does NOT disable target policy smoothing —
-                                          # that's controlled separately by target_sigma.
-    target_sigma: float = 0.1            # ε̃ in TD3: Gaussian std added to the TARGET
-                                          # action inside the Bellman backup for target
-                                          # policy smoothing (Fujimoto 2018). Prevents
-                                          # the critic from latching onto over-estimates
-                                          # of a single deterministic action. Decoupled
-                                          # from exploration_sigma so that exploration=0
-                                          # doesn't also disable TD3's stability trick.
-                                          # Paper σ̃=0.2 on MuJoCo continuous control;
-                                          # 0.1 is half-paper, picked for tighter
-                                          # robotic-arm action-space tolerance. Earlier
-                                          # 0.02 (matching exploration_sigma) was way
-                                          # too narrow — covered only ~0.5° per joint,
-                                          # missed real Q-spike widths and contributed
-                                          # to the Q explosion seen in v2_widened runs.
-    target_noise_clip: float = 0.5       # TD3 target noise clip: ε̃ clamped to [-c, c].
-                                          # Paper default: 0.5.
+    discount: float = 0.99  # gamma
+    tau: float = 0.005  # target network soft update rate
+    beta: float = 0.1  # BC regularizer weight (paper uses 1.0 with delta EE)
+    exploration_sigma: float = 0.02  # ε_expl in TD3: Gaussian std added to the ACTION
+    # the robot executes. Drives exploration and
+    # shows up as joint jitter. Paper uses 0.1 with
+    # delta EE (~1cm); joint angles have ~24° std,
+    # so 0.02 ≈ 0.5° jitter.
+    #
+    # Setting this to 0 disables joint jitter but
+    # does NOT disable target policy smoothing —
+    # that's controlled separately by target_sigma.
+    target_sigma: float = 0.1  # ε̃ in TD3: Gaussian std added to the TARGET
+    # action inside the Bellman backup for target
+    # policy smoothing (Fujimoto 2018). Prevents
+    # the critic from latching onto over-estimates
+    # of a single deterministic action. Decoupled
+    # from exploration_sigma so that exploration=0
+    # doesn't also disable TD3's stability trick.
+    # Paper σ̃=0.2 on MuJoCo continuous control;
+    # 0.1 is half-paper, picked for tighter
+    # robotic-arm action-space tolerance. Earlier
+    # 0.02 (matching exploration_sigma) was way
+    # too narrow — covered only ~0.5° per joint,
+    # missed real Q-spike widths and contributed
+    # to the Q explosion seen in v2_widened runs.
+    target_noise_clip: float = 0.5  # TD3 target noise clip: ε̃ clamped to [-c, c].
+    # Paper default: 0.5.
     # When True, the actor's exploration noise is sampled ONCE per chunk
     # and broadcast across all C frames (shape [B, 1, A] → [B, C, A]).
     # The result is a slow chunk-level drift instead of per-frame
@@ -94,9 +94,9 @@ class RLTConfig:
     # distributions in the replay buffer (UTD batches converge fast
     # though, so the impact decays within ~10 episodes).
     shared_noise_per_chunk: bool = True
-    ref_action_dropout: float = 0.5       # probability of zeroing reference chunk
-    utd_ratio: int = 5                    # gradient updates per new transition
-    subsample_stride: int = 2             # stride for replay buffer subsampling
+    ref_action_dropout: float = 0.5  # probability of zeroing reference chunk
+    utd_ratio: int = 5  # gradient updates per new transition
+    subsample_stride: int = 2  # stride for replay buffer subsampling
     # Global-norm clip on the critic gradient before opt.step(). Caps update
     # magnitude without cancelling direction. SB3's TD3 default is 10; Ville's
     # reproduction uses 20 (paired with 4 critics). We start at 10 as a
@@ -128,10 +128,10 @@ class RLTConfig:
     abort_reward: float = -1.0
 
     # --- Replay buffer ---
-    replay_capacity: int = 200_000        # max transitions (~1.2GB)
+    replay_capacity: int = 200_000  # max transitions (~1.2GB)
 
     # --- Warmup ---
-    warmup_episodes: int = 10             # VLA executes, actor/critic train on VLA data
+    warmup_episodes: int = 10  # VLA executes, actor/critic train on VLA data
 
     def is_warmup(self, episode: int) -> bool:
         """True when the 0-indexed episode is part of warmup.

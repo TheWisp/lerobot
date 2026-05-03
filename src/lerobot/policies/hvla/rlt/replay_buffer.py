@@ -97,8 +97,7 @@ class ReplayBuffer:
         """
         with self._lock:
             assert 0 <= target_size <= self.size, (
-                f"truncate target_size={target_size} out of bounds "
-                f"[0, {self.size}]"
+                f"truncate target_size={target_size} out of bounds [0, {self.size}]"
             )
             assert self.size < self.capacity or target_size == self.size, (
                 "ReplayBuffer.truncate is unsafe once the ring buffer "
@@ -132,27 +131,32 @@ class ReplayBuffer:
         """Save buffer contents to disk. Atomic via tmp+rename so a
         crash mid-write can't leave a torn file at ``path``."""
         import os
+
         with self._lock:
             tmp = path + ".tmp"
-            torch.save({
-                "size": self.size,
-                "ptr": self.ptr,
-                "capacity": self.capacity,
-                "z_rl": self._z_rl[:self.capacity],
-                "state": self._state[:self.capacity],
-                "action": self._action[:self.capacity],
-                "ref": self._ref[:self.capacity],
-                "reward": self._reward[:self.capacity],
-                "next_z_rl": self._next_z_rl[:self.capacity],
-                "next_state": self._next_state[:self.capacity],
-                "next_ref": self._next_ref[:self.capacity],
-                "done": self._done[:self.capacity],
-            }, tmp)
+            torch.save(
+                {
+                    "size": self.size,
+                    "ptr": self.ptr,
+                    "capacity": self.capacity,
+                    "z_rl": self._z_rl[: self.capacity],
+                    "state": self._state[: self.capacity],
+                    "action": self._action[: self.capacity],
+                    "ref": self._ref[: self.capacity],
+                    "reward": self._reward[: self.capacity],
+                    "next_z_rl": self._next_z_rl[: self.capacity],
+                    "next_state": self._next_state[: self.capacity],
+                    "next_ref": self._next_ref[: self.capacity],
+                    "done": self._done[: self.capacity],
+                },
+                tmp,
+            )
             os.replace(tmp, path)
 
     def load(self, path: str) -> None:
         """Load buffer contents from disk. Supports same or larger capacity."""
         import logging
+
         with self._lock:
             data = torch.load(path, weights_only=True)
             saved_cap = data["capacity"]
@@ -180,7 +184,9 @@ class ReplayBuffer:
             if saved_cap < self.capacity:
                 logging.getLogger(__name__).info(
                     "Replay buffer expanded: %d → %d capacity, %d transitions preserved",
-                    saved_cap, self.capacity, n,
+                    saved_cap,
+                    self.capacity,
+                    n,
                 )
 
     def __len__(self) -> int:
@@ -238,7 +244,12 @@ class TransactionalReplayBuffer:
     ):
         self._lock = threading.Lock()
         self._committed = ReplayBuffer(
-            capacity, rl_token_dim, state_dim, action_dim, chunk_length, device,
+            capacity,
+            rl_token_dim,
+            state_dim,
+            action_dim,
+            chunk_length,
+            device,
         )
         # Pending writes are a list of dicts (the kwargs that ``add``
         # was called with). One per transition. At ~6 Hz inference and

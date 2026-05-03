@@ -232,7 +232,7 @@ class SO107Leader(SOLeader):
         weak_torque = 100
         neutral_position = 50.0  # 50% open
 
-        logger.info(f"Applying weak torque limit: {weak_torque}/1000 ({weak_torque/10:.0f}%)")
+        logger.info(f"Applying weak torque limit: {weak_torque}/1000 ({weak_torque / 10:.0f}%)")
         logger.info(f"Setting gripper neutral position to: {neutral_position}%")
 
         # Set weak torque limit for gentle return
@@ -284,16 +284,15 @@ class SO107Leader(SOLeader):
         """
         if self._intervention_transition_lock:
             logger.info(
-                "SPACE ignored — intervention transition in progress. "
-                "Wait for the transition to complete."
+                "SPACE ignored — intervention transition in progress. Wait for the transition to complete."
             )
             return False
         elapsed = now - self._last_intervention_toggle_ts
         if elapsed < self._intervention_debounce_s:
             logger.info(
-                "SPACE ignored — debounce (%.0fms since last toggle, "
-                "min %.0fms).",
-                elapsed * 1000.0, self._intervention_debounce_s * 1000.0,
+                "SPACE ignored — debounce (%.0fms since last toggle, min %.0fms).",
+                elapsed * 1000.0,
+                self._intervention_debounce_s * 1000.0,
             )
             return False
         self._last_intervention_toggle_ts = now
@@ -307,6 +306,7 @@ class SO107Leader(SOLeader):
     def _start_keyboard_listener(self) -> None:
         """Start keyboard listener for intervention detection (space key)."""
         import time as _time
+
         from pynput import keyboard
 
         def on_press(key):
@@ -337,7 +337,9 @@ class SO107Leader(SOLeader):
             Dict with TeleopEvents keys indicating current intervention state.
         """
         return {
-            TeleopEvents.IS_INTERVENTION: self._intervention_active if self.config.intervention_enabled else False,
+            TeleopEvents.IS_INTERVENTION: self._intervention_active
+            if self.config.intervention_enabled
+            else False,
             TeleopEvents.TERMINATE_EPISODE: False,
             TeleopEvents.SUCCESS: False,
             TeleopEvents.RERECORD_EPISODE: False,

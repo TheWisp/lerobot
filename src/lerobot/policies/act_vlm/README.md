@@ -26,27 +26,27 @@ The S2 token is injected as the **first encoder token**, before the VAE latent �
 
 ## Files
 
-| File | Description |
-|------|-------------|
+| File                       | Description                                                                |
+| -------------------------- | -------------------------------------------------------------------------- |
 | `configuration_act_vlm.py` | Config extending ACTConfig with `s2_latent_dim`, `use_dino_backbone`, etc. |
-| `modeling_act_vlm.py` | Model with S2 projector MLP + optional DINOv2-S backbone |
-| `processor_act_vlm.py` | Pre/post processor (same as ACT; S2 latent passes through unnormalized) |
+| `modeling_act_vlm.py`      | Model with S2 projector MLP + optional DINOv2-S backbone                   |
+| `processor_act_vlm.py`     | Pre/post processor (same as ACT; S2 latent passes through unnormalized)    |
 
 Related files outside this directory:
 
-| File | Description |
-|------|-------------|
-| `scripts/extract_s2_latents.py` | Batch extraction of S2 latents from Pi0.5 server |
-| `dual_system_infer.py` | Async S2 worker + sync S1 control loop for real-time inference |
-| `src/lerobot/policies/factory.py` | Factory registration for `act_vlm` policy type |
+| File                              | Description                                                    |
+| --------------------------------- | -------------------------------------------------------------- |
+| `scripts/extract_s2_latents.py`   | Batch extraction of S2 latents from Pi0.5 server               |
+| `dual_system_infer.py`            | Async S2 worker + sync S1 control loop for real-time inference |
+| `src/lerobot/policies/factory.py` | Factory registration for `act_vlm` policy type                 |
 
 Server-side (openpi_subtask repo):
 
-| File | Description |
-|------|-------------|
-| `openpi/models/pi05.py` | `extract_prefix_latent()` — prefix encoding + mean pool |
-| `scripts/async_pi05/async_pi05_inference.py` | `extract_latent()` async method |
-| `scripts/async_pi05/async_pi05_websocket_server.py` | `"mode": "extract_latent"` endpoint |
+| File                                                | Description                                             |
+| --------------------------------------------------- | ------------------------------------------------------- |
+| `openpi/models/pi05.py`                             | `extract_prefix_latent()` — prefix encoding + mean pool |
+| `scripts/async_pi05/async_pi05_inference.py`        | `extract_latent()` async method                         |
+| `scripts/async_pi05/async_pi05_websocket_server.py` | `"mode": "extract_latent"` endpoint                     |
 
 ## Usage
 
@@ -90,9 +90,9 @@ Train with policy type `act_vlm`. Key config options:
 ```yaml
 policy:
   type: act_vlm
-  s2_latent_dim: 2048           # Must match Pi0.5 output
+  s2_latent_dim: 2048 # Must match Pi0.5 output
   s2_projector_hidden_dim: 1024
-  use_dino_backbone: false      # true for DINOv2-S (22M, ~5ms/img)
+  use_dino_backbone: false # true for DINOv2-S (22M, ~5ms/img)
   use_vae: true
   chunk_size: 100
   dim_model: 512
@@ -114,6 +114,7 @@ asyncio.run(controller.run(robot, get_observation_fn, duration_s=60))
 ```
 
 The controller manages:
+
 - **S2 worker**: async WebSocket client querying Pi0.5 at ~1Hz
 - **S1 loop**: synchronous ACTWithVLM forward pass at ~30-140Hz
 - **Thread-safe cache**: S2 latent shared between threads without blocking S1
@@ -121,14 +122,14 @@ The controller manages:
 
 ## Config reference
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `s2_latent_dim` | 2048 | Dimension of S2 latent from Pi0.5 |
-| `s2_projector_hidden_dim` | 1024 | Hidden dim of the 2-layer MLP projector |
-| `use_dino_backbone` | false | Replace ResNet18 with DINOv2-S |
-| `dino_model` | `dinov2_vits14` | DINOv2 variant (vits14 = 22M params) |
-| `dino_output_dim` | 384 | DINOv2-S output dimension |
-| `freeze_vision_backbone` | true | Freeze DINOv2 weights during training |
+| Parameter                 | Default         | Description                             |
+| ------------------------- | --------------- | --------------------------------------- |
+| `s2_latent_dim`           | 2048            | Dimension of S2 latent from Pi0.5       |
+| `s2_projector_hidden_dim` | 1024            | Hidden dim of the 2-layer MLP projector |
+| `use_dino_backbone`       | false           | Replace ResNet18 with DINOv2-S          |
+| `dino_model`              | `dinov2_vits14` | DINOv2 variant (vits14 = 22M params)    |
+| `dino_output_dim`         | 384             | DINOv2-S output dimension               |
+| `freeze_vision_backbone`  | true            | Freeze DINOv2 weights during training   |
 
 All other ACT config parameters (chunk_size, dim_model, n_heads, use_vae, etc.) are inherited and work as before.
 
@@ -144,7 +145,6 @@ All other ACT config parameters (chunk_size, dim_model, n_heads, use_vae, etc.) 
 - **Mean pooling** over last-N tokens: simpler, works well per OpenHelix findings; can upgrade to multi-token if needed
 - **Precomputed latents**: avoids needing Pi0.5 during training; pin the checkpoint and re-extract if weights change
 - **Optional DINOv2**: for when ResNet18 features aren't enough; frozen by default to keep training fast
-
 
 ## Commands
 
@@ -179,6 +179,7 @@ python ~/Documents/lerobot/scripts/extract_s2_latents.py \
 ```
 
 Training
+
 ```
 python scripts/train_act_vlm.py \
   --dataset-repo-id thewisp/cylinder_ring_assembly \
@@ -193,6 +194,7 @@ python scripts/train_act_vlm.py \
 ```
 
 Inference
+
 ```
 python dual_system_infer.py \
     --s1-checkpoint outputs/act_vlm_cylinder_ring_v4/checkpoint-80000 \

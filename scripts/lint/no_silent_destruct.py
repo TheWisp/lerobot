@@ -56,12 +56,10 @@ def check_file(path: Path) -> list[tuple[int, str]]:
     for i, line in enumerate(lines):
         # Update triple-quoted-string tracking (count occurrences on the line).
         # This is a best-effort heuristic — fine for our codebase.
-        if not in_triple_single:
-            if line.count('"""') % 2 == 1:
-                in_triple_double = not in_triple_double
-        if not in_triple_double:
-            if line.count("'''") % 2 == 1:
-                in_triple_single = not in_triple_single
+        if not in_triple_single and line.count('"""') % 2 == 1:
+            in_triple_double = not in_triple_double
+        if not in_triple_double and line.count("'''") % 2 == 1:
+            in_triple_single = not in_triple_single
 
         if in_triple_double or in_triple_single:
             continue

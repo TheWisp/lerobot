@@ -7,6 +7,7 @@ Design doc for the dataset visualization and editing tab.
 ## Core Features
 
 ### Dataset Management
+
 - Load one or more LeRobot datasets
 - Connect to HuggingFace Hub (authentication required)
 - Open local datasets (drag and drop support)
@@ -14,6 +15,7 @@ Design doc for the dataset visualization and editing tab.
 - Tree view showing multiple datasets and their episodes
 
 ### Episode Visualization
+
 - Main panel displays all episode features:
   - Camera views (multiple simultaneous video streams)
   - Actions (plotted as time series)
@@ -22,6 +24,7 @@ Design doc for the dataset visualization and editing tab.
 - Play/pause controls, click-to-seek, frame-by-frame navigation
 
 ### Episode Editing
+
 - Mark episodes as deleted (with confirmation)
 - Reorder episodes (swap)
 - Duplicate episodes
@@ -29,6 +32,7 @@ Design doc for the dataset visualization and editing tab.
 - Timeline trimming (iOS-style drag handles)
 
 ### Data Model
+
 - Source of truth: locally cached dataset files
 - In-memory working copy for edits
 - Edits are local until explicit save
@@ -60,22 +64,27 @@ Design doc for the dataset visualization and editing tab.
 ```
 
 ### Why No Sync/Merge with Hub?
+
 1. **No version control** - LeRobot datasets don't have commit history or checksums
 2. **No conflict resolution** - We can't reliably detect what changed or merge edits
 3. **Explicit is better** - User decides direction: "replace local" or "replace remote"
 4. **Simplicity** - No complex sync state to track or debug
 
 ### Dataset Opening Modes
-| Mode | Input | Behavior |
-|------|-------|----------|
-| **Open Local** | `/path/to/dataset` | Work directly on local files |
-| **Open from Hub** | `user/repo_id` | Download to local path, then work locally |
+
+| Mode              | Input              | Behavior                                  |
+| ----------------- | ------------------ | ----------------------------------------- |
+| **Open Local**    | `/path/to/dataset` | Work directly on local files              |
+| **Open from Hub** | `user/repo_id`     | Download to local path, then work locally |
 
 ### Reload Semantics
+
 **"Reload" always means re-read from local disk** — never fetches from Hub. Used after applying edits or when an external tool modifies the dataset.
 
 ### HuggingFace Hub Operations
+
 Both upload and download are **destructive** and require user confirmation:
+
 - **Download**: "Replace local dataset with version from Hub? Local changes will be lost."
 - **Upload**: "Push local dataset to Hub? Remote version will be overwritten."
 
@@ -84,6 +93,7 @@ Both upload and download are **destructive** and require user confirmation:
 ## Technical Analysis: LeRobot Dataset Format
 
 ### Dataset Structure
+
 ```
 dataset_root/
 +-- meta/
@@ -95,14 +105,16 @@ dataset_root/
 ```
 
 ### Performance Characteristics
-| Component | Load Time | Notes |
-|-----------|-----------|-------|
-| Metadata (info.json) | <10ms | Loaded once at init |
-| Episode info (parquet) | ~50ms | Memory-mapped, fast lookups |
-| Frame data (parquet) | ~1ms/frame | Memory-mapped, snappy compression |
-| **Video decode** | **50-500ms/frame** | **THE BOTTLENECK** |
+
+| Component              | Load Time          | Notes                             |
+| ---------------------- | ------------------ | --------------------------------- |
+| Metadata (info.json)   | <10ms              | Loaded once at init               |
+| Episode info (parquet) | ~50ms              | Memory-mapped, fast lookups       |
+| Frame data (parquet)   | ~1ms/frame         | Memory-mapped, snappy compression |
+| **Video decode**       | **50-500ms/frame** | **THE BOTTLENECK**                |
 
 ### Video Decoding Bottleneck
+
 - Each frame request triggers `decode_video_frames()` synchronously
 - Video containers (MP4) require seeking to keyframes (every 1-2s) and decoding forward
 - torchcodec: 50-100ms (preferred, GPU support); pyav: 200-500ms (fallback)
@@ -114,6 +126,7 @@ dataset_root/
 ### Python Backend (FastAPI) + Web Frontend
 
 **Rationale:**
+
 1. Must use LeRobot Python code — no rewriting dataset logic
 2. Video decoding stays in Python — torchcodec/pyav are Python libs
 3. Web UI is best for timeline/video UX — rich ecosystem
@@ -154,6 +167,7 @@ dataset_root/
 ## API Design
 
 ### REST Endpoints
+
 ```
 GET  /api/datasets                     # List opened datasets
 POST /api/datasets                     # Open dataset (local path or HF repo_id)
@@ -182,6 +196,7 @@ POST /api/datasets/{id}/hub/upload
 ```
 
 ### WebSocket for Playback
+
 ```
 WS /ws/playback/{dataset_id}/{episode_idx}
 
@@ -221,13 +236,16 @@ class EditState:
 ## Dataset Merge Design
 
 ### Motivation
+
 Sometimes the original dataset has flaws. Rather than extending it directly, the workflow is:
 record a new dataset, then selectively merge good episodes into the original. This gives
 flexibility to cherry-pick data.
 
 ### Existing Backend
+
 `lerobot-edit-dataset --operation.type merge` calls `merge_datasets()` in `dataset_tools.py`,
 which delegates to `aggregate_datasets()` in `aggregate.py`. The pipeline:
+
 1. `validate_all_metadata()` — checks FPS, robot_type, features match
 2. `aggregate_videos()` — `shutil.copy` or ffmpeg concat (NO re-encoding, preserves HF hashes)
 3. `aggregate_data()` — merge parquet files with remapped indices
@@ -238,14 +256,18 @@ which delegates to `aggregate_datasets()` in `aggregate.py`. The pipeline:
 copy (remux only). This preserves HuggingFace upload hashes for unchanged files.
 
 ### Known Bug (Fixed, Verified)
+
 When merging datasets with multiple meta/episodes files, indices were not remapped correctly.
 Fixed with proper `meta_src_to_dst` mapping in `aggregate_metadata()`.
+
 - Single merge regression test: `tests/datasets/test_merge_regression.py`
 - Chained merge tests (A+B->C, C+D->E and triple chain A+B->C->E->G, with video and file
   rotation): `tests/datasets/test_chained_merge.py` — all pass.
 
 ### GUI UX: Merge Dialog
+
 A "Merge" button on the Data tab opens a dialog:
+
 1. Select target: always a new dataset (never mutate in-place)
 2. Select source datasets from opened datasets (checkboxes)
 3. Optionally select specific episodes from each source (checkbox list)
@@ -257,6 +279,7 @@ Episode ordering: append source episodes in order (A's episodes, then B's). No d
 (would force video recompression).
 
 ### Integrity Safeguards
+
 1. **Pre-merge validation panel** — green/red checks for FPS, robot_type, features
 2. **Always merge to new dataset** — never mutate existing datasets
 3. **Post-merge integrity check** — verify:
@@ -267,6 +290,7 @@ Episode ordering: append source episodes in order (A's episodes, then B's). No d
 4. **Diff summary before commit** — "N episodes from A, M from B -> new dataset C"
 
 ### Episode Selection (Partial Merge)
+
 For selecting specific episodes (not whole datasets): the user picks episodes via checkboxes,
 backend creates a filtered view (similar to virtual edits), and passes only selected episodes
 to the merge pipeline.
@@ -276,12 +300,14 @@ to the merge pipeline.
 ## Future Features
 
 ### 3D Robot Visualization (URDF-based)
+
 - Load robot URDF, render synchronized with timeline
 - Display current joint positions from `observation.state`
 - Overlay commanded actions from `action`
 - Use case: verify camera-to-robot time alignment, debug teleop latency
 
 ### Optional Tauri Wrapper
+
 Wrap web UI in Tauri for native desktop feel without changing code.
 
 ---

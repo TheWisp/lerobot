@@ -29,7 +29,6 @@ Usage:
 
 import argparse
 import json
-import os
 import shutil
 from pathlib import Path
 
@@ -72,10 +71,7 @@ def migrate_run(run_dir: Path, dry_run: bool = False):
         print(f"\n  Migrating {ckpt.name}:")
 
         # Target location (may need to move into checkpoints/)
-        if needs_wrapper:
-            target_dir = run_dir / "checkpoints" / ckpt.name
-        else:
-            target_dir = ckpt
+        target_dir = run_dir / "checkpoints" / ckpt.name if needs_wrapper else ckpt
 
         pretrained_dir = target_dir / "pretrained_model"
         training_state_dir = target_dir / "training_state"
@@ -129,7 +125,7 @@ def migrate_run(run_dir: Path, dry_run: bool = False):
             "dino_model": "dinov2_vits14",
         }
         config_path = pretrained_dir / "config.json"
-        print(f"    Write config.json")
+        print("    Write config.json")
         if not dry_run:
             config_path.write_text(json.dumps(config, indent=2))
 
@@ -142,7 +138,7 @@ def migrate_run(run_dir: Path, dry_run: bool = False):
         opt_src = target_dir / "optimizer.pt"
         opt_dst = training_state_dir / "optimizer.pt"
         if opt_src.exists():
-            print(f"    Move optimizer.pt → training_state/optimizer.pt")
+            print("    Move optimizer.pt → training_state/optimizer.pt")
             if not dry_run:
                 # safe-destruct: explicit migration script
                 shutil.move(str(opt_src), str(opt_dst))
@@ -175,7 +171,9 @@ def migrate_run(run_dir: Path, dry_run: bool = False):
 def main():
     parser = argparse.ArgumentParser(description="Migrate legacy HVLA checkpoints to standard format")
     parser.add_argument("run_dir", help="Path to HVLA training run directory")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would be done without making changes"
+    )
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir)

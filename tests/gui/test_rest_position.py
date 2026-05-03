@@ -1,12 +1,10 @@
 """Tests for the rest position recording and playback module."""
 
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from lerobot.robots.rest_position import move_to_rest_position, record_rest_position
-
 
 # ============================================================================
 # Helpers
@@ -27,7 +25,7 @@ def _make_mock_robot(motor_positions: dict[str, float], action_keys: list[str] |
 
     if action_keys is None:
         action_keys = list(motor_positions.keys())
-    robot.action_features = {k: float for k in action_keys}
+    robot.action_features = dict.fromkeys(action_keys, float)
 
     # Track send_action calls
     robot.sent_actions = []
@@ -45,11 +43,13 @@ class TestRecordRestPosition:
     """Tests for snapshotting current joint positions."""
 
     def test_basic_recording(self):
-        robot = _make_mock_robot({
-            "shoulder_pan.pos": 10.0,
-            "shoulder_lift.pos": -25.3,
-            "gripper.pos": 50.0,
-        })
+        robot = _make_mock_robot(
+            {
+                "shoulder_pan.pos": 10.0,
+                "shoulder_lift.pos": -25.3,
+                "gripper.pos": 50.0,
+            }
+        )
 
         result = record_rest_position(robot)
 
@@ -100,12 +100,14 @@ class TestRecordRestPosition:
 
     def test_bimanual_prefixed_keys(self):
         """Bimanual robots have left_/right_ prefixed keys — should work transparently."""
-        robot = _make_mock_robot({
-            "left_shoulder_pan.pos": 5.0,
-            "left_gripper.pos": 30.0,
-            "right_shoulder_pan.pos": -5.0,
-            "right_gripper.pos": 70.0,
-        })
+        robot = _make_mock_robot(
+            {
+                "left_shoulder_pan.pos": 5.0,
+                "left_gripper.pos": 30.0,
+                "right_shoulder_pan.pos": -5.0,
+                "right_gripper.pos": 70.0,
+            }
+        )
 
         result = record_rest_position(robot)
 
@@ -134,8 +136,8 @@ class TestMoveToRestPosition:
 
         # First step: alpha = 1/10 = 0.1
         first = robot.sent_actions[0]
-        assert abs(first["a.pos"] - 1.0) < 1e-6   # 0.0 * 0.9 + 10.0 * 0.1
-        assert abs(first["b.pos"] - 90.0) < 1e-6   # 100.0 * 0.9 + 0.0 * 0.1
+        assert abs(first["a.pos"] - 1.0) < 1e-6  # 0.0 * 0.9 + 10.0 * 0.1
+        assert abs(first["b.pos"] - 90.0) < 1e-6  # 100.0 * 0.9 + 0.0 * 0.1
 
         # Last step: alpha = 1.0 → exactly at target
         last = robot.sent_actions[-1]
@@ -215,5 +217,5 @@ class TestMoveToRestPosition:
         # 5 steps: alpha = 0.2, 0.4, 0.6, 0.8, 1.0
         expected = [20.0, 40.0, 60.0, 80.0, 100.0]
         actual = [a["a.pos"] for a in robot.sent_actions]
-        for exp, act in zip(expected, actual):
+        for exp, act in zip(expected, actual, strict=False):
             assert abs(exp - act) < 1e-6

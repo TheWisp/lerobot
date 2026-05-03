@@ -3,11 +3,12 @@
 Verifies that _create_recording_dataset and _add_frame_to_dataset
 produce correct dataset structure without requiring GPU or robot hardware.
 """
-import pytest
-import numpy as np
+
 import shutil
-from pathlib import Path
 from unittest.mock import MagicMock
+
+import numpy as np
+import pytest
 
 
 @pytest.fixture
@@ -18,16 +19,26 @@ def mock_robot():
     robot.robot_type = "biso107"
 
     joint_names = [
-        "left_shoulder_pan.pos", "left_shoulder_lift.pos", "left_elbow_flex.pos",
-        "left_forearm_roll.pos", "left_wrist_flex.pos", "left_wrist_roll.pos", "left_gripper.pos",
-        "right_shoulder_pan.pos", "right_shoulder_lift.pos", "right_elbow_flex.pos",
-        "right_forearm_roll.pos", "right_wrist_flex.pos", "right_wrist_roll.pos", "right_gripper.pos",
+        "left_shoulder_pan.pos",
+        "left_shoulder_lift.pos",
+        "left_elbow_flex.pos",
+        "left_forearm_roll.pos",
+        "left_wrist_flex.pos",
+        "left_wrist_roll.pos",
+        "left_gripper.pos",
+        "right_shoulder_pan.pos",
+        "right_shoulder_lift.pos",
+        "right_elbow_flex.pos",
+        "right_forearm_roll.pos",
+        "right_wrist_flex.pos",
+        "right_wrist_roll.pos",
+        "right_gripper.pos",
     ]
     # action_features: joint_name -> float
-    robot.action_features = {name: float for name in joint_names}
+    robot.action_features = dict.fromkeys(joint_names, float)
     # observation_features: joints + cameras (tuple = image shape)
     robot.observation_features = {
-        **{name: float for name in joint_names},
+        **dict.fromkeys(joint_names, float),
         "front": (480, 640, 3),
         "top": (480, 640, 3),
     }
@@ -85,9 +96,9 @@ class TestCreateRecordingDataset:
         robot.__class__.__name__ = "SO100Follower"
         robot.robot_type = "so100"
         joint_names = [f"joint_{i}.pos" for i in range(7)]
-        robot.action_features = {name: float for name in joint_names}
+        robot.action_features = dict.fromkeys(joint_names, float)
         robot.observation_features = {
-            **{name: float for name in joint_names},
+            **dict.fromkeys(joint_names, float),
             "camera": (224, 224, 3),
         }
 

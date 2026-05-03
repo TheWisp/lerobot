@@ -29,6 +29,7 @@ from lerobot.utils.constants import PRETRAINED_MODEL_DIR
 
 def handle_wandb_errors(func):
     """Decorator to catch and log wandb errors without breaking the pipeline."""
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
@@ -38,6 +39,7 @@ def handle_wandb_errors(func):
             logging.error(colored(f"{'=' * 80}\n{error_msg}\n{'=' * 80}", "red", attrs=["bold"]))
             print(colored(f"\nWARNING: {error_msg}", "red", attrs=["bold"]))
             print(colored("Training will continue, but this operation was not logged to WandB.\n", "yellow"))
+
     return wrapper
 
 

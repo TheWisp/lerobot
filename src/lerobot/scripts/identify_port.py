@@ -97,7 +97,7 @@ def main():
     for port in ports:
         if test_port(port):
             while True:
-                response = input(f"\nWhich arm moved? [LL/RL/LF/RF] (or 'skip'): ").strip().upper()
+                response = input("\nWhich arm moved? [LL/RL/LF/RF] (or 'skip'): ").strip().upper()
                 if response in ["LL", "RL", "LF", "RF"]:
                     port_mapping[response] = port
                     print(f"  ✓ Recorded: {response} -> {port}")

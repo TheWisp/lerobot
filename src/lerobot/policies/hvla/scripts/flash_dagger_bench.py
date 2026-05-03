@@ -27,13 +27,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
 
 from lerobot.policies.hvla.scripts.flash_dagger_lora import apply_lora_to_decoder
 from lerobot.policies.hvla.scripts.flash_dagger_phase_a_rank import (
     compute_per_sample_loss,
-    override_norm_stats,
-    patch_episode_data_index,
 )
 from lerobot.policies.hvla.scripts.flash_dagger_phase_b import (
     build_dataset,
@@ -110,8 +107,9 @@ def benchmark_one(policy, config, batch_gpu, n_steps: int, lr: float) -> dict:
 
 def build_policy_with_config(state_dict_path, config, device, mode: str, rank: int):
     """Create a fresh policy and apply the requested training mode."""
-    from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
     import safetensors.torch as sft
+
+    from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
 
     policy = FlowMatchingS1Policy(config).to(device)
     state_dict = sft.load_file(str(state_dict_path))
@@ -181,14 +179,14 @@ def main():
 
     # Build one batch by sampling indices, collating, moving to GPU
     import random as _random
+
     _random.seed(0)
     chunk = _random.sample(train_idx, args.batch_size)
     samples = [eval_ds[i] for i in chunk]
     collate = make_collate_fn(config)
     batch = collate(samples)
     batch_gpu = {
-        k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
-        for k, v in batch.items()
+        k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()
     }
     logger.info("Pre-cached batch on GPU (batch_size=%d)", args.batch_size)
 
@@ -210,17 +208,25 @@ def main():
             stats = benchmark_one(policy, config, batch_gpu, args.steps, args.lr)
         except torch.cuda.OutOfMemoryError as e:
             logger.warning("  OOM: %s", e)
-            stats = {"trainable_M": 0, "step_ms_median": float("nan"),
-                     "peak_mem_MB": float("nan"),
-                     "optim_state_MB": float("nan"), "delta_MB_bf16": float("nan")}
+            stats = {
+                "trainable_M": 0,
+                "step_ms_median": float("nan"),
+                "peak_mem_MB": float("nan"),
+                "optim_state_MB": float("nan"),
+                "delta_MB_bf16": float("nan"),
+            }
         stats["config"] = name
         stats["mode"] = mode
         stats["rank"] = r
         logger.info(
             "  trainable=%.2fM | step=%.1fms (p10=%.1f, p90=%.1f) | peak_mem=%.0fMB | optim=%.0fMB | delta=%.1fMB",
-            stats["trainable_M"], stats["step_ms_median"],
-            stats.get("step_ms_p10", 0), stats.get("step_ms_p90", 0),
-            stats["peak_mem_MB"], stats["optim_state_MB"], stats["delta_MB_bf16"],
+            stats["trainable_M"],
+            stats["step_ms_median"],
+            stats.get("step_ms_p10", 0),
+            stats.get("step_ms_p90", 0),
+            stats["peak_mem_MB"],
+            stats["optim_state_MB"],
+            stats["delta_MB_bf16"],
         )
         rows.append(stats)
 
@@ -228,8 +234,18 @@ def main():
         torch.cuda.empty_cache()
 
     # Write CSV
-    keys = ["config", "mode", "rank", "trainable_M", "step_ms_median",
-            "step_ms_p10", "step_ms_p90", "peak_mem_MB", "optim_state_MB", "delta_MB_bf16"]
+    keys = [
+        "config",
+        "mode",
+        "rank",
+        "trainable_M",
+        "step_ms_median",
+        "step_ms_p10",
+        "step_ms_p90",
+        "peak_mem_MB",
+        "optim_state_MB",
+        "delta_MB_bf16",
+    ]
     with open(output_csv, "w") as f:
         f.write(",".join(keys) + "\n")
         for r in rows:
@@ -248,8 +264,12 @@ def main():
     for r in rows:
         logger.info(
             "  %-15s | %7.2fM | %6.1f  | %5.0fMB  | %4.0fMB | %.1fMB",
-            r["config"], r["trainable_M"], r["step_ms_median"],
-            r["peak_mem_MB"], r["optim_state_MB"], r["delta_MB_bf16"],
+            r["config"],
+            r["trainable_M"],
+            r["step_ms_median"],
+            r["peak_mem_MB"],
+            r["optim_state_MB"],
+            r["delta_MB_bf16"],
         )
 
 

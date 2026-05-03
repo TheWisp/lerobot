@@ -31,7 +31,7 @@ from torch.utils.data import DataLoader
 
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
-from lerobot.policies.hvla.s1.protocol import S2_LATENT_KEY, S2_AGE_KEY
+from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         lerobot_dataset,
-        s2_latents: np.ndarray,      # [N_frames, 2048]
+        s2_latents: np.ndarray,  # [N_frames, 2048]
         chunk_size: int = 50,
         max_delay_seconds: float = 0.15,
         fps: float = 30.0,
@@ -76,6 +76,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         # Preload all actions into memory (10MB for 186k × 14 float32)
         # Avoids calling dataset[i] 50 times per sample for chunk construction
         import logging as _log
+
         _log.getLogger(__name__).info("Preloading actions for chunk construction...")
         if hasattr(lerobot_dataset, "hf_dataset") and "action" in lerobot_dataset.hf_dataset.column_names:
             action_data = lerobot_dataset.hf_dataset["action"]
@@ -83,12 +84,13 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                 self._all_actions = torch.stack(list(action_data)).float()
             else:
                 import numpy as _np
+
                 self._all_actions = torch.tensor(_np.array(action_data), dtype=torch.float32)
         else:
             # Fallback: load one by one
-            self._all_actions = torch.stack([
-                lerobot_dataset[i]["action"] for i in range(len(lerobot_dataset))
-            ])
+            self._all_actions = torch.stack(
+                [lerobot_dataset[i]["action"] for i in range(len(lerobot_dataset))]
+            )
         _log.getLogger(__name__).info("Actions preloaded: %s", self._all_actions.shape)
 
         # Compute normalization stats (z-score: (x - mean) / std)
@@ -96,20 +98,26 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         self.action_std = self._all_actions.std(dim=0).clamp(min=1e-6)  # [action_dim]
         _log.getLogger(__name__).info(
             "Action norm stats: mean=[%.1f..%.1f] std=[%.1f..%.1f]",
-            self.action_mean.min(), self.action_mean.max(),
-            self.action_std.min(), self.action_std.max(),
+            self.action_mean.min(),
+            self.action_mean.max(),
+            self.action_std.min(),
+            self.action_std.max(),
         )
 
         # Normalize all preloaded actions
         self._all_actions = (self._all_actions - self.action_mean) / self.action_std
 
         # Preload and normalize states too
-        if hasattr(lerobot_dataset, "hf_dataset") and "observation.state" in lerobot_dataset.hf_dataset.column_names:
+        if (
+            hasattr(lerobot_dataset, "hf_dataset")
+            and "observation.state" in lerobot_dataset.hf_dataset.column_names
+        ):
             state_data = lerobot_dataset.hf_dataset["observation.state"]
             if isinstance(state_data[0], torch.Tensor):
                 self._all_states = torch.stack(list(state_data)).float()
             else:
                 import numpy as _np
+
                 self._all_states = torch.tensor(_np.array(state_data), dtype=torch.float32)
             self.state_mean = self._all_states.mean(dim=0)
             self.state_std = self._all_states.std(dim=0).clamp(min=1e-6)
@@ -150,11 +158,14 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         # --- Resize images if needed ---
         if self.resize_to is not None and self.image_keys:
             import torchvision.transforms.functional as TF
+
             for key in self.image_keys:
                 if key in sample and isinstance(sample[key], torch.Tensor):
                     sample[key] = TF.resize(
-                        sample[key], list(self.resize_to),
-                        interpolation=TF.InterpolationMode.BILINEAR, antialias=True,
+                        sample[key],
+                        list(self.resize_to),
+                        interpolation=TF.InterpolationMode.BILINEAR,
+                        antialias=True,
                     )
 
         return sample
@@ -162,9 +173,10 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
 
 def train(args):
     """Main training loop."""
+    import sys
+
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-    import sys
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
     logging.getLogger().handlers[0].stream = sys.stderr  # ensure unbuffered
 
@@ -189,12 +201,18 @@ def train(args):
         num_decoder_layers=args.num_decoder_layers,
     )
     if args.resize_images:
-        h, w = [int(x) for x in args.resize_images.split("x")]
-        config.image_features = {k: h for k in config.image_features}
+        h, w = (int(x) for x in args.resize_images.split("x"))
+        config.image_features = dict.fromkeys(config.image_features, h)
 
-    logger.info("Config: chunk=%d, hidden=%d, dec_layers=%d, rtc_max_delay=%d, rtc_drop=%.2f, denoise_steps=%d",
-                config.chunk_size, config.hidden_dim, config.num_decoder_layers,
-                config.rtc_max_delay, config.rtc_drop_prob, config.num_inference_steps)
+    logger.info(
+        "Config: chunk=%d, hidden=%d, dec_layers=%d, rtc_max_delay=%d, rtc_drop=%.2f, denoise_steps=%d",
+        config.chunk_size,
+        config.hidden_dim,
+        config.num_decoder_layers,
+        config.rtc_max_delay,
+        config.rtc_drop_prob,
+        config.num_inference_steps,
+    )
 
     # Load dataset
     logger.info("Loading dataset: %s", args.dataset_repo_id)
@@ -212,7 +230,7 @@ def train(args):
     # Parse resize
     resize_to = None
     if args.resize_images:
-        h, w = [int(x) for x in args.resize_images.split("x")]
+        h, w = (int(x) for x in args.resize_images.split("x"))
         resize_to = (h, w)
 
     # Wrap dataset
@@ -225,8 +243,12 @@ def train(args):
         image_keys=list(config.image_features.keys()),
     )
     dataloader = DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.num_workers, pin_memory=True, drop_last=True,
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        drop_last=True,
     )
 
     # Build model
@@ -239,17 +261,24 @@ def train(args):
 
     total_params = sum(p.numel() for p in policy.parameters())
     trainable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
-    logger.info("Total params: %d (%.1fM) | Trainable: %d (%.1fM)",
-                total_params, total_params / 1e6, trainable_params, trainable_params / 1e6)
+    logger.info(
+        "Total params: %d (%.1fM) | Trainable: %d (%.1fM)",
+        total_params,
+        total_params / 1e6,
+        trainable_params,
+        trainable_params / 1e6,
+    )
 
     # Optimizer with cosine LR schedule (matching Pi0/SmolVLA)
     optimizer = torch.optim.AdamW(
         [p for p in policy.parameters() if p.requires_grad],
-        lr=config.lr, weight_decay=config.weight_decay,
+        lr=config.lr,
+        weight_decay=config.weight_decay,
     )
 
     # Cosine decay: warmup → peak_lr → decay to lr_decay
     import math
+
     def lr_lambda(step):
         if step < config.warmup_steps:
             return step / max(config.warmup_steps, 1)  # linear warmup
@@ -276,6 +305,7 @@ def train(args):
 
         if model_path.exists():
             import safetensors.torch as sft
+
             state_dict = sft.load_file(str(model_path))
             policy.load_state_dict(state_dict, strict=False)
             logger.info("Resumed model from %s", model_path)
@@ -299,8 +329,12 @@ def train(args):
     use_amp = device.type == "cuda"
     if use_amp:
         logger.info("Using bf16 mixed precision + TF32 matmul")
-    logger.info("LR schedule: warmup %d → peak %.1e → cosine decay → %.1e",
-                config.warmup_steps, config.lr, config.lr_decay)
+    logger.info(
+        "LR schedule: warmup %d → peak %.1e → cosine decay → %.1e",
+        config.warmup_steps,
+        config.lr,
+        config.lr_decay,
+    )
 
     # Save norm stats for inference (must denormalize model output)
     norm_stats = {
@@ -313,6 +347,7 @@ def train(args):
 
     def save_checkpoint(step):
         import json
+
         import safetensors.torch as sft
 
         ckpts_dir = output_dir / "checkpoints"
@@ -327,7 +362,7 @@ def train(args):
 
         # Model weights
         sft.save_file(
-            {k: v for k, v in policy.state_dict().items()},
+            dict(policy.state_dict().items()),
             str(pretrained_dir / "model.safetensors"),
         )
 
@@ -370,11 +405,14 @@ def train(args):
         (pretrained_dir / "train_config.json").write_text(json.dumps(train_config, indent=2))
 
         # Training state (optimizer, scheduler, step)
-        torch.save({
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
-            "step": step,
-        }, str(training_state_dir / "optimizer.pt"))
+        torch.save(
+            {
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "step": step,
+            },
+            str(training_state_dir / "optimizer.pt"),
+        )
         (training_state_dir / "training_step.json").write_text(json.dumps({"step": step}))
 
         # Update 'last' symlink
@@ -421,7 +459,12 @@ def train(args):
             cur_lr = optimizer.param_groups[0]["lr"]
             logger.info(
                 "step %d/%d | loss: %.4f | flow_loss: %.4f | lr: %.1e | %.0fms",
-                step, args.steps, loss.item(), loss_dict["flow_loss"], cur_lr, elapsed,
+                step,
+                args.steps,
+                loss.item(),
+                loss_dict["flow_loss"],
+                cur_lr,
+                elapsed,
             )
 
         if step % args.save_freq == 0:
@@ -435,29 +478,48 @@ def train(args):
 def main():
     parser = argparse.ArgumentParser(description="Train Flow Matching S1 with Training-Time RTC")
     parser.add_argument("--dataset-repo-id", required=True)
-    parser.add_argument("--s2-latent-path", default=None,
-                        help="Path to S2 latents .npy file. If omitted, S1 trains without S2 conditioning.")
+    parser.add_argument(
+        "--s2-latent-path",
+        default=None,
+        help="Path to S2 latents .npy file. If omitted, S1 trains without S2 conditioning.",
+    )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--steps", type=int, default=100000)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--save-freq", type=int, default=20000)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--chunk-size", type=int, default=50,
-                        help="Action horizon (50 at 30Hz = 1.67s)")
-    parser.add_argument("--num-inference-steps", type=int, default=15,
-                        help="Denoising steps at inference (15 → ~130ms, expected_d≈4 at 30fps)")
-    parser.add_argument("--rtc-max-delay", type=int, default=6,
-                        help="Max simulated delay in frames for training-time RTC (15 denoise steps ≈ 5 frames delay)")
-    parser.add_argument("--rtc-drop-prob", type=float, default=0.2,
-                        help="Probability of no prefix (simulates first chunk)")
-    parser.add_argument("--max-delay", type=float, default=0.0,
-                        help="Max S2 latent delay in seconds (0 = always use aligned latent)")
+    parser.add_argument("--chunk-size", type=int, default=50, help="Action horizon (50 at 30Hz = 1.67s)")
+    parser.add_argument(
+        "--num-inference-steps",
+        type=int,
+        default=15,
+        help="Denoising steps at inference (15 → ~130ms, expected_d≈4 at 30fps)",
+    )
+    parser.add_argument(
+        "--rtc-max-delay",
+        type=int,
+        default=6,
+        help="Max simulated delay in frames for training-time RTC (15 denoise steps ≈ 5 frames delay)",
+    )
+    parser.add_argument(
+        "--rtc-drop-prob", type=float, default=0.2, help="Probability of no prefix (simulates first chunk)"
+    )
+    parser.add_argument(
+        "--max-delay",
+        type=float,
+        default=0.0,
+        help="Max S2 latent delay in seconds (0 = always use aligned latent)",
+    )
     parser.add_argument("--resize-images", type=str, default="224x224")
     parser.add_argument("--hidden-dim", type=int, default=768)
     parser.add_argument("--num-decoder-layers", type=int, default=6)
-    parser.add_argument("--resume", type=str, default=None,
-                        help="Resume from checkpoint dir (e.g., outputs/flow_s1_hvla_v2/checkpoint-5000)")
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Resume from checkpoint dir (e.g., outputs/flow_s1_hvla_v2/checkpoint-5000)",
+    )
     args = parser.parse_args()
     train(args)
 

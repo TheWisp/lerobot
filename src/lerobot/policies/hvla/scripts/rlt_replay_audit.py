@@ -9,6 +9,7 @@ Answers questions like:
 Usage:
     python src/lerobot/policies/hvla/scripts/rlt_replay_audit.py outputs/rlt_online_v2_widened/latest
 """
+
 from __future__ import annotations
 
 import sys
@@ -77,7 +78,7 @@ def main() -> int:
     # critic and running forward. This gives us a sanity check on Q range.
     if critic_path.exists() and actor_path.exists():
         try:
-            from lerobot.policies.hvla.rlt.actor_critic import RLTActor, RLTCritic
+            from lerobot.policies.hvla.rlt.actor_critic import RLTCritic
             from lerobot.policies.hvla.rlt.config import RLTConfig
         except Exception as e:
             print(f"\n(skipping critic eval — import failed: {e})")
@@ -90,7 +91,9 @@ def main() -> int:
         cfg = RLTConfig(rl_token_dim=rl_token_dim)
         action_dim = action_total // cfg.rl_chunk_length
         if action_dim * cfg.rl_chunk_length != action_total:
-            print(f"  action_dim mismatch: total={action_total} not divisible by C={cfg.rl_chunk_length}; skipping Q eval")
+            print(
+                f"  action_dim mismatch: total={action_total} not divisible by C={cfg.rl_chunk_length}; skipping Q eval"
+            )
             return 0
 
         critic = RLTCritic(cfg, state_dim, action_dim)
@@ -112,8 +115,8 @@ def main() -> int:
             return torch.stack([q.squeeze(-1) for q in q_list]).min(dim=0).values
 
         # Group indices
-        idx_pos1 = [i for i, (r, d) in enumerate(zip(reward, done)) if r > 0.5 and d > 0.5]
-        idx_neg1 = [i for i, (r, d) in enumerate(zip(reward, done)) if r < -0.5 and d > 0.5]
+        idx_pos1 = [i for i, (r, d) in enumerate(zip(reward, done, strict=False)) if r > 0.5 and d > 0.5]
+        idx_neg1 = [i for i, (r, d) in enumerate(zip(reward, done, strict=False)) if r < -0.5 and d > 0.5]
         idx_nonterm = [i for i, d in enumerate(done) if d < 0.5][:200]
         idx_human = torch.nonzero(delta < 1e-6, as_tuple=False).squeeze(-1).tolist()[:200]
 
@@ -122,8 +125,8 @@ def main() -> int:
         for label, idx_list in [
             (f"terminal +1 ({len(idx_pos1)})", idx_pos1),
             (f"terminal -1 ({len(idx_neg1)})", idx_neg1),
-            (f"non-terminal r=0 (sample 200)", idx_nonterm),
-            (f"action==ref ie intervention or warmup (sample 200)", idx_human),
+            ("non-terminal r=0 (sample 200)", idx_nonterm),
+            ("action==ref ie intervention or warmup (sample 200)", idx_human),
         ]:
             q = q_on(idx_list)
             if q is None or q.numel() == 0:

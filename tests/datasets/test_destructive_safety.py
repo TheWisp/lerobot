@@ -6,7 +6,6 @@ edge cases where a bad input could destroy more than intended.
 
 from __future__ import annotations
 
-import re
 from unittest.mock import patch
 
 import pytest

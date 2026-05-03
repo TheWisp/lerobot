@@ -1,7 +1,7 @@
 """Tests for SharedLatentCache IPC (latent + subtask + confidence)."""
 
-import torch
 import pytest
+import torch
 
 from lerobot.policies.hvla.ipc import SharedLatentCache
 

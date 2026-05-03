@@ -88,13 +88,9 @@ def prepare_batch(engine, frames: list[dict], lerobot_image_keys: list[str], hig
         return obs_list[0]
 
     return SimpleObservation(
-        images={
-            k: torch.cat([o.images[k] for o in obs_list], dim=0)
-            for k in obs_list[0].images
-        },
+        images={k: torch.cat([o.images[k] for o in obs_list], dim=0) for k in obs_list[0].images},
         image_masks={
-            k: torch.cat([o.image_masks[k] for o in obs_list], dim=0)
-            for k in obs_list[0].image_masks
+            k: torch.cat([o.image_masks[k] for o in obs_list], dim=0) for k in obs_list[0].image_masks
         },
         state=torch.cat([o.state for o in obs_list], dim=0),
         tokenized_prompt=torch.cat([o.tokenized_prompt for o in obs_list], dim=0),
@@ -160,7 +156,7 @@ def extract_latents(
         if idx % 100 == 0 or idx == n_frames:
             avg_ms = np.mean(timings[-20:])
             eta_s = avg_ms * (n_frames - idx) / 1000
-            print(f"  [{idx}/{n_frames}] {avg_ms:.1f}ms/frame | ETA: {eta_s/60:.1f}min")
+            print(f"  [{idx}/{n_frames}] {avg_ms:.1f}ms/frame | ETA: {eta_s / 60:.1f}min")
 
         if idx % 5000 == 0:
             partial = np.stack(latents, axis=0)
@@ -186,7 +182,9 @@ def main():
     )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument(
-        "--batch-size", type=int, default=8,
+        "--batch-size",
+        type=int,
+        default=8,
         help="Frames per GPU forward pass. Increase if VRAM allows (16+ on 24GB).",
     )
     args = parser.parse_args()

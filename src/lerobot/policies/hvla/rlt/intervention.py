@@ -46,15 +46,13 @@ class InterventionRecorder:
 
     def __init__(
         self,
-        replay: Any,          # ReplayBuffer — typed Any to avoid circular import
-        policy: Any,          # S1 policy (for normalization stats)
+        replay: Any,  # ReplayBuffer — typed Any to avoid circular import
+        policy: Any,  # S1 policy (for normalization stats)
         device: torch.device,
         chunk_length: int,
         joint_names: list[str],
     ):
-        assert chunk_length > 0, (
-            f"chunk_length must be positive, got {chunk_length}"
-        )
+        assert chunk_length > 0, f"chunk_length must be positive, got {chunk_length}"
         assert len(joint_names) > 0, "joint_names must not be empty"
         self._replay = replay
         self._policy = policy
@@ -118,12 +116,16 @@ class InterventionRecorder:
             logger.warning(
                 "RLT: intervention ended — %d frames, %d chunks stored, "
                 "expected %d. Some intervention data was dropped!",
-                frames, stored, expected,
+                frames,
+                stored,
+                expected,
             )
         else:
             logger.info(
-                "RLT: intervention ended — %d frames, %d chunks stored "
-                "(expected %d)", frames, stored, expected,
+                "RLT: intervention ended — %d frames, %d chunks stored (expected %d)",
+                frames,
+                stored,
+                expected,
             )
 
     def on_frame(
@@ -190,13 +192,13 @@ class InterventionRecorder:
 
     def _extract_state(self, obs: dict) -> Tensor:
         state_np = np.array(
-            [float(obs[j]) for j in self._joint_names], dtype=np.float32,
+            [float(obs[j]) for j in self._joint_names],
+            dtype=np.float32,
         )
         state_t = torch.from_numpy(state_np).to(self._device)
         if self._policy._state_mean is not None:
-            state_t = (
-                (state_t - self._policy._state_mean.to(self._device))
-                / self._policy._state_std.to(self._device)
+            state_t = (state_t - self._policy._state_mean.to(self._device)) / self._policy._state_std.to(
+                self._device
             )
         return state_t
 
@@ -213,8 +215,7 @@ class InterventionRecorder:
         #      in on_frame). Without it, _prev_chunk would carry None
         #      tensors into a replay write — corrupting the buffer.
         assert len(self._chunk_buf) == self._C, (
-            f"flush called with {len(self._chunk_buf)} frames buffered, "
-            f"expected exactly {self._C}"
+            f"flush called with {len(self._chunk_buf)} frames buffered, expected exactly {self._C}"
         )
         assert self._snap_z_rl is not None and self._snap_state is not None, (
             "flush called without a window-start snapshot — the snapshot "
@@ -305,7 +306,8 @@ class InterventionRecorder:
                 "RLT: intervention ended with terminal r=%+.2f but no "
                 "complete C-frame chunk yet (%d frames observed); "
                 "reward signal lost.",
-                reward, self._frame_count,
+                reward,
+                self._frame_count,
             )
             return False
         assert current_z_rl is not None, (

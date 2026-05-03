@@ -24,11 +24,11 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 
-from lerobot.configs.types import FeatureType, PolicyFeature
+from lerobot.configs.types import FeatureType
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.policies.act_vlm.configuration_act_vlm import ACTWithVLMConfig
-from lerobot.policies.act_vlm.modeling_act_vlm import ACTWithVLMPolicy, S2_LATENT_KEY, S2_AGE_KEY
+from lerobot.policies.act_vlm.modeling_act_vlm import S2_AGE_KEY, S2_LATENT_KEY, ACTWithVLMPolicy
 from lerobot.policies.factory import make_pre_post_processors
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
@@ -146,9 +146,12 @@ class LeRobotDatasetWithLatents(Dataset):
 
         self._getitem_calls += 1
         if self._getitem_calls <= 5 or self._getitem_calls % 1000 == 0:
-            shapes = {k: tuple(v.shape) if hasattr(v, "shape") else type(v).__name__
-                      for k, v in item.items()}
-            delay_info = f" delay={idx - delayed_idx}frames age={age_seconds:.2f}s" if self.max_delay_frames > 0 else ""
+            shapes = {k: tuple(v.shape) if hasattr(v, "shape") else type(v).__name__ for k, v in item.items()}
+            delay_info = (
+                f" delay={idx - delayed_idx}frames age={age_seconds:.2f}s"
+                if self.max_delay_frames > 0
+                else ""
+            )
             logger.info(
                 f"[GETITEM #{self._getitem_calls}] idx={idx}{delay_info} "
                 f"inner={inner_ms:.1f}ms total={total_ms:.1f}ms | shapes={shapes}"
@@ -193,15 +196,23 @@ def main():
     parser.add_argument("--dataset-root", default=None, help="Local root override for dataset")
     parser.add_argument("--s2-latent-path", required=True, help="Path to precomputed S2 latents .npy file")
     parser.add_argument("--episodes", default=None, help="Comma-separated episode indices (default: all)")
-    parser.add_argument("--max-delay", type=float, default=0.5,
-                        help="Max S2 delay augmentation in seconds (0=disabled, default=0.5)")
+    parser.add_argument(
+        "--max-delay",
+        type=float,
+        default=0.5,
+        help="Max S2 delay augmentation in seconds (0=disabled, default=0.5)",
+    )
     parser.add_argument("--dataset-fps", type=int, default=30, help="Dataset recording FPS")
 
     # Model
     parser.add_argument("--s2-latent-dim", type=int, default=2048, help="S2 latent dimension")
     parser.add_argument("--use-dino-backbone", action="store_true", help="Use DINOv2-S instead of ResNet18")
-    parser.add_argument("--freeze-vision-backbone", action="store_true", help="Freeze vision backbone during training")
-    parser.add_argument("--resize-images", default=None, help="Resize images to HxW before forward (e.g. '224x224')")
+    parser.add_argument(
+        "--freeze-vision-backbone", action="store_true", help="Freeze vision backbone during training"
+    )
+    parser.add_argument(
+        "--resize-images", default=None, help="Resize images to HxW before forward (e.g. '224x224')"
+    )
     parser.add_argument("--use-vae", action="store_true", default=True, help="Use VAE (default: true)")
     parser.add_argument("--no-vae", dest="use_vae", action="store_false")
     parser.add_argument("--chunk-size", type=int, default=100, help="Action chunk size")
@@ -248,7 +259,7 @@ def main():
     logger.info("[INIT 1/7] Loading dataset metadata...")
     dataset_metadata = LeRobotDatasetMetadata(args.dataset_repo_id, root=args.dataset_root)
     features = dataset_to_policy_features(dataset_metadata.features)
-    logger.info(f"[INIT 1/7] DONE in {(_t()-t0)*1000:.0f}ms | fps={dataset_metadata.fps}")
+    logger.info(f"[INIT 1/7] DONE in {(_t() - t0) * 1000:.0f}ms | fps={dataset_metadata.fps}")
 
     output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
     input_features = {key: ft for key, ft in features.items() if key not in output_features}
@@ -288,7 +299,7 @@ def main():
         policy = ACTWithVLMPolicy.from_pretrained(pretrained_name_or_path=args.resume)
     else:
         policy = ACTWithVLMPolicy(cfg)
-    logger.info(f"[INIT 2/7] Policy created in {(_t()-t0)*1000:.0f}ms")
+    logger.info(f"[INIT 2/7] Policy created in {(_t() - t0) * 1000:.0f}ms")
 
     t0 = _t()
     logger.info(f"[INIT 3/7] Moving policy to {device}...")
@@ -296,7 +307,7 @@ def main():
     policy.to(device)
     if device.type == "cuda":
         torch.cuda.synchronize()
-    logger.info(f"[INIT 3/7] .to(device) done in {(_t()-t0)*1000:.0f}ms")
+    logger.info(f"[INIT 3/7] .to(device) done in {(_t() - t0) * 1000:.0f}ms")
 
     num_params = sum(p.numel() for p in policy.parameters())
     num_trainable = sum(p.numel() for p in policy.parameters() if p.requires_grad)
@@ -306,7 +317,7 @@ def main():
     t0 = _t()
     logger.info("[INIT 4/7] Creating pre/post processors...")
     preprocessor, postprocessor = make_pre_post_processors(cfg, dataset_stats=dataset_metadata.stats)
-    logger.info(f"[INIT 4/7] Processors created in {(_t()-t0)*1000:.0f}ms")
+    logger.info(f"[INIT 4/7] Processors created in {(_t() - t0) * 1000:.0f}ms")
 
     # --- Dataset ---
     delta_timestamps = {
@@ -331,7 +342,7 @@ def main():
         video_backend="pyav",
     )
     logger.info(
-        f"[INIT 5/7] LeRobotDataset ready in {(_t()-t0)*1000:.0f}ms | "
+        f"[INIT 5/7] LeRobotDataset ready in {(_t() - t0) * 1000:.0f}ms | "
         f"{dataset.num_frames} frames, {dataset.num_episodes} episodes"
     )
 
@@ -339,11 +350,14 @@ def main():
     t0 = _t()
     logger.info("[INIT 6/7] Wrapping dataset with S2 latents...")
     dataset_with_latents = LeRobotDatasetWithLatents(
-        dataset, args.s2_latent_path,
+        dataset,
+        args.s2_latent_path,
         max_delay_seconds=args.max_delay,
         fps=args.dataset_fps,
     )
-    logger.info(f"[INIT 6/7] Wrap done in {(_t()-t0)*1000:.0f}ms | {dataset_with_latents.num_frames} frames")
+    logger.info(
+        f"[INIT 6/7] Wrap done in {(_t() - t0) * 1000:.0f}ms | {dataset_with_latents.num_frames} frames"
+    )
 
     # --- Dataloader ---
     t0 = _t()
@@ -357,7 +371,9 @@ def main():
         drop_last=True,
         prefetch_factor=2 if args.num_workers > 0 else None,
     )
-    logger.info(f"[INIT 7/7] DataLoader created in {(_t()-t0)*1000:.0f}ms | {len(dataloader)} batches/epoch")
+    logger.info(
+        f"[INIT 7/7] DataLoader created in {(_t() - t0) * 1000:.0f}ms | {len(dataloader)} batches/epoch"
+    )
 
     # --- Optimizer ---
     optimizer = torch.optim.AdamW(
@@ -367,7 +383,7 @@ def main():
     )
 
     logger.info("=" * 60)
-    logger.info(f"[INIT COMPLETE] All init done. Fetching first batch...")
+    logger.info("[INIT COMPLETE] All init done. Fetching first batch...")
     logger.info("=" * 60)
 
     # --- Training loop ---
@@ -418,9 +434,7 @@ def main():
                 for key in list(batch.keys()):
                     v = batch[key]
                     if isinstance(v, torch.Tensor) and v.dim() == 4 and v.shape[1] == 3:
-                        batch[key] = F.interpolate(
-                            v, size=resize_to, mode="bilinear", align_corners=False
-                        )
+                        batch[key] = F.interpolate(v, size=resize_to, mode="bilinear", align_corners=False)
             t_pre = (_t() - t0) * 1000
 
             # --- Forward ---
@@ -486,16 +500,16 @@ def main():
 
             # Log data loading time if suspiciously slow
             if t_data > 500:
-                logger.warning(f"[SLOW DATA] step {step+1}: data load took {t_data:.0f}ms")
+                logger.warning(f"[SLOW DATA] step {step + 1}: data load took {t_data:.0f}ms")
             elif step % args.log_freq == 0:
                 logger.info(f"  data load: {t_data:.0f}ms")
 
         epoch_ms = (_t() - iter_start) * 1000
         n = max(step, 1)
         logger.info(
-            f"[EPOCH {epoch}] Done in {epoch_ms/1000:.1f}s | "
-            f"avg per step: pre={t_pre_total/n:.0f}ms fwd={t_fwd_total/n:.0f}ms "
-            f"bwd={t_bwd_total/n:.0f}ms opt={t_opt_total/n:.0f}ms data={t_data_total/max(n-1,1):.0f}ms"
+            f"[EPOCH {epoch}] Done in {epoch_ms / 1000:.1f}s | "
+            f"avg per step: pre={t_pre_total / n:.0f}ms fwd={t_fwd_total / n:.0f}ms "
+            f"bwd={t_bwd_total / n:.0f}ms opt={t_opt_total / n:.0f}ms data={t_data_total / max(n - 1, 1):.0f}ms"
         )
 
         if done:

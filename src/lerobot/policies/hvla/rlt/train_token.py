@@ -40,7 +40,6 @@ from lerobot.policies.hvla.rlt.token import (
     rl_token_reconstruction_loss,
     save_rlt_token_config,
 )
-from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
 
 logger = logging.getLogger(__name__)
@@ -124,7 +123,7 @@ def train(args):
 
     resize_to = None
     if args.resize_images:
-        h, w = [int(x) for x in args.resize_images.split("x")]
+        h, w = (int(x) for x in args.resize_images.split("x"))
         resize_to = (h, w)
 
     dataset = FlowMatchingDataset(
@@ -159,17 +158,12 @@ def train(args):
             batch = next(data_iter)
 
         # Move to device
-        batch = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
-            for k, v in batch.items()
-        }
+        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
         # Extract context tokens from frozen S1 (no grad)
         with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             if s1_config.image_features:
-                batch["observation.images"] = [
-                    batch[key] for key in s1_config.image_features
-                ]
+                batch["observation.images"] = [batch[key] for key in s1_config.image_features]
             context = s1_policy.model.encode_observations(batch)  # [B, N_ctx, D]
             context = context.float()  # cast back to fp32 for encoder-decoder
 
@@ -189,7 +183,10 @@ def train(args):
             steps_per_sec = step / elapsed
             logger.info(
                 "step %d/%d | loss=%.6f | %.1f steps/s",
-                step, rlt_config.token_train_steps, avg_loss, steps_per_sec,
+                step,
+                rlt_config.token_train_steps,
+                avg_loss,
+                steps_per_sec,
             )
             running_loss = 0.0
 
@@ -230,14 +227,20 @@ def main():
     # (currently 2+2 layers). Pass --encoder-layers 4 --decoder-layers 4
     # to train the larger variant. Saved to each checkpoint's config.json
     # so inference / probe loaders rebuild the matching architecture.
-    parser.add_argument("--encoder-layers", type=int, default=None,
-                        help="Override RLTConfig.token_encoder_layers")
-    parser.add_argument("--decoder-layers", type=int, default=None,
-                        help="Override RLTConfig.token_decoder_layers")
-    parser.add_argument("--rl-token-dim", type=int, default=None,
-                        help="Widen bottleneck past S1 hidden_dim (adds "
-                             "input/output projections in encoder/decoder). "
-                             "Default = S1 hidden_dim (symmetric).")
+    parser.add_argument(
+        "--encoder-layers", type=int, default=None, help="Override RLTConfig.token_encoder_layers"
+    )
+    parser.add_argument(
+        "--decoder-layers", type=int, default=None, help="Override RLTConfig.token_decoder_layers"
+    )
+    parser.add_argument(
+        "--rl-token-dim",
+        type=int,
+        default=None,
+        help="Widen bottleneck past S1 hidden_dim (adds "
+        "input/output projections in encoder/decoder). "
+        "Default = S1 hidden_dim (symmetric).",
+    )
     return parser.parse_args()
 
 

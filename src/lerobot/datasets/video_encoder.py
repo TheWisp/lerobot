@@ -102,7 +102,9 @@ class StreamingVideoEncoder:
     def start_episode(self, tmp_video_path: Path) -> None:
         """Begin encoding a new episode to a temporary video file."""
         if self._episode_active:
-            raise RuntimeError("Cannot start a new episode while one is active. Call finish() or discard() first.")
+            raise RuntimeError(
+                "Cannot start a new episode while one is active. Call finish() or discard() first."
+            )
 
         tmp_video_path.parent.mkdir(parents=True, exist_ok=True)
         self._tmp_video_path = tmp_video_path
@@ -220,7 +222,7 @@ class StreamingVideoEncoder:
             return None
         n = self._running_n_pixels
         mean = self._running_sum / n
-        variance = self._running_sq_sum / n - mean ** 2
+        variance = self._running_sq_sum / n - mean**2
         # Clamp tiny negatives from floating-point rounding
         np.maximum(variance, 0, out=variance)
         return {
@@ -315,12 +317,12 @@ class StreamingVideoEncoder:
         pixels = ds_frame.reshape(-1, c).astype(np.float64)  # (H*W, C)
         if self._running_sum is None:
             self._running_sum = pixels.sum(axis=0)
-            self._running_sq_sum = (pixels ** 2).sum(axis=0)
+            self._running_sq_sum = (pixels**2).sum(axis=0)
             self._running_min = pixels.min(axis=0)
             self._running_max = pixels.max(axis=0)
         else:
             self._running_sum += pixels.sum(axis=0)
-            self._running_sq_sum += (pixels ** 2).sum(axis=0)
+            self._running_sq_sum += (pixels**2).sum(axis=0)
             np.minimum(self._running_min, pixels.min(axis=0), out=self._running_min)
             np.maximum(self._running_max, pixels.max(axis=0), out=self._running_max)
         self._running_n_pixels += h * w

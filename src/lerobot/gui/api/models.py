@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -18,12 +19,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
-_app_state: "AppState" = None  # type: ignore
+_app_state: AppState = None  # type: ignore
 
 SOURCES_FILE = Path.home() / ".config" / "lerobot" / "model_sources.json"
 
 
-def set_app_state(state: "AppState") -> None:
+def set_app_state(state: AppState) -> None:
     global _app_state
     _app_state = state
 
@@ -107,10 +108,8 @@ def _read_checkpoint_meta(ckpt_dir: Path) -> dict | None:
     step = None
     step_file = ckpt_dir / "training_state" / "training_step.json"
     if step_file.is_file():
-        try:
+        with contextlib.suppress(Exception):
             step = json.loads(step_file.read_text()).get("step")
-        except Exception:
-            pass
 
     # Model file size and parameter count
     model_file = pretrained / "model.safetensors"
@@ -141,10 +140,8 @@ def _scan_training_run(run_dir: Path) -> dict | None:
     # Resolve 'last' symlink
     last_link = ckpts_dir / "last"
     if last_link.exists():
-        try:
+        with contextlib.suppress(Exception):
             last_target = last_link.resolve().name
-        except Exception:
-            pass
 
     for child in sorted(ckpts_dir.iterdir()):
         if not child.is_dir() or child.name == "last":
@@ -225,16 +222,18 @@ def _read_flat_checkpoint(ckpt_dir: Path) -> dict | None:
         "model_size_bytes": model_size,
         "num_parameters": num_params,
         "num_checkpoints": 1,
-        "checkpoints": [{
-            "name": ckpt_dir.name,
-            "path": str(ckpt_dir),
-            "step": None,
-            "model_size_bytes": model_size,
-            "num_parameters": num_params,
-            "has_training_state": False,
-            "is_last": True,
-            "policy_type": config.get("type", "unknown"),
-        }],
+        "checkpoints": [
+            {
+                "name": ckpt_dir.name,
+                "path": str(ckpt_dir),
+                "step": None,
+                "model_size_bytes": model_size,
+                "num_parameters": num_params,
+                "has_training_state": False,
+                "is_last": True,
+                "policy_type": config.get("type", "unknown"),
+            }
+        ],
         "wandb_run_id": None,
         "wandb_project": None,
     }
@@ -252,7 +251,7 @@ def _find_highest_ep_snapshot(run_dir: Path) -> Path | None:
             if not (child / "actor.pt").is_file():
                 continue
             try:
-                n = int(child.name[len("ep_"):])
+                n = int(child.name[len("ep_") :])
             except ValueError:
                 continue
             if best is None or n > best[0]:
@@ -274,9 +273,7 @@ def _scan_source(source_path: str, max_depth: int = 2) -> list[dict]:
     return found
 
 
-def _scan_recursive(
-    base: Path, current: Path, found: list[dict], max_depth: int, depth: int
-) -> None:
+def _scan_recursive(base: Path, current: Path, found: list[dict], max_depth: int, depth: int) -> None:
     if depth > max_depth:
         return
     try:
@@ -284,10 +281,8 @@ def _scan_recursive(
         if (current / "checkpoints").is_dir():
             run_meta = _scan_training_run(current)
             if run_meta:
-                try:
+                with contextlib.suppress(ValueError):
                     run_meta["name"] = str(current.relative_to(base))
-                except ValueError:
-                    pass
                 found.append(run_meta)
             return  # Don't recurse into training run subdirs
 
@@ -296,10 +291,8 @@ def _scan_recursive(
         if (current / "model.safetensors").is_file() and (current / "config.json").is_file():
             meta = _read_flat_checkpoint(current)
             if meta:
-                try:
+                with contextlib.suppress(ValueError):
                     meta["name"] = str(current.relative_to(base))
-                except ValueError:
-                    pass
                 found.append(meta)
             return
 
@@ -311,10 +304,8 @@ def _scan_recursive(
             if meta:
                 meta["path"] = str(current)  # run dir, not checkpoint subdir
                 meta["run_dir"] = str(current)  # output_dir target on resume
-                try:
+                with contextlib.suppress(ValueError):
                     meta["name"] = str(current.relative_to(base))
-                except ValueError:
-                    pass
                 found.append(meta)
             # Rollback entry: the highest-numbered ep_N/ snapshot, if any.
             # All snapshots stay on disk for manual recovery, but only the
@@ -327,10 +318,8 @@ def _scan_recursive(
                 if snap_meta:
                     snap_meta["path"] = str(highest_snap)
                     snap_meta["run_dir"] = str(current)
-                    try:
+                    with contextlib.suppress(ValueError):
                         snap_meta["name"] = str(highest_snap.relative_to(base))
-                    except ValueError:
-                        pass
                     found.append(snap_meta)
             return
 
@@ -362,6 +351,7 @@ def _read_rlt_checkpoint(ckpt_dir: Path, base: Path) -> dict | None:
     if ts_path.exists():
         try:
             import torch
+
             ts = torch.load(str(ts_path), weights_only=True, map_location="cpu")
             meta["episode"] = ts.get("episode", 0)
             meta["updates"] = ts.get("total_updates", 0)
@@ -552,6 +542,6 @@ async def open_in_file_manager(body: dict) -> dict:
     try:
         _subprocess.Popen(["xdg-open", path])
     except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="xdg-open not found")
+        raise HTTPException(status_code=500, detail="xdg-open not found") from None
 
     return {"status": "ok"}

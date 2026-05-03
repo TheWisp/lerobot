@@ -12,7 +12,6 @@ Produces:
 
 from pathlib import Path
 
-import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -50,15 +49,14 @@ for _, r in df.iterrows():
 
 # --- Heatmap ------------------------------------------------------------------
 fig, ax = plt.subplots(figsize=(13, 7))
-im = ax.imshow(loss_matrix, aspect="auto", cmap="viridis_r",
-               vmin=0.02, vmax=0.20, origin="upper")
+im = ax.imshow(loss_matrix, aspect="auto", cmap="viridis_r", vmin=0.02, vmax=0.20, origin="upper")
 cbar = plt.colorbar(im, ax=ax, fraction=0.025, pad=0.01)
 cbar.set_label("held-out loss", fontsize=10)
 ax.set_xticks(range(n_iters))
 ax.set_xticklabels(range(1, n_iters + 1), fontsize=8)
 ax.set_yticks(range(n_eps))
 ax.set_yticklabels(
-    [f"ep {ep} (added @ {i+1})" for i, ep in enumerate(ep_order)],
+    [f"ep {ep} (added @ {i + 1})" for i, ep in enumerate(ep_order)],
     fontsize=8,
 )
 ax.set_xlabel("iteration")
@@ -70,8 +68,7 @@ ax.set_title(
 
 # Mark the diagonal (when each episode was added)
 for i in range(n_eps):
-    ax.add_patch(plt.Rectangle((i - 0.45, i - 0.45), 0.9, 0.9,
-                               fill=False, edgecolor="red", lw=1.2))
+    ax.add_patch(plt.Rectangle((i - 0.45, i - 0.45), 0.9, 0.9, fill=False, edgecolor="red", lw=1.2))
 
 plt.tight_layout()
 plt.savefig(HERE / "phase_e_heatmap.png", dpi=140, bbox_inches="tight")
@@ -130,10 +127,8 @@ early_mean = float(np.mean(new_fit_delta[:5]))
 late_mean = float(np.mean(new_fit_delta[-5:]))
 ax1.axhline(early_mean, ls="--", color="green", alpha=0.5, lw=1)
 ax1.axhline(late_mean, ls="--", color="red", alpha=0.5, lw=1)
-ax1.text(n_iters * 0.6, early_mean + 1, f"avg first-5: {early_mean:.1f}%%",
-         fontsize=8, color="green")
-ax1.text(n_iters * 0.6, late_mean - 2, f"avg last-5: {late_mean:.1f}%%",
-         fontsize=8, color="red")
+ax1.text(n_iters * 0.6, early_mean + 1, f"avg first-5: {early_mean:.1f}%%", fontsize=8, color="green")
+ax1.text(n_iters * 0.6, late_mean - 2, f"avg last-5: {late_mean:.1f}%%", fontsize=8, color="red")
 
 ax2.plot(iters_x, mean_old, "-o", color="#d62728", lw=2, label="mean old-episode loss")
 ax2.plot(iters_x, max_old, "-^", color="#ff7f0e", lw=1.5, label="max old-episode loss")
@@ -150,7 +145,8 @@ ax2.legend(loc="upper left", fontsize=9)
 
 fig.suptitle(
     f"Phase E saturation analysis (N={n_iters}, 10% old + 25% flashed + 65% new, rank 16, 60 steps/iter)",
-    fontsize=11, y=1.00,
+    fontsize=11,
+    y=1.00,
 )
 plt.tight_layout()
 plt.savefig(HERE / "phase_e_curves.png", dpi=140, bbox_inches="tight")
@@ -160,10 +156,16 @@ plt.close(fig)
 # --- Numeric summary ---------------------------------------------------------
 print("\n=== Phase E saturation summary ===")
 print(f"Iterations: {n_iters}")
-print(f"new-fit Δ%%: first-5 avg = {early_mean:.1f}%%, last-5 avg = {late_mean:.1f}%%, "
-      f"slope = {late_mean - early_mean:+.1f}pp")
-print(f"mean old-ep loss: iter1=N/A, iter5={mean_old[4]:.4f}, iter15={mean_old[14] if n_iters >= 15 else float('nan'):.4f}, "
-      f"iter25={mean_old[24] if n_iters >= 25 else float('nan'):.4f}, iter{n_iters}={mean_old[-1]:.4f}")
-print(f"max old-ep loss: iter5={max_old[4]:.4f}, iter15={max_old[14] if n_iters >= 15 else float('nan'):.4f}, "
-      f"iter25={max_old[24] if n_iters >= 25 else float('nan'):.4f}, iter{n_iters}={max_old[-1]:.4f}")
+print(
+    f"new-fit Δ%%: first-5 avg = {early_mean:.1f}%%, last-5 avg = {late_mean:.1f}%%, "
+    f"slope = {late_mean - early_mean:+.1f}pp"
+)
+print(
+    f"mean old-ep loss: iter1=N/A, iter5={mean_old[4]:.4f}, iter15={mean_old[14] if n_iters >= 15 else float('nan'):.4f}, "
+    f"iter25={mean_old[24] if n_iters >= 25 else float('nan'):.4f}, iter{n_iters}={mean_old[-1]:.4f}"
+)
+print(
+    f"max old-ep loss: iter5={max_old[4]:.4f}, iter15={max_old[14] if n_iters >= 15 else float('nan'):.4f}, "
+    f"iter25={max_old[24] if n_iters >= 25 else float('nan'):.4f}, iter{n_iters}={max_old[-1]:.4f}"
+)
 print(f"forget: iter1={forget_loss[0]:.4f}, iter{n_iters}={forget_loss[-1]:.4f}")

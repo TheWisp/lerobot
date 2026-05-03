@@ -375,9 +375,7 @@ class _NormalizationMixin:
             # Use 0.1 threshold to catch small denominators like 0.001604 that cause explosions
             # When range is < 0.1, clamp to 1.0 to normalize to reasonable values
             min_denom = torch.tensor(1.0, device=tensor.device, dtype=tensor.dtype)
-            denom = torch.where(
-                torch.abs(denom) < 0.1, min_denom, denom
-            )
+            denom = torch.where(torch.abs(denom) < 0.1, min_denom, denom)
             if inverse:
                 return (tensor + 1.0) * denom / 2.0 + q01
             # Normalize and clip to prevent outliers from exploding
@@ -398,9 +396,7 @@ class _NormalizationMixin:
             # Use 0.1 threshold to catch small denominators that cause explosions
             # When range is < 0.1, clamp to 1.0 to normalize to reasonable values
             min_denom = torch.tensor(1.0, device=tensor.device, dtype=tensor.dtype)
-            denom = torch.where(
-                torch.abs(denom) < 0.1, min_denom, denom
-            )
+            denom = torch.where(torch.abs(denom) < 0.1, min_denom, denom)
             if inverse:
                 return (tensor + 1.0) * denom / 2.0 + q10
             # Normalize and clip to prevent outliers from exploding

@@ -23,28 +23,24 @@ from lerobot.policies.hvla.rlt.metrics import (
     reset_metrics,
 )
 
-
 # ============================================================================
 # Per-group invariants — within-group length parity is the contract
 # ============================================================================
+
 
 class TestEpisodeGroupInvariant:
     def test_append_grows_all_series_in_lockstep(self):
         g = EpisodeGroup()
         for i in range(5):
             g.append(success=True, autonomous=False, duration_s=10.0)
-            assert (
-                len(g.successes) == len(g.autonomous)
-                == len(g.timestamps) == len(g.lengths_s) == i + 1
-            )
+            assert len(g.successes) == len(g.autonomous) == len(g.timestamps) == len(g.lengths_s) == i + 1
 
     def test_truncate_preserves_invariant(self):
         g = EpisodeGroup()
         for _ in range(50):
             g.append(success=True, autonomous=True, duration_s=1.0)
         g.truncate(20)
-        assert len(g.successes) == len(g.autonomous) == \
-               len(g.timestamps) == len(g.lengths_s) == 20
+        assert len(g.successes) == len(g.autonomous) == len(g.timestamps) == len(g.lengths_s) == 20
 
     def test_invariant_check_catches_external_corruption(self):
         """If something bypasses ``append`` and pokes a single series,
@@ -80,20 +76,26 @@ class TestInferenceGroupInvariant:
 
 class TestGradUpdateGroupInvariant:
     def _payload(self):
-        return dict(
-            critic_loss=0.01, critic_grad_norm=2.0, actor_loss=-0.3,
-            q_mean=0.5, q_min=-0.5, q_max=1.0,
-            actor_q_term=-0.3, actor_bc_term=0.1, update_rate=10.0,
-        )
+        return {
+            "critic_loss": 0.01,
+            "critic_grad_norm": 2.0,
+            "actor_loss": -0.3,
+            "q_mean": 0.5,
+            "q_min": -0.5,
+            "q_max": 1.0,
+            "actor_q_term": -0.3,
+            "actor_bc_term": 0.1,
+            "update_rate": 10.0,
+        }
 
     def test_all_ten_series_grow_together(self):
         g = GradUpdateGroup()
         for i in range(7):
             g.append(**self._payload())
             n = i + 1
-            assert all(
-                len(s) == n for s in g._all_series()
-            ), "all 10 series must have the same length after every append"
+            assert all(len(s) == n for s in g._all_series()), (
+                "all 10 series must have the same length after every append"
+            )
 
     def test_truncate_preserves_invariant(self):
         g = GradUpdateGroup()
@@ -127,22 +129,29 @@ class TestGradUpdateGroupInvariant:
 # Round-trip serialize/deserialize — resume must preserve every field
 # ============================================================================
 
+
 class TestRoundTrip:
     def _drive_metrics(self) -> RLTMetrics:
         m = RLTMetrics()
         for ep in range(3):
             m.record_episode(
-                episode=ep, success=(ep != 1),
-                autonomous=(ep == 0), duration_s=10.0 + ep,
+                episode=ep,
+                success=(ep != 1),
+                autonomous=(ep == 0),
+                duration_s=10.0 + ep,
             )
         for i in range(7):
             m.record_inference(
-                step=i, delta=0.01 * (i + 1),
-                buffer_size=100 + i, total_updates=10 * i, mode="RL",
+                step=i,
+                delta=0.01 * (i + 1),
+                buffer_size=100 + i,
+                total_updates=10 * i,
+                mode="RL",
             )
         for i in range(5):
             m.record_grad_update(
-                total_updates=20 + i, mode="RL",
+                total_updates=20 + i,
+                mode="RL",
                 critic_loss=0.001 * (i + 1),
                 critic_grad_norm=2.0 + i,
                 actor_loss=-0.3 - 0.01 * i,
@@ -220,6 +229,7 @@ class TestRoundTrip:
 # Aggregator-level — record methods preserve all invariants
 # ============================================================================
 
+
 class TestRLTMetrics:
     def setup_method(self):
         reset_metrics()
@@ -229,17 +239,23 @@ class TestRLTMetrics:
         recording one must not affect the other."""
         m = get_metrics()
         for _ in range(5):
-            m.record_inference(step=0, delta=0.05, buffer_size=0,
-                               total_updates=0, mode="RL")
+            m.record_inference(step=0, delta=0.05, buffer_size=0, total_updates=0, mode="RL")
         assert len(m.inferences) == 5
         assert len(m.grad_updates) == 0  # no piggyback
 
         for _ in range(3):
             m.record_grad_update(
-                total_updates=0, mode="RL",
-                critic_loss=0.01, critic_grad_norm=1.0, actor_loss=0.0,
-                q_mean=0.5, q_min=-0.5, q_max=1.0,
-                actor_q_term=0.0, actor_bc_term=0.0, update_rate=10.0,
+                total_updates=0,
+                mode="RL",
+                critic_loss=0.01,
+                critic_grad_norm=1.0,
+                actor_loss=0.0,
+                q_mean=0.5,
+                q_min=-0.5,
+                q_max=1.0,
+                actor_q_term=0.0,
+                actor_bc_term=0.0,
+                update_rate=10.0,
             )
         assert len(m.inferences) == 5  # unchanged
         assert len(m.grad_updates) == 3
@@ -251,10 +267,17 @@ class TestRLTMetrics:
         m = get_metrics()
         m.record_inference(step=0, delta=0.123, buffer_size=0, total_updates=0, mode="RL")
         m.record_grad_update(
-            total_updates=1, mode="RL",
-            critic_loss=0.01, critic_grad_norm=1.0, actor_loss=0.0,
-            q_mean=0.5, q_min=-0.5, q_max=1.0,
-            actor_q_term=0.0, actor_bc_term=0.0, update_rate=10.0,
+            total_updates=1,
+            mode="RL",
+            critic_loss=0.01,
+            critic_grad_norm=1.0,
+            actor_loss=0.0,
+            q_mean=0.5,
+            q_min=-0.5,
+            q_max=1.0,
+            actor_q_term=0.0,
+            actor_bc_term=0.0,
+            update_rate=10.0,
         )
         # The inference series got exactly one entry, and it's the real one
         assert m.inferences.deltas == [0.123]

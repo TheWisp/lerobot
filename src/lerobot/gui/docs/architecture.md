@@ -2,12 +2,12 @@
 
 ## Tabs
 
-| Tab | Purpose |
-|-----|---------|
-| **Data** | Browse, play, edit, merge datasets. See [data_tab.md](data_tab.md). |
-| **Model** | Browse checkpoints, launch training, inspect configs. See [model_tab.md](model_tab.md). |
-| **Run** | Teleoperate, run policies, replay episodes. Mode depends on selection (robot+teleop, robot+policy, robot+dataset). |
-| **Robot** | Hardware setup: robot/teleop profiles, camera detection, port identification, calibration. |
+| Tab       | Purpose                                                                                                            |
+| --------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Data**  | Browse, play, edit, merge datasets. See [data_tab.md](data_tab.md).                                                |
+| **Model** | Browse checkpoints, launch training, inspect configs. See [model_tab.md](model_tab.md).                            |
+| **Run**   | Teleoperate, run policies, replay episodes. Mode depends on selection (robot+teleop, robot+policy, robot+dataset). |
+| **Robot** | Hardware setup: robot/teleop profiles, camera detection, port identification, calibration.                         |
 
 ## Config Storage
 

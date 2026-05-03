@@ -32,14 +32,17 @@ outputs/
 optimizer/scheduler config, wandb run_id, batch_size, total steps, save_freq, etc.
 
 ### HF Hub models
+
 Downloaded to `~/.cache/huggingface/`. Policy loading via `PreTrainedPolicy.from_pretrained()`
 accepts both local paths and HF repo IDs.
 
 ### Policy types
+
 ACT, diffusion, pi0, pi0_fast, pi05, vqbet, tdmpc, sac, smolvla, groot, xvla, wall_x,
 reward_classifier. Registry in `policies/factory.py`.
 
 ### Training commands
+
 ```bash
 # Fresh training
 lerobot-train \
@@ -55,6 +58,7 @@ lerobot-train \
 ```
 
 ### WandB
+
 `WandBConfig` fields: enable, project, entity, run_id, mode. The `run_id` in `train_config.json`
 links back to the wandb run.
 
@@ -85,6 +89,7 @@ links back to the wandb run.
 ```
 
 ### Source folders
+
 - Default: `outputs/` (cwd), `~/.cache/huggingface/lerobot/` (HF cache)
 - User can add custom folders
 - Scan for `checkpoints/*/pretrained_model/config.json`
@@ -92,6 +97,7 @@ links back to the wandb run.
 - Persist to `~/.config/lerobot/settings.json`
 
 ### Model tree
+
 - Top level: training runs (output directories)
 - Expandable: individual checkpoints (002500, 005000, last)
 - Policy type badge, training status (completed / in-progress / failed)
@@ -109,6 +115,7 @@ Read-only.
 "Resume training", "Open folder".
 
 **Metrics** — three options in order of feasibility:
+
 1. Embed WandB iframe (simplest, requires browser login)
 2. Parse wandb local logs for offline chart rendering
 3. Parse stdout log lines for live training
@@ -144,6 +151,7 @@ Training subprocess management reuses the Run tab pattern (one active subprocess
 streaming). Initially one training job at a time.
 
 ### Model scanning
+
 1. Scan each source for `checkpoints/` subdirectories
 2. Read `pretrained_model/config.json` and `train_config.json`
 3. Extract: policy type, dataset, steps, wandb info

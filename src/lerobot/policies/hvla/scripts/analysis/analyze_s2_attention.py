@@ -74,14 +74,19 @@ def load_sample_batch(latents_dir: str, device: str, n_samples: int = 8):
     }
 
     # DINOv2 expects [B, 3, 224, 224] images
-    for cam in ["observation.images.front", "observation.images.left_wrist",
-                "observation.images.right_wrist", "observation.images.top"]:
+    for cam in [
+        "observation.images.front",
+        "observation.images.left_wrist",
+        "observation.images.right_wrist",
+        "observation.images.top",
+    ]:
         batch[cam] = torch.randn(B, 3, 224, 224, device=device)
 
     return batch
 
 
 # ─── Analysis 1: Ablation ──────────────────────────────────────────────
+
 
 def ablation_study(policy, batch, device):
     """Compare actions: real S2 vs zero S2 vs random S2."""
@@ -109,9 +114,14 @@ def ablation_study(policy, batch, device):
         with torch.no_grad():
             actions = model.sample_actions(b)  # [B, 50, 14]
         results[name] = actions
-        logger.info("  %12s: action mean=%.4f, std=%.4f, range=[%.4f, %.4f]",
-                     name, actions.mean().item(), actions.std().item(),
-                     actions.min().item(), actions.max().item())
+        logger.info(
+            "  %12s: action mean=%.4f, std=%.4f, range=[%.4f, %.4f]",
+            name,
+            actions.mean().item(),
+            actions.std().item(),
+            actions.min().item(),
+            actions.max().item(),
+        )
 
     # Compute divergences relative to real
     real_actions = results["real"]
@@ -120,30 +130,43 @@ def ablation_study(policy, batch, device):
     for name, actions in results.items():
         if name == "real":
             continue
-        diff = (actions - real_actions)
+        diff = actions - real_actions
         l2_per_step = diff.norm(dim=-1)  # [B, 50]
         l2_mean = l2_per_step.mean().item()
         l2_max = l2_per_step.max().item()
 
         # Cosine similarity of flattened action sequences
-        cos_sim = F.cosine_similarity(
-            actions.reshape(B, -1), real_actions.reshape(B, -1), dim=-1
-        ).mean().item()
+        cos_sim = (
+            F.cosine_similarity(actions.reshape(B, -1), real_actions.reshape(B, -1), dim=-1).mean().item()
+        )
 
         # Relative change
         real_norm = real_actions.norm(dim=-1).mean().item()
         rel_change = l2_mean / max(real_norm, 1e-8) * 100
 
-        logger.info("  %-12s  %10.4f  %10.4f  %10.4f  %10.1f%%",
-                     name, l2_mean, l2_max, cos_sim, rel_change)
+        logger.info("  %-12s  %10.4f  %10.4f  %10.4f  %10.1f%%", name, l2_mean, l2_max, cos_sim, rel_change)
 
     # Per-joint divergence (zero vs real) — shows which joints are most affected
     diff_zero = results["zero"] - real_actions  # [B, 50, 14]
     per_joint = diff_zero.abs().mean(dim=(0, 1))  # [14]
-    joint_labels = ["L1", "L2", "L3", "L4", "L5", "L6", "L_grip",
-                    "R1", "R2", "R3", "R4", "R5", "R6", "R_grip"]
+    joint_labels = [
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L_grip",
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R_grip",
+    ]
     logger.info("\nPer-joint divergence (zero vs real):")
-    for j, (label, val) in enumerate(zip(joint_labels, per_joint)):
+    for _j, (label, val) in enumerate(zip(joint_labels, per_joint, strict=False)):
         bar = "#" * int(val.item() * 50 / max(per_joint.max().item(), 1e-8))
         logger.info("  %7s: %.4f  %s", label, val.item(), bar)
 
@@ -151,6 +174,7 @@ def ablation_study(policy, batch, device):
 
 
 # ─── Analysis 2: Cross-attention weights ────────────────────────────────
+
 
 def cross_attention_analysis(policy, batch, device):
     """Extract cross-attention weights to see S2 latent contribution."""
@@ -200,14 +224,13 @@ def cross_attention_analysis(policy, batch, device):
             d = mha.embed_dim
 
             # Self-attention
-            x = layer.norm1(x + layer.dropout1(
-                layer.self_attn(x, x, x, need_weights=False)[0]
-            ))
+            x = layer.norm1(x + layer.dropout1(layer.self_attn(x, x, x, need_weights=False)[0]))
 
             # Cross-attention — compute weights manually
-            q = F.linear(x, mha.in_proj_weight[:d],
-                         mha.in_proj_bias[:d] if mha.in_proj_bias is not None else None)
-            q = q.reshape(B, T, nhead, head_dim).transpose(1, 2)   # [B, nhead, T, head_dim]
+            q = F.linear(
+                x, mha.in_proj_weight[:d], mha.in_proj_bias[:d] if mha.in_proj_bias is not None else None
+            )
+            q = q.reshape(B, T, nhead, head_dim).transpose(1, 2)  # [B, nhead, T, head_dim]
             k = ck.reshape(B, N_ctx, nhead, head_dim).transpose(1, 2)  # [B, nhead, N_ctx, head_dim]
             v = cv.reshape(B, N_ctx, nhead, head_dim).transpose(1, 2)
 
@@ -222,9 +245,9 @@ def cross_attention_analysis(policy, batch, device):
             attn_out = attn_out.transpose(1, 2).reshape(B, T, D)
             attn_out = mha.out_proj(attn_out)
             x = layer.norm2(x + layer.dropout2(attn_out))
-            x = layer.norm3(x + layer.dropout3(
-                layer.linear2(layer.dropout(layer.activation(layer.linear1(x))))
-            ))
+            x = layer.norm3(
+                x + layer.dropout3(layer.linear2(layer.dropout(layer.activation(layer.linear1(x)))))
+            )
 
     # Analyze attention on S2 token (last position) vs. images vs. state
     # Context layout: [image_patches(~1024), state(1), s2(1)]
@@ -240,7 +263,7 @@ def cross_attention_analysis(policy, batch, device):
         # Average across batch and action positions
         w_mean = w.mean(dim=(0, 2))  # [nhead, N_ctx]
 
-        s2_weight = w_mean[:, s2_pos].mean().item()   # mean across heads
+        s2_weight = w_mean[:, s2_pos].mean().item()  # mean across heads
         state_weight = w_mean[:, state_pos].mean().item()
         image_weight = w_mean[:, :n_image_tokens].mean().item()  # per-image-token average
 
@@ -248,8 +271,15 @@ def cross_attention_analysis(policy, batch, device):
         w_per_token = w.mean(dim=(0, 1, 2))  # [N_ctx]
         rank = (w_per_token > w_per_token[s2_pos]).sum().item() + 1
 
-        logger.info("  Layer %d   %10.6f  %10.6f  %10.6f  %10d / %d",
-                     i, s2_weight, state_weight, image_weight, rank, N_ctx)
+        logger.info(
+            "  Layer %d   %10.6f  %10.6f  %10.6f  %10d / %d",
+            i,
+            s2_weight,
+            state_weight,
+            image_weight,
+            rank,
+            N_ctx,
+        )
 
     # Per-head breakdown for first and last layer
     for layer_idx in [0, len(layer_weights) - 1]:
@@ -271,6 +301,7 @@ def cross_attention_analysis(policy, batch, device):
 
 
 # ─── Analysis 3: Encoder self-attention ─────────────────────────────────
+
 
 def encoder_attention_analysis(policy, batch, device):
     """Analyze how S2 latent mixes with other tokens in the obs_encoder."""
@@ -318,8 +349,8 @@ def encoder_attention_analysis(policy, batch, device):
             b = sa.in_proj_bias
 
             q = F.linear(x, w[:d], b[:d] if b is not None else None)
-            k = F.linear(x, w[d:2*d], b[d:2*d] if b is not None else None)
-            v = F.linear(x, w[2*d:3*d], b[2*d:3*d] if b is not None else None)
+            k = F.linear(x, w[d : 2 * d], b[d : 2 * d] if b is not None else None)
+            v = F.linear(x, w[2 * d : 3 * d], b[2 * d : 3 * d] if b is not None else None)
 
             q = q.reshape(B, N_ctx, nhead, head_dim).transpose(1, 2)
             k = k.reshape(B, N_ctx, nhead, head_dim).transpose(1, 2)
@@ -348,9 +379,12 @@ def encoder_attention_analysis(policy, batch, device):
             attn_out = attn_out.transpose(1, 2).reshape(B, N_ctx, D)
             attn_out = sa.out_proj(attn_out)
             x = enc_layer.norm1(x + enc_layer.dropout1(attn_out))
-            x = enc_layer.norm2(x + enc_layer.dropout2(
-                enc_layer.linear2(enc_layer.dropout(enc_layer.activation(enc_layer.linear1(x))))
-            ))
+            x = enc_layer.norm2(
+                x
+                + enc_layer.dropout2(
+                    enc_layer.linear2(enc_layer.dropout(enc_layer.activation(enc_layer.linear1(x))))
+                )
+            )
 
     # After encoder: how different is context with vs. without S2?
     logger.info("\n  Context token norm change (with S2 vs. without):")
@@ -362,9 +396,11 @@ def encoder_attention_analysis(policy, batch, device):
         context_without = model.encode_observations(b_no_s2)
 
         diff = (context_with - context_without).norm(dim=-1).mean(dim=0)  # [N_ctx]
-        for pos_name, pos_range in [("images", slice(0, N_ctx - 2)),
-                                     ("state", slice(N_ctx - 2, N_ctx - 1)),
-                                     ("S2", slice(N_ctx - 1, N_ctx))]:
+        for pos_name, pos_range in [
+            ("images", slice(0, N_ctx - 2)),
+            ("state", slice(N_ctx - 2, N_ctx - 1)),
+            ("S2", slice(N_ctx - 1, N_ctx)),
+        ]:
             d_val = diff[pos_range].mean().item()
             logger.info("    %s tokens: Δnorm = %.4f", pos_name, d_val)
 
@@ -372,9 +408,7 @@ def encoder_attention_analysis(policy, batch, device):
 def _sinusoidal_embedding_external(timesteps, dim, device, min_period=4e-3, max_period=4.0):
     """Same as model's _sinusoidal_embedding but standalone."""
     half = dim // 2
-    freqs = torch.exp(
-        torch.linspace(math.log(min_period), math.log(max_period), half, device=device)
-    )
+    freqs = torch.exp(torch.linspace(math.log(min_period), math.log(max_period), half, device=device))
     args = timesteps[..., None] * freqs
     return torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
 
@@ -382,7 +416,9 @@ def _sinusoidal_embedding_external(timesteps, dim, device, min_period=4e-3, max_
 def main():
     parser = argparse.ArgumentParser(description="Diagnose S1 attention to S2 latent")
     parser.add_argument("--s1-checkpoint", required=True, help="S1 checkpoint directory")
-    parser.add_argument("--s2-latents-dir", required=True, help="Directory with pre-extracted S2 latents (.npy)")
+    parser.add_argument(
+        "--s2-latents-dir", required=True, help="Directory with pre-extracted S2 latents (.npy)"
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--n-samples", type=int, default=8, help="Number of samples to analyze")
     parser.add_argument("--seed", type=int, default=42)

@@ -27,10 +27,10 @@ from lerobot.gui.api import datasets as datasets_module
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
-
 # ---------------------------------------------------------------------------
 # Unit tests for check_episode_video_duration
 # ---------------------------------------------------------------------------
+
 
 class TestCheckEpisodeVideoDuration:
     """Tests for the standalone check_episode_video_duration function."""
@@ -125,6 +125,7 @@ class TestCheckEpisodeVideoDuration:
 # Integration tests: list_episodes returns video_extra_frames
 # ---------------------------------------------------------------------------
 
+
 def _make_mock_dataset(episodes_meta: list[dict], fps: int = 30):
     """Create a mock dataset with specific episode metadata."""
     ds = MagicMock()
@@ -136,7 +137,7 @@ def _make_mock_dataset(episodes_meta: list[dict], fps: int = 30):
     ds.meta.camera_keys = ["observation.images.front"]
     ds.meta.video_keys = ["observation.images.front"]
     ds.meta.features = {"observation.images.front": {}, "action": {}}
-    ds.meta.episodes = {i: ep for i, ep in enumerate(episodes_meta)}
+    ds.meta.episodes = dict(enumerate(episodes_meta))
     return ds
 
 
@@ -165,14 +166,17 @@ class TestListEpisodesQuality:
         """Normal episodes should have video_extra_frames=0."""
         app, state = app_with_state
         fps = 30
-        state.datasets["test/ds"] = _make_mock_dataset([
-            {
-                "length": 300,
-                "tasks": ["pick"],
-                "videos/observation.images.front/from_timestamp": 0.0,
-                "videos/observation.images.front/to_timestamp": 300 / fps,
-            },
-        ], fps=fps)
+        state.datasets["test/ds"] = _make_mock_dataset(
+            [
+                {
+                    "length": 300,
+                    "tasks": ["pick"],
+                    "videos/observation.images.front/from_timestamp": 0.0,
+                    "videos/observation.images.front/to_timestamp": 300 / fps,
+                },
+            ],
+            fps=fps,
+        )
 
         async def run():
             with patch.object(datasets_module, "_check_and_reload_metadata"):
@@ -191,20 +195,23 @@ class TestListEpisodesQuality:
         """Episode with re-recording artifact should have video_extra_frames > 0."""
         app, state = app_with_state
         fps = 30
-        state.datasets["test/ds"] = _make_mock_dataset([
-            {
-                "length": 286,
-                "tasks": ["pick"],
-                "videos/observation.images.front/from_timestamp": 0.0,
-                "videos/observation.images.front/to_timestamp": 11.233,  # +51 extra
-            },
-            {
-                "length": 207,
-                "tasks": ["pick"],
-                "videos/observation.images.front/from_timestamp": 11.233,
-                "videos/observation.images.front/to_timestamp": 18.100,  # normal
-            },
-        ], fps=fps)
+        state.datasets["test/ds"] = _make_mock_dataset(
+            [
+                {
+                    "length": 286,
+                    "tasks": ["pick"],
+                    "videos/observation.images.front/from_timestamp": 0.0,
+                    "videos/observation.images.front/to_timestamp": 11.233,  # +51 extra
+                },
+                {
+                    "length": 207,
+                    "tasks": ["pick"],
+                    "videos/observation.images.front/from_timestamp": 11.233,
+                    "videos/observation.images.front/to_timestamp": 18.100,  # normal
+                },
+            ],
+            fps=fps,
+        )
 
         async def run():
             with patch.object(datasets_module, "_check_and_reload_metadata"):

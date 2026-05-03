@@ -23,7 +23,6 @@ import numpy as np
 import torch
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.policies.hvla.s2.config import S2VLMConfig
 from lerobot.policies.hvla.s2.model import S2VLMModel
 from lerobot.policies.hvla.s2.preprocessing import preprocess_images
 from lerobot.policies.hvla.s2.tokenizer import PaligemmaTokenizer
@@ -102,7 +101,7 @@ def extract_latents(
         # Prepare images: convert each frame's images to S2 format and batch
         batch_images = {key: [] for key in s2_image_keys}
         for item in frames:
-            for lr_key, s2_key in zip(lerobot_image_keys, s2_image_keys):
+            for lr_key, s2_key in zip(lerobot_image_keys, s2_image_keys, strict=False):
                 if lr_key in item:
                     batch_images[s2_key].append(lerobot_img_to_uint8_hwc(item[lr_key]))
 
@@ -117,12 +116,14 @@ def extract_latents(
                 masks = []
                 for img_np in cam_batch:
                     t_list, m_list = preprocess_images(
-                        {cam_key: img_np}, image_keys=(cam_key,), device=device,
+                        {cam_key: img_np},
+                        image_keys=(cam_key,),
+                        device=device,
                     )
                     tensors.append(t_list[0])
                     masks.append(m_list[0])
                 all_img_tensors.append(torch.cat(tensors, dim=0))  # [B, C, H, W]
-                all_img_masks.append(torch.cat(masks, dim=0))      # [B]
+                all_img_masks.append(torch.cat(masks, dim=0))  # [B]
 
         # Batch language tokens
         lang_tokens = torch.from_numpy(token_ids).unsqueeze(0).long().to(device)
@@ -132,7 +133,10 @@ def extract_latents(
 
         with torch.no_grad():
             latent_batch = model.extract_prefix_latent(
-                all_img_tensors, all_img_masks, lang_tokens, lang_masks,
+                all_img_tensors,
+                all_img_masks,
+                lang_tokens,
+                lang_masks,
             )  # [B, 2048]
         latent_np = latent_batch.float().cpu().numpy()
 

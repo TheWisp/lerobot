@@ -3,12 +3,12 @@
 Verifies that batched DINOv2, bidirectional attention, bf16 autocast,
 and other optimizations produce correct results.
 """
+
 import pytest
 import torch
-import numpy as np
 
-from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Model
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
+from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Model
 
 
 @pytest.fixture
@@ -60,14 +60,12 @@ class TestBatchedDINOv2:
             stacked = torch.cat(images, dim=0)  # [4, 3, 224, 224]
             features = model.backbone.forward_features(stacked)
             all_patches = features["x_norm_patchtokens"]  # [4, 256, 768]
-            batched_tokens = [model.image_proj(all_patches[i:i+1]) for i in range(4)]
+            batched_tokens = [model.image_proj(all_patches[i : i + 1]) for i in range(4)]
 
         for i in range(4):
             diff = (sequential_tokens[i] - batched_tokens[i]).abs().max().item()
             # Batched vs sequential has small numerical divergence from GPU kernel ordering
-            assert diff < 0.01, (
-                f"Camera {i} mismatch: max diff {diff:.2e} (expected < 0.01)"
-            )
+            assert diff < 0.01, f"Camera {i} mismatch: max diff {diff:.2e} (expected < 0.01)"
 
     def test_camera_order_preserved(self, model, device):
         """Swapping camera order in batch should swap output order."""
@@ -143,7 +141,7 @@ class TestBidirectionalAttention:
 
         # Restore
         for layer in model.decoder_layers:
-            if hasattr(layer, '_orig_forward'):
+            if hasattr(layer, "_orig_forward"):
                 layer.forward = layer._orig_forward
 
         assert all(m is None or m == "NOT_PASSED" for m in calls), (
@@ -240,8 +238,4 @@ class TestFullPipeline:
             actions = model.sample_actions(batch, num_steps=10)
 
         # Denormalized actions for SO-100 should be roughly in [-200, 200] range
-        assert actions.abs().max().item() < 500, (
-            f"Actions out of range: max={actions.abs().max():.1f}"
-        )
-
-
+        assert actions.abs().max().item() < 500, f"Actions out of range: max={actions.abs().max():.1f}"

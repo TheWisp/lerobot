@@ -7,7 +7,7 @@ Covers:
   - Recovery after S2 unload (shared memory unlinked)
   - Reconnect after S2 reload
 """
-import os
+
 import numpy as np
 import pytest
 
@@ -35,10 +35,14 @@ def dummy_obs():
 
 def _create_s2_shared_memory():
     """Simulate S2 standalone creating SharedImageBuffer."""
-    from lerobot.policies.hvla.ipc import SharedImageBuffer, DEFAULT_S2_IMAGE_KEYS
+    from lerobot.policies.hvla.ipc import DEFAULT_S2_IMAGE_KEYS, SharedImageBuffer
+
     buf = SharedImageBuffer(
         camera_keys=DEFAULT_S2_IMAGE_KEYS,
-        height=720, width=1280, create=True, state_dim=32,
+        height=720,
+        width=1280,
+        create=True,
+        state_dim=32,
     )
     return buf
 
@@ -53,6 +57,7 @@ class TestS2BufferDisabled:
         """Without LEROBOT_S2_IMAGE_BUFFER, no S2 buffer is created."""
         monkeypatch.delenv("LEROBOT_S2_IMAGE_BUFFER", raising=False)
         from lerobot.robots.obs_stream import ObservationStreamWriterStep
+
         step = ObservationStreamWriterStep()
         assert not step._s2_enabled
         result = step.observation(dummy_obs)
@@ -66,6 +71,7 @@ class TestS2BufferAttach:
         s2_buf = _create_s2_shared_memory()
         try:
             from lerobot.robots.obs_stream import ObservationStreamWriterStep
+
             step = ObservationStreamWriterStep()
             step.observation(dummy_obs)
             assert step._s2_buffer is not None
@@ -75,6 +81,7 @@ class TestS2BufferAttach:
     def test_retry_when_s2_not_started(self, dummy_obs):
         """Writer retries silently when S2 shared memory doesn't exist yet."""
         from lerobot.robots.obs_stream import ObservationStreamWriterStep
+
         step = ObservationStreamWriterStep()
 
         # First call — S2 not started, buffer stays None
@@ -96,6 +103,7 @@ class TestS2BufferAttach:
         s2_buf = _create_s2_shared_memory()
         try:
             from lerobot.robots.obs_stream import ObservationStreamWriterStep
+
             step = ObservationStreamWriterStep()
 
             # Write a distinctive image
@@ -115,6 +123,7 @@ class TestS2BufferUnloadReload:
         """After S2 unloads (unlinks shm), writer resets and stops crashing."""
         s2_buf = _create_s2_shared_memory()
         from lerobot.robots.obs_stream import ObservationStreamWriterStep
+
         step = ObservationStreamWriterStep()
 
         # Attach and write successfully
@@ -133,6 +142,7 @@ class TestS2BufferUnloadReload:
         # First S2 session
         s2_buf = _create_s2_shared_memory()
         from lerobot.robots.obs_stream import ObservationStreamWriterStep
+
         step = ObservationStreamWriterStep()
         step.observation(dummy_obs)
         assert step._s2_buffer is not None

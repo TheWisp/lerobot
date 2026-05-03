@@ -41,14 +41,13 @@ def plot_phase(ax, df: pd.DataFrame, title: str):
         iters = sub["iter"].astype(int).values
         losses = sub["loss"].astype(float).values
         added_at = sub["added_at_iter"].iloc[0]
-        ax.plot(iters, losses, "-o", color=color, lw=1.6, ms=5, alpha=0.9,
-                label=f"ep {ep} (added @ {added_at})")
+        ax.plot(
+            iters, losses, "-o", color=color, lw=1.6, ms=5, alpha=0.9, label=f"ep {ep} (added @ {added_at})"
+        )
         if iters[0] == added_at:
-            ax.plot(iters[0], losses[0], "s", color=color, ms=9,
-                    mec="black", mew=0.8)
+            ax.plot(iters[0], losses[0], "s", color=color, ms=9, mec="black", mew=0.8)
     forget = df[df["eval_ep"] == "forget"].sort_values("iter")
-    ax.plot(forget["iter"], forget["loss"], "--", color="black", lw=2.0,
-            label="forget (training-set)")
+    ax.plot(forget["iter"], forget["loss"], "--", color="black", lw=2.0, label="forget (training-set)")
     ax.set_title(title, fontsize=12)
     ax.set_xlabel("iteration")
     ax.set_xticks(range(1, 11))
@@ -67,7 +66,8 @@ ax1.text(0.5, 0.043, "≈ easy-episode floor", fontsize=8, color="gray")
 fig.suptitle(
     "Capacity test: same 10 episodes flashed sequentially. ■ = added at this iter; "
     "subsequent points = retention as more episodes are added.",
-    fontsize=11, y=1.00,
+    fontsize=11,
+    y=1.00,
 )
 plt.tight_layout()
 

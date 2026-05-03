@@ -572,7 +572,9 @@ def test_streaming_video_stats_correctness(tmp_path, empty_lerobot_dataset_facto
     for stat_key, gt_val in [("mean", gt_mean), ("std", gt_std), ("min", gt_min), ("max", gt_max)]:
         mem_val = np.asarray(in_memory_stats[vid_key][stat_key])
         np.testing.assert_allclose(
-            mem_val, gt_val, atol=1e-10,
+            mem_val,
+            gt_val,
+            atol=1e-10,
             err_msg=f"Running stat '{stat_key}' differs from numpy ground truth ({description})",
         )
 
@@ -594,7 +596,10 @@ def test_streaming_video_stats_correctness(tmp_path, empty_lerobot_dataset_facto
         ref_val = np.asarray(ref_stats[vid_key][stat_key])
         mem_val = np.asarray(in_memory_stats[vid_key][stat_key])
         np.testing.assert_allclose(
-            mem_val, ref_val, atol=1e-5, rtol=1e-4,
+            mem_val,
+            ref_val,
+            atol=1e-5,
+            rtol=1e-4,
             err_msg=f"Quantile '{stat_key}' differs between in-memory and reference ({description})",
         )
 
@@ -617,7 +622,7 @@ def test_streaming_video_stats_reservoir_quality(tmp_path, empty_lerobot_dataset
     A broken reservoir that only kept the first 300 of 900 frames would give
     q50 ≈ 0.17 — clearly wrong and caught by the ±0.03 tolerance.
     """
-    from lerobot.datasets.compute_stats import get_feature_stats, sample_indices
+    from lerobot.datasets.compute_stats import get_feature_stats
 
     vid_key = "video"
     h, w = 48, 64
@@ -668,7 +673,9 @@ def test_streaming_video_stats_reservoir_quality(tmp_path, empty_lerobot_dataset
     for stat_key, gt_val in [("mean", gt_mean), ("std", gt_std), ("min", gt_min), ("max", gt_max)]:
         computed_val = computed_stats[vid_key][stat_key]
         np.testing.assert_allclose(
-            computed_val, gt_val, atol=1e-5,
+            computed_val,
+            gt_val,
+            atol=1e-5,
             err_msg=f"Running stat '{stat_key}' should be exact but deviates from ground truth",
         )
 
@@ -679,7 +686,9 @@ def test_streaming_video_stats_reservoir_quality(tmp_path, empty_lerobot_dataset
         gt_val = gt_q_stats[stat_key]
         computed_val = computed_stats[vid_key][stat_key]
         np.testing.assert_allclose(
-            computed_val, gt_val, atol=0.03,
+            computed_val,
+            gt_val,
+            atol=0.03,
             err_msg=f"Reservoir '{stat_key}' deviates from ground truth",
         )
 
@@ -702,9 +711,7 @@ def test_streaming_video_stats_single_frame(tmp_path, empty_lerobot_dataset_fact
     for stat_key in ["min", "max", "mean", "std", "count"]:
         assert stat_key in stats[vid_key], f"Missing stat key '{stat_key}'"
     # Shape should be (C, 1, 1) = (3, 1, 1) after squeeze
-    assert stats[vid_key]["mean"].shape == (3, 1, 1), (
-        f"Wrong shape: {stats[vid_key]['mean'].shape}"
-    )
+    assert stats[vid_key]["mean"].shape == (3, 1, 1), f"Wrong shape: {stats[vid_key]['mean'].shape}"
     # Stats are per-channel across all pixels, so min <= mean <= max
     assert np.all(stats[vid_key]["min"] <= stats[vid_key]["mean"])
     assert np.all(stats[vid_key]["mean"] <= stats[vid_key]["max"])
@@ -740,11 +747,13 @@ def test_streaming_video_stats_in_saved_metadata(tmp_path, empty_lerobot_dataset
 
     num_frames = 10
     for _ in range(num_frames):
-        ds.add_frame({
-            vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
-            "state": torch.randn(2),
-            "task": "test_task",
-        })
+        ds.add_frame(
+            {
+                vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+                "state": torch.randn(2),
+                "task": "test_task",
+            }
+        )
     ds.save_episode()
     ds.finalize()
 
@@ -790,15 +799,16 @@ def test_save_episode_data_then_add_frame(tmp_path, empty_lerobot_dataset_factor
 
     # Record episode 0 normally (populates the buffer, exercises full path)
     for _ in range(5):
-        ds.add_frame({
-            vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
-            "state": torch.randn(2),
-            "task": "task0",
-        })
+        ds.add_frame(
+            {
+                vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+                "state": torch.randn(2),
+                "task": "task0",
+            }
+        )
     ds.save_episode()  # calls clear_episode_buffer → restarts encoders
 
     # Build an external episode buffer (mimics intervention recording pattern)
-    ext_buffer = ds.writer._create_episode_buffer()
     for _ in range(3):
         frame = {
             vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
@@ -806,8 +816,6 @@ def test_save_episode_data_then_add_frame(tmp_path, empty_lerobot_dataset_factor
             "task": "task1",
         }
         ds.add_frame(frame)
-    # Snapshot the buffer before save_episode pops size/task
-    ext_buffer = ds.writer.episode_buffer.copy()
 
     ds.save_episode()  # save episode 1 normally to advance metadata
 
@@ -841,11 +849,13 @@ def test_save_episode_data_then_add_frame(tmp_path, empty_lerobot_dataset_factor
         ds.writer._start_video_encoders()
 
     # This must NOT raise "No active episode. Call start_episode() first."
-    ds.add_frame({
-        vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
-        "state": torch.randn(2),
-        "task": "task3",
-    })
+    ds.add_frame(
+        {
+            vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+            "state": torch.randn(2),
+            "task": "task3",
+        }
+    )
 
 
 def test_streaming_video_stats_multi_episode(tmp_path, empty_lerobot_dataset_factory):

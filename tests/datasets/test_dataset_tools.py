@@ -1558,12 +1558,14 @@ def test_trim_episode_reloadable(sample_dataset):
     trim_episode(sample_dataset, episode_index=0, trim_start_s=0.1)
 
     # Reload dataset from disk
-    with patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version:
-        with patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download:
-            mock_get_safe_version.return_value = "v3.0"
-            mock_snapshot_download.return_value = str(root)
+    with (
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+    ):
+        mock_get_safe_version.return_value = "v3.0"
+        mock_snapshot_download.return_value = str(root)
 
-            reloaded = LeRobotDataset(repo_id, root=root)
+        reloaded = LeRobotDataset(repo_id, root=root)
 
     # Should be able to access data
     assert len(reloaded) > 0
@@ -1573,8 +1575,8 @@ def test_trim_episode_reloadable(sample_dataset):
 
 def test_trim_episode_with_video(tmp_path):
     """Test trimming an episode from a video dataset."""
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.datasets.io_utils import load_episodes
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     # Load pusht which has videos
     source_dataset = LeRobotDataset("lerobot/pusht", episodes=[0, 1])

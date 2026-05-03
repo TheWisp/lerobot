@@ -15,7 +15,8 @@ stay consistent.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 def invalidate_caches(
-    app_state: "AppState",
+    app_state: AppState,
     dataset_id: str,
     invalidate_episode_indices: Callable[[str], None] | None = None,
 ) -> None:

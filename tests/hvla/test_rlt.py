@@ -14,16 +14,8 @@ import threading
 import pytest
 import torch
 
-from lerobot.policies.hvla.rlt.config import RLTConfig
 from lerobot.policies.hvla.rlt.actor_critic import RLTActor, RLTCritic, TD3Agent
-from lerobot.policies.hvla.rlt.token import (
-    RLTokenDecoder,
-    RLTokenEncoder,
-    load_rlt_token_config,
-    rl_token_reconstruction_loss,
-    save_rlt_token_config,
-)
-from lerobot.policies.hvla.rlt.replay_buffer import ReplayBuffer, TransactionalReplayBuffer
+from lerobot.policies.hvla.rlt.config import RLTConfig
 from lerobot.policies.hvla.rlt.metrics import (
     RLTMetrics,
     get_metrics,
@@ -32,7 +24,14 @@ from lerobot.policies.hvla.rlt.metrics import (
     save_metrics_to_file,
     set_metrics_path,
 )
-
+from lerobot.policies.hvla.rlt.replay_buffer import ReplayBuffer, TransactionalReplayBuffer
+from lerobot.policies.hvla.rlt.token import (
+    RLTokenDecoder,
+    RLTokenEncoder,
+    load_rlt_token_config,
+    rl_token_reconstruction_loss,
+    save_rlt_token_config,
+)
 from lerobot.policies.hvla.s1_process import _atomic_torch_save
 
 # Small dims for speed — relationships (ratios, formulas) don't depend on size.
@@ -75,6 +74,7 @@ def device():
 # ===================================================================
 # BC penalty must use L2 sum, not MSE mean (real bug: 140× too weak)
 # ===================================================================
+
 
 class TestBCPenalty:
     def test_update_actor_bc_uses_sum_not_mean(self, config, device):
@@ -130,6 +130,7 @@ class TestBCPenalty:
 # Reconstruction loss: sum over D, not mean (same class of bug)
 # ===================================================================
 
+
 class TestReconstructionLoss:
     def test_actual_loss_uses_sum_over_token_dim(self, config):
         """Call the real rl_token_reconstruction_loss and verify it uses sum."""
@@ -159,16 +160,19 @@ class TestReconstructionLoss:
         loss = rl_token_reconstruction_loss(enc, dec, torch.randn(B, N_CTX, D))
         loss.backward()
         for name, p in enc.named_parameters():
-            assert p.grad is not None and p.grad.abs().sum() > 0, \
+            assert p.grad is not None and p.grad.abs().sum() > 0, (
                 f"Encoder param '{name}' got no gradient — encoder may be detached"
+            )
         for name, p in dec.named_parameters():
-            assert p.grad is not None and p.grad.abs().sum() > 0, \
+            assert p.grad is not None and p.grad.abs().sum() > 0, (
                 f"Decoder param '{name}' got no gradient — decoder may be detached"
+            )
 
 
 # ===================================================================
 # Critic: pessimistic Q (min, not max), correct discount, target frozen
 # ===================================================================
+
 
 class TestCriticInvariants:
     def test_min_q_is_pessimistic(self, config, device):
@@ -181,8 +185,7 @@ class TestCriticInvariants:
         qs = critic(z, s, a)
         min_q = critic.min_q(z, s, a)
         expected = torch.min(torch.cat(qs, dim=-1), dim=-1, keepdim=True).values
-        assert torch.allclose(min_q, expected), \
-            "min_q must return minimum over ensemble, not maximum or mean"
+        assert torch.allclose(min_q, expected), "min_q must return minimum over ensemble, not maximum or mean"
 
     def test_discount_uses_gamma_to_the_C(self, config, device):
         """Chunk-level RL: discount should be gamma^C, not gamma.
@@ -192,7 +195,7 @@ class TestCriticInvariants:
 
         # Create a batch where we can verify the target computation
         reward = torch.ones(1, 1, device=device)
-        done = torch.zeros(1, 1, device=device)
+        torch.zeros(1, 1, device=device)
         z = torch.randn(1, D, device=device)
         s = torch.randn(1, S, device=device)
         ref = torch.randn(1, C, A, device=device)
@@ -201,12 +204,11 @@ class TestCriticInvariants:
             next_a = agent.actor(z, s, ref, deterministic=False)
             target_q = agent.critic_target.min_q(z, s, next_a)
             # Correct: gamma^C
-            expected = reward + (0.99 ** C) * target_q
+            expected = reward + (0.99**C) * target_q
             # Wrong: gamma^1
             wrong = reward + 0.99 * target_q
 
-        assert abs(expected.item() - wrong.item()) > 1e-4, \
-            "Test setup: gamma^C and gamma should differ"
+        assert abs(expected.item() - wrong.item()) > 1e-4, "Test setup: gamma^C and gamma should differ"
         # If the code uses gamma instead of gamma^C, critic loss would converge
         # to wrong values. We verify indirectly by checking the code constant.
         assert agent.config.rl_chunk_length == C
@@ -215,8 +217,7 @@ class TestCriticInvariants:
         """Target network must be frozen. If it trains, soft update breaks."""
         agent = TD3Agent(config, S, A, device)
         for p in agent.critic_target.parameters():
-            assert not p.requires_grad, \
-                "critic_target should have requires_grad=False"
+            assert not p.requires_grad, "critic_target should have requires_grad=False"
 
     def test_update_critic_returns_loss_and_grad_norm(self, config, device):
         """update_critic returns (loss, grad_norm). grad_norm must be the
@@ -257,30 +258,27 @@ class TestCriticInvariants:
         after = list(agent.critic.parameters())
 
         # Pre-clip grad was large (sanity-check the test setup)
-        assert grad_norm > config.critic_grad_clip, \
+        assert grad_norm > config.critic_grad_clip, (
             f"test setup too mild: pre-clip grad_norm={grad_norm} <= clip"
+        )
 
         # Per-param delta shouldn't exceed lr × clip (upper bound for Adam is
         # looser but this still catches runaway). lr=3e-4, clip=1.0 → delta~3e-4.
-        max_delta = max(
-            (a_.detach() - b_).abs().max().item()
-            for a_, b_ in zip(after, before)
-        )
-        assert max_delta < 1e-2, \
-            f"weight moved {max_delta} — grad clip didn't bound the step"
+        max_delta = max((a_.detach() - b_).abs().max().item() for a_, b_ in zip(after, before, strict=False))
+        assert max_delta < 1e-2, f"weight moved {max_delta} — grad clip didn't bound the step"
 
     def test_done_masks_bootstrap(self, config, device):
         """When done=1, target Q should ignore next-state value."""
         agent = TD3Agent(config, S, A, device)
         z = torch.randn(1, D, device=device)
         s = torch.randn(1, S, device=device)
-        a = torch.randn(1, C, A, device=device)
+        torch.randn(1, C, A, device=device)
         ref = torch.randn(1, C, A, device=device)
 
         with torch.no_grad():
             next_a = agent.actor(z, s, ref, deterministic=False)
             next_q = agent.critic_target.min_q(z, s, next_a)
-            gamma_C = agent.config.discount ** C
+            gamma_C = agent.config.discount**C
 
             target_done = 1.0 + (gamma_C) * (1 - 1.0) * next_q  # done=1 → just reward
             target_cont = 1.0 + (gamma_C) * (1 - 0.0) * next_q  # done=0 → reward + discounted Q
@@ -296,6 +294,7 @@ class TestCriticInvariants:
 # the critic had no activation bound. Each test pins one defense in
 # place so a future "simplification" can't quietly remove it.
 # ===================================================================
+
 
 class TestQExplosionDefenses:
     def test_critic_has_layernorm_when_enabled(self, config, device):
@@ -316,7 +315,7 @@ class TestQExplosionDefenses:
                         f"Hidden Linear at idx {i} must be followed by LayerNorm"
                     )
                     assert isinstance(modules[i + 2], torch.nn.ReLU), (
-                        f"LayerNorm at idx {i+1} must be followed by ReLU"
+                        f"LayerNorm at idx {i + 1} must be followed by ReLU"
                     )
 
     def test_critic_has_no_layernorm_when_disabled(self, config, device):
@@ -339,8 +338,7 @@ class TestQExplosionDefenses:
         actor = RLTActor(config, S, A)
         for m in actor.mlp:
             assert not isinstance(m, torch.nn.LayerNorm), (
-                "Actor must NOT use LayerNorm — BC anchor + zero-init "
-                "is its bounding mechanism."
+                "Actor must NOT use LayerNorm — BC anchor + zero-init is its bounding mechanism."
             )
 
     def test_q_target_clip_bounds_bellman_target(self, config, device):
@@ -362,7 +360,7 @@ class TestQExplosionDefenses:
         b = 4
         z = torch.randn(b, D, device=device)
         s = torch.randn(b, S, device=device)
-        a = torch.randn(b, C, A, device=device)
+        torch.randn(b, C, A, device=device)
         ref = torch.randn(b, C, A, device=device)
         reward = torch.zeros(b, 1, device=device)
         done = torch.zeros(b, 1, device=device)
@@ -370,12 +368,12 @@ class TestQExplosionDefenses:
         # Recompute the same target the critic update path computes,
         # so we test the actual clip boundary.
         with torch.no_grad():
-            next_a = agent.actor(z, s, ref, deterministic=False,
-                                 sigma=config.target_sigma,
-                                 clip=config.target_noise_clip)
+            next_a = agent.actor(
+                z, s, ref, deterministic=False, sigma=config.target_sigma, clip=config.target_noise_clip
+            )
             target_q = agent.critic_target.min_q(z, s, next_a)
-            raw_target = reward + (config.discount ** C) * (1 - done) * target_q
-            denom = 1.0 - config.discount ** C
+            raw_target = reward + (config.discount**C) * (1 - done) * target_q
+            denom = 1.0 - config.discount**C
             clipped = raw_target.clamp(-1.0 / denom, 1.0 / denom)
 
         # Sanity: raw_target was way out of range
@@ -394,9 +392,9 @@ class TestQExplosionDefenses:
         We verify by sampling many next-actions with the target call
         and checking the noise std matches target_sigma, not
         exploration_sigma."""
-        config.exploration_sigma = 0.0   # the failure-mode setting
+        config.exploration_sigma = 0.0  # the failure-mode setting
         config.target_sigma = 0.1
-        config.target_noise_clip = 1.0   # large enough not to truncate at this scale
+        config.target_noise_clip = 1.0  # large enough not to truncate at this scale
         agent = TD3Agent(config, S, A, device)
 
         b = 5000  # need a lot to estimate std reliably
@@ -407,10 +405,9 @@ class TestQExplosionDefenses:
         with torch.no_grad():
             mu = agent.actor.mean(z, s, ref)
             # Reproduce the call the critic update makes:
-            sampled = agent.actor(z, s, ref,
-                                  deterministic=False,
-                                  sigma=config.target_sigma,
-                                  clip=config.target_noise_clip)
+            sampled = agent.actor(
+                z, s, ref, deterministic=False, sigma=config.target_sigma, clip=config.target_noise_clip
+            )
             noise = sampled - mu
         std = noise.std().item()
         # Should be close to target_sigma=0.1, NOT exploration_sigma=0.0.
@@ -443,7 +440,7 @@ class TestQExplosionDefenses:
             sampled = agent.actor(z, s, ref, deterministic=False)
             noise = sampled - mu  # [B, C, A]
         # All C frames must carry the SAME perturbation per (batch, action_dim)
-        ref_frame = noise[:, 0:1, :]                      # [B, 1, A]
+        ref_frame = noise[:, 0:1, :]  # [B, 1, A]
         diff = (noise - ref_frame).abs().max().item()
         assert diff < 1e-5, (
             f"shared_noise_per_chunk should broadcast one [B,1,A] sample "
@@ -464,6 +461,7 @@ class TestQExplosionDefenses:
         # Don't pass shared_noise_per_chunk to RLTConfig; the fixture
         # also doesn't set it. We rely on the dataclass default.
         from lerobot.policies.hvla.rlt.config import RLTConfig
+
         assert RLTConfig().shared_noise_per_chunk is True
         # Smoke check: the fixture's config still inherits the default
         # because TestQExplosionDefenses' RLTConfig() construction
@@ -502,7 +500,7 @@ class TestQExplosionDefenses:
         config.exploration_sigma = 0.1
         config.target_sigma = 0.1
         config.target_noise_clip = 1.0
-        config.shared_noise_per_chunk = True   # ON for execution
+        config.shared_noise_per_chunk = True  # ON for execution
         agent = TD3Agent(config, S, A, device)
 
         b = 1000  # need many samples for std check
@@ -514,7 +512,9 @@ class TestQExplosionDefenses:
             mu = agent.actor.mean(z, s, ref)
             # Reproduce the exact call update_critic makes for target smoothing
             target_sampled = agent.actor(
-                z, s, ref,
+                z,
+                s,
+                ref,
                 deterministic=False,
                 sigma=config.target_sigma,
                 clip=config.target_noise_clip,
@@ -560,6 +560,7 @@ class TestQExplosionDefenses:
 # Replay buffer: detach, ring wrap, save/load, thread safety
 # ===================================================================
 
+
 class TestReplayBuffer:
     def test_stored_tensors_are_detached(self, device):
         """Real bug: storing tensors with grad graphs → OOM + wrong gradients."""
@@ -578,8 +579,9 @@ class TestReplayBuffer:
             done=False,
         )
         # The stored tensor must not have a grad_fn
-        assert not buf._z_rl[0].requires_grad, \
+        assert not buf._z_rl[0].requires_grad, (
             "Replay buffer must detach tensors — gradient graphs leak memory"
+        )
 
     def test_ring_buffer_overwrites_oldest(self, device):
         buf = ReplayBuffer(5, D, S, A, C, device)
@@ -603,8 +605,7 @@ class TestReplayBuffer:
             buf2 = ReplayBuffer(20, D, S, A, C, device)
             buf2.load(path)
             assert len(buf2) == 15
-            assert torch.allclose(buf._reward[:15], buf2._reward[:15]), \
-                "Rewards don't match after save/load"
+            assert torch.allclose(buf._reward[:15], buf2._reward[:15]), "Rewards don't match after save/load"
         finally:
             os.unlink(path)
 
@@ -661,8 +662,9 @@ class TestReplayBuffer:
         # ptr must track size when no wrap has occurred (asserted in
         # implementation). Sample-able indices are now [0, 7).
         sample = buf.sample(50)
-        assert sample["reward"].max().item() <= 6.0 + 1e-6, \
+        assert sample["reward"].max().item() <= 6.0 + 1e-6, (
             f"truncate left newer entries reachable: max reward = {sample['reward'].max()}"
+        )
 
     def test_truncate_to_zero(self, device):
         buf = ReplayBuffer(10, D, S, A, C, device)
@@ -738,11 +740,16 @@ class TestReplayBuffer:
 # rationale and the README TODO entry that motivated this.
 # ===================================================================
 
+
 class TestTransactionalReplayBuffer:
     def _buf(self, capacity=100):
         return TransactionalReplayBuffer(
-            capacity=capacity, rl_token_dim=D, state_dim=S,
-            action_dim=A, chunk_length=C, device=torch.device("cpu"),
+            capacity=capacity,
+            rl_token_dim=D,
+            state_dim=S,
+            action_dim=A,
+            chunk_length=C,
+            device=torch.device("cpu"),
         )
 
     def _add_one(self, buf, val=1.0):
@@ -769,9 +776,7 @@ class TestTransactionalReplayBuffer:
         buf = self._buf()
         for _ in range(5):
             self._add_one(buf)
-        assert len(buf) == 0, (
-            "len(buf) reflects committed; staging-only adds must NOT show"
-        )
+        assert len(buf) == 0, "len(buf) reflects committed; staging-only adds must NOT show"
         assert buf.pending_size == 5
 
     def test_sample_never_returns_staged_transitions(self):
@@ -835,8 +840,7 @@ class TestTransactionalReplayBuffer:
         sample = buf.sample(5)
         for r in sample["reward"].squeeze():
             assert r.item() == 1.0, (
-                "Sampled reward came from discarded episode 2 — "
-                "IGNORE is leaking into training."
+                "Sampled reward came from discarded episode 2 — IGNORE is leaking into training."
             )
 
     def test_repeated_commit_discard_cycles(self):
@@ -877,7 +881,9 @@ class TestTransactionalReplayBuffer:
 
     def test_save_load_only_persists_committed(self):
         """Staging is volatile — never serialized. Reload is committed-only."""
-        import tempfile, os
+        import os
+        import tempfile
+
         buf = self._buf()
         for _ in range(4):
             self._add_one(buf, val=1.0)
@@ -931,6 +937,7 @@ class TestTransactionalReplayBuffer:
 # Metrics: autonomous rate formula (real bug: wrong denominator)
 # ===================================================================
 
+
 class TestMetrics:
     def test_autonomous_rate_denominator_is_all_episodes(self):
         """Real bug: was auto_successes/auto_episodes = 5/5 = 100%.
@@ -943,8 +950,7 @@ class TestMetrics:
 
         snap = m.snapshot()
         assert snap["autonomous_rate"] == 0.25, (
-            f"Got {snap['autonomous_rate']}. "
-            f"If 1.0, denominator is auto_episodes not all_episodes."
+            f"Got {snap['autonomous_rate']}. If 1.0, denominator is auto_episodes not all_episodes."
         )
 
     def test_rolling_series_uses_same_formula(self):
@@ -958,8 +964,7 @@ class TestMetrics:
         snap = m.snapshot()
         rolling = snap["series"]["autonomous_rate_rolling"]
         # Last point: 10 auto successes in 20 total = 0.5
-        assert abs(rolling[-1] - 0.5) < 0.01, \
-            "Rolling series disagrees with headline formula"
+        assert abs(rolling[-1] - 0.5) < 0.01, "Rolling series disagrees with headline formula"
 
     def test_series_bounded_under_max(self):
         m = RLTMetrics()
@@ -989,13 +994,19 @@ class TestMetrics:
         m = RLTMetrics()
         for i in range(10):
             m.record_episode(episode=i, success=True, autonomous=True, duration_s=5.0)
-            m.record_inference(step=i, delta=0.01, buffer_size=i,
-                               total_updates=i, mode="RL")
+            m.record_inference(step=i, delta=0.01, buffer_size=i, total_updates=i, mode="RL")
             m.record_grad_update(
-                total_updates=i, mode="RL",
-                critic_loss=0.1, critic_grad_norm=1.0, actor_loss=-0.3,
-                q_mean=1.0, q_min=0.5, q_max=1.5,
-                actor_q_term=-0.3, actor_bc_term=0.1, update_rate=10.0,
+                total_updates=i,
+                mode="RL",
+                critic_loss=0.1,
+                critic_grad_norm=1.0,
+                actor_loss=-0.3,
+                q_mean=1.0,
+                q_min=0.5,
+                q_max=1.5,
+                actor_q_term=-0.3,
+                actor_bc_term=0.1,
+                update_rate=10.0,
             )
         json.dumps(m.snapshot())  # must not raise
 
@@ -1003,6 +1014,7 @@ class TestMetrics:
 # ===================================================================
 # Config: warmup episode boundary (0-indexed)
 # ===================================================================
+
 
 class TestWarmupBoundary:
     """Guards against the pre-migration off-by-one where ``episode <=
@@ -1086,17 +1098,16 @@ class TestTokenCheckpointManifest:
         # Caller's base has runtime values that shouldn't be clobbered
         base = RLTConfig(beta=0.5, exploration_sigma=0.1)
         loaded = load_rlt_token_config(tmp_path, base=base)
-        assert loaded.token_encoder_layers == 4    # shape field — overridden from manifest
-        assert loaded.beta == 0.5                  # non-shape — base preserved
-        assert loaded.exploration_sigma == 0.1     # non-shape — base preserved
+        assert loaded.token_encoder_layers == 4  # shape field — overridden from manifest
+        assert loaded.beta == 0.5  # non-shape — base preserved
+        assert loaded.exploration_sigma == 0.1  # non-shape — base preserved
 
     def test_load_with_trained_arch_can_load_state_dict(self, tmp_path):
         """End-to-end: save a 4-layer encoder's state_dict + its manifest,
         read the manifest, rebuild the encoder with the loaded config,
         and the state_dict load must succeed (no shape mismatch)."""
         # Build, save, done — pretend this is what train_token.py produces
-        trained_cfg = RLTConfig(rl_token_dim=128, token_encoder_layers=4,
-                                token_ffn_dim=256)
+        trained_cfg = RLTConfig(rl_token_dim=128, token_encoder_layers=4, token_ffn_dim=256)
         original = RLTokenEncoder(trained_cfg)
         torch.save(original.state_dict(), tmp_path / "encoder.pt")
         save_rlt_token_config(tmp_path, trained_cfg)
@@ -1120,19 +1131,19 @@ class TestTokenCheckpointManifest:
         """
         # Widened: ctx=64, bottleneck=128 (mimics our 768 → 2048 experiment)
         trained_cfg = RLTConfig(
-            rl_token_dim=128, context_dim=64,
-            token_encoder_layers=2, token_ffn_dim=128,
+            rl_token_dim=128,
+            context_dim=64,
+            token_encoder_layers=2,
+            token_ffn_dim=128,
         )
         enc = RLTokenEncoder(trained_cfg)
         dec = RLTokenDecoder(trained_cfg)
 
         # Input has context_dim channels; output z_rl must have rl_token_dim;
         # reconstruction must land back in context_dim.
-        ctx = torch.randn(3, 10, 64)        # [B=3, N=10, C=64]
+        ctx = torch.randn(3, 10, 64)  # [B=3, N=10, C=64]
         z_rl = enc(ctx)
-        assert z_rl.shape == (3, 128), (
-            f"z_rl shape {z_rl.shape} — expected [B, rl_token_dim] = [3, 128]"
-        )
+        assert z_rl.shape == (3, 128), f"z_rl shape {z_rl.shape} — expected [B, rl_token_dim] = [3, 128]"
         recon = dec(z_rl, ctx)
         assert recon.shape == ctx.shape, (
             f"Reconstruction shape {recon.shape} must equal target shape "
@@ -1162,8 +1173,7 @@ class TestTokenCheckpointManifest:
         checkpoints from before this feature load via existing state_dict
         keys unchanged — state_dict keys are determined by module types,
         and nn.Identity has zero keys."""
-        cfg = RLTConfig(rl_token_dim=64, context_dim=None,
-                        token_encoder_layers=1, token_ffn_dim=32)
+        cfg = RLTConfig(rl_token_dim=64, context_dim=None, token_encoder_layers=1, token_ffn_dim=32)
         enc = RLTokenEncoder(cfg)
         dec = RLTokenDecoder(cfg)
         enc_keys = set(enc.state_dict().keys())
@@ -1174,7 +1184,7 @@ class TestTokenCheckpointManifest:
             f"got keys with it: {[k for k in enc_keys if 'input_proj' in k]}"
         )
         assert not any("target_proj" in k for k in dec_keys), (
-            f"Decoder in symmetric mode should not have target_proj params"
+            "Decoder in symmetric mode should not have target_proj params"
         )
 
 
@@ -1182,6 +1192,7 @@ class TestTokenCheckpointManifest:
 # Atomic checkpoint save (_atomic_torch_save) — prevents torn .pt files
 # when the process crashes mid-save. See commit 4c5624b1f.
 # ===================================================================
+
 
 class TestAtomicTorchSave:
     def test_writes_object_to_target_path(self, tmp_path):
@@ -1221,6 +1232,7 @@ class TestAtomicTorchSave:
         class _Unpicklable:
             def __reduce__(self):
                 raise RuntimeError("intentional save failure")
+
         with pytest.raises(RuntimeError, match="intentional save failure"):
             _atomic_torch_save({"bad": _Unpicklable()}, path)
 
@@ -1244,6 +1256,7 @@ class TestAtomicTorchSave:
 # ===================================================================
 # Helpers
 # ===================================================================
+
 
 def _make_batch(config, device):
     return {

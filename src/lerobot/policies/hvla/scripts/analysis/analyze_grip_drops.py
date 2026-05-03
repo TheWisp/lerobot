@@ -15,7 +15,6 @@ Usage:
 import argparse
 import logging
 import os
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -35,12 +34,14 @@ def load_drop_states(drop_dir: str) -> list[dict]:
         chunk_path = os.path.join(path, "chunk.npy")
         if not os.path.exists(state_path):
             continue
-        drops.append({
-            "name": entry,
-            "state": np.load(state_path),
-            "chunk": np.load(chunk_path) if os.path.exists(chunk_path) else None,
-            "path": path,
-        })
+        drops.append(
+            {
+                "name": entry,
+                "state": np.load(state_path),
+                "chunk": np.load(chunk_path) if os.path.exists(chunk_path) else None,
+                "path": path,
+            }
+        )
     return drops
 
 
@@ -63,12 +64,14 @@ def find_nearest_training_frames(
         if ep_counts.get(ep, 0) >= max_per_episode:
             continue
         ep_counts[ep] = ep_counts.get(ep, 0) + 1
-        results.append({
-            "frame_idx": idx,
-            "episode": ep,
-            "distance": dists[idx],
-            "state": all_states[idx],
-        })
+        results.append(
+            {
+                "frame_idx": idx,
+                "episode": ep,
+                "distance": dists[idx],
+                "state": all_states[idx],
+            }
+        )
         if len(results) >= num_nearest:
             break
     return results
@@ -82,23 +85,29 @@ def build_batch_from_dataset(dataset, frame_idx: int, image_keys: list[str], dev
         img = sample[key]  # [C, H, W] float
         if img.shape[1] != 224 or img.shape[2] != 224:
             import torchvision.transforms.functional as TF
+
             img = TF.resize(img, [224, 224], interpolation=TF.InterpolationMode.BILINEAR, antialias=True)
         batch[key] = img.unsqueeze(0).to(device)
     batch["observation.state"] = sample["observation.state"].unsqueeze(0).to(device)
     return batch
 
 
-def build_batch_from_drop(drop: dict, image_keys: list[str], device: torch.device,
-                          resize_to: tuple = (224, 224)) -> dict:
+def build_batch_from_drop(
+    drop: dict, image_keys: list[str], device: torch.device, resize_to: tuple = (224, 224)
+) -> dict:
     """Build a model-ready batch from a saved grip drop observation."""
     import cv2
+
     batch = {}
     # Load images from saved JPGs
     for key in image_keys:
         cam_name = key.split(".")[-1]
         # Try different naming patterns
-        for pattern in [f"{cam_name}.jpg", f"observation_images_{cam_name}.jpg",
-                       f"{cam_name.replace('.', '_')}.jpg"]:
+        for pattern in [
+            f"{cam_name}.jpg",
+            f"observation_images_{cam_name}.jpg",
+            f"{cam_name.replace('.', '_')}.jpg",
+        ]:
             img_path = os.path.join(drop["path"], pattern)
             if os.path.exists(img_path):
                 img = cv2.imread(img_path)
@@ -187,19 +196,23 @@ def main():
 
     # Load dataset
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
     dataset = LeRobotDataset(args.dataset)
     logger.info("Dataset: %d frames, %d episodes", len(dataset), dataset.meta.total_episodes)
 
     # Pre-load all states from parquet (fast — no video decoding)
     logger.info("Loading all states from parquet...")
-    import pyarrow.parquet as pq
     import glob
+
+    import pyarrow.parquet as pq
+
     parquet_files = sorted(glob.glob(str(dataset.root / "data" / "**" / "*.parquet"), recursive=True))
     all_rows = []
     for pf in parquet_files:
         table = pq.read_table(pf, columns=["observation.state", "episode_index"])
         all_rows.append(table)
     import pyarrow as pa
+
     merged = pa.concat_tables(all_rows)
     # observation.state is stored as list<float>, convert to 2D numpy
     all_states = np.array(merged.column("observation.state").to_pylist(), dtype=np.float32)
@@ -215,7 +228,8 @@ def main():
         episode_ends[ep] = i + 1
 
     # Load policy
-    from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Policy, FlowMatchingS1Config
+    from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Config, FlowMatchingS1Policy
+
     config = FlowMatchingS1Config()
     policy = FlowMatchingS1Policy.from_pretrained(args.checkpoint, config=config)
     policy.to(device).eval()
@@ -225,25 +239,32 @@ def main():
     s2_latent = torch.zeros(2048)
 
     # Analyze each drop
-    for drop_idx, drop in enumerate(drops[:args.max_drops]):
+    for _drop_idx, drop in enumerate(drops[: args.max_drops]):
         logger.info("\n" + "=" * 80)
         logger.info("ANALYZING DROP: %s", drop["name"])
         logger.info("State: %s", " ".join(f"{v:.1f}" for v in drop["state"]))
         if drop["chunk"] is not None:
-            logger.info("Chunk R gripper[0:15]: %s",
-                       " ".join(f"{drop['chunk'][i, 13]:.0f}" for i in range(15)))
+            logger.info(
+                "Chunk R gripper[0:15]: %s", " ".join(f"{drop['chunk'][i, 13]:.0f}" for i in range(15))
+            )
 
         # Find nearest training frames
         nearest = find_nearest_training_frames(
-            drop["state"], all_states, all_episodes,
+            drop["state"],
+            all_states,
+            all_episodes,
             num_nearest=args.num_nearest,
         )
 
         logger.info("\nNearest training frames:")
         for nn in nearest[:5]:
-            logger.info("  frame=%d ep=%d dist=%.2f state=%s",
-                       nn["frame_idx"], nn["episode"], nn["distance"],
-                       " ".join(f"{v:.1f}" for v in nn["state"]))
+            logger.info(
+                "  frame=%d ep=%d dist=%.2f state=%s",
+                nn["frame_idx"],
+                nn["episode"],
+                nn["distance"],
+                " ".join(f"{v:.1f}" for v in nn["state"]),
+            )
 
         # Run model on drop observation
         drop_batch = build_batch_from_drop(drop, image_keys, device)
@@ -253,23 +274,33 @@ def main():
 
         logger.info("\nRunning model on DROP observation (%d repeats)...", args.num_repeats)
         drop_results = run_model_repeated(policy, drop_batch, s2_latent, args.num_repeats, device)
-        logger.info("  R gripper drop rate: %.0f%% (%d/%d)",
-                    drop_results["r_drop_rate"] * 100,
-                    int(drop_results["r_drop_rate"] * args.num_repeats),
-                    args.num_repeats)
-        logger.info("  R gripper mean[0:10]: %s",
-                    " ".join(f"{v:.1f}" for v in drop_results["r_mean_trajectory"][:10]))
+        logger.info(
+            "  R gripper drop rate: %.0f%% (%d/%d)",
+            drop_results["r_drop_rate"] * 100,
+            int(drop_results["r_drop_rate"] * args.num_repeats),
+            args.num_repeats,
+        )
+        logger.info(
+            "  R gripper mean[0:10]: %s", " ".join(f"{v:.1f}" for v in drop_results["r_mean_trajectory"][:10])
+        )
 
         # Run model on nearest training frames
-        logger.info("\nRunning model on TRAINING observations (%d nearest × %d repeats)...",
-                    min(5, len(nearest)), args.num_repeats)
+        logger.info(
+            "\nRunning model on TRAINING observations (%d nearest × %d repeats)...",
+            min(5, len(nearest)),
+            args.num_repeats,
+        )
         for nn in nearest[:5]:
             train_batch = build_batch_from_dataset(dataset, nn["frame_idx"], image_keys, device)
             train_results = run_model_repeated(policy, train_batch, s2_latent, args.num_repeats, device)
-            logger.info("  frame=%d ep=%d dist=%.2f | R drop=%.0f%% | R mean[0:10]: %s",
-                       nn["frame_idx"], nn["episode"], nn["distance"],
-                       train_results["r_drop_rate"] * 100,
-                       " ".join(f"{v:.1f}" for v in train_results["r_mean_trajectory"][:10]))
+            logger.info(
+                "  frame=%d ep=%d dist=%.2f | R drop=%.0f%% | R mean[0:10]: %s",
+                nn["frame_idx"],
+                nn["episode"],
+                nn["distance"],
+                train_results["r_drop_rate"] * 100,
+                " ".join(f"{v:.1f}" for v in train_results["r_mean_trajectory"][:10]),
+            )
 
         # --- Camera swap ablation ---
         # Find the best training frame (lowest drop rate, closest distance)
@@ -286,47 +317,56 @@ def main():
 
         if best_nn is not None and best_nn_drop_rate < 0.1 and drop_results["r_drop_rate"] > 0.3:
             logger.info("\n--- CAMERA SWAP ABLATION for %s ---", drop["name"])
-            logger.info("Baseline: DROP obs = %.0f%% drops | TRAIN frame=%d = %.0f%% drops",
-                        drop_results["r_drop_rate"] * 100, best_nn["frame_idx"],
-                        best_nn_drop_rate * 100)
+            logger.info(
+                "Baseline: DROP obs = %.0f%% drops | TRAIN frame=%d = %.0f%% drops",
+                drop_results["r_drop_rate"] * 100,
+                best_nn["frame_idx"],
+                best_nn_drop_rate * 100,
+            )
 
             # For each camera: take training batch, replace ONE camera with inference image
             for cam_key in image_keys:
                 if cam_key not in drop_batch or cam_key not in best_nn_batch:
                     continue
                 # Start from training batch (0% drops), swap in ONE inference camera
-                hybrid_batch = {k: v.clone() if isinstance(v, torch.Tensor) else v
-                                for k, v in best_nn_batch.items()}
+                hybrid_batch = {
+                    k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in best_nn_batch.items()
+                }
                 hybrid_batch[cam_key] = drop_batch[cam_key].clone()
                 hybrid_result = run_model_repeated(policy, hybrid_batch, s2_latent, args.num_repeats, device)
                 cam_name = cam_key.split(".")[-1]
-                logger.info("  Swap %s → infer: R drop=%.0f%%", cam_name,
-                            hybrid_result["r_drop_rate"] * 100)
+                logger.info("  Swap %s → infer: R drop=%.0f%%", cam_name, hybrid_result["r_drop_rate"] * 100)
 
             # Also test: take inference batch, replace ONE camera with training image
             logger.info("  --- Reverse (infer base, swap in training cameras) ---")
             for cam_key in image_keys:
                 if cam_key not in drop_batch or cam_key not in best_nn_batch:
                     continue
-                hybrid_batch = {k: v.clone() if isinstance(v, torch.Tensor) else v
-                                for k, v in drop_batch.items()}
+                hybrid_batch = {
+                    k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in drop_batch.items()
+                }
                 hybrid_batch[cam_key] = best_nn_batch[cam_key].clone()
                 hybrid_result = run_model_repeated(policy, hybrid_batch, s2_latent, args.num_repeats, device)
                 cam_name = cam_key.split(".")[-1]
-                logger.info("  Swap %s → train: R drop=%.0f%%", cam_name,
-                            hybrid_result["r_drop_rate"] * 100)
+                logger.info("  Swap %s → train: R drop=%.0f%%", cam_name, hybrid_result["r_drop_rate"] * 100)
 
             # Test swapping ALL cameras at once (should match training drop rate)
-            all_train_batch = {k: v.clone() if isinstance(v, torch.Tensor) else v
-                               for k, v in best_nn_batch.items()}
+            all_train_batch = {
+                k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in best_nn_batch.items()
+            }
             # Keep inference state, use all training images
             all_train_batch["observation.state"] = drop_batch["observation.state"].clone()
-            all_train_result = run_model_repeated(policy, all_train_batch, s2_latent, args.num_repeats, device)
-            logger.info("  All cameras → train (infer state): R drop=%.0f%%",
-                        all_train_result["r_drop_rate"] * 100)
+            all_train_result = run_model_repeated(
+                policy, all_train_batch, s2_latent, args.num_repeats, device
+            )
+            logger.info(
+                "  All cameras → train (infer state): R drop=%.0f%%", all_train_result["r_drop_rate"] * 100
+            )
         else:
-            logger.info("\n--- SKIP ablation: no clean training baseline found (best=%.0f%% drops) ---",
-                        best_nn_drop_rate * 100)
+            logger.info(
+                "\n--- SKIP ablation: no clean training baseline found (best=%.0f%% drops) ---",
+                best_nn_drop_rate * 100,
+            )
 
         logger.info("\n--- SUMMARY for %s ---", drop["name"])
         logger.info("Drop observation R drop rate: %.0f%%", drop_results["r_drop_rate"] * 100)

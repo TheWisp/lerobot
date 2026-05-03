@@ -19,10 +19,10 @@ import pytest
 import torch
 import torchvision.transforms.functional as TF
 
-
 # ---------------------------------------------------------------------------
 # Test fixtures: small, deterministic raw observations
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def raw_state_14():
@@ -31,8 +31,7 @@ def raw_state_14():
     Values chosen so normalized output is easy to read.
     """
     return torch.tensor(
-        [90.0, -45.0, 30.0, 0.0, 10.0, 20.0, 50.0,
-         -90.0,  45.0, -30.0, 5.0, -10.0, -20.0, -50.0],
+        [90.0, -45.0, 30.0, 0.0, 10.0, 20.0, 50.0, -90.0, 45.0, -30.0, 5.0, -10.0, -20.0, -50.0],
         dtype=torch.float32,
     )
 
@@ -44,14 +43,12 @@ def state_norm_stats_14():
     FlowMatchingDataset) also vary per joint (shoulder ≠ wrist ≠ gripper)."""
     # 14 distinct means spanning a realistic range (-15 to +15 deg offsets)
     mean = torch.tensor(
-        [ 12.0,  -8.0,   5.0,   2.0,   15.0, -10.0,   7.0,
-          -12.0,   8.0,  -5.0,  -2.0,  -15.0,  10.0,  -7.0],
+        [12.0, -8.0, 5.0, 2.0, 15.0, -10.0, 7.0, -12.0, 8.0, -5.0, -2.0, -15.0, 10.0, -7.0],
         dtype=torch.float32,
     )
     # 14 distinct stds: variety so tests catch any accidental scalar/axis collapse
     std = torch.tensor(
-        [22.0, 18.0, 30.0, 14.0, 25.0, 19.0, 12.0,
-         20.0, 16.0, 28.0, 13.0, 27.0, 17.0, 11.0],
+        [22.0, 18.0, 30.0, 14.0, 25.0, 19.0, 12.0, 20.0, 16.0, 28.0, 13.0, 27.0, 17.0, 11.0],
         dtype=torch.float32,
     )
     return mean, std
@@ -82,9 +79,7 @@ class TestStateNormalizationParity:
     ``FlowMatchingDataset``. This test fails before the fix.
     """
 
-    def test_training_preprocess_produces_zscored_state(
-        self, raw_state_14, state_norm_stats_14
-    ):
+    def test_training_preprocess_produces_zscored_state(self, raw_state_14, state_norm_stats_14):
         """FlowMatchingDataset stores z-scored state in __getitem__. Replicate
         that expectation as a baseline for the inference-parity test, and
         sanity-check that the fixtures themselves produce a reasonable
@@ -102,9 +97,7 @@ class TestStateNormalizationParity:
             f"{expected.abs().max():.2f}. Check raw_state_14 / state_norm_stats_14."
         )
 
-    def test_obs_to_s1_batch_returns_raw_state_by_contract(
-        self, raw_state_14
-    ):
+    def test_obs_to_s1_batch_returns_raw_state_by_contract(self, raw_state_14):
         """``obs_to_s1_batch`` is a low-level obs→tensor converter; it does
         not know policy norm stats. Its contract is "raw state in, raw
         tensor out". Whoever consumes it is responsible for normalization.
@@ -116,15 +109,16 @@ class TestStateNormalizationParity:
         obs["front"] = np.zeros((224, 224, 3), dtype=np.uint8)
 
         batch = obs_to_s1_batch(
-            obs, s1_image_keys=["observation.images.front"],
-            shared_cache=None, s2_latent_key="observation.s2_latent",
-            device=torch.device("cpu"), resize_to=None,
+            obs,
+            s1_image_keys=["observation.images.front"],
+            shared_cache=None,
+            s2_latent_key="observation.s2_latent",  # gitleaks:allow
+            device=torch.device("cpu"),
+            resize_to=None,
         )
         assert torch.allclose(batch["observation.state"][0], raw_state_14)
 
-    def test_policy_prepare_batch_normalizes_state(
-        self, raw_state_14, state_norm_stats_14
-    ):
+    def test_policy_prepare_batch_normalizes_state(self, raw_state_14, state_norm_stats_14):
         """The FIX: ``FlowMatchingS1Policy`` must expose a method that
         produces a batch ready for ``encode_observations`` — meaning state
         z-scored with the same mean/std that training used (stored in
@@ -161,6 +155,7 @@ class TestStateNormalizationParity:
         policy._action_std = None
         # config isn't needed for state-only branch of prepare_batch
         from types import SimpleNamespace
+
         policy.config = SimpleNamespace(image_features={})
 
         raw_batch = {"observation.state": raw_state_14.unsqueeze(0)}
@@ -170,9 +165,10 @@ class TestStateNormalizationParity:
 
         expected = (raw_state_14 - mean) / std
         torch.testing.assert_close(
-            prepared["observation.state"][0], expected,
+            prepared["observation.state"][0],
+            expected,
             msg="prepare_batch must z-score state using policy norm_stats — "
-                "that's the invariant encode_observations needs (per training)",
+            "that's the invariant encode_observations needs (per training)",
         )
 
 
@@ -192,8 +188,10 @@ class TestImagePreprocessingParity:
         """Exactly what FlowMatchingDataset.__getitem__ does (train.py:151-158)."""
         img = torch.from_numpy(raw_image_hwc).permute(2, 0, 1).float() / 255.0
         return TF.resize(
-            img, list(resize_to),
-            interpolation=TF.InterpolationMode.BILINEAR, antialias=True,
+            img,
+            list(resize_to),
+            interpolation=TF.InterpolationMode.BILINEAR,
+            antialias=True,
         )
 
     @staticmethod
@@ -201,8 +199,8 @@ class TestImagePreprocessingParity:
         """Current inference path (s1_process.py:175-178) — what we need to
         replace. Kept here so we can show the mismatch numerically."""
         import cv2
-        img = cv2.resize(raw_image_hwc, (resize_to[1], resize_to[0]),
-                          interpolation=cv2.INTER_LINEAR)
+
+        img = cv2.resize(raw_image_hwc, (resize_to[1], resize_to[0]), interpolation=cv2.INTER_LINEAR)
         return torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
 
     def test_cv2_path_differs_from_training(self, raw_image_hwc):
@@ -232,16 +230,19 @@ class TestImagePreprocessingParity:
         the fix, obs_to_s1_batch / policy.preprocess_image produces the
         same tensor as FlowMatchingDataset.
         """
-        from lerobot.policies.hvla.s1_process import obs_to_s1_batch, JOINT_NAMES
+        from lerobot.policies.hvla.s1_process import JOINT_NAMES, obs_to_s1_batch
 
         resize_to = (224, 224)
-        obs = {name: 0.0 for name in JOINT_NAMES}
+        obs = dict.fromkeys(JOINT_NAMES, 0.0)
         obs["front"] = raw_image_hwc
 
         batch = obs_to_s1_batch(
-            obs, s1_image_keys=["observation.images.front"],
-            shared_cache=None, s2_latent_key="observation.s2_latent",
-            device=torch.device("cpu"), resize_to=resize_to,
+            obs,
+            s1_image_keys=["observation.images.front"],
+            shared_cache=None,
+            s2_latent_key="observation.s2_latent",  # gitleaks:allow
+            device=torch.device("cpu"),
+            resize_to=resize_to,
         )
         inference_img = batch["observation.images.front"][0]  # [3, H, W]
 
@@ -250,11 +251,13 @@ class TestImagePreprocessingParity:
         # Tight tolerance: same input, same algorithm, same precision — should
         # be bit-exact or extremely close after the fix.
         torch.testing.assert_close(
-            inference_img, train_img,
-            rtol=1e-4, atol=1e-4,
+            inference_img,
+            train_img,
+            rtol=1e-4,
+            atol=1e-4,
             msg="obs_to_s1_batch image path must match FlowMatchingDataset "
-                "(torchvision bilinear + antialias). If off by < 1 pixel but "
-                "> 1e-4, a different interpolation path has crept in.",
+            "(torchvision bilinear + antialias). If off by < 1 pixel but "
+            "> 1e-4, a different interpolation path has crept in.",
         )
 
 
@@ -281,8 +284,8 @@ class TestNonDinoBackboneParityKnownBroken:
     @pytest.mark.xfail(
         strict=True,
         reason="ACT-VLM training uses F.interpolate without antialiasing. "
-               "Inference path will be unified to TF.resize+antialias for "
-               "flow_matching; ACT-VLM pipeline alignment is a follow-up.",
+        "Inference path will be unified to TF.resize+antialias for "
+        "flow_matching; ACT-VLM pipeline alignment is a follow-up.",
     )
     def test_act_vlm_resize_matches_inference(self):
         """See class docstring for context on the xfail."""
@@ -311,7 +314,6 @@ class TestActorDtypeParity:
         matching how it was trained. Captured by wrapping the actor in a
         mock that records input dtypes and exercising the inference-side
         autocast + _rlt_inference_step path."""
-        from types import SimpleNamespace
         from lerobot.policies.hvla.rlt.config import RLTConfig
         from lerobot.policies.hvla.s1_inference import InferenceThread
         from lerobot.policies.hvla.s1_process import JOINT_NAMES
@@ -330,9 +332,11 @@ class TestActorDtypeParity:
         class _MinimalPolicy:
             class _MockInnerModel:
                 pass
+
             model = _MockInnerModel()
             supports_rtc = False
             rtc_prefix_length = 0
+
             def __init__(self):
                 self._state_mean = None
                 self._state_std = None
@@ -368,9 +372,7 @@ class TestActorDtypeParity:
 
         # Enter the same autocast context the main loop uses, then call
         # _rlt_inference_step — the fix must ensure the actor still sees fp32.
-        with torch.no_grad(), torch.autocast(
-            device_type="cpu", dtype=torch.bfloat16, enabled=False
-        ):
+        with torch.no_grad(), torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=False):
             # Note: enabled=False is used for CPU autocast because CPU bf16
             # autocast support is limited. What we're actually testing is that
             # the actor's inputs are fp32 regardless of the outer context —

@@ -19,14 +19,7 @@ import os
 from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import sys
-
-if sys.version_info >= (3, 11):
-    from typing import TypedDict, TypeVar, Unpack
-else:
-    from typing import TypedDict, TypeVar
-
-    from typing_extensions import Unpack
+from typing import TypedDict, TypeVar, Unpack
 
 import packaging
 import safetensors

@@ -84,10 +84,9 @@ from lerobot.datasets.utils import (
     LEGACY_TASKS_PATH,
     update_chunk_file_indices,
 )
-from lerobot.utils.utils import flatten_dict
 from lerobot.datasets.video_utils import concatenate_video_files, get_video_duration_in_s
 from lerobot.utils.constants import HF_LEROBOT_HOME
-from lerobot.utils.utils import init_logging
+from lerobot.utils.utils import flatten_dict, init_logging
 
 V21 = "v2.1"
 V30 = "v3.0"

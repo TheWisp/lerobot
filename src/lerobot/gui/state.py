@@ -52,8 +52,8 @@ class AppState:
     Holds all opened datasets, frame cache, and pending edits.
     """
 
-    frame_cache: "FrameCache"
-    datasets: dict[str, "LeRobotDataset"] = field(default_factory=dict)
+    frame_cache: FrameCache
+    datasets: dict[str, LeRobotDataset] = field(default_factory=dict)
     pending_edits: list[PendingEdit] = field(default_factory=list)
     _dataset_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
 

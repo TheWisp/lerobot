@@ -47,6 +47,7 @@ both `"image"` and `"video"` dtype keys take the same code path — write a PNG 
 For **image-mode datasets**, PNGs are the final storage format. They belong on disk.
 
 For **video-mode keys**, the PNGs are pure waste:
+
 1. Written to disk during recording (I/O cost)
 2. Sampled and read back for stats computation ([compute_stats.py:511-512](src/lerobot/datasets/compute_stats.py#L511-L512))
 3. ALL read back for video encoding ([video_utils.py:378-385](src/lerobot/datasets/video_utils.py#L378-L385))
@@ -87,6 +88,7 @@ the dataset is fully consistent** — parquet, video files, and metadata all agr
 robot throws an exception (a common occurrence), everything already saved is intact.
 
 With an episode-level async queue of depth N:
+
 - Parquet and metadata are written immediately for episodes 1..N
 - But video files only contain data up to episode 0
 - A crash leaves the dataset **silently corrupt**: metadata references video timestamps
@@ -147,15 +149,15 @@ save_episode():
 
 ### Why This Is Better in Every Dimension
 
-| Concern | Episode-level async (old plan) | Frame-level streaming (this plan) |
-|---------|-------------------------------|-----------------------------------|
-| Crash safety | Lose N queued episodes, corrupt metadata | Lose at most current episode (same as today) |
-| Metadata consistency | Broken for queued episodes | Always consistent — sync save_episode() |
-| Queue buildup | Real risk with short episodes | Impossible — queue bounded by episode length, lag absorbed at finish() |
-| PNG I/O during recording | Writes ALL frames as PNGs | Zero PNGs during recording for video keys |
-| Reset time utilization | Wasted | Encoder finishes trailing frames |
-| Complexity | New queue, recovery, reconciliation | Replaces AsyncImageWriter for video keys |
-| Downstream compatibility | Needs metadata split/deferral | compute_episode_stats unchanged |
+| Concern                  | Episode-level async (old plan)           | Frame-level streaming (this plan)                                      |
+| ------------------------ | ---------------------------------------- | ---------------------------------------------------------------------- |
+| Crash safety             | Lose N queued episodes, corrupt metadata | Lose at most current episode (same as today)                           |
+| Metadata consistency     | Broken for queued episodes               | Always consistent — sync save_episode()                                |
+| Queue buildup            | Real risk with short episodes            | Impossible — queue bounded by episode length, lag absorbed at finish() |
+| PNG I/O during recording | Writes ALL frames as PNGs                | Zero PNGs during recording for video keys                              |
+| Reset time utilization   | Wasted                                   | Encoder finishes trailing frames                                       |
+| Complexity               | New queue, recovery, reconciliation      | Replaces AsyncImageWriter for video keys                               |
+| Downstream compatibility | Needs metadata split/deferral            | compute_episode_stats unchanged                                        |
 
 ---
 
@@ -467,13 +469,13 @@ def _make_video_tmp_path(self, video_key: str) -> Path:
 
 #### Summary of Upstream Diff
 
-| Location | Change | Lines touched |
-|----------|--------|--------------|
-| `create()` | +1 line: `obj._init_video_encoders()` | 1 |
-| `add_frame()` | +3 lines: guard + push_frame + continue | 3 |
-| `save_episode()` | +~12 lines: finish/stats/guard/restart | 12 |
-| `clear_episode_buffer()` | +2 lines: guard + discard call | 2 |
-| **Total in existing methods** | | **~18 lines** |
+| Location                      | Change                                  | Lines touched |
+| ----------------------------- | --------------------------------------- | ------------- |
+| `create()`                    | +1 line: `obj._init_video_encoders()`   | 1             |
+| `add_frame()`                 | +3 lines: guard + push_frame + continue | 3             |
+| `save_episode()`              | +~12 lines: finish/stats/guard/restart  | 12            |
+| `clear_episode_buffer()`      | +2 lines: guard + discard call          | 2             |
+| **Total in existing methods** |                                         | **~18 lines** |
 
 All logic lives in the new helper methods + `StreamingVideoEncoder` class. The existing
 methods gain small guards that check `if self.video_encoders:` and delegate. If upstream
@@ -485,6 +487,7 @@ they're inserted between existing blocks, not modifying them.
 ## Can Encoding Keep Up with Real-Time?
 
 At 30fps, each frame has a 33ms budget. With libsvtav1 at preset 12 (fastest):
+
 - Single-frame encode is typically well under 33ms on modern CPUs
 - The background thread has the full frame interval to encode each frame
 - If occasional frames take longer, the bounded queue (maxsize=60, ~2s) absorbs bursts
@@ -499,6 +502,7 @@ missed camera polls — corrupting the very data we're trying to capture. The re
 must run at a rock-steady rate; it is not an acceptable place to absorb lag.
 
 Instead, if the encoder falls behind, frames accumulate in memory:
+
 - The queue can never grow beyond one episode's worth of frames (episodes are finite)
 - The realistic cost is only the **lag**, not total frames, since the encoder consumes
   continuously. If the encoder is 10% slower than real-time over a 60-second episode,
@@ -517,6 +521,7 @@ recording quality.
 ## Re-record Compatibility
 
 Re-record calls `clear_episode_buffer()` → `encoder.discard()`:
+
 - Background encoding thread receives discard sentinel and exits
 - Temp video file is deleted
 - Encoder resets and starts a fresh episode
@@ -528,6 +533,7 @@ Re-record calls `clear_episode_buffer()` → `encoder.discard()`:
 ## Crash Safety
 
 The transactional property of `save_episode()` is **preserved**:
+
 - Encoding happens during recording and is finished (flushed) before any metadata is written
 - `_save_episode_video()` (concatenation) runs synchronously as before
 - `meta.save_episode()` runs after concatenation as before
@@ -544,6 +550,7 @@ This is fundamentally incompatible with the streaming approach (streaming encode
 recording, not after).
 
 Options:
+
 1. **Remove batched encoding** — streaming is strictly better
 2. **Keep as fallback** — if `batch_encoding_size > 1`, fall back to the old PNG path
 
@@ -555,10 +562,12 @@ was trying to solve.
 ## Implementation Steps
 
 ### Step 1: StreamingVideoEncoder class
+
 Create `src/lerobot/datasets/video_encoder.py` with the class described above.
 Key: get the background thread encoding loop right, with proper flush and discard handling.
 
 ### Step 2: Reservoir sampling + write_sampled_frames_to_disk
+
 Implement `_maybe_sample()` using reservoir sampling.
 Implement `write_sampled_frames_to_disk()` to write sampled frames as PNGs.
 Validate that `compute_episode_stats()` produces equivalent results when given the
@@ -566,12 +575,14 @@ sampled subset vs the full frame set (the function already samples internally, s
 giving it a pre-sampled set should produce statistically identical results).
 
 ### Step 3: Add helper methods to LeRobotDataset
+
 Add `_init_video_encoders`, `_start_video_encoders`, `_stop_video_encoders`,
 `_finish_video_encoders`, `_discard_and_restart_video_encoders`,
 `_write_video_stats_samples`, `_make_video_tmp_path`. These are new methods —
 zero conflict with upstream.
 
 ### Step 4: Insert minimal guards into existing methods
+
 Add the ~18 lines of guards/calls described in the integration section:
 `create()` (+1), `add_frame()` (+3), `save_episode()` (+12),
 `clear_episode_buffer()` (+2). Existing logic is not modified, only guarded.
@@ -581,6 +592,7 @@ Add the ~18 lines of guards/calls described in the integration section:
 ## Testing
 
 ### Unit Tests
+
 - StreamingVideoEncoder: push N frames, finish, verify valid .mp4 with correct frame count
 - StreamingVideoEncoder: push frames, discard, verify temp file deleted and encoder reusable
 - Reservoir sampling: verify sample size is reasonable for various episode lengths
@@ -588,6 +600,7 @@ Add the ~18 lines of guards/calls described in the integration section:
 - Lag monitoring: warn when encoder falls behind, verify catch-up during reset
 
 ### Integration Tests
+
 - Record multiple episodes with streaming encoding, verify concatenated video matches
   frame-by-frame against old PNG-based encoding (bit-exact or within codec tolerance)
 - Stats comparison: verify streaming-path stats match PNG-path stats within tolerance
@@ -595,6 +608,7 @@ Add the ~18 lines of guards/calls described in the integration section:
 - Mixed dataset: image keys use PNGs, video keys use streaming, both work correctly
 
 ### Edge Cases
+
 - Very short episodes (< 1 second, < 30 frames)
 - First frame: encoder must handle width/height discovery from first frame
 - Keyboard interrupt during encoding
@@ -604,15 +618,16 @@ Add the ~18 lines of guards/calls described in the integration section:
 
 ## Risks and Mitigations
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Encoding can't keep up at 30fps | Memory grows during recording, finish() blocks longer | Unbounded queue absorbs lag; reset time provides catch-up; warn if lag grows across episodes |
-| PyAV threading issues | Crash or corruption | Encoder runs in own thread with isolated av context; no shared state |
-| GIL contention | Encoding thread starved | PyAV encode/mux are C calls that release GIL; queue ops are brief |
-| Reservoir sample not representative | Slightly different stats | Sample size matches upstream's sample_images(); validated in tests |
-| Upstream compute_episode_stats changes | Our sampled PNGs may not suffice | Interface is stable (list of paths); if it changes we adapt regardless |
+| Risk                                   | Impact                                                | Mitigation                                                                                   |
+| -------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Encoding can't keep up at 30fps        | Memory grows during recording, finish() blocks longer | Unbounded queue absorbs lag; reset time provides catch-up; warn if lag grows across episodes |
+| PyAV threading issues                  | Crash or corruption                                   | Encoder runs in own thread with isolated av context; no shared state                         |
+| GIL contention                         | Encoding thread starved                               | PyAV encode/mux are C calls that release GIL; queue ops are brief                            |
+| Reservoir sample not representative    | Slightly different stats                              | Sample size matches upstream's sample_images(); validated in tests                           |
+| Upstream compute_episode_stats changes | Our sampled PNGs may not suffice                      | Interface is stable (list of paths); if it changes we adapt regardless                       |
 
 ### GIL Note
+
 The main concern with a threading approach is GIL contention. However, the heavy
 operations — PyAV's `encode()` and `mux()` — are C-level calls that release the GIL.
 `av.VideoFrame.from_ndarray()` also primarily operates in C. The GIL is only held briefly
@@ -667,6 +682,7 @@ record_loop() at each frame:
 ```
 
 **`RecordingBroadcaster`** — lightweight component that:
+
 - Receives the observation dict (including camera arrays) each frame
 - Converts camera frames to JPEG (like rerun does with `compress_images`)
 - Publishes to connected WebSocket clients via the existing GUI server
@@ -674,6 +690,7 @@ record_loop() at each frame:
 - Runs JPEG compression in a background thread to avoid slowing the recording loop
 
 **GUI server changes**:
+
 - New endpoint: `/ws/live` (distinct from `/ws/playback/{dataset_id}`)
 - Receives frames from `RecordingBroadcaster` via an in-process queue or shared buffer
 - Streams to connected browser clients in the same format as the existing
@@ -681,6 +698,7 @@ record_loop() at each frame:
 - The frontend connects to `/ws/live` when a recording session is active
 
 **Why this is separate from the encoder**:
+
 - Different data format: GUI needs JPEG for display, encoder needs raw arrays for video
 - Different timing: GUI can drop frames if the client is slow, encoder cannot
 - Different lifecycle: GUI stream is optional, encoder is mandatory
@@ -690,6 +708,7 @@ record_loop() at each frame:
 
 The encoder and GUI broadcaster share no state. They both consume frames from the
 recording loop independently:
+
 - `add_frame()` → video keys → `StreamingVideoEncoder.push_frame()` (raw numpy)
 - `log_gui_data()` → `RecordingBroadcaster.push()` (observation dict → JPEG)
 
@@ -730,6 +749,7 @@ bypassing PNG generation entirely for video keys.
 The reset phase between episodes provides natural catch-up time.
 
 **Benefits**:
+
 1. Eliminates PNG write + read overhead for video keys during recording
 2. Encoding is (nearly) free — absorbed into recording time + reset time
 3. Preserves crash safety — no queue of unencoded episodes
@@ -737,6 +757,7 @@ The reset phase between episodes provides natural catch-up time.
 5. No changes to compute_episode_stats — sampled PNGs written at save time for compatibility
 
 **Key changes**:
+
 1. New `StreamingVideoEncoder` class (mirrors `AsyncImageWriter` pattern)
 2. `add_frame()` branches: image keys → PNG writer, video keys → streaming encoder
 3. `save_episode()` calls `encoder.finish()` instead of encoding from PNGs

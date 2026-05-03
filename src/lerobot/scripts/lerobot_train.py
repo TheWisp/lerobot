@@ -243,7 +243,6 @@ def wrap_policy_in_peft_model(cfg, policy):
     return policy
 
 
-
 @parser.wrap()
 def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     """
@@ -365,13 +364,13 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             # Freeze language and leave these unfrozen to reduce VRAM usage
             for name, param in policy.named_parameters():
                 param.requires_grad = (
-                    "gemma_expert" in name or
-                    "vision_tower" in name or
-                    "multi_modal" in name or
-                    "action_in_proj" in name or
-                    "action_out_proj" in name or
-                    "time_mlp_in" in name or
-                    "time_mlp_out" in name
+                    "gemma_expert" in name
+                    or "vision_tower" in name
+                    or "multi_modal" in name
+                    or "action_in_proj" in name
+                    or "action_out_proj" in name
+                    or "time_mlp_in" in name
+                    or "time_mlp_out" in name
                 )
 
             # Log which parameters will be trained and frozen
@@ -402,7 +401,9 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                 logging.info(f"  ✗ {name}: {numel:,} params")
 
             total_params = trainable_numel + frozen_numel
-            logging.info(f"\nTotal: {trainable_count}/{trainable_count + frozen_count} groups trainable, {trainable_numel:,}/{total_params:,} params trainable ({100*trainable_numel/total_params:.1f}%)")
+            logging.info(
+                f"\nTotal: {trainable_count}/{trainable_count + frozen_count} groups trainable, {trainable_numel:,}/{total_params:,} params trainable ({100 * trainable_numel / total_params:.1f}%)"
+            )
 
     # Wait for all processes to finish policy creation before continuing
     accelerator.wait_for_everyone()

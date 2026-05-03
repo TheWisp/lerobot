@@ -17,11 +17,9 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
 
 from lerobot.policies.hvla.rlt.config import RLTConfig
-
 
 # Fields that determine encoder/decoder tensor shapes. Saved to
 # ``config.json`` alongside each trained checkpoint so a loader can
@@ -38,7 +36,7 @@ _SHAPE_FIELDS = (
 )
 
 
-def save_rlt_token_config(ckpt_dir: "Path | str", rlt_config: RLTConfig) -> None:
+def save_rlt_token_config(ckpt_dir: Path | str, rlt_config: RLTConfig) -> None:
     """Write the shape-defining subset of ``rlt_config`` to
     ``{ckpt_dir}/config.json`` alongside encoder.pt / decoder.pt. Must be
     called at save time for every checkpoint that wants to be loadable
@@ -49,7 +47,7 @@ def save_rlt_token_config(ckpt_dir: "Path | str", rlt_config: RLTConfig) -> None
 
 
 def load_rlt_token_config(
-    ckpt_dir: "Path | str",
+    ckpt_dir: Path | str,
     base: RLTConfig | None = None,
 ) -> RLTConfig:
     """Return an ``RLTConfig`` whose shape fields match the saved
@@ -116,7 +114,8 @@ class RLTokenEncoder(nn.Module):
             batch_first=True,
         )
         self.transformer = nn.TransformerEncoder(
-            encoder_layer, num_layers=config.token_encoder_layers,
+            encoder_layer,
+            num_layers=config.token_encoder_layers,
         )
 
     def forward(self, context: Tensor) -> Tensor:
@@ -127,12 +126,12 @@ class RLTokenEncoder(nn.Module):
         Returns:
             z_rl: [B, D] compressed representation, D = rl_token_dim.
         """
-        context = self.input_proj(context)                    # [B, N, D]
+        context = self.input_proj(context)  # [B, N, D]
         B = context.shape[0]
-        readout = self.readout_embed.expand(B, -1, -1)        # [B, 1, D]
-        augmented = torch.cat([context, readout], dim=1)      # [B, N+1, D]
-        out = self.transformer(augmented)                     # [B, N+1, D]
-        z_rl = out[:, -1, :]                                  # [B, D]
+        readout = self.readout_embed.expand(B, -1, -1)  # [B, 1, D]
+        augmented = torch.cat([context, readout], dim=1)  # [B, N+1, D]
+        out = self.transformer(augmented)  # [B, N+1, D]
+        z_rl = out[:, -1, :]  # [B, D]
         return z_rl
 
 
@@ -162,7 +161,8 @@ class RLTokenDecoder(nn.Module):
             batch_first=True,
         )
         self.transformer = nn.TransformerDecoder(
-            decoder_layer, num_layers=config.token_decoder_layers,
+            decoder_layer,
+            num_layers=config.token_decoder_layers,
         )
         # Output head projects transformer hidden (d) back to context
         # space (ctx_d) so reconstruction is compared in the same units
@@ -195,14 +195,19 @@ class RLTokenDecoder(nn.Module):
 
         # Decoder input: shift right — prepend z_rl, drop last target pos.
         # Position 0 input = z_rl, position i input = target_proj[:, i-1].
-        decoder_input = torch.cat([
-            z_rl.unsqueeze(1),            # [B, 1, D]
-            target_proj[:, :-1, :],       # [B, N-1, D]
-        ], dim=1)                         # [B, N, D]
+        decoder_input = torch.cat(
+            [
+                z_rl.unsqueeze(1),  # [B, 1, D]
+                target_proj[:, :-1, :],  # [B, N-1, D]
+            ],
+            dim=1,
+        )  # [B, N, D]
 
         # Causal mask: position i can only attend to positions <= i
         causal_mask = nn.Transformer.generate_square_subsequent_mask(
-            N, device=z_rl.device, dtype=z_rl.dtype,
+            N,
+            device=z_rl.device,
+            dtype=z_rl.dtype,
         )
 
         out = self.transformer(decoder_input, memory, tgt_mask=causal_mask)

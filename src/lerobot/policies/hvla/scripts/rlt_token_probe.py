@@ -37,7 +37,6 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from lerobot.policies.hvla.rlt.config import RLTConfig
 from lerobot.policies.hvla.rlt.token import (
     RLTokenDecoder,
     RLTokenEncoder,
@@ -45,21 +44,24 @@ from lerobot.policies.hvla.rlt.token import (
     rl_token_reconstruction_loss,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--s1-checkpoint", required=True, type=Path,
-                   help="Path to S1 checkpoint dir (with pretrained_model/)")
-    p.add_argument("--rl-token-checkpoint", required=True, type=Path,
-                   help="Path to a train_token.py checkpoint directory "
-                        "(contains encoder.pt + decoder.pt)")
-    p.add_argument("--dataset", required=True,
-                   help="HF dataset repo id (e.g. thewisp/cylinder_ring_assembly)")
-    p.add_argument("--batches", type=int, default=20,
-                   help="Number of batches to probe (default 20)")
+    p.add_argument(
+        "--s1-checkpoint", required=True, type=Path, help="Path to S1 checkpoint dir (with pretrained_model/)"
+    )
+    p.add_argument(
+        "--rl-token-checkpoint",
+        required=True,
+        type=Path,
+        help="Path to a train_token.py checkpoint directory (contains encoder.pt + decoder.pt)",
+    )
+    p.add_argument(
+        "--dataset", required=True, help="HF dataset repo id (e.g. thewisp/cylinder_ring_assembly)"
+    )
+    p.add_argument("--batches", type=int, default=20, help="Number of batches to probe (default 20)")
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--resize-images", default="224x224")
     p.add_argument("--device", default="cuda")
@@ -73,11 +75,12 @@ def main() -> None:
     logger.info("starting")
 
     device = torch.device(args.device)
-    h, w = [int(x) for x in args.resize_images.split("x")]
+    h, w = (int(x) for x in args.resize_images.split("x"))
     resize_to = (h, w)
 
     logger.info("loading S1 policy...")
     from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
+
     s1 = FlowMatchingS1Policy.from_pretrained(args.s1_checkpoint)
     s1.eval().to(device)
     for p_ in s1.parameters():
@@ -101,8 +104,11 @@ def main() -> None:
         image_keys=list(s1_config.image_features.keys()),
     )
     loader = DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=2, pin_memory=True,
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=2,
+        pin_memory=True,
     )
 
     # Load encoder + decoder from a train_token.py checkpoint dir (each is a
@@ -114,8 +120,10 @@ def main() -> None:
     rlt_config = load_rlt_token_config(ckpt_dir)
     logger.info(
         "RLT arch: encoder_layers=%d decoder_layers=%d heads=%d ffn=%d dim=%d",
-        rlt_config.token_encoder_layers, rlt_config.token_decoder_layers,
-        rlt_config.token_num_heads, rlt_config.token_ffn_dim,
+        rlt_config.token_encoder_layers,
+        rlt_config.token_decoder_layers,
+        rlt_config.token_num_heads,
+        rlt_config.token_ffn_dim,
         rlt_config.rl_token_dim,
     )
     encoder = RLTokenEncoder(rlt_config).to(device).eval()
@@ -131,12 +139,9 @@ def main() -> None:
         for i, batch in enumerate(loader):
             if i >= args.batches:
                 break
-            batch = {k: (v.to(device) if isinstance(v, torch.Tensor) else v)
-                     for k, v in batch.items()}
+            batch = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
             if s1_config.image_features:
-                batch["observation.images"] = [
-                    batch[k] for k in s1_config.image_features
-                ]
+                batch["observation.images"] = [batch[k] for k in s1_config.image_features]
             context = s1.model.encode_observations(batch).float()
             z_rl = encoder(context)
             recon = decoder(z_rl, context)
@@ -146,8 +151,9 @@ def main() -> None:
             rmses.append(rmse)
             stds.append(std)
             losses.append(loss)
-            logger.info("batch %d: rmse=%.4f std=%.4f rel=%.1f%% loss=%.4f",
-                        i, rmse, std, 100 * rmse / std, loss)
+            logger.info(
+                "batch %d: rmse=%.4f std=%.4f rel=%.1f%% loss=%.4f", i, rmse, std, 100 * rmse / std, loss
+            )
 
     rmse = np.mean(rmses)
     std = np.mean(stds)
@@ -160,17 +166,25 @@ def main() -> None:
     logger.info("  mean paper-loss:     %.4f", np.mean(losses))
     logger.info("")
     if rel < 10:
-        logger.info("VERDICT: Phase-1 encoder is good (< 10%% rel error). "
-                    "No retrain needed. Proceed directly to fresh Phase 2 with "
-                    "the fixed inference pipeline.")
+        logger.info(
+            "VERDICT: Phase-1 encoder is good (< 10%% rel error). "
+            "No retrain needed. Proceed directly to fresh Phase 2 with "
+            "the fixed inference pipeline."
+        )
     elif rel < 20:
-        logger.info("VERDICT: Phase-1 encoder is borderline (%.1f%%). Proceed "
-                    "to Phase 2 but expect slower convergence; consider retraining "
-                    "Phase 1 for longer if Phase 2 stalls.", rel)
+        logger.info(
+            "VERDICT: Phase-1 encoder is borderline (%.1f%%). Proceed "
+            "to Phase 2 but expect slower convergence; consider retraining "
+            "Phase 1 for longer if Phase 2 stalls.",
+            rel,
+        )
     else:
-        logger.info("VERDICT: Phase-1 encoder is too lossy (%.1f%% rel error). "
-                    "Retrain Phase 1 from scratch on the fixed pipeline before "
-                    "starting fresh Phase 2.", rel)
+        logger.info(
+            "VERDICT: Phase-1 encoder is too lossy (%.1f%% rel error). "
+            "Retrain Phase 1 from scratch on the fixed pipeline before "
+            "starting fresh Phase 2.",
+            rel,
+        )
 
 
 if __name__ == "__main__":

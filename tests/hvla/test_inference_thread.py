@@ -2,12 +2,13 @@
 
 All tests use a MockS1Policy on CPU — no GPU required.
 """
+
 import json
-import pytest
 import threading
 import time
 
 import numpy as np
+import pytest
 import torch
 
 from lerobot.policies.hvla.s1_inference import InferenceThread, _slice_with_pad
@@ -48,6 +49,7 @@ class MockSharedCache:
 # Use the real JOINT_NAMES so obs_to_s1_batch works without modification
 from lerobot.policies.hvla.s1_process import JOINT_NAMES
 
+
 def _make_obs():
     """Create a minimal observation dict matching JOINT_NAMES."""
     obs = {}
@@ -59,18 +61,18 @@ def _make_obs():
 
 def _make_thread(**kwargs) -> InferenceThread:
     """Create an InferenceThread with test defaults."""
-    defaults = dict(
-        policy=MockS1Policy(),
-        preprocessor=lambda batch: batch,
-        postprocessor=lambda actions: actions,
-        shared_cache=MockSharedCache(),
-        s2_latent_key="observation.s2_latent",
-        s1_image_keys=["observation.images.front"],
-        joint_names=list(JOINT_NAMES),
-        device=torch.device("cpu"),
-        resize_to=None,
-        fps=30,
-    )
+    defaults = {
+        "policy": MockS1Policy(),
+        "preprocessor": lambda batch: batch,
+        "postprocessor": lambda actions: actions,
+        "shared_cache": MockSharedCache(),
+        "s2_latent_key": "observation.s2_latent",  # gitleaks:allow
+        "s1_image_keys": ["observation.images.front"],
+        "joint_names": list(JOINT_NAMES),
+        "device": torch.device("cpu"),
+        "resize_to": None,
+        "fps": 30,
+    }
     defaults.update(kwargs)
     return InferenceThread(**defaults)
 
@@ -221,9 +223,7 @@ class TestPauseResume:
 
             # No new chunks should have been produced
             count_after = len(thread.infer_times)
-            assert count_after == count_before, (
-                f"Inference ran while paused: {count_before} → {count_after}"
-            )
+            assert count_after == count_before, f"Inference ran while paused: {count_before} → {count_after}"
         finally:
             thread.stop()
 
@@ -425,16 +425,26 @@ class TestRLTChunkDump:
         recs = self._read_records(tmp_path)
         assert len(recs) == 2
         required = {
-            "t", "step", "ep", "ref", "actor", "deploy", "rlt_active",
-            "prefix_len", "exec_idx",
-            "rlt_enc_ms", "rlt_post_ms", "total_delay_ms",
-            "obs_to_infer_ms", "enc_obs_ms", "rl_tok_ms",
-            "s1_denoise_ms", "rlt_actor_ms",
+            "t",
+            "step",
+            "ep",
+            "ref",
+            "actor",
+            "deploy",
+            "rlt_active",
+            "prefix_len",
+            "exec_idx",
+            "rlt_enc_ms",
+            "rlt_post_ms",
+            "total_delay_ms",
+            "obs_to_infer_ms",
+            "enc_obs_ms",
+            "rl_tok_ms",
+            "s1_denoise_ms",
+            "rlt_actor_ms",
         }
         for r in recs:
-            assert set(r.keys()) == required, (
-                f"Expected {required}, got {set(r.keys())} in record {r}"
-            )
+            assert set(r.keys()) == required, f"Expected {required}, got {set(r.keys())} in record {r}"
 
     def test_dump_records_prefix_metadata(self, tmp_path):
         """``prefix_len`` and ``exec_idx`` from the RTC logic must round-trip
@@ -443,8 +453,11 @@ class TestRLTChunkDump:
         thread = self._make_thread_with_rlt(tmp_path)
         ref_norm = thread._rlt_compute_ref_norm(self._actions())
         thread._rlt_write_dump_record(
-            ref_norm, None, is_rlt_active=False,
-            prefix_len=4, exec_idx=6,
+            ref_norm,
+            None,
+            is_rlt_active=False,
+            prefix_len=4,
+            exec_idx=6,
         )
         recs = self._read_records(tmp_path)
         assert recs[0]["prefix_len"] == 4
@@ -457,15 +470,19 @@ class TestRLTChunkDump:
         thread = self._make_thread_with_rlt(tmp_path)
         ref_norm = thread._rlt_compute_ref_norm(self._actions())
         thread._rlt_write_dump_record(
-            ref_norm, None, is_rlt_active=False,
-            prefix_len=3, exec_idx=5,
-            rlt_enc_ms=3.14, rlt_post_ms=1.59, total_delay_ms=62.5,
+            ref_norm,
+            None,
+            is_rlt_active=False,
+            prefix_len=3,
+            exec_idx=5,
+            rlt_enc_ms=3.14,
+            rlt_post_ms=1.59,
+            total_delay_ms=62.5,
         )
         r = self._read_records(tmp_path)[0]
         assert r["rlt_enc_ms"] == 3.14
         assert r["rlt_post_ms"] == 1.59
         assert r["total_delay_ms"] == 62.5
-
 
     def test_dump_records_per_stage_timing_breakdown(self, tmp_path):
         """The per-stage fields split rlt_enc into its two components and
@@ -475,9 +492,14 @@ class TestRLTChunkDump:
         thread = self._make_thread_with_rlt(tmp_path)
         ref_norm = thread._rlt_compute_ref_norm(self._actions())
         thread._rlt_write_dump_record(
-            ref_norm, None, is_rlt_active=False,
-            prefix_len=2, exec_idx=7,
-            rlt_enc_ms=2.5, rlt_post_ms=1.0, total_delay_ms=60.0,
+            ref_norm,
+            None,
+            is_rlt_active=False,
+            prefix_len=2,
+            exec_idx=7,
+            rlt_enc_ms=2.5,
+            rlt_post_ms=1.0,
+            total_delay_ms=60.0,
             obs_to_infer_ms=12.5,
             enc_obs_ms=1.8,
             rl_tok_ms=0.7,
@@ -540,9 +562,7 @@ class TestRLTChunkDump:
         thread = self._make_thread_with_rlt(tmp_path, dump_on=False)
         assert thread._rlt_dump_chunks is False
 
-        (tmp_path / "rlt_overrides.json").write_text(
-            json.dumps({"dump_chunks": True})
-        )
+        (tmp_path / "rlt_overrides.json").write_text(json.dumps({"dump_chunks": True}))
         thread._rlt_check_config_overrides()
         assert thread._rlt_dump_chunks is True, (
             "Override poll must flip _rlt_dump_chunks even without a gradient "
@@ -635,8 +655,8 @@ class TestRLTChunkDump:
 
         def main_loop_step(expected_actor_output):
             """Emulate the main-loop sequence from s1_inference for one inference."""
-            thread._rlt_last_actor_norm = None        # reset before actor could run
-            thread._rlt_step_count += 1                # advance per-inference counter
+            thread._rlt_last_actor_norm = None  # reset before actor could run
+            thread._rlt_step_count += 1  # advance per-inference counter
             ref = thread._rlt_compute_ref_norm(actions)
             if thread.rlt_active:
                 # Actor would run here; simulate its effect on _rlt_last_actor_norm
@@ -644,7 +664,9 @@ class TestRLTChunkDump:
             if thread._rlt_dump_chunks and thread._rlt_system_active:
                 actor_norm = thread._rlt_last_actor_norm if thread.rlt_active else None
                 thread._rlt_write_dump_record(
-                    ref, actor_norm, is_rlt_active=thread.rlt_active,
+                    ref,
+                    actor_norm,
+                    is_rlt_active=thread.rlt_active,
                 )
 
         # Ep 0: actor engaged, 3 inferences
@@ -737,4 +759,3 @@ class TestRLTChunkDump:
             "dump_chunks alone is not enough — _rlt_system_active must be "
             "True to gate out reset-phase records (where ep is stale -1)"
         )
-

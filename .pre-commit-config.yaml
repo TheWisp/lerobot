@@ -100,8 +100,13 @@ repos:
     rev: v1.19.1
     hooks:
       - id: mypy
-        args: [--config-file=pyproject.toml]
-        exclude: ^(examples|benchmarks|tests)/
+        # Run on the full project so mypy can resolve cross-file types (parent
+        # Camera class, etc.). pass_filenames: true splits the staged set across
+        # multiple invocations and breaks import resolution. We pass src/lerobot
+        # explicitly because pass_filenames: false otherwise leaves mypy with no
+        # target argument.
+        args: [--config-file=pyproject.toml, src/lerobot]
+        pass_filenames: false
 
   ##### Docstring Checks #####
   # - repo: https://github.com/akaihola/darglint2

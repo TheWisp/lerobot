@@ -3,6 +3,7 @@
 ## 2026-04-03: Initial implementation
 
 ### Branch setup
+
 - Created `feature/rlt-v2` from `0592ce70` (pre-RLT, has intervention support)
 - Copied rlt/ core modules from v1 with fixes:
   - Replay buffer: added threading.Lock on all public methods
@@ -11,6 +12,7 @@
   - Config: sigma=0.01 (joint angles need lower noise than delta EE)
 
 ### RL Token v2 Training (Phase 1)
+
 - S1 checkpoint: `outputs/flow_s1_no_s2_v1/checkpoints/last/pretrained_model`
 - Dataset: `thewisp/cylinder_ring_assembly` (199K frames)
 - Steps: 10,000, batch=64, lr=1e-4
@@ -22,6 +24,7 @@
 - Checkpoint: `outputs/rlt_token_v2/checkpoint-10000`
 
 ### Integration (v2 architecture)
+
 - Episode = RL boundary. Operator prepares scene during reset.
 - InferenceThread: S1 encoder → z_rl → actor → refined chunk → replay buffer → inline gradient updates
 - Actor NOT called during intervention. Human chunks accumulated by main thread.
@@ -30,6 +33,7 @@
 - GUI dashboard: success rate, Q values, actor delta, critic loss
 
 ### Commits on feature/rlt-v2:
+
 1. `97e49406` — Core modules with infra fixes
 2. `dd3e3a35` — Updated design doc
 3. `a897f9cb` — Integration (s1_inference, s1_process, launch, GUI)
@@ -37,6 +41,7 @@
 ## 2026-04-03: Baseline measurement
 
 ### Setup
+
 - S1 checkpoint: `flow_s1_no_s2_v1`
 - Task: cylinder-ring assembly, critical phase only (operator teleops to pre-critical)
 - Episode timeout: 60s
@@ -44,17 +49,19 @@
 - 20 episodes
 
 ### Results
-| Metric | Value |
-|--------|-------|
-| Autonomous success rate | **65%** (13/20) |
-| Throughput | **10.4 successes / 10 min** |
-| Median success time | ~24s |
-| Failed episodes | all timed out at 60s |
-| Log file | `outputs/hvla_runs/run_20260403_155719.log` |
+
+| Metric                  | Value                                       |
+| ----------------------- | ------------------------------------------- |
+| Autonomous success rate | **65%** (13/20)                             |
+| Throughput              | **10.4 successes / 10 min**                 |
+| Median success time     | ~24s                                        |
+| Failed episodes         | all timed out at 60s                        |
+| Log file                | `outputs/hvla_runs/run_20260403_155719.log` |
 
 ## 2026-04-03: RLT v2 Training Session
 
 ### Training progression
+
 - Ep 1-10: Warmup (S1 passthrough), 80% success
 - Ep 11-90 (beta=1.0, sigma=0.01→0.02): Actor delta flat at 0.02, no visible learning. BC penalty dominated Q gradient.
 - Ep 91+ (beta=0.1): Immediate behavior change — faster successes, more exploration, some wrong directions.
@@ -64,6 +71,7 @@
 - Ep 289: 60% success rate (dip from cold cases + low beta)
 
 ### Key findings
+
 - beta=0.1 unlocked learning but destabilized cold (unseen) states — actor follows random Q noise without BC anchor
 - sigma=0.02 adds visible jitter but unclear if it helps vs just adding noise on joint angles
 - Speed improvement confirmed: 6.5-17s vs 24s baseline on successful episodes
@@ -71,6 +79,7 @@
 - Consistent reset positions (paper's "small randomization") would help critic coverage
 
 ### TODO
+
 1. **Adaptive beta**: High beta for cold/unseen states, low beta for well-covered states. At minimum expose beta as a GUI slider for live tuning during training.
 2. **Deployment mode**: Run trained RL actor alongside base VLA without training loop. Inference-only mode that loads actor checkpoint and applies to S1 chunks.
 3. ~~**Sigma research**~~ — answered on the v2_widened run: setting `exploration_sigma=0` on robot caused a cluster of catastrophic episodes (7 ignores in 5 attempts) — the actor commits 100% to its deterministic mean and any systematic actor drift goes unmasked. Keep `exploration_sigma≈0.02` (≈0.5° per joint). Decoupled `target_sigma=0.1` for TD3 target smoothing landed in 884f01d2b so this knob is independent.

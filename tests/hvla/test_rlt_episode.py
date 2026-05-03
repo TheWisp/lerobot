@@ -9,6 +9,7 @@ rest get ``None`` and write intermediate transitions. Real bug
 observed at ep124: 17 ``done=True`` transitions written instead of 1.
 The threading test below locks that fix in.
 """
+
 from __future__ import annotations
 
 import threading
@@ -18,10 +19,10 @@ import pytest
 
 from lerobot.policies.hvla.rlt.episode import EpisodeLifecycle, TerminalKind
 
-
 # ============================================================================
 # Initial state and lifecycle transitions
 # ============================================================================
+
 
 class TestInitialState:
     def test_fresh_lifecycle_is_inactive(self):
@@ -197,6 +198,7 @@ class TestEndEpisode:
 # Terminal signal + consumption — the main bug-fix surface
 # ============================================================================
 
+
 class TestTerminalSignalConsume:
     def test_signal_then_consume_returns_kind(self):
         lc = EpisodeLifecycle()
@@ -299,9 +301,7 @@ class TestTerminalSignalConsume:
         with caplog.at_level("WARNING", logger="lerobot.policies.hvla.rlt.episode"):
             lc.signal_terminal(TerminalKind.ABORT)
         warnings = [r for r in caplog.records if r.levelname == "WARNING"]
-        assert len(warnings) == 1, (
-            f"Expected exactly 1 conflict warning, got {len(warnings)}"
-        )
+        assert len(warnings) == 1, f"Expected exactly 1 conflict warning, got {len(warnings)}"
         # Message references both kinds + the diagnostic context
         msg = warnings[0].message
         assert "SUCCESS" in msg and "ABORT" in msg
@@ -403,7 +403,7 @@ class TestInternalInvariants:
         than silently swallow the corruption."""
         lc = EpisodeLifecycle()
         lc.begin(0)
-        lc._terminal_consumed = True   # simulate corruption
+        lc._terminal_consumed = True  # simulate corruption
         lc._terminal = None
         with pytest.raises(AssertionError, match="invariant violated"):
             lc.consume_terminal_for_storage()
@@ -412,6 +412,7 @@ class TestInternalInvariants:
 # ============================================================================
 # Threading — the actual fingerprint of the original bug
 # ============================================================================
+
 
 class TestThreadSafety:
     """The original bug was a race: main thread sets a flag, inference

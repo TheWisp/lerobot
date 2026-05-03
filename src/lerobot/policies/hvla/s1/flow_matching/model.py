@@ -35,7 +35,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
-from lerobot.policies.hvla.s1.protocol import S2_LATENT_KEY, S2_AGE_KEY, ACTION_PREFIX_KEY
+from lerobot.policies.hvla.s1.protocol import ACTION_PREFIX_KEY, S2_AGE_KEY, S2_LATENT_KEY
 
 OBS_STATE = "observation.state"
 OBS_IMAGES = "observation.images"
@@ -43,7 +43,10 @@ ACTION = "action"
 
 
 def _sinusoidal_embedding(
-    timesteps: Tensor, dim: int, min_period: float = 4e-3, max_period: float = 4.0,
+    timesteps: Tensor,
+    dim: int,
+    min_period: float = 4e-3,
+    max_period: float = 4.0,
 ) -> Tensor:
     """Sinusoidal timestep embedding, matching Pi0's approach."""
     half = dim // 2
@@ -103,21 +106,27 @@ class FlowMatchingS1Model(nn.Module):
 
         # --- Observation encoder ---
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d, nhead=config.num_heads,
+            d_model=d,
+            nhead=config.num_heads,
             dim_feedforward=config.dim_feedforward,
-            dropout=config.dropout, batch_first=True,
+            dropout=config.dropout,
+            batch_first=True,
         )
         self.obs_encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.num_encoder_layers)
 
         # --- Flow matching decoder (with cross-attention KV caching) ---
-        self.decoder_layers = nn.ModuleList([
-            nn.TransformerDecoderLayer(
-                d_model=d, nhead=config.num_heads,
-                dim_feedforward=config.dim_feedforward,
-                dropout=config.dropout, batch_first=True,
-            )
-            for _ in range(config.num_decoder_layers)
-        ])
+        self.decoder_layers = nn.ModuleList(
+            [
+                nn.TransformerDecoderLayer(
+                    d_model=d,
+                    nhead=config.num_heads,
+                    dim_feedforward=config.dim_feedforward,
+                    dropout=config.dropout,
+                    batch_first=True,
+                )
+                for _ in range(config.num_decoder_layers)
+            ]
+        )
 
         # --- Action projections (matching Pi0/SmolVLA) ---
         self.action_in_proj = nn.Linear(config.action_dim, d)
@@ -150,10 +159,14 @@ class FlowMatchingS1Model(nn.Module):
                         features = self.backbone.forward_features(stacked)
                         all_patches = features["x_norm_patchtokens"]  # [B*N_cams, 256, 768]
                 elif self._backbone_grad_ckpt and self.training:
+
                     def _backbone_fwd(x):
                         return self.backbone.forward_features(x)["x_norm_patchtokens"]
+
                     all_patches = torch.utils.checkpoint.checkpoint(
-                        _backbone_fwd, stacked, use_reentrant=False,
+                        _backbone_fwd,
+                        stacked,
+                        use_reentrant=False,
                     )
                 else:
                     features = self.backbone.forward_features(stacked)
@@ -195,10 +208,10 @@ class FlowMatchingS1Model(nn.Module):
             #   in_proj_weight is [3*d, d], split into Q, K, V
             d = mha.embed_dim
             w = mha.in_proj_weight  # [3*d, d]
-            b = mha.in_proj_bias    # [3*d]
+            b = mha.in_proj_bias  # [3*d]
             # K = context @ W_K^T + b_K, V = context @ W_V^T + b_V
-            k = F.linear(context, w[d:2*d], b[d:2*d] if b is not None else None)
-            v = F.linear(context, w[2*d:3*d], b[2*d:3*d] if b is not None else None)
+            k = F.linear(context, w[d : 2 * d], b[d : 2 * d] if b is not None else None)
+            v = F.linear(context, w[2 * d : 3 * d], b[2 * d : 3 * d] if b is not None else None)
             # Reshape for multi-head: [B, N, D] → [B, N, nhead, head_dim] → [B*nhead, N, head_dim]
             # Actually, keep as [B, N, D] — we'll handle heads in the forward
             cached_kv.append((k, v))
@@ -206,9 +219,9 @@ class FlowMatchingS1Model(nn.Module):
 
     def denoise_step(
         self,
-        x_t: Tensor,                # [B, chunk_size, action_dim]
-        context: Tensor,             # [B, N_ctx, D]
-        timestep: Tensor,            # [B, chunk_size] per-position timestep
+        x_t: Tensor,  # [B, chunk_size, action_dim]
+        context: Tensor,  # [B, N_ctx, D]
+        timestep: Tensor,  # [B, chunk_size] per-position timestep
         cached_kv: list[tuple[Tensor, Tensor]] | None = None,
     ) -> Tensor:
         """Single denoising step: predict velocity field v(x_t, t, context).
@@ -234,9 +247,9 @@ class FlowMatchingS1Model(nn.Module):
 
         # Fuse action + time via concat → MLP(SiLU) (Pi0/SmolVLA style)
         action_time = torch.cat([action_emb, t_emb], dim=-1)  # [B, T, 2D]
-        action_time = self.action_time_mlp_in(action_time)     # [B, T, D]
+        action_time = self.action_time_mlp_in(action_time)  # [B, T, D]
         action_time = F.silu(action_time)
-        action_time = self.action_time_mlp_out(action_time)    # [B, T, D]
+        action_time = self.action_time_mlp_out(action_time)  # [B, T, D]
 
         # Add position embeddings
         pos_ids = torch.arange(T, device=x_t.device)
@@ -255,7 +268,9 @@ class FlowMatchingS1Model(nn.Module):
                 # Cross-attention with pre-computed K,V
                 ck, cv = cached_kv[i]
                 mha = layer.multihead_attn
-                q = F.linear(x, mha.in_proj_weight[:d], mha.in_proj_bias[:d] if mha.in_proj_bias is not None else None)
+                q = F.linear(
+                    x, mha.in_proj_weight[:d], mha.in_proj_bias[:d] if mha.in_proj_bias is not None else None
+                )
                 nhead = mha.num_heads
                 head_dim = d // nhead
                 q = q.reshape(B, T, nhead, head_dim).transpose(1, 2)
@@ -266,7 +281,9 @@ class FlowMatchingS1Model(nn.Module):
                 attn_out = mha.out_proj(attn_out)
                 x = layer.norm2(x + layer.dropout2(attn_out))
                 # FFN
-                x = layer.norm3(x + layer.dropout3(layer.linear2(layer.dropout(layer.activation(layer.linear1(x))))))
+                x = layer.norm3(
+                    x + layer.dropout3(layer.linear2(layer.dropout(layer.activation(layer.linear1(x)))))
+                )
             else:
                 x = layer(x, context, tgt_mask=None)
 
@@ -292,10 +309,14 @@ class FlowMatchingS1Model(nn.Module):
         context = self.encode_observations(batch)
 
         # Sample flow matching time from Beta distribution (scalar per sample)
-        t_beta = torch.distributions.Beta(
-            self.config.time_sampling_beta_alpha,
-            self.config.time_sampling_beta_beta,
-        ).sample((B,)).to(device)
+        t_beta = (
+            torch.distributions.Beta(
+                self.config.time_sampling_beta_alpha,
+                self.config.time_sampling_beta_beta,
+            )
+            .sample((B,))
+            .to(device)
+        )
         t_flow = t_beta * (self.config.time_max - self.config.time_min) + self.config.time_min
 
         # Sample noise
@@ -338,9 +359,9 @@ class FlowMatchingS1Model(nn.Module):
             for b in range(B):
                 d = delays[b].item()
                 if d > 0:
-                    x_t[b, :d] = actions[b, :d]    # clean actions (no noise)
-                    per_pos_t[b, :d] = 0.0           # timestep = 0 for prefix
-                    loss_mask[b, :d] = 0.0           # exclude prefix from loss
+                    x_t[b, :d] = actions[b, :d]  # clean actions (no noise)
+                    per_pos_t[b, :d] = 0.0  # timestep = 0 for prefix
+                    loss_mask[b, :d] = 0.0  # exclude prefix from loss
 
         # Predict velocity with per-position timesteps
         v_pred = self.denoise_step(x_t, context, per_pos_t)
@@ -456,9 +477,9 @@ class FlowMatchingS1Policy(nn.Module):
         self._action_queue = deque()
         # Normalization stats (loaded from checkpoint dir)
         self._action_mean = None  # [action_dim]
-        self._action_std = None   # [action_dim]
-        self._state_mean = None   # [state_dim]
-        self._state_std = None    # [state_dim]
+        self._action_std = None  # [action_dim]
+        self._state_mean = None  # [state_dim]
+        self._state_std = None  # [state_dim]
 
     @property
     def supports_rtc(self) -> bool:
@@ -476,7 +497,8 @@ class FlowMatchingS1Policy(nn.Module):
         self._action_queue.clear()
 
     def prepare_batch_for_encode_observations(
-        self, batch: dict[str, Tensor],
+        self,
+        batch: dict[str, Tensor],
     ) -> dict[str, Tensor]:
         """Return a shallow copy of ``batch`` normalized exactly the way
         ``FlowMatchingDataset`` does at training time, ready to pass to
@@ -508,7 +530,9 @@ class FlowMatchingS1Policy(nn.Module):
 
     @torch.no_grad()
     def predict_action_chunk(
-        self, batch: dict[str, Tensor], num_steps: int | None = None,
+        self,
+        batch: dict[str, Tensor],
+        num_steps: int | None = None,
         context: Tensor | None = None,
     ) -> Tensor:
         """Predict action chunk via flow matching with RTC inpainting.
@@ -574,8 +598,9 @@ class FlowMatchingS1Policy(nn.Module):
         flat format (model.safetensors in checkpoint dir).
         """
         import json
-        import safetensors.torch
         from pathlib import Path
+
+        import safetensors.torch
 
         path = Path(checkpoint_path)
 
@@ -635,15 +660,18 @@ class FlowMatchingS1Policy(nn.Module):
         missing, unexpected = policy.load_state_dict(remapped, strict=False)
         if missing:
             import logging
+
             logging.warning("Missing keys: %s", missing)
         if unexpected:
             import logging
+
             logging.warning("Unexpected keys: %s", unexpected)
 
         # Load normalization stats
         norm_path = norm_dir / "norm_stats.pt"
         if norm_path.exists():
             import logging
+
             norm_stats = torch.load(norm_path, weights_only=True)
             policy._action_mean = norm_stats.get("action_mean")
             policy._action_std = norm_stats.get("action_std")
@@ -652,6 +680,7 @@ class FlowMatchingS1Policy(nn.Module):
             logging.info("Loaded norm stats from %s", norm_path)
         else:
             import logging
+
             logging.warning("No norm_stats.pt found at %s — running without normalization", norm_dir)
 
         return policy

@@ -10,11 +10,12 @@ Reader retries if counters don't match (torn read).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import multiprocessing.shared_memory
-from multiprocessing import resource_tracker
 import struct
 import time
+from multiprocessing import resource_tracker
 
 import numpy as np
 import torch
@@ -64,10 +65,12 @@ class SharedBlock:
                     except FileNotFoundError:
                         pass
                 self._shm = multiprocessing.shared_memory.SharedMemory(
-                    name=name, create=True, size=self._total_size,
+                    name=name,
+                    create=True,
+                    size=self._total_size,
                 )
                 self._shm.buf[:_HEADER_SIZE] = struct.pack(_HEADER_FMT, 0, 0, 0.0)
-                self._shm.buf[_HEADER_SIZE:] = b'\x00' * self._data_size
+                self._shm.buf[_HEADER_SIZE:] = b"\x00" * self._data_size
             else:
                 self._shm = multiprocessing.shared_memory.SharedMemory(name=name)
         finally:
@@ -79,8 +82,7 @@ class SharedBlock:
 
     def _ensure_view(self):
         if self._view is None:
-            self._view = np.ndarray(self.shape, dtype=self.dtype,
-                                    buffer=self._shm.buf, offset=_HEADER_SIZE)
+            self._view = np.ndarray(self.shape, dtype=self.dtype, buffer=self._shm.buf, offset=_HEADER_SIZE)
 
     def write(self, data: np.ndarray):
         """Write data with sequence counter protection."""
@@ -127,10 +129,8 @@ class SharedBlock:
         return ts
 
     def close(self):
-        try:
+        with contextlib.suppress(Exception):
             self._shm.close()
-        except Exception:
-            pass
 
     def unlink(self):
         _orig = resource_tracker.unregister
@@ -179,18 +179,24 @@ class SharedLatentCache:
         shm_name = name or self.SHM_NAME
         self._block = SharedBlock(name=shm_name, shape=(latent_dim,), dtype=np.float32, create=create)
         self._subtask_block = SharedBlock(
-            name=shm_name + "_subtask", shape=(self._SUBTASK_MAX_BYTES,), dtype=np.uint8, create=create,
+            name=shm_name + "_subtask",
+            shape=(self._SUBTASK_MAX_BYTES,),
+            dtype=np.uint8,
+            create=create,
         )
         self._confidence_block = SharedBlock(
-            name=shm_name + "_conf", shape=(1,), dtype=np.float32, create=create,
+            name=shm_name + "_conf",
+            shape=(1,),
+            dtype=np.float32,
+            create=create,
         )
 
     def write(self, latent: Tensor, subtask: str | None = None, confidence: float = 0.0) -> None:
         self._block.write(latent.detach().cpu().to(torch.float32).numpy())
         if subtask is not None:
-            encoded = subtask.encode("utf-8")[:self._SUBTASK_MAX_BYTES]
+            encoded = subtask.encode("utf-8")[: self._SUBTASK_MAX_BYTES]
             buf = np.zeros(self._SUBTASK_MAX_BYTES, dtype=np.uint8)
-            buf[:len(encoded)] = np.frombuffer(encoded, dtype=np.uint8)
+            buf[: len(encoded)] = np.frombuffer(encoded, dtype=np.uint8)
             self._subtask_block.write(buf)
             self._confidence_block.write(np.array([confidence], dtype=np.float32))
 
@@ -260,8 +266,15 @@ class SharedImageBuffer:
 
     SHM_PREFIX = "hvla_img_"
 
-    def __init__(self, camera_keys: tuple[str, ...], height: int = 720, width: int = 1280, channels: int = 3,
-                 create: bool = True, state_dim: int = 32):
+    def __init__(
+        self,
+        camera_keys: tuple[str, ...],
+        height: int = 720,
+        width: int = 1280,
+        channels: int = 3,
+        create: bool = True,
+        state_dim: int = 32,
+    ):
         self.camera_keys = camera_keys
         self.height = height
         self.width = width
@@ -272,11 +285,17 @@ class SharedImageBuffer:
         for key in camera_keys:
             shm_name = f"{self.SHM_PREFIX}{key}"
             self._cam_blocks[key] = SharedBlock(
-                name=shm_name, shape=(height, width, channels), dtype=np.uint8, create=create,
+                name=shm_name,
+                shape=(height, width, channels),
+                dtype=np.uint8,
+                create=create,
             )
 
         self._state_block = SharedBlock(
-            name=f"{self.SHM_PREFIX}_state", shape=(state_dim,), dtype=np.float32, create=create,
+            name=f"{self.SHM_PREFIX}_state",
+            shape=(state_dim,),
+            dtype=np.float32,
+            create=create,
         )
 
     def write_images(self, robot_obs: dict, cam_key_map: dict[str, str], joint_names: list[str]):
@@ -328,5 +347,3 @@ DEFAULT_S2_CAM_KEY_MAP = {
 }
 
 DEFAULT_S2_IMAGE_KEYS = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb", "base_1_rgb")
-
-

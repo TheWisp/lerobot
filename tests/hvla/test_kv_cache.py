@@ -3,12 +3,12 @@
 Verifies that the cached KV path produces numerically identical outputs
 to the uncached path across various configurations.
 """
+
 import pytest
 import torch
-import numpy as np
 
-from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Model
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
+from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Model
 
 
 @pytest.fixture

@@ -23,24 +23,19 @@ Fix: Always reload dataset.meta.episodes and dataset.meta.info at the start
 of each trim_episode_by_frames() call.
 """
 
-import shutil
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
-import pytest
 
 from lerobot.datasets.aggregate import aggregate_datasets
 from lerobot.datasets.dataset_tools import delete_episodes, trim_episode_by_frames
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.feature_utils import get_hf_features_from_features
 from lerobot.datasets.io_utils import (
-    hf_transform_to_torch,
     load_episodes,
     load_info,
-    load_nested_dataset,
 )
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from tests.fixtures.constants import DUMMY_REPO_ID
 
 try:

@@ -194,10 +194,12 @@ class TestPrefetchEpisode:
         # episodes 1-9 (450 more frames) until 1000-frame budget is met.
         # 50 * 10 = 500 total, all episodes should be cached since total < 1000 + ep0.
         for ep_idx in range(num_episodes):
-            assert app_state.frame_cache.contains("test_ds", ep_idx, 0, "cam_a"), \
+            assert app_state.frame_cache.contains("test_ds", ep_idx, 0, "cam_a"), (
                 f"Episode {ep_idx} frame 0 should be cached"
-            assert app_state.frame_cache.contains("test_ds", ep_idx, ep_length - 1, "cam_a"), \
+            )
+            assert app_state.frame_cache.contains("test_ds", ep_idx, ep_length - 1, "cam_a"), (
                 f"Episode {ep_idx} last frame should be cached"
+            )
 
     @patch("lerobot.datasets.video_utils.VideoDecoderCache")
     @patch("lerobot.datasets.video_utils.decode_video_frames_torchcodec")
@@ -220,12 +222,14 @@ class TestPrefetchEpisode:
 
         # Episodes 0-3 should be cached (ep0 + 1000 lookahead covers 3 more episodes)
         for ep_idx in range(4):
-            assert app_state.frame_cache.contains("test_ds", ep_idx, 0, "cam_a"), \
+            assert app_state.frame_cache.contains("test_ds", ep_idx, 0, "cam_a"), (
                 f"Episode {ep_idx} should be cached"
+            )
 
         # Episode 4 should NOT be cached (budget exhausted after ep 3)
-        assert not app_state.frame_cache.contains("test_ds", 4, 0, "cam_a"), \
+        assert not app_state.frame_cache.contains("test_ds", 4, 0, "cam_a"), (
             "Episode 4 should not be cached (beyond lookahead budget)"
+        )
 
 
 class TestMaybeStartPrefetch:

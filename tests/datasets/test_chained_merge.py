@@ -16,9 +16,6 @@ Tests both image-only and video datasets.
 
 from unittest.mock import patch
 
-import pandas as pd
-import pytest
-
 from lerobot.datasets.aggregate import aggregate_datasets
 from lerobot.datasets.dataset_tools import delete_episodes, trim_episode_by_frames
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -44,9 +41,7 @@ def assert_meta_files_exist(ds):
         ep = ds.meta.episodes[ep_idx]
         chunk_idx = int(ep["meta/episodes/chunk_index"])
         file_idx = int(ep["meta/episodes/file_index"])
-        meta_path = ds.root / DEFAULT_EPISODES_PATH.format(
-            chunk_index=chunk_idx, file_index=file_idx
-        )
+        meta_path = ds.root / DEFAULT_EPISODES_PATH.format(chunk_index=chunk_idx, file_index=file_idx)
         if not meta_path.exists():
             missing.append((ep_idx, chunk_idx, file_idx))
 
@@ -64,9 +59,8 @@ def assert_data_files_exist(ds):
         if not data_path.exists():
             missing.append((ep_idx, str(data_path)))
 
-    assert len(missing) == 0, (
-        f"{len(missing)} episodes reference non-existent data files: "
-        + ", ".join(f"ep {e} -> {p}" for e, p in missing[:10])
+    assert len(missing) == 0, f"{len(missing)} episodes reference non-existent data files: " + ", ".join(
+        f"ep {e} -> {p}" for e, p in missing[:10]
     )
 
 
@@ -79,9 +73,8 @@ def assert_video_files_exist(ds):
             if not video_path.exists():
                 missing.append((ep_idx, vid_key, str(video_path)))
 
-    assert len(missing) == 0, (
-        f"{len(missing)} episodes reference non-existent video files: "
-        + ", ".join(f"ep {e}/{k} -> {p}" for e, k, p in missing[:10])
+    assert len(missing) == 0, f"{len(missing)} episodes reference non-existent video files: " + ", ".join(
+        f"ep {e}/{k} -> {p}" for e, k, p in missing[:10]
     )
 
 
@@ -89,7 +82,7 @@ def assert_episode_indices_contiguous(ds):
     """Verify episode indices form a contiguous range [0, num_episodes)."""
     indices = [int(ds.meta.episodes[i]["episode_index"]) for i in range(ds.num_episodes)]
     assert indices == list(range(ds.num_episodes)), (
-        f"Episode indices are not contiguous [0..{ds.num_episodes-1}]: {indices}"
+        f"Episode indices are not contiguous [0..{ds.num_episodes - 1}]: {indices}"
     )
 
 
@@ -114,9 +107,7 @@ def assert_video_timestamps_valid(ds):
         for vid_key in ds.meta.video_keys:
             from_ts = ep[f"videos/{vid_key}/from_timestamp"]
             to_ts = ep[f"videos/{vid_key}/to_timestamp"]
-            assert from_ts >= 0, (
-                f"Episode {ep_idx}, {vid_key}: from_timestamp ({from_ts}) < 0"
-            )
+            assert from_ts >= 0, f"Episode {ep_idx}, {vid_key}: from_timestamp ({from_ts}) < 0"
             assert from_ts < to_ts, (
                 f"Episode {ep_idx}, {vid_key}: from_timestamp ({from_ts}) >= to_timestamp ({to_ts})"
             )
@@ -125,11 +116,9 @@ def assert_video_timestamps_valid(ds):
 def assert_full_iteration(ds, expected_frames):
     """Verify we can iterate through all frames and the count matches."""
     count = 0
-    for item in ds:
+    for _item in ds:
         count += 1
-    assert count == expected_frames, (
-        f"Expected {expected_frames} frames during iteration, got {count}"
-    )
+    assert count == expected_frames, f"Expected {expected_frames} frames during iteration, got {count}"
 
 
 def run_integrity_checks(ds, expected_episodes, expected_frames, has_videos):
@@ -137,9 +126,7 @@ def run_integrity_checks(ds, expected_episodes, expected_frames, has_videos):
     assert ds.num_episodes == expected_episodes, (
         f"Expected {expected_episodes} episodes, got {ds.num_episodes}"
     )
-    assert ds.num_frames == expected_frames, (
-        f"Expected {expected_frames} frames, got {ds.num_frames}"
-    )
+    assert ds.num_frames == expected_frames, f"Expected {expected_frames} frames, got {ds.num_frames}"
     assert_meta_files_exist(ds)
     assert_data_files_exist(ds)
     assert_episode_indices_contiguous(ds)
@@ -156,12 +143,18 @@ class TestChainedMerge:
     def test_chained_merge_no_video(self, tmp_path, lerobot_dataset_factory):
         """Chained merge with image-only datasets."""
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=5, total_frames=250, use_videos=False,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=5,
+            total_frames=250,
+            use_videos=False,
         )
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=8, total_frames=400, use_videos=False,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=8,
+            total_frames=400,
+            use_videos=False,
         )
 
         # Step 1: A+B -> C
@@ -176,8 +169,11 @@ class TestChainedMerge:
 
         # Create D
         ds_d = lerobot_dataset_factory(
-            root=tmp_path / "ds_d", repo_id=f"{DUMMY_REPO_ID}_d",
-            total_episodes=6, total_frames=300, use_videos=False,
+            root=tmp_path / "ds_d",
+            repo_id=f"{DUMMY_REPO_ID}_d",
+            total_episodes=6,
+            total_frames=300,
+            use_videos=False,
         )
 
         # Step 2: C+D -> E
@@ -193,12 +189,18 @@ class TestChainedMerge:
     def test_chained_merge_with_video(self, tmp_path, lerobot_dataset_factory):
         """Chained merge with video datasets — the real-world case."""
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=5, total_frames=250, use_videos=True,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=5,
+            total_frames=250,
+            use_videos=True,
         )
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=8, total_frames=400, use_videos=True,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=8,
+            total_frames=400,
+            use_videos=True,
         )
 
         # Step 1: A+B -> C
@@ -213,8 +215,11 @@ class TestChainedMerge:
 
         # Create D
         ds_d = lerobot_dataset_factory(
-            root=tmp_path / "ds_d", repo_id=f"{DUMMY_REPO_ID}_d",
-            total_episodes=6, total_frames=300, use_videos=True,
+            root=tmp_path / "ds_d",
+            repo_id=f"{DUMMY_REPO_ID}_d",
+            total_episodes=6,
+            total_frames=300,
+            use_videos=True,
         )
 
         # Step 2: C+D -> E
@@ -230,13 +235,19 @@ class TestChainedMerge:
     def test_triple_chain_with_video(self, tmp_path, lerobot_dataset_factory):
         """Triple chain: A+B->C, C+D->E, E+F->G. Stress test for accumulated remapping."""
         datasets_config = [
-            ("a", 4, 200), ("b", 3, 150), ("d", 5, 250), ("f", 3, 150),
+            ("a", 4, 200),
+            ("b", 3, 150),
+            ("d", 5, 250),
+            ("f", 3, 150),
         ]
         sources = {}
         for name, eps, frames in datasets_config:
             sources[name] = lerobot_dataset_factory(
-                root=tmp_path / f"ds_{name}", repo_id=f"{DUMMY_REPO_ID}_{name}",
-                total_episodes=eps, total_frames=frames, use_videos=True,
+                root=tmp_path / f"ds_{name}",
+                repo_id=f"{DUMMY_REPO_ID}_{name}",
+                total_episodes=eps,
+                total_frames=frames,
+                use_videos=True,
             )
 
         # A+B -> C
@@ -278,12 +289,18 @@ class TestChainedMerge:
         non-trivial file structure.
         """
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=10, total_frames=500, use_videos=True,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=10,
+            total_frames=500,
+            use_videos=True,
         )
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=8, total_frames=400, use_videos=True,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=8,
+            total_frames=400,
+            use_videos=True,
         )
 
         # Step 1: A+B -> C with small file limits to force rotation
@@ -305,8 +322,11 @@ class TestChainedMerge:
 
         # Create D
         ds_d = lerobot_dataset_factory(
-            root=tmp_path / "ds_d", repo_id=f"{DUMMY_REPO_ID}_d",
-            total_episodes=6, total_frames=300, use_videos=True,
+            root=tmp_path / "ds_d",
+            repo_id=f"{DUMMY_REPO_ID}_d",
+            total_episodes=6,
+            total_frames=300,
+            use_videos=True,
         )
 
         # Step 2: C+D -> E (also with small file limits)
@@ -340,25 +360,30 @@ class TestChainedMerge:
                 mv.return_value = "v3.0"
                 ms.return_value = str(out)
                 return delete_episodes(
-                    ds, episode_indices=indices,
-                    output_dir=out, repo_id=f"{DUMMY_REPO_ID}_{name}",
+                    ds,
+                    episode_indices=indices,
+                    output_dir=out,
+                    repo_id=f"{DUMMY_REPO_ID}_{name}",
                 )
 
         # --- Dataset A: 6 episodes, 300 total frames (randomly distributed) ---
         ds_a = lerobot_dataset_factory(
-            root=tmp_path / "ds_a", repo_id=f"{DUMMY_REPO_ID}_a",
-            total_episodes=6, total_frames=300, use_videos=True,
+            root=tmp_path / "ds_a",
+            repo_id=f"{DUMMY_REPO_ID}_a",
+            total_episodes=6,
+            total_frames=300,
+            use_videos=True,
         )
 
         # Trim ep 0: cut 5 frames from each end
         a_ep0_len = _ep_len(ds_a, 0)
         trim_episode_by_frames(ds_a, episode_index=0, start_frame=5, end_frame=a_ep0_len - 5)
-        a_ep0_trimmed = a_ep0_len - 10
+        a_ep0_len - 10
 
         # Trim ep 3: cut 3 frames from start
         a_ep3_len = _ep_len(ds_a, 3)
         trim_episode_by_frames(ds_a, episode_index=3, start_frame=3, end_frame=a_ep3_len)
-        a_ep3_trimmed = a_ep3_len - 3
+        a_ep3_len - 3
 
         # Reload, then delete eps 2 and 4
         ds_a = load_merged_dataset(ds_a.repo_id, ds_a.root)
@@ -372,8 +397,11 @@ class TestChainedMerge:
 
         # --- Dataset B: 5 episodes, 250 total frames ---
         ds_b = lerobot_dataset_factory(
-            root=tmp_path / "ds_b", repo_id=f"{DUMMY_REPO_ID}_b",
-            total_episodes=5, total_frames=250, use_videos=True,
+            root=tmp_path / "ds_b",
+            repo_id=f"{DUMMY_REPO_ID}_b",
+            total_episodes=5,
+            total_frames=250,
+            use_videos=True,
         )
 
         # Trim ep 1: cut 4 frames from end
@@ -404,8 +432,11 @@ class TestChainedMerge:
 
         # --- Dataset D: 4 episodes, 200 frames (fresh, no edits) ---
         ds_d = lerobot_dataset_factory(
-            root=tmp_path / "ds_d", repo_id=f"{DUMMY_REPO_ID}_d",
-            total_episodes=4, total_frames=200, use_videos=True,
+            root=tmp_path / "ds_d",
+            repo_id=f"{DUMMY_REPO_ID}_d",
+            total_episodes=4,
+            total_frames=200,
+            use_videos=True,
         )
 
         # --- Chain: C + D → E ---
