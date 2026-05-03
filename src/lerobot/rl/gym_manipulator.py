@@ -767,7 +767,16 @@ def control_loop(
 def replay_trajectory(
     env: gym.Env, action_processor: DataProcessorPipeline, cfg: GymManipulatorConfig
 ) -> None:
-    """Replay recorded trajectory on robot environment."""
+    """Replay recorded trajectory on robot environment.
+
+    Pre: ``cfg.dataset.replay_episode`` is not None and the dataset is on disk.
+    Post: each recorded action has been applied to ``env`` once, paced at the
+    dataset's recording fps. ``cfg.env.fps`` is intentionally ignored — the
+    only correct rate for replay is whatever the data was captured at; any
+    other rate would integrate physics differently and diverge from the
+    original trajectory. Users wanting fast/slow preview should use the
+    dataset-level playback in the GUI instead.
+    """
     assert cfg.dataset.replay_episode is not None, "Replay episode must be provided for replay"
 
     dataset = LeRobotDataset(
@@ -777,6 +786,15 @@ def replay_trajectory(
         download_videos=False,
     )
     actions = dataset.select_columns(ACTION)
+
+    replay_fps = dataset.fps
+    if replay_fps != cfg.env.fps:
+        logging.warning(
+            f"Replay fps={replay_fps} (from dataset) differs from env profile "
+            f"fps={cfg.env.fps}. Using dataset fps so the trajectory replays at "
+            f"the rate it was recorded at."
+        )
+    dt = 1.0 / replay_fps
 
     _, info = env.reset()
 
@@ -788,7 +806,7 @@ def replay_trajectory(
         )
         transition = action_processor(transition)
         env.step(transition[TransitionKey.ACTION])
-        precise_sleep(max(1 / cfg.env.fps - (time.perf_counter() - start_time), 0.0))
+        precise_sleep(max(dt - (time.perf_counter() - start_time), 0.0))
 
 
 @parser.wrap()
