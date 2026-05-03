@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import traceback
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from lerobot.gui.api import datasets, edits, env, models, playback, robot, run
@@ -37,6 +38,28 @@ app = FastAPI(
     description="Web-based visualization and editing tool for LeRobot datasets",
     version="0.1.0",
 )
+
+
+@app.exception_handler(Exception)
+async def _json_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return uncaught exceptions as structured JSON, not Starlette's HTML 500.
+
+    Why: the frontend `fetch` paths uniformly do `response.json()`. When an
+    endpoint raises and Starlette renders the default text/html "Internal
+    Server Error" page, the JS layer fails with a confusing
+    `Unexpected token 'I'` parse error and the user has no idea what
+    actually broke. This handler keeps the response shape consistent
+    (`{"detail": "..."}`) so the GUI can surface a real message.
+    """
+    logger.exception(f"Unhandled exception in {request.method} {request.url.path}: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": f"{type(exc).__name__}: {exc}",
+            "traceback": traceback.format_exc(),
+        },
+    )
+
 
 # Global app state (initialized on startup)
 _app_state: AppState | None = None

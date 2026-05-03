@@ -122,9 +122,7 @@ class TestMetadataReloadOnReopen:
             mock_ds.meta.episodes = [{"length": 100} for _ in range(216)]
 
         async def run():
-            with patch.object(
-                datasets_module, "_check_and_reload_metadata", side_effect=simulate_reload
-            ):
+            with patch.object(datasets_module, "_check_and_reload_metadata", side_effect=simulate_reload):
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app), base_url="http://test"
                 ) as client:
@@ -194,9 +192,7 @@ class TestListEpisodesReloadsMetadata:
             mock_ds.meta.episodes = [{"length": 50} for _ in range(8)]
 
         async def run():
-            with patch.object(
-                datasets_module, "_check_and_reload_metadata", side_effect=simulate_reload
-            ):
+            with patch.object(datasets_module, "_check_and_reload_metadata", side_effect=simulate_reload):
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app), base_url="http://test"
                 ) as client:
@@ -204,5 +200,38 @@ class TestListEpisodesReloadsMetadata:
                     assert resp.status_code == 200
                     episodes = resp.json()
                     assert len(episodes) == 8
+
+        asyncio.run(run())
+
+
+class TestListEpisodesHandlesCorruptDataset:
+    """`list_episodes` must survive an info.json that races ahead of the
+    on-disk episode metadata. This happens when a recording subprocess is
+    killed mid-write (or skips dataset.finalize()): info.json gets bumped
+    per save_episode, but the buffered episode metadata never reaches disk.
+    """
+
+    def test_clamps_to_persisted_episodes(self, app_with_state):
+        """info.json claims 30 episodes but only 28 are on disk → return 28, not 500."""
+        app, state = app_with_state
+        dataset_id = "test/corrupt"
+        # Persisted metadata has 28 entries...
+        episodes_on_disk = [{"length": 100, "tasks": ["pick"]} for _ in range(28)]
+        mock_ds = _make_mock_dataset(28)
+        # ...but info.json claims 30 (the corruption signature)
+        mock_ds.meta.total_episodes = 30
+        mock_ds.meta.episodes = episodes_on_disk
+        state.datasets[dataset_id] = mock_ds
+
+        async def run():
+            with patch.object(datasets_module, "_check_and_reload_metadata"):
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://test"
+                ) as client:
+                    resp = await client.get(f"/api/datasets/{dataset_id}/episodes")
+                    assert resp.status_code == 200, resp.text
+                    episodes = resp.json()
+                    # Returned only what's actually persisted; no IndexError.
+                    assert len(episodes) == 28
 
         asyncio.run(run())

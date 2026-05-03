@@ -932,8 +932,23 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
         episodes = load_episodes(dataset.root)
         dataset.meta.episodes = episodes
 
+    # Defensive clamp: info.json's total_episodes can race ahead of the on-disk
+    # episode-metadata parquet when a recording session was killed mid-write
+    # (e.g. SIGKILL, OOM, or a bug that skipped dataset.finalize()). Iterate
+    # only up to what's actually persisted so the GUI stays usable; surface
+    # the discrepancy as a warning.
+    persisted = len(episodes)
+    claimed = dataset.meta.total_episodes
+    if persisted < claimed:
+        logger.warning(
+            f"{dataset_id}: info.json claims {claimed} episodes but only {persisted} are "
+            f"persisted to meta/episodes/. Listing the {persisted} we can read; the "
+            f"dataset is likely corrupt from an interrupted recording — repair via "
+            f"`lerobot-edit-dataset verify` or re-aggregate stats."
+        )
+
     result = []
-    for i in range(dataset.meta.total_episodes):
+    for i in range(min(claimed, persisted)):
         ep = episodes[i]
         length = ep["length"]
         duration_s = length / dataset.fps
