@@ -3871,6 +3871,40 @@ def verify_dataset(
         result.add_warning("alignment", f"... and {length_mismatches - 3} more episode length mismatches")
     if index_errors > 3:
         result.add_warning("data", f"... and {index_errors - 3} more index mismatches")
+
+    # Action-quality heuristic: an episode whose action column is identically
+    # zero across every frame is almost always a recording-flow bug rather
+    # than legit data. Common failure mode: gym-hil / pynput intervention flag
+    # never engaged during teleop, so the policy's neutral [0,...,0] passed
+    # through env.step and got recorded. Surface as a warning so users notice
+    # silently-rotted episodes when opening the dataset, not at training time
+    # when the loss curve is mysteriously flat.
+    from lerobot.utils.constants import ACTION
+
+    if ACTION in data.columns:
+        bad_episodes = []
+        for ep_idx in episode_indices:
+            ep_actions = data.loc[data["episode_index"] == ep_idx, ACTION].tolist()
+            if not ep_actions:
+                continue
+            try:
+                if all(all(v == 0 for v in a) for a in ep_actions):
+                    bad_episodes.append(int(ep_idx))
+            except (TypeError, ValueError):
+                # Malformed action data — skip this episode rather than crash
+                # the whole verification run.
+                continue
+        if bad_episodes:
+            listed = ", ".join(str(i) for i in bad_episodes[:5])
+            more = f" (and {len(bad_episodes) - 5} more)" if len(bad_episodes) > 5 else ""
+            result.add_warning(
+                "data",
+                f"{len(bad_episodes)} episode(s) have all-zero actions across every frame: "
+                f"[{listed}]{more}. Common cause: teleop intervention never engaged "
+                f"during recording — the policy's neutral action got recorded instead. "
+                f"These episodes are useless for training/replay.",
+                details={"episode_indices": bad_episodes},
+            )
     if frame_index_errors > 3:
         result.add_warning("data", f"... and {frame_index_errors - 3} more frame_index issues")
 

@@ -20,15 +20,14 @@ This preserves video quality and is much faster than re-encoding.
 """
 
 import shutil
-from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.io_utils import load_episodes, load_info
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 
 @pytest.fixture
@@ -776,6 +775,60 @@ class TestVerifyDataset:
 
         assert not result.is_valid
         assert any("Episode count mismatch" in str(e) for e in result.errors)
+
+    def test_verify_warns_on_all_zero_action_episode(self, tmp_path, lerobot_dataset_factory):
+        """An episode whose action column is identically zero across every
+        frame is almost always a recording-flow bug, not legit data. Verify
+        that opening such a dataset produces a clear warning naming the
+        affected episode indices."""
+
+        from lerobot.datasets.dataset_tools import verify_dataset
+        from lerobot.utils.constants import ACTION
+
+        dataset = lerobot_dataset_factory(
+            root=tmp_path / "test_zero_actions",
+            repo_id="test/zero_actions",
+            total_episodes=4,
+            total_frames=200,
+        )
+
+        # Zero out actions for episodes 1 and 3 only (mimicking the gym-hil /
+        # intervention-flag bug we just fixed: some episodes are clean, others
+        # are silently no-op).
+        for parquet_path in (dataset.root / "data").rglob("*.parquet"):
+            df = pd.read_parquet(parquet_path)
+            mask = df["episode_index"].isin([1, 3])
+            if mask.any():
+                action_dim = len(df.loc[mask, ACTION].iloc[0])
+                df.loc[mask, ACTION] = pd.Series(
+                    [np.zeros(action_dim, dtype=np.float32) for _ in range(mask.sum())],
+                    index=df[mask].index,
+                )
+                df.to_parquet(parquet_path, index=False)
+
+        result = verify_dataset(dataset.root, check_videos=False)
+
+        # Structural integrity is fine; only a *warning* is raised.
+        assert result.is_valid
+        zero_warnings = [w for w in result.warnings if "all-zero actions" in w.message]
+        assert len(zero_warnings) == 1, f"Expected one all-zero warning, got: {result.warnings}"
+        assert zero_warnings[0].details["episode_indices"] == [1, 3]
+
+    def test_verify_no_warning_when_actions_are_normal(self, tmp_path, lerobot_dataset_factory):
+        """The factory's default datasets have random non-zero actions — make
+        sure we don't fire false positives on healthy data."""
+        from lerobot.datasets.dataset_tools import verify_dataset
+
+        dataset = lerobot_dataset_factory(
+            root=tmp_path / "test_normal_actions",
+            repo_id="test/normal_actions",
+            total_episodes=3,
+            total_frames=150,
+        )
+
+        result = verify_dataset(dataset.root, check_videos=False)
+
+        assert not any("all-zero actions" in w.message for w in result.warnings)
 
     def test_verify_detects_broken_indices(self, tmp_path, lerobot_dataset_factory):
         """Verify detection of non-continuous dataset_from_index values."""
