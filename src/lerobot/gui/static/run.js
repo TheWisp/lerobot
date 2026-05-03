@@ -941,6 +941,14 @@ function refreshRunDatasetSelects() {
 
 // ---- Form rendering ----
 
+// Marker for required-field labels. Visually consistent across the whole
+// form — pair with the corresponding entry in `_WORKFLOW_VALIDATORS` /
+// `_POLICY_VALIDATORS` so the asterisk and the Launch-button gating tell
+// the same story. For conditional fields (RL Token Encoder, recording
+// task / new-dataset name) the asterisk is part of the label; the
+// label's `display:none` toggle naturally hides the marker too.
+const _REQ = ' <span class="required-marker">*</span>';
+
 function renderRunForm() {
     if (_runFormRendered) return; // Only build once
     _runFormRendered = true;
@@ -953,9 +961,9 @@ function renderRunForm() {
     // ---- Teleop workflow section ----
     html += `<div id="run-section-teleop" style="${selectedWorkflow === 'teleop' ? '' : 'display:none'}">`;
     html += '<div class="form-grid">';
-    html += `<label>Robot</label>`;
+    html += `<label>Robot${_REQ}</label>`;
     html += `<select id="run-teleop-robot">${_robotProfileOptions()}</select>`;
-    html += `<label>Teleop</label>`;
+    html += `<label>Teleop${_REQ}</label>`;
     html += `<select id="run-teleop-teleop">${_teleopProfileOptions()}</select>`;
     html += `<label>FPS</label>`;
     html += `<input type="number" id="run-teleop-fps" value="60" min="1" max="200">`;
@@ -969,13 +977,13 @@ function renderRunForm() {
     html += `</div>`;
     // New dataset name (hidden by default)
     html += `<div id="run-teleop-new-dataset-row" class="form-grid" style="display:none;">`;
-    html += `<label>Name</label>`;
+    html += `<label>Name${_REQ}</label>`;
     html += `<div><input type="text" id="run-teleop-new-dataset-name" placeholder="my_new_dataset" oninput="_checkNewDatasetConflict()">`;
     html += `<div class="dataset-conflict-warning" id="run-teleop-dataset-conflict" style="display:none;"></div></div>`;
     html += `</div>`;
     // Record fields (hidden when None selected)
     html += `<div id="run-teleop-record-fields" class="form-grid" style="display:none;">`;
-    html += `<label>Task</label>`;
+    html += `<label>Task${_REQ}</label>`;
     html += `<div>`;
     html += `<select id="run-teleop-task-select" onchange="_onTaskSelectChange()"><option value="" selected>Pick up the cube</option></select>`;
     html += `<input type="text" id="run-teleop-task-custom" placeholder="Describe the task" style="display:none; margin-top:4px;">`;
@@ -1029,9 +1037,9 @@ function renderRunForm() {
     // ---- Replay workflow section ----
     html += `<div id="run-section-replay" style="${selectedWorkflow === 'replay' ? '' : 'display:none'}">`;
     html += '<div class="form-grid">';
-    html += `<label>Robot</label>`;
+    html += `<label>Robot${_REQ}</label>`;
     html += `<select id="run-replay-robot">${_robotProfileOptions()}</select>`;
-    html += `<label>Episode</label>`;
+    html += `<label>Episode${_REQ}</label>`;
     html += `<select id="run-replay-episode" onchange="_onReplayEpisodeChange()">${_episodeOptions()}</select>`;
     html += '</div>';
     html += '</div>'; // end replay section
@@ -1039,9 +1047,9 @@ function renderRunForm() {
     // ---- Policy workflow section ----
     html += `<div id="run-section-policy" style="${selectedWorkflow === 'policy' ? '' : 'display:none'}">`;
     html += '<div class="form-grid">';
-    html += `<label>Robot</label>`;
+    html += `<label>Robot${_REQ}</label>`;
     html += `<select id="run-policy-robot">${_robotProfileOptions()}</select>`;
-    html += `<label>Checkpoint</label>`;
+    html += `<label>Checkpoint${_REQ}</label>`;
     html += `<select id="run-policy-checkpoint" onchange="_onPolicyCheckpointChange()">${_modelCheckpointOptions()}</select>`;
     // Teleop profile (optional — for manual resets between episodes)
     html += `<label>Teleop</label>`;
@@ -1060,7 +1068,7 @@ function renderRunForm() {
     html += '<div class="form-grid">';
     html += `<label>S2 Checkpoint</label>`;
     html += `<input type="text" id="run-hvla-s2-checkpoint" placeholder="/path/to/s2/model.safetensors" value="">`;
-    html += `<label>Task Prompt</label>`;
+    html += `<label>Task Prompt${_REQ}</label>`;
     html += `<input type="text" id="run-hvla-task" placeholder="assemble cylinder into ring" value="">`;
     html += `<label>Decode Subtask</label>`;
     html += `<input type="checkbox" id="run-hvla-decode-subtask">`;
@@ -1091,7 +1099,7 @@ function renderRunForm() {
     html += `<option value="__new__">+ New training...</option>`;
     html += `</select>`;
     // Fields shown when New is selected
-    html += `<label id="run-hvla-rlt-token-label" style="display:none">RL Token Encoder <span style="color:#d33">*</span></label>`;
+    html += `<label id="run-hvla-rlt-token-label" style="display:none">RL Token Encoder${_REQ}</label>`;
     html += `<input type="text" id="run-hvla-rlt-token-ckpt" placeholder="outputs/rlt_token_v4_4layer_d2048/checkpoint-10000" style="display:none" title="Required: path to the trained Phase-1 RL token encoder checkpoint dir (containing encoder.pt + config.json). The actor's input dim depends on this — wrong / missing means a state_dict size mismatch crash on load.">`;
     html += `<label id="run-hvla-rlt-outdir-label" style="display:none">Output Directory</label>`;
     html += `<input type="text" id="run-hvla-rlt-output-dir" value="outputs/rlt_online" style="display:none">`;
