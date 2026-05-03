@@ -424,6 +424,17 @@ class TestFieldChoices:
         # the precedence rule).
         assert pusht_obs["choices"] != aloha_obs["choices"]
 
+    def test_gym_manipulator_exposes_max_episode_steps(self):
+        """Regression: gym-hil registers all PickCube/ArrangeBoxes
+        variants with max_episode_steps=100. At 30fps that's ~3.3s --
+        too short for human teleop. We added an override field on
+        HILSerlRobotEnvConfig, threaded through to gym.make. The
+        schema must surface it so the GUI form lets users override."""
+        client = TestClient(app)
+        schemas = {s["type_name"]: s for s in client.get("/api/env/schemas").json()}
+        names = {f["name"] for f in schemas["gym_manipulator"]["fields"]}
+        assert "max_episode_steps" in names, names
+
     def test_gym_manipulator_name_field_is_dropdown(self):
         """Regression: HILSerlRobotEnvConfig.name defaults to "real_robot"
         in the schema, but that value routes gym_manipulator's

@@ -335,6 +335,10 @@ function _defaultEnvFields(type) {
             task: 'PandaPickCubeKeyboard-v0',
             fps: 10,
             device: 'cuda',
+            // Override gym-hil's registered max_episode_steps=100 (which is
+            // ~3.3s at fps=30 — too short for human teleop). 1500 ≈ 50s at
+            // 30fps; the user can lengthen / shorten in the editor.
+            max_episode_steps: 1500,
         };
     }
     return {};

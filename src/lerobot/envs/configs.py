@@ -311,6 +311,12 @@ class HILSerlRobotEnvConfig(EnvConfig):
     processor: HILSerlProcessorConfig = field(default_factory=HILSerlProcessorConfig)
 
     name: str = "real_robot"
+    # Overrides gym_hil's per-task max_episode_steps (registered as 100 for
+    # all PickCube / ArrangeBoxes variants in gym_hil/__init__.py). Threaded
+    # through to gym.make in make_robot_env. None keeps the registered
+    # default; any int wraps the env in a TimeLimit at that step count.
+    # Only honored when name != "real_robot" (the gym_hil branch).
+    max_episode_steps: int | None = None
 
     @property
     def gym_kwargs(self) -> dict:
