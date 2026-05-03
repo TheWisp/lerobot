@@ -163,7 +163,9 @@ class ReplayRequest(BaseModel):
     repo_id: str
     root: str | None = None
     episode: int
-    fps: int = 30
+    # No fps: replay must always pace at the dataset's recording fps. Upstream
+    # `lerobot-replay` declares `cfg.dataset.fps` but its loop paces by
+    # `dataset.fps` directly, so the field is dead config.
 
 
 class HVLARunRequest(BaseModel):
@@ -584,13 +586,15 @@ async def start_record(req: RecordRequest) -> dict:
 async def start_replay(req: ReplayRequest) -> dict:
     _ensure_no_active_process()
 
+    # Note: --dataset.fps is intentionally omitted — `lerobot-replay` declares
+    # it as config but ignores it (the loop paces by `dataset.fps` directly),
+    # so passing it from the GUI was dead wiring.
     args = ["lerobot-replay"]
     args.extend(_profile_to_cli_args(req.robot, "robot"))
     args.append(f"--dataset.repo_id={req.repo_id}")
     if req.root:
         args.append(f"--dataset.root={req.root}")
     args.append(f"--dataset.episode={req.episode}")
-    args.append(f"--dataset.fps={req.fps}")
 
     await _launch_subprocess(args, command="replay", config=req.model_dump())
     return {"status": "started", "command": "replay", "pid": _active_process.pid}

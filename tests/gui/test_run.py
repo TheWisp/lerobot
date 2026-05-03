@@ -444,7 +444,6 @@ class TestReplayEndpoint:
                 robot=_ROBOT,
                 repo_id="user/my_dataset",
                 episode=5,
-                fps=60,
             )
             with (
                 patch("lerobot.gui.api.run._active_process", None),
@@ -459,7 +458,10 @@ class TestReplayEndpoint:
         assert "--robot.port=/dev/ttyACM0" in captured_args
         assert "--dataset.repo_id=user/my_dataset" in captured_args
         assert "--dataset.episode=5" in captured_args
-        assert "--dataset.fps=60" in captured_args
+        # Replay must NOT pass --dataset.fps: the upstream lerobot-replay loop
+        # paces by `dataset.fps` (read from the loaded dataset) regardless,
+        # so a CLI-supplied value would be misleading dead config.
+        assert not any(a.startswith("--dataset.fps") for a in captured_args)
         # Replay should not have teleop args
         assert not any("teleop" in a for a in captured_args)
         # Replay now includes cameras (for obs-stream live viewer)
@@ -476,7 +478,6 @@ class TestReplayEndpoint:
                 repo_id="user/my_dataset",
                 root="/tmp/datasets/user/my_dataset",
                 episode=3,
-                fps=30,
             )
             with (
                 patch("lerobot.gui.api.run._active_process", None),

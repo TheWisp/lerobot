@@ -352,13 +352,9 @@ function _checkNewDatasetConflict() {
 function _onReplayEpisodeChange() {
     const sel = document.getElementById('run-replay-episode');
     if (!sel || !sel.value) return;
-    // Parse "datasetId:episodeIndex" and auto-fill FPS
-    const [dsId] = sel.value.split(':');
-    const d = (window.datasets || {})[dsId];
-    if (d) {
-        const fpsInput = document.getElementById('run-replay-fps');
-        if (fpsInput) fpsInput.value = d.fps;
-    }
+    // No-op for now: replay paces at the dataset's recorded fps, which the
+    // backend reads from the dataset metadata. Kept as a hook for future
+    // per-episode UI (e.g. preview thumbnail when an episode is picked).
 }
 
 // ---- Policy dataset helpers ----
@@ -901,8 +897,6 @@ function renderRunForm() {
     html += `<select id="run-replay-robot">${_robotProfileOptions()}</select>`;
     html += `<label>Episode</label>`;
     html += `<select id="run-replay-episode" onchange="_onReplayEpisodeChange()">${_episodeOptions()}</select>`;
-    html += `<label>FPS</label>`;
-    html += `<input type="number" id="run-replay-fps" value="30" min="1" max="200">`;
     html += '</div>';
     html += '</div>'; // end replay section
 
@@ -1214,7 +1208,6 @@ async function launchRun() {
             repo_id: _resolveDatasetRepoId(d),
             root: d.root,
             episode: parseInt(epIdx),
-            fps: parseInt(document.getElementById('run-replay-fps')?.value) || 30,
         };
     } else if (selectedWorkflow === 'policy') {
         const checkpointSel = document.getElementById('run-policy-checkpoint');
