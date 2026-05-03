@@ -297,6 +297,74 @@ class TestRoundTripIntegrity:
         body = client.get("/api/env/profiles/empty").json()
         assert body["fields"] == {}
 
+    def test_change_task_then_save_persists_new_task(self, tmp_env_profiles_dir):
+        """User-flow smoke test for the dirty-detection / Save bar fix.
+
+        Flow: create with task A, PUT with task B, GET returns task B.
+        This is the data-layer half of the bug where the env editor
+        appeared to silently update without showing a Save bar — the
+        in-memory model did change correctly; what was missing was the
+        frontend re-evaluating dirty state. This test pins the API
+        contract the frontend depends on (task field round-trips on
+        update) so a regression on the backend would be caught here
+        even if the JS logic is unchanged."""
+        client = TestClient(app)
+        client.post(
+            "/api/env/profiles",
+            json={
+                "type": "gym_manipulator",
+                "name": "task_change",
+                "fields": {"name": "gym_hil", "task": "PandaPickCubeKeyboard-v0", "fps": 10},
+            },
+        )
+        # Simulate the user picking a new task in the dropdown and clicking Save.
+        client.put(
+            "/api/env/profiles/task_change",
+            json={
+                "type": "gym_manipulator",
+                "name": "task_change",
+                "fields": {"name": "gym_hil", "task": "PandaArrangeBoxesGamepad-v0", "fps": 10},
+            },
+        )
+        body = client.get("/api/env/profiles/task_change").json()
+        assert body["fields"]["task"] == "PandaArrangeBoxesGamepad-v0"
+        # Other fields preserved.
+        assert body["fields"]["name"] == "gym_hil"
+        assert body["fields"]["fps"] == 10
+
+
+class TestTaskInstructionsEndpoint:
+    """`/api/env/task-instructions` is the single source of truth the
+    env editor and the runtime banner both read from. The data must
+    be task-specific — when the user picks a new task, the instructions
+    panel needs to actually change. (The original bug was the JS
+    not re-rendering; this test pins the data layer so we'd catch a
+    regression where the endpoint returned the same dict regardless
+    of input.)"""
+
+    def test_keyboard_vs_gamepad_have_different_intervention_models(self):
+        client = TestClient(app)
+        kb = client.get("/api/env/task-instructions?task=PandaPickCubeKeyboard-v0").json()
+        gp = client.get("/api/env/task-instructions?task=PandaPickCubeGamepad-v0").json()
+        # Keyboard toggles, gamepad holds — fundamentally different models.
+        assert kb["controls"]["intervention"]["model"] == "toggle"
+        assert gp["controls"]["intervention"]["model"] == "hold"
+        assert kb["controls"]["intervention"]["label"] != gp["controls"]["intervention"]["label"]
+        # Source URL points at the right env file
+        assert any("panda_pick_gym_env.py" in d["url"] for d in kb["docs"])
+        assert any("panda_pick_gym_env.py" in d["url"] for d in gp["docs"])
+
+    def test_autonomous_variant_has_no_controls_but_has_docs(self):
+        """Base / Viewer / -v0 variants don't take human input. The dict
+        must reflect that: controls=None, docs still present so the user
+        running an autonomous policy still gets behaviour rules."""
+        client = TestClient(app)
+        body = client.get("/api/env/task-instructions?task=PandaPickCubeBase-v0").json()
+        assert body["controls"] is None
+        assert body["input_type"] is None
+        assert len(body["behaviour"]) > 0  # termination rules still surface
+        assert len(body["docs"]) > 0
+
 
 class TestRegisteredTasks:
     """`/api/env/registered-tasks` enumerates gym tasks for a namespace,
