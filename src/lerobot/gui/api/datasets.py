@@ -21,7 +21,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
 # Will be set by server.py
-_app_state: "AppState" = None  # type: ignore
+_app_state: AppState = None  # type: ignore
 
 # Track metadata file modification times for auto-reload
 _dataset_info_mtime: dict[str, float] = {}
@@ -178,7 +178,10 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
             hf_datasets.enable_caching()
 
         from lerobot.gui.cache_invalidation import invalidate_caches
-        invalidate_caches(_app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices)
+
+        invalidate_caches(
+            _app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices
+        )
 
         # Verify dataset integrity after reload
         from lerobot.datasets.dataset_tools import verify_dataset
@@ -191,8 +194,7 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
             logger.warning(f"Post-reload verification warning: {warn.message}")
 
         logger.info(
-            f"Reloaded dataset: {dataset.meta.total_episodes} episodes, "
-            f"{dataset.meta.total_frames} frames"
+            f"Reloaded dataset: {dataset.meta.total_episodes} episodes, {dataset.meta.total_frames} frames"
         )
         return True
     except Exception as e:
@@ -241,8 +243,17 @@ def _prefetch_episode(
 
     try:
         _prefetch_single_episode(
-            dataset_id, dataset, episode_idx, ep_length, generation, start_frame,
-            video_keys, first_camera, fps, tolerance_s, prefetch_decoder_cache,
+            dataset_id,
+            dataset,
+            episode_idx,
+            ep_length,
+            generation,
+            start_frame,
+            video_keys,
+            first_camera,
+            fps,
+            tolerance_s,
+            prefetch_decoder_cache,
         )
 
         # Keep prefetching subsequent episodes until we have enough lookahead
@@ -258,9 +269,7 @@ def _prefetch_episode(
             if first_camera and _app_state.frame_cache.is_episode_cached(
                 dataset_id, next_idx, next_length, first_camera
             ):
-                logger.debug(
-                    f"Lookahead: episode {next_idx} already cached, skipping"
-                )
+                logger.debug(f"Lookahead: episode {next_idx} already cached, skipping")
                 lookahead_remaining -= next_length
                 next_idx += 1
                 continue
@@ -272,8 +281,17 @@ def _prefetch_episode(
             # Clear decoder cache between episodes (different video files)
             prefetch_decoder_cache.clear()
             _prefetch_single_episode(
-                dataset_id, dataset, next_idx, next_length, generation, 0,
-                video_keys, first_camera, fps, tolerance_s, prefetch_decoder_cache,
+                dataset_id,
+                dataset,
+                next_idx,
+                next_length,
+                generation,
+                0,
+                video_keys,
+                first_camera,
+                fps,
+                tolerance_s,
+                prefetch_decoder_cache,
             )
             lookahead_remaining -= next_length
             next_idx += 1
@@ -349,7 +367,9 @@ def _prefetch_single_episode(
 
                     t1 = time.perf_counter()
                     frames = decode_video_frames_torchcodec(
-                        video_path, timestamps, tolerance_s,
+                        video_path,
+                        timestamps,
+                        tolerance_s,
                         decoder_cache=prefetch_decoder_cache,
                     )
                     t2 = time.perf_counter()
@@ -419,7 +439,7 @@ def _maybe_start_prefetch(dataset_id: str, episode_idx: int, ep_length: int, sta
     _prefetch_executor.submit(_prefetch_episode, dataset_id, episode_idx, ep_length, generation, start_frame)
 
 
-def set_app_state(state: "AppState") -> None:
+def set_app_state(state: AppState) -> None:
     """Set the application state for API handlers."""
     global _app_state
     _app_state = state
@@ -453,9 +473,7 @@ def _write_opened(opened: list[dict]) -> None:
 
 def _save_opened_state() -> None:
     """Save the current set of opened datasets from app state."""
-    entries = []
-    for dataset_id, ds in _app_state.datasets.items():
-        entries.append({"root": str(ds.root)})
+    entries = [{"root": str(ds.root)} for ds in _app_state.datasets.values()]
     _write_opened(entries)
 
 
@@ -505,9 +523,7 @@ def _scan_source(source_path: str, max_depth: int = 3) -> list[dict]:
     return found
 
 
-def _scan_recursive(
-    base: Path, current: Path, found: list[dict], max_depth: int, depth: int
-) -> None:
+def _scan_recursive(base: Path, current: Path, found: list[dict], max_depth: int, depth: int) -> None:
     """Recursively scan for datasets up to max_depth."""
     if depth > max_depth:
         return
@@ -518,14 +534,16 @@ def _scan_recursive(
             try:
                 info = json.loads(info_file.read_text())
                 rel = current.relative_to(base)
-                found.append({
-                    "name": str(rel),
-                    "root": str(current),
-                    "total_episodes": info.get("total_episodes", 0),
-                    "total_frames": info.get("total_frames", 0),
-                    "fps": info.get("fps", 0),
-                    "robot_type": info.get("robot_type") or "",
-                })
+                found.append(
+                    {
+                        "name": str(rel),
+                        "root": str(current),
+                        "total_episodes": info.get("total_episodes", 0),
+                        "total_frames": info.get("total_frames", 0),
+                        "fps": info.get("fps", 0),
+                        "robot_type": info.get("robot_type") or "",
+                    }
+                )
             except Exception:
                 logger.debug(f"Failed to read info.json in {current}", exc_info=True)
             return  # Don't recurse into dataset subdirs
@@ -538,7 +556,7 @@ def _scan_recursive(
                         _scan_recursive(base, child, found, max_depth, depth + 1)
             except PermissionError:
                 pass
-    except Exception:
+    except Exception:  # nosec B110 - directory scan should never abort enumeration
         pass
 
 
@@ -633,9 +651,9 @@ async def open_in_file_manager(body: dict) -> dict:
         raise HTTPException(status_code=400, detail=f"Not a valid directory: {path}")
 
     try:
-        _subprocess.Popen(["xdg-open", path])
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="xdg-open not found")
+        _subprocess.Popen(["xdg-open", path])  # nosec B607 - xdg-open is the standard Linux file-opener
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail="xdg-open not found") from e
 
     return {"status": "ok"}
 
@@ -675,7 +693,7 @@ class DatasetInfo(BaseModel):
     robot_type: str = ""
     camera_keys: list[str]
     features: list[str]
-    errors: list[str] = []    # Verification errors (metadata mismatches — dataset may be corrupted)
+    errors: list[str] = []  # Verification errors (metadata mismatches — dataset may be corrupted)
     warnings: list[str] = []  # Non-critical warnings (stale stats, etc.)
 
 
@@ -716,8 +734,8 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
     """Open a dataset by repo_id or local path."""
     import datasets as hf_datasets
 
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.datasets.io_utils import load_episodes
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     try:
         if request.local_path:
@@ -735,7 +753,9 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                 # Check for metadata changes (e.g. new episodes recorded externally)
                 _check_and_reload_metadata(dataset_id)
                 dataset = _app_state.datasets[dataset_id]
-                logger.info(f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)")
+                logger.info(
+                    f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)"
+                )
                 return DatasetInfo(
                     id=dataset_id,
                     repo_id=dataset.repo_id,
@@ -754,10 +774,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                 try:
                     rel = local_path.relative_to(HF_LEROBOT_HOME)
                     parts = rel.parts
-                    if len(parts) >= 2:
-                        repo_id = f"{parts[0]}/{parts[1]}"
-                    else:
-                        repo_id = local_path.name
+                    repo_id = f"{parts[0]}/{parts[1]}" if len(parts) >= 2 else local_path.name
                 except ValueError:
                     repo_id = local_path.name
 
@@ -775,10 +792,10 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                     raise HTTPException(
                         status_code=400,
                         detail=(
-                            f"Dataset metadata is inconsistent: info.json episode/frame counts "
-                            f"don't match the actual parquet data. This usually means episodes "
-                            f"were added or removed without updating info.json. "
-                            f"Run dataset verification to identify and repair the issue."
+                            "Dataset metadata is inconsistent: info.json episode/frame counts "
+                            "don't match the actual parquet data. This usually means episodes "
+                            "were added or removed without updating info.json. "
+                            "Run dataset verification to identify and repair the issue."
                         ),
                     ) from e
                 raise
@@ -792,7 +809,9 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             if dataset_id in _app_state.datasets:
                 _check_and_reload_metadata(dataset_id)
                 dataset = _app_state.datasets[dataset_id]
-                logger.info(f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)")
+                logger.info(
+                    f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)"
+                )
                 return DatasetInfo(
                     id=dataset_id,
                     repo_id=dataset.repo_id,
@@ -812,6 +831,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
 
         # Ensure episodes are loaded
         from lerobot.gui.dataset_reload import ensure_episodes_loaded
+
         ensure_episodes_loaded(dataset)
 
         # Check and repair episode metadata indices if needed
@@ -874,7 +894,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
 
     except Exception as e:
         logger.exception(f"Failed to open dataset: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.delete("/{dataset_id:path}")
@@ -993,7 +1013,9 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
 
     if camera:
         if camera not in camera_keys:
-            raise HTTPException(status_code=400, detail=f"Camera not found: {camera}. Available: {camera_keys}")
+            raise HTTPException(
+                status_code=400, detail=f"Camera not found: {camera}. Available: {camera_keys}"
+            )
         camera_key = camera
     else:
         camera_key = camera_keys[0]
@@ -1193,10 +1215,14 @@ async def visualize_episode(dataset_id: str, episode_idx: int) -> dict[str, str]
     # Build the command
     cmd = [
         "lerobot-dataset-viz",
-        "--repo-id", dataset.repo_id,
-        "--episode-index", str(episode_idx),
-        "--root", str(dataset.root),
-        "--display-compressed-images", "False",
+        "--repo-id",
+        dataset.repo_id,
+        "--episode-index",
+        str(episode_idx),
+        "--root",
+        str(dataset.root),
+        "--display-compressed-images",
+        "False",
     ]
 
     logger.info(f"Launching Rerun viz: {' '.join(cmd)}")
@@ -1210,7 +1236,7 @@ async def visualize_episode(dataset_id: str, episode_idx: int) -> dict[str, str]
             start_new_session=True,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to launch visualizer: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to launch visualizer: {e}") from e
 
     return {"status": "ok", "message": f"Launched Rerun for episode {episode_idx}"}
 
@@ -1249,6 +1275,7 @@ async def hub_repo_info(repo_id: str):
         remote_fps = None
         try:
             import json as _json
+
             from huggingface_hub import hf_hub_download
 
             info_path = hf_hub_download(repo_id, "meta/info.json", repo_type="dataset")
@@ -1256,7 +1283,7 @@ async def hub_repo_info(repo_id: str):
             remote_episodes = remote_info.get("total_episodes")
             remote_frames = remote_info.get("total_frames")
             remote_fps = remote_info.get("fps")
-        except Exception:
+        except Exception:  # nosec B110 - remote info is best-effort metadata
             pass
 
         return {
@@ -1359,6 +1386,7 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
         p = Path(dataset_id)
         if p.exists() and (p / "meta" / "info.json").exists():
             from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
             _app_state.datasets[dataset_id] = LeRobotDataset(str(p), local_files_only=True)
             logger.info("Auto-opened dataset for upload: %s", dataset_id)
         else:
@@ -1377,8 +1405,11 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
 
             api = HfApi()
             api.whoami()
-        except Exception:
-            raise HTTPException(status_code=401, detail="Not logged in to HuggingFace Hub. Run `huggingface-cli login` in terminal.")
+        except Exception as e:
+            raise HTTPException(
+                status_code=401,
+                detail="Not logged in to HuggingFace Hub. Run `huggingface-cli login` in terminal.",
+            ) from e
 
         logger.info(f"Uploading dataset to {repo_id} from {dataset.root}")
         try:
@@ -1393,7 +1424,7 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
             )
         except Exception as e:
             logger.exception(f"Upload failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Upload failed: {e}") from e
 
     logger.info(f"Upload complete: {repo_id}")
     return {
@@ -1434,7 +1465,7 @@ async def hub_download(dataset_id: str, request: HubDownloadRequest | None = Non
             )
         except Exception as e:
             logger.exception(f"Download failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Download failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Download failed: {e}") from e
 
         # Reload dataset in-place (same pattern as merge_into / apply_edits)
         try:
@@ -1443,11 +1474,14 @@ async def hub_download(dataset_id: str, request: HubDownloadRequest | None = Non
             reload_dataset_from_disk(dataset, root=root)
 
             from lerobot.gui.cache_invalidation import invalidate_caches
-            invalidate_caches(_app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices)
+
+            invalidate_caches(
+                _app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices
+            )
 
         except Exception as e:
             logger.exception(f"Reload after download failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Download succeeded but reload failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Download succeeded but reload failed: {e}") from e
 
     logger.info(f"Download complete: {repo_id} ({dataset.meta.total_episodes} episodes)")
     return {
