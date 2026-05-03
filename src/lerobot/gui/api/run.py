@@ -246,6 +246,22 @@ def _write_gym_manipulator_config_tmp(cfg: dict) -> str:
         return tmp.name
 
 
+def _gym_hil_source_url(task: str) -> str:
+    """Map a gym-hil task id to its env class's source URL on GitHub.
+
+    Mirrors `_gymHilSourceUrl` in env.js. Behaviour rules — termination
+    triggers, success threshold, reward shape — live in this Python file
+    with no user-facing prose, so pointing at the source is the most
+    useful link we can give without re-documenting upstream code.
+    """
+    repo = "https://github.com/huggingface/gym-hil/blob/main"
+    if "PandaPickCube" in task:
+        return f"{repo}/gym_hil/envs/panda_pick_gym_env.py"
+    if "PandaArrangeBoxes" in task:
+        return f"{repo}/gym_hil/envs/panda_arrange_boxes_gym_env.py"
+    return f"{repo}/gym_hil/envs/"
+
+
 def _append_sim_controls_banner(env_profile: dict) -> None:
     """Print a one-time controls hint to the Output panel right after a sim
     launch. gym-hil prints its own keyboard list but doesn't say two
@@ -272,6 +288,11 @@ def _append_sim_controls_banner(env_profile: dict) -> None:
     _append_output(
         "• ⚠ Keyboard capture is system-wide (pynput): keys from ANY focused window reach gym-hil."
     )
+    _append_output("")
+    _append_output("Docs (most behaviour rules aren't in prose — read the source):")
+    _append_output(f"  • This task's env source: {_gym_hil_source_url(task)}")
+    _append_output("  • gym-hil package:        https://github.com/huggingface/gym-hil")
+    _append_output("  • LeRobot HIL-SERL guide: https://huggingface.co/docs/lerobot/hilserl_sim")
     _append_output("===================================")
     _append_output("")
 

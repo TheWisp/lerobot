@@ -231,9 +231,24 @@ function renderEnvEditor() {
             } else {
                 html += 'gamepad sticks + triggers.<br>';
             }
-            html += '<b>End episode</b>: <code>Enter</code> = success, <code>Backspace</code> or <code>Esc</code> = failure. The env auto-resets and continues.<br>';
+            html += '<b>End episode</b>: <code>Enter</code> = success, <code>Esc</code> = failure. The env <i>also</i> auto-ends on natural success (cube lifted &gt;10cm) or if the cube goes off-table.<br>';
             html += '<b>Stop the run</b>: hit the GUI <code>Stop</code> button (the printed "Press Ctrl+C" hint is for direct CLI use, not the GUI).<br><br>';
             html += '<span style="color:#b58900">⚠ System-wide keyboard capture.</span> gym-hil uses <code>pynput</code>, which grabs keys from the focused window — any window. Typing <code>Enter</code> in the terminal, browser, IDE, etc. will end the current episode. Be deliberate about what you type while the env is running.';
+            html += '</div></div>';
+
+            // Docs / source links — gym-hil's behaviour rules (success
+            // threshold, out-of-bounds termination, reward shape) live in
+            // the env class source, with no user-facing prose. Linking
+            // straight to the relevant file is the most useful pointer
+            // we can give without re-documenting upstream code.
+            const srcUrl = _gymHilSourceUrl(task);
+            html += '<div class="form-section">';
+            html += '<div class="form-section-title">Behaviour reference</div>';
+            html += '<div class="form-hint" style="line-height:1.6">';
+            html += 'gym-hil envs have implicit termination / reward rules not surfaced in the form (e.g. PickCube terminates when the cube is lifted &gt;10cm <i>or</i> bumped off-table). To read them:<br>';
+            html += `&nbsp;&bull; <a href="${_envEsc(srcUrl)}" target="_blank" rel="noopener">📖 Source for this task family</a> on GitHub<br>`;
+            html += `&nbsp;&bull; <a href="https://github.com/huggingface/gym-hil" target="_blank" rel="noopener">gym-hil package</a> README<br>`;
+            html += `&nbsp;&bull; <a href="https://huggingface.co/docs/lerobot/hilserl_sim" target="_blank" rel="noopener">LeRobot HIL-SERL sim guide</a>`;
             html += '</div></div>';
         }
         // Show source provenance (registry vs fallback) so users can see
@@ -324,6 +339,19 @@ function renderEnvFormField(field, value) {
     const display = (value === null || value === undefined) ? '' : String(value);
     return label + `<input type="text" id="${id}" value="${_envEsc(display)}"
         ${!field.required ? 'placeholder="(optional)"' : ''}>`;
+}
+
+/** Map a gym-hil task id (e.g. "PandaPickCubeKeyboard-v0") to the GitHub
+ *  source URL of the env class that implements it. Lets us surface a
+ *  "📖 Source" link the user can click to read termination / reward /
+ *  bounds rules — these aren't documented anywhere user-facing today,
+ *  they live as Python in the gym-hil package. */
+function _gymHilSourceUrl(task) {
+    const t = String(task || "");
+    const repo = "https://github.com/huggingface/gym-hil/blob/main";
+    if (t.includes("PandaPickCube")) return `${repo}/gym_hil/envs/panda_pick_gym_env.py`;
+    if (t.includes("PandaArrangeBoxes")) return `${repo}/gym_hil/envs/panda_arrange_boxes_gym_env.py`;
+    return `${repo}/gym_hil/envs/`;
 }
 
 /** Sensible starter fields for a fresh profile of this type. Without
