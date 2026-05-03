@@ -74,7 +74,6 @@ import tqdm
 
 from lerobot.datasets import LeRobotDataset
 from lerobot.utils.constants import ACTION, DONE, OBS_STATE, REWARD
-from lerobot.utils.utils import init_logging
 
 
 def to_hwc_uint8_numpy(chw_float32_torch: torch.Tensor) -> np.ndarray:
@@ -190,7 +189,14 @@ def visualize_dataset(
             print("Ctrl-C received. Exiting.")
 
 
-def main():
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argparse parser used by ``main``.
+
+    Exposed as a function so tests (and other call sites that compose argv
+    for this script — e.g. the GUI's ``visualize_episode`` endpoint) can
+    dry-run-parse their argv against the same parser the script uses,
+    without executing the rest of ``main``.
+    """
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -285,6 +291,11 @@ def main():
         help="If set, display compressed images in Rerun instead of uncompressed ones.",
     )
 
+    return parser
+
+
+def main():
+    parser = _build_parser()
     args = parser.parse_args()
     kwargs = vars(args)
     repo_id = kwargs.pop("repo_id")

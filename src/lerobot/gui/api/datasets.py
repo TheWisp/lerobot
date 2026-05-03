@@ -1195,6 +1195,41 @@ async def get_cache_stats(dataset_id: str) -> dict[str, Any]:
     return _app_state.frame_cache.stats()
 
 
+def _build_visualize_cmd(repo_id: str, episode_idx: int, root: str) -> list[str]:
+    """Build the argv for ``lerobot-dataset-viz`` — extracted so tests can pin
+    its shape against the target script's actual argparse (see
+    ``tests/gui/test_visualize_episode.py``).
+
+    Two things have bitten us here:
+
+    1. PATH-based ``lerobot-dataset-viz`` resolves to whichever env's bin/
+       comes first — typically the *base* conda env rather than the lerobot
+       env running the GUI. That env can ship incompatible torch / torchcodec
+       versions and the viewer crashes mid-decode with
+       ``NotImplementedError: torchcodec_ns::_convert_to_tensor``. Use
+       ``sys.executable -m`` so we always run under the same Python as the
+       GUI.
+    2. ``--display-compressed-images`` is a store_true flag (no value) since
+       the upstream refactor; passing ``"False"`` as the next argv makes
+       argparse treat ``"False"`` as an unknown positional and crash silently.
+       Default (uncompressed) is what we want for the standalone viewer, so
+       just omit the flag.
+    """
+    import sys
+
+    return [
+        sys.executable,
+        "-m",
+        "lerobot.scripts.lerobot_dataset_viz",
+        "--repo-id",
+        repo_id,
+        "--episode-index",
+        str(episode_idx),
+        "--root",
+        str(root),
+    ]
+
+
 @router.post("/{dataset_id:path}/episodes/{episode_idx}/visualize")
 async def visualize_episode(dataset_id: str, episode_idx: int) -> dict[str, str]:
     """Launch Rerun visualization for an episode.
@@ -1212,30 +1247,7 @@ async def visualize_episode(dataset_id: str, episode_idx: int) -> dict[str, str]
     if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
         raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
 
-    # Build the command.
-    # 1) Use `sys.executable -m` instead of the `lerobot-dataset-viz` console
-    #    script. PATH-based resolution picks up whichever env's bin/ comes first
-    #    — typically the *base* conda env (Python 3.12) rather than the lerobot
-    #    env (Python 3.10) running the GUI, which ships incompatible torch /
-    #    torchcodec versions and crashes the viewer with an opaque
-    #    `NotImplementedError: torchcodec_ns::_convert_to_tensor` at decode time.
-    # 2) `--display-compressed-images` is a store_true flag (no value) since the
-    #    upstream refactor — passing "False" as the next argv makes argparse
-    #    treat "False" as an unknown positional and crash silently. Default
-    #    (uncompressed) is what we want for the standalone Rerun viewer.
-    import sys as _sys
-
-    cmd = [
-        _sys.executable,
-        "-m",
-        "lerobot.scripts.lerobot_dataset_viz",
-        "--repo-id",
-        dataset.repo_id,
-        "--episode-index",
-        str(episode_idx),
-        "--root",
-        str(dataset.root),
-    ]
+    cmd = _build_visualize_cmd(dataset.repo_id, episode_idx, str(dataset.root))
 
     logger.info(f"Launching Rerun viz: {' '.join(cmd)}")
 
