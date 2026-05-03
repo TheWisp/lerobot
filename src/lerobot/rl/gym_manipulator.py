@@ -554,6 +554,17 @@ def step_env_and_process_transition(
     complementary_data = processed_action_transition[TransitionKey.COMPLEMENTARY_DATA].copy()
     new_info = info.copy()
     new_info.update(processed_action_transition[TransitionKey.INFO])
+    # Restore gym-hil's current-step authoritative keys. The processor's info
+    # was carried forward from the previous iter's transition, so its
+    # "is_intervention" / "teleop_action" reflect the previous step, not this
+    # one — letting them win on update() introduces a one-step stale lag,
+    # which manifests as recorded actions being all-zero even when the user
+    # actively intervenes. (Bug originally introduced by upstream PR #3273
+    # which swapped the merge order to preserve the *enum* TeleopEvents key
+    # without noticing it also clobbered the *string* gym-hil keys.)
+    for _k in ("is_intervention", "teleop_action", "rerecord_episode"):
+        if _k in info:
+            new_info[_k] = info[_k]
 
     new_transition = create_transition(
         observation=obs,
