@@ -4,14 +4,46 @@
 
 - [High] **Warning/error panel**: dataset verification errors and warnings are currently buried in server log text. Add a visible warning panel (banner or sidebar) that surfaces verification results when a dataset is opened — errors as red, warnings as yellow. Users must not miss data integrity issues.
 - [High] **Open local dataset by path**: opening a copied/renamed local dataset fails because `LeRobotDataset.__init__` tries to reach HuggingFace Hub when the folder name doesn't match a cached `owner/name` repo_id. Spaces in folder names also rejected. Need to bypass Hub entirely for local-only datasets.
-- [ ] Parquet data display (action/state charts in timeline)
+- [ ] Parquet data display (action/state charts in timeline) — superseded by Feature Editing (see below); action/state co-display alongside cameras tracked as a follow-up there
 - [ ] Monitor local dataset changes — auto-refresh UI when new episodes recorded while GUI is open
 - [ ] Duplicate episode
 - [ ] Copy/move episodes between datasets
 - [ ] Reorder episodes
 - [ ] Create new dataset from UI
 - [ ] Drag-drop dataset opening
-- [ ] Undo/redo
+- [ ] Undo/redo — explicitly punted from Feature Editing V1 (per-chip removal in edits-bar covers most "oops" cases). Real undo across Saves needs pre-edit value capture or a Git-like history.
+
+### Feature Editing (per-frame view + edit)
+
+See [docs/feature_editing.md](docs/feature_editing.md) for the full design.
+
+V1: schema-driven, drag-to-select-range + Inspector typed editing. Lays the foundation for RECAP-style labeling (`reward`, `success`, `subtask`).
+
+- [ ] Phase A1: schema in `DatasetInfo` (extend the existing dataset-open response with full features dict — dtype, shape, names)
+- [ ] Phase A2: per-frame feature values endpoint + Inspector dataset-summary empty state (schema-driven renderer registry)
+- [ ] Phase A3: episode feature-series endpoint + timeline rows (line / band / stripe per dtype)
+- [ ] Phase B1: vertical-slice selection + click-to-seek-and-select (click inside trim → playhead + selection `[N, N+1)`; drag inside trim → seek + range; playhead-thumb drag scrubs without re-selecting; click outside trim → no-op; Esc clears)
+- [ ] Phase B2: Inspector edit widgets (checkbox / slider+number / dropdown for `subtask_index` / text / row-of-N inputs / "Edit as JSON…"); auto-staging on change with `● pending` indicator
+- [ ] Phase B3: stage `feature_set` edits in `PendingEdit` pipeline; group-by-`(feature, episode)` rendering with expand/collapse
+- [ ] Phase B4: "Show pending edits" toggle (current vs post-Save data overlay on timeline)
+- [ ] Phase B5: validation + safety rails (block edits on `DEFAULT_FEATURES` / `action` / `observation.*` / image / video; >10k frames confirmation)
+- [ ] Phase B6: **new `set_feature_values()` API** in `dataset_tools.py` (peer to `modify_features`) — in-place parquet rewrite of value cells, stats recomputation, `subtasks.parquet` updates, `finalize()`; GUI's `_apply_feature_set_edits()` translates staged edits into one call
+- [ ] Phase C1: two mouse-draggable resize handles (vertical Inspector ↔ main, horizontal cameras ↔ timeline)
+
+Follow-ups (post-V1, listed in design doc):
+
+- [P1/P2] **Stats viewer** — surface `meta/episodes/*.parquet` `stats/*` columns: per-feature min/max/mean/std/quantiles, per-episode and per-dataset, read-only
+- [ ] In-place segment editing: boundary drag, double-click rename, click-empty-and-type, split / merge
+- [ ] Row context menus (Rename, Delete, Split here, Merge with next)
+- [ ] Multi-range selection
+- [ ] Loop-on-selection during playback
+- [ ] Curve editor for continuous features (reward, value, advantage)
+- [ ] **Multi-dim numeric vector visualization** for `action` / `observation.*` — design between stacked-rows / overlaid-curves / collapsed-expandable
+- [ ] Schema mutations: add / remove / rename features via `modify_features`
+- [ ] URDF / 3D trajectory views
+- [ ] True first-class per-episode features (format extension to `info.json` `episode_features` + `episodes.parquet` writer)
+- [ ] Episode-list shortcuts: tri-state `success` checkbox column with bulk-set; inline-editable `task` per episode
+- [ ] First-class `subtask_index` writer at recording time (`add_frame(subtask=...)` analog to `add_frame(task=...)`); today only the read hook + offline annotation Space exist
 
 ### Dataset Merge
 
@@ -154,7 +186,7 @@ Live overlay during teleop/record showing how the current state compares to the 
 - [Mid] Consolidate `_keep_episodes_from_video_by_time` (time-based) with `_keep_episodes_from_video_with_av` (frame-based, upstream) in `dataset_tools.py`. Migrate trim callers to frame indices.
 - [Mid] Consolidate streaming video encoders: our `video_encoder.py` vs upstream's `video_utils.py`. Upstream's is more mature (HW encoders, frame dropping). Consider migrating.
 - [High] **Duplicate detection within dataset**: detect near-duplicate episodes during dataset opening and before merging. Prevents wasted training compute on redundant data. Could use joint state trajectory similarity or image embedding distance.
-- [Mid] **Subtask labeling in GUI**: allow labeling subtask boundaries within an episode from the Data tab timeline. Click/drag to mark frame ranges with subtask names.
+- [Mid] **Subtask labeling in GUI** — **superseded by [docs/feature_editing.md](docs/feature_editing.md)**. V1 of Feature Editing delivers exactly this: drag-select a frame range on the subtask row → type the label in the Inspector → Apply.
 - [Mid] **Subtask format**: conform subtask column to LeRobot 3.0 format + OpenPI changes. Currently uses raw string column; may need task_index remapping.
 
 ## HVLA / Policy Evaluation

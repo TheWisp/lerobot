@@ -1,0 +1,324 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" font-family="system-ui, -apple-system, sans-serif" font-size="13">
+  <style>
+    .label { fill: #222; }
+    .muted { fill: #666; }
+    .deferred { fill: #999; }
+    .frame { fill: #fafafa; stroke: #444; stroke-width: 1.5; }
+    .panel { fill: #f3f3f3; stroke: #888; stroke-width: 1; }
+    .panel-sidebar { fill: #ededed; stroke: #888; stroke-width: 1; }
+    .placeholder { fill: #d8d8d8; stroke: #666; stroke-width: 1; }
+    .placeholder-deferred { fill: none; stroke: #999; stroke-width: 1.5; stroke-dasharray: 6 4; }
+    .row-bg { fill: #fff; stroke: #cfcfcf; stroke-width: 1; }
+    .row-bg-readonly { fill: #f6f6f6; stroke: #cfcfcf; stroke-width: 1; }
+    .row-bg-dim { fill: #ededed; stroke: #cfcfcf; stroke-width: 1; }
+    .trim-envelope { fill: #cfe0fb; fill-opacity: 0.30; stroke: #5b8def; stroke-width: 1; stroke-dasharray: 4 3; }
+    .trim-handle { fill: #5b8def; stroke: #3a6fd6; stroke-width: 1; }
+    .selection-slice { fill: #ffd966; fill-opacity: 0.45; stroke: #b58900; stroke-width: 1.4; }
+    .selection-handle { fill: #b58900; }
+    .playhead { stroke: #cc0000; stroke-width: 1.4; }
+    .seg-a { fill: #b3d9ff; stroke: #5b8def; stroke-width: 0.8; }
+    .seg-b { fill: #ffd6c2; stroke: #d97757; stroke-width: 0.8; }
+    .seg-c { fill: #c2e8c2; stroke: #4caf50; stroke-width: 0.8; }
+    .reward-line { fill: none; stroke: #5b8def; stroke-width: 1.6; }
+    .bool-on { fill: #c2e8c2; stroke: #4caf50; stroke-width: 0.8; }
+    .bool-off { fill: #f0f0f0; stroke: #cfcfcf; stroke-width: 0.8; }
+    .chip { fill: #fff; stroke: #888; stroke-width: 1; rx: 4; }
+    .chip-detail { fill: #fafafa; stroke: #d0d0d0; stroke-width: 0.8; rx: 3; }
+    .btn { fill: #fff; stroke: #444; stroke-width: 1; rx: 4; }
+    .btn-disabled { fill: #f0f0f0; stroke: #bbb; stroke-width: 1; rx: 4; }
+    .btn-primary { fill: #5b8def; stroke: #3a6fd6; stroke-width: 1; rx: 4; }
+    .btn-primary-text { fill: #fff; }
+    .btn-toggle-on { fill: #fff3c4; stroke: #b58900; stroke-width: 1; rx: 4; }
+    .annot { fill: #b58900; font-size: 11px; }
+    .section-title { font-weight: 600; font-size: 13px; fill: #222; }
+    .axis-tick { stroke: #aaa; stroke-width: 0.5; }
+    .axis-label { fill: #888; font-size: 10px; }
+    .axis-line { stroke: #888; stroke-width: 1.2; }
+    .scroll-thumb { fill: #c0c0c0; stroke: #999; stroke-width: 0.5; rx: 3; }
+    .scroll-track { fill: #ececec; stroke: none; }
+    .focus-ring { fill: none; stroke: #b58900; stroke-width: 1.6; rx: 4; }
+    .resize-handle { fill: #d0d0d0; stroke: #999; stroke-width: 0.8; }
+    .slider-track { fill: #d8d8d8; stroke: #aaa; stroke-width: 0.5; rx: 2; }
+    .slider-thumb { fill: #5b8def; stroke: #3a6fd6; stroke-width: 1; }
+    .readonly-tag { fill: #999; font-size: 10px; font-style: italic; }
+    .tab { fill: #f0f0f0; stroke: #888; stroke-width: 1; rx: 0; }
+    .tab-active { fill: #fff; stroke: #444; stroke-width: 1.5; rx: 0; }
+    .tree-row { fill: none; }
+    .tree-row-active { fill: #fff3c4; stroke: #b58900; stroke-width: 0.8; }
+  </style>
+
+  <!-- Outer frame -->
+  <rect class="frame" x="6" y="6" width="1268" height="748" rx="6"/>
+
+  <!-- ============ TOP TAB BAR ============ -->
+  <rect class="panel" x="6" y="6" width="1268" height="32" rx="0"/>
+  <rect class="tab-active" x="14" y="10" width="76" height="28"/>
+  <text class="label" x="35" y="29" font-weight="600">Data</text>
+  <rect class="tab" x="92" y="10" width="76" height="28"/>
+  <text class="muted" x="116" y="29">Model</text>
+  <rect class="tab" x="170" y="10" width="76" height="28"/>
+  <text class="muted" x="195" y="29">Run</text>
+  <rect class="tab" x="248" y="10" width="76" height="28"/>
+  <text class="muted" x="272" y="29">Robot</text>
+
+  <!-- ============ LEFT SIDEBAR (data tree) ============ -->
+  <rect class="panel-sidebar" x="6" y="38" width="180" height="716"/>
+  <text class="section-title" x="16" y="58">Datasets</text>
+
+  <!-- Sources subtitle -->
+  <text class="muted" x="16" y="78" font-size="11">Sources</text>
+  <text class="muted" x="160" y="78" font-size="13">+</text>
+  <text class="muted" x="20" y="94" font-size="11">▾ ~/Documents/lerobot</text>
+  <text class="muted" x="20" y="110" font-size="11">▸ ~/.cache/huggingface</text>
+
+  <line x1="14" y1="120" x2="178" y2="120" stroke="#cfcfcf"/>
+
+  <!-- Open datasets list -->
+  <text class="muted" x="16" y="140" font-size="11">Open</text>
+  <rect class="tree-row-active" x="10" y="148" width="172" height="22"/>
+  <text class="label" x="20" y="163" font-size="11" font-weight="600">▾ my_dataset</text>
+  <text class="muted" x="20" y="180" font-size="10.5">  ep 0 · 385 frames</text>
+  <text class="muted" x="20" y="194" font-size="10.5">  ep 1 · 412 frames</text>
+  <text class="muted" x="20" y="208" font-size="10.5">  ep 2 · 348 frames</text>
+  <text class="muted" x="20" y="222" font-size="10.5">  …</text>
+  <text class="muted" x="20" y="246" font-size="11">▸ thewisp/intervention…</text>
+  <text class="muted" x="20" y="266" font-size="11">▸ jadechoghari/collect-fr…</text>
+
+  <text class="annot" x="14" y="298" font-size="10">open a dataset to see its</text>
+  <text class="annot" x="14" y="312" font-size="10">schema (row labels + Inspector)</text>
+
+  <!-- Resize handle: between Sidebar and Main -->
+  <rect class="resize-handle" x="186" y="38" width="4" height="716" rx="1.5"/>
+  <line x1="188" y1="382" x2="188" y2="410" stroke="#888" stroke-width="0.8"/>
+
+  <!-- ============ MAIN PANEL (cameras + timeline + edits bar) ============ -->
+
+  <!-- Cameras row -->
+  <rect class="placeholder" x="200" y="48" width="220" height="220"/>
+  <text class="label" x="210" y="68">Cam 1</text>
+  <text class="muted" x="210" y="83" font-size="11">observation.images.front</text>
+
+  <rect class="placeholder" x="430" y="48" width="220" height="220"/>
+  <text class="label" x="440" y="68">Cam 2</text>
+  <text class="muted" x="440" y="83" font-size="11">observation.images.top</text>
+
+  <rect class="placeholder-deferred" x="660" y="48" width="282" height="220"/>
+  <text class="deferred" x="700" y="155" font-size="14">URDF / 3D trajectory</text>
+  <text class="deferred" x="755" y="172" font-size="11" font-style="italic">(deferred — Phase C)</text>
+
+  <!-- Resize handle: horizontal, between cameras and timeline -->
+  <rect class="resize-handle" x="200" y="276" width="744" height="4" rx="1.5"/>
+  <line x1="556" y1="277" x2="588" y2="277" stroke="#888" stroke-width="0.8"/>
+
+  <!-- Timeline section header — existing transport controls (Play / Speed / Frame / Time / Reset) -->
+  <text class="section-title" x="200" y="300">Timeline</text>
+
+  <!-- Play button -->
+  <rect class="btn" x="262" y="287" width="56" height="20"/>
+  <text class="muted" x="278" y="301" font-size="11">▶ Play</text>
+
+  <!-- Speed select dropdown -->
+  <rect class="btn" x="324" y="287" width="58" height="20"/>
+  <text class="muted" x="334" y="301" font-size="11">1x ▾</text>
+
+  <!-- Frame info -->
+  <text class="muted" x="396" y="301" font-size="11">frame 247 / 385</text>
+
+  <!-- Time info -->
+  <text class="muted" x="496" y="301" font-size="11">0:08 / 0:12</text>
+
+  <!-- Reset trim -->
+  <rect class="btn" x="580" y="287" width="68" height="20"/>
+  <text class="muted" x="592" y="301" font-size="11">Reset trim</text>
+
+  <!-- Status -->
+  <text class="muted" x="660" y="301" font-size="11" font-style="italic">Ready</text>
+
+  <!-- Time axis with trim handles (no separate "trim" row) -->
+  <line class="axis-line" x1="290" y1="320" x2="940" y2="320"/>
+  <g class="axis-tick">
+    <line x1="290" y1="316" x2="290" y2="324"/>
+    <line x1="383" y1="316" x2="383" y2="324"/>
+    <line x1="476" y1="316" x2="476" y2="324"/>
+    <line x1="569" y1="316" x2="569" y2="324"/>
+    <line x1="662" y1="316" x2="662" y2="324"/>
+    <line x1="755" y1="316" x2="755" y2="324"/>
+    <line x1="848" y1="316" x2="848" y2="324"/>
+    <line x1="940" y1="316" x2="940" y2="324"/>
+  </g>
+  <g class="axis-label">
+    <text x="284" y="312">0</text>
+    <text x="372" y="312">50</text>
+    <text x="463" y="312">100</text>
+    <text x="556" y="312">150</text>
+    <text x="649" y="312">200</text>
+    <text x="742" y="312">250</text>
+    <text x="835" y="312">300</text>
+    <text x="924" y="312">350</text>
+  </g>
+
+  <!-- Trim envelope: extends DOWN through all feature rows -->
+  <rect class="trim-envelope" x="320" y="320" width="600" height="200"/>
+
+  <!-- Trim handles attached to the time axis -->
+  <rect class="trim-handle" x="316" y="312" width="8" height="22" rx="2"/>
+  <rect class="trim-handle" x="916" y="312" width="8" height="22" rx="2"/>
+
+  <text class="annot" x="500" y="338">trim handles on time axis · envelope through all feature rows</text>
+
+  <!-- Subtask row -->
+  <text class="label" x="200" y="362" font-size="12">subtask</text>
+  <text class="muted" x="200" y="375" font-size="10">string · editable</text>
+  <rect class="row-bg" x="290" y="348" width="650" height="34"/>
+  <rect class="row-bg-dim" x="290" y="348" width="30" height="34"/>
+  <rect class="row-bg-dim" x="920" y="348" width="20" height="34"/>
+
+  <rect class="seg-a" x="320" y="352" width="120" height="26"/>
+  <text font-size="11" x="335" y="369">approach</text>
+  <rect class="seg-b" x="440" y="352" width="106" height="26"/>
+  <text font-size="11" x="450" y="369">reach handle</text>
+  <rect class="seg-c" x="546" y="352" width="194" height="26"/>
+  <text font-size="11" x="595" y="369">grasp + lift</text>
+  <rect class="seg-a" x="740" y="352" width="90" height="26"/>
+  <text font-size="11" x="755" y="369">place</text>
+  <rect class="seg-b" x="830" y="352" width="90" height="26"/>
+  <text font-size="11" x="840" y="369">release</text>
+
+  <!-- Reward row -->
+  <text class="label" x="200" y="406" font-size="12">reward</text>
+  <text class="muted" x="200" y="419" font-size="10">float32[1] · editable</text>
+  <rect class="row-bg" x="290" y="388" width="650" height="34"/>
+  <rect class="row-bg-dim" x="290" y="388" width="30" height="34"/>
+  <rect class="row-bg-dim" x="920" y="388" width="20" height="34"/>
+  <polyline class="reward-line"
+    points="320,414 340,412 360,408 380,406 400,410 420,412 440,412 460,408 480,404 500,402 520,403 540,406 560,408 580,405 600,402 620,398 640,394 660,394 680,397 700,400 720,401 740,404 760,406 780,406 800,408 820,406 840,402 860,400 880,402 900,406 920,410"/>
+
+  <!-- Success row -->
+  <text class="label" x="200" y="446" font-size="12">success</text>
+  <text class="muted" x="200" y="459" font-size="10">bool[1] · editable</text>
+  <rect class="row-bg" x="290" y="428" width="650" height="22"/>
+  <rect class="row-bg-dim" x="290" y="428" width="30" height="22"/>
+  <rect class="row-bg-dim" x="920" y="428" width="20" height="22"/>
+  <rect class="bool-off" x="320" y="430" width="560" height="18"/>
+  <rect class="bool-on" x="880" y="430" width="40" height="18"/>
+
+  <!-- Action row (read-only, dimmed) -->
+  <text class="muted" x="200" y="480" font-size="12">action ▾</text>
+  <text class="readonly-tag" x="200" y="493">float32[14] · read-only</text>
+  <rect class="row-bg-readonly" x="290" y="462" width="650" height="22"/>
+  <rect class="row-bg-dim" x="290" y="462" width="30" height="22"/>
+  <rect class="row-bg-dim" x="920" y="462" width="20" height="22"/>
+  <text class="muted" x="350" y="477" font-size="11" font-style="italic">collapsed — click to expand (read-only)</text>
+
+  <text class="muted" x="200" y="513" font-size="10" font-style="italic">…6 features hidden (pin to show, or scroll)</text>
+
+  <!-- Scrollbar in timeline section -->
+  <rect class="scroll-track" x="945" y="348" width="6" height="160" rx="3"/>
+  <rect class="scroll-thumb" x="945" y="348" width="6" height="80"/>
+
+  <!-- Vertical selection slice -->
+  <rect class="selection-slice" x="463" y="348" width="19" height="146"/>
+  <rect class="selection-handle" x="461" y="344" width="4" height="154"/>
+  <rect class="selection-handle" x="481" y="344" width="4" height="154"/>
+  <text class="annot" x="431" y="340">[from=120</text>
+  <text class="annot" x="479" y="340">to=130)</text>
+
+  <!-- Playhead -->
+  <line class="playhead" x1="601" y1="316" x2="601" y2="494"/>
+  <polygon class="playhead" fill="#cc0000" points="597,314 605,314 601,320"/>
+
+  <!-- Edits bar separator -->
+  <line x1="200" y1="540" x2="952" y2="540" stroke="#888" stroke-width="1.5"/>
+  <text class="section-title" x="200" y="558">Pending edits (50)</text>
+
+  <!-- "Show pending edits" toggle -->
+  <rect class="btn-toggle-on" x="360" y="546" width="180" height="22"/>
+  <text class="muted" x="375" y="561" font-size="11">Show pending edits · ON</text>
+
+  <!-- Group 1: subtask · ep 0 (3 edits, expanded) -->
+  <text class="muted" x="200" y="585" font-size="11">▾</text>
+  <rect class="chip" x="214" y="572" width="240" height="22"/>
+  <text font-size="11" x="224" y="587">subtask · ep 0 (3)</text>
+  <text class="muted" x="440" y="588" font-size="13">×</text>
+
+  <rect class="chip-detail" x="230" y="598" width="244" height="20"/>
+  <text font-size="11" x="240" y="612" fill="#444">120…129  →  "reach handle"</text>
+  <rect class="chip-detail" x="230" y="620" width="244" height="20"/>
+  <text font-size="11" x="240" y="634" fill="#444">200…211  →  "grasp"</text>
+  <rect class="chip-detail" x="230" y="642" width="244" height="20"/>
+  <text font-size="11" x="240" y="656" fill="#444">240…259  →  "lift"</text>
+
+  <!-- Group 2: reward · ep 0 (47 edits, collapsed) -->
+  <text class="muted" x="490" y="585" font-size="11">▸</text>
+  <rect class="chip" x="504" y="572" width="240" height="22"/>
+  <text font-size="11" x="514" y="587">reward · ep 0 (47)</text>
+  <text class="muted" x="730" y="588" font-size="13">×</text>
+
+  <!-- Discard / Save -->
+  <rect class="btn" x="760" y="568" width="92" height="28"/>
+  <text x="785" y="587">Discard</text>
+  <rect class="btn-primary" x="858" y="568" width="92" height="28"/>
+  <text class="btn-primary-text" x="887" y="587" font-weight="600">Save</text>
+
+  <!-- Resize handle: vertical, between Main and Inspector -->
+  <rect class="resize-handle" x="956" y="38" width="6" height="716" rx="2"/>
+  <line x1="959" y1="382" x2="959" y2="410" stroke="#888" stroke-width="0.8"/>
+
+  <!-- ============ PROPS / INSPECTOR (right sidebar, full height, always visible) ============ -->
+
+  <rect class="panel" x="962" y="38" width="312" height="716"/>
+  <text class="section-title" x="974" y="58">Props (Inspector)</text>
+
+  <!-- Compact dataset summary, top -->
+  <text class="muted" x="974" y="76" font-size="11">my_dataset · 14 episodes · 4 821 frames</text>
+  <text class="muted" x="974" y="90" font-size="11">30 fps · so101_follower</text>
+  <line x1="974" y1="100" x2="1262" y2="100" stroke="#cfcfcf"/>
+
+  <!-- Selection header -->
+  <text class="label" x="974" y="118" font-weight="600">frames 120…129 · ep 0</text>
+  <text class="muted" x="974" y="132" font-size="11">10 frames · drag-select on any row</text>
+
+  <line x1="974" y1="144" x2="1262" y2="144" stroke="#cfcfcf"/>
+
+  <!-- subtask card (focused — origin row, has pending edit) -->
+  <rect class="focus-ring" x="970" y="154" width="298" height="78"/>
+  <text class="muted" x="974" y="170" font-size="11">subtask</text>
+  <text fill="#b58900" x="1024" y="170" font-size="11">● pending</text>
+  <text class="muted" x="1224" y="170" font-size="11">string</text>
+  <text class="muted" x="974" y="187" font-size="11">range mode: "reach handle"</text>
+  <rect class="btn" x="974" y="195" width="290" height="28"/>
+  <text class="label" x="984" y="214">grasp handle</text>
+
+  <!-- reward card with slider + number input -->
+  <text class="muted" x="974" y="252" font-size="11">reward</text>
+  <text class="muted" x="1218" y="252" font-size="11">float32[1]</text>
+  <text class="muted" x="974" y="270" font-size="11">range min/max: −0.21 / −0.04</text>
+  <rect class="slider-track" x="974" y="282" width="190" height="6"/>
+  <circle class="slider-thumb" cx="1029" cy="285" r="6"/>
+  <text class="muted" x="974" y="304" font-size="9">−1.0</text>
+  <text class="muted" x="1148" y="304" font-size="9">0.0</text>
+  <rect class="btn" x="1172" y="278" width="92" height="22"/>
+  <text class="label" x="1185" y="294" font-size="12">−0.10</text>
+
+  <!-- success card -->
+  <text class="muted" x="974" y="332" font-size="11">success</text>
+  <text class="muted" x="1226" y="332" font-size="11">bool[1]</text>
+  <text class="muted" x="974" y="350" font-size="11">range value: false (uniform)</text>
+  <rect class="chip" x="974" y="358" width="20" height="20"/>
+  <text class="muted" x="1002" y="374">unchecked  ›  set ✓ for range</text>
+
+  <!-- action card (read-only) -->
+  <text class="muted" x="974" y="408" font-size="11">action</text>
+  <text class="readonly-tag" x="1166" y="408">read-only · float32[14]</text>
+  <text class="muted" x="974" y="425" font-size="11" font-style="italic">recorded data — not editable in V1</text>
+
+  <!-- observation.state card (read-only) -->
+  <text class="muted" x="974" y="452" font-size="11">observation.state</text>
+  <text class="readonly-tag" x="1170" y="452">read-only · float32[14]</text>
+
+  <line x1="974" y1="488" x2="1262" y2="488" stroke="#cfcfcf"/>
+
+  <text class="muted" x="974" y="508" font-size="11">Edits stage automatically as you change a card.</text>
+  <text class="muted" x="974" y="524" font-size="11">Review &amp; commit in Pending edits below.</text>
+  <text class="muted" x="974" y="548" font-size="11">Hint: Esc clears selection.</text>
+</svg>
