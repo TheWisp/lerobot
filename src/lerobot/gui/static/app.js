@@ -30,6 +30,23 @@ let sourceDatasets = {};  // {sourcePath: [{name, root, total_episodes, ...}]}
 let expandedSources = new Set();
 let _sourcesLoaded = false;
 
+// `let` at script-scope is NOT visible on `window` — sibling scripts
+// (feature_editing.js, etc.) can read these via bare names but not via
+// `window.X`. Mirror the shared state via getters so cross-file readers
+// work either way. Read-only — sibling scripts must not assign these.
+Object.defineProperties(window, {
+    datasets: { get: () => datasets, configurable: true },
+    episodes: { get: () => episodes, configurable: true },
+    currentDataset: { get: () => currentDataset, configurable: true },
+    currentEpisode: { get: () => currentEpisode, configurable: true },
+    currentFrame: { get: () => currentFrame, configurable: true },
+    totalFrames: { get: () => totalFrames, configurable: true },
+    fps: { get: () => fps, configurable: true },
+    trimStart: { get: () => trimStart, configurable: true },
+    trimEnd: { get: () => trimEnd, configurable: true },
+    pendingEdits: { get: () => pendingEdits, configurable: true },
+});
+
 async function loadSources() {
     try {
         const res = await fetch('/api/datasets/sources');
