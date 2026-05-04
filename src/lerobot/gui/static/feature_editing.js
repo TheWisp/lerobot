@@ -9,6 +9,16 @@
 (function () {
     "use strict";
 
+    // Lightweight log prefix so DevTools console is searchable / filterable.
+    // Toggle verbose mode in the browser via:
+    //     window.FeatureEditing.verbose = true
+    // before opening a dataset.
+    const LOG = "[feature-editing]";
+    const _log = (...a) => console.info(LOG, ...a);
+    const _warn = (...a) => console.warn(LOG, ...a);
+    const _err = (...a) => console.error(LOG, ...a);
+    _log("module loaded");
+
     // ── Per-dataset / per-episode caches ─────────────────────────────────
     const seriesCache = new Map(); // key = `${datasetId}:${episodeIdx}` → {length, series}
     const featureRowState = new Map(); // featureName → {pinned, expanded}
@@ -34,10 +44,22 @@
     // ── Hooks called from app.js ─────────────────────────────────────────
 
     function onDatasetOpened(datasetId) {
+        const ds = window.datasets && window.datasets[datasetId];
+        const fs = (ds && ds.features_schema) || {};
+        const featureNames = Object.keys(fs);
+        _log("onDatasetOpened", datasetId, "features:", featureNames.length, "schema present:", !!ds);
+        if (!ds) {
+            _err("onDatasetOpened: dataset not in window.datasets — wiring issue?");
+        } else if (!ds.features_schema) {
+            _warn("onDatasetOpened: dataset.features_schema is undefined — likely a stale frontend. Reload (Ctrl/Cmd-Shift-R).");
+        } else if (featureNames.length === 0) {
+            _warn("onDatasetOpened: features_schema is empty — dataset has no declared features.");
+        }
         renderInspectorEmpty(datasetId);
     }
 
     function onDatasetClosed(datasetId) {
+        _log("onDatasetClosed", datasetId);
         // Drop cached series for this dataset.
         for (const key of Array.from(seriesCache.keys())) {
             if (key.startsWith(`${datasetId}:`)) seriesCache.delete(key);
@@ -48,12 +70,14 @@
     }
 
     function onEpisodeSelected(datasetId, episodeIdx) {
+        _log("onEpisodeSelected", datasetId, "ep=", episodeIdx);
         // Reset selection on episode switch — selection is per-episode.
         selection = null;
         renderInspector();
-        loadFeatureSeries(datasetId, episodeIdx).then(() => {
+        loadFeatureSeries(datasetId, episodeIdx).then((data) => {
+            _log("feature-series loaded for ep", episodeIdx, "→", data ? "OK, " + Object.keys(data.series || {}).length + " series" : "NULL");
             renderFeatureRows();
-        }).catch((err) => console.warn("feature-series load failed", err));
+        }).catch((err) => _err("feature-series load failed", err));
     }
 
     function onPlayheadChanged() {
@@ -68,6 +92,7 @@
 
     function clearSelection() {
         if (!selection) return;
+        _log("clearSelection");
         selection = null;
         renderInspector();
         renderFeatureRows();
@@ -77,7 +102,10 @@
 
     async function loadFeatureSeries(datasetId, episodeIdx) {
         const key = `${datasetId}:${episodeIdx}`;
-        if (seriesCache.has(key)) return seriesCache.get(key);
+        if (seriesCache.has(key)) {
+            _log("loadFeatureSeries cache hit", key);
+            return seriesCache.get(key);
+        }
         // Only fetch features the user can actually see (visible by default + pinned),
         // not every column in the dataset. Avoids pulling 14-dim observation.state etc.
         // when the user only cares about reward / success / subtask.
@@ -96,9 +124,11 @@
         if (visible.length > 0) {
             url += `?features=${visible.map(encodeURIComponent).join(",")}`;
         }
+        _log("loadFeatureSeries", url, "visible features:", visible);
         const res = await fetch(url);
         if (!res.ok) {
-            console.warn(`feature-series failed: ${res.status}`);
+            const text = await res.text().catch(() => "");
+            _err(`feature-series ${res.status}: ${text}`);
             return null;
         }
         const data = await res.json();
@@ -545,33 +575,50 @@
 
     function renderFeatureRows() {
         const container = document.getElementById("feature-rows");
-        if (!container) return;
+        if (!container) {
+            _err("renderFeatureRows: #feature-rows container missing from DOM");
+            return;
+        }
         const datasetId = window.currentDataset;
         const epIdx = window.currentEpisode;
         if (!datasetId || epIdx == null || epIdx === undefined) {
+            _log("renderFeatureRows: no current dataset/episode (datasetId=", datasetId, "ep=", epIdx, ")");
             container.innerHTML = "";
             return;
         }
         const ds = window.datasets && window.datasets[datasetId];
         if (!ds || !ds.features_schema) {
-            container.innerHTML = "";
+            _warn("renderFeatureRows: ds or features_schema missing for", datasetId, "→ rendering nothing. Hard-reload to refresh schema.");
+            container.innerHTML =
+                '<div class="feature-rows-empty">' +
+                'Schema unavailable for this dataset. ' +
+                'Hard-reload (Ctrl/Cmd-Shift-R) to fetch the latest schema, then reopen the dataset.' +
+                "</div>";
             return;
         }
         const key = `${datasetId}:${epIdx}`;
         const cached = seriesCache.get(key);
         if (!cached) {
+            _log("renderFeatureRows: series not cached yet for", key, "(loading…)");
             container.innerHTML = '<div class="feature-rows-empty">Loading feature series…</div>';
             return;
         }
 
         const visibleFeatures = [];
+        const hiddenNames = [];
         for (const [name, ft] of Object.entries(ds.features_schema)) {
             const state = featureRowState.get(name) || {};
             const hidden = isHiddenByDefault(name, ft) && !state.pinned;
             if (!hidden) visibleFeatures.push([name, ft]);
+            else hiddenNames.push(name);
         }
+        _log("renderFeatureRows: visible=", visibleFeatures.map(p => p[0]), "hidden=", hiddenNames);
         if (!visibleFeatures.length) {
-            container.innerHTML = '<div class="feature-rows-empty">No editable features visible. (action / observation.* hidden by default.)</div>';
+            container.innerHTML =
+                '<div class="feature-rows-empty">' +
+                'No visible features. action / observation.* / images / DEFAULT_FEATURES are ' +
+                'hidden by default — pin a feature to show it.' +
+                "</div>";
             return;
         }
 
