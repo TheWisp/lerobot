@@ -2085,26 +2085,32 @@ def run_s1(
                 np.mean(infer_thread.infer_times),
                 s2_info,
             )
+        # Per-phase shutdown timings so we can see which phase is eating the
+        # SIGTERM→SIGKILL grace window. Total is logged at the end.
+        shutdown_totals: dict[str, float] = {}
         if dataset is not None:
-            try:
-                if (
-                    dataset.writer.episode_buffer is not None
-                    and dataset.writer.episode_buffer.get("size", 0) > 0
-                ):
-                    dataset.save_episode()
-                    logger.info("S1: Final partial episode saved")
-                dataset.finalize()
-                logger.info("S1: Dataset '%s' finalized (%d episodes)", record_dataset, recorded_episodes)
-            except Exception as e:
-                logger.warning("S1: Failed to finalize dataset: %s", e)
+            with _shutdown_phase("dataset_finalize", shutdown_totals):
+                try:
+                    if (
+                        dataset.writer.episode_buffer is not None
+                        and dataset.writer.episode_buffer.get("size", 0) > 0
+                    ):
+                        dataset.save_episode()
+                        logger.info("S1: Final partial episode saved")
+                    dataset.finalize()
+                    logger.info("S1: Dataset '%s' finalized (%d episodes)", record_dataset, recorded_episodes)
+                except Exception as e:
+                    logger.warning("S1: Failed to finalize dataset: %s", e)
         if int_dataset is not None:
-            try:
-                int_dataset.finalize()
-                logger.info("S1: Intervention dataset finalized (%d episodes)", int_dataset.num_episodes)
-            except Exception as e:
-                logger.warning("S1: Failed to finalize intervention dataset: %s", e)
+            with _shutdown_phase("int_dataset_finalize", shutdown_totals):
+                try:
+                    int_dataset.finalize()
+                    logger.info("S1: Intervention dataset finalized (%d episodes)", int_dataset.num_episodes)
+                except Exception as e:
+                    logger.warning("S1: Failed to finalize intervention dataset: %s", e)
         if listener is not None:
-            listener.stop()
+            with _shutdown_phase("listener_stop", shutdown_totals):
+                listener.stop()
         # RLT: final save (training mode only). Skipped on unhandled
         # exception — partial / mid-update state shouldn't land in
         # latest/. The user falls back to a per-10-ep snapshot
@@ -2119,40 +2125,69 @@ def run_s1(
                     "from the previous episode's clean save."
                 )
             else:
-                try:
-                    save_dir = rlt_state["output_dir"] / "latest"
-                    save_dir.mkdir(parents=True, exist_ok=True)
-                    _atomic_torch_save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
-                    _atomic_torch_save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
-                    _atomic_torch_save(rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt")
-                    _atomic_torch_save(
-                        {
-                            "actor_opt": rlt_agent.actor_opt.state_dict(),
-                            "critic_opt": rlt_agent.critic_opt.state_dict(),
-                            "episode": rlt_state["episode"],
-                            "total_transitions": rlt_state["total_transitions"],
-                            "total_updates": rlt_state["total_updates"],
-                            "successes": rlt_state["successes"],
-                        },
-                        save_dir / "training_state.pt",
-                    )
-                    rlt_replay.save(str(save_dir / "replay_buffer.pt"))
-                    from lerobot.policies.hvla.rlt.metrics import save_metrics_to_file
+                with _shutdown_phase("rlt_final_save", shutdown_totals):
+                    try:
+                        save_dir = rlt_state["output_dir"] / "latest"
+                        save_dir.mkdir(parents=True, exist_ok=True)
+                        _atomic_torch_save(rlt_agent.actor.state_dict(), save_dir / "actor.pt")
+                        _atomic_torch_save(rlt_agent.critic.state_dict(), save_dir / "critic.pt")
+                        _atomic_torch_save(
+                            rlt_agent.critic_target.state_dict(), save_dir / "critic_target.pt"
+                        )
+                        _atomic_torch_save(
+                            {
+                                "actor_opt": rlt_agent.actor_opt.state_dict(),
+                                "critic_opt": rlt_agent.critic_opt.state_dict(),
+                                "episode": rlt_state["episode"],
+                                "total_transitions": rlt_state["total_transitions"],
+                                "total_updates": rlt_state["total_updates"],
+                                "successes": rlt_state["successes"],
+                            },
+                            save_dir / "training_state.pt",
+                        )
+                        rlt_replay.save(str(save_dir / "replay_buffer.pt"))
+                        from lerobot.policies.hvla.rlt.metrics import save_metrics_to_file
 
-                    save_metrics_to_file()
-                    logger.info("RLT: Final checkpoint → %s", save_dir)
-                except Exception as e:
-                    logger.error("RLT: Failed to save final checkpoint: %s", e)
-        _soft_land(robot)
+                        save_metrics_to_file()
+                        logger.info("RLT: Final checkpoint → %s", save_dir)
+                    except Exception as e:
+                        logger.error("RLT: Failed to save final checkpoint: %s", e)
+        with _shutdown_phase("soft_land", shutdown_totals):
+            _soft_land(robot)
         if teleop is not None:
+            with _shutdown_phase("teleop_disconnect", shutdown_totals):
+                try:
+                    teleop.disconnect()
+                except Exception as e:
+                    logger.warning("Teleop disconnect error (non-fatal): %s", e)
+        with _shutdown_phase("robot_disconnect", shutdown_totals):
             try:
-                teleop.disconnect()
+                robot.disconnect()
             except Exception as e:
-                logger.warning("Teleop disconnect error (non-fatal): %s", e)
-        try:
-            robot.disconnect()
-        except Exception as e:
-            logger.warning("Robot disconnect error (non-fatal): %s", e)
+                logger.warning("Robot disconnect error (non-fatal): %s", e)
+        logger.info(
+            "S1 shutdown total: %.3fs (%s)",
+            sum(shutdown_totals.values()),
+            ", ".join(f"{k}={v:.2f}s" for k, v in shutdown_totals.items()),
+        )
+
+
+@contextlib.contextmanager
+def _shutdown_phase(name: str, totals: dict):
+    """Time a shutdown phase and accumulate into ``totals`` for a final summary.
+
+    Phase timings let us see whether the SIGTERM→SIGKILL grace window in
+    `gui/api/run.stop_process` is too short by design (e.g. _soft_land alone
+    is 4s) or whether some specific phase is randomly slow. Every phase is
+    logged even on exception so a failing phase still records its cost.
+    """
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - t0
+        totals[name] = elapsed
+        logger.info("S1 shutdown[%s]: %.3fs", name, elapsed)
 
 
 def _get_motor_buses(robot) -> list:
