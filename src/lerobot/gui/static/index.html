@@ -322,8 +322,8 @@
         <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:400px; max-width:520px;">
             <h3 id="hub-modal-title" style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);"></h3>
             <div style="margin-bottom:12px;">
-                <label style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Repository ID</label>
-                <input id="hub-repo-input" type="text" oninput="fetchHubRepoInfo()" style="width:100%; padding:6px 8px; background:var(--bg-primary, #252526); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                <label for="hub-repo-input" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Repository ID</label>
+                <input id="hub-repo-input" type="text" oninput="fetchHubRepoInfo()" placeholder="username/dataset-name" spellcheck="false" autocomplete="off" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--accent, #0e639c); border-radius:4px; font-size:12px; box-sizing:border-box; outline:none; box-shadow:0 0 0 1px rgba(14,99,156,0.2);" onfocus="this.style.boxShadow='0 0 0 2px rgba(14,99,156,0.5)'" onblur="this.style.boxShadow='0 0 0 1px rgba(14,99,156,0.2)'">
             </div>
             <div id="hub-repo-info" style="font-size:11px; color:var(--text-secondary, #999); padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px; min-height:40px;"></div>
             <div id="hub-local-info" style="font-size:11px; color:var(--text-secondary, #999); padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px;"></div>
@@ -338,7 +338,7 @@
     <!-- Toast notifications -->
     <div class="toast-container" id="toast-container"></div>
 
-    <script src="/static/app.js?v=26"></script>
+    <script src="/static/app.js?v=27"></script>
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=39"></script>
     <script src="/static/model.js?v=3"></script>

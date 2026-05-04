@@ -1510,9 +1510,11 @@ function fetchHubRepoInfo() {
         try {
             const res = await fetch(`/api/datasets/hub/repo-info?repo_id=${encodeURIComponent(repoId)}`);
             const data = await res.json();
+            const hubUrl = `https://huggingface.co/datasets/${repoId}`;
+            const linkHtml = `<a href="${hubUrl}" target="_blank" rel="noopener noreferrer" style="color:#61afef; text-decoration:none;" title="Open on HuggingFace Hub">${repoId} ↗</a>`;
             if (!data.exists) {
                 infoEl.innerHTML = _hubAction === 'upload'
-                    ? '<span style="color:#e5c07b">New repo — will be created on upload</span>'
+                    ? `<span style="color:#e5c07b">New repo — will be created on upload</span><br><span style="color:var(--text-tertiary,#666)">URL: ${linkHtml}</span>`
                     : '<span style="color:#e06c75">Repo not found on Hub</span>';
                 return;
             }
@@ -1520,7 +1522,8 @@ function fetchHubRepoInfo() {
                 ? `${data.total_episodes} episodes, ${data.total_frames?.toLocaleString() || '?'} frames`
                 : `${data.files} files`;
             infoEl.innerHTML =
-                `<strong>Remote:</strong> ${epInfo}, ${data.total_size_mb} MB` +
+                `<strong>Remote:</strong> ${linkHtml}<br>` +
+                `${epInfo}, ${data.total_size_mb} MB` +
                 `${data.private ? ' (private)' : ''}<br>` +
                 `Last modified: ${data.last_modified || 'unknown'}<br>` +
                 `Downloads: ${data.downloads} | SHA: ${data.sha || '?'}`;
