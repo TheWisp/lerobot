@@ -85,7 +85,36 @@
         if (!selection) renderInspectorFrameValues();
     }
 
+    // Tracks the previous pending-count so we can detect a Save (>0 → 0).
+    let _lastPendingCount = 0;
+
     function onPendingEditsChanged() {
+        const pending = (window.pendingEdits || []);
+        const prev = _lastPendingCount;
+        const curr = pending.length;
+        _lastPendingCount = curr;
+
+        // Pending dropping to 0 means Save or Discard just fired. The series
+        // cache holds pre-edit values that are now stale relative to disk —
+        // drop it so the next render fetches fresh data.
+        if (prev > 0 && curr === 0) {
+            const datasetId = window.currentDataset;
+            if (datasetId) {
+                _log("onPendingEditsChanged: pending dropped to 0; invalidating seriesCache for", datasetId);
+                for (const key of Array.from(seriesCache.keys())) {
+                    if (key.startsWith(`${datasetId}:`)) seriesCache.delete(key);
+                }
+                // Re-fetch for the current episode so the row plots redraw fresh.
+                const epIdx = window.currentEpisode;
+                if (epIdx != null) {
+                    loadFeatureSeries(datasetId, epIdx).then(() => renderFeatureRows()).catch(
+                        (err) => _err("post-save series reload failed", err)
+                    );
+                    return; // renderFeatureRows is called inside the .then()
+                }
+            }
+        }
+
         renderFeatureRows(); // pending overlay changes
         renderInspector(); // pending indicator on cards
     }
@@ -218,24 +247,31 @@
         if (!body) return;
 
         const featuresSchema = ds.features_schema || {};
-        const epLen = (window.totalFrames > 0) ? window.totalFrames : 0;
         const from = selection.frameFrom;
         const to = selection.frameTo;
         const k = to - from;
         const m = to - 1;
 
-        // Compute global indices for staging (frame index ↔ global index mapping).
-        // We rely on the backend's _get_episode_start_index by sending local
-        // frame_from / frame_to; the backend computes the global offset.
-
         const cards = [];
         for (const [name, ft] of Object.entries(featuresSchema)) {
+            if (!isEditable(name, ft)) continue;
             cards.push(renderFeatureCard(name, ft, from, to, datasetId, selection.episodeIndex, selection.originRow));
         }
+        if (cards.length === 0) {
+            cards.push(
+                '<div class="empty-state">' +
+                'No editable features in the selection. action / observation.* / images / DEFAULT_FEATURES are read-only in V1.' +
+                '</div>'
+            );
+        }
+
+        const titleText = (k === 1)
+            ? `frame ${from}`
+            : `frames ${from}…${m} (${k} frames)`;
 
         body.innerHTML = `
             <div class="inspector-selection-header">
-                <div class="sel-title">frames ${from}…${m} (${k} frame${k === 1 ? "" : "s"})</div>
+                <div class="sel-title">${titleText}</div>
                 <div class="sel-meta">ep ${selection.episodeIndex} · drag-select on any row</div>
             </div>
             ${cards.join("")}
