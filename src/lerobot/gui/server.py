@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import logging.config
 from datetime import datetime
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -119,7 +119,9 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_00
 
     app.state.cache_size = cache_size
     logger.info(f"Starting LeRobot Dataset GUI at http://{host}:{port}")
-    uvicorn.run(app, host=host, port=port, access_log=False)
+    # log_config=None: keep the uvicorn handlers we attached in setup_logging.
+    # Without this, uvicorn calls dictConfig at startup and replaces them.
+    uvicorn.run(app, host=host, port=port, access_log=False, log_config=None)
 
 
 def setup_logging(log_dir: Path | None = None) -> Path:
@@ -143,43 +145,55 @@ def setup_logging(log_dir: Path | None = None) -> Path:
     date_str = datetime.now().strftime("%Y-%m-%d")
     log_file = log_dir / f"server_{date_str}.log"
 
-    # Configure only the lerobot.gui logger (not root)
-    gui_logger = logging.getLogger("lerobot.gui")
-    gui_logger.setLevel(logging.INFO)
-    gui_logger.propagate = False  # Don't propagate to root logger
-
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    console_handler.setFormatter(console_format)
-
-    # File handler (rotating, max 10MB per file, keep 10 files)
-    file_handler = RotatingFileHandler(
-        log_file,
-        maxBytes=10 * 1024 * 1024,  # 10 MB
-        backupCount=10,
-        encoding="utf-8",
+    # Configure lerobot.gui plus uvicorn/uvicorn.error in one shared dictConfig so
+    # both share a single rotating file handler (avoids RotatingFileHandler races
+    # when two handlers point at the same path) and so uvicorn/starlette ASGI
+    # tracebacks reach the file log — not just the terminal that started the
+    # server. We pair this with `log_config=None` in run_server to stop uvicorn
+    # from clobbering these loggers via its own dictConfig at startup.
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    logging.config.dictConfig(
+        {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {"default": {"format": log_format}},
+            "handlers": {
+                "console": {
+                    "class": "logging.StreamHandler",
+                    "formatter": "default",
+                    "level": "INFO",
+                },
+                "file": {
+                    "class": "logging.handlers.RotatingFileHandler",
+                    "filename": str(log_file),
+                    "maxBytes": 10 * 1024 * 1024,
+                    "backupCount": 10,
+                    "encoding": "utf-8",
+                    "formatter": "default",
+                    "level": "INFO",
+                },
+            },
+            "loggers": {
+                "lerobot.gui": {
+                    "handlers": ["console", "file"],
+                    "level": "INFO",
+                    "propagate": False,
+                },
+                "uvicorn": {
+                    "handlers": ["console", "file"],
+                    "level": "INFO",
+                    "propagate": False,
+                },
+                "uvicorn.error": {
+                    "handlers": ["console", "file"],
+                    "level": "INFO",
+                    "propagate": False,
+                },
+            },
+        }
     )
-    file_handler.setLevel(logging.INFO)
-    file_format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    file_handler.setFormatter(file_format)
 
-    gui_logger.addHandler(console_handler)
-    gui_logger.addHandler(file_handler)
-
-    # TODO(file-log-coverage): uvicorn / starlette ASGI errors do not reach
-    # this file log. They use the `uvicorn.error` logger and print to stdout/
-    # stderr; with `propagate=False` above we explicitly cut them off from
-    # the root logger, so unhandled ASGI tracebacks (e.g. an SSE generator
-    # raising) are visible only in the terminal that started the server.
-    # That made debugging the gym-hil/Python-3.10 `asyncio.TimeoutError`
-    # regression require copy-pasting the console — the file log showed
-    # only "Process exited rc=0". Fix direction: also attach
-    # `file_handler` to logging.getLogger("uvicorn.error") and
-    # logging.getLogger("uvicorn") (or wrap uvicorn's logging config with
-    # a `log_config` dict that points at this file).
-    gui_logger.info(f"Logging to {log_file}")
+    logging.getLogger("lerobot.gui").info(f"Logging to {log_file}")
 
     return log_dir
 
