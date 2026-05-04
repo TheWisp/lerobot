@@ -31,6 +31,7 @@ See [docs/data_tab.md](docs/data_tab.md) for full design.
 - [ ] `POST /api/datasets/{id}/hub/download` — pull from Hub (overwrites local, with confirmation)
 - [ ] `POST /api/datasets/{id}/hub/upload` — push to Hub (overwrites remote, with confirmation)
 - [ ] Frontend: auth indicator in header, download/upload buttons per dataset
+- [High] **Hub progress bar (uploads + downloads)**: every `snapshot_download` / `upload_folder` call writes a tqdm bar to the server stderr that the GUI never sees. The Hub modal (upload / download / open-sync) just shows a static "Uploading…" / "Downloading…" status while the request blocks for minutes. Wire real progress for all Hub transfers: hook `huggingface_hub.utils.tqdm` into a per-request callback that pushes byte counts + current filename into a shared progress dict, expose via SSE or a poll endpoint, and render a progress bar in the modal status area. Affects all three Hub modal modes; most visible for the open-sync flow because users see it before they have any sense of dataset size.
 
 ## Model Tab
 

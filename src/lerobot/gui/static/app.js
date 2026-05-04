@@ -188,50 +188,23 @@ async function openDataset(path) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         });
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        datasets[data.id] = data;
 
-        // Show errors as persistent red toast
-        if (data.errors && data.errors.length > 0) {
-            showToast(
-                'Dataset Error',
-                data.errors.join('\n'),
-                'error',
-                0  // persistent — don't auto-dismiss
-            );
-        }
-        // Show non-critical warnings as brief yellow toast
-        if (data.warnings && data.warnings.length > 0) {
-            // Filter out stats.json mismatches (noisy, not actionable)
-            const actionable = data.warnings.filter(w => !w.startsWith('stats.json mismatch'));
-            if (actionable.length > 0) {
-                showToast(
-                    'Dataset Warning',
-                    actionable.join('\n'),
-                    'warning',
-                    8000
-                );
+        // 409 = incomplete local cache. Hand off to the Hub modal in
+        // 'open-sync' mode — the modal owns the download + open flow from
+        // here. We bail out of openDataset; the modal calls _completeOpen()
+        // on success.
+        if (res.status === 409) {
+            const payload = await res.json();
+            const detail = payload && payload.detail;
+            if (detail && detail.code === 'incomplete_local_cache') {
+                openHubModal(null, 'open-sync', { body, detail });
+                return;
             }
         }
 
-        // Load episodes
-        const epRes = await fetch(`/api/datasets/${encodeURIComponent(data.id)}/episodes`);
-        episodes[data.id] = await epRes.json();
-
-        // Sync episode count (backend may have reloaded metadata with new episodes)
-        datasets[data.id].total_episodes = episodes[data.id].length;
-
-        // Expand this dataset by default
-        expandedNodes.add(data.id);
-
-        // Refresh pending edits (backend restores persisted edits on open)
-        await refreshPendingEdits();
-
-        renderTree();
-        renderSources();  // Update source list to show open state
-        if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
-        setStatus(`Opened: ${data.repo_id}`);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        await _completeOpen(data);
     } catch (e) {
         let errorMsg = e.message;
         try {
@@ -241,6 +214,35 @@ async function openDataset(path) {
         setStatus('Error: ' + errorMsg);
         showToast('Failed to open dataset', errorMsg, 'error', 10000);
     }
+}
+
+// Shared post-open flow: surface errors/warnings, load episodes, expand the
+// tree, refresh edits. Called from both the normal openDataset path and the
+// Hub-modal 'open-sync' path.
+async function _completeOpen(data) {
+    datasets[data.id] = data;
+
+    if (data.errors && data.errors.length > 0) {
+        showToast('Dataset Error', data.errors.join('\n'), 'error', 0);
+    }
+    if (data.warnings && data.warnings.length > 0) {
+        const actionable = data.warnings.filter(w => !w.startsWith('stats.json mismatch'));
+        if (actionable.length > 0) {
+            showToast('Dataset Warning', actionable.join('\n'), 'warning', 8000);
+        }
+    }
+
+    const epRes = await fetch(`/api/datasets/${encodeURIComponent(data.id)}/episodes`);
+    episodes[data.id] = await epRes.json();
+    datasets[data.id].total_episodes = episodes[data.id].length;
+
+    expandedNodes.add(data.id);
+    await refreshPendingEdits();
+
+    renderTree();
+    renderSources();
+    if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
+    setStatus(`Opened: ${data.repo_id}`);
 }
 
 function isEpisodeDeleted(datasetId, epIdx) {
@@ -1461,42 +1463,80 @@ async function checkHubAuth() {
 }
 
 let _hubDatasetId = null;
-let _hubAction = null;  // 'upload' or 'download'
+let _hubAction = null;  // 'upload' | 'download' | 'open-sync'
+let _hubOpenSyncCtx = null;  // { body, detail } for 'open-sync' mode
 let _hubRepoInfoTimer = null;
 
 function hubUploadDataset(datasetId) { openHubModal(datasetId, 'upload'); }
 function hubDownloadDataset(datasetId) { openHubModal(datasetId, 'download'); }
 
-function openHubModal(datasetId, action) {
+function openHubModal(datasetId, action, ctx) {
     _hubDatasetId = datasetId;
     _hubAction = action;
-    const ds = datasets[datasetId];
-    if (!ds) return;
+    _hubOpenSyncCtx = action === 'open-sync' ? (ctx || null) : null;
 
-    const isUpload = action === 'upload';
-    document.getElementById('hub-modal-title').textContent = isUpload ? 'Upload to Hub' : 'Download from Hub';
-    document.getElementById('hub-execute-btn').textContent = isUpload ? 'Upload' : 'Download';
-    document.getElementById('hub-execute-btn').style.background = isUpload ? 'var(--accent, #0e639c)' : '#c24038';
-    document.getElementById('hub-execute-btn').disabled = false;
-    document.getElementById('hub-status').textContent = '';
-    document.getElementById('hub-repo-input').value = ds.repo_id;
+    const ds = datasetId != null ? datasets[datasetId] : null;
+    // Upload/download require an already-opened dataset; open-sync does not.
+    if (action !== 'open-sync' && !ds) return;
+    if (action === 'open-sync' && !_hubOpenSyncCtx) return;
 
-    // Show local dataset info
-    document.getElementById('hub-local-info').innerHTML =
-        `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>` +
-        `<span style="color:var(--text-tertiary,#666)">${ds.root}</span>`;
+    const titleEl = document.getElementById('hub-modal-title');
+    const btn = document.getElementById('hub-execute-btn');
+    const statusEl = document.getElementById('hub-status');
+    const repoInput = document.getElementById('hub-repo-input');
+    const localInfoEl = document.getElementById('hub-local-info');
+    const repoInfoEl = document.getElementById('hub-repo-info');
 
-    document.getElementById('hub-repo-info').innerHTML = '<span style="color:var(--text-tertiary,#666)">Loading remote info...</span>';
+    btn.disabled = false;
+    statusEl.textContent = '';
+    repoInfoEl.innerHTML = '<span style="color:var(--text-tertiary,#666)">Loading remote info...</span>';
+
+    if (action === 'upload') {
+        titleEl.textContent = 'Upload to Hub';
+        btn.textContent = 'Upload';
+        btn.style.background = 'var(--accent, #0e639c)';
+        repoInput.value = ds.repo_id;
+        localInfoEl.innerHTML =
+            `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>` +
+            `<span style="color:var(--text-tertiary,#666)">${ds.root}</span>`;
+    } else if (action === 'download') {
+        titleEl.textContent = 'Download from Hub';
+        btn.textContent = 'Download';
+        btn.style.background = '#c24038';
+        repoInput.value = ds.repo_id;
+        localInfoEl.innerHTML =
+            `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>` +
+            `<span style="color:var(--text-tertiary,#666)">${ds.root}</span>`;
+    } else if (action === 'open-sync') {
+        const { detail } = _hubOpenSyncCtx;
+        titleEl.textContent = 'Open dataset — local cache is incomplete';
+        btn.textContent = 'Download & Open';
+        btn.style.background = 'var(--accent, #0e639c)';
+        repoInput.value = detail.repo_id || '';
+        const probs = (detail.problems || []).slice(0, 5)
+            .map(p => `<div style="color:var(--text-tertiary,#666); font-size:11px;">• ${p}</div>`).join('');
+        const more = (detail.problems || []).length > 5
+            ? `<div style="color:var(--text-tertiary,#666); font-size:11px;">• (and ${detail.problems.length - 5} more)</div>`
+            : '';
+        localInfoEl.innerHTML =
+            `<strong>Local cache:</strong> incomplete<br>` +
+            `<span style="color:var(--text-tertiary,#666)">${detail.local_path}</span>` +
+            `<div style="margin-top:6px;"><strong>Missing:</strong></div>${probs}${more}` +
+            `<div style="margin-top:8px; color:var(--text-tertiary,#666); font-size:11px;">` +
+            `Clicking <em>Download &amp; Open</em> fetches missing files into the path above, then opens the dataset. ` +
+            `Progress prints to the server terminal — this dialog stays open until done.</div>`;
+    }
+
     document.getElementById('hub-modal-overlay').style.display = 'flex';
-
     fetchHubRepoInfo();
-    fetchHubDiff();
+    if (action !== 'open-sync') fetchHubDiff();
 }
 
 function closeHubModal() {
     document.getElementById('hub-modal-overlay').style.display = 'none';
     _hubDatasetId = null;
     _hubAction = null;
+    _hubOpenSyncCtx = null;
 }
 
 function fetchHubRepoInfo() {
@@ -1564,14 +1604,53 @@ async function fetchHubDiff() {
 }
 
 async function executeHubAction() {
-    if (!_hubDatasetId || !_hubAction) return;
+    // open-sync uses _hubOpenSyncCtx instead of _hubDatasetId
+    if (!_hubAction) return;
+    if (_hubAction !== 'open-sync' && !_hubDatasetId) return;
+    if (_hubAction === 'open-sync' && !_hubOpenSyncCtx) return;
+
     const repoId = document.getElementById('hub-repo-input').value.trim();
     if (!repoId) return;
 
     const btn = document.getElementById('hub-execute-btn');
     const status = document.getElementById('hub-status');
     btn.disabled = true;
-    status.textContent = _hubAction === 'upload' ? 'Uploading...' : 'Downloading...';
+    status.textContent =
+        _hubAction === 'upload' ? 'Uploading...' :
+        _hubAction === 'open-sync' ? 'Downloading & opening...' : 'Downloading...';
+
+    // 'open-sync' branches off entirely — different endpoint, different post-success flow.
+    if (_hubAction === 'open-sync') {
+        try {
+            const res = await fetch('/api/datasets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ..._hubOpenSyncCtx.body,
+                    repo_id: repoId,
+                    confirm_hub_sync: true,
+                }),
+            });
+            if (!res.ok) {
+                let msg = 'Open failed';
+                try {
+                    const data = await res.json();
+                    msg = (data && data.detail) || msg;
+                    if (typeof msg === 'object') msg = msg.message || JSON.stringify(msg);
+                } catch (_) {}
+                status.textContent = msg;
+                btn.disabled = false;
+                return;
+            }
+            const data = await res.json();
+            closeHubModal();
+            await _completeOpen(data);
+        } catch (e) {
+            status.textContent = 'Error: ' + e.message;
+            btn.disabled = false;
+        }
+        return;
+    }
 
     const endpoint = `/api/datasets/${encodeURIComponent(_hubDatasetId)}/hub/${_hubAction}`;
     try {

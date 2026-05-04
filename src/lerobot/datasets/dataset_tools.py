@@ -25,6 +25,7 @@ This module provides utilities for:
 
 import contextlib
 import logging
+import os
 import shutil
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2936,9 +2937,12 @@ def repair_episode_indices(dataset_root: Path) -> int:
     combined_df = pd.concat(all_dfs, ignore_index=True)
     combined_df = combined_df.sort_values("episode_index").reset_index(drop=True)
 
-    # Check if repair is needed by computing expected indices
+    # Check if repair is needed by computing expected indices.
+    # Track which source files actually contain repaired rows so we only
+    # rewrite the files that need it (and can short-circuit on read-only).
     repaired_count = 0
     cumulative_idx = 0
+    files_with_changes: set[str] = set()
     for i, row in combined_df.iterrows():
         expected_from = cumulative_idx
         expected_to = cumulative_idx + row["length"]
@@ -2947,14 +2951,27 @@ def repair_episode_indices(dataset_root: Path) -> int:
             combined_df.at[i, "dataset_from_index"] = expected_from
             combined_df.at[i, "dataset_to_index"] = expected_to
             repaired_count += 1
+            files_with_changes.add(row["_source_file"])
 
         cumulative_idx = expected_to
 
     if repaired_count == 0:
         return 0
 
-    # Write back to original files, preserving file structure
+    # Pre-flight: refuse to start if any target file isn't writable. A partial
+    # rewrite would leave dataset_from_index inconsistent across files.
+    unwritable_meta = [p for p in files_with_changes if not os.access(p, os.W_OK)]
+    if unwritable_meta:
+        raise PermissionError(
+            f"Cannot repair episode indices in {dataset_root}: "
+            f"{len(unwritable_meta)} metadata parquet file(s) are read-only "
+            f"(e.g. {unwritable_meta[0]})"
+        )
+
+    # Write back only the files whose rows actually changed.
     for parquet_path in parquet_files:
+        if str(parquet_path) not in files_with_changes:
+            continue
         file_mask = combined_df["_source_file"] == str(parquet_path)
         file_df = combined_df[file_mask].drop(columns=["_source_file"]).copy()
         if len(file_df) > 0:

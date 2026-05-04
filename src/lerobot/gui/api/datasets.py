@@ -62,6 +62,61 @@ _prefetch_lock = threading.Lock()
 _PREFETCH_SEEK_THRESHOLD = 5
 
 
+def _check_local_dataset_complete(local_path: Path) -> tuple[bool, list[str]]:
+    """Check whether a local dataset directory has all data + video files.
+
+    Used to short-circuit ``LeRobotDataset.__init__``'s implicit Hub download
+    when the user opens a local path: the editor is local-only and should not
+    silently pull hundreds of MB from the Hub if local files are missing.
+
+    Returns:
+        ``(is_complete, problems)``. ``problems`` is a list of human-readable
+        strings; empty when the cache is complete. Never raises.
+    """
+    from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
+
+    if not (local_path / "meta" / "info.json").exists():
+        return False, ["meta/info.json is missing"]
+
+    try:
+        # Passing root= ensures the metadata loader reads from disk; for a local
+        # dataset that has meta/, no Hub fetch is triggered.
+        meta = LeRobotDatasetMetadata(repo_id=local_path.name, root=local_path)
+    except Exception as e:
+        return False, [f"failed to load metadata: {e}"]
+
+    problems: list[str] = []
+
+    missing_data: set[str] = set()
+    for ep in range(meta.total_episodes):
+        try:
+            p = local_path / meta.get_data_file_path(ep)
+        except Exception as e:
+            problems.append(f"ep {ep}: cannot resolve data path ({e})")
+            continue
+        if not p.exists():
+            missing_data.add(str(p))
+    if missing_data:
+        sample = sorted(missing_data)[0]
+        problems.append(f"{len(missing_data)} data parquet file(s) missing (e.g. {sample})")
+
+    missing_videos: set[str] = set()
+    for vid_key in meta.video_keys:
+        for ep in range(meta.total_episodes):
+            try:
+                p = local_path / meta.get_video_file_path(ep, vid_key)
+            except Exception as e:
+                problems.append(f"ep {ep} {vid_key}: cannot resolve video path ({e})")
+                continue
+            if not p.exists():
+                missing_videos.add(str(p))
+    if missing_videos:
+        sample = sorted(missing_videos)[0]
+        problems.append(f"{len(missing_videos)} video file(s) missing (e.g. {sample})")
+
+    return (len(problems) == 0), problems
+
+
 def _get_episode_start_index(dataset_id: str, episode_idx: int) -> int:
     """Get the global HuggingFace dataset index where an episode starts.
 
@@ -191,7 +246,11 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
         # Check and repair episode metadata indices if needed
         from lerobot.datasets.dataset_tools import repair_episode_indices
 
-        repaired = repair_episode_indices(root)
+        try:
+            repaired = repair_episode_indices(root)
+        except PermissionError as e:
+            logger.warning(f"Skipping episode index repair on reload: {e}")
+            repaired = 0
         if repaired > 0:
             logger.info(f"Repaired {repaired} episode indices with incorrect dataset_from_index")
             dataset.meta.episodes = load_episodes(root)
@@ -733,6 +792,10 @@ class OpenDatasetRequest(BaseModel):
 
     repo_id: str | None = None
     local_path: str | None = None
+    # When opening a local path with an incomplete cache, the server returns 409
+    # with a list of problems. Re-issue with confirm_hub_sync=True to authorize
+    # the implicit Hub download (snapshot_download into the existing root).
+    confirm_hub_sync: bool = False
 
 
 class DatasetInfo(BaseModel):
@@ -859,9 +922,33 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                 try:
                     rel = local_path.relative_to(HF_LEROBOT_HOME)
                     parts = rel.parts
-                    repo_id = f"{parts[0]}/{parts[1]}" if len(parts) >= 2 else local_path.name
                 except ValueError:
-                    repo_id = local_path.name
+                    # Not under HF_LEROBOT_HOME — best-effort: use the last two
+                    # path components as owner/name. Matches the canonical
+                    # "<root>/<owner>/<name>" layout that mirrors HF.
+                    parts = local_path.parts[-2:]
+                repo_id = f"{parts[0]}/{parts[1]}" if len(parts) >= 2 else local_path.name
+
+            # Editor is local-only by default: surface incomplete on-disk
+            # caches as a 409 so the frontend can ask the user to confirm.
+            # On confirm (confirm_hub_sync=True), we skip the pre-check and let
+            # LeRobotDataset.__init__ pull the missing files via snapshot_download
+            # into local_path — same code path the existing /hub/download
+            # endpoint uses.
+            if not request.confirm_hub_sync:
+                is_complete, problems = _check_local_dataset_complete(local_path)
+                if not is_complete:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "incomplete_local_cache",
+                            "message": "Local dataset cache is incomplete.",
+                            "problems": problems,
+                            "repo_id": repo_id,
+                            "local_path": str(local_path),
+                            "hub_sync_available": True,
+                        },
+                    )
 
             # Disable HuggingFace caching to ensure fresh data is loaded
             # This is important for datasets that may have been edited
@@ -925,7 +1012,14 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
         errors: list[str] = []
         warnings: list[str] = []
 
-        repaired = repair_episode_indices(dataset.root)
+        try:
+            repaired = repair_episode_indices(dataset.root)
+        except PermissionError as e:
+            # Read-only dataset (e.g. backup directory). Skip repair, surface a
+            # warning, and let the user open the dataset for inspection.
+            logger.warning(f"Skipping episode index repair: {e}")
+            warnings.append(f"Episode index repair skipped (dataset is read-only): {e}")
+            repaired = 0
         if repaired > 0:
             logger.info(f"Repaired {repaired} episode indices with incorrect dataset_from_index")
             dataset.meta.episodes = load_episodes(dataset.root)
@@ -977,6 +1071,10 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             warnings=warnings,
         )
 
+    except HTTPException:
+        # Preserve intentional HTTP responses (e.g. 400 / 409) — don't wrap
+        # them in a 500 with stringified detail.
+        raise
     except Exception as e:
         logger.exception(f"Failed to open dataset: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
