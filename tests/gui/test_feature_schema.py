@@ -130,3 +130,73 @@ def test_feature_schema_round_trips_through_json() -> None:
     re_parsed = {name: FeatureSchema.model_validate(d) for name, d in payload.items()}
     assert re_parsed["reward"].dtype == "float32"
     assert re_parsed["observation.state"].shape == [14]
+
+
+# ── Subtask synthesis: subtask_index + meta/subtasks.parquet → "subtask" string ──
+
+
+def test_subtask_synthesis_replaces_storage_with_string_display() -> None:
+    """When ``subtask_synthesis=True``, ``subtask_index`` is removed from the
+    schema and replaced by a synthetic ``subtask`` (string) entry.
+
+    The user always thinks in terms of strings. Backend rule: synthesize iff
+    BOTH ``subtask_index`` is in ``features`` AND the dataset has a lookup
+    table (``meta/subtasks.parquet``) — caller passes ``subtask_synthesis=True``
+    when that condition is met.
+    """
+    features = {
+        "subtask_index": {"dtype": "int64", "shape": [1], "names": None},
+        "reward": {"dtype": "float32", "shape": [1], "names": None},
+    }
+    schema = _build_features_schema(features, subtask_synthesis=True)
+    assert "subtask_index" not in schema, "storage feature must be hidden"
+    assert "subtask" in schema, "display feature must be synthesized"
+    sub = schema["subtask"]
+    assert sub.dtype == "string"
+    assert sub.shape == [1]
+    assert sub.names is None
+    # Reward is unrelated; should pass through.
+    assert "reward" in schema
+    assert schema["reward"].dtype == "float32"
+
+
+def test_subtask_synthesis_disabled_keeps_storage_name() -> None:
+    """``subtask_synthesis=False`` (the default for datasets without the
+    lookup table) leaves ``subtask_index`` in the schema as-is."""
+    features = {
+        "subtask_index": {"dtype": "int64", "shape": [1], "names": None},
+    }
+    schema = _build_features_schema(features, subtask_synthesis=False)
+    assert "subtask" not in schema
+    assert "subtask_index" in schema
+    assert schema["subtask_index"].dtype == "int64"
+
+
+def test_subtask_synthesis_when_no_subtask_index_is_noop() -> None:
+    """Passing ``subtask_synthesis=True`` for a dataset that doesn't have
+    ``subtask_index`` should NOT invent a fake ``subtask`` entry."""
+    features = {"reward": {"dtype": "float32", "shape": [1], "names": None}}
+    schema = _build_features_schema(features, subtask_synthesis=True)
+    assert "subtask" not in schema
+    assert "reward" in schema
+
+
+def test_subtask_synthesis_inherits_per_episode_flag() -> None:
+    """If ``subtask_index`` is detected as per-episode-broadcast, the
+    synthetic ``subtask`` inherits the flag — coercion happens at the
+    storage layer, but the user-facing card needs to know to render the
+    'whole episode' note."""
+    features = {
+        "subtask_index": {"dtype": "int64", "shape": [1], "names": None},
+    }
+    schema = _build_features_schema(features, per_episode={"subtask_index"}, subtask_synthesis=True)
+    assert "subtask" in schema
+    assert schema["subtask"].is_per_episode is True
+
+
+def test_subtask_synthesis_does_not_set_per_episode_when_storage_isnt() -> None:
+    features = {
+        "subtask_index": {"dtype": "int64", "shape": [1], "names": None},
+    }
+    schema = _build_features_schema(features, per_episode=set(), subtask_synthesis=True)
+    assert schema["subtask"].is_per_episode is False

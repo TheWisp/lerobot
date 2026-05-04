@@ -232,6 +232,29 @@ class FeatureSetRequest(BaseModel):
     # this flag, an overlap returns 409 so the frontend can prompt the user.
 
 
+def _resolve_synthetic_feature(dataset, requested_feature: str) -> str:
+    """Map a user-facing feature name to its storage feature name.
+
+    Hardcoded special case for the LeRobot 3.0 subtask format:
+    user-facing ``subtask`` (string) → storage ``subtask_index`` (int64)
+    when the dataset has ``meta/subtasks.parquet``. Returns the input
+    unchanged for any other feature name.
+    """
+    from lerobot.gui.api.datasets import (
+        SUBTASK_DISPLAY_FEATURE,
+        SUBTASK_STORAGE_FEATURE,
+        _has_subtask_lookup,
+    )
+
+    if (
+        requested_feature == SUBTASK_DISPLAY_FEATURE
+        and SUBTASK_STORAGE_FEATURE in dataset.meta.features
+        and _has_subtask_lookup(dataset)
+    ):
+        return SUBTASK_STORAGE_FEATURE
+    return requested_feature
+
+
 def _validate_feature_edit(dataset, request: FeatureSetRequest) -> tuple[int, int, int, int, dict[str, Any]]:
     """Validate the request against the dataset schema and trim envelope.
 
@@ -239,9 +262,20 @@ def _validate_feature_edit(dataset, request: FeatureSetRequest) -> tuple[int, in
     The returned frame_from/frame_to may be coerced to ``[0, episode_length)``
     if the feature is detected as per-episode-broadcast (e.g. ``success``) —
     sub-range edits would silently break the broadcast invariant otherwise.
+
+    Side effect: ``request.feature`` is mutated to the storage feature name
+    when the request used a synthetic display name (e.g. ``subtask`` →
+    ``subtask_index``). Subsequent code paths see the storage name only.
+
     Raises HTTPException with appropriate 4xx codes on failure.
     """
     feature_dict = dataset.meta.features
+
+    # Translate synthetic display names (subtask) → storage names (subtask_index)
+    # before validation. PendingEdit stores the storage name so the apply
+    # pipeline doesn't need to know about the synthesis.
+    request.feature = _resolve_synthetic_feature(dataset, request.feature)
+
     if request.feature not in feature_dict:
         raise HTTPException(status_code=400, detail=f"Unknown feature: {request.feature!r}")
 

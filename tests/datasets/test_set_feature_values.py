@@ -469,3 +469,331 @@ class TestCrossFileOrdering:
         # And no orphan .tmp left lying around.
         orphans = list((ds.root / "data").rglob("*.tmp"))
         assert orphans == [], f"orphan .tmp files: {orphans}"
+
+
+# ── Edge cases for subtask string resolution ────────────────────────────────
+
+
+def _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory, *, with_lookup=True):
+    """Build a factory dataset and inject ``subtask_index`` + (optionally) a lookup table.
+
+    Returns the ``LeRobotDataset`` ready for ``set_feature_values`` to mutate.
+    """
+    ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+    ds.meta.features["subtask_index"] = {"dtype": "int64", "shape": [1], "names": None}
+    for shard in (ds.root / "data").glob("*/*.parquet"):
+        df = pd.read_parquet(shard)
+        df["subtask_index"] = np.zeros(len(df), dtype=np.int64)
+        df.to_parquet(shard, compression="snappy", index=False)
+    if with_lookup:
+        from lerobot.datasets.io_utils import load_subtasks
+
+        subtasks = pd.DataFrame(
+            {"subtask_index": [0, 1, 2]},
+            index=pd.Index(["approach", "grasp", "release"], name="subtask"),
+        )
+        (ds.root / "meta").mkdir(exist_ok=True)
+        subtasks.to_parquet(ds.root / "meta" / "subtasks.parquet")
+        ds.meta.subtasks = load_subtasks(ds.root)
+    return ds
+
+
+class TestSubtaskResolutionEdgeCases:
+    """Pin the contract for resolving string ``subtask_index`` edits at Save:
+
+    * existing strings reuse their index (no renumbering, no churn),
+    * new strings get appended with ``max(existing) + 1`` so prior data
+      that references existing indices is never invalidated,
+    * the same new string used in multiple staged edits collapses to a
+      single appended row with one index,
+    * a missing lookup table is created from scratch on first Save.
+    """
+
+    def test_existing_strings_reuse_indices_no_renumbering(self, tmp_path, lerobot_dataset_factory):
+        ds = _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory)
+        before = pd.read_parquet(ds.root / "meta" / "subtasks.parquet").copy()
+        before_indices = {str(name): int(row["subtask_index"]) for name, row in before.iterrows()}
+
+        # Stage edits that all use EXISTING strings.
+        set_feature_values(
+            ds,
+            edits=[
+                {"feature": "subtask_index", "from_index": 0, "to_index": 5, "value": "grasp"},
+                {"feature": "subtask_index", "from_index": 5, "to_index": 10, "value": "release"},
+            ],
+        )
+
+        # Lookup table is unchanged — existing indices are stable, no renumbering.
+        after = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        after_indices = {str(name): int(row["subtask_index"]) for name, row in after.iterrows()}
+        assert after_indices == before_indices, (
+            f"existing subtask indices must not be renumbered. before={before_indices} after={after_indices}"
+        )
+
+        # Data shards now have the resolved ints — the same ints existing referenced.
+        merged = pd.concat([pd.read_parquet(s) for s in (ds.root / "data").glob("*/*.parquet")])
+        merged = merged.sort_values("index").reset_index(drop=True)
+        for fi in range(0, 5):
+            assert int(merged.iloc[fi]["subtask_index"]) == before_indices["grasp"]
+        for fi in range(5, 10):
+            assert int(merged.iloc[fi]["subtask_index"]) == before_indices["release"]
+
+    def test_new_string_appended_with_max_plus_one(self, tmp_path, lerobot_dataset_factory):
+        """A new string gets ``max(existing_indices) + 1``, regardless of gaps.
+        Critical: appending must never collide with existing rows."""
+        ds = _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory)
+
+        set_feature_values(
+            ds,
+            edits=[{"feature": "subtask_index", "from_index": 0, "to_index": 3, "value": "inspect knot"}],
+        )
+
+        after = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        names_to_idx = {str(name): int(row["subtask_index"]) for name, row in after.iterrows()}
+        assert names_to_idx["inspect knot"] == 3, (
+            f"new string should land at max(existing)+1 = 3, got {names_to_idx['inspect knot']}"
+        )
+        # Original entries are byte-identical.
+        assert names_to_idx["approach"] == 0
+        assert names_to_idx["grasp"] == 1
+        assert names_to_idx["release"] == 2
+
+    def test_lookup_with_gaps_appends_after_max_not_in_gap(self, tmp_path, lerobot_dataset_factory):
+        """If a user manually edited subtasks.parquet to skip indices, our
+        next-index policy is ``max + 1`` (stable), NOT 'fill the gap' —
+        gap-filling could collide with stale references in the data."""
+        ds = _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory)
+        # Manually rewrite the lookup with gaps: indices {0, 5, 7}.
+        sparse = pd.DataFrame(
+            {"subtask_index": [0, 5, 7]},
+            index=pd.Index(["approach", "lift", "place"], name="subtask"),
+        )
+        sparse.to_parquet(ds.root / "meta" / "subtasks.parquet")
+
+        set_feature_values(
+            ds,
+            edits=[{"feature": "subtask_index", "from_index": 0, "to_index": 2, "value": "wave"}],
+        )
+
+        after = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        names_to_idx = {str(name): int(row["subtask_index"]) for name, row in after.iterrows()}
+        assert names_to_idx["wave"] == 8, (
+            f"new string should be max(existing 0,5,7)+1 = 8, got {names_to_idx['wave']}"
+        )
+
+    def test_same_new_string_in_multiple_edits_appends_once(self, tmp_path, lerobot_dataset_factory):
+        """Multiple staged edits using the SAME new string in one Save must
+        appear as a SINGLE row in the lookup with ONE index — no duplicates."""
+        ds = _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory)
+
+        set_feature_values(
+            ds,
+            edits=[
+                {"feature": "subtask_index", "from_index": 0, "to_index": 3, "value": "wave"},
+                {"feature": "subtask_index", "from_index": 5, "to_index": 8, "value": "wave"},
+                {"feature": "subtask_index", "from_index": 10, "to_index": 12, "value": "wave"},
+            ],
+        )
+
+        after = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        rows = [str(name) for name in after.index]
+        assert rows.count("wave") == 1, f"wave should appear exactly once in lookup; got rows={rows}"
+
+        wave_idx = int(after.loc["wave", "subtask_index"])
+        merged = pd.concat([pd.read_parquet(s) for s in (ds.root / "data").glob("*/*.parquet")])
+        merged = merged.sort_values("index").reset_index(drop=True)
+        # All three ranges resolved to the same int.
+        for fi in (0, 1, 2, 5, 6, 7, 10, 11):
+            assert int(merged.iloc[fi]["subtask_index"]) == wave_idx, (
+                f"frame {fi} should hold the wave index {wave_idx}, got {merged.iloc[fi]['subtask_index']}"
+            )
+
+    def test_lookup_table_created_when_missing(self, tmp_path, lerobot_dataset_factory):
+        """Dataset has subtask_index column but no lookup file yet — first Save
+        with a string value must create the lookup with index 0."""
+        ds = _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory, with_lookup=False)
+        assert not (ds.root / "meta" / "subtasks.parquet").exists()
+
+        set_feature_values(
+            ds,
+            edits=[{"feature": "subtask_index", "from_index": 0, "to_index": 5, "value": "first"}],
+        )
+
+        path = ds.root / "meta" / "subtasks.parquet"
+        assert path.exists()
+        df = pd.read_parquet(path)
+        assert list(df.index) == ["first"]
+        assert int(df.loc["first", "subtask_index"]) == 0
+
+    def test_two_distinct_new_strings_in_one_save_get_distinct_indices(
+        self, tmp_path, lerobot_dataset_factory
+    ):
+        """Two new strings staged together must resolve to TWO different indices
+        appended in registration order, both ≥ ``max(existing) + 1``."""
+        ds = _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory)
+
+        set_feature_values(
+            ds,
+            edits=[
+                {"feature": "subtask_index", "from_index": 0, "to_index": 3, "value": "alpha"},
+                {"feature": "subtask_index", "from_index": 3, "to_index": 6, "value": "beta"},
+            ],
+        )
+
+        after = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        names_to_idx = {str(name): int(row["subtask_index"]) for name, row in after.iterrows()}
+        assert names_to_idx["alpha"] == 3, names_to_idx
+        assert names_to_idx["beta"] == 4, names_to_idx
+        # And the original entries are intact.
+        assert names_to_idx["approach"] == 0
+        assert names_to_idx["release"] == 2
+
+    def test_two_consecutive_saves_each_append_one(self, tmp_path, lerobot_dataset_factory):
+        """Save 1 adds "alpha" → index 3. Save 2 adds "beta" → index 4. The
+        second Save sees the post-Save-1 lookup and continues from there."""
+        ds = _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory)
+
+        set_feature_values(
+            ds,
+            edits=[{"feature": "subtask_index", "from_index": 0, "to_index": 2, "value": "alpha"}],
+        )
+        first = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        alpha_idx = int(first.loc["alpha", "subtask_index"])
+
+        set_feature_values(
+            ds,
+            edits=[{"feature": "subtask_index", "from_index": 5, "to_index": 7, "value": "beta"}],
+        )
+        second = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        beta_idx = int(second.loc["beta", "subtask_index"])
+
+        assert alpha_idx == 3
+        assert beta_idx == 4
+        # alpha row is unchanged after the second Save (no renumbering).
+        assert int(second.loc["alpha", "subtask_index"]) == alpha_idx
+
+    def test_same_string_across_two_saves_keeps_one_index(self, tmp_path, lerobot_dataset_factory):
+        """The same new string staged in two separate Saves must end up as ONE
+        row — the second Save sees the first's append and reuses it."""
+        ds = _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory)
+
+        set_feature_values(
+            ds,
+            edits=[{"feature": "subtask_index", "from_index": 0, "to_index": 3, "value": "wave"}],
+        )
+        after_first = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        wave_idx_1 = int(after_first.loc["wave", "subtask_index"])
+
+        set_feature_values(
+            ds,
+            edits=[{"feature": "subtask_index", "from_index": 5, "to_index": 8, "value": "wave"}],
+        )
+        after_second = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+
+        wave_rows = [n for n in after_second.index if n == "wave"]
+        assert len(wave_rows) == 1, "wave must appear exactly once across two Saves"
+        assert int(after_second.loc["wave", "subtask_index"]) == wave_idx_1
+
+    def test_int_value_for_subtask_index_passes_through_unchanged(self, tmp_path, lerobot_dataset_factory):
+        """If the caller bypasses the synthesis layer and writes an int directly,
+        we don't try to look it up — the int is treated as the resolved index.
+        This is the raw-API path; the lookup table is left alone."""
+        ds = _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory)
+        before_size = len(pd.read_parquet(ds.root / "meta" / "subtasks.parquet"))
+
+        set_feature_values(
+            ds,
+            edits=[
+                {"feature": "subtask_index", "from_index": 0, "to_index": 3, "value": 1}  # int
+            ],
+        )
+
+        after = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        assert len(after) == before_size, "lookup must not grow when value is an int"
+
+        merged = pd.concat([pd.read_parquet(s) for s in (ds.root / "data").glob("*/*.parquet")])
+        merged = merged.sort_values("index").reset_index(drop=True)
+        for fi in (0, 1, 2):
+            assert int(merged.iloc[fi]["subtask_index"]) == 1
+
+    def test_mixed_int_and_string_values_in_one_save(self, tmp_path, lerobot_dataset_factory):
+        """One staged edit uses int 1, another uses a new string — resolution
+        only applies to the string edit. Both land correctly."""
+        ds = _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory)
+
+        set_feature_values(
+            ds,
+            edits=[
+                {"feature": "subtask_index", "from_index": 0, "to_index": 3, "value": 1},  # int
+                {"feature": "subtask_index", "from_index": 5, "to_index": 8, "value": "newish"},  # str
+            ],
+        )
+
+        after = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        names = list(after.index)
+        assert "newish" in names
+        assert int(after.loc["newish", "subtask_index"]) == 3
+
+        merged = pd.concat([pd.read_parquet(s) for s in (ds.root / "data").glob("*/*.parquet")])
+        merged = merged.sort_values("index").reset_index(drop=True)
+        # First range got the int 1.
+        for fi in (0, 1, 2):
+            assert int(merged.iloc[fi]["subtask_index"]) == 1
+        # Second range got the resolved newish index 3.
+        for fi in (5, 6, 7):
+            assert int(merged.iloc[fi]["subtask_index"]) == 3
+
+    def test_string_value_when_dataset_has_no_subtask_index_feature_raises(
+        self, tmp_path, lerobot_dataset_factory
+    ):
+        """The set_feature_values resolver assumes the dataset declares
+        ``subtask_index`` in features. If it doesn't, attempting to stage
+        a string value for it must raise — there's no place to write."""
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        # Don't add subtask_index to features.
+        with pytest.raises(ValueError, match="Unknown feature"):
+            set_feature_values(
+                ds,
+                edits=[{"feature": "subtask_index", "from_index": 0, "to_index": 3, "value": "x"}],
+            )
+
+
+# ── Regression: in-memory meta.subtasks must refresh after appending ────────
+
+
+class TestSubtaskMetaInMemoryRefresh:
+    def test_meta_subtasks_updated_after_append(self, tmp_path, lerobot_dataset_factory):
+        """``dataset[i]`` decodes ``subtask_index → subtask`` via
+        ``self._meta.subtasks.iloc[idx]``. If we write a new index to the data
+        but forget to update the in-memory ``meta.subtasks``, the next read
+        of any frame with the new index hits an out-of-bounds IndexError.
+        Regression test for that path — discovered via the headless GUI flow
+        when the auto-prefetcher hit it after a Save."""
+        from lerobot.datasets.io_utils import load_subtasks
+
+        ds = _setup_dataset_with_subtask_index(tmp_path, lerobot_dataset_factory)
+        before_size = len(ds.meta.subtasks)
+
+        set_feature_values(
+            ds,
+            edits=[{"feature": "subtask_index", "from_index": 0, "to_index": 3, "value": "wave"}],
+        )
+
+        # In-memory meta must reflect the new row immediately — not just the
+        # disk file. Without the dataset.meta.subtasks = updated line in
+        # _resolve_subtask_string_edits, this assertion fails and the next
+        # dataset[i] would IndexError.
+        assert len(ds.meta.subtasks) == before_size + 1, (
+            f"in-memory meta.subtasks did not pick up appended row: "
+            f"size={len(ds.meta.subtasks)} expected={before_size + 1}"
+        )
+        assert "wave" in ds.meta.subtasks.index
+
+        # Sanity: disk and memory agree.
+        on_disk = load_subtasks(ds.root)
+        assert list(on_disk.index) == list(ds.meta.subtasks.index)
+
+        # Functional check: decoding a frame with the new index must succeed.
+        new_idx = int(ds.meta.subtasks.loc["wave", "subtask_index"])
+        decoded = ds.meta.subtasks.iloc[new_idx].name
+        assert decoded == "wave"

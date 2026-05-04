@@ -919,7 +919,28 @@ def _invalidate_per_episode_features(dataset_id: str) -> None:
     _per_episode_features_cache.pop(dataset_id, None)
 
 
-def _build_features_schema(features: dict, per_episode: set[str] | None = None) -> dict[str, FeatureSchema]:
+# Hardcoded backend representation of the LeRobot 3.0 subtask format. The
+# data layer stores ``subtask_index`` (int64[1]) plus ``meta/subtasks.parquet``
+# (index → string lookup). The user always thinks in terms of strings, so
+# whenever both pieces are present the schema endpoint synthesizes a
+# ``subtask`` (string) feature in place of ``subtask_index``. Stage endpoint
+# accepts either name and routes to the storage feature; PendingEdit stores
+# the storage name so the apply pipeline doesn't need a special case.
+SUBTASK_STORAGE_FEATURE = "subtask_index"
+SUBTASK_DISPLAY_FEATURE = "subtask"
+
+
+def _has_subtask_lookup(dataset) -> bool:
+    """True if the dataset has a ``meta/subtasks.parquet`` lookup table."""
+    return getattr(dataset.meta, "subtasks", None) is not None
+
+
+def _build_features_schema(
+    features: dict,
+    per_episode: set[str] | None = None,
+    *,
+    subtask_synthesis: bool = False,
+) -> dict[str, FeatureSchema]:
     """Convert ``ds.meta.features`` into the JSON-friendly FeatureSchema dict.
 
     Pre: ``features`` follows the LeRobot ``info.json`` shape — each value
@@ -928,18 +949,25 @@ def _build_features_schema(features: dict, per_episode: set[str] | None = None) 
     Post: returned dict has the same keys; values are pydantic-validated
     FeatureSchema instances. Shapes are coerced to ``list[int]`` for
     JSON serialization stability.
+
+    If ``subtask_synthesis=True`` and ``subtask_index`` is in ``features``,
+    the storage entry is replaced by a synthetic ``subtask`` (string)
+    entry that inherits the per-episode flag from ``subtask_index``. The
+    caller passes ``subtask_synthesis=True`` only when the dataset also
+    has ``meta/subtasks.parquet``.
     """
     per_episode = per_episode or set()
     out: dict[str, FeatureSchema] = {}
     for name, ft in features.items():
+        if subtask_synthesis and name == SUBTASK_STORAGE_FEATURE:
+            # Skip the storage entry; it will be replaced by the synthetic
+            # display entry below. We don't include both — the user thinks
+            # in strings, so exposing both would just leak the storage name.
+            continue
         shape = ft.get("shape", [])
-        # Normalize tuples → lists so the response round-trips through JSON identically.
         shape_list = [int(x) for x in shape] if shape is not None else []
         names = ft.get("names")
         if names is not None and not isinstance(names, list):
-            # Some features encode names as a dict (e.g. {"motors": [...]}) — flatten
-            # to a single list of strings if we can; otherwise drop. The GUI only
-            # uses names for vector-component labels, so a dict shape isn't useful.
             if isinstance(names, dict):
                 vals = next(iter(names.values()), None)
                 names = list(vals) if isinstance(vals, list) else None
@@ -950,6 +978,17 @@ def _build_features_schema(features: dict, per_episode: set[str] | None = None) 
             shape=shape_list,
             names=names,
             is_per_episode=name in per_episode,
+        )
+
+    if subtask_synthesis and SUBTASK_STORAGE_FEATURE in features:
+        # Per-episode flag transfers from the storage feature: if every episode
+        # had uniform subtask_index, every episode also has a uniform subtask
+        # string, so edits should still coerce to whole-episode.
+        out[SUBTASK_DISPLAY_FEATURE] = FeatureSchema(
+            dtype="string",
+            shape=[1],
+            names=None,
+            is_per_episode=SUBTASK_STORAGE_FEATURE in per_episode,
         )
     return out
 
@@ -968,6 +1007,17 @@ def _dataset_info_from(
     ``features`` name list and the full ``features_schema`` mapping.
     """
     per_episode = _detect_per_episode_features(dataset_id, dataset)
+    # Synthesize the user-facing "subtask" string feature only when the
+    # dataset has BOTH the storage column AND the lookup table — an
+    # incomplete dataset (one but not the other) would not let us decode.
+    subtask_synthesis = SUBTASK_STORAGE_FEATURE in dataset.meta.features and _has_subtask_lookup(dataset)
+    feature_names = list(dataset.meta.features.keys())
+    if subtask_synthesis:
+        # Mirror the schema synthesis in the legacy `features: list[str]` field
+        # so frontends that read that list see "subtask" instead of "subtask_index".
+        feature_names = [
+            SUBTASK_DISPLAY_FEATURE if n == SUBTASK_STORAGE_FEATURE else n for n in feature_names
+        ]
     return DatasetInfo(
         id=dataset_id,
         repo_id=dataset.repo_id,
@@ -977,8 +1027,12 @@ def _dataset_info_from(
         fps=dataset.fps,
         robot_type=getattr(dataset.meta, "robot_type", "") or "",
         camera_keys=list(dataset.meta.camera_keys),
-        features=list(dataset.meta.features.keys()),
-        features_schema=_build_features_schema(dataset.meta.features, per_episode=per_episode),
+        features=feature_names,
+        features_schema=_build_features_schema(
+            dataset.meta.features,
+            per_episode=per_episode,
+            subtask_synthesis=subtask_synthesis,
+        ),
         errors=errors or [],
         warnings=warnings or [],
     )

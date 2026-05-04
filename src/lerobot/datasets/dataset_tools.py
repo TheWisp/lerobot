@@ -1114,6 +1114,14 @@ def _resolve_subtask_string_edits(
             raise
         logging.info(f"Appended {len(new_strings)} subtask(s) to {subtasks_path}")
 
+        # Refresh in-memory meta so subsequent dataset[i] reads can decode
+        # the newly-assigned indices. Without this, the data parquet has
+        # subtask_index = N but meta.subtasks.iloc[N] is out-of-bounds — the
+        # reader's auto-decode hits an IndexError on every frame written
+        # with a brand-new subtask. Discovered via the headless GUI flow
+        # test that triggered the prefetcher right after a Save.
+        dataset.meta.subtasks = updated
+
     return resolved
 
 
