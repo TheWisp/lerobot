@@ -242,6 +242,7 @@ async function _completeOpen(data) {
     renderTree();
     renderSources();
     if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
+    if (window.FeatureEditing) window.FeatureEditing.onDatasetOpened(data.id);
     setStatus(`Opened: ${data.repo_id}`);
 }
 
@@ -411,6 +412,7 @@ function selectEpisode(datasetId, epIdx, length) {
     renderCameraGrid();
     loadAllFrames(0);
     loadTrimForCurrentEpisode();
+    if (window.FeatureEditing) window.FeatureEditing.onEpisodeSelected(datasetId, epIdx);
 }
 
 function renderCameraGrid() {
@@ -478,6 +480,8 @@ function loadAllFrames(idx) {
     const currentTime = formatTime(currentFrame / fps);
     const totalTime = formatTime(totalFrames / fps);
     document.getElementById('time-info').textContent = `${currentTime} / ${totalTime}`;
+
+    if (window.FeatureEditing) window.FeatureEditing.onPlayheadChanged();
 
     return Promise.all(promises);
 }
@@ -1205,6 +1209,7 @@ async function refreshPendingEdits() {
         pendingEdits = data.edits;
         renderTree();
         loadTrimForCurrentEpisode();
+        if (window.FeatureEditing) window.FeatureEditing.onPendingEditsChanged();
     } catch (e) {
         console.error('Failed to refresh edits:', e);
     }

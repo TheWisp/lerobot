@@ -28,6 +28,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from lerobot.datasets.dataset_tools import check_episode_video_duration
+from lerobot.datasets.utils import DEFAULT_DATA_PATH
 from lerobot.utils.constants import HF_LEROBOT_HOME
 
 if TYPE_CHECKING:
@@ -798,6 +799,18 @@ class OpenDatasetRequest(BaseModel):
     confirm_hub_sync: bool = False
 
 
+class FeatureSchema(BaseModel):
+    """Schema info for a single dataset feature.
+
+    Mirrors the per-feature spec from ``info.json`` ``features`` dict —
+    just the fields the GUI actually uses for rendering and validation.
+    """
+
+    dtype: str  # e.g. "float32", "int64", "bool", "string", "image", "video"
+    shape: list[int]  # e.g. [1] for scalar, [14] for vector, [3, 480, 640] for image
+    names: list[str] | None = None  # component names for vectors; None for scalars/strings
+
+
 class DatasetInfo(BaseModel):
     """Summary info about a dataset."""
 
@@ -809,9 +822,75 @@ class DatasetInfo(BaseModel):
     fps: int
     robot_type: str = ""
     camera_keys: list[str]
-    features: list[str]
+    features: list[str]  # feature names only — preserved for backwards-compat
+    features_schema: dict[str, FeatureSchema] = {}
+    # Full per-feature schema (dtype, shape, names) keyed by feature name.
+    # Populated from ``ds.meta.features``. The GUI renderer registry
+    # dispatches on (dtype, ndim) to pick row + Inspector widgets.
     errors: list[str] = []  # Verification errors (metadata mismatches — dataset may be corrupted)
     warnings: list[str] = []  # Non-critical warnings (stale stats, etc.)
+
+
+def _build_features_schema(features: dict) -> dict[str, FeatureSchema]:
+    """Convert ``ds.meta.features`` into the JSON-friendly FeatureSchema dict.
+
+    Pre: ``features`` follows the LeRobot ``info.json`` shape — each value
+    has ``dtype`` (str), ``shape`` (list/tuple of int), and optional
+    ``names`` (list of str or None).
+    Post: returned dict has the same keys; values are pydantic-validated
+    FeatureSchema instances. Shapes are coerced to ``list[int]`` for
+    JSON serialization stability.
+    """
+    out: dict[str, FeatureSchema] = {}
+    for name, ft in features.items():
+        shape = ft.get("shape", [])
+        # Normalize tuples → lists so the response round-trips through JSON identically.
+        shape_list = [int(x) for x in shape] if shape is not None else []
+        names = ft.get("names")
+        if names is not None and not isinstance(names, list):
+            # Some features encode names as a dict (e.g. {"motors": [...]}) — flatten
+            # to a single list of strings if we can; otherwise drop. The GUI only
+            # uses names for vector-component labels, so a dict shape isn't useful.
+            if isinstance(names, dict):
+                vals = next(iter(names.values()), None)
+                names = list(vals) if isinstance(vals, list) else None
+            else:
+                names = None
+        out[name] = FeatureSchema(
+            dtype=str(ft.get("dtype", "")),
+            shape=shape_list,
+            names=names,
+        )
+    return out
+
+
+def _dataset_info_from(
+    dataset_id: str,
+    dataset,
+    *,
+    errors: list[str] | None = None,
+    warnings: list[str] | None = None,
+) -> DatasetInfo:
+    """Build a DatasetInfo response from an opened LeRobotDataset.
+
+    Pre: ``dataset.meta`` is fully loaded (call ``ensure_episodes_loaded``
+    first if opening). Post: returns a DatasetInfo with both the legacy
+    ``features`` name list and the full ``features_schema`` mapping.
+    """
+    return DatasetInfo(
+        id=dataset_id,
+        repo_id=dataset.repo_id,
+        root=str(dataset.root),
+        total_episodes=dataset.meta.total_episodes,
+        total_frames=dataset.meta.total_frames,
+        fps=dataset.fps,
+        robot_type=getattr(dataset.meta, "robot_type", "") or "",
+        camera_keys=list(dataset.meta.camera_keys),
+        features=list(dataset.meta.features.keys()),
+        features_schema=_build_features_schema(dataset.meta.features),
+        errors=errors or [],
+        warnings=warnings or [],
+    )
 
 
 class EpisodeActionStats(BaseModel):
@@ -859,22 +938,7 @@ class EpisodeInfo(BaseModel):
 @router.get("")
 async def list_datasets() -> list[DatasetInfo]:
     """List all currently opened datasets."""
-    result = []
-    for dataset_id, ds in _app_state.datasets.items():
-        result.append(
-            DatasetInfo(
-                id=dataset_id,
-                repo_id=ds.repo_id,
-                root=str(ds.root),
-                total_episodes=ds.meta.total_episodes,
-                total_frames=ds.meta.total_frames,
-                fps=ds.fps,
-                robot_type=getattr(ds.meta, "robot_type", "") or "",
-                camera_keys=list(ds.meta.camera_keys),
-                features=list(ds.meta.features.keys()),
-            )
-        )
-    return result
+    return [_dataset_info_from(dataset_id, ds) for dataset_id, ds in _app_state.datasets.items()]
 
 
 @router.post("")
@@ -904,17 +968,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                 logger.info(
                     f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)"
                 )
-                return DatasetInfo(
-                    id=dataset_id,
-                    repo_id=dataset.repo_id,
-                    root=str(dataset.root),
-                    total_episodes=dataset.meta.total_episodes,
-                    total_frames=dataset.meta.total_frames,
-                    fps=dataset.fps,
-                    robot_type=getattr(dataset.meta, "robot_type", "") or "",
-                    camera_keys=list(dataset.meta.camera_keys),
-                    features=list(dataset.meta.features.keys()),
-                )
+                return _dataset_info_from(dataset_id, dataset)
 
             # Extract repo_id from path: if under HF_LEROBOT_HOME, use owner/name
             repo_id = request.repo_id
@@ -984,17 +1038,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                 logger.info(
                     f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)"
                 )
-                return DatasetInfo(
-                    id=dataset_id,
-                    repo_id=dataset.repo_id,
-                    root=str(dataset.root),
-                    total_episodes=dataset.meta.total_episodes,
-                    total_frames=dataset.meta.total_frames,
-                    fps=dataset.fps,
-                    robot_type=getattr(dataset.meta, "robot_type", "") or "",
-                    camera_keys=list(dataset.meta.camera_keys),
-                    features=list(dataset.meta.features.keys()),
-                )
+                return _dataset_info_from(dataset_id, dataset)
 
             # Open from HuggingFace Hub
             dataset = LeRobotDataset(request.repo_id)
@@ -1057,19 +1101,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
         logger.info(f"Opened dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)")
         _save_opened_state()
 
-        return DatasetInfo(
-            id=dataset_id,
-            repo_id=dataset.repo_id,
-            root=str(dataset.root),
-            total_episodes=dataset.meta.total_episodes,
-            total_frames=dataset.meta.total_frames,
-            fps=dataset.fps,
-            robot_type=getattr(dataset.meta, "robot_type", "") or "",
-            camera_keys=list(dataset.meta.camera_keys),
-            features=list(dataset.meta.features.keys()),
-            errors=errors,
-            warnings=warnings,
-        )
+        return _dataset_info_from(dataset_id, dataset, errors=errors, warnings=warnings)
 
     except HTTPException:
         # Preserve intentional HTTP responses (e.g. 400 / 409) — don't wrap
@@ -1284,6 +1316,192 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
             "Expires": "0",
         },
     )
+
+
+def _coerce_feature_value_to_json(value: Any, dtype: str) -> Any:
+    """Convert a single sample's feature value into JSON-serializable form.
+
+    Pre: ``value`` comes from ``dataset[i][name]`` — typically a torch.Tensor,
+    np.ndarray, str, bool, int, or float.
+    Post: returns a JSON-compatible Python type (bool / int / float / str / list).
+    Image / video tensors are NEVER passed in (caller must skip those features).
+    """
+    import numpy as np
+    import torch
+
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu().numpy()
+    if isinstance(value, np.ndarray):
+        if value.size == 1:
+            scalar = value.item()
+            return bool(scalar) if dtype == "bool" else scalar
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    # Pass-through for str / int / float / bool. Anything else falls back to str()
+    # so the response stays JSON-encodable (better than failing the whole frame).
+    if isinstance(value, (str, bool, int, float)):
+        return value
+    return str(value)
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}/features")
+async def get_frame_features(dataset_id: str, episode_idx: int, frame_idx: int) -> dict[str, Any]:
+    """Return all per-frame feature values at a single frame.
+
+    Skips ``image`` / ``video`` features (those have a dedicated frame
+    endpoint). Returns JSON-serializable values: scalars for shape ``[1]``,
+    lists for vectors, strings for ``string`` features. ``subtask_index``
+    and the decoded ``subtask`` string both appear when the dataset has a
+    subtasks lookup table.
+    """
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    dataset = _app_state.datasets[dataset_id]
+
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+
+    ep = dataset.meta.episodes[episode_idx]
+    ep_length = ep["length"]
+    if frame_idx < 0 or frame_idx >= ep_length:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Frame {frame_idx} out of range for episode {episode_idx} (length={ep_length})",
+        )
+
+    episode_start = _get_episode_start_index(dataset_id, episode_idx)
+    global_idx = episode_start + frame_idx
+    item = dataset[global_idx]
+
+    # Filter out image/video features — those have their own frame endpoints.
+    skip_dtypes = {"image", "video"}
+    out: dict[str, Any] = {}
+    for name, ft in dataset.meta.features.items():
+        dtype = ft.get("dtype", "")
+        if dtype in skip_dtypes:
+            continue
+        if name not in item:
+            # Decoder can drop columns it doesn't know how to load; skip rather than error.
+            continue
+        try:
+            out[name] = _coerce_feature_value_to_json(item[name], dtype)
+        except Exception as e:
+            logger.warning(f"Failed to coerce feature {name!r} at frame {frame_idx}: {e}")
+            # Don't fail the whole response over one bad cell.
+            out[name] = None
+
+    # ``dataset[i]`` includes both ``task`` (decoded string) and ``task_index``
+    # automatically; same for ``subtask`` / ``subtask_index`` when the lookup
+    # table is present. They flow through the loop above.
+    return {"frame_index": frame_idx, "episode_index": episode_idx, "values": out}
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/feature-series")
+async def get_episode_feature_series(
+    dataset_id: str,
+    episode_idx: int,
+    features: str = "",
+) -> dict[str, Any]:
+    """Return the per-frame trajectory of one or more features for an episode.
+
+    The frontend uses this to render line / band / stripe rows under the timeline.
+    Image / video features are rejected (they have their own video decode path).
+
+    Pre: ``features`` is a comma-separated list of feature names. Empty / omitted
+    means "all non-image, non-video features the dataset declares".
+    Post: response shape is ``{episode_index, length, series: {name: [v0..v_{N-1}]}}``.
+    For ``task`` / ``subtask``, the decoded string is returned per frame (matching
+    what ``dataset[i]`` would yield) — backed by the dataset's lookup table.
+    """
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    dataset = _app_state.datasets[dataset_id]
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+
+    requested = [name.strip() for name in features.split(",") if name.strip()] if features else None
+
+    # Resolve which raw columns we need to read from parquet, and which
+    # decoded views (task / subtask) the caller wants on top of those.
+    feature_dict = dataset.meta.features
+    skip_dtypes = {"image", "video"}
+
+    # Synthetic columns: not in features dict, but materialized by dataset[i].
+    has_subtasks = getattr(dataset.meta, "subtasks", None) is not None and "subtask_index" in feature_dict
+    synthetic_decoded = {"task": "task_index"}
+    if has_subtasks:
+        synthetic_decoded["subtask"] = "subtask_index"
+
+    if requested is None:
+        # Default: every per-frame feature except image/video, plus the synthetic
+        # decoded views the dataset supports.
+        raw_cols: list[str] = [
+            name for name, ft in feature_dict.items() if ft.get("dtype") not in skip_dtypes
+        ]
+        decoded_cols: list[str] = [name for name in synthetic_decoded if synthetic_decoded[name] in raw_cols]
+    else:
+        raw_cols = []
+        decoded_cols = []
+        for name in requested:
+            if name in synthetic_decoded:
+                # caller asked for "task"/"subtask" — read the *_index column and decode.
+                if synthetic_decoded[name] in feature_dict:
+                    raw_cols.append(synthetic_decoded[name])
+                    decoded_cols.append(name)
+                continue
+            if name not in feature_dict:
+                raise HTTPException(status_code=400, detail=f"Unknown feature: {name!r}")
+            if feature_dict[name].get("dtype") in skip_dtypes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Feature {name!r} is image/video — fetch via /frame/{{idx}} instead.",
+                )
+            raw_cols.append(name)
+
+    ep = dataset.meta.episodes[episode_idx]
+    chunk_idx = int(ep["data/chunk_index"])
+    file_idx = int(ep["data/file_index"])
+    parquet_path = Path(dataset.root) / DEFAULT_DATA_PATH.format(chunk_index=chunk_idx, file_index=file_idx)
+
+    if not parquet_path.exists():
+        raise HTTPException(status_code=404, detail=f"Data parquet missing: {parquet_path}")
+
+    # Always pull episode_index too so we can slice in-memory. Avoids reading the whole
+    # shard's worth of columns when we only need a slice — though for 1 episode we read
+    # the matching rows only.
+    cols_to_read = list(dict.fromkeys(["episode_index", *raw_cols]))
+    df = pd.read_parquet(parquet_path, columns=cols_to_read)
+    df = df[df["episode_index"] == episode_idx].reset_index(drop=True)
+
+    series: dict[str, list[Any]] = {}
+    for name in raw_cols:
+        col = df[name].tolist() if name in df.columns else []
+        # Pandas keeps numpy arrays for vector cells. Coerce per-row.
+        series[name] = [_coerce_feature_value_to_json(v, feature_dict[name].get("dtype", "")) for v in col]
+
+    # Decode synthetic columns ("task", "subtask") from the underlying *_index series.
+    for decoded_name in decoded_cols:
+        idx_col = synthetic_decoded[decoded_name]
+        lookup = dataset.meta.tasks if decoded_name == "task" else dataset.meta.subtasks
+        if lookup is None:
+            continue
+        idx_values = series.get(idx_col, [])
+        try:
+            series[decoded_name] = [lookup.iloc[int(i)].name for i in idx_values]
+        except Exception as e:
+            logger.warning(f"Failed to decode {decoded_name} via {idx_col}: {e}")
+            series[decoded_name] = [None] * len(idx_values)
+
+    return {
+        "episode_index": episode_idx,
+        "length": int(ep["length"]),
+        "series": series,
+    }
 
 
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frames")

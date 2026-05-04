@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=24">
+    <link rel="stylesheet" href="/static/style.css?v=25">
 </head>
 <body>
     <div class="tab-bar">
@@ -45,6 +45,8 @@
                     <div class="empty-state">Select an episode to view</div>
                 </div>
 
+                <div class="cameras-timeline-resize-handle" id="cameras-timeline-resize"></div>
+
                 <div class="controls-bar">
                     <button id="play-btn" onclick="togglePlay()">&#9654; Play</button>
                     <select class="speed-select" id="speed-select" onchange="changeSpeed(this.value)">
@@ -78,10 +80,31 @@
                     <div class="status" id="status">Ready</div>
                 </div>
 
+                <!-- Per-feature timeline rows (Phase A3). Each row aligns horizontally
+                     with the timeline above it; selection bands extend vertically across
+                     all rows in this stack (Phase B1). Trim envelope tints the playable
+                     range across every row. -->
+                <div class="feature-rows" id="feature-rows"></div>
+
                 <div class="edits-bar" id="edits-bar">
                     <span class="edits-count" id="edits-count">0 pending edits</span>
+                    <label class="show-pending-toggle">
+                        <input type="checkbox" id="show-pending-edits-toggle" onchange="onShowPendingEditsToggle()">
+                        Show pending edits
+                    </label>
                     <button class="btn-discard" onclick="discardEdits()">Discard</button>
                     <button class="btn-save" onclick="applyEdits()">Save Changes</button>
+                </div>
+            </div>
+            <div class="inspector-resize-handle" id="inspector-resize"></div>
+            <!-- Inspector ("Props") panel — schema-driven, scoped to current selection.
+                 Always visible when a dataset is open; empty-state shows dataset summary. -->
+            <div class="inspector" id="inspector">
+                <div class="inspector-header">
+                    <h2>Inspector</h2>
+                </div>
+                <div class="inspector-body" id="inspector-body">
+                    <div class="empty-state">Open a dataset to inspect its features</div>
                 </div>
             </div>
         </div>
@@ -339,6 +362,7 @@
     <div class="toast-container" id="toast-container"></div>
 
     <script src="/static/app.js?v=31"></script>
+    <script src="/static/feature_editing.js?v=1"></script>
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=39"></script>
     <script src="/static/model.js?v=3"></script>

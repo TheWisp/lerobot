@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -201,6 +201,136 @@ async def set_episode_trim(request: TrimRequest):
     }
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# Feature-value editing (Phase B3 + B5)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+# Read-only feature names / dtypes — editing is blocked.
+_DEFAULT_FEATURES = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
+_READONLY_DTYPES = {"image", "video"}
+_LARGE_SAVE_FRAME_THRESHOLD = 10_000
+
+
+class FeatureSetRequest(BaseModel):
+    """Stage a per-frame feature value edit for a contiguous range.
+
+    The frontend sends one of these per Inspector card change. The range
+    uses the episode's local frame numbers; the backend translates to the
+    global ``index`` column at apply time.
+    """
+
+    dataset_id: str
+    episode_index: int
+    feature: str
+    frame_from: int  # inclusive
+    frame_to: int  # exclusive
+    value: Any  # JSON-serializable; coerced to feature dtype on apply
+    confirm_large: bool = False  # set True to acknowledge a > 10k frame Save
+
+
+def _validate_feature_edit(dataset, request: FeatureSetRequest) -> tuple[int, int, dict[str, Any]]:
+    """Validate the request against the dataset schema and trim envelope.
+
+    Returns (global_from_index, global_to_index, feature_info) on success.
+    Raises HTTPException with appropriate 4xx codes on failure.
+    """
+    feature_dict = dataset.meta.features
+    if request.feature not in feature_dict:
+        raise HTTPException(status_code=400, detail=f"Unknown feature: {request.feature!r}")
+
+    feature_info = feature_dict[request.feature]
+    dtype = feature_info.get("dtype", "")
+
+    if request.feature in _DEFAULT_FEATURES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Feature {request.feature!r} is auto-managed and not editable",
+        )
+    if dtype in _READONLY_DTYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Feature {request.feature!r} has dtype {dtype!r} and is not editable in V1",
+        )
+    if request.feature == "action" or request.feature.startswith("observation."):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Feature {request.feature!r} is recorded sensor / control data and is read-only in V1",
+        )
+
+    if request.episode_index < 0 or request.episode_index >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=400, detail=f"Invalid episode index: {request.episode_index}")
+
+    ep = dataset.meta.episodes[request.episode_index]
+    ep_length = int(ep["length"])
+    if request.frame_from < 0 or request.frame_to > ep_length or request.frame_from >= request.frame_to:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid range [{request.frame_from}, {request.frame_to}) for episode "
+                f"{request.episode_index} (length={ep_length})"
+            ),
+        )
+
+    n_frames = request.frame_to - request.frame_from
+    if n_frames > _LARGE_SAVE_FRAME_THRESHOLD and not request.confirm_large:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "large_edit_confirmation_required",
+                "message": (
+                    f"This edit touches {n_frames} frames (> {_LARGE_SAVE_FRAME_THRESHOLD}). "
+                    "Re-send with confirm_large=true to proceed."
+                ),
+                "frames": n_frames,
+            },
+        )
+
+    # Translate to global indices.
+    from lerobot.gui.api.datasets import _get_episode_start_index
+
+    episode_start = _get_episode_start_index(request.dataset_id, request.episode_index)
+    global_from = episode_start + request.frame_from
+    global_to = episode_start + request.frame_to
+    return global_from, global_to, feature_info
+
+
+@router.post("/feature-set")
+async def stage_feature_set(request: FeatureSetRequest):
+    """Stage a feature-set edit for later apply on Save."""
+    from lerobot.gui.state import PendingEdit
+
+    _require_unlocked(request.dataset_id)
+
+    if request.dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset_id}")
+
+    dataset = _app_state.datasets[request.dataset_id]
+    global_from, global_to, _ = _validate_feature_edit(dataset, request)
+
+    edit = PendingEdit(
+        edit_type="feature_set",
+        dataset_id=request.dataset_id,
+        episode_index=request.episode_index,
+        params={
+            "feature": request.feature,
+            "frame_from": request.frame_from,
+            "frame_to": request.frame_to,
+            "global_from_index": global_from,
+            "global_to_index": global_to,
+            "value": request.value,
+        },
+    )
+    _app_state.add_edit(edit)
+    _save_edits_for_dataset(request.dataset_id)
+
+    logger.info(
+        f"Staged feature-set edit: feature={request.feature} ep={request.episode_index} "
+        f"frames=[{request.frame_from}, {request.frame_to}) global=[{global_from}, {global_to})"
+    )
+    return {"status": "ok", "message": "Feature-set edit staged"}
+
+
 @router.delete("/{edit_index}")
 async def remove_edit(edit_index: int):
     """Remove a pending edit by index."""
@@ -269,6 +399,7 @@ async def _apply_edits_locked(dataset_id: str):
     from lerobot.datasets.dataset_tools import (
         delete_episodes_virtual,
         reaggregate_dataset_stats,
+        set_feature_values,
         trim_episode_virtual,
     )
     from lerobot.datasets.io_utils import load_episodes
@@ -282,11 +413,40 @@ async def _apply_edits_locked(dataset_id: str):
     applied = 0
     errors = []
 
-    # Sort edits: apply trims first (they modify in place), then deletes
+    # Sort edits: apply value-edits first (they modify cells in existing rows),
+    # then trims (modify episode bounds), then deletes (remove rows). Doing
+    # value-edits first means their global indices haven't been shifted by trims
+    # / deletes yet — staged global_from / global_to remain valid.
+    feature_set_edits = [e for e in edits if e.edit_type == "feature_set"]
     trim_edits = [e for e in edits if e.edit_type == "trim"]
     delete_edits = sorted(
         [e for e in edits if e.edit_type == "delete"], key=lambda e: e.episode_index, reverse=True
     )
+
+    # Apply staged feature_set edits in one pass.
+    if feature_set_edits:
+        try:
+            payload = [
+                {
+                    "feature": e.params["feature"],
+                    "from_index": e.params["global_from_index"],
+                    "to_index": e.params["global_to_index"],
+                    "value": e.params["value"],
+                }
+                for e in feature_set_edits
+            ]
+            for e in feature_set_edits:
+                logger.info(
+                    f"FEATURE_SET dataset={original_root} feature={e.params['feature']} "
+                    f"ep={e.episode_index} global=[{e.params['global_from_index']}, "
+                    f"{e.params['global_to_index']})"
+                )
+            set_feature_values(dataset, payload, in_place=True)
+            applied += len(feature_set_edits)
+            logger.info(f"Applied {len(feature_set_edits)} feature-set edits")
+        except Exception as e:
+            errors.append(f"Feature-set edits: {e}")
+            logger.exception("Failed to apply feature-set edits")
 
     # Apply trims (these modify in-place)
     for edit in trim_edits:
