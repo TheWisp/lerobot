@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=26">
+    <link rel="stylesheet" href="/static/style.css?v=27">
 </head>
 <body>
     <div class="tab-bar">
@@ -56,19 +56,6 @@
                         <option value="1.5">1.5x</option>
                         <option value="2">2x</option>
                     </select>
-                    <div class="timeline-container" id="timeline-container">
-                        <div class="timeline-hover" id="timeline-hover">0:00 / Frame 0</div>
-                        <div class="timeline" id="timeline">
-                            <div class="timeline-progress" id="timeline-progress"></div>
-                            <div class="trim-cut-left" id="trim-cut-left"></div>
-                            <div class="trim-cut-right" id="trim-cut-right"></div>
-                            <div class="trim-region" id="trim-region">
-                                <div class="trim-handle left" id="trim-handle-left"></div>
-                                <div class="trim-handle right" id="trim-handle-right"></div>
-                            </div>
-                            <div class="timeline-scrubber" id="timeline-scrubber"></div>
-                        </div>
-                    </div>
                     <div class="trim-controls" id="trim-controls">
                         <span class="trim-info" id="trim-info"></span>
                         <button class="btn-reset" onclick="resetTrim()">Reset</button>
@@ -80,11 +67,31 @@
                     <div class="status" id="status">Ready</div>
                 </div>
 
-                <!-- Per-feature timeline rows (Phase A3). Each row aligns horizontally
-                     with the timeline above it; selection bands extend vertically across
-                     all rows in this stack (Phase B1). Trim envelope tints the playable
-                     range across every row. -->
-                <div class="feature-rows" id="feature-rows"></div>
+                <!-- Stacked timeline: the scrubber row and the per-feature rows share
+                     the same horizontal coordinate system (.row-label + .row-track),
+                     so trim handles, envelope tints, the selection band, and the
+                     playhead all line up across every row. -->
+                <div class="timeline-stack">
+                    <div class="scrubber-row">
+                        <div class="row-label">
+                            <div class="row-name">time</div>
+                        </div>
+                        <div class="row-track" id="timeline-container">
+                            <div class="timeline-hover" id="timeline-hover">0:00 / Frame 0</div>
+                            <div class="timeline" id="timeline">
+                                <div class="timeline-progress" id="timeline-progress"></div>
+                                <div class="trim-cut-left" id="trim-cut-left"></div>
+                                <div class="trim-cut-right" id="trim-cut-right"></div>
+                                <div class="trim-region" id="trim-region">
+                                    <div class="trim-handle left" id="trim-handle-left"></div>
+                                    <div class="trim-handle right" id="trim-handle-right"></div>
+                                </div>
+                                <div class="timeline-scrubber" id="timeline-scrubber"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="feature-rows" id="feature-rows"></div>
+                </div>
 
                 <div class="edits-bar" id="edits-bar">
                     <span class="edits-count" id="edits-count">0 pending edits</span>

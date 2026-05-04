@@ -517,15 +517,66 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .feature-card .vector-row { display: flex; gap: 4px; flex-wrap: wrap; }
 .feature-card .vector-row input { width: 60px; }
 
-/* Feature rows under the timeline (Phase A3 / B1).
-   Each row has a fixed-width label on the left and an SVG track on the right. */
-.feature-rows {
+/* The timeline stack: the scrubber row + all feature rows share the same
+   .row-label / .row-track geometry so trim handles, envelope tints, the
+   selection band, and the playhead all line up vertically. */
+.timeline-stack {
     background: #0f1c2e;
     border-top: 1px solid #0f3460;
+    flex-shrink: 0;
+    max-height: 340px;
+    position: relative;
+    /* Outer is a non-scrolling flex column. The scrubber row pins to the top
+       (flex-shrink: 0); .feature-rows is the scrollable region underneath. */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Scrubber row hosts the existing #timeline element. Same column widths as
+   feature rows; bottom border separates it from the per-feature stack. */
+.scrubber-row {
+    display: flex;
+    align-items: stretch;
+    height: 28px;
+    border-bottom: 1px solid #0f3460;
+    background: #142036;
+    flex-shrink: 0;
+    position: relative;
+}
+.scrubber-row .row-label {
+    width: 120px;
+    flex-shrink: 0;
+    padding: 4px 8px;
+    border-right: 1px solid #0f3460;
+    background: #16213e;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+}
+.scrubber-row .row-label .row-name { color: #aaa; font-size: 10px; font-weight: 600; }
+.scrubber-row .row-track {
+    flex: 1;
+    position: relative;
+    /* Vertical padding only: gives the scrubber thumb (16×16, centered on the
+       8px timeline) room above/below. NO horizontal padding so the timeline
+       width matches feature rows' .row-track exactly — that's the whole
+       point of the new layout: vertical alignment of trim handles, envelope
+       tints, selection band, and playhead across every row. */
+    padding: 10px 0;
+    overflow: visible;
+    /* Center the 8px timeline vertically inside the 28px row. */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+/* Feature rows (Phase A3 / B1). */
+.feature-rows {
+    /* Inner stack — sibling of .scrubber-row inside .timeline-stack. */
+    flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    flex-shrink: 0;
-    max-height: 280px;
     position: relative;
 }
 .feature-row {
