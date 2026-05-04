@@ -340,3 +340,132 @@ class TestForkMode:
         forked = _read_data_df(fork_root)
         for idx in range(0, 5):
             assert np.allclose(np.asarray(forked[forked["index"] == idx].iloc[0]["action"]), 9.0)
+
+
+# ── Subtask string resolution at Save time ──────────────────────────────────
+
+
+class TestSubtaskStringResolution:
+    """``subtask_index`` edits may stage strings; Save resolves them to ints
+    against ``meta/subtasks.parquet`` (creating the file if missing)."""
+
+    def test_string_value_resolved_to_index(self, tmp_path, lerobot_dataset_factory):
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        # Inject a subtask_index column into the schema. Factory doesn't include
+        # it by default, so we splice it in.
+        ds.meta.features["subtask_index"] = {"dtype": "int64", "shape": [1], "names": None}
+        # Add a subtask_index column to every shard so the rewrite has something to
+        # update. Initialize all rows to 0.
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            df["subtask_index"] = np.zeros(len(df), dtype=np.int64)
+            df.to_parquet(shard, compression="snappy", index=False)
+
+        # Stage a string edit for frames [0, 5).
+        set_feature_values(
+            ds,
+            edits=[
+                {
+                    "feature": "subtask_index",
+                    "from_index": 0,
+                    "to_index": 5,
+                    "value": "approach",
+                }
+            ],
+        )
+
+        # subtasks.parquet now exists with "approach" → index 0.
+        subtasks_path = ds.root / "meta" / "subtasks.parquet"
+        assert subtasks_path.exists(), "subtasks.parquet was not written"
+        subtasks_df = pd.read_parquet(subtasks_path)
+        names = list(subtasks_df.index)
+        assert "approach" in names
+
+        # And the data shard cells in [0, 5) hold that index.
+        from pathlib import Path as _Path  # noqa: F401  (avoid Path shadowing in test)
+
+        merged = pd.concat([pd.read_parquet(s) for s in (ds.root / "data").glob("*/*.parquet")])
+        merged = merged.sort_values("index").reset_index(drop=True)
+        approach_idx = int(subtasks_df.loc["approach", "subtask_index"])
+        in_range = merged[(merged["index"] >= 0) & (merged["index"] < 5)]
+        assert all(int(v) == approach_idx for v in in_range["subtask_index"])
+
+    def test_concurrent_new_strings_assign_distinct_indices(self, tmp_path, lerobot_dataset_factory):
+        """Two distinct new strings staged in one Save get distinct indices."""
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        ds.meta.features["subtask_index"] = {"dtype": "int64", "shape": [1], "names": None}
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            df["subtask_index"] = np.zeros(len(df), dtype=np.int64)
+            df.to_parquet(shard, compression="snappy", index=False)
+
+        set_feature_values(
+            ds,
+            edits=[
+                {"feature": "subtask_index", "from_index": 0, "to_index": 3, "value": "approach"},
+                {"feature": "subtask_index", "from_index": 5, "to_index": 8, "value": "grasp"},
+            ],
+        )
+
+        subtasks = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        names_to_idx = {str(name): int(row["subtask_index"]) for name, row in subtasks.iterrows()}
+        assert "approach" in names_to_idx and "grasp" in names_to_idx
+        assert names_to_idx["approach"] != names_to_idx["grasp"]
+
+
+# ── Cross-file ordering: pass-1 writes all .tmp before any rename ───────────
+
+
+class TestCrossFileOrdering:
+    def test_no_orphan_tmp_after_successful_save(self, tmp_path, lerobot_dataset_factory):
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=3, total_frames=30)
+        action_dim = ds.meta.features["action"]["shape"][0]
+
+        set_feature_values(
+            ds,
+            edits=[{"feature": "action", "from_index": 5, "to_index": 12, "value": [0.5] * action_dim}],
+        )
+
+        orphans = list((ds.root / "data").rglob("*.tmp"))
+        assert orphans == [], f"unexpected orphan .tmp files: {orphans}"
+
+    def test_pass1_failure_leaves_no_committed_renames(self, tmp_path, lerobot_dataset_factory, monkeypatch):
+        """Force a tmp-write error and confirm:
+
+        * original shard files are byte-identical (no rename happened),
+        * no orphan ``.tmp`` files are left behind.
+
+        Patches ``pd.DataFrame.to_parquet`` to fail only on writes targeting a
+        ``.tmp`` path inside the dataset's ``data/`` dir, isolating from the
+        stats-recompute path which writes parquet elsewhere.
+        """
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=3, total_frames=30)
+        data_dir = ds.root / "data"
+        before_bytes = {p: p.read_bytes() for p in data_dir.rglob("*.parquet")}
+
+        action_dim = ds.meta.features["action"]["shape"][0]
+        original = pd.DataFrame.to_parquet
+
+        def fail_on_data_tmp_write(self, path, *args, **kwargs):
+            target = Path(path)
+            if str(target).endswith(".tmp") and data_dir in target.parents:
+                raise OSError("simulated tmp-write failure")
+            return original(self, path, *args, **kwargs)
+
+        monkeypatch.setattr(pd.DataFrame, "to_parquet", fail_on_data_tmp_write)
+
+        with pytest.raises(OSError):
+            set_feature_values(
+                ds,
+                edits=[{"feature": "action", "from_index": 0, "to_index": 5, "value": [9.0] * action_dim}],
+            )
+
+        monkeypatch.undo()
+
+        # Original shard files must be byte-identical — pass-1 failed before any rename.
+        for p, expected in before_bytes.items():
+            assert p.read_bytes() == expected, f"{p} was modified despite pass-1 failure"
+
+        # And no orphan .tmp left lying around.
+        orphans = list((ds.root / "data").rglob("*.tmp"))
+        assert orphans == [], f"orphan .tmp files: {orphans}"

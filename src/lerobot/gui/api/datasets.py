@@ -151,6 +151,7 @@ def _invalidate_episode_start_indices(dataset_id: str) -> None:
     """Clear cached episode start indices when metadata changes."""
     _episode_start_indices.pop(dataset_id, None)
     _episode_action_stats.pop(dataset_id, None)
+    _per_episode_features_cache.pop(dataset_id, None)
 
 
 # Cache of per-episode action stats keyed by dataset_id. Surfaced via
@@ -809,6 +810,11 @@ class FeatureSchema(BaseModel):
     dtype: str  # e.g. "float32", "int64", "bool", "string", "image", "video"
     shape: list[int]  # e.g. [1] for scalar, [14] for vector, [3, 480, 640] for image
     names: list[str] | None = None  # component names for vectors; None for scalars/strings
+    is_per_episode: bool = False
+    # True if every episode has uniform value for this feature — i.e. it's a logical
+    # per-episode field broadcast across the per-frame column. Edits coerce to the
+    # whole episode to preserve the broadcast invariant. Detected once per dataset
+    # open via _detect_per_episode_features() and cached.
 
 
 class DatasetInfo(BaseModel):
@@ -831,7 +837,89 @@ class DatasetInfo(BaseModel):
     warnings: list[str] = []  # Non-critical warnings (stale stats, etc.)
 
 
-def _build_features_schema(features: dict) -> dict[str, FeatureSchema]:
+_per_episode_features_cache: dict[str, set[str]] = {}
+
+
+def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
+    """Identify features whose values are uniform within every episode.
+
+    Pre: ``dataset`` is fully loaded.
+    Post: returns a set of feature names. Only considers features that
+    are non-image, non-video, non-DEFAULT_FEATURES, non-action,
+    non-observation.* — the same gate the staging endpoint uses to
+    decide editability. Result is cached per ``dataset_id``.
+
+    Detection is by reading the data parquet shards once. For each
+    feature, group rows by ``episode_index`` and check that every group
+    has at most one unique value. We treat lists / numpy arrays as not
+    per-episode (only scalars and strings can plausibly be broadcast).
+    """
+    if dataset_id in _per_episode_features_cache:
+        return _per_episode_features_cache[dataset_id]
+
+    skip_dtypes = {"image", "video"}
+    default_features = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
+
+    candidate_features: list[str] = []
+    for name, ft in dataset.meta.features.items():
+        if ft.get("dtype") in skip_dtypes:
+            continue
+        if name in default_features:
+            continue
+        if name == "action" or name.startswith("observation."):
+            continue
+        # Vectors and matrices can't reasonably be "uniform per episode" — skip.
+        shape = ft.get("shape") or [1]
+        if len(shape) > 1 or (len(shape) == 1 and shape[0] != 1):
+            continue
+        candidate_features.append(name)
+
+    if not candidate_features:
+        _per_episode_features_cache[dataset_id] = set()
+        return _per_episode_features_cache[dataset_id]
+
+    per_episode: set[str] = set()
+    data_dir = Path(dataset.root) / "data"
+    parquet_files = sorted(data_dir.glob("*/*.parquet"))
+    if not parquet_files:
+        _per_episode_features_cache[dataset_id] = set()
+        return _per_episode_features_cache[dataset_id]
+
+    cols_to_read = ["episode_index", *candidate_features]
+    nunique_by_feature: dict[str, int] = dict.fromkeys(candidate_features, 0)
+
+    try:
+        for shard in parquet_files:
+            df = pd.read_parquet(shard, columns=cols_to_read)
+            for name in candidate_features:
+                if nunique_by_feature[name] > 1:
+                    continue
+                # nunique() per episode_index group — max across groups tells us
+                # whether ANY episode has variation. >1 disqualifies the feature.
+                nunique_max = df.groupby("episode_index")[name].nunique(dropna=False).max()
+                if nunique_max is None:
+                    continue
+                nunique_by_feature[name] = max(nunique_by_feature[name], int(nunique_max))
+    except Exception as e:
+        logger.warning(f"per-episode-feature detection failed for {dataset_id}: {e}")
+        _per_episode_features_cache[dataset_id] = set()
+        return _per_episode_features_cache[dataset_id]
+
+    for name, nu in nunique_by_feature.items():
+        if 0 < nu <= 1:
+            per_episode.add(name)
+
+    _per_episode_features_cache[dataset_id] = per_episode
+    logger.info(f"detected per-episode features for {dataset_id}: {sorted(per_episode)}")
+    return per_episode
+
+
+def _invalidate_per_episode_features(dataset_id: str) -> None:
+    """Drop the cached per-episode feature set when the dataset changes."""
+    _per_episode_features_cache.pop(dataset_id, None)
+
+
+def _build_features_schema(features: dict, per_episode: set[str] | None = None) -> dict[str, FeatureSchema]:
     """Convert ``ds.meta.features`` into the JSON-friendly FeatureSchema dict.
 
     Pre: ``features`` follows the LeRobot ``info.json`` shape — each value
@@ -841,6 +929,7 @@ def _build_features_schema(features: dict) -> dict[str, FeatureSchema]:
     FeatureSchema instances. Shapes are coerced to ``list[int]`` for
     JSON serialization stability.
     """
+    per_episode = per_episode or set()
     out: dict[str, FeatureSchema] = {}
     for name, ft in features.items():
         shape = ft.get("shape", [])
@@ -860,6 +949,7 @@ def _build_features_schema(features: dict) -> dict[str, FeatureSchema]:
             dtype=str(ft.get("dtype", "")),
             shape=shape_list,
             names=names,
+            is_per_episode=name in per_episode,
         )
     return out
 
@@ -877,6 +967,7 @@ def _dataset_info_from(
     first if opening). Post: returns a DatasetInfo with both the legacy
     ``features`` name list and the full ``features_schema`` mapping.
     """
+    per_episode = _detect_per_episode_features(dataset_id, dataset)
     return DatasetInfo(
         id=dataset_id,
         repo_id=dataset.repo_id,
@@ -887,7 +978,7 @@ def _dataset_info_from(
         robot_type=getattr(dataset.meta, "robot_type", "") or "",
         camera_keys=list(dataset.meta.camera_keys),
         features=list(dataset.meta.features.keys()),
-        features_schema=_build_features_schema(dataset.meta.features),
+        features_schema=_build_features_schema(dataset.meta.features, per_episode=per_episode),
         errors=errors or [],
         warnings=warnings or [],
     )

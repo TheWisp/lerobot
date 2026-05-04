@@ -1260,7 +1260,12 @@ async function applyEdits() {
         setStatus('No dataset selected');
         return;
     }
-    if (!confirm(`Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.`)) return;
+    if (!confirm(
+        `Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.\n\n` +
+        `Pause any training jobs reading this dataset before continuing — ` +
+        `the GUI server serializes its own writes, but external readers see ` +
+        `torn state across shards mid-Save.`
+    )) return;
 
     setEditingEnabled(false);
     setStatus('Applying edits...');

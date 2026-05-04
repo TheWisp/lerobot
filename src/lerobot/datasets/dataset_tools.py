@@ -1039,6 +1039,84 @@ def _shape_value_for_column(value: Any, feature_info: dict, n_rows: int) -> list
     return [arr.copy() for _ in range(n_rows)]
 
 
+def _resolve_subtask_string_edits(
+    work_root: Path,
+    dataset,
+    edits: list,
+) -> list:
+    """Resolve string values for ``subtask_index`` against ``meta/subtasks.parquet``.
+
+    Pre: ``edits`` is a list of ``FeatureValueEdit``. Edits whose ``feature == "subtask_index"``
+    and ``value`` is a string are resolved here; non-string values pass through.
+    Post: returns a new list with strings replaced by their int64 indices.
+    Side effect: appends new strings to ``meta/subtasks.parquet`` (rewriting the
+    file once if anything was added).
+
+    Done at Save time, not stage time, so concurrent new-string Saves on
+    different sessions converge to one row in the lookup table.
+    """
+    needs_resolution = [e for e in edits if e.feature == "subtask_index" and isinstance(e.value, str)]
+    if not needs_resolution:
+        return list(edits)
+
+    if "subtask_index" not in dataset.meta.features:
+        raise ValueError("Cannot resolve string subtask_index edits: dataset has no subtask_index feature")
+
+    subtasks_path = work_root / "meta" / "subtasks.parquet"
+    if subtasks_path.exists():
+        subtasks_df = pd.read_parquet(subtasks_path)
+    else:
+        # First subtask appearing in the dataset — initialize the lookup.
+        subtasks_df = pd.DataFrame({"subtask_index": []}, dtype="int64")
+        subtasks_df.index = pd.Index([], name="subtask")
+
+    if subtasks_df.index.name != "subtask":
+        subtasks_df.index.name = "subtask"
+
+    existing: dict[str, int] = {str(name): int(row["subtask_index"]) for name, row in subtasks_df.iterrows()}
+    next_idx = (max(existing.values()) + 1) if existing else 0
+    new_strings: list[str] = []
+
+    resolved: list = []
+    for e in edits:
+        if e.feature == "subtask_index" and isinstance(e.value, str):
+            if e.value not in existing:
+                existing[e.value] = next_idx
+                new_strings.append(e.value)
+                next_idx += 1
+            resolved.append(
+                FeatureValueEdit(
+                    feature=e.feature,
+                    from_index=e.from_index,
+                    to_index=e.to_index,
+                    value=existing[e.value],
+                )
+            )
+        else:
+            resolved.append(e)
+
+    if new_strings:
+        new_rows = pd.DataFrame(
+            {"subtask_index": [existing[s] for s in new_strings]},
+            index=pd.Index(new_strings, name="subtask"),
+        )
+        updated = pd.concat([subtasks_df, new_rows]) if len(subtasks_df) else new_rows
+        subtasks_path.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic write — same temp+rename pattern as the data shards.
+        tmp_path = subtasks_path.with_suffix(subtasks_path.suffix + ".tmp")
+        try:
+            updated.to_parquet(tmp_path)
+            os.replace(tmp_path, subtasks_path)
+        except Exception:
+            if tmp_path.exists():
+                # safe-destruct: our own .tmp lookup-table file
+                tmp_path.unlink()
+            raise
+        logging.info(f"Appended {len(new_strings)} subtask(s) to {subtasks_path}")
+
+    return resolved
+
+
 def set_feature_values(
     dataset: LeRobotDataset,
     edits: list,
@@ -1120,55 +1198,74 @@ def set_feature_values(
         shutil.copytree(dataset.root, out_root, dirs_exist_ok=True)
         work_root = out_root
 
+    # ── Resolve string-keyed edits (subtask_index) to indices ─────────
+    # Stage 1 of the Save sequence per the design doc: any edit whose ``value``
+    # is a string targeting a sidecar-lookup feature (currently only
+    # ``subtask_index``) gets resolved against the lookup table here. New
+    # strings are appended to the table and the resolved int replaces the
+    # staged string in-memory. Done before shard writes so cells go in as
+    # int64s and so concurrent new-string Saves converge to one row.
+    edit_objs = _resolve_subtask_string_edits(work_root, dataset, edit_objs)
+
     data_dir = work_root / DATA_DIR
     parquet_files = sorted(data_dir.glob("*/*.parquet"))
     if not parquet_files:
         raise ValueError(f"No parquet files found in {data_dir}")
 
-    # ── Apply edits per shard ──────────────────────────────────────────
+    # ── Apply edits per shard, two-pass for cross-file crash safety ────
+    # Pass 1: load each shard, mutate in memory, write the .tmp sibling.
+    # Pass 2: rename every .tmp → final in sequence. A crash after pass 1
+    # but before any rename leaves only orphan .tmp files (cleanable);
+    # only the rename loop has any partial-Save window.
     affected_episodes: set[int] = set()
+    pending_renames: list[tuple[Path, Path]] = []  # [(tmp, final), ...]
 
-    for shard_path in parquet_files:
-        df = pd.read_parquet(shard_path)
-        if "index" not in df.columns:
-            raise ValueError(f"Data shard {shard_path} is missing the global 'index' column")
+    try:
+        for shard_path in parquet_files:
+            df = pd.read_parquet(shard_path)
+            if "index" not in df.columns:
+                raise ValueError(f"Data shard {shard_path} is missing the global 'index' column")
 
-        # Quick reject: any edit overlap with this shard's index range?
-        idx_min = int(df["index"].min())
-        idx_max = int(df["index"].max())  # inclusive
+            idx_min = int(df["index"].min())
+            idx_max = int(df["index"].max())  # inclusive
 
-        shard_dirty = False
-        for e in edit_objs:
-            # Half-open intersect: [from, to) overlaps [idx_min, idx_max+1)
-            lo = max(e.from_index, idx_min)
-            hi = min(e.to_index, idx_max + 1)
-            if lo >= hi:
+            shard_dirty = False
+            for e in edit_objs:
+                # Half-open intersect: [from, to) overlaps [idx_min, idx_max+1)
+                lo = max(e.from_index, idx_min)
+                hi = min(e.to_index, idx_max + 1)
+                if lo >= hi:
+                    continue
+                mask = (df["index"] >= lo) & (df["index"] < hi)
+                n = int(mask.sum())
+                if n == 0:
+                    continue
+                df.loc[mask, e.feature] = pd.Series(
+                    _shape_value_for_column(e.value, feature_dict[e.feature], n),
+                    index=df.index[mask],
+                )
+                affected_episodes.update(int(x) for x in df.loc[mask, "episode_index"].unique())
+                shard_dirty = True
+
+            if not shard_dirty:
                 continue
-            mask = (df["index"] >= lo) & (df["index"] < hi)
-            n = int(mask.sum())
-            if n == 0:
-                continue
-            df.loc[mask, e.feature] = pd.Series(
-                _shape_value_for_column(e.value, feature_dict[e.feature], n),
-                index=df.index[mask],
-            )
-            affected_episodes.update(int(x) for x in df.loc[mask, "episode_index"].unique())
-            shard_dirty = True
 
-        if not shard_dirty:
-            continue
-
-        # Atomic write: temp file in same directory, then os.replace.
-        tmp_path = shard_path.with_suffix(shard_path.suffix + ".tmp")
-        try:
+            tmp_path = shard_path.with_suffix(shard_path.suffix + ".tmp")
             df.to_parquet(tmp_path, compression="snappy", index=False)
-            os.replace(tmp_path, shard_path)
-            logging.info(f"Updated {shard_path} ({len(df)} rows total)")
-        except Exception:
+            pending_renames.append((tmp_path, shard_path))
+            logging.info(f"Wrote tmp shard {tmp_path} ({len(df)} rows)")
+    except Exception:
+        # Pass 1 failed — clean up any tmp we wrote so far.
+        for tmp_path, _ in pending_renames:
             if tmp_path.exists():
-                # safe-destruct: our own .tmp file we just wrote on this line above.
+                # safe-destruct: our own .tmp file we just wrote in this function.
                 tmp_path.unlink()
-            raise
+        raise
+
+    # Pass 2: rename all .tmp → final. Per-file atomic via os.replace.
+    for tmp_path, final_path in pending_renames:
+        os.replace(tmp_path, final_path)
+        logging.info(f"Renamed {tmp_path} → {final_path}")
 
     # ── Recompute affected episode stats ───────────────────────────────
     for ep_idx in sorted(affected_episodes):

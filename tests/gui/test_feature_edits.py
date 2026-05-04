@@ -410,3 +410,237 @@ class TestApplyFeatureSet:
         # And the pending edits list is now empty.
         pending = _list_pending(app, dataset_id).json()
         assert pending["total"] == 0
+
+
+# ── Overlapping staged edits — 409 + clip-on-confirm ────────────────────────
+
+
+class TestOverlappingEdits:
+    def test_overlap_returns_409_with_structured_detail(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        """Two staged edits on the same (feature, episode) with overlapping
+        ranges must trigger a 409 unless ``confirm_overlap=True``."""
+        app, state = app_with_state
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        editable = [
+            n
+            for n, ft in ds.meta.features.items()
+            if ft["dtype"] not in ("image", "video", "string")
+            and n not in {"timestamp", "frame_index", "episode_index", "index", "task_index"}
+            and n != "action"
+            and not n.startswith("observation.")
+        ]
+        if not editable:
+            pytest.skip("no editable feature in factory dataset")
+        feature = editable[0]
+        ft = ds.meta.features[feature]
+        shape = ft.get("shape") or [1]
+        value = 1.5 if shape in ([1], []) else [1.5] * shape[0]
+
+        # First edit lands fine.
+        r1 = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": feature,
+                "frame_from": 0,
+                "frame_to": 5,
+                "value": value,
+            },
+        )
+        assert r1.status_code == 200, r1.text
+
+        # Overlapping second edit returns 409.
+        r2 = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": feature,
+                "frame_from": 3,
+                "frame_to": 7,
+                "value": value,
+            },
+        )
+        assert r2.status_code == 409
+        detail = r2.json()["detail"]
+        assert detail["code"] == "overlapping_edit"
+        assert detail["feature"] == feature
+        assert detail["episode_index"] == 0
+        assert detail["new_range"] == [3, 7]
+        assert detail["overlapping"][0]["frame_from"] == 0
+        assert detail["overlapping"][0]["frame_to"] == 5
+
+    def test_confirm_overlap_clips_prior_edit(self, app_with_state, tmp_path, lerobot_dataset_factory):
+        """With ``confirm_overlap=True``, the prior edit is clipped (last-write-wins)."""
+        app, state = app_with_state
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        editable = [
+            n
+            for n, ft in ds.meta.features.items()
+            if ft["dtype"] not in ("image", "video", "string")
+            and n not in {"timestamp", "frame_index", "episode_index", "index", "task_index"}
+            and n != "action"
+            and not n.startswith("observation.")
+        ]
+        if not editable:
+            pytest.skip("no editable feature in factory dataset")
+        feature = editable[0]
+        ft = ds.meta.features[feature]
+        shape = ft.get("shape") or [1]
+        value = 1.5 if shape in ([1], []) else [1.5] * shape[0]
+
+        _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": feature,
+                "frame_from": 0,
+                "frame_to": 5,
+                "value": value,
+            },
+        )
+        r2 = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": feature,
+                "frame_from": 3,
+                "frame_to": 7,
+                "value": value,
+                "confirm_overlap": True,
+            },
+        )
+        assert r2.status_code == 200, r2.text
+
+        pending = _list_pending(app, dataset_id).json()
+        # We expect two edits now: the clipped prior [0, 3) and the new [3, 7).
+        ranges = sorted(
+            (int(e["params"]["frame_from"]), int(e["params"]["frame_to"]))
+            for e in pending["edits"]
+            if e["edit_type"] == "feature_set"
+        )
+        assert ranges == [(0, 3), (3, 7)], ranges
+
+    def test_fully_contained_prior_is_removed(self, app_with_state, tmp_path, lerobot_dataset_factory):
+        """If the new edit fully contains a prior one, the prior is removed entirely."""
+        app, state = app_with_state
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        editable = [
+            n
+            for n, ft in ds.meta.features.items()
+            if ft["dtype"] not in ("image", "video", "string")
+            and n not in {"timestamp", "frame_index", "episode_index", "index", "task_index"}
+            and n != "action"
+            and not n.startswith("observation.")
+        ]
+        if not editable:
+            pytest.skip("no editable feature in factory dataset")
+        feature = editable[0]
+        ft = ds.meta.features[feature]
+        shape = ft.get("shape") or [1]
+        value = 1.5 if shape in ([1], []) else [1.5] * shape[0]
+
+        # Prior edit at [3, 5) — fully inside the new [0, 8).
+        _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": feature,
+                "frame_from": 3,
+                "frame_to": 5,
+                "value": value,
+            },
+        )
+        r2 = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": feature,
+                "frame_from": 0,
+                "frame_to": 8,
+                "value": value,
+                "confirm_overlap": True,
+            },
+        )
+        assert r2.status_code == 200
+
+        pending = _list_pending(app, dataset_id).json()
+        ranges = [
+            (int(e["params"]["frame_from"]), int(e["params"]["frame_to"]))
+            for e in pending["edits"]
+            if e["edit_type"] == "feature_set"
+        ]
+        assert ranges == [(0, 8)], ranges
+
+    def test_prior_split_when_new_strictly_inside(self, app_with_state, tmp_path, lerobot_dataset_factory):
+        """If the new edit is strictly inside the prior, the prior splits in two."""
+        app, state = app_with_state
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        editable = [
+            n
+            for n, ft in ds.meta.features.items()
+            if ft["dtype"] not in ("image", "video", "string")
+            and n not in {"timestamp", "frame_index", "episode_index", "index", "task_index"}
+            and n != "action"
+            and not n.startswith("observation.")
+        ]
+        if not editable:
+            pytest.skip("no editable feature in factory dataset")
+        feature = editable[0]
+        ft = ds.meta.features[feature]
+        shape = ft.get("shape") or [1]
+        value = 1.5 if shape in ([1], []) else [1.5] * shape[0]
+
+        # Prior wide edit, then new narrow inside.
+        _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": feature,
+                "frame_from": 0,
+                "frame_to": 9,
+                "value": value,
+            },
+        )
+        r2 = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": feature,
+                "frame_from": 3,
+                "frame_to": 6,
+                "value": value,
+                "confirm_overlap": True,
+            },
+        )
+        assert r2.status_code == 200
+
+        pending = _list_pending(app, dataset_id).json()
+        ranges = sorted(
+            (int(e["params"]["frame_from"]), int(e["params"]["frame_to"]))
+            for e in pending["edits"]
+            if e["edit_type"] == "feature_set"
+        )
+        # Expect: left clip [0, 3), the new [3, 6), right clip [6, 9).
+        assert ranges == [(0, 3), (3, 6), (6, 9)], ranges

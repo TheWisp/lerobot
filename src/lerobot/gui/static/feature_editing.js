@@ -78,7 +78,24 @@
     async function loadFeatureSeries(datasetId, episodeIdx) {
         const key = `${datasetId}:${episodeIdx}`;
         if (seriesCache.has(key)) return seriesCache.get(key);
-        const url = `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${episodeIdx}/feature-series`;
+        // Only fetch features the user can actually see (visible by default + pinned),
+        // not every column in the dataset. Avoids pulling 14-dim observation.state etc.
+        // when the user only cares about reward / success / subtask.
+        const ds = window.datasets && window.datasets[datasetId];
+        const visible = (ds && ds.features_schema)
+            ? Object.entries(ds.features_schema)
+                .filter(([name, ft]) => {
+                    const state = featureRowState.get(name) || {};
+                    if (state.pinned) return true;
+                    if (isHiddenByDefault(name, ft)) return false;
+                    return true;
+                })
+                .map(([name, _]) => name)
+            : [];
+        let url = `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${episodeIdx}/feature-series`;
+        if (visible.length > 0) {
+            url += `?features=${visible.map(encodeURIComponent).join(",")}`;
+        }
         const res = await fetch(url);
         if (!res.ok) {
             console.warn(`feature-series failed: ${res.status}`);
@@ -246,17 +263,28 @@
         const focused = (originRow === name);
         const dtype = ft.dtype || "?";
         const shape = (ft.shape || []).join("×") || "1";
-        const pendingEdit = findPendingFeatureEdit(datasetId, episodeIndex, name, frameFrom, frameTo);
+        const isBroadcast = !!ft.is_per_episode;
+        // Broadcast features always edit the whole episode; show the effective
+        // range so the user sees what the staging endpoint will write.
+        let effFrom = frameFrom, effTo = frameTo;
+        if (editable && isBroadcast) {
+            effFrom = 0;
+            effTo = window.totalFrames || frameTo;
+        }
+        const pendingEdit = findPendingFeatureEdit(datasetId, episodeIndex, name, effFrom, effTo);
 
         const headerExtras = pendingEdit
             ? `<span class="card-pending">● pending</span>`
+            : "";
+        const broadcastNote = (editable && isBroadcast)
+            ? `<div class="card-broadcast-note">per-episode — edit applies to the full episode (frames 0…${(window.totalFrames || 0) - 1})</div>`
             : "";
 
         let widget = "";
         if (!editable) {
             widget = `<span class="card-readonly-tag">read-only in V1</span>`;
         } else {
-            widget = renderWidgetForType(name, ft, frameFrom, frameTo, datasetId, episodeIndex);
+            widget = renderWidgetForType(name, ft, effFrom, effTo, datasetId, episodeIndex);
         }
 
         return `
@@ -265,7 +293,8 @@
                     <span class="card-name">${escapeHtml(name)}${headerExtras}</span>
                     <span class="card-dtype">${escapeHtml(dtype)}[${shape}]</span>
                 </div>
-                <div class="card-summary">${cardSummary(name, ft, datasetId, episodeIndex, frameFrom, frameTo)}</div>
+                <div class="card-summary">${cardSummary(name, ft, datasetId, episodeIndex, effFrom, effTo)}</div>
+                ${broadcastNote}
                 <div class="card-widget">${widget}</div>
             </div>
         `;
@@ -339,11 +368,32 @@
 
     // ── Edit-widget wiring (auto-staging on change) ─────────────────────
 
+    // 300 ms debounce — text-style inputs stage on idle, not every keystroke.
+    function _debounce(fn, ms) {
+        let t = null;
+        return (...args) => {
+            if (t) clearTimeout(t);
+            t = setTimeout(() => { t = null; fn(...args); }, ms);
+        };
+    }
+
     function wireWidgets(root) {
         const cards = root.querySelectorAll(".feature-card[data-feature]");
         cards.forEach(card => {
             const featureName = card.getAttribute("data-feature");
             const widgets = card.querySelectorAll("[data-widget]");
+
+            // Indeterminate state for bool[1] checkboxes when the range has mixed values.
+            const boolBox = card.querySelector('[data-widget="bool"]');
+            if (boolBox) {
+                const summary = card.querySelector(".card-summary");
+                if (summary && /(\d+) true · (\d+) false/.test(summary.textContent || "")) {
+                    const m = (summary.textContent || "").match(/(\d+) true · (\d+) false/);
+                    if (m && parseInt(m[1], 10) > 0 && parseInt(m[2], 10) > 0) {
+                        boolBox.indeterminate = true;
+                    }
+                }
+            }
 
             // Slider <-> number sync for scalar-slider/scalar-number pair.
             const slider = card.querySelector('[data-widget="scalar-slider"]');
@@ -352,25 +402,39 @@
                 slider.addEventListener("input", () => {
                     numInput.value = slider.value;
                 });
+                // Slider commits on `change` (released) — discrete, not flooding.
                 slider.addEventListener("change", () => {
                     stageFeatureEdit(featureName, parseFloat(slider.value));
                 });
-                numInput.addEventListener("change", () => {
+                // Number input: stage on blur OR after 300ms idle to avoid hammering
+                // the staging endpoint on every keystroke.
+                const stageNum = () => {
                     if (numInput.value === "") return;
                     slider.value = numInput.value;
                     stageFeatureEdit(featureName, parseFloat(numInput.value));
-                });
+                };
+                numInput.addEventListener("blur", stageNum);
+                numInput.addEventListener("input", _debounce(stageNum, 300));
             }
 
             widgets.forEach(w => {
                 const kind = w.getAttribute("data-widget");
                 if (kind === "bool") {
-                    w.addEventListener("change", () => stageFeatureEdit(featureName, w.checked));
+                    w.addEventListener("change", () => {
+                        // User clicked → no longer indeterminate.
+                        w.indeterminate = false;
+                        stageFeatureEdit(featureName, w.checked);
+                    });
                 } else if (kind === "string") {
-                    w.addEventListener("change", () => stageFeatureEdit(featureName, w.value));
+                    const stageText = () => {
+                        if (w.value === "") return;
+                        stageFeatureEdit(featureName, w.value);
+                    };
+                    w.addEventListener("blur", stageText);
+                    w.addEventListener("input", _debounce(stageText, 300));
                 } else if (kind === "vector-cell") {
                     // Stage when *any* cell changes — collect all cells into the vector.
-                    w.addEventListener("change", () => {
+                    const stageVec = () => {
                         const cells = card.querySelectorAll('[data-widget="vector-cell"]');
                         const vec = [];
                         cells.forEach(c => {
@@ -378,16 +442,21 @@
                             vec.push(v);
                         });
                         stageFeatureEdit(featureName, vec);
-                    });
+                    };
+                    w.addEventListener("blur", stageVec);
+                    w.addEventListener("input", _debounce(stageVec, 300));
                 } else if (kind === "json") {
-                    w.addEventListener("change", () => {
+                    const stageJson = () => {
+                        if (w.value === "") return;
                         try {
                             const parsed = JSON.parse(w.value);
                             stageFeatureEdit(featureName, parsed);
                         } catch (e) {
                             window.setStatus && window.setStatus("Invalid JSON: " + e.message);
                         }
-                    });
+                    };
+                    w.addEventListener("blur", stageJson);
+                    w.addEventListener("input", _debounce(stageJson, 600));
                 }
                 // scalar-slider / scalar-number handled above via slider/numInput pair.
             });
@@ -406,16 +475,47 @@
             value: value,
         };
         try {
-            const res = await fetch("/api/edits/feature-set", {
+            let res = await fetch("/api/edits/feature-set", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
             });
+            // Overlapping-edit confirmation: 409 with structured detail.
+            if (res.status === 409) {
+                const payload = await res.json();
+                const detail = payload && payload.detail;
+                if (detail && detail.code === "overlapping_edit") {
+                    const ranges = (detail.overlapping || [])
+                        .map(o => `[${o.frame_from}…${o.frame_to - 1}]`)
+                        .join(", ");
+                    const ok = window.confirm(
+                        `You already have ${detail.overlapping.length} staged edit(s) on ` +
+                        `${detail.feature} (episode ${detail.episode_index}) overlapping ` +
+                        `frames ${detail.new_range[0]}…${detail.new_range[1] - 1}: ${ranges}.\n\n` +
+                        `Continue? Prior edits will be clipped (last-write-wins).`
+                    );
+                    if (!ok) return;
+                    res = await fetch("/api/edits/feature-set", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ ...body, confirm_overlap: true }),
+                    });
+                }
+            }
             if (!res.ok) {
                 const err = await res.text();
                 window.setStatus && window.setStatus(`Edit rejected: ${err}`);
                 return;
             }
+            // Backend may have coerced the range (per-episode broadcast).
+            // Update local selection so the visualization matches what was staged.
+            try {
+                const responseBody = await res.json();
+                if (responseBody && Array.isArray(responseBody.coerced_range)) {
+                    selection.frameFrom = responseBody.coerced_range[0];
+                    selection.frameTo = responseBody.coerced_range[1];
+                }
+            } catch (_) { /* response body wasn't JSON — ignore */ }
             // Refresh pending edits list (app.js owns the global state).
             if (typeof window.refreshPendingEdits === "function") {
                 await window.refreshPendingEdits();
