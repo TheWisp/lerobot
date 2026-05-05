@@ -492,12 +492,23 @@
                         stageFeatureEdit(featureName, w.checked);
                     });
                 } else if (kind === "string") {
+                    // Stage on blur, Enter, or after 600ms idle while typing.
+                    // Repeated stages on the same range collapse via the
+                    // _lastStagedKey path in stageFeatureEdit — typing "appr",
+                    // pausing, then typing "oach" produces one staged edit
+                    // with value "approach", not two overlapping ones.
                     const stageText = () => {
                         if (w.value === "") return;
                         stageFeatureEdit(featureName, w.value);
                     };
                     w.addEventListener("blur", stageText);
-                    w.addEventListener("input", _debounce(stageText, 300));
+                    w.addEventListener("input", _debounce(stageText, 600));
+                    w.addEventListener("keydown", (e) => {
+                        if (e.key === "Enter") {
+                            e.preventDefault();
+                            w.blur(); // triggers stageText via the blur handler
+                        }
+                    });
                 } else if (kind === "vector-cell") {
                     // Stage when *any* cell changes — collect all cells into the vector.
                     const stageVec = () => {
@@ -529,6 +540,16 @@
         });
     }
 
+    // Identity of the last successfully-staged edit. When the user keeps
+    // editing the SAME (dataset, feature, episode, range), we treat it as
+    // "still updating the same edit" and auto-confirm overlap silently —
+    // the backend's fully-contained-removal collapses to one staged edit.
+    // Cleared when the selection changes (different range = different edit).
+    let _lastStagedKey = null;
+    function _stageKey(datasetId, feature, episodeIndex, frameFrom, frameTo) {
+        return `${datasetId}|${feature}|${episodeIndex}|${frameFrom}|${frameTo}`;
+    }
+
     async function stageFeatureEdit(featureName, value) {
         if (!selection) return;
         const datasetId = window.currentDataset;
@@ -540,13 +561,24 @@
             frame_to: selection.frameTo,
             value: value,
         };
+        const stageKey = _stageKey(
+            datasetId, featureName, selection.episodeIndex,
+            selection.frameFrom, selection.frameTo
+        );
+        // Same key as last successful stage? Skip the 409-dialog round-trip
+        // and confirm overlap upfront — the backend collapses the prior
+        // edit into the new one (full containment).
+        if (_lastStagedKey === stageKey) {
+            body.confirm_overlap = true;
+        }
         try {
             let res = await fetch("/api/edits/feature-set", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
             });
-            // Overlapping-edit confirmation: 409 with structured detail.
+            // Overlap with a *different* edit (e.g. a separately-staged range)
+            // — prompt the user. Same-key collisions are pre-confirmed above.
             if (res.status === 409) {
                 const payload = await res.json();
                 const detail = payload && payload.detail;
@@ -575,13 +607,24 @@
             }
             // Backend may have coerced the range (per-episode broadcast).
             // Update local selection so the visualization matches what was staged.
+            let coercedFrom = selection.frameFrom, coercedTo = selection.frameTo;
             try {
                 const responseBody = await res.json();
                 if (responseBody && Array.isArray(responseBody.coerced_range)) {
-                    selection.frameFrom = responseBody.coerced_range[0];
-                    selection.frameTo = responseBody.coerced_range[1];
+                    coercedFrom = responseBody.coerced_range[0];
+                    coercedTo = responseBody.coerced_range[1];
+                    selection.frameFrom = coercedFrom;
+                    selection.frameTo = coercedTo;
                 }
             } catch (_) { /* response body wasn't JSON — ignore */ }
+            // Record the identity of this successful stage so subsequent
+            // typing in the SAME widget+selection auto-collapses into one
+            // edit instead of stacking 409 dialogs. Use the (possibly
+            // coerced) range that actually landed in PendingEdit.
+            _lastStagedKey = _stageKey(
+                datasetId, featureName, selection.episodeIndex,
+                coercedFrom, coercedTo
+            );
             // Refresh pending edits list (app.js owns the global state).
             if (typeof window.refreshPendingEdits === "function") {
                 await window.refreshPendingEdits();
