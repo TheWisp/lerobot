@@ -394,10 +394,20 @@
             widget = renderWidgetForType(name, ft, effFrom, effTo, datasetId, episodeIndex);
         }
 
+        // Dataset-wide observed range (sourced from meta/stats.json on the
+        // backend). Shown next to the feature name as e.g. "reward [-1.0 … 0.0]"
+        // so the user has a stable reference scale across episodes. Shown only
+        // for scalar numeric features; the backend doesn't populate it for
+        // vectors / non-numeric.
+        const observedRange =
+            (ft.observed_min != null && ft.observed_max != null)
+                ? `<span class="card-observed-range">[${formatNumber(ft.observed_min)} … ${formatNumber(ft.observed_max)}]</span>`
+                : "";
+
         return `
             <div class="feature-card ${focused ? "focused" : ""} ${editable ? "" : "readonly"}" data-feature="${escapeHtml(name)}">
                 <div class="card-header">
-                    <span class="card-name">${escapeHtml(name)}${headerExtras}</span>
+                    <span class="card-name">${escapeHtml(name)}${observedRange}${headerExtras}</span>
                     <span class="card-dtype">${escapeHtml(dtype)}[${shape}]</span>
                 </div>
                 <div class="card-summary">${cardSummary(name, ft, datasetId, episodeIndex, effFrom, effTo)}</div>
@@ -470,21 +480,27 @@
             return `<input type="text" data-widget="string" data-feature="${escapeHtml(name)}" placeholder="(value for range)">`;
         }
         if (isScalar && (dtype.startsWith("int") || dtype.startsWith("float"))) {
-            // Slider min/max come from the loaded episode's series — the
-            // observed value range, not a schema bound. The user may not
-            // know this, so we also show the (selection-merged) summary
-            // above and may surface dataset-wide stats in a future pass.
-            const key = `${datasetId}:${episodeIndex}`;
-            const cached = seriesCache.get(key);
+            // Prefer the dataset-wide observed extrema from meta/stats.json
+            // (sent over in ft.observed_min/max) — stable across episodes and
+            // matches what the user sees in the card header. Fall back to the
+            // current episode's observed range if stats are missing (older
+            // datasets, or in-memory datasets without stats computed yet).
             let lo = -1, hi = 1;
-            if (cached && cached.series && cached.series[name]) {
-                const all = cached.series[name].filter(v => typeof v === "number");
-                if (all.length) {
-                    lo = Math.min(...all);
-                    hi = Math.max(...all);
-                    if (lo === hi) { lo -= 1; hi += 1; }
+            if (ft.observed_min != null && ft.observed_max != null) {
+                lo = ft.observed_min;
+                hi = ft.observed_max;
+            } else {
+                const key = `${datasetId}:${episodeIndex}`;
+                const cached = seriesCache.get(key);
+                if (cached && cached.series && cached.series[name]) {
+                    const all = cached.series[name].filter(v => typeof v === "number");
+                    if (all.length) {
+                        lo = Math.min(...all);
+                        hi = Math.max(...all);
+                    }
                 }
             }
+            if (lo === hi) { lo -= 1; hi += 1; }
             // Initial value mirrors the merged slice: a single value when the
             // selection is uniform, blank when mixed. Without this, the number
             // box renders empty (looking like an unfilled color-picker swatch),

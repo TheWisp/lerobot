@@ -481,6 +481,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .feature-card .card-name { color: #4fc3f7; font-weight: 600; }
 .feature-card .card-dtype { color: #888; font-size: 10px; }
 .feature-card .card-pending { color: #f39c12; font-size: 10px; margin-left: 6px; }
+.feature-card .card-observed-range {
+    color: #888;
+    font-size: 10px;
+    font-weight: normal;
+    margin-left: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
 .feature-card .card-broadcast-note {
     color: #b58900;
     font-size: 10px;

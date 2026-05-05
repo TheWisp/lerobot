@@ -815,6 +815,14 @@ class FeatureSchema(BaseModel):
     # per-episode field broadcast across the per-frame column. Edits coerce to the
     # whole episode to preserve the broadcast invariant. Detected once per dataset
     # open via _detect_per_episode_features() and cached.
+    observed_min: float | None = None
+    observed_max: float | None = None
+    # Dataset-wide observed extrema, sourced from ``meta/stats.json`` (aggregated
+    # across episodes by ``compute_stats.py``). Populated only for scalar numeric
+    # features (shape == [1] or empty). The GUI shows these next to the feature
+    # name and uses them to scale the slider so the range is stable across
+    # episodes. Distinct from any future *declared* min/max bound — these are
+    # observed values, not enforced.
 
 
 class DatasetInfo(BaseModel):
@@ -935,11 +943,51 @@ def _has_subtask_lookup(dataset) -> bool:
     return getattr(dataset.meta, "subtasks", None) is not None
 
 
+def _scalar_observed_extrema(
+    stats: dict | None, name: str, shape: list[int]
+) -> tuple[float | None, float | None]:
+    """Pull ``(min, max)`` for a scalar feature out of ``meta/stats.json``.
+
+    ``stats`` is the dict loaded by :func:`load_stats`, structured as
+    ``{feature_name: {"min": np.ndarray, "max": np.ndarray, ...}}``. Values are
+    aggregated across all episodes by ``compute_stats.py``.
+
+    Returns ``(None, None)`` if stats are missing, the feature isn't in stats,
+    the values aren't numeric/finite, or the shape isn't scalar (we don't
+    surface component-wise stats for vectors — too messy in the card header).
+    """
+    if stats is None or name not in stats:
+        return None, None
+    if shape and not (len(shape) == 1 and shape[0] == 1):
+        return None, None  # vectors / matrices: skip
+    entry = stats[name]
+    if not isinstance(entry, dict):
+        return None, None
+    raw_min = entry.get("min")
+    raw_max = entry.get("max")
+    try:
+        import numpy as _np
+
+        mn = float(_np.asarray(raw_min).flatten()[0]) if raw_min is not None else None
+        mx = float(_np.asarray(raw_max).flatten()[0]) if raw_max is not None else None
+    except (TypeError, ValueError, IndexError):
+        return None, None
+    # Reject NaN / inf — they'd break JSON serialization and confuse the GUI.
+    import math
+
+    if mn is not None and not math.isfinite(mn):
+        mn = None
+    if mx is not None and not math.isfinite(mx):
+        mx = None
+    return mn, mx
+
+
 def _build_features_schema(
     features: dict,
     per_episode: set[str] | None = None,
     *,
     subtask_synthesis: bool = False,
+    stats: dict | None = None,
 ) -> dict[str, FeatureSchema]:
     """Convert ``ds.meta.features`` into the JSON-friendly FeatureSchema dict.
 
@@ -955,6 +1003,10 @@ def _build_features_schema(
     entry that inherits the per-episode flag from ``subtask_index``. The
     caller passes ``subtask_synthesis=True`` only when the dataset also
     has ``meta/subtasks.parquet``.
+
+    If ``stats`` is provided (the ``ds.meta.stats`` dict from
+    ``meta/stats.json``), scalar numeric features get their dataset-wide
+    observed ``(min, max)`` populated.
     """
     per_episode = per_episode or set()
     out: dict[str, FeatureSchema] = {}
@@ -973,11 +1025,14 @@ def _build_features_schema(
                 names = list(vals) if isinstance(vals, list) else None
             else:
                 names = None
+        obs_min, obs_max = _scalar_observed_extrema(stats, name, shape_list)
         out[name] = FeatureSchema(
             dtype=str(ft.get("dtype", "")),
             shape=shape_list,
             names=names,
             is_per_episode=name in per_episode,
+            observed_min=obs_min,
+            observed_max=obs_max,
         )
 
     if subtask_synthesis and SUBTASK_STORAGE_FEATURE in features:
@@ -1032,6 +1087,7 @@ def _dataset_info_from(
             dataset.meta.features,
             per_episode=per_episode,
             subtask_synthesis=subtask_synthesis,
+            stats=getattr(dataset.meta, "stats", None),
         ),
         errors=errors or [],
         warnings=warnings or [],
