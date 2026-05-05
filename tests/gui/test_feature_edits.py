@@ -1073,3 +1073,112 @@ class TestSubtaskFeatureSeriesDecoded:
             f"subtask series should be strings, got types: {types}"
         )
         assert set(series).issubset({"approach", "grasp", "release"}), set(series)
+
+
+# ── Per-episode broadcast coercion at the staging endpoint ─────────────────
+
+
+class TestPerEpisodeBroadcastCoercion:
+    """Per-episode features (uniform within each episode) like ``success`` must
+    not accept sub-range edits — that would break the broadcast invariant.
+    The staging endpoint silently coerces the requested range to ``[0, len)``
+    for the episode and returns ``coerced_range`` so the GUI can update its
+    selection band. Frontend bool-checkbox + summary code relies on this:
+    it shows the broadcast note "frames 0…N-1" and the merged slice covers
+    the whole episode, so the checkbox initial state correctly reflects
+    "all true" / "all false" / "mixed".
+    """
+
+    @staticmethod
+    def _ds_with_per_episode_success(tmp_path, lerobot_dataset_factory):
+        """Build a dataset and inject a ``success`` bool[1] column that's
+        uniform within each episode (alternating True / False)."""
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=40)
+        ds.meta.features["success"] = {"dtype": "bool", "shape": [1], "names": None}
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            df["success"] = df["episode_index"].astype(int) % 2 == 0
+            df.to_parquet(shard, compression="snappy", index=False)
+        return ds
+
+    def test_subrange_edit_on_per_episode_feature_is_coerced_to_full_episode(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        app, state = app_with_state
+        ds = self._ds_with_per_episode_success(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        # User drag-selects a sub-range and tries to flip it. The endpoint
+        # should accept (200) but coerce the range to the whole episode.
+        ep0_length = int(ds.meta.episodes[0]["length"])
+        resp = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "success",
+                "frame_from": 5,
+                "frame_to": 12,
+                "value": False,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body.get("coerced_range") == [0, ep0_length], body
+        assert body.get("coerce_reason") == "per_episode_broadcast"
+
+        # The PendingEdit reflects the coerced range, not the user's input —
+        # the GUI's selection band update + merged-slice computation depends
+        # on this so the checkbox state and summary cover the whole episode.
+        pending = _list_pending(app, dataset_id).json()
+        ours = [e for e in pending["edits"] if e["edit_type"] == "feature_set"]
+        assert len(ours) == 1
+        assert ours[0]["params"]["frame_from"] == 0
+        assert ours[0]["params"]["frame_to"] == ep0_length
+        assert ours[0]["params"]["value"] is False
+
+    def test_full_range_edit_on_per_episode_feature_does_not_report_coercion(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        """When the user already supplies the full episode range, the
+        response should NOT carry ``coerced_range`` (avoids confusing the GUI
+        into thinking a coercion happened when the request was already
+        valid)."""
+        app, state = app_with_state
+        ds = self._ds_with_per_episode_success(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        ep0_length = int(ds.meta.episodes[0]["length"])
+        resp = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "success",
+                "frame_from": 0,
+                "frame_to": ep0_length,
+                "value": True,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert "coerced_range" not in body, body
+        assert "coerce_reason" not in body, body
+
+    def test_per_episode_feature_appears_in_schema_with_flag_set(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        """Detection must mark ``success`` as per-episode in the schema —
+        the frontend uses ``is_per_episode`` to render the broadcast note
+        and effFrom/effTo override (so the inspector summary covers the
+        whole episode)."""
+        app, state = app_with_state
+        ds = self._ds_with_per_episode_success(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        info = datasets_module._dataset_info_from(dataset_id, ds)
+        assert "success" in info.features_schema
+        assert info.features_schema["success"].is_per_episode is True

@@ -60,6 +60,14 @@
         return merged;
     }
 
+    function getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo) {
+        const key = `${datasetId}:${episodeIndex}`;
+        const cached = seriesCache.get(key);
+        if (!cached || !cached.series || !cached.series[name]) return null;
+        const merged = applyPendingEditsToSeries(name, cached.series[name]);
+        return merged.slice(frameFrom, frameTo);
+    }
+
     // Dragging state for selection on a feature row.
     let dragState = null; // {anchorFrame, originRow}
 
@@ -400,15 +408,25 @@
     }
 
     function cardSummary(name, ft, datasetId, episodeIndex, frameFrom, frameTo) {
-        const key = `${datasetId}:${episodeIndex}`;
-        const cached = seriesCache.get(key);
-        if (!cached || !cached.series || !cached.series[name]) return "&nbsp;";
-        const slice = cached.series[name].slice(frameFrom, frameTo);
-        if (!slice.length) return "&nbsp;";
+        const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
+        if (slice === null || !slice.length) return "&nbsp;";
+        // Single-frame selection: just show the value (no range/uniform framing).
+        if (slice.length === 1) {
+            const v = slice[0];
+            if (typeof v === "number") return `value: ${formatNumber(v)}`;
+            if (typeof v === "boolean") return `value: ${v ? "✓ true" : "✗ false"}`;
+            if (typeof v === "string") return `value: "${escapeHtml(v)}"`;
+            return `value: ${escapeHtml(String(v))}`;
+        }
         if (typeof slice[0] === "number") {
-            const min = Math.min(...slice.filter(v => typeof v === "number"));
-            const max = Math.max(...slice.filter(v => typeof v === "number"));
-            return `range: ${formatNumber(min)} … ${formatNumber(max)}`;
+            const nums = slice.filter(v => typeof v === "number");
+            const min = Math.min(...nums);
+            const max = Math.max(...nums);
+            // Avoid the misleading "range: X … X" when every frame in the
+            // selection has the same value — call it uniform explicitly so the
+            // user doesn't read it as the feature's schema bounds.
+            if (min === max) return `uniform: ${formatNumber(min)} (${slice.length} frames)`;
+            return `selection min … max: ${formatNumber(min)} … ${formatNumber(max)}`;
         }
         if (typeof slice[0] === "boolean") {
             const t = slice.filter(v => v === true).length;
@@ -417,7 +435,7 @@
         }
         if (typeof slice[0] === "string") {
             const unique = new Set(slice);
-            if (unique.size === 1) return `uniform: "${escapeHtml(slice[0])}"`;
+            if (unique.size === 1) return `uniform: "${escapeHtml(slice[0])}" (${slice.length} frames)`;
             return `${unique.size} unique values`;
         }
         return "&nbsp;";
@@ -429,13 +447,33 @@
         const isScalar = (shape.length === 0) || (shape.length === 1 && shape[0] === 1);
 
         if (dtype === "bool" && isScalar) {
-            return `<input type="checkbox" data-widget="bool" data-feature="${escapeHtml(name)}">`;
+            // Initial state mirrors the merged slice (disk + pending edits):
+            // all-true → checked, all-false → unchecked, mixed → indeterminate.
+            // Without this, an all-true range renders as an unchecked box and
+            // the user's click stages true (a no-op), then the roundtrip
+            // re-renders unchecked → looks like the click did nothing.
+            const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
+            let checkedAttr = "";
+            let dataInitial = "false";
+            if (slice && slice.length) {
+                const t = slice.filter(v => v === true).length;
+                const f = slice.length - t;
+                if (t > 0 && f === 0) { checkedAttr = " checked"; dataInitial = "true"; }
+                else if (t > 0 && f > 0) { dataInitial = "mixed"; }
+            }
+            return (
+                `<input type="checkbox" data-widget="bool" data-feature="${escapeHtml(name)}"` +
+                ` data-initial="${dataInitial}"${checkedAttr}>`
+            );
         }
         if (dtype === "string") {
             return `<input type="text" data-widget="string" data-feature="${escapeHtml(name)}" placeholder="(value for range)">`;
         }
         if (isScalar && (dtype.startsWith("int") || dtype.startsWith("float"))) {
-            // slider + number input. Slider range derived from the loaded series, if available.
+            // Slider min/max come from the loaded episode's series — the
+            // observed value range, not a schema bound. The user may not
+            // know this, so we also show the (selection-merged) summary
+            // above and may surface dataset-wide stats in a future pass.
             const key = `${datasetId}:${episodeIndex}`;
             const cached = seriesCache.get(key);
             let lo = -1, hi = 1;
@@ -447,10 +485,30 @@
                     if (lo === hi) { lo -= 1; hi += 1; }
                 }
             }
+            // Initial value mirrors the merged slice: a single value when the
+            // selection is uniform, blank when mixed. Without this, the number
+            // box renders empty (looking like an unfilled color-picker swatch),
+            // and the slider sits at its midpoint regardless of actual values.
+            const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
+            let initialValueAttr = "";
+            let initialSliderAttr = "";
+            if (slice && slice.length) {
+                const nums = slice.filter(v => typeof v === "number");
+                if (nums.length) {
+                    const min = Math.min(...nums);
+                    const max = Math.max(...nums);
+                    if (min === max) {
+                        const formatted = (dtype.startsWith("int")) ? String(Math.round(min)) : String(min);
+                        initialValueAttr = ` value="${formatted}"`;
+                        initialSliderAttr = ` value="${formatted}"`;
+                    }
+                    // Mixed: leave both blank so the user sees no spurious value.
+                }
+            }
             const step = (dtype.startsWith("int")) ? "1" : "any";
             return `
-                <input type="range" data-widget="scalar-slider" data-feature="${escapeHtml(name)}" min="${lo}" max="${hi}" step="${step}">
-                <input type="number" data-widget="scalar-number" data-feature="${escapeHtml(name)}" step="${step}">
+                <input type="range" data-widget="scalar-slider" data-feature="${escapeHtml(name)}" min="${lo}" max="${hi}" step="${step}"${initialSliderAttr}>
+                <input type="number" data-widget="scalar-number" data-feature="${escapeHtml(name)}" step="${step}"${initialValueAttr} placeholder="(value)">
             `;
         }
         if (shape.length === 1 && shape[0] > 0 && shape[0] <= 8) {
@@ -482,16 +540,12 @@
             const featureName = card.getAttribute("data-feature");
             const widgets = card.querySelectorAll("[data-widget]");
 
-            // Indeterminate state for bool[1] checkboxes when the range has mixed values.
+            // Indeterminate state for bool[1] checkboxes when the range has
+            // mixed values. The data-initial attribute is set in renderWidgetForType
+            // from the merged slice — no need to re-derive from card text.
             const boolBox = card.querySelector('[data-widget="bool"]');
-            if (boolBox) {
-                const summary = card.querySelector(".card-summary");
-                if (summary && /(\d+) true · (\d+) false/.test(summary.textContent || "")) {
-                    const m = (summary.textContent || "").match(/(\d+) true · (\d+) false/);
-                    if (m && parseInt(m[1], 10) > 0 && parseInt(m[2], 10) > 0) {
-                        boolBox.indeterminate = true;
-                    }
-                }
+            if (boolBox && boolBox.getAttribute("data-initial") === "mixed") {
+                boolBox.indeterminate = true;
             }
 
             // Slider <-> number sync for scalar-slider/scalar-number pair.
