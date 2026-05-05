@@ -920,3 +920,156 @@ class TestSubtaskTranslation:
         assert "inspect knot" in after.index, "new subtask string should be appended to lookup"
         # And its index should be > all the previously-existing ones.
         assert int(after.loc["inspect knot", "subtask_index"]) >= len(before)
+
+
+# ── Same-range repeated stage collapses to a single PendingEdit ────────────
+
+
+class TestSameRangeRepeatedStageCollapses:
+    """The frontend stages on every keystroke (debounced). When the user keeps
+    typing in the same selection, each follow-up stage uses ``confirm_overlap=True``
+    upfront. The backend's fully-contained-removal must collapse the prior edit
+    so the pending list ends up with exactly one entry — not a chain of
+    overlapping partials. This test pins that contract from the API surface,
+    which the frontend's typing-UX relies on (no 409 dialog, single chip).
+    """
+
+    @staticmethod
+    def _editable_feature(ds):
+        for n, ft in ds.meta.features.items():
+            if (
+                ft["dtype"] not in ("image", "video", "string")
+                and n not in {"timestamp", "frame_index", "episode_index", "index", "task_index"}
+                and n != "action"
+                and not n.startswith("observation.")
+            ):
+                return n, ft
+        return None, None
+
+    def test_repeated_same_range_stages_collapse_to_one(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        app, state = app_with_state
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=40)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        feature, ft = self._editable_feature(ds)
+        if feature is None:
+            pytest.skip("no editable feature in factory dataset")
+        shape = ft.get("shape") or [1]
+        first_value = 0.1 if shape in ([1], []) else [0.1] * shape[0]
+        second_value = 0.5 if shape in ([1], []) else [0.5] * shape[0]
+        third_value = 0.9 if shape in ([1], []) else [0.9] * shape[0]
+
+        body = {
+            "dataset_id": dataset_id,
+            "episode_index": 0,
+            "feature": feature,
+            "frame_from": 4,
+            "frame_to": 9,
+        }
+
+        # First stage — no overlap, no confirm needed.
+        r1 = _post_feature_set(app, {**body, "value": first_value})
+        assert r1.status_code == 200, r1.text
+
+        # Second stage on the SAME range: send confirm_overlap=True upfront
+        # (mirrors what the frontend does after detecting the same _stageKey).
+        r2 = _post_feature_set(app, {**body, "value": second_value, "confirm_overlap": True})
+        assert r2.status_code == 200, r2.text
+
+        # Third stage on the SAME range with another value.
+        r3 = _post_feature_set(app, {**body, "value": third_value, "confirm_overlap": True})
+        assert r3.status_code == 200, r3.text
+
+        pending = _list_pending(app, dataset_id).json()
+        feature_set_edits = [
+            e
+            for e in pending["edits"]
+            if e["edit_type"] == "feature_set" and e["params"]["feature"] == feature
+        ]
+        assert len(feature_set_edits) == 1, (
+            f"three same-range stages should collapse into one PendingEdit, got {len(feature_set_edits)}"
+        )
+        only = feature_set_edits[0]["params"]
+        assert only["frame_from"] == 4 and only["frame_to"] == 9
+        # The most recent value is what survives.
+        assert only["value"] == third_value, only
+
+    def test_subtask_same_range_repeated_stage_collapses(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        """Subtask path specifically: typing 'app' then 'appr' then 'approach'
+        should collapse to one PendingEdit storing 'approach', because the
+        frontend's same-key detection translates the synthetic display name
+        the same way the backend does."""
+        app, state = app_with_state
+        ds = TestSubtaskTranslation._ds_with_subtask_lookup(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        body = {
+            "dataset_id": dataset_id,
+            "episode_index": 0,
+            "feature": "subtask",
+            "frame_from": 1,
+            "frame_to": 4,
+        }
+        for v in ["app", "appr", "approach"]:
+            r = _post_feature_set(app, {**body, "value": v, "confirm_overlap": v != "app"})
+            assert r.status_code == 200, r.text
+
+        pending = _list_pending(app, dataset_id).json()
+        subtask_edits = [
+            e
+            for e in pending["edits"]
+            if e["edit_type"] == "feature_set" and e["params"]["feature"] == "subtask_index"
+        ]
+        assert len(subtask_edits) == 1, (
+            f"three same-range subtask stages should collapse into one, got {len(subtask_edits)}"
+        )
+        # Final value is what landed.
+        assert subtask_edits[0]["params"]["value"] == "approach"
+
+
+# ── Feature-series endpoint returns decoded subtask strings ────────────────
+
+
+class TestSubtaskFeatureSeriesDecoded:
+    """The frontend's live-merge of pending edits into the displayed series
+    relies on subtask values being strings on both sides — series values from
+    /feature-series and pending edit values from POST /feature-set. This test
+    pins the decode side: ``GET .../feature-series?features=subtask`` returns
+    the decoded strings, not the raw int indices.
+    """
+
+    def test_feature_series_decodes_subtask_to_strings(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        app, state = app_with_state
+        ds = TestSubtaskTranslation._ds_with_subtask_lookup(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.get(
+                    f"/api/datasets/{dataset_id}/episodes/0/feature-series?features=subtask"
+                )
+
+        resp = asyncio.run(run())
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        series = body["series"].get("subtask")
+        assert series is not None, body
+        # Per the fixture, subtask_index = frame_index % 3 → ["approach","grasp","release",...]
+        # Either way: every value must be a string from the lookup, not an int.
+        assert len(series) == body["length"]
+        types = {type(v).__name__ for v in series}
+        assert all(isinstance(v, str) for v in series), (
+            f"subtask series should be strings, got types: {types}"
+        )
+        assert set(series).issubset({"approach", "grasp", "release"}), set(series)

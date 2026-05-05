@@ -27,6 +27,39 @@
     let selection = null;
     let showPendingEdits = false;
 
+    // Display↔storage name mapping for synthetic features. Backend stores
+    // pending edits keyed by the storage name, but the row is rendered with
+    // the display name — pending overlays + live value merging must bridge
+    // both sides. Currently only the LeRobot 3.0 subtask format goes through
+    // this synthesis (see SUBTASK_DISPLAY_FEATURE in api/datasets.py).
+    const DISPLAY_TO_STORAGE = { subtask: "subtask_index" };
+
+    function rowMatchesPendingFeature(rowName, pendingFeature) {
+        if (rowName === pendingFeature) return true;
+        return DISPLAY_TO_STORAGE[rowName] === pendingFeature;
+    }
+
+    function pendingFeatureEditsFor(rowName) {
+        return (window.pendingEdits || []).filter(e =>
+            e.dataset_id === window.currentDataset &&
+            e.episode_index === window.currentEpisode &&
+            e.edit_type === "feature_set" &&
+            e.params && rowMatchesPendingFeature(rowName, e.params.feature)
+        );
+    }
+
+    function applyPendingEditsToSeries(rowName, series) {
+        const edits = pendingFeatureEditsFor(rowName);
+        if (!edits.length) return series;
+        const merged = series.slice();
+        for (const e of edits) {
+            const from = Math.max(0, e.params.frame_from);
+            const to = Math.min(merged.length, e.params.frame_to);
+            for (let i = from; i < to; i++) merged[i] = e.params.value;
+        }
+        return merged;
+    }
+
     // Dragging state for selection on a feature row.
     let dragState = null; // {anchorFrame, originRow}
 
@@ -714,8 +747,12 @@
         const dtype = ft.dtype || "?";
         const shape = (ft.shape || []).join("×") || "1";
         const editable = isEditable(name, ft);
-        const series = cached.series[name] || [];
+        const rawSeries = cached.series[name] || [];
         const length = cached.length;
+        // Live-merge pending feature_set edits so the row reflects in-progress
+        // values immediately — without this, a typed-but-not-saved subtask
+        // change is invisible until the user clicks Save.
+        const series = applyPendingEditsToSeries(name, rawSeries);
         const trackContent = renderTrackSvg(name, ft, series, length);
         const [trimFrom, trimTo] = getActiveTrim(window.currentDataset, window.currentEpisode, length);
 
@@ -738,12 +775,7 @@
         }
         // "Show pending edits" overlay — paint each pending feature_set edit for this feature.
         if (showPendingEdits && editable) {
-            const pendingForFeature = (window.pendingEdits || []).filter(e =>
-                e.dataset_id === window.currentDataset &&
-                e.episode_index === window.currentEpisode &&
-                e.edit_type === "feature_set" &&
-                e.params && e.params.feature === name
-            );
+            const pendingForFeature = pendingFeatureEditsFor(name);
             for (const e of pendingForFeature) {
                 const left = (e.params.frame_from / length) * 100;
                 const width = ((e.params.frame_to - e.params.frame_from) / length) * 100;
@@ -788,10 +820,15 @@
         }
 
         if (dtype === "string") {
-            // colored stripe — each unique string gets a color; render run-length segments.
+            // Colored stripe — each unique string gets a color; render run-length segments.
+            // The colored rectangles go in a stretched SVG (preserveAspectRatio="none")
+            // so they fill the row exactly. Text labels go in HTML overlays — putting
+            // them in the stretched SVG would non-uniformly scale the glyphs (the cause
+            // of the "white stretched artifact" before the rewrite).
             const colors = ["#5b8def", "#d97757", "#4caf50", "#b58900", "#9b59b6", "#16a085"];
             const colorMap = new Map();
-            const segs = [];
+            const rects = [];
+            const labels = [];
             let i = 0;
             while (i < series.length) {
                 const v = series[i];
@@ -801,13 +838,20 @@
                 const color = colorMap.get(v);
                 const x = (i / length) * 100;
                 const w = ((j - i) / length) * 100;
-                segs.push(`<rect x="${x}%" y="10%" width="${w}%" height="80%" fill="${color}" opacity="0.7"/>`);
-                if (j - i > 4) { // only label long-enough segments
-                    segs.push(`<text x="${x + w / 2}%" y="55%" font-size="9" fill="#fff" text-anchor="middle" dominant-baseline="middle" pointer-events="none">${escapeHtml(String(v).slice(0, 10))}</text>`);
+                rects.push(`<rect x="${x}%" y="10%" width="${w}%" height="80%" fill="${color}" opacity="0.7"/>`);
+                if (j - i > 4) {
+                    labels.push(
+                        `<div class="row-string-label" ` +
+                        `style="left:${x}%; width:${w}%;">` +
+                        `${escapeHtml(String(v).slice(0, 24))}</div>`
+                    );
                 }
                 i = j;
             }
-            return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${segs.join("")}</svg>`;
+            return (
+                `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${rects.join("")}</svg>` +
+                labels.join("")
+            );
         }
 
         // Numeric: scalar → line; vector → mini multi-line (up to 8); large → single line of norms.

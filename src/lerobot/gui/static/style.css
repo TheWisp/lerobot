@@ -674,3 +674,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     border: 1px dashed #f39c12;
     pointer-events: none;
 }
+
+/* String row labels: HTML overlay so glyphs aren't stretched by the
+   row-track SVG's preserveAspectRatio="none". Positioned in the same
+   percent-based coordinate space as the colored stripe rects. */
+.feature-row .row-track .row-string-label {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 11px;
+    pointer-events: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
