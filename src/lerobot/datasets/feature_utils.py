@@ -263,18 +263,26 @@ def validate_feature_numeric_bounds(name: str, feature: dict, value: np.ndarray)
       original use case is e.g. a 1-5 quality rating: declared ``min=1, max=5``
       rejects 7 at ``add_frame`` time and at GUI stage time (since the GUI's
       stage endpoint also funnels through this validator).
-    * ``names`` (list[str]) defines the legal categorical labels for an integer
-      feature. The on-disk value is the integer index ``[0, len(names))``;
-      anything outside is rejected. This is how categorical features like
-      ``control_mode`` (``names=["ee", "joint"]``) get enforcement.
+    * ``names`` (list[str]) defines the legal categorical labels for a
+      *scalar* integer feature (shape ``[1]`` or empty). The on-disk value
+      is the integer index ``[0, len(names))``; anything outside is
+      rejected. ``control_mode`` with ``names=["ee", "joint"]`` is the
+      canonical case.
 
-    Vectors are checked element-wise; the first out-of-bounds element produces
-    the error.
+      ``names`` for non-scalar features is the historical "component name"
+      list (e.g. ``["x", "y", "z"]`` on a 3-vector position), which carries
+      no bounds semantics — we deliberately don't trigger categorical
+      enforcement there to stay backward-compatible with existing datasets.
+
+    Vectors are checked element-wise for min/max; the first out-of-bounds
+    element produces the error.
     """
     min_bound = feature.get("min")
     max_bound = feature.get("max")
     names = feature.get("names")
-    is_categorical = isinstance(names, list) and feature.get("dtype", "").startswith("int")
+    shape = feature.get("shape", [])
+    is_scalar = (len(shape) == 0) or (len(shape) == 1 and shape[0] == 1)
+    is_categorical = isinstance(names, list) and feature.get("dtype", "").startswith("int") and is_scalar
 
     if min_bound is None and max_bound is None and not is_categorical:
         return ""

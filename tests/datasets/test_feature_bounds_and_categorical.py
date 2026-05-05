@@ -134,6 +134,29 @@ class TestCategoricalValidation:
             == ""
         )
 
+    def test_vector_int_with_component_names_is_not_categorical(self) -> None:
+        """Backward-compat regression: ``names`` on a non-scalar int feature is
+        component labels (legacy LeRobot convention), NOT categorical labels.
+        Without the scalar gate, an ``int64[3]`` with names=["x","y","z"] would
+        be wrongly bounds-checked against [0, 3) and reject any value ≥ 3.
+        """
+        feature = {"dtype": "int64", "shape": (3,), "names": ["x", "y", "z"]}
+        # Values way outside [0, len(names)=3) — should still pass because
+        # categorical mode is gated to scalars only.
+        assert (
+            validate_feature_dtype_and_shape(
+                "joint_indices", feature, np.array([100, 200, 300], dtype=np.int64)
+            )
+            == ""
+        )
+        # And via the inner helper directly:
+        assert (
+            validate_feature_numeric_bounds(
+                "joint_indices", feature, np.array([100, 200, 300], dtype=np.int64)
+            )
+            == ""
+        )
+
     def test_categorical_combined_with_explicit_max_uses_both(self) -> None:
         # If someone declares both names and an explicit max (unusual but
         # legal), both checks fire. This is just a defensive test — the
