@@ -394,15 +394,21 @@
             widget = renderWidgetForType(name, ft, effFrom, effTo, datasetId, episodeIndex);
         }
 
-        // Dataset-wide observed range (sourced from meta/stats.json on the
-        // backend). Shown next to the feature name as e.g. "reward [-1.0 … 0.0]"
-        // so the user has a stable reference scale across episodes. Shown only
-        // for scalar numeric features; the backend doesn't populate it for
-        // vectors / non-numeric.
-        const observedRange =
-            (ft.observed_min != null && ft.observed_max != null)
-                ? `<span class="card-observed-range">[${formatNumber(ft.observed_min)} … ${formatNumber(ft.observed_max)}]</span>`
-                : "";
+        // Range shown next to the feature name. Declared bounds (info.json
+        // ``min`` / ``max``) take precedence — they're authoritative and
+        // enforced. Otherwise fall back to the dataset-wide observed extrema
+        // from meta/stats.json. The two get distinct labels so the user knows
+        // which one they're looking at.
+        let observedRange = "";
+        if (ft.declared_min != null && ft.declared_max != null) {
+            observedRange =
+                `<span class="card-observed-range" title="declared bounds (info.json)">` +
+                `[${formatNumber(ft.declared_min)} … ${formatNumber(ft.declared_max)}]</span>`;
+        } else if (ft.observed_min != null && ft.observed_max != null) {
+            observedRange =
+                `<span class="card-observed-range" title="observed across the dataset (meta/stats.json)">` +
+                `[${formatNumber(ft.observed_min)} … ${formatNumber(ft.observed_max)}]</span>`;
+        }
 
         return `
             <div class="feature-card ${focused ? "focused" : ""} ${editable ? "" : "readonly"}" data-feature="${escapeHtml(name)}">
@@ -479,14 +485,50 @@
         if (dtype === "string") {
             return `<input type="text" data-widget="string" data-feature="${escapeHtml(name)}" placeholder="(value for range)">`;
         }
+        // Categorical integer feature (int + names). The on-disk value is the
+        // index ``[0, len(names))``; the user picks by label. Detected before
+        // the generic scalar path so the slider doesn't take over for these.
+        if (isScalar && dtype.startsWith("int") && Array.isArray(ft.names) && ft.names.length > 0) {
+            const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
+            let initialIdx = null;
+            if (slice && slice.length) {
+                const nums = slice.filter(v => typeof v === "number");
+                if (nums.length) {
+                    const min = Math.min(...nums);
+                    const max = Math.max(...nums);
+                    if (min === max) initialIdx = Math.round(min);
+                }
+            }
+            const options = ft.names.map((label, idx) => {
+                const sel = (idx === initialIdx) ? " selected" : "";
+                return `<option value="${idx}"${sel}>${escapeHtml(label)}</option>`;
+            });
+            // Leading blank option used when the selection is mixed — so the
+            // dropdown doesn't lie about the current value.
+            const placeholder =
+                initialIdx == null
+                    ? `<option value="" selected disabled>(mixed)</option>`
+                    : "";
+            return (
+                `<select data-widget="categorical" data-feature="${escapeHtml(name)}">` +
+                placeholder +
+                options.join("") +
+                `</select>`
+            );
+        }
         if (isScalar && (dtype.startsWith("int") || dtype.startsWith("float"))) {
-            // Prefer the dataset-wide observed extrema from meta/stats.json
-            // (sent over in ft.observed_min/max) — stable across episodes and
-            // matches what the user sees in the card header. Fall back to the
-            // current episode's observed range if stats are missing (older
-            // datasets, or in-memory datasets without stats computed yet).
+            // Slider lo/hi precedence:
+            //   1. Declared bounds from info.json (enforced by the backend)
+            //   2. Dataset-wide observed extrema from meta/stats.json
+            //   3. Current episode's loaded series (fallback for older datasets)
+            // Declared bounds win because they're authoritative — a 1-5 quality
+            // rating shouldn't let the slider scroll outside [1, 5] just because
+            // the observed values happen to span the same range.
             let lo = -1, hi = 1;
-            if (ft.observed_min != null && ft.observed_max != null) {
+            if (ft.declared_min != null && ft.declared_max != null) {
+                lo = ft.declared_min;
+                hi = ft.declared_max;
+            } else if (ft.observed_min != null && ft.observed_max != null) {
                 lo = ft.observed_min;
                 hi = ft.observed_max;
             } else {
@@ -593,6 +635,14 @@
                         // User clicked → no longer indeterminate.
                         w.indeterminate = false;
                         stageFeatureEdit(featureName, w.checked);
+                    });
+                } else if (kind === "categorical") {
+                    // Dropdown over an int+names feature. The select's value
+                    // is the index string; stage as int so it lands as
+                    // categorical-valid via the backend's bounds check.
+                    w.addEventListener("change", () => {
+                        if (w.value === "") return;  // (mixed) placeholder
+                        stageFeatureEdit(featureName, parseInt(w.value, 10));
                     });
                 } else if (kind === "string") {
                     // Stage on blur, Enter, or after 600ms idle while typing.
@@ -914,6 +964,44 @@
                         `<div class="row-string-label" ` +
                         `style="left:${x}%; width:${w}%;">` +
                         `${escapeHtml(String(v).slice(0, 24))}</div>`
+                    );
+                }
+                i = j;
+            }
+            return (
+                `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${rects.join("")}</svg>` +
+                labels.join("")
+            );
+        }
+
+        // Categorical (int + names): render as a colored band with the label
+        // for each segment, similar to strings but indexed via ft.names.
+        const isScalar = (shape.length === 0 || (shape.length === 1 && shape[0] === 1));
+        if (
+            isScalar
+            && dtype.startsWith("int")
+            && Array.isArray(ft.names)
+            && ft.names.length > 0
+            && typeof series[0] === "number"
+        ) {
+            const colors = ["#5b8def", "#d97757", "#4caf50", "#b58900", "#9b59b6", "#16a085"];
+            const rects = [];
+            const labels = [];
+            let i = 0;
+            while (i < series.length) {
+                const v = series[i];
+                let j = i;
+                while (j < series.length && series[j] === v) j++;
+                const idx = (typeof v === "number") ? Math.round(v) : -1;
+                const label = (idx >= 0 && idx < ft.names.length) ? ft.names[idx] : `?(${v})`;
+                const color = colors[((idx >= 0) ? idx : 0) % colors.length];
+                const x = (i / length) * 100;
+                const w = ((j - i) / length) * 100;
+                rects.push(`<rect x="${x}%" y="10%" width="${w}%" height="80%" fill="${color}" opacity="0.7"/>`);
+                if (j - i > 4) {
+                    labels.push(
+                        `<div class="row-string-label" style="left:${x}%; width:${w}%;">` +
+                        `${escapeHtml(String(label).slice(0, 24))}</div>`
                     );
                 }
                 i = j;

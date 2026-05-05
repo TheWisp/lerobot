@@ -1,22 +1,37 @@
 """Build a test dataset with editable features for manually exercising the
 feature-editing GUI.
 
-Copies an existing local dataset and bolts on three features:
+Copies an existing local dataset and bolts on a configurable subset of
+features:
 
-* ``reward`` — float32[1], initialized to a -1.0 step penalty everywhere
-  (RECAP-style baseline). Edit me with the slider+number widget.
-* ``success`` — bool[1], initialized so each episode has uniform value
-  (per-episode broadcast — should auto-detect; the Inspector card shows
-  the broadcast note and edits coerce to whole-episode).
-* ``subtask_index`` — int64[1], initialized to a simple 3-segment
-  progression. Plus a ``meta/subtasks.parquet`` with starter strings —
-  exercises the dropdown widget. Frontend may stage strings; backend
-  resolves to indices at Save.
+* ``reward`` — float32[1], per-frame sinusoid around -1.0 (RECAP-style step
+  penalty with visual variation). Slider+number widget.
+* ``success`` — bool[1], per-episode broadcast (alternating true/false
+  across episodes). Checkbox widget; edits coerce to whole-episode.
+* ``subtask_index`` — int64[1], 3-segment progression per episode plus a
+  ``meta/subtasks.parquet`` lookup with starter strings. Frontend stages
+  strings; backend resolves to indices at Save.
+* ``quality`` — int64[1], per-episode rating 1–5 (π0.7-style annotator
+  score). Cycles 1, 2, 3, 4, 5, 1, … across episodes. Per-episode
+  broadcast like ``success``; the slider should auto-scale to [1, 5]
+  once stats land.
+* ``control_mode`` — string[1], per-episode alternating "ee" / "joint".
+  Per-episode broadcast; renders as colored stripe on the row, text
+  input in the inspector.
+
+Default builds all five features. Pass ``--features a,b,c`` to pick a
+subset.
 
 Usage:
-    python /tmp/make_test_feature_editing_dataset.py \\
+    python scripts/gui/make_test_feature_editing_dataset.py \\
         --src ~/.cache/huggingface/lerobot/thewisp/intervention_cylinder_ring_assembly \\
         --dst /tmp/feature-editing-test-dataset
+
+    # Just the π0.7 features:
+    python scripts/gui/make_test_feature_editing_dataset.py \\
+        --src ~/.cache/huggingface/lerobot/thewisp/intervention_cylinder_ring_assembly \\
+        --dst /tmp/pi07-features-test-dataset \\
+        --features quality,control_mode
 
 After it runs, open the dst path in the GUI and try:
 
@@ -28,11 +43,15 @@ After it runs, open the dst path in the GUI and try:
    the full episode regardless of what you dragged.
 3. Stage two overlapping edits on ``reward`` for the same episode →
    the second one should pop the overlap-confirmation modal.
-4. Click Save → reload → values persist.
+4. Save → reload → values persist.
 
-For subtask editing once the frontend dropdown ships, you'd type a new
-string ("inspect knot") and confirm it appears in
-``meta/subtasks.parquet`` after Save with a fresh int index.
+For ``quality`` / ``control_mode``: after the first Save the
+``observed_min``/``observed_max`` should populate (e.g. ``quality
+[1.0 … 5.0]`` in the card header) and the slider scale to that range.
+
+For subtask editing, type a new string (e.g. "inspect knot"). After
+Save, confirm it appears in ``meta/subtasks.parquet`` with a fresh
+integer index.
 """
 
 from __future__ import annotations
@@ -45,22 +64,124 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# ── Feature builders ────────────────────────────────────────────────────────
+#
+# Each builder returns a dict with:
+#   - schema: the info.json features entry (dtype, shape, optionally names/min/max)
+#   - fill:   (df, episodes_seen) -> column data of length len(df)
+#   - extras: optional list of (relpath, write_fn) for sidecar files like
+#             meta/subtasks.parquet
+#
+# ``episodes_seen`` is a per-builder scratch dict shared across shards so the
+# builder can pin a per-episode value the first time it sees an episode and
+# reuse it on subsequent shards.
 
-def add_editable_features(dst: Path) -> None:
-    """Mutate the dataset at ``dst`` in place: add the three features."""
+
+def _build_reward(df: pd.DataFrame, _seen: dict) -> np.ndarray:
+    frame_idx = df["frame_index"].astype(int).values
+    return (-1.0 + 0.2 * np.sin(0.1 * frame_idx.astype(np.float32))).astype(np.float32)
+
+
+def _build_success(df: pd.DataFrame, seen: dict) -> np.ndarray:
+    """Per-episode bool: alternates true/false across episodes."""
+    eps = df["episode_index"].astype(int).values
+    out = np.zeros(len(df), dtype=bool)
+    for i, ep in enumerate(eps):
+        if ep not in seen:
+            seen[ep] = bool(ep % 2)
+        out[i] = seen[ep]
+    return out
+
+
+def _build_subtask_index(df: pd.DataFrame, _seen: dict) -> np.ndarray:
+    """3-segment progression by frame position (crude bucket)."""
+    fi = df["frame_index"].astype(int).values
+    return np.where(fi < 30, 0, np.where(fi < 70, 1, 2)).astype(np.int64)
+
+
+def _build_quality(df: pd.DataFrame, seen: dict) -> np.ndarray:
+    """Per-episode int 1-5 — π0.7-style quality rating, cycles 1..5."""
+    eps = df["episode_index"].astype(int).values
+    out = np.zeros(len(df), dtype=np.int64)
+    for i, ep in enumerate(eps):
+        if ep not in seen:
+            # Cycle 1, 2, 3, 4, 5, 1, 2, … so every value is exercised.
+            seen[ep] = int(ep % 5) + 1
+        out[i] = seen[ep]
+    return out
+
+
+def _build_control_mode(df: pd.DataFrame, seen: dict) -> np.ndarray:
+    """Per-episode categorical int (0=ee, 1=joint), alternating across episodes."""
+    eps = df["episode_index"].astype(int).values
+    out = np.zeros(len(df), dtype=np.int64)
+    for i, ep in enumerate(eps):
+        if ep not in seen:
+            seen[ep] = int(ep % 2)
+        out[i] = seen[ep]
+    return out
+
+
+# Each entry: name → (info.json schema, builder, optional extras factory).
+# The schema entries demonstrate four patterns:
+#   - reward: plain float scalar
+#   - success: plain bool scalar
+#   - subtask_index: int scalar with sidecar lookup table (string-decoded by GUI)
+#   - quality: int scalar with declared min/max bounds (validated)
+#   - control_mode: int scalar with declared names (categorical)
+_FEATURE_BUILDERS = {
+    "reward": {
+        "schema": {"dtype": "float32", "shape": [1], "names": None},
+        "fill": _build_reward,
+    },
+    "success": {
+        "schema": {"dtype": "bool", "shape": [1], "names": None},
+        "fill": _build_success,
+    },
+    "subtask_index": {
+        "schema": {"dtype": "int64", "shape": [1], "names": None},
+        "fill": _build_subtask_index,
+        "extras": [
+            (
+                "meta/subtasks.parquet",
+                lambda: pd.DataFrame(
+                    {"subtask_index": [0, 1, 2]},
+                    index=pd.Index(["approach", "grasp", "release"], name="subtask"),
+                ),
+            ),
+        ],
+    },
+    "quality": {
+        # min/max are *declared bounds* — backend's validate_feature_dtype_and_shape
+        # rejects values outside [1, 5] at add_frame and stage time. The GUI
+        # also uses these to scale the slider so the range stays at [1, 5]
+        # regardless of episode contents.
+        "schema": {"dtype": "int64", "shape": [1], "names": None, "min": 1, "max": 5},
+        "fill": _build_quality,
+    },
+    "control_mode": {
+        # ``names`` makes this a categorical: stored as int index, displayed
+        # by label. The GUI renders a dropdown for editing and a colored
+        # band per category on the timeline row.
+        "schema": {"dtype": "int64", "shape": [1], "names": ["ee", "joint"]},
+        "fill": _build_control_mode,
+    },
+}
+
+ALL_FEATURES = list(_FEATURE_BUILDERS.keys())
+
+
+def add_editable_features(dst: Path, features_to_add: list[str]) -> None:
+    """Mutate the dataset at ``dst`` in place: add the named features."""
     info_path = dst / "meta" / "info.json"
     info = json.loads(info_path.read_text())
 
     # Schema additions ──────────────────────────────────────────────────
-    new_features = {
-        "reward": {"dtype": "float32", "shape": [1], "names": None},
-        "success": {"dtype": "bool", "shape": [1], "names": None},
-        "subtask_index": {"dtype": "int64", "shape": [1], "names": None},
-    }
-    for name, spec in new_features.items():
+    for name in features_to_add:
+        spec = _FEATURE_BUILDERS[name]["schema"]
         if name not in info["features"]:
             info["features"][name] = spec
-            print(f"  + declared {name} in info.json")
+            print(f"  + declared {name} in info.json  ({spec})")
         else:
             print(f"  ~ {name} already exists in info.json — leaving as-is")
 
@@ -71,60 +192,34 @@ def add_editable_features(dst: Path) -> None:
     shards = sorted(data_dir.rglob("*.parquet"))
     print(f"  data shards: {len(shards)}")
 
-    # Pre-decide per-episode success values: alternate true/false so the
-    # detection picks `success` as per-episode.
-    episodes_seen: dict[int, bool] = {}
+    # Per-builder scratch dicts (so per-episode values stay consistent
+    # across shards).
+    scratch: dict[str, dict] = {n: {} for n in features_to_add}
 
     for shard in shards:
         df = pd.read_parquet(shard)
-        n = len(df)
-        ep_indices = df["episode_index"].astype(int).values
-        frame_indices = df["frame_index"].astype(int).values
-
-        # reward: per-frame varying so the detector doesn't false-flag it as
-        # per-episode. Use a small sinusoid superimposed on the -1.0 step
-        # penalty — gives a visually interesting line plot on the row too.
-        df["reward"] = (-1.0 + 0.2 * np.sin(0.1 * frame_indices.astype(np.float32))).astype(np.float32)
-
-        # success: alternate true/false per episode.
-        success_vals = np.zeros(n, dtype=bool)
-        for i, ep in enumerate(ep_indices):
-            if ep not in episodes_seen:
-                episodes_seen[ep] = bool(ep % 2)
-            success_vals[i] = episodes_seen[ep]
-        df["success"] = success_vals
-
-        # subtask_index: simple frame-position bucket (3 segments per episode).
-        # Approximate: 0 if first 33% of episode, 1 if middle 34%, 2 otherwise.
-        # We don't know per-episode length from one row, so use frame_index ranges.
-        # frame_index is already 0-based per episode in standard LeRobot data.
-        # Use crude buckets: <30 → 0, <70 → 1, else 2 (works for 10-frame to
-        # 1000-frame episodes, just as a placeholder).
-        si = np.where(frame_indices < 30, 0, np.where(frame_indices < 70, 1, 2)).astype(np.int64)
-        df["subtask_index"] = si
-
+        for name in features_to_add:
+            df[name] = _FEATURE_BUILDERS[name]["fill"](df, scratch[name])
         df.to_parquet(shard, compression="snappy", index=False)
-        print(f"  ✓ {shard.relative_to(dst)} ({n} rows)")
+        print(f"  ✓ {shard.relative_to(dst)} ({len(df)} rows)")
 
-    # Subtasks lookup table ─────────────────────────────────────────────
-    subtasks_path = dst / "meta" / "subtasks.parquet"
-    subtasks = pd.DataFrame(
-        {"subtask_index": [0, 1, 2]},
-        index=pd.Index(["approach", "grasp", "release"], name="subtask"),
-    )
-    subtasks.to_parquet(subtasks_path)
-    print(f"  + meta/subtasks.parquet  → {list(subtasks.index)}")
+    # Sidecar extras (e.g. meta/subtasks.parquet) ───────────────────────
+    for name in features_to_add:
+        for relpath, factory in _FEATURE_BUILDERS[name].get("extras", []):
+            target = dst / relpath
+            target.parent.mkdir(parents=True, exist_ok=True)
+            df = factory()
+            df.to_parquet(target)
+            print(f"  + {relpath}  → {list(df.index)}")
 
     # Episodes parquet stats columns ────────────────────────────────────
-    # Re-add stats columns for the new features so the GUI doesn't error.
-    # We keep this best-effort: if the parquet doesn't already track stats
-    # for any feature, we skip.
+    # Best-effort: re-add stats columns for the new features so the GUI's
+    # verification path doesn't warn. Skip if the file doesn't already
+    # track stats for any feature.
     eps_dir = dst / "meta" / "episodes"
     eps_shards = sorted(eps_dir.rglob("*.parquet"))
     for shard in eps_shards:
         eps_df = pd.read_parquet(shard)
-        # Sample any existing stats column to gauge the schema (e.g.
-        # `stats/timestamp/min`). If none exist, skip.
         sample_stat = next(
             (c for c in eps_df.columns if c.startswith("stats/") and c.endswith("/min")),
             None,
@@ -133,10 +228,9 @@ def add_editable_features(dst: Path) -> None:
             print(f"  · {shard.name}: no existing stats columns — skipping stats fill")
             continue
 
-        for feature in ("reward", "success", "subtask_index"):
+        for feature in features_to_add:
             if f"stats/{feature}/min" in eps_df.columns:
                 continue  # already populated
-            # Build placeholder stat lists matching the existing per-row format.
             placeholder = [[0.0]] * len(eps_df)
             for stat in ("min", "max", "mean", "std", "q01", "q10", "q50", "q90", "q99"):
                 eps_df[f"stats/{feature}/{stat}"] = placeholder
@@ -167,7 +261,20 @@ def main() -> None:
         action="store_true",
         help="If set, wipe the destination first.",
     )
+    parser.add_argument(
+        "--features",
+        type=str,
+        default=",".join(ALL_FEATURES),
+        help=(
+            f"Comma-separated subset of features to add. Available: {','.join(ALL_FEATURES)}. Default: all."
+        ),
+    )
     args = parser.parse_args()
+
+    requested = [s.strip() for s in args.features.split(",") if s.strip()]
+    unknown = [n for n in requested if n not in _FEATURE_BUILDERS]
+    if unknown:
+        raise SystemExit(f"Unknown feature(s): {unknown}. Available: {ALL_FEATURES}")
 
     src: Path = args.src.expanduser().resolve()
     dst: Path = args.dst.expanduser().resolve()
@@ -184,8 +291,8 @@ def main() -> None:
     shutil.copytree(src, dst)
     print(f"  ✓ copied {sum(1 for _ in dst.rglob('*'))} files")
 
-    print("Adding editable features…")
-    add_editable_features(dst)
+    print(f"Adding editable features: {requested}…")
+    add_editable_features(dst, requested)
 
     print()
     print(f"✓ Test dataset ready at {dst}")

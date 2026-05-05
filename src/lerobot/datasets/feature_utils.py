@@ -221,11 +221,15 @@ def validate_features_presence(actual_features: set[str], expected_features: set
 def validate_feature_dtype_and_shape(
     name: str, feature: dict, value: np.ndarray | PILImage.Image | str
 ) -> str:
-    """Validate the dtype and shape of a single feature's value.
+    """Validate the dtype, shape, and optional declared bounds of a single feature's value.
 
     Args:
         name (str): The name of the feature.
         feature (dict): The feature specification from the LeRobot features dictionary.
+            May include optional ``"min"`` / ``"max"`` (numeric scalars) for bounded
+            numeric features, and optional ``"names"`` (list[str]) for categorical
+            integer features. Both are honored when present and silently skipped
+            otherwise — backward compatible with v3 datasets that don't declare them.
         value: The value of the feature to validate.
 
     Returns:
@@ -237,13 +241,67 @@ def validate_feature_dtype_and_shape(
     expected_dtype = feature["dtype"]
     expected_shape = feature["shape"]
     if is_valid_numpy_dtype_string(expected_dtype):
-        return validate_feature_numpy_array(name, expected_dtype, expected_shape, value)
+        error = validate_feature_numpy_array(name, expected_dtype, expected_shape, value)
+        if error:
+            return error
+        return validate_feature_numeric_bounds(name, feature, value)
     elif expected_dtype in ["image", "video"]:
         return validate_feature_image_or_video(name, expected_shape, value)
     elif expected_dtype == "string":
         return validate_feature_string(name, value)
     else:
         raise NotImplementedError(f"The feature dtype '{expected_dtype}' is not implemented yet.")
+
+
+def validate_feature_numeric_bounds(name: str, feature: dict, value: np.ndarray) -> str:
+    """Enforce optional declared ``min``/``max`` and categorical ``names`` on a value.
+
+    Both fields are *opt-in* — features without them validate identically to the
+    pre-extension behavior. When present:
+
+    * ``min`` / ``max`` (numeric) bound every component of ``value``. The
+      original use case is e.g. a 1-5 quality rating: declared ``min=1, max=5``
+      rejects 7 at ``add_frame`` time and at GUI stage time (since the GUI's
+      stage endpoint also funnels through this validator).
+    * ``names`` (list[str]) defines the legal categorical labels for an integer
+      feature. The on-disk value is the integer index ``[0, len(names))``;
+      anything outside is rejected. This is how categorical features like
+      ``control_mode`` (``names=["ee", "joint"]``) get enforcement.
+
+    Vectors are checked element-wise; the first out-of-bounds element produces
+    the error.
+    """
+    min_bound = feature.get("min")
+    max_bound = feature.get("max")
+    names = feature.get("names")
+    is_categorical = isinstance(names, list) and feature.get("dtype", "").startswith("int")
+
+    if min_bound is None and max_bound is None and not is_categorical:
+        return ""
+
+    arr = np.asarray(value)
+    flat = arr.flatten()
+    if not flat.size:
+        return ""
+
+    if min_bound is not None:
+        below = flat[flat < min_bound]
+        if below.size:
+            return f"The feature '{name}' has value {below[0].item()!r} below declared min={min_bound!r}.\n"
+    if max_bound is not None:
+        above = flat[flat > max_bound]
+        if above.size:
+            return f"The feature '{name}' has value {above[0].item()!r} above declared max={max_bound!r}.\n"
+    if is_categorical:
+        n_classes = len(names)
+        for v in flat:
+            iv = int(v)
+            if iv < 0 or iv >= n_classes:
+                return (
+                    f"The feature '{name}' has value {iv} outside categorical range "
+                    f"[0, {n_classes}) (names={names!r}).\n"
+                )
+    return ""
 
 
 def validate_feature_numpy_array(

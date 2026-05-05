@@ -331,3 +331,50 @@ class TestSchemaWithStats:
         dumped = schema["reward"].model_dump()
         assert isinstance(dumped["observed_min"], float)
         assert math.isfinite(dumped["observed_min"])
+
+
+# ── Declared bounds (info.json min/max → FeatureSchema.declared_min/max) ───
+
+
+class TestDeclaredBoundsInSchema:
+    def test_min_max_populate_declared_fields(self) -> None:
+        features = {
+            "quality": {"dtype": "int64", "shape": [1], "names": None, "min": 1, "max": 5},
+        }
+        schema = _build_features_schema(features)
+        assert schema["quality"].declared_min == 1.0
+        assert schema["quality"].declared_max == 5.0
+
+    def test_only_min_declared(self) -> None:
+        features = {"loss": {"dtype": "float32", "shape": [1], "names": None, "min": 0.0}}
+        schema = _build_features_schema(features)
+        assert schema["loss"].declared_min == 0.0
+        assert schema["loss"].declared_max is None
+
+    def test_no_bounds_declared_yields_none(self) -> None:
+        features = {"reward": {"dtype": "float32", "shape": [1], "names": None}}
+        schema = _build_features_schema(features)
+        assert schema["reward"].declared_min is None
+        assert schema["reward"].declared_max is None
+
+    def test_non_numeric_bound_silently_dropped(self) -> None:
+        # Defensive: a malformed info.json that has min: "low" shouldn't crash.
+        features = {"x": {"dtype": "float32", "shape": [1], "names": None, "min": "low"}}
+        schema = _build_features_schema(features)
+        assert schema["x"].declared_min is None
+
+    def test_categorical_names_pass_through(self) -> None:
+        # ``names`` for an int feature is the categorical labels list — should
+        # land in FeatureSchema.names so the frontend can render the dropdown.
+        features = {
+            "control_mode": {"dtype": "int64", "shape": [1], "names": ["ee", "joint"]},
+        }
+        schema = _build_features_schema(features)
+        assert schema["control_mode"].names == ["ee", "joint"]
+
+    def test_serializes_to_json_friendly_floats(self) -> None:
+        features = {"q": {"dtype": "int64", "shape": [1], "names": None, "min": 1, "max": 5}}
+        schema = _build_features_schema(features)
+        dumped = schema["q"].model_dump()
+        assert isinstance(dumped["declared_min"], float)
+        assert isinstance(dumped["declared_max"], float)

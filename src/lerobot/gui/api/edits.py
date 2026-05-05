@@ -337,10 +337,49 @@ def _validate_feature_edit(dataset, request: FeatureSetRequest) -> tuple[int, in
             },
         )
 
+    # Declared bounds (info.json ``min``/``max``) and categorical (``names``)
+    # validation. We run this here rather than only at apply time so the user
+    # gets immediate 400 feedback when they type 7 into a 1-5 quality field
+    # — the alternative would be silently staging the bad value and only
+    # blowing up on Save. We tolerate non-numeric value shapes for features
+    # without bounds (e.g. string subtask labels) by short-circuiting.
+    bounds_error = _validate_value_against_declared_bounds(request.feature, feature_info, request.value)
+    if bounds_error:
+        raise HTTPException(status_code=400, detail=bounds_error)
+
     episode_start = _get_episode_start_index(request.dataset_id, request.episode_index)
     global_from = episode_start + frame_from
     global_to = episode_start + frame_to
     return frame_from, frame_to, global_from, global_to, feature_info
+
+
+def _validate_value_against_declared_bounds(feature_name: str, feature_info: dict, value: Any) -> str:
+    """Run the declared-bounds / categorical check on the requested value.
+
+    Returns the error string from
+    :func:`validate_feature_numeric_bounds` (empty when valid). Skips
+    silently if the feature has no declared bounds or categorical names —
+    string features and unbounded numeric features fall through.
+    """
+    has_bounds = feature_info.get("min") is not None or feature_info.get("max") is not None
+    is_categorical = isinstance(feature_info.get("names"), list) and feature_info.get("dtype", "").startswith(
+        "int"
+    )
+    if not has_bounds and not is_categorical:
+        return ""
+
+    import numpy as np
+
+    from lerobot.datasets.feature_utils import validate_feature_numeric_bounds
+
+    # Coerce JSON-y value to a numpy array. The bounds checker is shape-
+    # agnostic — it flattens before checking — so a scalar / list / vector
+    # all work.
+    try:
+        arr = np.asarray(value)
+    except (TypeError, ValueError):
+        return f"Could not interpret value {value!r} as numeric for bounds check"
+    return validate_feature_numeric_bounds(feature_name, feature_info, arr)
 
 
 def _find_overlapping_feature_edits(

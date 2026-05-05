@@ -1182,3 +1182,168 @@ class TestPerEpisodeBroadcastCoercion:
         info = datasets_module._dataset_info_from(dataset_id, ds)
         assert "success" in info.features_schema
         assert info.features_schema["success"].is_per_episode is True
+
+
+# ── Declared bounds + categorical at the staging endpoint ──────────────────
+
+
+class TestStageDeclaredBoundsAndCategorical:
+    """The stage endpoint runs the declared-bounds and categorical checks via
+    ``validate_feature_numeric_bounds`` so the user sees a 400 immediately
+    instead of silently staging a bad value and only learning at Save time.
+    """
+
+    @staticmethod
+    def _ds_with_bounded_features(tmp_path, lerobot_dataset_factory):
+        """Plant ``quality`` (int 1-5) and ``control_mode`` (categorical)."""
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=40)
+        ds.meta.features["quality"] = {
+            "dtype": "int64",
+            "shape": [1],
+            "names": None,
+            "min": 1,
+            "max": 5,
+        }
+        ds.meta.features["control_mode"] = {
+            "dtype": "int64",
+            "shape": [1],
+            "names": ["ee", "joint"],
+        }
+        # Add columns so the parquet has them — values are within bounds.
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            df["quality"] = np.full(len(df), 3, dtype=np.int64)
+            df["control_mode"] = np.zeros(len(df), dtype=np.int64)
+            df.to_parquet(shard, compression="snappy", index=False)
+        return ds
+
+    def test_quality_within_bounds_accepted(self, app_with_state, tmp_path, lerobot_dataset_factory):
+        app, state = app_with_state
+        ds = self._ds_with_bounded_features(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        resp = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "quality",
+                "frame_from": 0,
+                "frame_to": 5,
+                "value": 4,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_quality_above_max_rejected(self, app_with_state, tmp_path, lerobot_dataset_factory):
+        app, state = app_with_state
+        ds = self._ds_with_bounded_features(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        resp = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "quality",
+                "frame_from": 0,
+                "frame_to": 5,
+                "value": 7,  # > max=5
+            },
+        )
+        assert resp.status_code == 400, resp.text
+        assert "above declared max" in resp.json()["detail"]
+
+    def test_quality_below_min_rejected(self, app_with_state, tmp_path, lerobot_dataset_factory):
+        app, state = app_with_state
+        ds = self._ds_with_bounded_features(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        resp = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "quality",
+                "frame_from": 0,
+                "frame_to": 5,
+                "value": 0,  # < min=1
+            },
+        )
+        assert resp.status_code == 400, resp.text
+        assert "below declared min" in resp.json()["detail"]
+
+    def test_categorical_legal_index_accepted(self, app_with_state, tmp_path, lerobot_dataset_factory):
+        app, state = app_with_state
+        ds = self._ds_with_bounded_features(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        for idx in (0, 1):
+            resp = _post_feature_set(
+                app,
+                {
+                    "dataset_id": dataset_id,
+                    "episode_index": 0,
+                    "feature": "control_mode",
+                    "frame_from": 0,
+                    "frame_to": 5,
+                    "value": idx,
+                    "confirm_overlap": idx > 0,  # second stage on same range
+                },
+            )
+            assert resp.status_code == 200, resp.text
+
+    def test_categorical_out_of_range_index_rejected(self, app_with_state, tmp_path, lerobot_dataset_factory):
+        app, state = app_with_state
+        ds = self._ds_with_bounded_features(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        resp = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "control_mode",
+                "frame_from": 0,
+                "frame_to": 5,
+                "value": 2,  # only 2 names → legal range [0, 2)
+            },
+        )
+        assert resp.status_code == 400, resp.text
+        assert "outside categorical range" in resp.json()["detail"]
+
+    def test_unbounded_feature_still_accepts_anything(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        """``reward`` has no declared bounds — any finite value should pass.
+        Regression: ensures the bounds check short-circuits and doesn't
+        accidentally reject features that don't opt in."""
+        app, state = app_with_state
+        ds = self._ds_with_bounded_features(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        # Add a plain reward feature (no min/max).
+        ds.meta.features["reward"] = {"dtype": "float32", "shape": [1], "names": None}
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            df["reward"] = np.zeros(len(df), dtype=np.float32)
+            df.to_parquet(shard, compression="snappy", index=False)
+
+        resp = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "reward",
+                "frame_from": 0,
+                "frame_to": 5,
+                "value": 1e9,  # huge, but no bound declared
+            },
+        )
+        assert resp.status_code == 200, resp.text

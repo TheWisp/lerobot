@@ -821,8 +821,15 @@ class FeatureSchema(BaseModel):
     # across episodes by ``compute_stats.py``). Populated only for scalar numeric
     # features (shape == [1] or empty). The GUI shows these next to the feature
     # name and uses them to scale the slider so the range is stable across
-    # episodes. Distinct from any future *declared* min/max bound — these are
-    # observed values, not enforced.
+    # episodes. Distinct from declared bounds (below): observed, not enforced.
+    declared_min: float | None = None
+    declared_max: float | None = None
+    # Optional declared bounds from the feature spec in ``info.json``. When
+    # present, ``validate_feature_dtype_and_shape`` rejects values outside
+    # ``[declared_min, declared_max]`` at add_frame and stage time. The GUI
+    # uses them to scale the slider (preferred over observed_min/max) and may
+    # show them in the card header. Categorical integer features use the
+    # ``names`` field instead — the legal range is implicitly ``[0, len(names))``.
 
 
 class DatasetInfo(BaseModel):
@@ -943,6 +950,25 @@ def _has_subtask_lookup(dataset) -> bool:
     return getattr(dataset.meta, "subtasks", None) is not None
 
 
+def _coerce_optional_float(v: Any) -> float | None:
+    """Coerce a value from ``info.json`` to a JSON-friendly Python float.
+
+    Tolerates ``None``, missing, non-numeric, or NaN/inf — returns ``None`` for
+    anything we can't safely surface as a slider bound.
+    """
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    import math
+
+    if not math.isfinite(f):
+        return None
+    return f
+
+
 def _scalar_observed_extrema(
     stats: dict | None, name: str, shape: list[int]
 ) -> tuple[float | None, float | None]:
@@ -1026,6 +1052,10 @@ def _build_features_schema(
             else:
                 names = None
         obs_min, obs_max = _scalar_observed_extrema(stats, name, shape_list)
+        # Declared bounds: optional ``min`` / ``max`` keys in info.json — coerce
+        # to JSON-friendly float and tolerate missing/non-numeric values silently.
+        decl_min = _coerce_optional_float(ft.get("min"))
+        decl_max = _coerce_optional_float(ft.get("max"))
         out[name] = FeatureSchema(
             dtype=str(ft.get("dtype", "")),
             shape=shape_list,
@@ -1033,6 +1063,8 @@ def _build_features_schema(
             is_per_episode=name in per_episode,
             observed_min=obs_min,
             observed_max=obs_max,
+            declared_min=decl_min,
+            declared_max=decl_max,
         )
 
     if subtask_synthesis and SUBTASK_STORAGE_FEATURE in features:
