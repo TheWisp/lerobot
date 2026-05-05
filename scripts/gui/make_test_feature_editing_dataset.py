@@ -11,13 +11,15 @@ features:
 * ``subtask_index`` — int64[1], 3-segment progression per episode plus a
   ``meta/subtasks.parquet`` lookup with starter strings. Frontend stages
   strings; backend resolves to indices at Save.
-* ``quality`` — int64[1], per-episode rating 1–5 (π0.7-style annotator
-  score). Cycles 1, 2, 3, 4, 5, 1, … across episodes. Per-episode
-  broadcast like ``success``; the slider should auto-scale to [1, 5]
-  once stats land.
-* ``control_mode`` — string[1], per-episode alternating "ee" / "joint".
-  Per-episode broadcast; renders as colored stripe on the row, text
-  input in the inspector.
+* ``quality`` — int64[1], per-frame rating 1–5 (π0.7-style annotator
+  score; the values vary within each episode, oscillating 5→1→5 with
+  ~60-frame period, so sub-range edits exercise the declared-bounds
+  slider). Slider scaled to [1, 5] via declared bounds.
+* ``control_mode`` — int64[1] with names=["ee","joint"], per-episode
+  categorical alternating ee/joint across episodes. Demonstrates the
+  ``<select>`` widget; lives only in the Inspector under
+  "Per-episode" since the timeline row of a uniform feature wastes
+  space.
 
 Default builds all five features. Pass ``--features a,b,c`` to pick a
 subset.
@@ -99,16 +101,18 @@ def _build_subtask_index(df: pd.DataFrame, _seen: dict) -> np.ndarray:
     return np.where(fi < 30, 0, np.where(fi < 70, 1, 2)).astype(np.int64)
 
 
-def _build_quality(df: pd.DataFrame, seen: dict) -> np.ndarray:
-    """Per-episode int 1-5 — π0.7-style quality rating, cycles 1..5."""
-    eps = df["episode_index"].astype(int).values
-    out = np.zeros(len(df), dtype=np.int64)
-    for i, ep in enumerate(eps):
-        if ep not in seen:
-            # Cycle 1, 2, 3, 4, 5, 1, 2, … so every value is exercised.
-            seen[ep] = int(ep % 5) + 1
-        out[i] = seen[ep]
-    return out
+def _build_quality(df: pd.DataFrame, _seen: dict) -> np.ndarray:
+    """Per-frame int 1-5 — π0.7-style quality rating.
+
+    π0.7 annotators mark quality per frame so they can flag individual
+    fumbles within an otherwise-good demonstration. We mirror that here
+    with an oscillation that dips from 5 down to 1 and back, period
+    ~60 frames — gives a visually interesting per-frame curve and lets
+    the per-frame slider edit a sub-range without coercion.
+    """
+    fi = df["frame_index"].astype(int).values
+    val = 3.0 + 2.0 * np.cos(2.0 * np.pi * fi / 60.0)
+    return np.clip(np.round(val), 1, 5).astype(np.int64)
 
 
 def _build_control_mode(df: pd.DataFrame, seen: dict) -> np.ndarray:

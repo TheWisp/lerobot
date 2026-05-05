@@ -452,13 +452,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .inspector-summary .summary-key { color: #888; }
 .inspector-summary .summary-value { color: #ddd; }
 
-.inspector-selection-header {
+/* Inspector section header — used twice (Episode N + Frames N…M). */
+.inspector-section-header {
     padding: 8px 0;
     border-bottom: 1px solid #0f3460;
-    margin-bottom: 8px;
+    margin: 16px 0 8px 0;
 }
-.inspector-selection-header .sel-title { font-weight: 600; color: #f39c12; }
-.inspector-selection-header .sel-meta { color: #888; font-size: 11px; }
+.inspector-section-header:first-child { margin-top: 0; }
+.inspector-section-header .sel-title { font-weight: 600; color: #f39c12; }
+.inspector-section-header .sel-meta { color: #888; font-size: 11px; margin-top: 2px; }
 
 .feature-card {
     border: 1px solid #0f3460;

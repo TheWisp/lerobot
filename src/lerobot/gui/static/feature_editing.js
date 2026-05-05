@@ -122,8 +122,12 @@
     }
 
     function onPlayheadChanged() {
-        // Update the per-frame value display in Inspector when no selection.
-        if (!selection) renderInspectorFrameValues();
+        // No-op. The per-frame section tracks the timeline marker at render
+        // time only — re-rendering on every scrub would tear down DOM
+        // listeners and steal focus from any per-episode widget the user
+        // is editing. The user gets fresh per-frame values by clicking on
+        // the timeline (which both moves the marker AND creates a
+        // single-frame selection), or by drag-selecting a range.
     }
 
     // Tracks the previous pending-count so we can detect a Save (>0 → 0).
@@ -272,53 +276,103 @@
     }
 
     function renderInspector() {
-        if (!selection) {
-            if (window.currentDataset) {
-                renderInspectorEmpty(window.currentDataset);
-                renderInspectorFrameValues();
-            }
-            return;
-        }
-
         const datasetId = window.currentDataset;
         const ds = window.datasets && window.datasets[datasetId];
-        if (!ds) return;
-
+        if (!ds) {
+            // No dataset open → fallback to the schema-only empty state.
+            if (datasetId) renderInspectorEmpty(datasetId);
+            return;
+        }
         const body = document.getElementById("inspector-body");
         if (!body) return;
 
-        const featuresSchema = ds.features_schema || {};
-        const from = selection.frameFrom;
-        const to = selection.frameTo;
-        const k = to - from;
-        const m = to - 1;
+        // We always render both sections. Per-episode is always editable
+        // (it doesn't depend on frame selection). Per-frame is editable
+        // only when the user has a selection — otherwise the cards show
+        // the current playhead frame's values with widgets disabled, so
+        // the schema is always visible (consistent with how the user
+        // expects the inspector to behave when scrubbing).
+        const epIdx = (selection && selection.episodeIndex != null)
+            ? selection.episodeIndex
+            : window.currentEpisode;
+        if (epIdx == null) {
+            // Dataset open but no episode selected yet.
+            renderInspectorEmpty(datasetId);
+            return;
+        }
 
-        const cards = [];
+        const featuresSchema = ds.features_schema || {};
+        const epLen = (window.totalFrames > 0) ? window.totalFrames : 0;
+
+        // Per-frame "effective range": the selection if there is one,
+        // otherwise the playhead frame as a [N, N+1) single-frame view.
+        const hasSelection = selection != null && selection.episodeIndex === epIdx;
+        const playhead = window.currentFrame ?? 0;
+        const fFrom = hasSelection ? selection.frameFrom : playhead;
+        const fTo = hasSelection ? selection.frameTo : playhead + 1;
+        const k = fTo - fFrom;
+        const m = fTo - 1;
+        const originRow = hasSelection ? selection.originRow : null;
+
+        const perFrameCards = [];
+        const perEpisodeCards = [];
         for (const [name, ft] of Object.entries(featuresSchema)) {
             if (!isEditable(name, ft)) continue;
-            cards.push(renderFeatureCard(name, ft, from, to, datasetId, selection.episodeIndex, selection.originRow));
+            if (ft.is_per_episode) {
+                // Always editable — covers the whole episode by definition.
+                perEpisodeCards.push(
+                    renderFeatureCard(name, ft, 0, epLen, datasetId, epIdx, originRow,
+                        { editable: true })
+                );
+            } else {
+                // Editable only when the user has actively selected a range.
+                perFrameCards.push(
+                    renderFeatureCard(name, ft, fFrom, fTo, datasetId, epIdx, originRow,
+                        { editable: hasSelection })
+                );
+            }
         }
-        if (cards.length === 0) {
-            cards.push(
+
+        const frameTitle = hasSelection
+            ? (k === 1 ? `frame ${fFrom}` : `frames ${fFrom}…${m} (${k} frames)`)
+            : `frame ${playhead}`;
+        const frameMeta = hasSelection
+            ? "Frame-specific features · drag-select on any row to change range"
+            : "Frame-specific features · drag-select on any row to edit";
+
+        const sections = [];
+        // Per-episode goes ABOVE per-frame: episode is broader context.
+        if (perEpisodeCards.length) {
+            sections.push(
+                `<div class="inspector-section-header">` +
+                `<div class="sel-title">Episode ${epIdx}` +
+                (epLen > 0 ? ` (${epLen} frames)` : "") + `</div>` +
+                `<div class="sel-meta">Episode-only features</div>` +
+                `</div>` +
+                perEpisodeCards.join("")
+            );
+        }
+        if (perFrameCards.length) {
+            sections.push(
+                `<div class="inspector-section-header">` +
+                `<div class="sel-title">${frameTitle}</div>` +
+                `<div class="sel-meta">${frameMeta}</div>` +
+                `</div>` +
+                perFrameCards.join("")
+            );
+        }
+        if (!sections.length) {
+            sections.push(
                 '<div class="empty-state">' +
-                'No editable features in the selection. action / observation.* / images / DEFAULT_FEATURES are read-only in V1.' +
+                'No editable features. action / observation.* / images / DEFAULT_FEATURES are read-only in V1.' +
                 '</div>'
             );
         }
 
-        const titleText = (k === 1)
-            ? `frame ${from}`
-            : `frames ${from}…${m} (${k} frames)`;
+        body.innerHTML = sections.join("");
 
-        body.innerHTML = `
-            <div class="inspector-selection-header">
-                <div class="sel-title">${titleText}</div>
-                <div class="sel-meta">ep ${selection.episodeIndex} · drag-select on any row</div>
-            </div>
-            ${cards.join("")}
-        `;
-
-        // Wire edit widgets (auto-staging on change).
+        // Wire edit widgets (auto-staging on change). Disabled widgets are
+        // skipped naturally — they have no listeners that could fire.
         wireWidgets(body);
     }
 
@@ -365,8 +419,14 @@
         `;
     }
 
-    function renderFeatureCard(name, ft, frameFrom, frameTo, datasetId, episodeIndex, originRow) {
-        const editable = isEditable(name, ft);
+    function renderFeatureCard(name, ft, frameFrom, frameTo, datasetId, episodeIndex, originRow, opts) {
+        // Schema-level read-only check (action / observation.* / images / DEFAULT_FEATURES).
+        const schemaEditable = isEditable(name, ft);
+        // Caller can downgrade to read-only (used for per-frame cards when no
+        // selection — they show current playhead values but the user must
+        // drag-select to actually edit).
+        const callerEditable = (opts && opts.editable === false) ? false : true;
+        const editable = schemaEditable && callerEditable;
         const focused = (originRow === name);
         const dtype = ft.dtype || "?";
         const shape = (ft.shape || []).join("×") || "1";
@@ -383,13 +443,15 @@
         const headerExtras = pendingEdit
             ? `<span class="card-pending">● pending</span>`
             : "";
-        const broadcastNote = (editable && isBroadcast)
-            ? `<div class="card-broadcast-note">per-episode — edit applies to the full episode (frames 0…${(window.totalFrames || 0) - 1})</div>`
-            : "";
 
         let widget = "";
-        if (!editable) {
+        if (!schemaEditable) {
             widget = `<span class="card-readonly-tag">read-only in V1</span>`;
+        } else if (!callerEditable) {
+            // Per-frame card without a selection: render the widget but
+            // disabled, so the user sees current values without being able
+            // to edit until they drag-select.
+            widget = renderWidgetForType(name, ft, effFrom, effTo, datasetId, episodeIndex, { disabled: true });
         } else {
             widget = renderWidgetForType(name, ft, effFrom, effTo, datasetId, episodeIndex);
         }
@@ -417,7 +479,6 @@
                     <span class="card-dtype">${escapeHtml(dtype)}[${shape}]</span>
                 </div>
                 <div class="card-summary">${cardSummary(name, ft, datasetId, episodeIndex, effFrom, effTo)}</div>
-                ${broadcastNote}
                 <div class="card-widget">${widget}</div>
             </div>
         `;
@@ -457,10 +518,11 @@
         return "&nbsp;";
     }
 
-    function renderWidgetForType(name, ft, frameFrom, frameTo, datasetId, episodeIndex) {
+    function renderWidgetForType(name, ft, frameFrom, frameTo, datasetId, episodeIndex, opts) {
         const dtype = ft.dtype || "";
         const shape = ft.shape || [];
         const isScalar = (shape.length === 0) || (shape.length === 1 && shape[0] === 1);
+        const disabledAttr = (opts && opts.disabled) ? " disabled" : "";
 
         if (dtype === "bool" && isScalar) {
             // Initial state mirrors the merged slice (disk + pending edits):
@@ -479,11 +541,11 @@
             }
             return (
                 `<input type="checkbox" data-widget="bool" data-feature="${escapeHtml(name)}"` +
-                ` data-initial="${dataInitial}"${checkedAttr}>`
+                ` data-initial="${dataInitial}"${checkedAttr}${disabledAttr}>`
             );
         }
         if (dtype === "string") {
-            return `<input type="text" data-widget="string" data-feature="${escapeHtml(name)}" placeholder="(value for range)">`;
+            return `<input type="text" data-widget="string" data-feature="${escapeHtml(name)}" placeholder="(value for range)"${disabledAttr}>`;
         }
         // Categorical integer feature (int + names). The on-disk value is the
         // index ``[0, len(names))``; the user picks by label. Detected before
@@ -510,7 +572,7 @@
                     ? `<option value="" selected disabled>(mixed)</option>`
                     : "";
             return (
-                `<select data-widget="categorical" data-feature="${escapeHtml(name)}">` +
+                `<select data-widget="categorical" data-feature="${escapeHtml(name)}"${disabledAttr}>` +
                 placeholder +
                 options.join("") +
                 `</select>`
@@ -565,20 +627,20 @@
             }
             const step = (dtype.startsWith("int")) ? "1" : "any";
             return `
-                <input type="range" data-widget="scalar-slider" data-feature="${escapeHtml(name)}" min="${lo}" max="${hi}" step="${step}"${initialSliderAttr}>
-                <input type="number" data-widget="scalar-number" data-feature="${escapeHtml(name)}" step="${step}"${initialValueAttr} placeholder="(value)">
+                <input type="range" data-widget="scalar-slider" data-feature="${escapeHtml(name)}" min="${lo}" max="${hi}" step="${step}"${initialSliderAttr}${disabledAttr}>
+                <input type="number" data-widget="scalar-number" data-feature="${escapeHtml(name)}" step="${step}"${initialValueAttr} placeholder="(value)"${disabledAttr}>
             `;
         }
         if (shape.length === 1 && shape[0] > 0 && shape[0] <= 8) {
             // Small numeric vector → row of inputs.
             const inputs = [];
             for (let i = 0; i < shape[0]; i++) {
-                inputs.push(`<input type="number" data-widget="vector-cell" data-feature="${escapeHtml(name)}" data-cell="${i}" step="any">`);
+                inputs.push(`<input type="number" data-widget="vector-cell" data-feature="${escapeHtml(name)}" data-cell="${i}" step="any"${disabledAttr}>`);
             }
             return `<div class="vector-row">${inputs.join("")}</div>`;
         }
         // Large vector / matrix → JSON textarea.
-        return `<textarea data-widget="json" data-feature="${escapeHtml(name)}" placeholder="JSON value (matches dtype/shape)"></textarea>`;
+        return `<textarea data-widget="json" data-feature="${escapeHtml(name)}" placeholder="JSON value (matches dtype/shape)"${disabledAttr}></textarea>`;
     }
 
     // ── Edit-widget wiring (auto-staging on change) ─────────────────────
@@ -758,22 +820,25 @@
                 window.setStatus && window.setStatus(`Edit rejected: ${err}`);
                 return;
             }
-            // Backend may have coerced the range (per-episode broadcast).
-            // Update local selection so the visualization matches what was staged.
+            // The backend coerces the range for per-episode features (the
+            // staged edit covers [0, episode_length)). We use the coerced
+            // range for the same-stage-key collapse logic, but DON'T mutate
+            // the user's selection: the user dragged a sub-range for a
+            // reason and snapping it to the whole episode every time they
+            // tweak success/control_mode is jarring.
             let coercedFrom = selection.frameFrom, coercedTo = selection.frameTo;
             try {
                 const responseBody = await res.json();
                 if (responseBody && Array.isArray(responseBody.coerced_range)) {
                     coercedFrom = responseBody.coerced_range[0];
                     coercedTo = responseBody.coerced_range[1];
-                    selection.frameFrom = coercedFrom;
-                    selection.frameTo = coercedTo;
                 }
             } catch (_) { /* response body wasn't JSON — ignore */ }
             // Record the identity of this successful stage so subsequent
             // typing in the SAME widget+selection auto-collapses into one
-            // edit instead of stacking 409 dialogs. Use the (possibly
-            // coerced) range that actually landed in PendingEdit.
+            // edit instead of stacking 409 dialogs. Keyed on the coerced
+            // range so two stages on the same per-episode feature collapse
+            // even when the user's selection drifted between them.
             _lastStagedKey = _stageKey(
                 datasetId, featureName, selection.episodeIndex,
                 coercedFrom, coercedTo
@@ -840,7 +905,13 @@
         const hiddenNames = [];
         for (const [name, ft] of Object.entries(ds.features_schema)) {
             const state = featureRowState.get(name) || {};
-            const hidden = isHiddenByDefault(name, ft) && !state.pinned;
+            const hiddenDefault = isHiddenByDefault(name, ft);
+            // Per-episode features are uniform across the episode — a
+            // full-width solid-color row is wasted real estate. Surface
+            // them only in the Inspector under their own section. The
+            // user can still pin them to the timeline if they want.
+            const hiddenPerEpisode = ft.is_per_episode && !state.pinned;
+            const hidden = (hiddenDefault || hiddenPerEpisode) && !state.pinned;
             if (!hidden) visibleFeatures.push([name, ft]);
             else hiddenNames.push(name);
         }
