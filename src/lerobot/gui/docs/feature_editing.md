@@ -237,6 +237,61 @@ A `display_hint` in `info.json` for finer control is a follow-up.
 
 **Out (Follow-ups):** in-place segment manipulation · row context menus · multi-range selection · loop-on-selection · undo / redo across Saves (incl. **single-step "Revert last Save"** via a pre-edit snapshot file at `.lerobot_gui_edits_history/<timestamp>.json` — designed but punted) · schema mutations (add/remove/rename) · derived/computed features · curve editor · **multi-dim numeric vector visualization** (`action`, `observation.*`) — design between stacked-rows / overlaid-curves / collapsed-expandable, deferred · URDF / 3D trajectory views · stats viewer (P1/P2) · first-class per-episode features (format extension) · `add_frame(subtask=...)` writer · `display_hint` in `info.json` · episode-list shortcuts (success column, inline `task` edit) · cross-file atomic Save (manifest + resume-on-open) · keyboard-only frame-range entry (alternative to drag-select).
 
+### Post-V1 additions landed during implementation
+
+The branch went beyond the original V1 surface — these are documented here so the next reader knows they're part of the shipped system, not deferred.
+
+- **Declared bounds (`min` / `max`) on a feature** — optional fields in
+  `info.json`'s features dict, validated by
+  `validate_feature_numeric_bounds` in
+  [feature_utils.py](../../datasets/feature_utils.py) at `add_frame`
+  and at GUI stage time. Backward-compatible: features without these
+  fields validate identically to before. Surfaced in the schema
+  endpoint as `FeatureSchema.declared_min` / `declared_max`. Used
+  by the Inspector slider's lo/hi precedence (declared > observed >
+  series-fallback) and by the `[min … max]` chip rendered next to
+  the feature name.
+- **Categorical (int + names) widget** — `int` features with a
+  non-empty `names` list (and scalar shape) now render as a
+  dropdown over the labels in the Inspector and as a colored band
+  per category on the timeline row. The on-disk value is the
+  integer index `[0, len(names))`; the strings are display labels.
+  `is_categorical_feature(ft)` in
+  [feature_utils.py](../../datasets/feature_utils.py) is the canonical
+  predicate (single source of truth for the
+  scalar-int-with-names contract).
+- **Dataset-wide observed `[min, max]`** — `FeatureSchema.observed_min`
+  / `observed_max` populated from `meta/stats.json` (aggregated
+  across episodes by `compute_stats.py`). The Inspector shows the
+  observed range as a fallback chip when declared bounds aren't
+  present, and the slider scale falls back to it when stats are
+  available but no declared bounds.
+- **Per-episode segmentation in the Inspector** — features detected
+  as per-episode-broadcast (uniform within each episode, e.g.
+  `success`, `control_mode`) no longer get full-width solid-color
+  timeline rows. They live in their own "Episode N (M frames)"
+  Inspector section _above_ the per-frame section. Per-frame cards
+  remain editable when a selection exists; per-episode cards are
+  always editable (selection-independent).
+- **Stage-time bounds enforcement** — the GUI's
+  `POST /api/edits/feature-set` runs the bounds checker inline, so
+  out-of-range values get an immediate 400 with the user-submitted
+  feature name in the error message. This is in addition to the
+  source-of-truth gate in `set_feature_values` itself.
+- **`StatsRecomputationError`** — `set_feature_values` raises this
+  specific exception when per-episode stats recompute fails _after_
+  data shards were written. The data is already on disk; only stats
+  are stale. The GUI's apply pipeline catches it and reports
+  `status: "partial"` with the failure surfaced. Without the
+  specific exception type, stale stats (which corrupt the schema
+  endpoint's `observed_min/max` chip and break normalization at
+  training time) silently land in production.
+
+The new `set_feature_values()` API now lives in its own module —
+[src/lerobot/datasets/feature_value_edits.py](../../datasets/feature_value_edits.py)
+— re-exported from `dataset_tools.py` for back-compat. Isolating it
+keeps our changes off `dataset_tools.py`'s busy refactor surface.
+
 ---
 
 ## Critical files
