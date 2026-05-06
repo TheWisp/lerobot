@@ -1,0 +1,90 @@
+<h2>Where does the Cloud option live in the launch form?</h2>
+<p class="subtitle">Both options share the same Model tab. The question is how visible the Local↔Cloud switch should be.</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Top-of-form radio: <em>Local</em> | <em>Cloud (Nebius)</em></h3>
+      <p>Single "Train" button on the Model tab opens one form. First field is a radio that switches the rest of the form between local fields (output dir) and cloud fields (Nebius profile, push-to-Hub repo). Common fields (dataset, policy, hyperparams) appear once and apply to both.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Train form — Local mode selected</div>
+        <div class="mockup-body" style="text-align:left">
+          <div style="font-size:13px"><strong>Run on:</strong> &nbsp;
+            <span style="background:#3a6;color:white;padding:2px 8px;border-radius:3px">● Local</span>
+            <span style="color:#888;padding:2px 8px">○ Nebius</span>
+          </div>
+          <hr style="margin:8px 0;border-color:#444">
+          <div style="font-size:12px;line-height:1.7">
+            Dataset: <span class="placeholder" style="display:inline-block;width:200px">lerobot/aloha_static_cups</span><br>
+            Policy: <span class="placeholder" style="display:inline-block;width:80px">pi0</span> &nbsp;
+            Steps: <span class="placeholder" style="display:inline-block;width:60px">100000</span><br>
+            Output dir: <span class="placeholder" style="display:inline-block;width:200px">outputs/pi0_run1</span>
+          </div>
+          <div style="margin-top:8px"><button class="mock-button">Start training</button></div>
+        </div>
+      </div>
+      <div class="mockup" style="margin-top:8px">
+        <div class="mockup-header">Train form — Nebius mode selected</div>
+        <div class="mockup-body" style="text-align:left">
+          <div style="font-size:13px"><strong>Run on:</strong> &nbsp;
+            <span style="color:#888;padding:2px 8px">○ Local</span>
+            <span style="background:#5a9;color:white;padding:2px 8px;border-radius:3px">● Nebius</span>
+          </div>
+          <hr style="margin:8px 0;border-color:#444">
+          <div style="font-size:12px;line-height:1.7">
+            Dataset: <span class="placeholder" style="display:inline-block;width:200px">lerobot/aloha_static_cups</span> ↑ Hub<br>
+            Policy: <span class="placeholder" style="display:inline-block;width:80px">pi0</span> &nbsp;
+            Steps: <span class="placeholder" style="display:inline-block;width:60px">100000</span><br>
+            Code source: <span class="placeholder" style="display:inline-block;width:200px">git @ HEAD (734686b3)</span><br>
+            Nebius profile: <span class="placeholder" style="display:inline-block;width:80px">default</span><br>
+            ☑ Push final ckpt to <span class="placeholder" style="display:inline-block;width:140px">user/pi0_run1</span>
+          </div>
+          <div style="margin-top:8px"><button class="mock-button">Provision &amp; start</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Two buttons: <em>Train locally</em> | <em>Train on Nebius</em></h3>
+      <p>Two side-by-side buttons in the model detail panel, each opens a separate form pre-scoped to that target. No mode switch inside the form — fewer conditionals in the UI, but cloud-specific fields are only discoverable after clicking the cloud button.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Model detail panel — actions row</div>
+        <div class="mockup-body" style="text-align:left">
+          <button class="mock-button">Train locally</button>
+          <button class="mock-button" style="margin-left:8px">Train on Nebius ☁</button>
+          <button class="mock-button" style="margin-left:8px;background:#444">Use in Run tab</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Subtab: <em>Train</em> &nbsp;→&nbsp; <em>Local</em> | <em>Cloud</em> nav</h3>
+      <p>Open a "Train" view that occupies the full detail panel, with its own internal nav for Local / Cloud / (future) Resume. More room for cloud-specific UI like the cost meter, VM provisioning progress, and post-training cleanup actions — none of which fit comfortably into a small form.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Model detail panel — Train view</div>
+        <div class="mockup-body" style="text-align:left">
+          <div style="font-size:13px;border-bottom:1px solid #444;padding-bottom:6px">
+            <span style="color:#888">Train ▸</span>
+            <span style="background:#3a6;color:white;padding:2px 8px;border-radius:3px">Local</span>
+            <span style="color:#888;padding:2px 8px">Cloud</span>
+            <span style="color:#888;padding:2px 8px">Resume</span>
+          </div>
+          <div style="font-size:12px;line-height:1.7;margin-top:8px">
+            Dataset: <span class="placeholder" style="display:inline-block;width:200px">lerobot/aloha_static_cups</span><br>
+            Policy: <span class="placeholder" style="display:inline-block;width:80px">pi0</span><br>
+            …
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:24px;color:#888;font-size:13px">My recommendation: <strong>A</strong>. The radio is a single visible affordance, common fields stay common, and the form is small enough that the Local↔Cloud branch only adds ~3 fields. C is over-engineered for one extra mode; B hides the cloud option behind a separate button which makes "what's the difference" less obvious.</p>

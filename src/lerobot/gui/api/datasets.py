@@ -1133,11 +1133,14 @@ def _build_features_schema(
         # to JSON-friendly float and tolerate missing/non-numeric values silently.
         decl_min = _coerce_optional_float(ft.get("min"))
         decl_max = _coerce_optional_float(ft.get("max"))
+        # Per-episode: declared hint in the feature spec wins over inference.
+        # Inference is the fallback for legacy datasets that don't declare it.
+        declared_per_episode = bool(ft.get("per_episode", False))
         out[name] = FeatureSchema(
             dtype=str(ft.get("dtype", "")),
             shape=shape_list,
             names=names,
-            is_per_episode=name in per_episode,
+            is_per_episode=declared_per_episode or name in per_episode,
             per_episode_source=per_episode_source.get(name),
             observed_min=obs_min,
             observed_max=obs_max,
@@ -1428,6 +1431,168 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
     except Exception as e:
         logger.exception(f"Failed to open dataset: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ── Schema-add endpoints (in-place column add) ─────────────────────────
+
+
+# Default features the GUI offers to add via the banner. Any keys the user's
+# dataset is missing get appended in a single ``add_features_inplace`` call;
+# this is the convenience layer on top of the generic POST .../features.
+_DEFAULT_FEATURE_SPECS = {
+    "reward": {
+        "fill_value": 0.0,
+        "info": {"dtype": "float32", "shape": [1], "names": None},
+    },
+    "success": {
+        "fill_value": 0,
+        "info": {"dtype": "int8", "shape": [1], "names": None, "per_episode": True},
+    },
+}
+
+
+class AddFeatureRequest(BaseModel):
+    """Body for ``POST /api/datasets/{id}/features``.
+
+    The ``fill_value`` is auto-typed by ``add_features_inplace`` based on
+    ``dtype``; bool/int/float strings sent from JS get coerced. Only V1
+    dtypes are currently editable in the GUI: bool, int8, int64, float32,
+    string. Vector / image / video features can be added but won't have
+    an editable widget yet.
+    """
+
+    name: str
+    dtype: str
+    shape: list[int] = [1]
+    per_episode: bool = False
+    fill_value: Any = 0
+
+
+class AddFeatureResponse(BaseModel):
+    added: list[str]
+    info: DatasetInfo
+
+
+def _refresh_dataset_after_schema_change(dataset_id: str) -> None:
+    """Drop schema-bound caches after a schema mutation.
+
+    Keeps in-memory state in sync with the new ``info.json`` / parquet
+    contents. ``_dataset_info_mtime`` is popped so the next dataset-open
+    call re-detects the schema; ``_per_episode_features_cache`` and
+    ``_episode_start_indices`` are cleared via the existing helper.
+    ``add_features_inplace`` already replaces ``dataset.meta`` in place,
+    so future ``_dataset_info_from`` calls will see the new schema.
+    """
+    from lerobot.gui.cache_invalidation import invalidate_caches
+
+    _dataset_info_mtime.pop(dataset_id, None)
+    invalidate_caches(
+        _app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices
+    )
+
+
+@router.post("/{dataset_id:path}/features", response_model=AddFeatureResponse)
+async def add_dataset_feature(dataset_id: str, body: AddFeatureRequest) -> AddFeatureResponse:
+    """Add one new feature column to the dataset in place.
+
+    Refuses (409) if any pending ``feature_set`` edits exist for the
+    dataset — the user must Save or Discard them first to avoid mixing
+    schema and value mutations on the same parquet shards.
+    """
+    from lerobot.datasets.dataset_tools import add_features_inplace
+    from lerobot.utils.constants import DEFAULT_FEATURES
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    if body.name in DEFAULT_FEATURES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{body.name}' is a reserved DEFAULT_FEATURE",
+        )
+    if body.name in _DEFAULT_FEATURE_SPECS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{body.name}' is a default feature — use POST /features/defaults "
+                "(banner) instead of the generic dialog."
+            ),
+        )
+
+    pending = _app_state.pending_feature_set_edits_for_dataset(dataset_id)
+    if pending:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{len(pending)} pending feature edits — Save or Discard them first",
+        )
+
+    async with _app_state.get_lock(dataset_id):
+        dataset = _app_state.datasets[dataset_id]
+        if body.name in dataset.meta.features:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Feature '{body.name}' already exists in dataset",
+            )
+
+        info = {"dtype": body.dtype, "shape": list(body.shape), "names": None}
+        if body.per_episode:
+            info["per_episode"] = True
+
+        try:
+            add_features_inplace(dataset, features={body.name: (body.fill_value, info)})
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            logger.exception(f"add_features_inplace failed for {dataset_id}: {e}")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+        _refresh_dataset_after_schema_change(dataset_id)
+        return AddFeatureResponse(added=[body.name], info=_dataset_info_from(dataset_id, dataset))
+
+
+@router.post("/{dataset_id:path}/features/defaults", response_model=AddFeatureResponse)
+async def add_default_features(dataset_id: str) -> AddFeatureResponse:
+    """Add ``reward`` and/or ``success`` if either is missing from the schema.
+
+    Idempotent: returns ``added=[]`` when both are already present. Used
+    by the banner shown on dataset open.
+    """
+    from lerobot.datasets.dataset_tools import add_features_inplace
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    pending = _app_state.pending_feature_set_edits_for_dataset(dataset_id)
+    if pending:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{len(pending)} pending feature edits — Save or Discard them first",
+        )
+
+    async with _app_state.get_lock(dataset_id):
+        dataset = _app_state.datasets[dataset_id]
+        to_add = {
+            name: (spec["fill_value"], dict(spec["info"]))
+            for name, spec in _DEFAULT_FEATURE_SPECS.items()
+            if name not in dataset.meta.features
+        }
+        if not to_add:
+            return AddFeatureResponse(
+                added=[], info=_dataset_info_from(dataset_id, dataset)
+            )
+
+        try:
+            add_features_inplace(dataset, features=to_add)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            logger.exception(f"add_features_inplace (defaults) failed for {dataset_id}: {e}")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+        _refresh_dataset_after_schema_change(dataset_id)
+        return AddFeatureResponse(
+            added=sorted(to_add.keys()), info=_dataset_info_from(dataset_id, dataset)
+        )
 
 
 @router.delete("/{dataset_id:path}")

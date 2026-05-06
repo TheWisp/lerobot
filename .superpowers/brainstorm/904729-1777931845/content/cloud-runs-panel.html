@@ -1,0 +1,103 @@
+<h2>Cloud Runs panel — what's on each card?</h2>
+<p class="subtitle">With multi-run support, the Model tab needs a "Cloud Runs" section listing every active VM. Each card needs enough info to answer "is it OK?" and "what does it cost?" without clicking in.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Model tab — Cloud Runs section (sketch of card content)</div>
+  <div class="mockup-body" style="text-align:left;font-family:monospace;font-size:12px;line-height:1.6">
+    <div style="border:1px solid #4a8;border-radius:4px;padding:8px;margin-bottom:8px;background:#1a3326">
+      <div style="display:flex;justify-content:space-between">
+        <span style="font-weight:bold;color:#7d7">● pi0_aloha_cups_2026_05_04 &nbsp;<span style="color:#888;font-weight:normal">— training</span></span>
+        <span style="color:#aaa">2h 14m  ·  $9.42</span>
+      </div>
+      <div style="color:#aaa;margin-top:4px">
+        VM: yellow-bear-instance-2 (computeinstance-e00abc...)<br>
+        Step: 23,400 / 100,000 (23%)  ·  GPU: 1× H100  ·  Spot<br>
+        Last log: <span style="color:#888">"loss=0.0241 step=23400 lr=1e-4"</span>
+      </div>
+      <div style="margin-top:6px">
+        <button class="mock-button" style="font-size:11px;padding:2px 8px">Tail log</button>
+        <button class="mock-button" style="font-size:11px;padding:2px 8px">Open Wandb ↗</button>
+        <button class="mock-button" style="font-size:11px;padding:2px 8px">SSH</button>
+        <button class="mock-button" style="font-size:11px;padding:2px 8px;background:#5a3">Stop &amp; pull ckpt</button>
+        <button class="mock-button" style="font-size:11px;padding:2px 8px;background:#a44">Destroy</button>
+      </div>
+    </div>
+
+    <div style="border:1px solid #fa3;border-radius:4px;padding:8px;margin-bottom:8px;background:#332817">
+      <div style="display:flex;justify-content:space-between">
+        <span style="font-weight:bold;color:#fc7">⏸ act_test_run &nbsp;<span style="color:#888;font-weight:normal">— preempted</span></span>
+        <span style="color:#aaa">stopped 4m ago  ·  $0.31</span>
+      </div>
+      <div style="color:#aaa;margin-top:4px">
+        VM: green-fox-instance (stopped state)<br>
+        Last step: 5,200 / 50,000  ·  Last ckpt rsynced: outputs/act_test_run/checkpoints/005000<br>
+        <span style="color:#fc7">Spot VM was preempted by Nebius.</span>
+      </div>
+      <div style="margin-top:6px">
+        <button class="mock-button" style="font-size:11px;padding:2px 8px;background:#5a3">Restart &amp; resume from 5000</button>
+        <button class="mock-button" style="font-size:11px;padding:2px 8px;background:#a44">Destroy</button>
+      </div>
+    </div>
+
+    <div style="border:1px solid #555;border-radius:4px;padding:8px;margin-bottom:8px;opacity:0.85">
+      <div style="display:flex;justify-content:space-between">
+        <span style="font-weight:bold;color:#ccc">✓ smolvla_pickup_run3 &nbsp;<span style="color:#888;font-weight:normal">— completed</span></span>
+        <span style="color:#aaa">3h 21m  ·  $14.10</span>
+      </div>
+      <div style="color:#aaa;margin-top:4px">
+        Final ckpt: outputs/smolvla_pickup_run3/checkpoints/100000  ·  Hub: user/smolvla_pickup_run3<br>
+        VM destroyed automatically.
+      </div>
+      <div style="margin-top:6px">
+        <button class="mock-button" style="font-size:11px;padding:2px 8px">Use in Run tab</button>
+        <button class="mock-button" style="font-size:11px;padding:2px 8px">Open Wandb ↗</button>
+        <button class="mock-button" style="font-size:11px;padding:2px 8px">Dismiss</button>
+      </div>
+    </div>
+
+    <div style="border:1px solid #a44;border-radius:4px;padding:8px;background:#331717">
+      <div style="display:flex;justify-content:space-between">
+        <span style="font-weight:bold;color:#f88">✗ pi0_dirty_test &nbsp;<span style="color:#888;font-weight:normal">— failed during training</span></span>
+        <span style="color:#aaa">12m  ·  $0.94</span>
+      </div>
+      <div style="color:#aaa;margin-top:4px">
+        VM: <span style="color:#f88">still running</span> (left up for debugging — see Q3)<br>
+        Failure: lerobot-train exited rc=1, last log: <span style="color:#888">"CUDA OOM at step 142"</span>
+      </div>
+      <div style="margin-top:6px">
+        <button class="mock-button" style="font-size:11px;padding:2px 8px">Tail full log</button>
+        <button class="mock-button" style="font-size:11px;padding:2px 8px">SSH</button>
+        <button class="mock-button" style="font-size:11px;padding:2px 8px;background:#a44">Destroy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h3 style="margin-top:24px">What I'm asking</h3>
+<p>Two questions about the card:</p>
+
+<div class="options">
+  <div class="option" data-choice="ok" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>Looks right — go with this</h3>
+      <p>Card structure (status icon, name, runtime/cost, VM ID, step progress, last log line, action buttons) covers what I need at a glance. Different states (training / preempted / completed / failed) get different colors + action sets.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="trim" onclick="toggleSelect(this)">
+    <div class="letter">−</div>
+    <div class="content">
+      <h3>Too much info — trim</h3>
+      <p>Drop fields you don't need. Tell me which ones in the chat (e.g. "no SSH button", "no last-log preview", "drop cost").</p>
+    </div>
+  </div>
+  <div class="option" data-choice="more" onclick="toggleSelect(this)">
+    <div class="letter">+</div>
+    <div class="content">
+      <h3>Needs more info — add</h3>
+      <p>Tell me what's missing in chat (e.g. "show ETA to completion", "show GPU utilization", "show disk usage").</p>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:24px;color:#888;font-size:13px">Note on the cost figure: it's <em>estimated</em> from VM uptime × Nebius's published $/hr for the chosen preset, not pulled from a billing API. Refreshes every minute.</p>
