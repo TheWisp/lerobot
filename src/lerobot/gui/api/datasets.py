@@ -1133,9 +1133,15 @@ def _build_features_schema(
         # to JSON-friendly float and tolerate missing/non-numeric values silently.
         decl_min = _coerce_optional_float(ft.get("min"))
         decl_max = _coerce_optional_float(ft.get("max"))
-        # Per-episode: declared hint in the feature spec wins over inference.
-        # Inference is the fallback for legacy datasets that don't declare it.
-        declared_per_episode = bool(ft.get("per_episode", False))
+        # Per-episode: declared hint in the feature spec wins over inference,
+        # in BOTH directions (explicit false also overrides inferred-true).
+        # This matters for freshly-added per-frame features whose constant
+        # initial fill would otherwise look like uniform-per-episode and
+        # mis-coerce range edits to the whole episode.
+        if "per_episode" in ft:
+            is_per_ep = bool(ft["per_episode"])
+        else:
+            is_per_ep = name in per_episode
         out[name] = FeatureSchema(
             dtype=str(ft.get("dtype", "")),
             shape=shape_list,
@@ -1455,7 +1461,11 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
 _DEFAULT_FEATURE_SPECS = {
     "reward": {
         "fill_value": 0.0,
-        "info": {"dtype": "float32", "shape": [1], "names": None},
+        # per_episode=false declared explicitly so that the constant 0.0
+        # initial fill doesn't get mis-inferred as a per-episode broadcast
+        # column. Otherwise drag-select range edits would coerce to the
+        # full episode for reward, which is the opposite of what users want.
+        "info": {"dtype": "float32", "shape": [1], "names": None, "per_episode": False},
     },
     "success": {
         "fill_value": 0,
@@ -1547,9 +1557,17 @@ async def add_dataset_feature(dataset_id: str, body: AddFeatureRequest) -> AddFe
                 detail=f"Feature '{body.name}' already exists in dataset",
             )
 
-        info = {"dtype": body.dtype, "shape": list(body.shape), "names": None}
-        if body.per_episode:
-            info["per_episode"] = True
+        # Always write the declared per_episode value (including False) so
+        # the FeatureSchema construction picks it up over the inference
+        # fallback. A constant initial fill would otherwise be mis-inferred
+        # as per-episode-uniform and silently coerce range edits to whole
+        # episodes for non-per-episode columns.
+        info = {
+            "dtype": body.dtype,
+            "shape": list(body.shape),
+            "names": None,
+            "per_episode": bool(body.per_episode),
+        }
 
         try:
             add_features_inplace(dataset, features={body.name: (body.fill_value, info)})

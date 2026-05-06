@@ -1068,6 +1068,10 @@ def add_features_inplace(
     new_feature_specs = {name: dict(info) for name, (_, info) in features.items()}
 
     # ── Pass 1: write .tmp shards with appended columns ────────────────
+    # For each new feature, build a numpy column with the declared dtype
+    # so the on-disk parquet matches the schema. Without the explicit
+    # ``astype``, pandas would auto-promote (float32 → float64, int8 →
+    # int64) when constructing the Series from a Python list of scalars.
     pending_renames: list[tuple[Path, Path]] = []  # [(tmp, final), ...]
     try:
         for shard_path in parquet_files:
@@ -1075,7 +1079,20 @@ def add_features_inplace(
             n_rows = len(df)
             for name, (fill, info) in features.items():
                 col_values = _shape_value_for_column(fill, info, n_rows)
-                df[name] = col_values
+                dtype_str = info.get("dtype", "")
+                shape = list(info.get("shape") or [1])
+                is_scalar = shape in ([], [1])
+                if dtype_str == "string":
+                    df[name] = pd.Series(col_values, dtype="object")
+                elif is_scalar and dtype_str:
+                    # Scalar columns: cast through numpy so the declared
+                    # dtype lands on disk verbatim (no float32→double drift).
+                    df[name] = pd.Series(col_values, dtype=np.dtype(dtype_str))
+                else:
+                    # Vector / matrix: pandas keeps these as object lists;
+                    # parquet stores them as fixed-size lists. The element
+                    # dtype is preserved by _shape_value_for_column already.
+                    df[name] = col_values
             tmp_path = shard_path.with_suffix(shard_path.suffix + ".tmp")
             df.to_parquet(tmp_path, compression="snappy", index=False)
             pending_renames.append((tmp_path, shard_path))

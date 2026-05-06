@@ -1730,6 +1730,30 @@ def test_add_features_inplace_empty_dict_rejected(small_dataset_no_video):
         add_features_inplace(small_dataset_no_video, features={})
 
 
+def test_add_features_inplace_preserves_declared_dtype(small_dataset_no_video):
+    """Declared dtype lands on disk verbatim — no float32→double drift."""
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    add_features_inplace(
+        ds,
+        features={
+            "f32_col": (0.0, {"dtype": "float32", "shape": [1], "names": None}),
+            "i8_col": (0, {"dtype": "int8", "shape": [1], "names": None}),
+            "i64_col": (0, {"dtype": "int64", "shape": [1], "names": None}),
+            "bool_col": (False, {"dtype": "bool", "shape": [1], "names": None}),
+        },
+    )
+    for f in (ds.root / "data").rglob("*.parquet"):
+        table = pq.read_table(f)
+        assert str(table.schema.field("f32_col").type) == "float", \
+            f"f32_col got {table.schema.field('f32_col').type}, expected float"
+        assert str(table.schema.field("i8_col").type) == "int8", \
+            f"i8_col got {table.schema.field('i8_col').type}, expected int8"
+        assert str(table.schema.field("i64_col").type) == "int64"
+        assert str(table.schema.field("bool_col").type) == "bool"
+
+
 def test_add_features_inplace_recomputes_stats(small_dataset_no_video):
     """After add, stats columns for the new feature exist in episodes parquet."""
     import pyarrow.parquet as pq
