@@ -23,6 +23,15 @@
     const seriesCache = new Map(); // key = `${datasetId}:${episodeIdx}` → {length, series}
     const featureRowState = new Map(); // featureName → {pinned, expanded}
 
+    // Banner dismissal — in-memory only (per browser session). Cleared on
+    // page reload so the user is re-asked about adding default features.
+    const bannerDismissed = new Set();
+
+    // Names of MUST-have default features the banner offers to add. Mirrors
+    // the backend's _DEFAULT_FEATURE_SPECS keys; if the two diverge, the
+    // banner lists names the backend won't actually add.
+    const DEFAULT_FEATURE_NAMES = ["reward", "success"];
+
     // Selection: {episodeIndex, frameFrom, frameTo, originRow}
     let selection = null;
     let showPendingEdits = false;
@@ -80,6 +89,7 @@
         onPlayheadChanged,
         onPendingEditsChanged,
         clearSelection,
+        refreshAfterSchemaAdd,
     };
 
     // ── Hooks called from app.js ─────────────────────────────────────────
@@ -97,6 +107,7 @@
             _warn("onDatasetOpened: features_schema is empty — dataset has no declared features.");
         }
         renderInspectorEmpty(datasetId);
+        maybeShowDefaultsBanner(datasetId);
     }
 
     function onDatasetClosed(datasetId) {
@@ -106,8 +117,106 @@
             if (key.startsWith(`${datasetId}:`)) seriesCache.delete(key);
         }
         if (selection && selection.datasetId === datasetId) selection = null;
+        bannerDismissed.delete(datasetId);
+        hideDefaultsBanner();
         renderInspectorEmpty(null);
         renderFeatureRows();
+    }
+
+    // ── Default-features banner (T12) ──────────────────────────────────
+
+    function _missingDefaults(datasetId) {
+        const ds = window.datasets && window.datasets[datasetId];
+        const fs = (ds && ds.features_schema) || {};
+        return DEFAULT_FEATURE_NAMES.filter(n => !fs[n]);
+    }
+
+    function maybeShowDefaultsBanner(datasetId) {
+        const banner = document.getElementById("default-features-banner");
+        if (!banner) return;
+        const missing = _missingDefaults(datasetId);
+        if (missing.length === 0 || bannerDismissed.has(datasetId)) {
+            banner.hidden = true;
+            return;
+        }
+        document.getElementById("banner-missing-list").textContent = missing.join(", ");
+        banner.hidden = false;
+        banner.dataset.datasetId = datasetId;
+        const addBtn = document.getElementById("banner-add-btn");
+        const dismissBtn = document.getElementById("banner-dismiss-btn");
+        addBtn.onclick = () => addDefaultsFor(datasetId);
+        dismissBtn.onclick = () => {
+            bannerDismissed.add(datasetId);
+            banner.hidden = true;
+        };
+    }
+
+    function hideDefaultsBanner() {
+        const banner = document.getElementById("default-features-banner");
+        if (banner) banner.hidden = true;
+    }
+
+    async function addDefaultsFor(datasetId) {
+        const addBtn = document.getElementById("banner-add-btn");
+        const dismissBtn = document.getElementById("banner-dismiss-btn");
+        const originalText = addBtn.textContent;
+        addBtn.disabled = true;
+        addBtn.textContent = "Adding…";
+        if (dismissBtn) dismissBtn.disabled = true;
+        try {
+            const r = await fetch(
+                `/api/datasets/${encodeURIComponent(datasetId)}/features/defaults`,
+                { method: "POST" }
+            );
+            if (!r.ok) {
+                const detail = (await r.json().catch(() => ({}))).detail || r.statusText;
+                window.setStatus && window.setStatus(`Add defaults failed: ${detail}`);
+                return;
+            }
+            const payload = await r.json();
+            // Update window.datasets from the POST response so the row column
+            // re-renders against the new schema without a separate GET.
+            if (payload && payload.info) {
+                window.datasets[datasetId] = payload.info;
+            }
+            hideDefaultsBanner();
+            renderInspector();
+            renderFeatureRows();
+            window.setStatus && window.setStatus(
+                `Added: ${payload.added && payload.added.length ? payload.added.join(", ") : "(nothing — already present)"}`
+            );
+        } catch (err) {
+            _err("addDefaultsFor failed", err);
+            window.setStatus && window.setStatus("Add defaults failed: " + err.message);
+        } finally {
+            addBtn.disabled = false;
+            addBtn.textContent = originalText;
+            if (dismissBtn) dismissBtn.disabled = false;
+        }
+    }
+
+    // Public: called by add_feature_dialog.js after a successful POST so the
+    // schema-bound caches can refresh and rows re-render.
+    function refreshAfterSchemaAdd(datasetId, info) {
+        if (info) {
+            window.datasets[datasetId] = info;
+        }
+        // Drop cached series — new feature columns aren't in the cached
+        // payload yet. Next renderFeatureRows triggers a fresh load.
+        for (const key of Array.from(seriesCache.keys())) {
+            if (key.startsWith(`${datasetId}:`)) seriesCache.delete(key);
+        }
+        maybeShowDefaultsBanner(datasetId);
+        // Trigger a feature-series reload for the current episode if any.
+        if (window.currentEpisode != null) {
+            loadFeatureSeries(datasetId, window.currentEpisode).then(() => {
+                renderFeatureRows();
+                renderInspector();
+            }).catch(e => _err("refreshAfterSchemaAdd: feature-series reload failed", e));
+        } else {
+            renderFeatureRows();
+            renderInspector();
+        }
     }
 
     function onEpisodeSelected(datasetId, episodeIdx) {
@@ -475,6 +584,14 @@
         const isScalar = (shape.length === 0) || (shape.length === 1 && shape[0] === 1);
         const disabledAttr = (opts && opts.disabled) ? " disabled" : "";
 
+        // Tri-state success widget: int8 per-episode named "success".
+        // -1 = failure, 0 = unmarked, +1 = success. Renders as a three-button
+        // segment control. The per-episode coercion already widened the
+        // [from,to) range to the full episode in the calling card.
+        if (name === "success" && dtype === "int8" && ft.is_per_episode && isScalar) {
+            return renderSuccessSegment(name, frameFrom, frameTo, datasetId, episodeIndex, opts);
+        }
+
         if (dtype === "bool" && isScalar) {
             // Initial state mirrors the merged slice (disk + pending edits):
             // all-true → checked, all-false → unchecked, mixed → indeterminate.
@@ -594,6 +711,34 @@
         return `<textarea data-widget="json" data-feature="${escapeHtml(name)}" placeholder="JSON value (matches dtype/shape)"${disabledAttr}></textarea>`;
     }
 
+    function renderSuccessSegment(name, frameFrom, frameTo, datasetId, episodeIndex, opts) {
+        // Three-button segment control: -1 / 0 / +1. Determines "active"
+        // from the merged slice (uniform value → that button is active;
+        // mixed value → none active). Disabled state matches other widgets.
+        const disabledAttr = (opts && opts.disabled) ? ' disabled class="disabled"' : "";
+        const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
+        let uniformValue = null;
+        if (slice && slice.length) {
+            const first = slice[0];
+            if (slice.every(v => v === first)) uniformValue = first;
+        }
+        const states = [
+            { value: -1, label: "✗ Failure", cls: "failure" },
+            { value: 0,  label: "— Unmarked", cls: "unmarked" },
+            { value: 1,  label: "✓ Success", cls: "success" },
+        ];
+        const buttons = states.map(s => {
+            const isActive = (uniformValue === s.value);
+            const activeCls = isActive ? " active" : "";
+            return (
+                `<button type="button" data-widget="success-segment" data-feature="${escapeHtml(name)}"` +
+                ` data-value="${s.value}" class="${s.cls}${activeCls}"${disabledAttr}>` +
+                `${escapeHtml(s.label)}</button>`
+            );
+        });
+        return `<div class="success-segment">${buttons.join("")}</div>`;
+    }
+
     // ── Edit-widget wiring (auto-staging on change) ─────────────────────
 
     // 300 ms debounce — text-style inputs stage on idle, not every keystroke.
@@ -700,6 +845,13 @@
                     };
                     w.addEventListener("blur", stageJson);
                     w.addEventListener("input", _debounce(stageJson, 600));
+                } else if (kind === "success-segment") {
+                    // Tri-state success: stage as int8 (-1 / 0 / +1).
+                    w.addEventListener("click", () => {
+                        if (w.disabled) return;
+                        const v = parseInt(w.getAttribute("data-value"), 10);
+                        stageFeatureEdit(featureName, v);
+                    });
                 }
                 // scalar-slider / scalar-number handled above via slider/numInput pair.
             });
@@ -890,7 +1042,25 @@
         }
 
         const rows = visibleFeatures.map(([name, ft]) => renderFeatureRow(name, ft, cached));
+        // "+ Add feature" affordance for non-default custom features. The
+        // banner handles reward / success; this dialog covers the rest.
+        rows.push(
+            '<div class="feature-row feature-row-addbtn">' +
+            '<button class="feature-add-btn" type="button" id="feature-row-add-feature-btn">+ Add feature</button>' +
+            '</div>'
+        );
         container.innerHTML = rows.join("");
+
+        const addBtn = document.getElementById("feature-row-add-feature-btn");
+        if (addBtn) {
+            addBtn.onclick = () => {
+                if (window.AddFeatureDialog && window.AddFeatureDialog.open) {
+                    window.AddFeatureDialog.open();
+                } else {
+                    _warn("AddFeatureDialog not available — script load issue?");
+                }
+            };
+        }
 
         // Wire mouse handlers on each row's track.
         container.querySelectorAll(".row-track").forEach(track => {
