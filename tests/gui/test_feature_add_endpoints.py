@@ -235,6 +235,43 @@ class TestPendingEditGuard:
         finally:
             state.pending_edits.clear()
 
+    def test_dataset_open_sweeps_orphan_tmp(self, app_with_state, tmp_path, empty_lerobot_dataset_factory):
+        """A stale .tmp left from a crashed save is removed when the dataset is opened."""
+        app, _state = app_with_state
+        features = {
+            "action": {"dtype": "float32", "shape": (2,), "names": None},
+            "observation.state": {"dtype": "float32", "shape": (2,), "names": None},
+        }
+        ds = empty_lerobot_dataset_factory(root=tmp_path / "ds", features=features)
+        for _ in range(2):
+            for _ in range(3):
+                ds.add_frame({
+                    "action": np.zeros(2, dtype=np.float32),
+                    "observation.state": np.zeros(2, dtype=np.float32),
+                    "task": "t",
+                })
+            ds.save_episode()
+        ds.finalize()
+
+        # Drop a stale .tmp file in the data dir.
+        stale = next((ds.root / "data").rglob("*.parquet")).with_suffix(".parquet.tmp")
+        stale.write_text("orphan")
+        assert stale.exists()
+
+        # Open via the API.
+        async def open_call():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.post(
+                    "/api/datasets",
+                    json={"local_path": str(ds.root), "confirm_hub_sync": True},
+                )
+
+        resp = asyncio.run(open_call())
+        assert resp.status_code == 200, resp.text
+        assert not stale.exists(), "stale .tmp not cleaned on open"
+
     def test_post_defaults_blocked_by_pending_feature_edits(self, app_with_state, opened_dataset):
         app, state = app_with_state
         dataset_id, _ds = opened_dataset

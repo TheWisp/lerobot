@@ -1402,6 +1402,19 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
         if verification.is_valid and not verification.warnings:
             logger.info("Dataset verification passed with no errors")
 
+        # Crash-recovery: sweep any orphan .tmp files left from an
+        # interrupted schema-add or value-edit save before serving the
+        # dataset. Fast (one rglob over data/ + meta/) and almost always
+        # a no-op on healthy datasets.
+        try:
+            from lerobot.datasets.dataset_tools import _sweep_orphan_tmp_shards
+
+            removed = _sweep_orphan_tmp_shards(dataset.root)
+            if removed:
+                logger.info(f"Cleaned {removed} orphan .tmp file(s) for {dataset_id}")
+        except Exception as e:
+            logger.warning(f"Orphan .tmp sweep failed for {dataset_id}: {e}")
+
         # Store in app state
         _app_state.datasets[dataset_id] = dataset
 
