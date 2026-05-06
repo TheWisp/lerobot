@@ -336,11 +336,14 @@
     }
 
     function isHiddenByDefault(name, ft) {
-        // Hidden by default per the design: image/video, defaults, action / observation.*
+        // Hidden by default: only DEFAULT_FEATURES (timestamp / frame_index /
+        // index / episode_index / task_index — internal bookkeeping) and
+        // image/video features (their own grid). action / observation.* are
+        // SHOWN by default — the user wants them on the timeline as
+        // recorded-data overlays, even though they're read-only in V1.
+        // Pin/unpin still works to override per-feature.
         if (DEFAULT_FEATURES.has(name)) return true;
         if (READONLY_DTYPES.has(ft.dtype)) return true;
-        if (name === "action") return true;
-        if (name.startsWith("observation.")) return true;
         return false;
     }
 
