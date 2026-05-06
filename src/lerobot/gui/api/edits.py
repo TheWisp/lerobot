@@ -255,34 +255,39 @@ def _resolve_synthetic_feature(dataset, requested_feature: str) -> str:
     return requested_feature
 
 
-def _validate_feature_edit(dataset, request: FeatureSetRequest) -> tuple[int, int, int, int, dict[str, Any]]:
+def _validate_feature_edit(
+    dataset, request: FeatureSetRequest
+) -> tuple[str, int, int, int, int, dict[str, Any]]:
     """Validate the request against the dataset schema and trim envelope.
 
-    Returns ``(frame_from, frame_to, global_from, global_to, feature_info)``.
-    The returned frame_from/frame_to may be coerced to ``[0, episode_length)``
-    if the feature is detected as per-episode-broadcast (e.g. ``success``) —
-    sub-range edits would silently break the broadcast invariant otherwise.
+    Returns ``(storage_feature, frame_from, frame_to, global_from, global_to,
+    feature_info)``. ``storage_feature`` is the canonical on-disk feature name
+    — for the LeRobot 3.0 subtask format it's ``"subtask_index"`` even when
+    the caller submitted ``"subtask"``. The returned frame_from/frame_to may
+    be coerced to ``[0, episode_length)`` when the feature is detected as
+    per-episode-broadcast (e.g. ``success``).
 
-    Side effect: ``request.feature`` is mutated to the storage feature name
-    when the request used a synthetic display name (e.g. ``subtask`` →
-    ``subtask_index``). Subsequent code paths see the storage name only.
+    The request object itself is NOT mutated — error messages reference the
+    user-submitted name (``request.feature``) so feedback stays familiar,
+    while the storage name is what gets stored in PendingEdit and consumed
+    by the apply pipeline.
 
     Raises HTTPException with appropriate 4xx codes on failure.
     """
     feature_dict = dataset.meta.features
 
     # Translate synthetic display names (subtask) → storage names (subtask_index)
-    # before validation. PendingEdit stores the storage name so the apply
-    # pipeline doesn't need to know about the synthesis.
-    request.feature = _resolve_synthetic_feature(dataset, request.feature)
+    # for everything that operates on on-disk columns. ``request.feature``
+    # stays untouched so error messages reflect what the caller actually sent.
+    storage_feature = _resolve_synthetic_feature(dataset, request.feature)
 
-    if request.feature not in feature_dict:
+    if storage_feature not in feature_dict:
         raise HTTPException(status_code=400, detail=f"Unknown feature: {request.feature!r}")
 
-    feature_info = feature_dict[request.feature]
+    feature_info = feature_dict[storage_feature]
     dtype = feature_info.get("dtype", "")
 
-    if request.feature in _DEFAULT_FEATURES:
+    if storage_feature in _DEFAULT_FEATURES:
         raise HTTPException(
             status_code=400,
             detail=f"Feature {request.feature!r} is auto-managed and not editable",
@@ -292,7 +297,7 @@ def _validate_feature_edit(dataset, request: FeatureSetRequest) -> tuple[int, in
             status_code=400,
             detail=f"Feature {request.feature!r} has dtype {dtype!r} and is not editable in V1",
         )
-    if request.feature == "action" or request.feature.startswith("observation."):
+    if storage_feature == "action" or storage_feature.startswith("observation."):
         raise HTTPException(
             status_code=400,
             detail=f"Feature {request.feature!r} is recorded sensor / control data and is read-only in V1",
@@ -318,7 +323,7 @@ def _validate_feature_edit(dataset, request: FeatureSetRequest) -> tuple[int, in
     from lerobot.gui.api.datasets import _detect_per_episode_features, _get_episode_start_index
 
     per_episode = _detect_per_episode_features(request.dataset_id, dataset)
-    if request.feature in per_episode:
+    if storage_feature in per_episode:
         frame_from, frame_to = 0, ep_length
     else:
         frame_from, frame_to = request.frame_from, request.frame_to
@@ -339,10 +344,10 @@ def _validate_feature_edit(dataset, request: FeatureSetRequest) -> tuple[int, in
 
     # Declared bounds (info.json ``min``/``max``) and categorical (``names``)
     # validation. We run this here rather than only at apply time so the user
-    # gets immediate 400 feedback when they type 7 into a 1-5 quality field
-    # — the alternative would be silently staging the bad value and only
-    # blowing up on Save. We tolerate non-numeric value shapes for features
-    # without bounds (e.g. string subtask labels) by short-circuiting.
+    # gets immediate 400 feedback when they type 7 into a 1-5 quality field —
+    # the alternative would be silently staging the bad value and only
+    # blowing up on Save. The error message uses the user-submitted name so
+    # they recognize it.
     bounds_error = _validate_value_against_declared_bounds(request.feature, feature_info, request.value)
     if bounds_error:
         raise HTTPException(status_code=400, detail=bounds_error)
@@ -350,7 +355,7 @@ def _validate_feature_edit(dataset, request: FeatureSetRequest) -> tuple[int, in
     episode_start = _get_episode_start_index(request.dataset_id, request.episode_index)
     global_from = episode_start + frame_from
     global_to = episode_start + frame_to
-    return frame_from, frame_to, global_from, global_to, feature_info
+    return storage_feature, frame_from, frame_to, global_from, global_to, feature_info
 
 
 def _validate_value_against_declared_bounds(feature_name: str, feature_info: dict, value: Any) -> str:
@@ -500,10 +505,21 @@ async def stage_feature_set(request: FeatureSetRequest):
         raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset_id}")
 
     dataset = _app_state.datasets[request.dataset_id]
-    frame_from, frame_to, global_from, global_to, _ = _validate_feature_edit(dataset, request)
+    (
+        storage_feature,
+        frame_from,
+        frame_to,
+        global_from,
+        global_to,
+        _,
+    ) = _validate_feature_edit(dataset, request)
 
+    # Overlap detection runs against the canonical on-disk feature name —
+    # otherwise a user staging "subtask" twice would dodge the overlap
+    # check because each request has a different surface name even though
+    # both target subtask_index.
     overlaps = _find_overlapping_feature_edits(
-        request.dataset_id, request.episode_index, request.feature, frame_from, frame_to
+        request.dataset_id, request.episode_index, storage_feature, frame_from, frame_to
     )
     if overlaps and not request.confirm_overlap:
         raise HTTPException(
@@ -516,7 +532,7 @@ async def stage_feature_set(request: FeatureSetRequest):
                     f"frames {frame_from}…{frame_to - 1}. "
                     "Re-send with confirm_overlap=true to clip the prior edit(s)."
                 ),
-                "feature": request.feature,
+                "feature": storage_feature,
                 "episode_index": request.episode_index,
                 "new_range": [frame_from, frame_to],
                 "overlapping": [
@@ -534,16 +550,18 @@ async def stage_feature_set(request: FeatureSetRequest):
         removed = _clip_overlapping_edits(overlaps, frame_from, frame_to)
         logger.info(
             f"Resolved {len(overlaps)} overlapping edit(s) on "
-            f"{request.feature} ep={request.episode_index}: {removed} removed, "
+            f"{storage_feature} ep={request.episode_index}: {removed} removed, "
             f"{len(overlaps) - removed} clipped"
         )
 
+    # PendingEdit always stores the canonical on-disk feature name so the
+    # apply pipeline (set_feature_values) sees a consistent column to write.
     edit = PendingEdit(
         edit_type="feature_set",
         dataset_id=request.dataset_id,
         episode_index=request.episode_index,
         params={
-            "feature": request.feature,
+            "feature": storage_feature,
             "frame_from": frame_from,
             "frame_to": frame_to,
             "global_from_index": global_from,
@@ -555,7 +573,7 @@ async def stage_feature_set(request: FeatureSetRequest):
     _save_edits_for_dataset(request.dataset_id)
 
     logger.info(
-        f"Staged feature-set edit: feature={request.feature} ep={request.episode_index} "
+        f"Staged feature-set edit: feature={storage_feature} ep={request.episode_index} "
         f"frames=[{frame_from}, {frame_to}) global=[{global_from}, {global_to})"
     )
     response: dict[str, Any] = {"status": "ok", "message": "Feature-set edit staged"}
@@ -638,6 +656,7 @@ async def _apply_edits_locked(dataset_id: str):
         set_feature_values,
         trim_episode_virtual,
     )
+    from lerobot.datasets.feature_value_edits import StatsRecomputationError
     from lerobot.datasets.io_utils import load_episodes
 
     edits = _app_state.get_edits_for_dataset(dataset_id)
@@ -680,6 +699,14 @@ async def _apply_edits_locked(dataset_id: str):
             set_feature_values(dataset, payload, in_place=True)
             applied += len(feature_set_edits)
             logger.info(f"Applied {len(feature_set_edits)} feature-set edits")
+        except StatsRecomputationError as e:
+            # Data writes succeeded, only stats recompute failed — increment
+            # applied (the user's edits ARE on disk) but surface the staleness
+            # so the frontend shows partial. The user can re-run stats from
+            # the dataset reload path or via a manual aggregation pass.
+            applied += len(feature_set_edits)
+            errors.append(f"Feature-set edits applied, but stats recompute failed: {e}")
+            logger.warning(f"Feature-set edits applied with stale stats: {e}")
         except Exception as e:
             errors.append(f"Feature-set edits: {e}")
             logger.exception("Failed to apply feature-set edits")

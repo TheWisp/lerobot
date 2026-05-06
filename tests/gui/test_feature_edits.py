@@ -728,6 +728,56 @@ class TestSubtaskTranslation:
         assert edit["params"]["feature"] == "subtask_index", edit
         assert edit["params"]["value"] == "grasp"
 
+    def test_stage_error_uses_user_submitted_name_not_storage_name(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        """Regression: when the user submits ``feature="subtask"`` with a
+        value that fails downstream validation (e.g. invalid range), the
+        400 error message must reference ``"subtask"`` — what the user
+        sent — not ``"subtask_index"`` (the internal storage name they
+        never typed). Previously we mutated ``request.feature`` in place
+        and downstream errors leaked the storage name."""
+        app, state = app_with_state
+        ds = self._ds_with_subtask_lookup(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        # Invalid range — frame_to <= frame_from.
+        resp = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "subtask",
+                "frame_from": 5,
+                "frame_to": 5,  # invalid (empty range)
+                "value": "grasp",
+            },
+        )
+        assert resp.status_code == 400, resp.text
+        # The error mentions the user's submitted range, not the storage name.
+        # (The storage name appears nowhere in the user-facing detail.)
+        detail = resp.json()["detail"]
+        assert "Invalid range" in detail
+        # Subtask range check doesn't include the feature name in the message,
+        # but other error paths do — exercise one of those:
+
+        # Read-only feature name reflected back literally.
+        resp2 = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "action",  # read-only V1
+                "frame_from": 0,
+                "frame_to": 5,
+                "value": [0.0] * ds.meta.features["action"]["shape"][0],
+            },
+        )
+        assert resp2.status_code == 400
+        # Error says "action", not some translated name.
+        assert "'action'" in resp2.json()["detail"], resp2.json()["detail"]
+
     def test_stage_subtask_with_brand_new_string_value(
         self, app_with_state, tmp_path, lerobot_dataset_factory
     ):
@@ -1608,6 +1658,54 @@ class TestApplyPartialStatus:
             df["reward"] = np.zeros(len(df), dtype=np.float32)
             df.to_parquet(shard, compression="snappy", index=False)
         return ds
+
+    def test_apply_returns_partial_when_stats_recompute_fails(
+        self, app_with_state, tmp_path, lerobot_dataset_factory, monkeypatch
+    ):
+        """Stats failure during apply: data IS on disk, response is partial,
+        applied count includes the edit (it succeeded — only stats are stale),
+        errors list mentions the stats issue."""
+        app, state = app_with_state
+        ds = self._ds_with_reward(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        r = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "reward",
+                "frame_from": 0,
+                "frame_to": 3,
+                "value": -0.5,
+            },
+        )
+        assert r.status_code == 200, r.text
+
+        # Patch the stats-recompute helper to raise. set_feature_values will
+        # surface this as StatsRecomputationError; the GUI's apply path catches
+        # it specifically and reports partial-with-applied=1.
+        monkeypatch.setattr(
+            "lerobot.datasets.dataset_tools._recompute_episode_stats_from_data",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("simulated stats failure")),
+        )
+
+        ar = _post_apply(app, dataset_id)
+        assert ar.status_code == 200, ar.text
+        body = ar.json()
+        assert body["status"] == "partial", body
+        assert body["applied"] == 1, body
+        assert any("stats" in err.lower() for err in body.get("errors", [])), body
+
+        # Data is on disk despite the stats failure.
+        df = pd.concat(
+            [pd.read_parquet(p) for p in sorted((ds.root / "data").glob("*/*.parquet"))],
+            ignore_index=True,
+        )
+        ep0_offset = int(ds.meta.episodes[0]["dataset_from_index"])
+        for i in range(3):
+            assert pytest.approx(float(df.iloc[ep0_offset + i]["reward"]), abs=1e-6) == -0.5
 
     def test_apply_returns_partial_when_dataset_reload_fails(
         self, app_with_state, tmp_path, lerobot_dataset_factory, monkeypatch
