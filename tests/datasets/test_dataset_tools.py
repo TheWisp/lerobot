@@ -24,7 +24,9 @@ import torch
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
 
 from lerobot.datasets.dataset_tools import (
+    _sweep_orphan_tmp_shards,
     add_features,
+    add_features_inplace,
     delete_episodes,
     merge_datasets,
     modify_features,
@@ -1631,3 +1633,137 @@ def test_trim_episode_with_video(tmp_path):
 
     # Cleanup
     shutil.rmtree(test_root)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# add_features_inplace — schema-additive in-place column add
+# ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def small_dataset_no_video(tmp_path, empty_lerobot_dataset_factory):
+    """Tiny in-memory dataset (no images/video) for fast in-place add tests."""
+    features = {
+        "action": {"dtype": "float32", "shape": (2,), "names": None},
+        "observation.state": {"dtype": "float32", "shape": (2,), "names": None},
+    }
+    dataset = empty_lerobot_dataset_factory(
+        root=tmp_path / "small_ds",
+        features=features,
+    )
+    for _ in range(2):
+        for _ in range(5):
+            dataset.add_frame({
+                "action": np.zeros(2, dtype=np.float32),
+                "observation.state": np.zeros(2, dtype=np.float32),
+                "task": "t",
+            })
+        dataset.save_episode()
+    dataset.finalize()
+    return dataset
+
+
+def test_add_features_inplace_per_frame_reward(small_dataset_no_video, tmp_path):
+    """Adding a per-frame `reward` rewrites parquet shards in place; videos untouched."""
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    data_files_before = sorted((ds.root / "data").rglob("*.parquet"))
+    assert data_files_before, "test setup expected at least one parquet shard"
+
+    add_features_inplace(
+        ds,
+        features={"reward": (0.0, {"dtype": "float32", "shape": [1], "names": None})},
+    )
+
+    # Schema reload: reward in features.
+    assert "reward" in ds.meta.features
+    assert ds.meta.features["reward"]["dtype"] == "float32"
+
+    # Every parquet shard now has a `reward` column with all 0.0.
+    for f in (ds.root / "data").rglob("*.parquet"):
+        table = pq.read_table(f)
+        assert "reward" in table.column_names, f"reward missing from {f}"
+        col = table.column("reward").to_pylist()
+        assert all(v == 0.0 for v in col), f"non-zero values in {f}: {col[:5]}"
+
+    # No .tmp orphans.
+    assert not list(ds.root.rglob("*.tmp")), "orphan .tmp files left over"
+
+
+def test_add_features_inplace_per_episode_success(small_dataset_no_video):
+    """Per-episode int8 success: per_episode hint preserved, fill applied."""
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    add_features_inplace(
+        ds,
+        features={
+            "success": (0, {"dtype": "int8", "shape": [1], "names": None, "per_episode": True}),
+        },
+    )
+
+    assert ds.meta.features["success"].get("per_episode") is True
+    assert ds.meta.features["success"]["dtype"] == "int8"
+
+    for f in (ds.root / "data").rglob("*.parquet"):
+        table = pq.read_table(f)
+        assert "success" in table.column_names
+        assert all(v == 0 for v in table.column("success").to_pylist())
+
+
+@pytest.mark.parametrize("name,info,fragment", [
+    ("action", {"dtype": "float32", "shape": [1], "names": None}, "already exists"),
+    ("timestamp", {"dtype": "float32", "shape": [1], "names": None}, "DEFAULT_FEATURE"),
+    ("ok_name", {"dtype": "float32"}, "must include keys"),  # missing shape
+    ("ok_name", {"dtype": "float32", "shape": []}, "positive ints"),
+    ("ok_name", {"dtype": "float32", "shape": [1], "per_episode": "yes"}, "must be a bool"),
+])
+def test_add_features_inplace_validation(small_dataset_no_video, name, info, fragment):
+    """Each rejection case raises ValueError with a recognizable message."""
+    with pytest.raises(ValueError, match=fragment):
+        add_features_inplace(small_dataset_no_video, features={name: (0.0, info)})
+
+
+def test_add_features_inplace_empty_dict_rejected(small_dataset_no_video):
+    with pytest.raises(ValueError, match="empty"):
+        add_features_inplace(small_dataset_no_video, features={})
+
+
+def test_add_features_inplace_recomputes_stats(small_dataset_no_video):
+    """After add, stats columns for the new feature exist in episodes parquet."""
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    add_features_inplace(
+        ds,
+        features={"reward": (0.0, {"dtype": "float32", "shape": [1], "names": None})},
+    )
+
+    eps_dir = ds.root / "meta" / "episodes"
+    eps_files = list(eps_dir.rglob("*.parquet"))
+    assert eps_files, "no episodes metadata files found"
+    table = pq.read_table(eps_files[0])
+    cols = set(table.column_names)
+    reward_stat_cols = [c for c in cols if c.startswith("stats/reward/")]
+    assert reward_stat_cols, f"no stats/reward/* columns in {cols}"
+
+
+def test_sweep_orphan_tmp_shards(tmp_path):
+    """Orphan .tmp files left from a crashed save are cleaned up."""
+    data_dir = tmp_path / "ds" / "data" / "chunk-000"
+    data_dir.mkdir(parents=True)
+    (data_dir / "file-000.parquet").write_text("not real parquet")
+    (data_dir / "file-000.parquet.tmp").write_text("orphan")
+    (data_dir / "file-001.parquet.tmp").write_text("orphan")
+    info_dir = tmp_path / "ds" / "meta"
+    info_dir.mkdir(parents=True)
+    (info_dir / "info.json").write_text("{}")
+    (info_dir / "info.json.tmp").write_text("orphan")
+
+    removed = _sweep_orphan_tmp_shards(tmp_path / "ds")
+    assert removed == 3
+    assert not list((tmp_path / "ds").rglob("*.tmp"))
+    # Real files untouched.
+    assert (data_dir / "file-000.parquet").exists()
+    assert (info_dir / "info.json").exists()
