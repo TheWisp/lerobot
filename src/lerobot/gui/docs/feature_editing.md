@@ -310,7 +310,7 @@ keeps our changes off `dataset_tools.py`'s busy refactor surface.
 **Tests**:
 
 - new `tests/datasets/test_set_feature_values.py` — value rewrites, stats recomputation, sidecar lookup updates (`subtasks.parquet`), in-place vs forked output, `finalize()` is called.
-- extend [tests/gui/test_state.py](../../../tests/gui/test_state.py) for `feature_set` `PendingEdit` serialization.
+- extend [tests/gui/test_state.py](../../../../tests/gui/test_state.py) for `feature_set` `PendingEdit` serialization.
 - new `tests/gui/test_feature_endpoints.py` — schema, per-frame features, feature-series.
 - new `tests/gui/test_feature_edits.py` — staging, validation, safety rails, end-to-end Save flow.
 - new `tests/gui/test_overlapping_edits.py` — overlap detection at stage time + clipping behavior.
