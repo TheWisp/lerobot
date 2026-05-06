@@ -471,6 +471,103 @@ class TestCrossFileOrdering:
         assert orphans == [], f"orphan .tmp files: {orphans}"
 
 
+class TestStatsRecomputationFailure:
+    """``set_feature_values`` writes data shards in pass-2, then runs
+    ``_recompute_episode_stats_from_data`` on every affected episode. A
+    failure there is surfaced as ``StatsRecomputationError`` rather than
+    silently logged — stale stats break the schema endpoint's
+    ``observed_min``/``max`` chip and break normalization at training
+    time, which are real silent-corruption paths.
+
+    Contract: data is committed first; the exception fires AFTER. So
+    callers always see fresh values on disk even if stats are stale.
+    """
+
+    def test_failure_raises_stats_recomputation_error(self, tmp_path, lerobot_dataset_factory, monkeypatch):
+        from lerobot.datasets import feature_value_edits as fve
+
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        action_dim = ds.meta.features["action"]["shape"][0]
+
+        # Patch on the feature_value_edits module — that's where the import
+        # lands in the function-local scope.
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated stats failure")
+
+        monkeypatch.setattr(
+            "lerobot.datasets.dataset_tools._recompute_episode_stats_from_data",
+            _boom,
+        )
+
+        # Re-import inside the function to test that the late-import path
+        # picks up the monkey-patch. (set_feature_values does ``from
+        # lerobot.datasets.dataset_tools import _recompute_episode_stats_from_data``
+        # at call time.)
+        with pytest.raises(fve.StatsRecomputationError) as exc_info:
+            set_feature_values(
+                ds,
+                edits=[{"feature": "action", "from_index": 0, "to_index": 5, "value": [9.0] * action_dim}],
+            )
+
+        # The exception carries the list of affected episodes and the
+        # underlying cause, so callers can decide what to do.
+        err = exc_info.value
+        assert isinstance(err.episodes, list) and err.episodes, err.episodes
+        assert isinstance(err.cause, RuntimeError), type(err.cause)
+        assert "simulated stats failure" in str(err.cause)
+
+    def test_failure_still_commits_data_to_disk(self, tmp_path, lerobot_dataset_factory, monkeypatch):
+        """Durability invariant: even when stats fail, the data shards
+        already carry the new values. This is what makes the failure
+        recoverable — the user can re-run stats computation manually
+        rather than re-do their edits."""
+        from lerobot.datasets import feature_value_edits as fve
+
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        action_dim = ds.meta.features["action"]["shape"][0]
+        new_value = [-7.5] * action_dim
+
+        monkeypatch.setattr(
+            "lerobot.datasets.dataset_tools._recompute_episode_stats_from_data",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("nope")),
+        )
+
+        with pytest.raises(fve.StatsRecomputationError):
+            set_feature_values(
+                ds,
+                edits=[{"feature": "action", "from_index": 0, "to_index": 5, "value": new_value}],
+            )
+
+        # Data on disk: rows 0..4 have the new value.
+        df = (
+            pd.concat(
+                [pd.read_parquet(p) for p in sorted((ds.root / "data").rglob("*.parquet"))],
+                ignore_index=True,
+            )
+            .sort_values("index")
+            .reset_index(drop=True)
+        )
+        for i in range(5):
+            cell = np.asarray(df.iloc[i]["action"])
+            assert np.allclose(cell, -7.5), f"frame {i} should have new value, got {cell}"
+
+        # And no orphan .tmp left over (pass-2 rename completed before stats ran).
+        orphans = list((ds.root / "data").rglob("*.tmp"))
+        assert orphans == [], f"orphan .tmp files: {orphans}"
+
+    def test_no_failure_returns_normally(self, tmp_path, lerobot_dataset_factory):
+        """Sanity: in the normal happy-path, ``set_feature_values`` returns
+        ``None`` and doesn't raise StatsRecomputationError."""
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        action_dim = ds.meta.features["action"]["shape"][0]
+        # Should not raise.
+        ret = set_feature_values(
+            ds,
+            edits=[{"feature": "action", "from_index": 0, "to_index": 3, "value": [0.1] * action_dim}],
+        )
+        assert ret is None
+
+
 # ── Edge cases for subtask string resolution ────────────────────────────────
 
 
