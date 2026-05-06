@@ -487,6 +487,21 @@ def run_s1(
     if not logging.getLogger().handlers:
         setup_process_logging()
 
+    # Add a per-run FileHandler at the TOP of the function so the file log
+    # captures the full startup (policy load, dataset preload, flash-DAgger
+    # pre-encoding, robot/camera connect). Previously this handler was added
+    # later, after all of those steps — so a crash during startup left no
+    # file-log evidence and post-hoc debugging required the GUI SSE buffer.
+    import datetime
+
+    run_log_dir = Path("outputs/hvla_runs")
+    run_log_dir.mkdir(parents=True, exist_ok=True)
+    run_log_file = run_log_dir / f"run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    _run_fh = logging.FileHandler(str(run_log_file), mode="w")
+    _run_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    logging.getLogger().addHandler(_run_fh)
+    logger.info("S1: Run log → %s", run_log_file)
+
     import json
 
     import draccus
@@ -658,17 +673,8 @@ def run_s1(
     # Note: S2 wait happens after inference thread starts (below),
     # because the inference thread publishes images that S2 needs.
 
-    # Log all runs to file (not just RLT) for post-analysis
-    import datetime
-    from pathlib import Path
-
-    run_log_dir = Path("outputs/hvla_runs")
-    run_log_dir.mkdir(parents=True, exist_ok=True)
-    run_log_file = run_log_dir / f"run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-    _run_fh = logging.FileHandler(str(run_log_file), mode="w")
-    _run_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    logging.getLogger().addHandler(_run_fh)
-    logger.info("S1: Run log → %s", run_log_file)
+    # (Per-run FileHandler installed at top of run_s1 — see line ~497.
+    # Removed from this location so the file log captures full startup.)
 
     # Route uncaught exceptions through the logger so their tracebacks
     # land in the persistent run_*.log alongside everything else.
@@ -707,8 +713,6 @@ def run_s1(
     rlt_state = None
 
     if rlt_mode:
-        from pathlib import Path
-
         from lerobot.policies.hvla.rlt.actor_critic import TD3Agent
         from lerobot.policies.hvla.rlt.config import RLTConfig
         from lerobot.policies.hvla.rlt.replay_buffer import TransactionalReplayBuffer
