@@ -802,6 +802,29 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 .feature-row-addbtn .feature-add-btn:hover { border-color: #4fc3f7; color: #4fc3f7; }
 
+/* ── Per-row delete button (✕) ──────────────────────────────────────── */
+.feature-row .row-label .row-delete-btn {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid transparent;
+    color: #888;
+    width: 18px;
+    height: 18px;
+    line-height: 16px;
+    padding: 0;
+    border-radius: 3px;
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.1s;
+}
+.feature-row:hover .row-label .row-delete-btn { opacity: 1; }
+.feature-row .row-label .row-delete-btn:hover {
+    color: #e57373;
+    border-color: #e57373;
+    background: #2a1a1a;
+}
+
 /* ── Success tri-state segment control ──────────────────────────────── */
 .success-segment {
     display: inline-flex;

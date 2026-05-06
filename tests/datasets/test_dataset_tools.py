@@ -32,6 +32,7 @@ from lerobot.datasets.dataset_tools import (
     modify_features,
     modify_tasks,
     remove_feature,
+    remove_features_inplace,
     rename_features_inplace,
     split_dataset,
     trim_episode,
@@ -1828,6 +1829,47 @@ def test_rename_features_inplace_applies_spec_overrides(small_dataset_no_video):
 def test_rename_features_inplace_validation(small_dataset_no_video, renames, fragment):
     with pytest.raises(ValueError, match=fragment):
         rename_features_inplace(small_dataset_no_video, renames=renames)
+
+
+def test_remove_features_inplace_drops_data_columns(small_dataset_no_video):
+    """remove_features_inplace drops the column from data + stats + info.json."""
+    import json
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    # First add a column we can then remove.
+    add_features_inplace(
+        ds,
+        features={"to_drop": (0.0, {"dtype": "float32", "shape": [1], "names": None})},
+    )
+    assert "to_drop" in ds.meta.features
+
+    remove_features_inplace(ds, names="to_drop")
+
+    assert "to_drop" not in ds.meta.features
+    for f in (ds.root / "data").rglob("*.parquet"):
+        assert "to_drop" not in pq.read_table(f).column_names
+    eps_dir = ds.root / "meta" / "episodes"
+    for f in eps_dir.rglob("*.parquet"):
+        cols = pq.read_table(f).column_names
+        assert not any(c.startswith("stats/to_drop/") for c in cols)
+    with open(ds.root / "meta" / "info.json") as f:
+        info = json.load(f)
+    assert "to_drop" not in info["features"]
+
+
+@pytest.mark.parametrize("name,fragment", [
+    ("missing_feature", "not found"),
+    ("timestamp", "DEFAULT_FEATURE"),
+])
+def test_remove_features_inplace_validation(small_dataset_no_video, name, fragment):
+    with pytest.raises(ValueError, match=fragment):
+        remove_features_inplace(small_dataset_no_video, names=name)
+
+
+def test_remove_features_inplace_empty_list_rejected(small_dataset_no_video):
+    with pytest.raises(ValueError, match="empty"):
+        remove_features_inplace(small_dataset_no_video, names=[])
 
 
 def test_sweep_orphan_tmp_shards(tmp_path):

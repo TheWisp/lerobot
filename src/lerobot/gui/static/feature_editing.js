@@ -1108,6 +1108,13 @@
         container.querySelectorAll(".row-track").forEach(track => {
             wireFeatureRowTrack(track);
         });
+        // Wire per-row delete buttons.
+        container.querySelectorAll(".row-delete-btn").forEach(btn => {
+            btn.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                deleteFeature(btn.getAttribute("data-feature"));
+            });
+        });
     }
 
     function renderFeatureRow(name, ft, cached) {
@@ -1153,12 +1160,24 @@
         const readonlyTag = editable ? "" : `<div class="row-readonly">read-only</div>`;
         const rowClass = editable ? "feature-row" : "feature-row readonly";
 
+        // Per-row delete (✕). Hidden for DEFAULT_FEATURES, image/video,
+        // and the default columns (reward, success) — those go through
+        // the banner / dialog flow so the user doesn't accidentally drop
+        // a column the rest of the GUI relies on.
+        const isDeletable = !DEFAULT_FEATURES.has(name)
+            && !READONLY_DTYPES.has(ft.dtype)
+            && !DEFAULT_FEATURE_NAMES.includes(name);
+        const deleteBtn = isDeletable
+            ? `<button class="row-delete-btn" data-feature="${escapeHtml(name)}" type="button" title="Delete this feature column">✕</button>`
+            : "";
+
         return `
             <div class="${rowClass}" data-feature="${escapeHtml(name)}">
                 <div class="row-label">
                     <div class="row-name">${escapeHtml(name)}</div>
                     <div class="row-dtype">${escapeHtml(dtype)}[${shape}]</div>
                     ${readonlyTag}
+                    ${deleteBtn}
                 </div>
                 <div class="row-track" data-feature="${escapeHtml(name)}" data-length="${length}">
                     ${trackContent}
@@ -1166,6 +1185,51 @@
                 </div>
             </div>
         `;
+    }
+
+    async function deleteFeature(featureName) {
+        const datasetId = window.currentDataset;
+        if (!datasetId) return;
+        const ok = window.confirm(
+            `Permanently delete feature column "${featureName}"?\n\n` +
+            `This rewrites the dataset's parquet shards in place. Cannot be undone.`
+        );
+        if (!ok) return;
+        try {
+            const r = await fetch(
+                `/api/datasets/${encodeURIComponent(datasetId)}/features/${encodeURIComponent(featureName)}`,
+                { method: "DELETE" }
+            );
+            if (!r.ok) {
+                const detail = (await r.json().catch(() => ({}))).detail || r.statusText;
+                window.setStatus && window.setStatus(`Delete failed: ${detail}`);
+                return;
+            }
+            const payload = await r.json();
+            if (payload && payload.info) {
+                window.datasets[datasetId] = payload.info;
+            }
+            // Drop cached series — schema changed.
+            for (const key of Array.from(seriesCache.keys())) {
+                if (key.startsWith(`${datasetId}:`)) seriesCache.delete(key);
+            }
+            // Re-show the banner if reward/success were missing again.
+            maybeShowDefaultsBanner(datasetId);
+            // Re-render rows + inspector.
+            if (window.currentEpisode != null) {
+                loadFeatureSeries(datasetId, window.currentEpisode).then(() => {
+                    renderFeatureRows();
+                    renderInspector();
+                });
+            } else {
+                renderFeatureRows();
+                renderInspector();
+            }
+            window.setStatus && window.setStatus(`Deleted feature: ${featureName}`);
+        } catch (err) {
+            _err("deleteFeature failed", err);
+            window.setStatus && window.setStatus(`Delete failed: ${err.message}`);
+        }
     }
 
     function renderTrackSvg(name, ft, series, length) {

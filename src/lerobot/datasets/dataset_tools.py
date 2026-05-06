@@ -1136,6 +1136,110 @@ def add_features_inplace(
         logging.warning(f"dataset.finalize() failed (non-fatal for in-place schema add): {e}")
 
 
+def remove_features_inplace(
+    dataset: "LeRobotDataset",
+    names: list[str] | str,
+) -> None:
+    """Remove feature columns from an existing dataset in place.
+
+    Drops the named columns from every parquet shard under ``data/``,
+    drops the matching ``stats/<feature>/*`` columns from
+    ``meta/episodes/*.parquet``, and removes the entries from
+    ``info.json``. Videos are NOT touched — refuses to remove image /
+    video features (those have on-disk filenames that need a real fork).
+
+    Args:
+        dataset: The dataset to mutate. Must already be loaded.
+        names: One feature name or a list of feature names to drop.
+
+    Raises:
+        ValueError: For empty input, missing names, ``DEFAULT_FEATURES``
+            collisions, or attempts to drop image/video features.
+    """
+    from lerobot.datasets.utils import DATA_DIR, INFO_PATH
+    from lerobot.utils.constants import DEFAULT_FEATURES
+    from lerobot.utils.io_utils import write_json
+
+    name_list = [names] if isinstance(names, str) else list(names)
+    if not name_list:
+        raise ValueError("names list is empty")
+
+    existing = dataset.meta.features
+    for name in name_list:
+        if name in DEFAULT_FEATURES:
+            raise ValueError(f"Cannot remove DEFAULT_FEATURE '{name}'")
+        if name not in existing:
+            raise ValueError(f"Feature '{name}' not found in dataset")
+        if existing[name].get("dtype") in ("image", "video"):
+            raise ValueError(
+                f"Cannot remove image/video feature '{name}' in-place "
+                "— use the forked remove_feature() instead"
+            )
+
+    work_root = Path(dataset.root)
+    info_path = work_root / INFO_PATH
+    data_dir = work_root / DATA_DIR
+
+    parquet_files = sorted(data_dir.glob("*/*.parquet"))
+    if not parquet_files:
+        raise ValueError(f"No parquet files found in {data_dir}")
+
+    # ── Pass 1: drop columns in each data shard via .tmp ───────────────
+    pending_renames: list[tuple[Path, Path]] = []
+    try:
+        for shard_path in parquet_files:
+            df = pd.read_parquet(shard_path)
+            cols_to_drop = [n for n in name_list if n in df.columns]
+            if cols_to_drop:
+                df = df.drop(columns=cols_to_drop)
+            tmp_path = shard_path.with_suffix(shard_path.suffix + ".tmp")
+            df.to_parquet(tmp_path, compression="snappy", index=False)
+            pending_renames.append((tmp_path, shard_path))
+    except Exception:
+        for tmp_path, _ in pending_renames:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        raise
+
+    for tmp_path, final_path in pending_renames:
+        os.replace(tmp_path, final_path)
+
+    # ── Drop stats columns in each episodes parquet ────────────────────
+    eps_dir = work_root / "meta" / "episodes"
+    if eps_dir.exists():
+        prefixes = [f"stats/{n}/" for n in name_list]
+        for parquet_path in sorted(eps_dir.rglob("*.parquet")):
+            edf = pd.read_parquet(parquet_path)
+            cols_to_drop = [
+                c for c in edf.columns
+                if any(c.startswith(p) for p in prefixes)
+            ]
+            if cols_to_drop:
+                edf = edf.drop(columns=cols_to_drop)
+                tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
+                edf.to_parquet(tmp_path, compression="snappy", index=False)
+                os.replace(tmp_path, parquet_path)
+
+    # ── Update info.json last (atomic via .tmp + rename) ───────────────
+    import json as _json
+
+    with info_path.open("r") as f:
+        info_dict = _json.load(f)
+    for name in name_list:
+        info_dict["features"].pop(name, None)
+
+    info_tmp = info_path.with_suffix(info_path.suffix + ".tmp")
+    write_json(info_dict, info_tmp)
+    os.replace(info_tmp, info_path)
+
+    dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
+
+    try:
+        dataset.finalize()
+    except Exception as e:
+        logging.warning(f"dataset.finalize() failed (non-fatal for remove): {e}")
+
+
 def rename_features_inplace(
     dataset: "LeRobotDataset",
     renames: dict[str, str],

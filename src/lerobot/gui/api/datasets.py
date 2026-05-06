@@ -1699,6 +1699,63 @@ async def add_default_features(dataset_id: str) -> AddFeatureResponse:
         )
 
 
+class RemoveFeatureResponse(BaseModel):
+    removed: list[str]
+    info: DatasetInfo
+
+
+@router.delete(
+    "/{dataset_id:path}/features/{feature_name}",
+    response_model=RemoveFeatureResponse,
+)
+async def remove_dataset_feature(dataset_id: str, feature_name: str) -> RemoveFeatureResponse:
+    """Drop one feature column from the dataset in place.
+
+    Refuses (400) for ``DEFAULT_FEATURES`` and image/video features
+    (their on-disk filenames also encode the feature name — would need
+    the forked ``remove_feature`` and a video re-encode).
+    Refuses (409) when pending ``feature_set`` edits exist on the
+    dataset, same as the schema-add path.
+    """
+    from lerobot.datasets.dataset_tools import remove_features_inplace
+    from lerobot.utils.constants import DEFAULT_FEATURES
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    if feature_name in DEFAULT_FEATURES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{feature_name}' is a reserved DEFAULT_FEATURE",
+        )
+
+    pending = _app_state.pending_feature_set_edits_for_dataset(dataset_id)
+    if pending:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{len(pending)} pending feature edits — Save or Discard them first",
+        )
+
+    async with _app_state.get_lock(dataset_id):
+        dataset = _app_state.datasets[dataset_id]
+        if feature_name not in dataset.meta.features:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Feature '{feature_name}' not found in dataset",
+            )
+        try:
+            remove_features_inplace(dataset, names=feature_name)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            logger.exception(f"remove_features_inplace failed for {dataset_id}/{feature_name}: {e}")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+        _refresh_dataset_after_schema_change(dataset_id)
+        return RemoveFeatureResponse(
+            removed=[feature_name], info=_dataset_info_from(dataset_id, dataset)
+        )
+
+
 @router.delete("/{dataset_id:path}")
 async def close_dataset(dataset_id: str) -> dict[str, str]:
     """Close a dataset."""

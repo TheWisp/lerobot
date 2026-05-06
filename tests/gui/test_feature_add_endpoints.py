@@ -347,6 +347,59 @@ class TestPendingEditGuard:
         assert resp.status_code == 200, resp.text
         assert not stale.exists(), "stale .tmp not cleaned on open"
 
+    def test_delete_feature_drops_column(self, app_with_state, opened_dataset):
+        """DELETE /features/{name} drops the column."""
+        async def del_call(client, path):
+            return await client.delete(path)
+
+        app, _state = app_with_state
+        dataset_id, _ds = opened_dataset
+
+        # Add a column we can then drop.
+        _post_json(app, f"/api/datasets/{dataset_id}/features", {
+            "name": "scratch", "dtype": "float32", "shape": [1],
+            "per_episode": False, "fill_value": 0.0,
+        })
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.delete(f"/api/datasets/{dataset_id}/features/scratch")
+
+        resp = asyncio.run(run())
+        assert resp.status_code == 200, resp.text
+        payload = resp.json()
+        assert payload["removed"] == ["scratch"]
+        assert "scratch" not in payload["info"]["features_schema"]
+
+    def test_delete_feature_rejects_default(self, app_with_state, opened_dataset):
+        app, _state = app_with_state
+        dataset_id, _ds = opened_dataset
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.delete(f"/api/datasets/{dataset_id}/features/timestamp")
+
+        resp = asyncio.run(run())
+        assert resp.status_code == 400
+        assert "DEFAULT_FEATURE" in resp.json()["detail"]
+
+    def test_delete_feature_unknown_returns_404(self, app_with_state, opened_dataset):
+        app, _state = app_with_state
+        dataset_id, _ds = opened_dataset
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.delete(f"/api/datasets/{dataset_id}/features/nonexistent")
+
+        resp = asyncio.run(run())
+        assert resp.status_code == 404
+
     def test_post_defaults_blocked_by_pending_feature_edits(self, app_with_state, opened_dataset):
         app, state = app_with_state
         dataset_id, _ds = opened_dataset
