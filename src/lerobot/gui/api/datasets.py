@@ -929,11 +929,6 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
     return per_episode
 
 
-def _invalidate_per_episode_features(dataset_id: str) -> None:
-    """Drop the cached per-episode feature set when the dataset changes."""
-    _per_episode_features_cache.pop(dataset_id, None)
-
-
 # Hardcoded backend representation of the LeRobot 3.0 subtask format. The
 # data layer stores ``subtask_index`` (int64[1]) plus ``meta/subtasks.parquet``
 # (index → string lookup). The user always thinks in terms of strings, so

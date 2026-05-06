@@ -1347,3 +1347,317 @@ class TestStageDeclaredBoundsAndCategorical:
             },
         )
         assert resp.status_code == 200, resp.text
+
+
+# ── End-to-end apply for the post-V1 widget cases ──────────────────────────
+
+
+class TestApplyForBoundsCategoricalAndPerEpisode:
+    """Round-trip tests: stage → apply → read back from the parquet shard.
+    Pin the *value-on-disk* contract for the three feature kinds added on
+    this branch: declared-bounds scalar, categorical (int+names), and
+    per-episode broadcast.
+
+    The staging side is covered by ``TestStageDeclaredBoundsAndCategorical``
+    and ``TestPerEpisodeBroadcastCoercion``; this class confirms apply
+    actually persists what was staged.
+    """
+
+    @staticmethod
+    def _ds_with_post_v1_features(tmp_path, lerobot_dataset_factory):
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=40)
+        ds.meta.features["quality"] = {
+            "dtype": "int64",
+            "shape": [1],
+            "names": None,
+            "min": 1,
+            "max": 5,
+        }
+        ds.meta.features["control_mode"] = {
+            "dtype": "int64",
+            "shape": [1],
+            "names": ["ee", "joint"],
+        }
+        ds.meta.features["success"] = {
+            "dtype": "bool",
+            "shape": [1],
+            "names": None,
+        }
+        # Per-episode features (success, control_mode) get uniform-per-episode
+        # values so detection flips them on. quality varies per-frame so it
+        # stays per-frame (otherwise sub-range edits would be coerced to the
+        # whole episode).
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            fi = df["frame_index"].astype(int).to_numpy()
+            df["quality"] = ((fi % 5) + 1).astype(np.int64)  # cycles 1..5
+            ep_col = df["episode_index"].astype(int).to_numpy()
+            df["control_mode"] = (ep_col % 2).astype(np.int64)
+            df["success"] = ep_col % 2 == 0
+            df.to_parquet(shard, compression="snappy", index=False)
+        return ds
+
+    @staticmethod
+    def _read_data_df(root):
+        parts = []
+        for shard in sorted((root / "data").glob("*/*.parquet")):
+            parts.append(pd.read_parquet(shard))
+        return pd.concat(parts, ignore_index=True).sort_values("index").reset_index(drop=True)
+
+    def test_bounded_scalar_lands_at_declared_value(self, app_with_state, tmp_path, lerobot_dataset_factory):
+        """Stage quality=4 on frames [3, 8) → apply → those rows on disk
+        carry exactly 4, others are unchanged."""
+        app, state = app_with_state
+        ds = self._ds_with_post_v1_features(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        before = self._read_data_df(ds.root).copy()
+        r = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "quality",
+                "frame_from": 3,
+                "frame_to": 8,
+                "value": 4,
+            },
+        )
+        assert r.status_code == 200, r.text
+        ar = _post_apply(app, dataset_id)
+        assert ar.status_code == 200, ar.text
+        assert ar.json()["applied"] == 1
+
+        after = self._read_data_df(ds.root)
+        ep_offset = int(ds.meta.episodes[0]["dataset_from_index"])
+        # In-range rows: now 4
+        for fi in range(3, 8):
+            assert int(after.iloc[ep_offset + fi]["quality"]) == 4
+        # Out-of-range rows: unchanged
+        for fi in (0, 1, 2, 8, 9):
+            row_before = before[before["index"] == ep_offset + fi].iloc[0]
+            row_after = after[after["index"] == ep_offset + fi].iloc[0]
+            assert int(row_after["quality"]) == int(row_before["quality"])
+
+    def test_categorical_lands_as_int_index(self, app_with_state, tmp_path, lerobot_dataset_factory):
+        """Stage control_mode=1 (joint) → apply → on-disk value is the int
+        index 1, not the string label. Per-episode coercion expands to the
+        whole episode regardless of the user's drag range."""
+        app, state = app_with_state
+        ds = self._ds_with_post_v1_features(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        ep0_len = int(ds.meta.episodes[0]["length"])
+        r = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "control_mode",
+                "frame_from": 5,
+                "frame_to": 12,  # sub-range — backend coerces to whole episode
+                "value": 1,
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert r.json().get("coerced_range") == [0, ep0_len]
+        ar = _post_apply(app, dataset_id)
+        assert ar.status_code == 200
+
+        after = self._read_data_df(ds.root)
+        ep0 = after[after["episode_index"] == 0]
+        # All 0..ep0_len-1 frames carry the new index, regardless of drag range.
+        assert (ep0["control_mode"].astype(int) == 1).all(), ep0["control_mode"].unique()
+        # Episode 1 untouched (still control_mode == 1 % 2 == 1 from setup).
+        ep1 = after[after["episode_index"] == 1]
+        assert (ep1["control_mode"].astype(int) == 1).all() if 1 % 2 == 1 else True
+
+    def test_per_episode_bool_lands_across_whole_episode(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        """Per-episode bool ``success``: drag over a sub-range, but apply
+        rewrites the whole episode. Other episodes stay as-is."""
+        app, state = app_with_state
+        ds = self._ds_with_post_v1_features(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        # Episode 0 was set up as success=True (ep%2==0). Stage False on a
+        # sub-range; whole-episode coercion should flip every frame to False.
+        r = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "success",
+                "frame_from": 2,
+                "frame_to": 6,
+                "value": False,
+            },
+        )
+        assert r.status_code == 200, r.text
+        ar = _post_apply(app, dataset_id)
+        assert ar.status_code == 200
+
+        after = self._read_data_df(ds.root)
+        ep0 = after[after["episode_index"] == 0]
+        assert (~ep0["success"].astype(bool)).all(), "every frame in ep0 should be False"
+        # Episode 1 was False before (ep%2==0 is False); should still be False.
+        ep1 = after[after["episode_index"] == 1]
+        assert (~ep1["success"].astype(bool)).all()
+
+
+# ── set_feature_values rejects bounds-violating values regardless of caller ─
+
+
+class TestSetFeatureValuesEnforcesBounds:
+    """``set_feature_values`` is the public Python entry point for value
+    edits; the GUI funnels through it but so do notebooks and scripts. This
+    class confirms it rejects out-of-range values directly — i.e. you can't
+    bypass bounds by skipping the GUI's stage-time check.
+    """
+
+    @staticmethod
+    def _ds_with_bounded_quality(tmp_path, lerobot_dataset_factory):
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        ds.meta.features["quality"] = {
+            "dtype": "int64",
+            "shape": [1],
+            "names": None,
+            "min": 1,
+            "max": 5,
+        }
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            df["quality"] = np.full(len(df), 3, dtype=np.int64)
+            df.to_parquet(shard, compression="snappy", index=False)
+        return ds
+
+    def test_rejects_value_above_declared_max(self, tmp_path, lerobot_dataset_factory):
+        from lerobot.datasets.dataset_tools import set_feature_values
+
+        ds = self._ds_with_bounded_quality(tmp_path, lerobot_dataset_factory)
+        with pytest.raises(ValueError, match="above declared max"):
+            set_feature_values(
+                ds,
+                edits=[{"feature": "quality", "from_index": 0, "to_index": 5, "value": 7}],
+            )
+
+    def test_rejects_value_below_declared_min(self, tmp_path, lerobot_dataset_factory):
+        from lerobot.datasets.dataset_tools import set_feature_values
+
+        ds = self._ds_with_bounded_quality(tmp_path, lerobot_dataset_factory)
+        with pytest.raises(ValueError, match="below declared min"):
+            set_feature_values(
+                ds,
+                edits=[{"feature": "quality", "from_index": 0, "to_index": 5, "value": 0}],
+            )
+
+    def test_accepts_value_inside_bounds(self, tmp_path, lerobot_dataset_factory):
+        """Sanity: in-range values still pass."""
+        from lerobot.datasets.dataset_tools import set_feature_values
+
+        ds = self._ds_with_bounded_quality(tmp_path, lerobot_dataset_factory)
+        # Should not raise.
+        set_feature_values(
+            ds,
+            edits=[{"feature": "quality", "from_index": 0, "to_index": 5, "value": 4}],
+        )
+
+    def test_rejects_categorical_index_out_of_range(self, tmp_path, lerobot_dataset_factory):
+        from lerobot.datasets.dataset_tools import set_feature_values
+
+        ds = self._ds_with_bounded_quality(tmp_path, lerobot_dataset_factory)
+        ds.meta.features["control_mode"] = {
+            "dtype": "int64",
+            "shape": [1],
+            "names": ["ee", "joint"],
+        }
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            df["control_mode"] = np.zeros(len(df), dtype=np.int64)
+            df.to_parquet(shard, compression="snappy", index=False)
+        with pytest.raises(ValueError, match="outside categorical range"):
+            set_feature_values(
+                ds,
+                edits=[{"feature": "control_mode", "from_index": 0, "to_index": 5, "value": 2}],
+            )
+
+
+# ── Apply-pipeline silent-failure surfacing ───────────────────────────────
+
+
+class TestApplyPartialStatus:
+    """The apply pipeline writes shards in pass-1, then attempts a metadata
+    reload + post-edit verification. Failures in those non-essential
+    follow-up steps are caught and surfaced as ``status: "partial"`` with
+    the underlying exception in ``errors``. Without this contract, a stale
+    in-memory ``dataset.meta`` after an on-disk parquet rewrite would corrupt
+    every subsequent edit (wrong index translation). Pin the failure-flow
+    contract here so a future refactor can't quietly drop the surfacing.
+    """
+
+    @staticmethod
+    def _ds_with_reward(tmp_path, lerobot_dataset_factory):
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        ds.meta.features["reward"] = {"dtype": "float32", "shape": [1], "names": None}
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            df["reward"] = np.zeros(len(df), dtype=np.float32)
+            df.to_parquet(shard, compression="snappy", index=False)
+        return ds
+
+    def test_apply_returns_partial_when_dataset_reload_fails(
+        self, app_with_state, tmp_path, lerobot_dataset_factory, monkeypatch
+    ):
+        """Stage a reward edit, force ``reload_dataset_from_disk`` to raise,
+        confirm: response status==partial, applied==1 (parquet writes
+        succeeded), errors list contains the reload failure."""
+        app, state = app_with_state
+        ds = self._ds_with_reward(tmp_path, lerobot_dataset_factory)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        # Stage a small edit.
+        r = _post_feature_set(
+            app,
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "reward",
+                "frame_from": 0,
+                "frame_to": 3,
+                "value": -0.5,
+            },
+        )
+        assert r.status_code == 200, r.text
+
+        # Patch the reload helper at its *source* module since edits.py
+        # imports it inside the try block.
+        from lerobot.gui import dataset_reload
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("simulated reload failure")
+
+        monkeypatch.setattr(dataset_reload, "reload_dataset_from_disk", _boom)
+
+        ar = _post_apply(app, dataset_id)
+        # Apply still returns 200 — partial success is not an HTTP error.
+        assert ar.status_code == 200, ar.text
+        body = ar.json()
+        assert body["status"] == "partial", body
+        assert body["applied"] == 1, body
+        assert any("reload" in err.lower() for err in body.get("errors", [])), body
+
+        # Disk-level invariant: the parquet should still have the new value
+        # since pass-1 succeeded — partial means downstream steps failed,
+        # not that data wasn't written.
+        df = pd.concat(
+            [pd.read_parquet(p) for p in sorted((ds.root / "data").glob("*/*.parquet"))],
+            ignore_index=True,
+        )
+        ep0_offset = int(ds.meta.episodes[0]["dataset_from_index"])
+        for i in range(3):
+            assert pytest.approx(float(df.iloc[ep0_offset + i]["reward"]), abs=1e-6) == -0.5

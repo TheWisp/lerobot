@@ -361,24 +361,16 @@ def _validate_value_against_declared_bounds(feature_name: str, feature_info: dic
     silently if the feature has no declared bounds or categorical names —
     string features and unbounded numeric features fall through.
     """
-    has_bounds = feature_info.get("min") is not None or feature_info.get("max") is not None
-    # ``names`` is overloaded: vector component labels for non-scalars,
-    # categorical labels for scalar ints. Restrict the categorical check to
-    # scalar ints so int vectors with component names (legacy use) aren't
-    # accidentally bounds-checked against [0, len(names)).
-    shape = feature_info.get("shape", [])
-    is_scalar = (len(shape) == 0) or (len(shape) == 1 and shape[0] == 1)
-    is_categorical = (
-        isinstance(feature_info.get("names"), list)
-        and feature_info.get("dtype", "").startswith("int")
-        and is_scalar
+    from lerobot.datasets.feature_utils import (
+        is_categorical_feature,
+        validate_feature_numeric_bounds,
     )
-    if not has_bounds and not is_categorical:
+
+    has_bounds = feature_info.get("min") is not None or feature_info.get("max") is not None
+    if not has_bounds and not is_categorical_feature(feature_info):
         return ""
 
     import numpy as np
-
-    from lerobot.datasets.feature_utils import validate_feature_numeric_bounds
 
     # Coerce JSON-y value to a numpy array. The bounds checker is shape-
     # agnostic — it flattens before checking — so a scalar / list / vector

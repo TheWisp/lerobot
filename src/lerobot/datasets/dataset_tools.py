@@ -1095,6 +1095,14 @@ def _resolve_subtask_string_edits(
         else:
             resolved.append(e)
 
+    # Postcondition: no string subtask_index values survive resolution.
+    # If one slipped through, downstream parquet writes would fail with
+    # confusing dtype errors instead of pointing back at this layer.
+    assert all(not (r.feature == "subtask_index" and isinstance(r.value, str)) for r in resolved), (
+        "subtask_index resolution left at least one string value unresolved"
+    )
+    assert len(resolved) == len(edits), f"resolution dropped edits: in={len(edits)} out={len(resolved)}"
+
     if new_strings:
         new_rows = pd.DataFrame(
             {"subtask_index": [existing[s] for s in new_strings]},
@@ -1178,8 +1186,19 @@ def set_feature_values(
 
     feature_dict = dataset.meta.features
     total_frames = dataset.meta.total_frames
+    assert total_frames > 0, f"dataset has total_frames={total_frames} — empty dataset cannot be edited"
 
     # ── Validate ────────────────────────────────────────────────────────
+    # Enforce dtype, shape, declared bounds (``min``/``max``), and categorical
+    # range (``names``) all in one place. Any caller of ``set_feature_values``
+    # — GUI stage path, notebooks, scripts — funnels through these checks, so
+    # there's no way to write a bounds-violating value to disk through the
+    # public API. The GUI also checks bounds at stage time for early UX
+    # feedback, but THIS is the source-of-truth gate.
+    from lerobot.datasets.feature_utils import (
+        validate_feature_numeric_bounds,
+    )
+
     for e in edit_objs:
         if e.feature not in feature_dict:
             raise ValueError(f"Unknown feature: {e.feature!r}")
@@ -1191,6 +1210,21 @@ def set_feature_values(
                 f"Invalid range [{e.from_index}, {e.to_index}) for {e.feature!r} "
                 f"(total_frames={total_frames})"
             )
+        # Bounds + categorical check. ``value`` may be a Python scalar, list,
+        # or numpy array; the bounds checker flattens and inspects, shape-
+        # agnostic. String values are skipped here because subtask resolution
+        # converts them to ints in the next pass — at which point the
+        # categorical range check is implicit (lookup index is always valid).
+        if not isinstance(e.value, str):
+            try:
+                arr = np.asarray(e.value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Edit value for {e.feature!r} could not be coerced to a numpy array: {exc}"
+                ) from exc
+            err = validate_feature_numeric_bounds(e.feature, ft, arr)
+            if err:
+                raise ValueError(err.rstrip("\n"))
 
     # ── Resolve the work directory ─────────────────────────────────────
     if in_place:

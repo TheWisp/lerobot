@@ -218,6 +218,28 @@ def validate_features_presence(actual_features: set[str], expected_features: set
     return error_message
 
 
+def is_categorical_feature(feature: dict) -> bool:
+    """True if ``feature`` declares a categorical-int contract.
+
+    A feature is categorical iff it's a *scalar* integer (shape ``[1]`` or
+    empty) with a non-empty ``names`` list. The on-disk value is the integer
+    index ``[0, len(names))``; the strings are display labels.
+
+    ``names`` for non-scalar features is the legacy *component-label*
+    convention (e.g. ``["x", "y", "z"]`` on a 3-vector position) and carries
+    no bounds semantics — this predicate returns False so vector features
+    aren't accidentally bounds-checked against ``[0, len(names))``.
+    """
+    names = feature.get("names")
+    if not isinstance(names, list) or not names:
+        return False
+    if not feature.get("dtype", "").startswith("int"):
+        return False
+    shape = feature.get("shape", [])
+    is_scalar = (len(shape) == 0) or (len(shape) == 1 and shape[0] == 1)
+    return is_scalar
+
+
 def validate_feature_dtype_and_shape(
     name: str, feature: dict, value: np.ndarray | PILImage.Image | str
 ) -> str:
@@ -279,10 +301,14 @@ def validate_feature_numeric_bounds(name: str, feature: dict, value: np.ndarray)
     """
     min_bound = feature.get("min")
     max_bound = feature.get("max")
-    names = feature.get("names")
-    shape = feature.get("shape", [])
-    is_scalar = (len(shape) == 0) or (len(shape) == 1 and shape[0] == 1)
-    is_categorical = isinstance(names, list) and feature.get("dtype", "").startswith("int") and is_scalar
+    if min_bound is not None and max_bound is not None:
+        # Pin invariant up front — silently swallowing min > max would let
+        # any value pass since the [min, max] window is empty.
+        assert min_bound <= max_bound, (
+            f"Feature '{name}' has declared min={min_bound!r} > max={max_bound!r} (invalid range)"
+        )
+    is_categorical = is_categorical_feature(feature)
+    names = feature.get("names") if is_categorical else None
 
     if min_bound is None and max_bound is None and not is_categorical:
         return ""
@@ -301,6 +327,9 @@ def validate_feature_numeric_bounds(name: str, feature: dict, value: np.ndarray)
         if above.size:
             return f"The feature '{name}' has value {above[0].item()!r} above declared max={max_bound!r}.\n"
     if is_categorical:
+        assert isinstance(names, list) and names, (
+            f"is_categorical_feature returned True for '{name}' but names is {names!r}"
+        )
         n_classes = len(names)
         for v in flat:
             iv = int(v)

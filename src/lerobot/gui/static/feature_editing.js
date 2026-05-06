@@ -235,12 +235,6 @@
         return false;
     }
 
-    function getEpisodeStartFrame(datasetId, episodeIdx) {
-        // Episode is per-episode; we map back to local frame indices for staging.
-        // (Selection's frameFrom / frameTo are LOCAL to the episode.)
-        return 0;
-    }
-
     function getActiveTrim(datasetId, episodeIdx, episodeLength) {
         // Mirrors app.js trimStart / trimEnd — those are populated for the
         // currently-playing episode. If we're inspecting another episode, use
@@ -374,49 +368,6 @@
         // Wire edit widgets (auto-staging on change). Disabled widgets are
         // skipped naturally — they have no listeners that could fire.
         wireWidgets(body);
-    }
-
-    function renderInspectorFrameValues() {
-        // Show per-frame values in the Inspector when there's no selection.
-        if (selection) return;
-        const datasetId = window.currentDataset;
-        const ds = window.datasets && window.datasets[datasetId];
-        const epIdx = window.currentEpisode;
-        const frame = window.currentFrame;
-        const body = document.getElementById("inspector-body");
-        if (!ds || epIdx == null || !body) return;
-
-        const url = `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${epIdx}/frame/${frame}/features`;
-        fetch(url).then(r => r.ok ? r.json() : null).then(data => {
-            if (!data || selection) return; // selection raced in; abort
-            const featuresSchema = ds.features_schema || {};
-            const cards = [];
-            cards.push(`
-                <div class="inspector-summary" style="margin-bottom:12px;">
-                    <div><span class="summary-key">frame:</span> <span class="summary-value">${frame} / ${window.totalFrames}</span> · <span class="summary-key">ep:</span> <span class="summary-value">${epIdx}</span></div>
-                </div>
-            `);
-            for (const [name, ft] of Object.entries(featuresSchema)) {
-                if (isHiddenByDefault(name, ft) && !featureRowState.get(name)?.pinned) continue;
-                const val = data.values[name];
-                cards.push(renderReadonlyValueCard(name, ft, val));
-            }
-            body.innerHTML = cards.join("");
-        }).catch(err => console.warn("frame features fetch failed", err));
-    }
-
-    function renderReadonlyValueCard(name, ft, value) {
-        const dtype = ft.dtype || "?";
-        const shape = (ft.shape || []).join("×") || "1";
-        return `
-            <div class="feature-card readonly">
-                <div class="card-header">
-                    <span class="card-name">${escapeHtml(name)}</span>
-                    <span class="card-dtype">${escapeHtml(dtype)}[${shape}]</span>
-                </div>
-                <div class="card-summary">${formatValueShort(value)}</div>
-            </div>
-        `;
     }
 
     function renderFeatureCard(name, ft, frameFrom, frameTo, datasetId, episodeIndex, originRow, opts) {
@@ -792,8 +743,10 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
             });
-            // Overlap with a *different* edit (e.g. a separately-staged range)
-            // — prompt the user. Same-key collisions are pre-confirmed above.
+            // 409 paths: overlapping edit, or large-edit (>10k frames). Both
+            // surface a confirmation dialog and re-POST with the right ack
+            // flag. Same-key overlap collisions were pre-confirmed above so
+            // they shouldn't reach this branch in normal typing flow.
             if (res.status === 409) {
                 const payload = await res.json();
                 const detail = payload && payload.detail;
@@ -812,6 +765,17 @@
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ ...body, confirm_overlap: true }),
+                    });
+                } else if (detail && detail.code === "large_edit_confirmation_required") {
+                    const ok = window.confirm(
+                        `This edit touches ${detail.frames} frames.\n\n` +
+                        `Continue? Saves over ~10,000 frames can take a while.`
+                    );
+                    if (!ok) return;
+                    res = await fetch("/api/edits/feature-set", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ ...body, confirm_large: true }),
                     });
                 }
             }
