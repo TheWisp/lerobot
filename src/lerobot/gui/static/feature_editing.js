@@ -131,6 +131,31 @@
         return DEFAULT_FEATURE_NAMES.filter(n => !fs[n]);
     }
 
+    // Known alternate column names that the backend will rename rather
+    // than duplicate. Mirrors the `rename_from` lists in
+    // _DEFAULT_FEATURE_SPECS on the backend; frontend only uses these
+    // to show the user what will happen before they click Add.
+    const DEFAULT_RENAME_FROM = {
+        reward: ["next.reward"],
+        success: [],
+    };
+
+    function _plannedRenames(datasetId) {
+        const ds = window.datasets && window.datasets[datasetId];
+        const fs = (ds && ds.features_schema) || {};
+        const out = [];
+        for (const target of DEFAULT_FEATURE_NAMES) {
+            if (fs[target]) continue;
+            for (const alt of (DEFAULT_RENAME_FROM[target] || [])) {
+                if (fs[alt]) {
+                    out.push({ from: alt, to: target });
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
     function maybeShowDefaultsBanner(datasetId) {
         const banner = document.getElementById("default-features-banner");
         if (!banner) return;
@@ -140,6 +165,20 @@
             return;
         }
         document.getElementById("banner-missing-list").textContent = missing.join(", ");
+        // Show rename plan when applicable (e.g. "next.reward → reward")
+        // so the user understands the existing column will be reused
+        // rather than duplicated.
+        const renames = _plannedRenames(datasetId);
+        const noteEl = document.getElementById("banner-rename-note");
+        if (noteEl) {
+            if (renames.length) {
+                const items = renames.map(r => `<code>${r.from}</code> → <code>${r.to}</code>`).join(", ");
+                noteEl.innerHTML = `Will preserve existing data: ${items}.`;
+                noteEl.hidden = false;
+            } else {
+                noteEl.hidden = true;
+            }
+        }
         banner.hidden = false;
         banner.dataset.datasetId = datasetId;
         const addBtn = document.getElementById("banner-add-btn");

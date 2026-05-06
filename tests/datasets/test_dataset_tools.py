@@ -32,6 +32,7 @@ from lerobot.datasets.dataset_tools import (
     modify_features,
     modify_tasks,
     remove_feature,
+    rename_features_inplace,
     split_dataset,
     trim_episode,
 )
@@ -1771,6 +1772,62 @@ def test_add_features_inplace_recomputes_stats(small_dataset_no_video):
     cols = set(table.column_names)
     reward_stat_cols = [c for c in cols if c.startswith("stats/reward/")]
     assert reward_stat_cols, f"no stats/reward/* columns in {cols}"
+
+
+def test_rename_features_inplace_renames_data_columns(small_dataset_no_video):
+    """Renaming a column updates parquet shards in place; videos untouched."""
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    rename_features_inplace(ds, renames={"observation.state": "obs_state"})
+
+    assert "obs_state" in ds.meta.features
+    assert "observation.state" not in ds.meta.features
+
+    for f in (ds.root / "data").rglob("*.parquet"):
+        cols = pq.read_table(f).column_names
+        assert "obs_state" in cols and "observation.state" not in cols
+
+
+def test_rename_features_inplace_migrates_stats_columns(small_dataset_no_video):
+    """Stats columns under stats/<old>/* are renamed to stats/<new>/*."""
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    rename_features_inplace(ds, renames={"observation.state": "obs_state"})
+
+    eps_dir = ds.root / "meta" / "episodes"
+    for f in eps_dir.rglob("*.parquet"):
+        cols = pq.read_table(f).column_names
+        assert any(c.startswith("stats/obs_state/") for c in cols)
+        assert not any(c.startswith("stats/observation.state/") for c in cols)
+
+
+def test_rename_features_inplace_applies_spec_overrides(small_dataset_no_video):
+    """spec_overrides are merged into the renamed feature's spec in info.json."""
+    import json
+
+    ds = small_dataset_no_video
+    rename_features_inplace(
+        ds,
+        renames={"observation.state": "obs_state"},
+        spec_overrides={"obs_state": {"per_episode": False}},
+    )
+    with open(ds.root / "meta" / "info.json") as f:
+        info = json.load(f)
+    assert info["features"]["obs_state"].get("per_episode") is False
+
+
+@pytest.mark.parametrize("renames,fragment", [
+    ({}, "empty"),
+    ({"missing_feature": "new_name"}, "not found"),
+    ({"observation.state": "action"}, "already exists"),
+    ({"observation.state": "timestamp"}, "DEFAULT_FEATURES"),
+    ({"timestamp": "ts2"}, "DEFAULT_FEATURES"),
+])
+def test_rename_features_inplace_validation(small_dataset_no_video, renames, fragment):
+    with pytest.raises(ValueError, match=fragment):
+        rename_features_inplace(small_dataset_no_video, renames=renames)
 
 
 def test_sweep_orphan_tmp_shards(tmp_path):

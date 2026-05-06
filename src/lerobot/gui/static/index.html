@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=29">
+    <link rel="stylesheet" href="/static/style.css?v=30">
 </head>
 <body>
     <div class="tab-bar">
@@ -79,6 +79,7 @@
                     <span class="banner-text">
                         This dataset is missing default features:
                         <strong id="banner-missing-list"></strong>.
+                        <span id="banner-rename-note" class="banner-rename-note" hidden></span>
                     </span>
                     <button id="banner-add-btn" class="btn-small" type="button">Add missing features</button>
                     <button id="banner-dismiss-btn" class="btn-small secondary" type="button">Dismiss</button>
@@ -407,7 +408,7 @@
     </dialog>
 
     <script src="/static/app.js?v=32"></script>
-    <script src="/static/feature_editing.js?v=18"></script>
+    <script src="/static/feature_editing.js?v=19"></script>
     <script src="/static/add_feature_dialog.js?v=1"></script>
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=39"></script>

@@ -196,6 +196,81 @@ class TestPostFeaturesDefaults:
         resp2 = _post_json(app, f"/api/datasets/{dataset_id}/features/defaults", None)
         assert resp2.status_code == 200
         assert resp2.json()["added"] == []
+        assert resp2.json()["renamed"] == []
+
+    def test_renames_existing_next_reward_to_reward(
+        self, app_with_state, tmp_path, empty_lerobot_dataset_factory
+    ):
+        """When the dataset has next.reward and lacks reward, rename instead of add."""
+        app, state = app_with_state
+        features = {
+            "action": {"dtype": "float32", "shape": (2,), "names": None},
+            "observation.state": {"dtype": "float32", "shape": (2,), "names": None},
+            # Pre-populate with the Gym-convention reward column.
+            "next.reward": {"dtype": "float32", "shape": (1,), "names": None},
+        }
+        ds = empty_lerobot_dataset_factory(root=tmp_path / "ds_with_next", features=features)
+        for _ in range(2):
+            for _ in range(3):
+                ds.add_frame({
+                    "action": np.zeros(2, dtype=np.float32),
+                    "observation.state": np.zeros(2, dtype=np.float32),
+                    "next.reward": np.array([0.5], dtype=np.float32),
+                    "task": "t",
+                })
+            ds.save_episode()
+        ds.finalize()
+
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        resp = _post_json(app, f"/api/datasets/{dataset_id}/features/defaults", None)
+        assert resp.status_code == 200, resp.text
+        payload = resp.json()
+        # success was added; reward came from a rename.
+        assert "success" in payload["added"]
+        assert "reward" not in payload["added"]
+        assert payload["renamed"] == ["next.reward→reward"]
+
+        # The renamed column carries the original 0.5 fill, not 0.0.
+        import pyarrow.parquet as pq
+
+        for f in (ds.root / "data").rglob("*.parquet"):
+            t = pq.read_table(f)
+            assert "reward" in t.column_names
+            assert "next.reward" not in t.column_names
+            assert all(v == 0.5 for v in t.column("reward").to_pylist())
+
+    def test_skips_rename_when_dtype_incompatible(
+        self, app_with_state, tmp_path, empty_lerobot_dataset_factory
+    ):
+        """If next.reward has the wrong dtype, fall back to adding a new column."""
+        app, state = app_with_state
+        features = {
+            "action": {"dtype": "float32", "shape": (2,), "names": None},
+            "observation.state": {"dtype": "float32", "shape": (2,), "names": None},
+            # Wrong dtype: int64 instead of float32 — must not be auto-renamed.
+            "next.reward": {"dtype": "int64", "shape": (1,), "names": None},
+        }
+        ds = empty_lerobot_dataset_factory(root=tmp_path / "ds_wrong_dtype", features=features)
+        for _ in range(2):
+            for _ in range(3):
+                ds.add_frame({
+                    "action": np.zeros(2, dtype=np.float32),
+                    "observation.state": np.zeros(2, dtype=np.float32),
+                    "next.reward": np.array([1], dtype=np.int64),
+                    "task": "t",
+                })
+            ds.save_episode()
+        ds.finalize()
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        resp = _post_json(app, f"/api/datasets/{dataset_id}/features/defaults", None)
+        assert resp.status_code == 200, resp.text
+        payload = resp.json()
+        assert sorted(payload["added"]) == ["reward", "success"]
+        assert payload["renamed"] == []  # incompatible dtype → no rename
 
 
 # ── Pending-edits guard (T9) ─────────────────────────────────────────

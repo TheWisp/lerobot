@@ -722,6 +722,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .default-features-banner .banner-icon { font-size: 14px; }
 .default-features-banner .banner-text { flex: 1; }
 .default-features-banner button { white-space: nowrap; }
+.default-features-banner .banner-rename-note {
+    display: block;
+    margin-top: 2px;
+    color: #c8b888;
+    font-size: 11px;
+}
+.default-features-banner .banner-rename-note code {
+    background: #1f1f1f;
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 0 4px;
+    color: #ddd;
+    font-size: 10px;
+}
 
 /* ── Add Feature dialog ─────────────────────────────────────────────── */
 .add-feature-dialog {

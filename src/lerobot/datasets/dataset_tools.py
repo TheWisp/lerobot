@@ -1136,6 +1136,137 @@ def add_features_inplace(
         logging.warning(f"dataset.finalize() failed (non-fatal for in-place schema add): {e}")
 
 
+def rename_features_inplace(
+    dataset: "LeRobotDataset",
+    renames: dict[str, str],
+    *,
+    spec_overrides: dict[str, dict] | None = None,
+) -> None:
+    """Rename feature columns in an existing dataset in place.
+
+    Renames every parquet column under ``data/`` and the matching
+    ``stats/<feature>/*`` columns in ``meta/episodes/*.parquet``.
+    Updates ``info.json`` last (atomic via ``.tmp + rename``). Videos
+    are NOT touched — this function refuses to rename image / video
+    features because their on-disk filenames also encode the feature
+    name (use the forked :func:`rename_feature` for those).
+
+    Args:
+        dataset: The dataset to mutate. Must already be loaded.
+        renames: ``{old_name: new_name}``. Multiple renames are applied
+            in one pass.
+        spec_overrides: Optional ``{new_name: {key: value, ...}}`` —
+            keys merged into the renamed feature's spec in
+            ``info.json``. Useful when the rename also flips a hint
+            (e.g. ``per_episode``) that the source column didn't declare.
+
+    Raises:
+        ValueError: For empty input, missing ``old_name``, existing
+            ``new_name``, ``DEFAULT_FEATURES`` collisions, or attempts
+            to rename image/video features.
+    """
+    from lerobot.datasets.utils import DATA_DIR, INFO_PATH
+    from lerobot.utils.constants import DEFAULT_FEATURES
+    from lerobot.utils.io_utils import write_json
+
+    if not renames:
+        raise ValueError("renames dict is empty")
+
+    spec_overrides = spec_overrides or {}
+    existing = dataset.meta.features
+
+    # ── Validate ───────────────────────────────────────────────────────
+    new_names_seen: set[str] = set()
+    for old, new in renames.items():
+        # DEFAULT_FEATURES check first — these names also appear in
+        # `dataset.meta.features` (auto-merged at create time), so the
+        # "already exists" branch would otherwise mask them.
+        if old in DEFAULT_FEATURES or new in DEFAULT_FEATURES:
+            raise ValueError(
+                f"Cannot rename DEFAULT_FEATURES (refused: {old} → {new})"
+            )
+        if old not in existing:
+            raise ValueError(f"Feature '{old}' not found in dataset")
+        if new in existing and new != old:
+            raise ValueError(f"Feature '{new}' already exists in dataset")
+        if new in new_names_seen:
+            raise ValueError(f"Duplicate rename target: '{new}'")
+        if existing[old].get("dtype") in ("image", "video"):
+            raise ValueError(
+                f"Cannot rename image/video feature '{old}' in-place "
+                "— use the forked rename_feature() instead"
+            )
+        new_names_seen.add(new)
+
+    work_root = Path(dataset.root)
+    info_path = work_root / INFO_PATH
+    data_dir = work_root / DATA_DIR
+
+    parquet_files = sorted(data_dir.glob("*/*.parquet"))
+    if not parquet_files:
+        raise ValueError(f"No parquet files found in {data_dir}")
+
+    # ── Pass 1: rename columns in each data shard via .tmp ─────────────
+    pending_renames: list[tuple[Path, Path]] = []
+    try:
+        for shard_path in parquet_files:
+            df = pd.read_parquet(shard_path)
+            df = df.rename(columns=renames)
+            tmp_path = shard_path.with_suffix(shard_path.suffix + ".tmp")
+            df.to_parquet(tmp_path, compression="snappy", index=False)
+            pending_renames.append((tmp_path, shard_path))
+    except Exception:
+        for tmp_path, _ in pending_renames:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        raise
+
+    for tmp_path, final_path in pending_renames:
+        os.replace(tmp_path, final_path)
+
+    # ── Rename stats columns in each episodes parquet ──────────────────
+    eps_dir = work_root / "meta" / "episodes"
+    if eps_dir.exists():
+        for parquet_path in sorted(eps_dir.rglob("*.parquet")):
+            edf = pd.read_parquet(parquet_path)
+            col_renames: dict[str, str] = {}
+            for old, new in renames.items():
+                old_prefix = f"stats/{old}/"
+                new_prefix = f"stats/{new}/"
+                for col in edf.columns:
+                    if col.startswith(old_prefix):
+                        col_renames[col] = new_prefix + col[len(old_prefix):]
+            if col_renames:
+                edf = edf.rename(columns=col_renames)
+                tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
+                edf.to_parquet(tmp_path, compression="snappy", index=False)
+                os.replace(tmp_path, parquet_path)
+
+    # ── Update info.json last (atomic via .tmp + rename) ───────────────
+    import json as _json
+
+    with info_path.open("r") as f:
+        info_dict = _json.load(f)
+    feats = info_dict["features"]
+    for old, new in renames.items():
+        spec = dict(feats.pop(old))
+        if new in spec_overrides:
+            spec.update(spec_overrides[new])
+        feats[new] = spec
+
+    info_tmp = info_path.with_suffix(info_path.suffix + ".tmp")
+    write_json(info_dict, info_tmp)
+    os.replace(info_tmp, info_path)
+
+    # Refresh in-memory metadata.
+    dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
+
+    try:
+        dataset.finalize()
+    except Exception as e:
+        logging.warning(f"dataset.finalize() failed (non-fatal for rename): {e}")
+
+
 def _add_new_feature_stats_to_episodes(
     dataset_root: Path,
     new_features: dict,

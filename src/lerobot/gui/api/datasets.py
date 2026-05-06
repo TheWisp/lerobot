@@ -1466,10 +1466,19 @@ _DEFAULT_FEATURE_SPECS = {
         # column. Otherwise drag-select range edits would coerce to the
         # full episode for reward, which is the opposite of what users want.
         "info": {"dtype": "float32", "shape": [1], "names": None, "per_episode": False},
+        # Existing column names that should be preserved (renamed, not
+        # discarded) when present in the dataset. Renaming requires the
+        # source column to be type-compatible with the destination spec
+        # (same dtype + shape after spec_overrides applied).
+        "rename_from": ["next.reward"],
     },
     "success": {
         "fill_value": 0,
         "info": {"dtype": "int8", "shape": [1], "names": None, "per_episode": True},
+        # next.done is bool, success is int8 tri-state — semantics differ
+        # (True/False vs success/unmarked/failure). Skipping auto-rename
+        # for safety; the user can still convert by hand if they want.
+        "rename_from": [],
     },
 }
 
@@ -1494,6 +1503,11 @@ class AddFeatureRequest(BaseModel):
 class AddFeatureResponse(BaseModel):
     added: list[str]
     info: DatasetInfo
+    # Optional: renames performed (when /features/defaults reuses an
+    # existing column under a different name instead of adding a duplicate).
+    # Each entry is "<old_name>→<new_name>". Empty for the generic
+    # POST /features endpoint.
+    renamed: list[str] = []
 
 
 def _refresh_dataset_after_schema_change(dataset_id: str) -> None:
@@ -1581,14 +1595,37 @@ async def add_dataset_feature(dataset_id: str, body: AddFeatureRequest) -> AddFe
         return AddFeatureResponse(added=[body.name], info=_dataset_info_from(dataset_id, dataset))
 
 
+def _compatible_for_rename(existing_spec: dict, target_spec: dict) -> bool:
+    """True if `existing_spec` is type-compatible with the target default spec.
+
+    Renaming preserves the on-disk values, so the source column's dtype
+    and shape must already match what the target spec declares; otherwise
+    we'd silently misadvertise the data type. Optional spec keys (names,
+    per_episode) are intentionally ignored — those can be overridden via
+    spec_overrides during the rename.
+    """
+    if existing_spec.get("dtype") != target_spec.get("dtype"):
+        return False
+    es = list(existing_spec.get("shape") or [])
+    ts = list(target_spec.get("shape") or [])
+    return es == ts
+
+
 @router.post("/{dataset_id:path}/features/defaults", response_model=AddFeatureResponse)
 async def add_default_features(dataset_id: str) -> AddFeatureResponse:
-    """Add ``reward`` and/or ``success`` if either is missing from the schema.
+    """Reconcile the dataset's schema against the default features.
 
-    Idempotent: returns ``added=[]`` when both are already present. Used
-    by the banner shown on dataset open.
+    For each missing default:
+      * if a known alternate column exists with a compatible dtype/shape
+        (e.g. ``next.reward`` for ``reward``), rename it in place — the
+        existing recorded values are preserved instead of being shadowed
+        by a fresh all-zeros column.
+      * otherwise, add a new column with the default fill value.
+
+    Idempotent: returns ``added=[], renamed=[]`` when nothing's needed.
+    Used by the banner shown on dataset open.
     """
-    from lerobot.datasets.dataset_tools import add_features_inplace
+    from lerobot.datasets.dataset_tools import add_features_inplace, rename_features_inplace
 
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
@@ -1602,27 +1639,63 @@ async def add_default_features(dataset_id: str) -> AddFeatureResponse:
 
     async with _app_state.get_lock(dataset_id):
         dataset = _app_state.datasets[dataset_id]
-        to_add = {
-            name: (spec["fill_value"], dict(spec["info"]))
-            for name, spec in _DEFAULT_FEATURE_SPECS.items()
-            if name not in dataset.meta.features
-        }
-        if not to_add:
+
+        # Plan: split missing defaults into renames (alternate exists +
+        # compatible) vs adds (everything else).
+        renames: dict[str, str] = {}
+        rename_overrides: dict[str, dict] = {}
+        to_add: dict[str, tuple] = {}
+
+        for name, spec in _DEFAULT_FEATURE_SPECS.items():
+            if name in dataset.meta.features:
+                continue
+            target_info = dict(spec["info"])
+            picked_alternate = None
+            for alt in spec.get("rename_from", []):
+                if alt in dataset.meta.features and _compatible_for_rename(
+                    dataset.meta.features[alt], target_info
+                ):
+                    picked_alternate = alt
+                    break
+            if picked_alternate is not None:
+                renames[picked_alternate] = name
+                # The alternate may not declare per_episode (e.g. legacy
+                # next.reward); merge in the default's hint so the
+                # renamed column gets the right is_per_episode behavior.
+                rename_overrides[name] = {
+                    k: v for k, v in target_info.items()
+                    if k in ("per_episode", "names")
+                }
+            else:
+                to_add[name] = (spec["fill_value"], target_info)
+
+        if not renames and not to_add:
             return AddFeatureResponse(
-                added=[], info=_dataset_info_from(dataset_id, dataset)
+                added=[], renamed=[], info=_dataset_info_from(dataset_id, dataset)
             )
 
         try:
-            add_features_inplace(dataset, features=to_add)
+            # Renames first so the new names are present before any
+            # subsequent add validates against an updated schema.
+            if renames:
+                rename_features_inplace(
+                    dataset, renames=renames, spec_overrides=rename_overrides
+                )
+            if to_add:
+                add_features_inplace(dataset, features=to_add)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
-            logger.exception(f"add_features_inplace (defaults) failed for {dataset_id}: {e}")
+            logger.exception(
+                f"add_default_features failed for {dataset_id}: {e}"
+            )
             raise HTTPException(status_code=500, detail=str(e)) from e
 
         _refresh_dataset_after_schema_change(dataset_id)
         return AddFeatureResponse(
-            added=sorted(to_add.keys()), info=_dataset_info_from(dataset_id, dataset)
+            added=sorted(to_add.keys()),
+            renamed=sorted(f"{old}→{new}" for old, new in renames.items()),
+            info=_dataset_info_from(dataset_id, dataset),
         )
 
 
