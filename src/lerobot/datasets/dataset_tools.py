@@ -942,6 +942,16 @@ def swap_features(
     return dataset
 
 
+# ============================================================================
+# set_feature_values — in-place per-frame value editing
+#
+# Implementation lives in :mod:`lerobot.datasets.feature_value_edits` to
+# isolate it from this file's busy refactor history. Re-exported here so
+# existing imports (``from lerobot.datasets.dataset_tools import
+# set_feature_values, FeatureValueEdit``) keep working.
+# ============================================================================
+
+
 def _fractions_to_episode_indices(
     total_episodes: int,
     splits: dict[str, float],

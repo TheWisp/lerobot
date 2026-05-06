@@ -30,6 +30,23 @@ let sourceDatasets = {};  // {sourcePath: [{name, root, total_episodes, ...}]}
 let expandedSources = new Set();
 let _sourcesLoaded = false;
 
+// `let` at script-scope is NOT visible on `window` — sibling scripts
+// (feature_editing.js, etc.) can read these via bare names but not via
+// `window.X`. Mirror the shared state via getters so cross-file readers
+// work either way. Read-only — sibling scripts must not assign these.
+Object.defineProperties(window, {
+    datasets: { get: () => datasets, configurable: true },
+    episodes: { get: () => episodes, configurable: true },
+    currentDataset: { get: () => currentDataset, configurable: true },
+    currentEpisode: { get: () => currentEpisode, configurable: true },
+    currentFrame: { get: () => currentFrame, configurable: true },
+    totalFrames: { get: () => totalFrames, configurable: true },
+    fps: { get: () => fps, configurable: true },
+    trimStart: { get: () => trimStart, configurable: true },
+    trimEnd: { get: () => trimEnd, configurable: true },
+    pendingEdits: { get: () => pendingEdits, configurable: true },
+});
+
 async function loadSources() {
     try {
         const res = await fetch('/api/datasets/sources');
@@ -242,6 +259,7 @@ async function _completeOpen(data) {
     renderTree();
     renderSources();
     if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
+    if (window.FeatureEditing) window.FeatureEditing.onDatasetOpened(data.id);
     setStatus(`Opened: ${data.repo_id}`);
 }
 
@@ -411,6 +429,7 @@ function selectEpisode(datasetId, epIdx, length) {
     renderCameraGrid();
     loadAllFrames(0);
     loadTrimForCurrentEpisode();
+    if (window.FeatureEditing) window.FeatureEditing.onEpisodeSelected(datasetId, epIdx);
 }
 
 function renderCameraGrid() {
@@ -478,6 +497,8 @@ function loadAllFrames(idx) {
     const currentTime = formatTime(currentFrame / fps);
     const totalTime = formatTime(totalFrames / fps);
     document.getElementById('time-info').textContent = `${currentTime} / ${totalTime}`;
+
+    if (window.FeatureEditing) window.FeatureEditing.onPlayheadChanged();
 
     return Promise.all(promises);
 }
@@ -1205,6 +1226,7 @@ async function refreshPendingEdits() {
         pendingEdits = data.edits;
         renderTree();
         loadTrimForCurrentEpisode();
+        if (window.FeatureEditing) window.FeatureEditing.onPendingEditsChanged();
     } catch (e) {
         console.error('Failed to refresh edits:', e);
     }
@@ -1255,7 +1277,12 @@ async function applyEdits() {
         setStatus('No dataset selected');
         return;
     }
-    if (!confirm(`Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.`)) return;
+    if (!confirm(
+        `Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.\n\n` +
+        `Pause any training jobs reading this dataset before continuing — ` +
+        `the GUI server serializes its own writes, but external readers see ` +
+        `torn state across shards mid-Save.`
+    )) return;
 
     setEditingEnabled(false);
     setStatus('Applying edits...');

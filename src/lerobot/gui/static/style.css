@@ -406,3 +406,298 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #merge-diff-panel details { margin: 2px 0; }
 #merge-diff-panel summary { cursor: pointer; color: #61afef; }
 #merge-diff-panel summary:hover { text-decoration: underline; }
+
+/* ============================================================================
+   Feature Editing — Phase B layout
+   ============================================================================ */
+
+/* Inspector panel (right sidebar). Always visible when a dataset is open;
+   toggled off via display:none from JS when no dataset is loaded. */
+.inspector {
+    width: 320px;
+    min-width: 220px;
+    max-width: 600px;
+    background: #16213e;
+    border-left: 1px solid #0f3460;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+.inspector-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid #0f3460;
+}
+.inspector-header h2 {
+    font-size: 14px;
+    color: #4fc3f7;
+    margin: 0;
+}
+.inspector-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 14px;
+    font-size: 12px;
+    color: #ddd;
+}
+.inspector-body .empty-state {
+    color: #888;
+    font-style: italic;
+    padding: 8px 0;
+}
+.inspector-summary {
+    color: #aaa;
+    line-height: 1.6;
+}
+.inspector-summary .summary-key { color: #888; }
+.inspector-summary .summary-value { color: #ddd; }
+
+/* Inspector section header — used twice (Episode N + Frames N…M). */
+.inspector-section-header {
+    padding: 8px 0;
+    border-bottom: 1px solid #0f3460;
+    margin: 16px 0 8px 0;
+}
+.inspector-section-header:first-child { margin-top: 0; }
+.inspector-section-header .sel-title { font-weight: 600; color: #f39c12; }
+.inspector-section-header .sel-meta { color: #888; font-size: 11px; margin-top: 2px; }
+
+.feature-card {
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    background: #1a2a44;
+}
+.feature-card.focused {
+    border-color: #f39c12;
+    box-shadow: 0 0 0 1px #f39c12;
+}
+.feature-card.readonly { background: #1a1f30; opacity: 0.85; }
+.feature-card .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+.feature-card .card-name { color: #4fc3f7; font-weight: 600; }
+.feature-card .card-dtype { color: #888; font-size: 10px; }
+.feature-card .card-pending { color: #f39c12; font-size: 10px; margin-left: 6px; }
+.feature-card .card-observed-range {
+    color: #888;
+    font-size: 10px;
+    font-weight: normal;
+    margin-left: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.feature-card .card-broadcast-note {
+    color: #b58900;
+    font-size: 10px;
+    font-style: italic;
+    background: rgba(243, 156, 18, 0.10);
+    border-left: 2px solid #f39c12;
+    padding: 4px 6px;
+    margin: 4px 0 6px 0;
+    border-radius: 2px;
+}
+.feature-card .card-readonly-tag {
+    color: #888;
+    font-size: 10px;
+    font-style: italic;
+}
+.feature-card .card-summary { color: #888; font-size: 11px; margin-bottom: 6px; }
+.feature-card .card-widget { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.feature-card input[type="number"],
+.feature-card input[type="text"],
+.feature-card textarea,
+.feature-card select {
+    background: #0f1c2e;
+    border: 1px solid #0f3460;
+    color: #eee;
+    padding: 4px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+.feature-card input[type="number"] { width: 90px; }
+.feature-card input[type="text"] { flex: 1; min-width: 0; }
+.feature-card textarea { flex: 1; min-width: 0; min-height: 60px; font-family: monospace; }
+.feature-card select { flex: 1; min-width: 0; }
+.feature-card input[type="range"] { flex: 1; min-width: 0; }
+.feature-card .vector-row { display: flex; gap: 4px; flex-wrap: wrap; }
+.feature-card .vector-row input { width: 60px; }
+
+/* The timeline stack: the scrubber row + all feature rows share the same
+   .row-label / .row-track geometry so trim handles, envelope tints, the
+   selection band, and the playhead all line up vertically. */
+.timeline-stack {
+    background: #0f1c2e;
+    border-top: 1px solid #0f3460;
+    flex-shrink: 0;
+    max-height: 340px;
+    position: relative;
+    /* Outer is a non-scrolling flex column. The scrubber row pins to the top
+       (flex-shrink: 0); .feature-rows is the scrollable region underneath. */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Scrubber row hosts the existing #timeline element. Same column widths as
+   feature rows; bottom border separates it from the per-feature stack. */
+.scrubber-row {
+    display: flex;
+    align-items: stretch;
+    height: 28px;
+    border-bottom: 1px solid #0f3460;
+    background: #142036;
+    flex-shrink: 0;
+    position: relative;
+}
+.scrubber-row .row-label {
+    width: 120px;
+    flex-shrink: 0;
+    padding: 4px 8px;
+    border-right: 1px solid #0f3460;
+    background: #16213e;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+}
+.scrubber-row .row-label .row-name { color: #aaa; font-size: 10px; font-weight: 600; }
+.scrubber-row .row-track {
+    flex: 1;
+    position: relative;
+    /* Vertical padding only: gives the scrubber thumb (16×16, centered on the
+       8px timeline) room above/below. NO horizontal padding so the timeline
+       width matches feature rows' .row-track exactly — that's the whole
+       point of the new layout: vertical alignment of trim handles, envelope
+       tints, selection band, and playhead across every row. */
+    padding: 10px 0;
+    overflow: visible;
+    /* Center the 8px timeline vertically inside the 28px row. */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+/* Feature rows (Phase A3 / B1). */
+.feature-rows {
+    /* Inner stack — sibling of .scrubber-row inside .timeline-stack. */
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    position: relative;
+}
+.feature-row {
+    display: flex;
+    align-items: stretch;
+    height: 36px;
+    border-bottom: 1px solid #102540;
+    position: relative;
+}
+.feature-row.collapsed { height: 22px; }
+.feature-row .row-label {
+    width: 120px;
+    flex-shrink: 0;
+    padding: 4px 8px;
+    border-right: 1px solid #0f3460;
+    overflow: hidden;
+    background: #16213e;
+}
+.feature-row .row-label .row-name { color: #ddd; font-size: 11px; font-weight: 600; }
+.feature-row .row-label .row-dtype { color: #888; font-size: 10px; }
+.feature-row .row-label .row-readonly { color: #999; font-size: 9px; font-style: italic; }
+.feature-row .row-track {
+    flex: 1;
+    position: relative;
+    cursor: crosshair;
+    background: #0a1626;
+}
+.feature-row.readonly .row-track { cursor: default; }
+.feature-row .row-track svg { display: block; width: 100%; height: 100%; }
+.feature-row .row-track .row-trim-dim {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+}
+.feature-row .row-track .row-selection {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgba(243, 156, 18, 0.25);
+    border-left: 2px solid #f39c12;
+    border-right: 2px solid #f39c12;
+    pointer-events: none;
+}
+
+.feature-rows-empty {
+    color: #888;
+    font-style: italic;
+    padding: 12px 16px;
+    font-size: 12px;
+}
+
+/* "Show pending edits" toggle on the edits bar */
+.show-pending-toggle {
+    color: #ccc;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+.show-pending-toggle input[type="checkbox"] { accent-color: #f39c12; }
+
+/* Resize handles */
+.cameras-timeline-resize-handle {
+    height: 4px;
+    cursor: row-resize;
+    background: transparent;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+.cameras-timeline-resize-handle:hover,
+.cameras-timeline-resize-handle.dragging {
+    background: #4fc3f7;
+}
+.inspector-resize-handle {
+    width: 4px;
+    cursor: col-resize;
+    background: transparent;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+.inspector-resize-handle:hover,
+.inspector-resize-handle.dragging {
+    background: #4fc3f7;
+}
+
+/* Show pending edits — overlay drawn on top of feature row tracks */
+.feature-row .row-track .row-pending-overlay {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgba(243, 156, 18, 0.30);
+    border: 1px dashed #f39c12;
+    pointer-events: none;
+}
+
+/* String row labels: HTML overlay so glyphs aren't stretched by the
+   row-track SVG's preserveAspectRatio="none". Positioned in the same
+   percent-based coordinate space as the colored stripe rects. */
+.feature-row .row-track .row-string-label {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 11px;
+    pointer-events: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

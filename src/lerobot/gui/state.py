@@ -36,9 +36,19 @@ EDITS_FILE_VERSION = 1
 
 @dataclass
 class PendingEdit:
-    """A pending edit operation that hasn't been applied yet."""
+    """A pending edit operation that hasn't been applied yet.
 
-    edit_type: Literal["delete", "trim"]
+    Edit types:
+    * ``"delete"`` — virtual-delete an episode. ``params`` is empty.
+    * ``"trim"`` — trim an episode to ``[start_frame, end_frame)``. ``params``
+      has ``start_frame`` and ``end_frame``.
+    * ``"feature_set"`` — overwrite a per-frame feature for a contiguous
+      range. ``params`` has ``feature``, ``from_index``, ``to_index``,
+      ``value``. Applied via ``set_feature_values``. ``episode_index`` is
+      stored for grouping in the GUI; the actual range is in ``params``.
+    """
+
+    edit_type: Literal["delete", "trim", "feature_set"]
     dataset_id: str
     episode_index: int
     params: dict = field(default_factory=dict)

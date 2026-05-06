@@ -28,6 +28,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from lerobot.datasets.dataset_tools import check_episode_video_duration
+from lerobot.datasets.utils import DEFAULT_DATA_PATH
 from lerobot.utils.constants import HF_LEROBOT_HOME
 
 if TYPE_CHECKING:
@@ -150,6 +151,7 @@ def _invalidate_episode_start_indices(dataset_id: str) -> None:
     """Clear cached episode start indices when metadata changes."""
     _episode_start_indices.pop(dataset_id, None)
     _episode_action_stats.pop(dataset_id, None)
+    _per_episode_features_cache.pop(dataset_id, None)
 
 
 # Cache of per-episode action stats keyed by dataset_id. Surfaced via
@@ -798,6 +800,38 @@ class OpenDatasetRequest(BaseModel):
     confirm_hub_sync: bool = False
 
 
+class FeatureSchema(BaseModel):
+    """Schema info for a single dataset feature.
+
+    Mirrors the per-feature spec from ``info.json`` ``features`` dict —
+    just the fields the GUI actually uses for rendering and validation.
+    """
+
+    dtype: str  # e.g. "float32", "int64", "bool", "string", "image", "video"
+    shape: list[int]  # e.g. [1] for scalar, [14] for vector, [3, 480, 640] for image
+    names: list[str] | None = None  # component names for vectors; None for scalars/strings
+    is_per_episode: bool = False
+    # True if every episode has uniform value for this feature — i.e. it's a logical
+    # per-episode field broadcast across the per-frame column. Edits coerce to the
+    # whole episode to preserve the broadcast invariant. Detected once per dataset
+    # open via _detect_per_episode_features() and cached.
+    observed_min: float | None = None
+    observed_max: float | None = None
+    # Dataset-wide observed extrema, sourced from ``meta/stats.json`` (aggregated
+    # across episodes by ``compute_stats.py``). Populated only for scalar numeric
+    # features (shape == [1] or empty). The GUI shows these next to the feature
+    # name and uses them to scale the slider so the range is stable across
+    # episodes. Distinct from declared bounds (below): observed, not enforced.
+    declared_min: float | None = None
+    declared_max: float | None = None
+    # Optional declared bounds from the feature spec in ``info.json``. When
+    # present, ``validate_feature_dtype_and_shape`` rejects values outside
+    # ``[declared_min, declared_max]`` at add_frame and stage time. The GUI
+    # uses them to scale the slider (preferred over observed_min/max) and may
+    # show them in the card header. Categorical integer features use the
+    # ``names`` field instead — the legal range is implicitly ``[0, len(names))``.
+
+
 class DatasetInfo(BaseModel):
     """Summary info about a dataset."""
 
@@ -809,9 +843,282 @@ class DatasetInfo(BaseModel):
     fps: int
     robot_type: str = ""
     camera_keys: list[str]
-    features: list[str]
+    features: list[str]  # feature names only — preserved for backwards-compat
+    features_schema: dict[str, FeatureSchema] = {}
+    # Full per-feature schema (dtype, shape, names) keyed by feature name.
+    # Populated from ``ds.meta.features``. The GUI renderer registry
+    # dispatches on (dtype, ndim) to pick row + Inspector widgets.
     errors: list[str] = []  # Verification errors (metadata mismatches — dataset may be corrupted)
     warnings: list[str] = []  # Non-critical warnings (stale stats, etc.)
+
+
+_per_episode_features_cache: dict[str, set[str]] = {}
+
+
+def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
+    """Identify features whose values are uniform within every episode.
+
+    Pre: ``dataset`` is fully loaded.
+    Post: returns a set of feature names. Only considers features that
+    are non-image, non-video, non-DEFAULT_FEATURES, non-action,
+    non-observation.* — the same gate the staging endpoint uses to
+    decide editability. Result is cached per ``dataset_id``.
+
+    Detection is by reading the data parquet shards once. For each
+    feature, group rows by ``episode_index`` and check that every group
+    has at most one unique value. We treat lists / numpy arrays as not
+    per-episode (only scalars and strings can plausibly be broadcast).
+    """
+    if dataset_id in _per_episode_features_cache:
+        return _per_episode_features_cache[dataset_id]
+
+    skip_dtypes = {"image", "video"}
+    default_features = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
+
+    candidate_features: list[str] = []
+    for name, ft in dataset.meta.features.items():
+        if ft.get("dtype") in skip_dtypes:
+            continue
+        if name in default_features:
+            continue
+        if name == "action" or name.startswith("observation."):
+            continue
+        # Vectors and matrices can't reasonably be "uniform per episode" — skip.
+        shape = ft.get("shape") or [1]
+        if len(shape) > 1 or (len(shape) == 1 and shape[0] != 1):
+            continue
+        candidate_features.append(name)
+
+    if not candidate_features:
+        _per_episode_features_cache[dataset_id] = set()
+        return _per_episode_features_cache[dataset_id]
+
+    per_episode: set[str] = set()
+    data_dir = Path(dataset.root) / "data"
+    parquet_files = sorted(data_dir.glob("*/*.parquet"))
+    if not parquet_files:
+        _per_episode_features_cache[dataset_id] = set()
+        return _per_episode_features_cache[dataset_id]
+
+    cols_to_read = ["episode_index", *candidate_features]
+    nunique_by_feature: dict[str, int] = dict.fromkeys(candidate_features, 0)
+
+    try:
+        for shard in parquet_files:
+            df = pd.read_parquet(shard, columns=cols_to_read)
+            for name in candidate_features:
+                if nunique_by_feature[name] > 1:
+                    continue
+                # nunique() per episode_index group — max across groups tells us
+                # whether ANY episode has variation. >1 disqualifies the feature.
+                nunique_max = df.groupby("episode_index")[name].nunique(dropna=False).max()
+                if nunique_max is None:
+                    continue
+                nunique_by_feature[name] = max(nunique_by_feature[name], int(nunique_max))
+    except Exception as e:
+        logger.warning(f"per-episode-feature detection failed for {dataset_id}: {e}")
+        _per_episode_features_cache[dataset_id] = set()
+        return _per_episode_features_cache[dataset_id]
+
+    for name, nu in nunique_by_feature.items():
+        if 0 < nu <= 1:
+            per_episode.add(name)
+
+    _per_episode_features_cache[dataset_id] = per_episode
+    logger.info(f"detected per-episode features for {dataset_id}: {sorted(per_episode)}")
+    return per_episode
+
+
+# Hardcoded backend representation of the LeRobot 3.0 subtask format. The
+# data layer stores ``subtask_index`` (int64[1]) plus ``meta/subtasks.parquet``
+# (index → string lookup). The user always thinks in terms of strings, so
+# whenever both pieces are present the schema endpoint synthesizes a
+# ``subtask`` (string) feature in place of ``subtask_index``. Stage endpoint
+# accepts either name and routes to the storage feature; PendingEdit stores
+# the storage name so the apply pipeline doesn't need a special case.
+SUBTASK_STORAGE_FEATURE = "subtask_index"
+SUBTASK_DISPLAY_FEATURE = "subtask"
+
+
+def _has_subtask_lookup(dataset) -> bool:
+    """True if the dataset has a ``meta/subtasks.parquet`` lookup table."""
+    return getattr(dataset.meta, "subtasks", None) is not None
+
+
+def _coerce_optional_float(v: Any) -> float | None:
+    """Coerce a value from ``info.json`` to a JSON-friendly Python float.
+
+    Tolerates ``None``, missing, non-numeric, or NaN/inf — returns ``None`` for
+    anything we can't safely surface as a slider bound.
+    """
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    import math
+
+    if not math.isfinite(f):
+        return None
+    return f
+
+
+def _scalar_observed_extrema(
+    stats: dict | None, name: str, shape: list[int]
+) -> tuple[float | None, float | None]:
+    """Pull ``(min, max)`` for a scalar feature out of ``meta/stats.json``.
+
+    ``stats`` is the dict loaded by :func:`load_stats`, structured as
+    ``{feature_name: {"min": np.ndarray, "max": np.ndarray, ...}}``. Values are
+    aggregated across all episodes by ``compute_stats.py``.
+
+    Returns ``(None, None)`` if stats are missing, the feature isn't in stats,
+    the values aren't numeric/finite, or the shape isn't scalar (we don't
+    surface component-wise stats for vectors — too messy in the card header).
+    """
+    if stats is None or name not in stats:
+        return None, None
+    if shape and not (len(shape) == 1 and shape[0] == 1):
+        return None, None  # vectors / matrices: skip
+    entry = stats[name]
+    if not isinstance(entry, dict):
+        return None, None
+    raw_min = entry.get("min")
+    raw_max = entry.get("max")
+    try:
+        import numpy as _np
+
+        mn = float(_np.asarray(raw_min).flatten()[0]) if raw_min is not None else None
+        mx = float(_np.asarray(raw_max).flatten()[0]) if raw_max is not None else None
+    except (TypeError, ValueError, IndexError):
+        return None, None
+    # Reject NaN / inf — they'd break JSON serialization and confuse the GUI.
+    import math
+
+    if mn is not None and not math.isfinite(mn):
+        mn = None
+    if mx is not None and not math.isfinite(mx):
+        mx = None
+    return mn, mx
+
+
+def _build_features_schema(
+    features: dict,
+    per_episode: set[str] | None = None,
+    *,
+    subtask_synthesis: bool = False,
+    stats: dict | None = None,
+) -> dict[str, FeatureSchema]:
+    """Convert ``ds.meta.features`` into the JSON-friendly FeatureSchema dict.
+
+    Pre: ``features`` follows the LeRobot ``info.json`` shape — each value
+    has ``dtype`` (str), ``shape`` (list/tuple of int), and optional
+    ``names`` (list of str or None).
+    Post: returned dict has the same keys; values are pydantic-validated
+    FeatureSchema instances. Shapes are coerced to ``list[int]`` for
+    JSON serialization stability.
+
+    If ``subtask_synthesis=True`` and ``subtask_index`` is in ``features``,
+    the storage entry is replaced by a synthetic ``subtask`` (string)
+    entry that inherits the per-episode flag from ``subtask_index``. The
+    caller passes ``subtask_synthesis=True`` only when the dataset also
+    has ``meta/subtasks.parquet``.
+
+    If ``stats`` is provided (the ``ds.meta.stats`` dict from
+    ``meta/stats.json``), scalar numeric features get their dataset-wide
+    observed ``(min, max)`` populated.
+    """
+    per_episode = per_episode or set()
+    out: dict[str, FeatureSchema] = {}
+    for name, ft in features.items():
+        if subtask_synthesis and name == SUBTASK_STORAGE_FEATURE:
+            # Skip the storage entry; it will be replaced by the synthetic
+            # display entry below. We don't include both — the user thinks
+            # in strings, so exposing both would just leak the storage name.
+            continue
+        shape = ft.get("shape", [])
+        shape_list = [int(x) for x in shape] if shape is not None else []
+        names = ft.get("names")
+        if names is not None and not isinstance(names, list):
+            if isinstance(names, dict):
+                vals = next(iter(names.values()), None)
+                names = list(vals) if isinstance(vals, list) else None
+            else:
+                names = None
+        obs_min, obs_max = _scalar_observed_extrema(stats, name, shape_list)
+        # Declared bounds: optional ``min`` / ``max`` keys in info.json — coerce
+        # to JSON-friendly float and tolerate missing/non-numeric values silently.
+        decl_min = _coerce_optional_float(ft.get("min"))
+        decl_max = _coerce_optional_float(ft.get("max"))
+        out[name] = FeatureSchema(
+            dtype=str(ft.get("dtype", "")),
+            shape=shape_list,
+            names=names,
+            is_per_episode=name in per_episode,
+            observed_min=obs_min,
+            observed_max=obs_max,
+            declared_min=decl_min,
+            declared_max=decl_max,
+        )
+
+    if subtask_synthesis and SUBTASK_STORAGE_FEATURE in features:
+        # Per-episode flag transfers from the storage feature: if every episode
+        # had uniform subtask_index, every episode also has a uniform subtask
+        # string, so edits should still coerce to whole-episode.
+        out[SUBTASK_DISPLAY_FEATURE] = FeatureSchema(
+            dtype="string",
+            shape=[1],
+            names=None,
+            is_per_episode=SUBTASK_STORAGE_FEATURE in per_episode,
+        )
+    return out
+
+
+def _dataset_info_from(
+    dataset_id: str,
+    dataset,
+    *,
+    errors: list[str] | None = None,
+    warnings: list[str] | None = None,
+) -> DatasetInfo:
+    """Build a DatasetInfo response from an opened LeRobotDataset.
+
+    Pre: ``dataset.meta`` is fully loaded (call ``ensure_episodes_loaded``
+    first if opening). Post: returns a DatasetInfo with both the legacy
+    ``features`` name list and the full ``features_schema`` mapping.
+    """
+    per_episode = _detect_per_episode_features(dataset_id, dataset)
+    # Synthesize the user-facing "subtask" string feature only when the
+    # dataset has BOTH the storage column AND the lookup table — an
+    # incomplete dataset (one but not the other) would not let us decode.
+    subtask_synthesis = SUBTASK_STORAGE_FEATURE in dataset.meta.features and _has_subtask_lookup(dataset)
+    feature_names = list(dataset.meta.features.keys())
+    if subtask_synthesis:
+        # Mirror the schema synthesis in the legacy `features: list[str]` field
+        # so frontends that read that list see "subtask" instead of "subtask_index".
+        feature_names = [
+            SUBTASK_DISPLAY_FEATURE if n == SUBTASK_STORAGE_FEATURE else n for n in feature_names
+        ]
+    return DatasetInfo(
+        id=dataset_id,
+        repo_id=dataset.repo_id,
+        root=str(dataset.root),
+        total_episodes=dataset.meta.total_episodes,
+        total_frames=dataset.meta.total_frames,
+        fps=dataset.fps,
+        robot_type=getattr(dataset.meta, "robot_type", "") or "",
+        camera_keys=list(dataset.meta.camera_keys),
+        features=feature_names,
+        features_schema=_build_features_schema(
+            dataset.meta.features,
+            per_episode=per_episode,
+            subtask_synthesis=subtask_synthesis,
+            stats=getattr(dataset.meta, "stats", None),
+        ),
+        errors=errors or [],
+        warnings=warnings or [],
+    )
 
 
 class EpisodeActionStats(BaseModel):
@@ -859,22 +1166,7 @@ class EpisodeInfo(BaseModel):
 @router.get("")
 async def list_datasets() -> list[DatasetInfo]:
     """List all currently opened datasets."""
-    result = []
-    for dataset_id, ds in _app_state.datasets.items():
-        result.append(
-            DatasetInfo(
-                id=dataset_id,
-                repo_id=ds.repo_id,
-                root=str(ds.root),
-                total_episodes=ds.meta.total_episodes,
-                total_frames=ds.meta.total_frames,
-                fps=ds.fps,
-                robot_type=getattr(ds.meta, "robot_type", "") or "",
-                camera_keys=list(ds.meta.camera_keys),
-                features=list(ds.meta.features.keys()),
-            )
-        )
-    return result
+    return [_dataset_info_from(dataset_id, ds) for dataset_id, ds in _app_state.datasets.items()]
 
 
 @router.post("")
@@ -904,17 +1196,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                 logger.info(
                     f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)"
                 )
-                return DatasetInfo(
-                    id=dataset_id,
-                    repo_id=dataset.repo_id,
-                    root=str(dataset.root),
-                    total_episodes=dataset.meta.total_episodes,
-                    total_frames=dataset.meta.total_frames,
-                    fps=dataset.fps,
-                    robot_type=getattr(dataset.meta, "robot_type", "") or "",
-                    camera_keys=list(dataset.meta.camera_keys),
-                    features=list(dataset.meta.features.keys()),
-                )
+                return _dataset_info_from(dataset_id, dataset)
 
             # Extract repo_id from path: if under HF_LEROBOT_HOME, use owner/name
             repo_id = request.repo_id
@@ -984,17 +1266,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                 logger.info(
                     f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)"
                 )
-                return DatasetInfo(
-                    id=dataset_id,
-                    repo_id=dataset.repo_id,
-                    root=str(dataset.root),
-                    total_episodes=dataset.meta.total_episodes,
-                    total_frames=dataset.meta.total_frames,
-                    fps=dataset.fps,
-                    robot_type=getattr(dataset.meta, "robot_type", "") or "",
-                    camera_keys=list(dataset.meta.camera_keys),
-                    features=list(dataset.meta.features.keys()),
-                )
+                return _dataset_info_from(dataset_id, dataset)
 
             # Open from HuggingFace Hub
             dataset = LeRobotDataset(request.repo_id)
@@ -1057,19 +1329,7 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
         logger.info(f"Opened dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)")
         _save_opened_state()
 
-        return DatasetInfo(
-            id=dataset_id,
-            repo_id=dataset.repo_id,
-            root=str(dataset.root),
-            total_episodes=dataset.meta.total_episodes,
-            total_frames=dataset.meta.total_frames,
-            fps=dataset.fps,
-            robot_type=getattr(dataset.meta, "robot_type", "") or "",
-            camera_keys=list(dataset.meta.camera_keys),
-            features=list(dataset.meta.features.keys()),
-            errors=errors,
-            warnings=warnings,
-        )
+        return _dataset_info_from(dataset_id, dataset, errors=errors, warnings=warnings)
 
     except HTTPException:
         # Preserve intentional HTTP responses (e.g. 400 / 409) — don't wrap
@@ -1284,6 +1544,192 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
             "Expires": "0",
         },
     )
+
+
+def _coerce_feature_value_to_json(value: Any, dtype: str) -> Any:
+    """Convert a single sample's feature value into JSON-serializable form.
+
+    Pre: ``value`` comes from ``dataset[i][name]`` — typically a torch.Tensor,
+    np.ndarray, str, bool, int, or float.
+    Post: returns a JSON-compatible Python type (bool / int / float / str / list).
+    Image / video tensors are NEVER passed in (caller must skip those features).
+    """
+    import numpy as np
+    import torch
+
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu().numpy()
+    if isinstance(value, np.ndarray):
+        if value.size == 1:
+            scalar = value.item()
+            return bool(scalar) if dtype == "bool" else scalar
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    # Pass-through for str / int / float / bool. Anything else falls back to str()
+    # so the response stays JSON-encodable (better than failing the whole frame).
+    if isinstance(value, (str, bool, int, float)):
+        return value
+    return str(value)
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}/features")
+async def get_frame_features(dataset_id: str, episode_idx: int, frame_idx: int) -> dict[str, Any]:
+    """Return all per-frame feature values at a single frame.
+
+    Skips ``image`` / ``video`` features (those have a dedicated frame
+    endpoint). Returns JSON-serializable values: scalars for shape ``[1]``,
+    lists for vectors, strings for ``string`` features. ``subtask_index``
+    and the decoded ``subtask`` string both appear when the dataset has a
+    subtasks lookup table.
+    """
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    dataset = _app_state.datasets[dataset_id]
+
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+
+    ep = dataset.meta.episodes[episode_idx]
+    ep_length = ep["length"]
+    if frame_idx < 0 or frame_idx >= ep_length:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Frame {frame_idx} out of range for episode {episode_idx} (length={ep_length})",
+        )
+
+    episode_start = _get_episode_start_index(dataset_id, episode_idx)
+    global_idx = episode_start + frame_idx
+    item = dataset[global_idx]
+
+    # Filter out image/video features — those have their own frame endpoints.
+    skip_dtypes = {"image", "video"}
+    out: dict[str, Any] = {}
+    for name, ft in dataset.meta.features.items():
+        dtype = ft.get("dtype", "")
+        if dtype in skip_dtypes:
+            continue
+        if name not in item:
+            # Decoder can drop columns it doesn't know how to load; skip rather than error.
+            continue
+        try:
+            out[name] = _coerce_feature_value_to_json(item[name], dtype)
+        except Exception as e:
+            logger.warning(f"Failed to coerce feature {name!r} at frame {frame_idx}: {e}")
+            # Don't fail the whole response over one bad cell.
+            out[name] = None
+
+    # ``dataset[i]`` includes both ``task`` (decoded string) and ``task_index``
+    # automatically; same for ``subtask`` / ``subtask_index`` when the lookup
+    # table is present. They flow through the loop above.
+    return {"frame_index": frame_idx, "episode_index": episode_idx, "values": out}
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/feature-series")
+async def get_episode_feature_series(
+    dataset_id: str,
+    episode_idx: int,
+    features: str = "",
+) -> dict[str, Any]:
+    """Return the per-frame trajectory of one or more features for an episode.
+
+    The frontend uses this to render line / band / stripe rows under the timeline.
+    Image / video features are rejected (they have their own video decode path).
+
+    Pre: ``features`` is a comma-separated list of feature names. Empty / omitted
+    means "all non-image, non-video features the dataset declares".
+    Post: response shape is ``{episode_index, length, series: {name: [v0..v_{N-1}]}}``.
+    For ``task`` / ``subtask``, the decoded string is returned per frame (matching
+    what ``dataset[i]`` would yield) — backed by the dataset's lookup table.
+    """
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    dataset = _app_state.datasets[dataset_id]
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+
+    requested = [name.strip() for name in features.split(",") if name.strip()] if features else None
+
+    # Resolve which raw columns we need to read from parquet, and which
+    # decoded views (task / subtask) the caller wants on top of those.
+    feature_dict = dataset.meta.features
+    skip_dtypes = {"image", "video"}
+
+    # Synthetic columns: not in features dict, but materialized by dataset[i].
+    has_subtasks = getattr(dataset.meta, "subtasks", None) is not None and "subtask_index" in feature_dict
+    synthetic_decoded = {"task": "task_index"}
+    if has_subtasks:
+        synthetic_decoded["subtask"] = "subtask_index"
+
+    if requested is None:
+        # Default: every per-frame feature except image/video, plus the synthetic
+        # decoded views the dataset supports.
+        raw_cols: list[str] = [
+            name for name, ft in feature_dict.items() if ft.get("dtype") not in skip_dtypes
+        ]
+        decoded_cols: list[str] = [name for name in synthetic_decoded if synthetic_decoded[name] in raw_cols]
+    else:
+        raw_cols = []
+        decoded_cols = []
+        for name in requested:
+            if name in synthetic_decoded:
+                # caller asked for "task"/"subtask" — read the *_index column and decode.
+                if synthetic_decoded[name] in feature_dict:
+                    raw_cols.append(synthetic_decoded[name])
+                    decoded_cols.append(name)
+                continue
+            if name not in feature_dict:
+                raise HTTPException(status_code=400, detail=f"Unknown feature: {name!r}")
+            if feature_dict[name].get("dtype") in skip_dtypes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Feature {name!r} is image/video — fetch via /frame/{{idx}} instead.",
+                )
+            raw_cols.append(name)
+
+    ep = dataset.meta.episodes[episode_idx]
+    chunk_idx = int(ep["data/chunk_index"])
+    file_idx = int(ep["data/file_index"])
+    parquet_path = Path(dataset.root) / DEFAULT_DATA_PATH.format(chunk_index=chunk_idx, file_index=file_idx)
+
+    if not parquet_path.exists():
+        raise HTTPException(status_code=404, detail=f"Data parquet missing: {parquet_path}")
+
+    # Always pull episode_index too so we can slice in-memory. Avoids reading the whole
+    # shard's worth of columns when we only need a slice — though for 1 episode we read
+    # the matching rows only.
+    cols_to_read = list(dict.fromkeys(["episode_index", *raw_cols]))
+    df = pd.read_parquet(parquet_path, columns=cols_to_read)
+    df = df[df["episode_index"] == episode_idx].reset_index(drop=True)
+
+    series: dict[str, list[Any]] = {}
+    for name in raw_cols:
+        col = df[name].tolist() if name in df.columns else []
+        # Pandas keeps numpy arrays for vector cells. Coerce per-row.
+        series[name] = [_coerce_feature_value_to_json(v, feature_dict[name].get("dtype", "")) for v in col]
+
+    # Decode synthetic columns ("task", "subtask") from the underlying *_index series.
+    for decoded_name in decoded_cols:
+        idx_col = synthetic_decoded[decoded_name]
+        lookup = dataset.meta.tasks if decoded_name == "task" else dataset.meta.subtasks
+        if lookup is None:
+            continue
+        idx_values = series.get(idx_col, [])
+        try:
+            series[decoded_name] = [lookup.iloc[int(i)].name for i in idx_values]
+        except Exception as e:
+            logger.warning(f"Failed to decode {decoded_name} via {idx_col}: {e}")
+            series[decoded_name] = [None] * len(idx_values)
+
+    return {
+        "episode_index": episode_idx,
+        "length": int(ep["length"]),
+        "series": series,
+    }
 
 
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frames")

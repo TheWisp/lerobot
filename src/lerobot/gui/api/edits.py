@@ -16,13 +16,13 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from lerobot.gui.state import AppState
+    from lerobot.gui.state import AppState, PendingEdit
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +201,390 @@ async def set_episode_trim(request: TrimRequest):
     }
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# Feature-value editing (Phase B3 + B5)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+# Read-only feature names / dtypes — editing is blocked.
+_DEFAULT_FEATURES = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
+_READONLY_DTYPES = {"image", "video"}
+_LARGE_SAVE_FRAME_THRESHOLD = 10_000
+
+
+class FeatureSetRequest(BaseModel):
+    """Stage a per-frame feature value edit for a contiguous range.
+
+    The frontend sends one of these per Inspector card change. The range
+    uses the episode's local frame numbers; the backend translates to the
+    global ``index`` column at apply time.
+    """
+
+    dataset_id: str
+    episode_index: int
+    feature: str
+    frame_from: int  # inclusive
+    frame_to: int  # exclusive
+    value: Any  # JSON-serializable; coerced to feature dtype on apply
+    confirm_large: bool = False  # set True to acknowledge a > 10k frame Save
+    confirm_overlap: bool = False
+    # set True to clip prior staged edits that overlap this one's range. Without
+    # this flag, an overlap returns 409 so the frontend can prompt the user.
+
+
+def _resolve_synthetic_feature(dataset, requested_feature: str) -> str:
+    """Map a user-facing feature name to its storage feature name.
+
+    Hardcoded special case for the LeRobot 3.0 subtask format:
+    user-facing ``subtask`` (string) → storage ``subtask_index`` (int64)
+    when the dataset has ``meta/subtasks.parquet``. Returns the input
+    unchanged for any other feature name.
+    """
+    from lerobot.gui.api.datasets import (
+        SUBTASK_DISPLAY_FEATURE,
+        SUBTASK_STORAGE_FEATURE,
+        _has_subtask_lookup,
+    )
+
+    if (
+        requested_feature == SUBTASK_DISPLAY_FEATURE
+        and SUBTASK_STORAGE_FEATURE in dataset.meta.features
+        and _has_subtask_lookup(dataset)
+    ):
+        return SUBTASK_STORAGE_FEATURE
+    return requested_feature
+
+
+def _validate_feature_edit(
+    dataset, request: FeatureSetRequest
+) -> tuple[str, int, int, int, int, dict[str, Any]]:
+    """Validate the request against the dataset schema and trim envelope.
+
+    Returns ``(storage_feature, frame_from, frame_to, global_from, global_to,
+    feature_info)``. ``storage_feature`` is the canonical on-disk feature name
+    — for the LeRobot 3.0 subtask format it's ``"subtask_index"`` even when
+    the caller submitted ``"subtask"``. The returned frame_from/frame_to may
+    be coerced to ``[0, episode_length)`` when the feature is detected as
+    per-episode-broadcast (e.g. ``success``).
+
+    The request object itself is NOT mutated — error messages reference the
+    user-submitted name (``request.feature``) so feedback stays familiar,
+    while the storage name is what gets stored in PendingEdit and consumed
+    by the apply pipeline.
+
+    Raises HTTPException with appropriate 4xx codes on failure.
+    """
+    feature_dict = dataset.meta.features
+
+    # Translate synthetic display names (subtask) → storage names (subtask_index)
+    # for everything that operates on on-disk columns. ``request.feature``
+    # stays untouched so error messages reflect what the caller actually sent.
+    storage_feature = _resolve_synthetic_feature(dataset, request.feature)
+
+    if storage_feature not in feature_dict:
+        raise HTTPException(status_code=400, detail=f"Unknown feature: {request.feature!r}")
+
+    feature_info = feature_dict[storage_feature]
+    dtype = feature_info.get("dtype", "")
+
+    if storage_feature in _DEFAULT_FEATURES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Feature {request.feature!r} is auto-managed and not editable",
+        )
+    if dtype in _READONLY_DTYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Feature {request.feature!r} has dtype {dtype!r} and is not editable in V1",
+        )
+    if storage_feature == "action" or storage_feature.startswith("observation."):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Feature {request.feature!r} is recorded sensor / control data and is read-only in V1",
+        )
+
+    if request.episode_index < 0 or request.episode_index >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=400, detail=f"Invalid episode index: {request.episode_index}")
+
+    ep = dataset.meta.episodes[request.episode_index]
+    ep_length = int(ep["length"])
+    if request.frame_from < 0 or request.frame_to > ep_length or request.frame_from >= request.frame_to:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid range [{request.frame_from}, {request.frame_to}) for episode "
+                f"{request.episode_index} (length={ep_length})"
+            ),
+        )
+
+    # Per-episode broadcast features: silently coerce sub-range edits to the
+    # full episode. The frontend visualizes this; the staging endpoint enforces
+    # it as the source of truth so a stale frontend can't break the invariant.
+    from lerobot.gui.api.datasets import _detect_per_episode_features, _get_episode_start_index
+
+    per_episode = _detect_per_episode_features(request.dataset_id, dataset)
+    if storage_feature in per_episode:
+        frame_from, frame_to = 0, ep_length
+    else:
+        frame_from, frame_to = request.frame_from, request.frame_to
+
+    n_frames = frame_to - frame_from
+    if n_frames > _LARGE_SAVE_FRAME_THRESHOLD and not request.confirm_large:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "large_edit_confirmation_required",
+                "message": (
+                    f"This edit touches {n_frames} frames (> {_LARGE_SAVE_FRAME_THRESHOLD}). "
+                    "Re-send with confirm_large=true to proceed."
+                ),
+                "frames": n_frames,
+            },
+        )
+
+    # Declared bounds (info.json ``min``/``max``) and categorical (``names``)
+    # validation. We run this here rather than only at apply time so the user
+    # gets immediate 400 feedback when they type 7 into a 1-5 quality field —
+    # the alternative would be silently staging the bad value and only
+    # blowing up on Save. The error message uses the user-submitted name so
+    # they recognize it.
+    bounds_error = _validate_value_against_declared_bounds(request.feature, feature_info, request.value)
+    if bounds_error:
+        raise HTTPException(status_code=400, detail=bounds_error)
+
+    episode_start = _get_episode_start_index(request.dataset_id, request.episode_index)
+    global_from = episode_start + frame_from
+    global_to = episode_start + frame_to
+    return storage_feature, frame_from, frame_to, global_from, global_to, feature_info
+
+
+def _validate_value_against_declared_bounds(feature_name: str, feature_info: dict, value: Any) -> str:
+    """Run the declared-bounds / categorical check on the requested value.
+
+    Returns the error string from
+    :func:`validate_feature_numeric_bounds` (empty when valid). Skips
+    silently if the feature has no declared bounds or categorical names —
+    string features and unbounded numeric features fall through.
+    """
+    from lerobot.datasets.feature_utils import (
+        is_categorical_feature,
+        validate_feature_numeric_bounds,
+    )
+
+    has_bounds = feature_info.get("min") is not None or feature_info.get("max") is not None
+    if not has_bounds and not is_categorical_feature(feature_info):
+        return ""
+
+    import numpy as np
+
+    # Coerce JSON-y value to a numpy array. The bounds checker is shape-
+    # agnostic — it flattens before checking — so a scalar / list / vector
+    # all work.
+    try:
+        arr = np.asarray(value)
+    except (TypeError, ValueError):
+        return f"Could not interpret value {value!r} as numeric for bounds check"
+    return validate_feature_numeric_bounds(feature_name, feature_info, arr)
+
+
+def _find_overlapping_feature_edits(
+    dataset_id: str, episode_index: int, feature: str, frame_from: int, frame_to: int
+) -> list[tuple[int, PendingEdit]]:
+    """Return ``(index_in_pending_edits, edit)`` pairs that overlap the given range.
+
+    Half-open `[a, b)` overlaps `[c, d)` iff `a < d and c < b`. Only considers
+    feature_set edits on the same (dataset, episode, feature) tuple.
+    """
+    from lerobot.gui.state import PendingEdit  # noqa: F401  (referenced in type hint only)
+
+    overlaps: list[tuple[int, Any]] = []
+    for i, e in enumerate(_app_state.pending_edits):
+        if (
+            e.edit_type != "feature_set"
+            or e.dataset_id != dataset_id
+            or e.episode_index != episode_index
+            or e.params.get("feature") != feature
+        ):
+            continue
+        a = int(e.params.get("frame_from", 0))
+        b = int(e.params.get("frame_to", 0))
+        if frame_from < b and a < frame_to:
+            overlaps.append((i, e))
+    return overlaps
+
+
+def _clip_overlapping_edits(
+    overlaps: list[tuple[int, Any]],
+    new_from: int,
+    new_to: int,
+) -> int:
+    """Last-write-wins resolution: clip prior edits' ranges to the non-overlap.
+
+    Pre: ``overlaps`` is the result of :func:`_find_overlapping_feature_edits` for
+    the same ``(dataset, episode, feature)`` tuple. Iterates in reverse index
+    order so removals don't shift indices we still need.
+    Post: returns the count of removed (fully-contained) edits.
+
+    Cases per overlapping prior edit ``[a, b)``:
+
+    * ``new`` fully contains prior (``new_from <= a`` and ``new_to >= b``) → remove it.
+    * ``new`` cuts off the right tail (``a < new_from <= b <= new_to``) → clip to ``[a, new_from)``.
+    * ``new`` cuts off the left tail (``new_from <= a < new_to < b``) → clip to ``[new_to, b)``.
+    * ``new`` is strictly inside (``a < new_from`` and ``new_to < b``) → split into two pieces.
+      We keep the left piece in place and append a new edit for the right piece.
+    """
+    removed = 0
+    for i, e in sorted(overlaps, key=lambda x: x[0], reverse=True):
+        a = int(e.params["frame_from"])
+        b = int(e.params["frame_to"])
+        if new_from <= a and new_to >= b:
+            _app_state.pending_edits.pop(i)
+            removed += 1
+            continue
+        # Compute remaining piece(s).
+        left = (a, min(b, new_from))  # may be empty
+        right = (max(a, new_to), b)  # may be empty
+        left_keep = left[0] < left[1]
+        right_keep = right[0] < right[1]
+        if left_keep and right_keep:
+            # Strictly inside — split. Keep left in place, append right.
+            e.params["frame_from"] = left[0]
+            e.params["frame_to"] = left[1]
+            # Recompute global indices.
+            episode_start = e.params["global_from_index"] - a
+            e.params["global_from_index"] = episode_start + left[0]
+            e.params["global_to_index"] = episode_start + left[1]
+            from lerobot.gui.state import PendingEdit
+
+            split = PendingEdit(
+                edit_type="feature_set",
+                dataset_id=e.dataset_id,
+                episode_index=e.episode_index,
+                params={
+                    **e.params,
+                    "frame_from": right[0],
+                    "frame_to": right[1],
+                    "global_from_index": episode_start + right[0],
+                    "global_to_index": episode_start + right[1],
+                },
+            )
+            _app_state.pending_edits.append(split)
+        elif left_keep:
+            episode_start = e.params["global_from_index"] - a
+            e.params["frame_from"] = left[0]
+            e.params["frame_to"] = left[1]
+            e.params["global_from_index"] = episode_start + left[0]
+            e.params["global_to_index"] = episode_start + left[1]
+        elif right_keep:
+            episode_start = e.params["global_from_index"] - a
+            e.params["frame_from"] = right[0]
+            e.params["frame_to"] = right[1]
+            e.params["global_from_index"] = episode_start + right[0]
+            e.params["global_to_index"] = episode_start + right[1]
+        else:
+            # Both empty — should be caught by the "fully contains" branch above.
+            _app_state.pending_edits.pop(i)
+            removed += 1
+    return removed
+
+
+@router.post("/feature-set")
+async def stage_feature_set(request: FeatureSetRequest):
+    """Stage a feature-set edit for later apply on Save.
+
+    On overlap with an existing staged edit on the same
+    ``(dataset, episode, feature)``: returns 409 with structured detail
+    unless ``request.confirm_overlap=True``, in which case prior edits are
+    clipped (or removed if fully contained) and the new edit is staged.
+    """
+    from lerobot.gui.state import PendingEdit
+
+    _require_unlocked(request.dataset_id)
+
+    if request.dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset_id}")
+
+    dataset = _app_state.datasets[request.dataset_id]
+    (
+        storage_feature,
+        frame_from,
+        frame_to,
+        global_from,
+        global_to,
+        _,
+    ) = _validate_feature_edit(dataset, request)
+
+    # Overlap detection runs against the canonical on-disk feature name —
+    # otherwise a user staging "subtask" twice would dodge the overlap
+    # check because each request has a different surface name even though
+    # both target subtask_index.
+    overlaps = _find_overlapping_feature_edits(
+        request.dataset_id, request.episode_index, storage_feature, frame_from, frame_to
+    )
+    if overlaps and not request.confirm_overlap:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "overlapping_edit",
+                "message": (
+                    f"You already have {len(overlaps)} staged edit(s) on "
+                    f"{request.feature!r} (episode {request.episode_index}) overlapping "
+                    f"frames {frame_from}…{frame_to - 1}. "
+                    "Re-send with confirm_overlap=true to clip the prior edit(s)."
+                ),
+                "feature": storage_feature,
+                "episode_index": request.episode_index,
+                "new_range": [frame_from, frame_to],
+                "overlapping": [
+                    {
+                        "edit_index": i,
+                        "frame_from": int(e.params["frame_from"]),
+                        "frame_to": int(e.params["frame_to"]),
+                        "value": e.params.get("value"),
+                    }
+                    for i, e in overlaps
+                ],
+            },
+        )
+    if overlaps and request.confirm_overlap:
+        removed = _clip_overlapping_edits(overlaps, frame_from, frame_to)
+        logger.info(
+            f"Resolved {len(overlaps)} overlapping edit(s) on "
+            f"{storage_feature} ep={request.episode_index}: {removed} removed, "
+            f"{len(overlaps) - removed} clipped"
+        )
+
+    # PendingEdit always stores the canonical on-disk feature name so the
+    # apply pipeline (set_feature_values) sees a consistent column to write.
+    edit = PendingEdit(
+        edit_type="feature_set",
+        dataset_id=request.dataset_id,
+        episode_index=request.episode_index,
+        params={
+            "feature": storage_feature,
+            "frame_from": frame_from,
+            "frame_to": frame_to,
+            "global_from_index": global_from,
+            "global_to_index": global_to,
+            "value": request.value,
+        },
+    )
+    _app_state.add_edit(edit)
+    _save_edits_for_dataset(request.dataset_id)
+
+    logger.info(
+        f"Staged feature-set edit: feature={storage_feature} ep={request.episode_index} "
+        f"frames=[{frame_from}, {frame_to}) global=[{global_from}, {global_to})"
+    )
+    response: dict[str, Any] = {"status": "ok", "message": "Feature-set edit staged"}
+    if frame_from != request.frame_from or frame_to != request.frame_to:
+        # Surface coercion (per-episode broadcast) so the GUI can update its
+        # selection band rather than show stale ranges.
+        response["coerced_range"] = [frame_from, frame_to]
+        response["coerce_reason"] = "per_episode_broadcast"
+    return response
+
+
 @router.delete("/{edit_index}")
 async def remove_edit(edit_index: int):
     """Remove a pending edit by index."""
@@ -269,8 +653,10 @@ async def _apply_edits_locked(dataset_id: str):
     from lerobot.datasets.dataset_tools import (
         delete_episodes_virtual,
         reaggregate_dataset_stats,
+        set_feature_values,
         trim_episode_virtual,
     )
+    from lerobot.datasets.feature_value_edits import StatsRecomputationError
     from lerobot.datasets.io_utils import load_episodes
 
     edits = _app_state.get_edits_for_dataset(dataset_id)
@@ -282,11 +668,48 @@ async def _apply_edits_locked(dataset_id: str):
     applied = 0
     errors = []
 
-    # Sort edits: apply trims first (they modify in place), then deletes
+    # Sort edits: apply value-edits first (they modify cells in existing rows),
+    # then trims (modify episode bounds), then deletes (remove rows). Doing
+    # value-edits first means their global indices haven't been shifted by trims
+    # / deletes yet — staged global_from / global_to remain valid.
+    feature_set_edits = [e for e in edits if e.edit_type == "feature_set"]
     trim_edits = [e for e in edits if e.edit_type == "trim"]
     delete_edits = sorted(
         [e for e in edits if e.edit_type == "delete"], key=lambda e: e.episode_index, reverse=True
     )
+
+    # Apply staged feature_set edits in one pass.
+    if feature_set_edits:
+        try:
+            payload = [
+                {
+                    "feature": e.params["feature"],
+                    "from_index": e.params["global_from_index"],
+                    "to_index": e.params["global_to_index"],
+                    "value": e.params["value"],
+                }
+                for e in feature_set_edits
+            ]
+            for e in feature_set_edits:
+                logger.info(
+                    f"FEATURE_SET dataset={original_root} feature={e.params['feature']} "
+                    f"ep={e.episode_index} global=[{e.params['global_from_index']}, "
+                    f"{e.params['global_to_index']})"
+                )
+            set_feature_values(dataset, payload, in_place=True)
+            applied += len(feature_set_edits)
+            logger.info(f"Applied {len(feature_set_edits)} feature-set edits")
+        except StatsRecomputationError as e:
+            # Data writes succeeded, only stats recompute failed — increment
+            # applied (the user's edits ARE on disk) but surface the staleness
+            # so the frontend shows partial. The user can re-run stats from
+            # the dataset reload path or via a manual aggregation pass.
+            applied += len(feature_set_edits)
+            errors.append(f"Feature-set edits applied, but stats recompute failed: {e}")
+            logger.warning(f"Feature-set edits applied with stale stats: {e}")
+        except Exception as e:
+            errors.append(f"Feature-set edits: {e}")
+            logger.exception("Failed to apply feature-set edits")
 
     # Apply trims (these modify in-place)
     for edit in trim_edits:
