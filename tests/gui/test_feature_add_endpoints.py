@@ -34,20 +34,28 @@ from lerobot.gui.state import AppState, PendingEdit
 
 @pytest.fixture
 def app_with_state():
-    """FastAPI app with the datasets router and a clean module-level state."""
+    """FastAPI app with the datasets + edits routers and a clean module-level state."""
+    from lerobot.gui.api import edits as edits_module
+
     app = FastAPI()
+    # Routers already declare their own prefixes (/api/datasets, /api/edits).
     app.include_router(datasets_module.router)
+    app.include_router(edits_module.router)
 
     state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
     original_state = datasets_module._app_state
+    original_edits_state = edits_module._app_state
     original_indices = datasets_module._episode_start_indices.copy()
     datasets_module.set_app_state(state)
+    edits_module._app_state = state
 
     yield app, state
 
     datasets_module._app_state = original_state
+    edits_module._app_state = original_edits_state
     datasets_module._episode_start_indices.clear()
     datasets_module._episode_start_indices.update(original_indices)
+    state.pending_edits.clear()
 
 
 @pytest.fixture
@@ -240,6 +248,52 @@ class TestPostFeaturesDefaults:
             assert "reward" in t.column_names
             assert "next.reward" not in t.column_names
             assert all(v == 0.5 for v in t.column("reward").to_pylist())
+
+    def test_added_reward_does_not_get_inferred_as_per_episode(
+        self, app_with_state, opened_dataset
+    ):
+        """After adding reward (declared per_episode=false), staging a range
+        edit on it does NOT get coerced to whole-episode by inference.
+
+        Bug repro: the constant 0.0 fill made every episode look uniform,
+        so _detect_per_episode_features inferred per_episode=True and the
+        staging endpoint silently widened the user's range edit to the
+        whole episode. The declared per_episode=false hint must win.
+        """
+        app, _state = app_with_state
+        dataset_id, ds = opened_dataset
+
+        # Add reward via the defaults endpoint.
+        _post_json(app, f"/api/datasets/{dataset_id}/features/defaults", None)
+
+        # Stage a range edit on reward — should be accepted as a range edit.
+        ep_length = int(ds.meta.episodes[0]["length"])
+        # Pick a sub-range strictly inside the episode.
+        sub_from, sub_to = 1, max(2, ep_length - 1)
+        resp = _post_json(app, "/api/edits/feature-set", {
+            "dataset_id": dataset_id,
+            "episode_index": 0,
+            "feature": "reward",
+            "frame_from": sub_from,
+            "frame_to": sub_to,
+            "value": 0.5,
+        })
+        assert resp.status_code == 200, resp.text
+        # The pending edit should preserve the staged sub-range, not be
+        # widened to [0, ep_length).
+        async def get_edits():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.get("/api/edits")
+        pending = asyncio.run(get_edits()).json()["edits"]
+        feature_set_edits = [e for e in pending if e["params"].get("feature") == "reward"]
+        assert feature_set_edits, "no pending feature_set edit found for reward"
+        e = feature_set_edits[-1]["params"]
+        assert (e["frame_from"], e["frame_to"]) == (sub_from, sub_to), (
+            f"reward edit was coerced from [{sub_from}, {sub_to}) to "
+            f"[{e['frame_from']}, {e['frame_to']}) — declared per_episode=false should prevent this"
+        )
 
     def test_skips_rename_when_dtype_incompatible(
         self, app_with_state, tmp_path, empty_lerobot_dataset_factory

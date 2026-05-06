@@ -917,7 +917,14 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
     skip_dtypes = {"image", "video"}
     default_features = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
 
-    declared: set[str] = set()
+    # Declared `per_episode` hint in the feature spec wins over inference,
+    # in BOTH directions. Mirrors the same precedence used in
+    # _build_features_schema. Without this, a freshly-added per-frame
+    # column (e.g. reward) initialized to a constant fill would look
+    # uniform-per-episode and be silently coerced to whole-episode by
+    # the staging endpoint — even though the schema says is_per_episode=false.
+    declared_per_episode: set[str] = set()
+    declared_not_per_episode: set[str] = set()
     candidate_features: list[str] = []
     for name, ft in dataset.meta.features.items():
         if ft.get("dtype") in skip_dtypes:
@@ -925,6 +932,13 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
         if name in default_features:
             continue
         if name == "action" or name.startswith("observation."):
+            continue
+        if "per_episode" in ft:
+            if bool(ft["per_episode"]):
+                declared_per_episode.add(name)
+            else:
+                declared_not_per_episode.add(name)
+            # Either way, skip inference for this feature — declared wins.
             continue
         # Vectors and matrices can't reasonably be "uniform per episode" — skip.
         shape = ft.get("shape") or [1]
@@ -941,9 +955,10 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
     warnings: list[str] = []
 
     if not candidate_features:
-        _per_episode_features_cache[dataset_id] = declared
-        _per_episode_source_cache[dataset_id] = source_map
-        _per_episode_warnings_cache[dataset_id] = warnings
+        # Still record any declared per-episode features even when there's
+        # nothing to infer (e.g. all features are declared one way or the
+        # other already).
+        _per_episode_features_cache[dataset_id] = set(declared_per_episode)
         return _per_episode_features_cache[dataset_id]
 
     data_dir = Path(dataset.root) / "data"
@@ -997,6 +1012,11 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
         else:
             if is_uniform:
                 per_episode.add(name)
+    # Declared overrides win over inference: add explicit-true, drop
+    # explicit-false (the latter shouldn't appear in `per_episode` since
+    # it was filtered out of candidate_features, but defensive belt+braces).
+    per_episode |= declared_per_episode
+    per_episode -= declared_not_per_episode
                 source_map[name] = "detected"
 
     _per_episode_features_cache[dataset_id] = per_episode
