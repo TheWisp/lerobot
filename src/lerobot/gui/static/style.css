@@ -703,7 +703,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 
 /* ── Default-features banner (offer to add reward / success) ───────── */
-.default-features-banner {
+/* `:not([hidden])` so the `hidden` HTML attribute (UA `display: none`)
+   wins over our explicit display rule. Without this, `display: flex`
+   would override `hidden` and the banner would stay visible after
+   `hideDefaultsBanner()` runs — bug. */
+.default-features-banner:not([hidden]) {
     display: flex;
     align-items: center;
     gap: 12px;
