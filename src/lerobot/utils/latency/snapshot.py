@@ -64,6 +64,7 @@ class LatencySnapshotWriter:
         series_window_s: float = DEFAULT_SERIES_WINDOW_S,
         series_max_points: int = DEFAULT_SERIES_MAX_POINTS,
         loop_kind: str = "teleop",
+        target_fps: float | None = None,
     ):
         assert interval_s >= 0, f"interval_s must be non-negative, got {interval_s}"
         self._dir = Path(output_dir)
@@ -73,6 +74,10 @@ class LatencySnapshotWriter:
         self._series_window_s = series_window_s
         self._series_max_points = series_max_points
         self._loop_kind = loop_kind
+        # The loop's nominal iteration budget in ms (1000/fps). Published in
+        # every snapshot so the GUI can scale color thresholds to the actual
+        # FPS instead of hardcoding for 60 Hz.
+        self._target_period_ms: float | None = (1000.0 / float(target_fps)) if target_fps else None
         self._last_write_at: float = 0.0
         self._dir_ready: bool = False
 
@@ -106,6 +111,8 @@ class LatencySnapshotWriter:
         )
         snap["t"] = t
         snap["loop_kind"] = self._loop_kind
+        if self._target_period_ms is not None:
+            snap["target_period_ms"] = self._target_period_ms
 
         if not self._dir_ready:
             self._dir.mkdir(parents=True, exist_ok=True)
