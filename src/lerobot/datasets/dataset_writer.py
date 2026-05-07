@@ -35,6 +35,7 @@ from .compute_stats import compute_episode_stats, get_feature_stats
 from .dataset_metadata import LeRobotDatasetMetadata
 from .feature_utils import (
     get_hf_features_from_features,
+    is_per_episode_declared,
     validate_episode_buffer,
     validate_frame,
 )
@@ -59,6 +60,53 @@ from .video_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _values_match(a, b) -> bool:
+    """Equality check tolerant of numpy scalars / 0-d arrays / lists.
+
+    Used by per-episode-feature consistency: ``add_frame`` may receive a
+    Python scalar on one call and a numpy scalar on the next for the same
+    column. ``a == b`` would either crash on a numpy mismatch or return
+    an array. Coerce via ``np.array_equal`` which handles all sane cases.
+    """
+    try:
+        return bool(np.array_equal(a, b, equal_nan=False))
+    except TypeError:
+        # Strings / objects: fall back to equality.
+        return a == b
+
+
+def _validate_per_episode_consistency(frame: dict, episode_buffer: dict, features: dict) -> None:
+    """Reject ``add_frame`` calls that violate a declared per-episode invariant.
+
+    Pre: ``frame`` is the user-supplied frame dict (after ``validate_frame``);
+    ``episode_buffer`` is the writer's accumulating buffer for the current
+    episode; ``features`` is ``dataset.meta.features``.
+    Post: raises ``ValueError`` if any feature with ``per_episode: true``
+    in ``info.json`` carries a value in ``frame`` that differs from the
+    value already pinned for this episode (i.e. the value of the first
+    frame). On the first frame of an episode this check trivially passes.
+    """
+    for name, ft in features.items():
+        if not is_per_episode_declared(ft):
+            continue
+        if name not in frame:
+            continue
+        new_value = frame[name]
+        existing = episode_buffer.get(name, [])
+        if not existing:
+            # First frame in the episode for this feature — pin.
+            continue
+        pinned = existing[0]
+        if not _values_match(pinned, new_value):
+            ep_idx = episode_buffer.get("episode_index", "?")
+            raise ValueError(
+                f"Feature {name!r} is declared per_episode=true but episode "
+                f"{ep_idx} has inconsistent values: first frame had {pinned!r}, "
+                f"now got {new_value!r}. Either keep the value uniform across the "
+                f"episode or remove the per_episode flag from info.json."
+            )
 
 
 def _encode_video_worker(
@@ -198,6 +246,13 @@ class DatasetWriter:
 
         if self.episode_buffer is None:
             self.episode_buffer = self._create_episode_buffer()
+
+        # Per-episode consistency check: features declared with
+        # ``per_episode: true`` in info.json must carry the same value for
+        # every frame in the episode. Pin the value on the first frame and
+        # reject any subsequent frame that disagrees. The check fires here
+        # so the caller sees the bad call site, not a parquet-write later.
+        _validate_per_episode_consistency(frame, self.episode_buffer, self._meta.features)
 
         # Automatically add frame_index and timestamp to episode buffer
         frame_index = self.episode_buffer["size"]

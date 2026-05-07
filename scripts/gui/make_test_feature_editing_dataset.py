@@ -139,7 +139,11 @@ _FEATURE_BUILDERS = {
         "fill": _build_reward,
     },
     "success": {
-        "schema": {"dtype": "bool", "shape": [1], "names": None},
+        # ``per_episode: true`` is the format flag declaring intent: every
+        # frame of an episode carries the same success value. The detector
+        # honors this without scanning the data, and ``add_frame`` rejects
+        # writes that violate the invariant.
+        "schema": {"dtype": "bool", "shape": [1], "names": None, "per_episode": True},
         "fill": _build_success,
     },
     "subtask_index": {
@@ -165,9 +169,15 @@ _FEATURE_BUILDERS = {
     },
     "control_mode": {
         # ``names`` makes this a categorical: stored as int index, displayed
-        # by label. The GUI renders a dropdown for editing and a colored
-        # band per category on the timeline row.
-        "schema": {"dtype": "int64", "shape": [1], "names": ["ee", "joint"]},
+        # by label. ``per_episode: true`` declares it episode-wide so the GUI
+        # doesn't need to scan the parquet to figure that out (each recording
+        # is in one control mode for its entire duration).
+        "schema": {
+            "dtype": "int64",
+            "shape": [1],
+            "names": ["ee", "joint"],
+            "per_episode": True,
+        },
         "fill": _build_control_mode,
     },
 }

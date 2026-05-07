@@ -240,6 +240,48 @@ def is_categorical_feature(feature: dict) -> bool:
     return is_scalar
 
 
+def is_per_episode_declared(feature: dict) -> bool:
+    """True iff ``feature`` declares ``per_episode: true`` in info.json.
+
+    The flag is the writer's *intent*: every frame in any given episode
+    carries the same value for this feature. Layout doesn't change — the
+    column is still per-frame in ``data/chunk-*/file-*.parquet`` — but
+    the GUI surfaces it as episode-wide and the writer enforces uniformity
+    at ``add_frame`` time.
+
+    Distinct from the GUI's runtime detector (which scans data for
+    uniformity); see :func:`lerobot.gui.api.datasets._detect_per_episode_features`.
+    """
+    return feature.get("per_episode") is True
+
+
+def validate_per_episode_flag(name: str, feature: dict) -> str:
+    """Reject ``per_episode: true`` on features where it makes no sense.
+
+    Returns an error message (empty if valid). The flag is meaningful only
+    for *scalar* non-image/video features (shape ``[1]`` or empty). Vector
+    / matrix features can't reasonably broadcast across an episode (you'd
+    write the same vector to every frame, which is uncommon and easy to
+    misuse), and image/video are recorded per-frame by definition.
+    """
+    if not is_per_episode_declared(feature):
+        return ""
+    dtype = feature.get("dtype", "")
+    if dtype in ("image", "video"):
+        return (
+            f"Feature {name!r} declares per_episode=true but dtype={dtype!r}; "
+            f"image/video are recorded per-frame and cannot be per-episode.\n"
+        )
+    shape = feature.get("shape") or [1]
+    is_scalar = (len(shape) == 0) or (len(shape) == 1 and shape[0] == 1)
+    if not is_scalar:
+        return (
+            f"Feature {name!r} declares per_episode=true but shape={list(shape)} "
+            f"is not scalar; per_episode is only valid for shape [1] or [].\n"
+        )
+    return ""
+
+
 def validate_feature_dtype_and_shape(
     name: str, feature: dict, value: np.ndarray | PILImage.Image | str
 ) -> str:
