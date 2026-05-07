@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import random
+from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
@@ -163,18 +164,25 @@ class FlashDaggerSystem:
         forget_val_indices = sorted(rng.sample(range(n_train), min(config.forget_val_size, n_train)))
 
         # Pre-encode both pools once. Subsequent fit cycles never re-encode
-        # them — the encoder is frozen so the contexts are stable. Trade-off:
-        # ~30s startup cost (5000 frames at batch 64 ≈ 80 forwards). Memory
-        # is bounded by context tensor size (much smaller than image tensors).
+        # them — the encoder is frozen so the contexts are stable. The
+        # encode is dominated by video decoding from the dataset (~25ms per
+        # frame for 4 cameras at 720p) so 5000 frames takes ~2 minutes.
+        #
+        # That's deterministic given (base checkpoint, dataset, indices),
+        # so we cache the encoded contexts to disk keyed on the base hash.
+        # Subsequent sessions on the same checkpoint+dataset load in ~1s.
+        from lerobot.policies.hvla.flash_dagger.lora import compute_base_hash
+
+        base_sha = compute_base_hash(policy)
+        repo_id = getattr(train_dataset, "repo_id", "<unknown>")
         t0 = now_seconds()
-        logger.info("[flash-DAgger] pre-encoding replay pool (%d frames)…", len(replay_indices))
-        self.replay_samples: list[dict] = self._pre_encode_dataset_indices(replay_indices)
-        logger.info(
-            "[flash-DAgger] pre-encoding forget-val pool (%d frames)…",
-            len(forget_val_indices),
+        self.replay_samples: list[dict] = self._load_or_encode_pool(
+            replay_indices, kind="replay", base_sha=base_sha, repo_id=repo_id
         )
-        self.forget_val_samples: list[dict] = self._pre_encode_dataset_indices(forget_val_indices)
-        logger.info("[flash-DAgger] pre-encoding done in %.1fs", now_seconds() - t0)
+        self.forget_val_samples: list[dict] = self._load_or_encode_pool(
+            forget_val_indices, kind="forget", base_sha=base_sha, repo_id=repo_id
+        )
+        logger.info("[flash-DAgger] pool setup done in %.1fs", now_seconds() - t0)
 
         # Baseline forget loss: how good is the un-flashed policy on the
         # held-out training-set sample? Denominator for drift % each cycle.
@@ -516,6 +524,74 @@ class FlashDaggerSystem:
         return total / max(n, 1)
 
     # ──────────────────────── encoding helpers ──────────────────────────
+
+    def _pool_cache_path(self, base_sha: str, repo_id: str, kind: str, size: int) -> Path:
+        """Build the cache filename for a pre-encoded pool.
+
+        Key components:
+          - base_sha[:16]: identifies the policy checkpoint (cache invalidates
+            when the base weights change)
+          - repo_id slug: identifies the dataset
+          - kind ("replay" or "forget"): two pools per session
+          - size: distinguishes pools when replay_pool_size / forget_val_size change
+          - seed: distinguishes different sample selections from the same dataset
+
+        Stored under ~/.cache/lerobot/flash_dagger_pools/.
+        """
+        cache_dir = Path.home() / ".cache" / "lerobot" / "flash_dagger_pools"
+        slug = str(repo_id).replace("/", "_").replace(":", "_")
+        name = f"{base_sha[:16]}_{slug}_{kind}_{size}_seed{self.config.seed}.pt"
+        return cache_dir / name
+
+    def _load_or_encode_pool(
+        self,
+        indices: list[int],
+        kind: str,
+        base_sha: str,
+        repo_id: str,
+    ) -> list[dict]:
+        """Load pre-encoded pool from disk if cached; encode + save otherwise.
+
+        Cache is keyed on (base checkpoint, dataset, kind, size, seed). The
+        encoder is frozen, so identical keys produce identical samples — safe
+        to memoize across sessions. Cache invalidates automatically when any
+        component of the key changes.
+        """
+        cache_path = self._pool_cache_path(base_sha, repo_id, kind, len(indices))
+        if cache_path.exists():
+            try:
+                t0 = now_seconds()
+                samples = torch.load(cache_path, map_location="cpu", weights_only=False)
+                logger.info(
+                    "[flash-DAgger] loaded %s pool from cache (%d samples) in %.1fs → %s",
+                    kind,
+                    len(samples),
+                    now_seconds() - t0,
+                    cache_path,
+                )
+                return samples
+            except Exception as e:
+                logger.warning(
+                    "[flash-DAgger] %s pool cache load failed (%s); re-encoding",
+                    kind,
+                    e,
+                )
+
+        logger.info(
+            "[flash-DAgger] pre-encoding %s pool (%d frames)… cache miss",
+            kind,
+            len(indices),
+        )
+        samples = self._pre_encode_dataset_indices(indices)
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cache_path.with_suffix(".pt.tmp")
+            torch.save(samples, tmp)
+            tmp.replace(cache_path)
+            logger.info("[flash-DAgger] saved %s pool cache → %s", kind, cache_path)
+        except Exception as e:
+            logger.warning("[flash-DAgger] %s pool cache save failed (non-fatal): %s", kind, e)
+        return samples
 
     def _pre_encode_dataset_indices(self, indices: list[int]) -> list[dict]:
         """Encode a slice of the HF training dataset → list of training samples.
