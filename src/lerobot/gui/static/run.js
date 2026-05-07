@@ -1573,6 +1573,10 @@ async function launchRun() {
             // run ends (see connectOutputSSE done handler).
             _pendingNewRltOutputDir = body.rlt_checkpoint ? null : (body.rlt_output_dir || null);
         }
+        // Latency dashboard polls regardless of workflow — the teleop subprocess
+        // always emits latency_snapshot.json, and the endpoint returns an empty
+        // stub when the file isn't there yet, so this is safe across workflows.
+        _startLatencyPoll();
         // Start live camera viewer (polls until obs stream is available)
         startObsStreamViewer();
     } catch (e) {
@@ -1617,6 +1621,7 @@ function connectOutputSSE() {
         if (data.done) {
             disconnectOutputSSE();
             _stopRLTPoll();
+            _stopLatencyPoll();
             // Sliders only make sense during an active run — disable
             // them. The diag button is sticky (preference persists in
             // localStorage), so just refresh its tooltip to reflect the
@@ -2061,8 +2066,10 @@ function _switchBottomTab(tab) {
     });
     const outputPanel = document.getElementById('run-bottom-panel-output');
     const rlPanel = document.getElementById('run-bottom-panel-rl');
+    const latencyPanel = document.getElementById('run-bottom-panel-latency');
     if (outputPanel) outputPanel.style.display = (tab === 'output') ? '' : 'none';
     if (rlPanel) rlPanel.style.display = (tab === 'rl') ? '' : 'none';
+    if (latencyPanel) latencyPanel.style.display = (tab === 'latency') ? '' : 'none';
 }
 
 function _showRLTab(show) {
@@ -2080,6 +2087,166 @@ function _startRLTPoll() {
 
 function _stopRLTPoll() {
     if (_rltPollTimer) { clearInterval(_rltPollTimer); _rltPollTimer = null; }
+}
+
+// =============================================================================
+// Latency dashboard — polls /api/run/latency-metrics at 1 Hz while a run is
+// active. The teleop subprocess writes outputs/teleop/latency_snapshot.json
+// every 1 s; we read it cross-process and render system + per-camera cards.
+// =============================================================================
+
+let _latencyPollTimer = null;
+
+function _showLatencyTab(show) {
+    const tab = document.getElementById('run-bottom-tab-latency');
+    if (tab) tab.style.display = show ? '' : 'none';
+}
+
+function _startLatencyPoll() {
+    _stopLatencyPoll();
+    _showLatencyTab(true);
+    // 1 Hz matches the snapshot writer interval; faster polling gains nothing.
+    _latencyPollTimer = setInterval(_fetchLatencyMetrics, 1000);
+    _fetchLatencyMetrics();
+}
+
+function _stopLatencyPoll() {
+    if (_latencyPollTimer) { clearInterval(_latencyPollTimer); _latencyPollTimer = null; }
+}
+
+async function _fetchLatencyMetrics() {
+    try {
+        const res = await fetch('/api/run/latency-metrics');
+        if (!res.ok) return;
+        const data = await res.json();
+        _updateLatencyDashboard(data);
+    } catch (e) { /* ignore — next poll will retry */ }
+}
+
+// Status thresholds (ms) for the system cards. Loop budgets vary with FPS;
+// these defaults are tuned for 60 Hz teleop. A future revision can drive
+// them from the active config (target_period_ms = 1000/fps).
+const _LAT_BUDGETS = {
+    loop_dt_ms:           { ok: 12,  warn: 20  },
+    e2e_obs_to_action_ms: { ok: 50,  warn: 80  },
+    motor_read_ms:        { ok: 6,   warn: 10  },
+    action_send_ms:       { ok: 2,   warn: 5   },
+    residual_ms_abs:      { ok: 1,   warn: 3   },
+};
+
+function _classifyLatency(value, budget) {
+    if (budget == null) return '';
+    if (value <= budget.ok) return 'ok';
+    if (value <= budget.warn) return 'warn';
+    return 'bad';
+}
+
+function _renderLatencyCard(parent, key, title, p50, p95, budget, sparkData) {
+    const card = document.createElement('div');
+    card.className = 'latency-card';
+    const cls = _classifyLatency(p95 != null ? p95 : p50, budget);
+    card.innerHTML = `
+        <div class="latency-card-title">${title}</div>
+        <div class="latency-card-value ${cls}">${p50.toFixed(1)} ms${p95 != null ? ` <span class="latency-card-sub">p95 ${p95.toFixed(1)}</span>` : ''}</div>
+        <canvas data-spark-key="${key}"></canvas>
+    `;
+    parent.appendChild(card);
+    if (sparkData && sparkData.length > 0) {
+        const canvas = card.querySelector('canvas');
+        canvas.id = `latency-spark-${key}`;
+        // Reuse the same sparkline primitive RLT uses; auto-scale (no fixed range).
+        _drawSparkline(canvas.id, sparkData, '#4fc3f7');
+    }
+}
+
+function _updateLatencyDashboard(data) {
+    const stages = data.stages || {};
+    const series = data.series || {};
+
+    // System metrics row.
+    const sysGrid = document.getElementById('latency-grid-system');
+    if (sysGrid) {
+        sysGrid.innerHTML = '';
+        const sysOrder = [
+            { key: 'loop_dt_ms',           title: 'Loop'        },
+            { key: 'e2e_obs_to_action_ms', title: 'End-to-End'  },
+            { key: 'motor_read_ms',        title: 'Motor read'  },
+            { key: 'action_send_ms',       title: 'Action send' },
+        ];
+        for (const item of sysOrder) {
+            const stage = stages[item.key];
+            if (!stage) continue;
+            const sparkPoints = (series[item.key] || []).map(([_t, v]) => v);
+            _renderLatencyCard(sysGrid, item.key, item.title,
+                stage.p50 ?? 0, stage.p95 ?? null,
+                _LAT_BUDGETS[item.key], sparkPoints);
+        }
+
+        // Residual: classify by absolute magnitude (negative is fine but
+        // surprising; either direction past the budget is worth flagging).
+        const residual = stages.residual_ms;
+        if (residual) {
+            const card = document.createElement('div');
+            card.className = 'latency-card';
+            const absP95 = Math.abs(residual.p95 ?? 0);
+            const cls = _classifyLatency(absP95, _LAT_BUDGETS.residual_ms_abs);
+            card.innerHTML = `
+                <div class="latency-card-title">Residual (e2e − sum of stages)</div>
+                <div class="latency-card-value ${cls}">${(residual.p50 ?? 0).toFixed(2)} ms <span class="latency-card-sub">p95 ${(residual.p95 ?? 0).toFixed(2)}</span></div>
+                <div class="latency-card-sub">Near zero means the breakdown accounts for everything.</div>
+            `;
+            sysGrid.appendChild(card);
+        }
+
+        // Overrun ratio.
+        const overrun = (data.overrun_ratio || 0) * 100;
+        const ovCard = document.createElement('div');
+        ovCard.className = 'latency-card';
+        const ovCls = overrun < 1 ? 'ok' : overrun < 5 ? 'warn' : 'bad';
+        ovCard.innerHTML = `
+            <div class="latency-card-title">Overrun</div>
+            <div class="latency-card-value ${ovCls}">${overrun.toFixed(1)}%</div>
+            <div class="latency-card-sub">Iterations exceeding the FPS budget.</div>
+        `;
+        sysGrid.appendChild(ovCard);
+    }
+
+    // Per-camera cards.
+    const camGrid = document.getElementById('latency-grid-cameras');
+    if (camGrid) {
+        const camKeys = Object.keys(stages).filter(k => k.startsWith('cam_') && k.endsWith('_stale_ms'));
+        if (camKeys.length === 0) {
+            camGrid.innerHTML = '<div class="latency-empty">No camera data yet — waiting for first snapshot…</div>';
+        } else {
+            camGrid.innerHTML = '';
+            camKeys.sort();
+            for (const staleKey of camKeys) {
+                const camName = staleKey.slice('cam_'.length, -'_stale_ms'.length);
+                const periodKey = `cam_${camName}_period_ms`;
+                const stale = stages[staleKey];
+                const period = stages[periodKey];
+                const fps = period && period.p50 ? (1000 / period.p50) : null;
+                const stalePalette = stale.p95 < 40 ? 'ok' : stale.p95 < 70 ? 'warn' : 'bad';
+                const card = document.createElement('div');
+                card.className = 'latency-cam-card';
+                card.innerHTML = `
+                    <div class="latency-cam-card-title">${camName}</div>
+                    <div class="latency-cam-stat">stale p50/p95 <b class="${stalePalette}">${stale.p50.toFixed(0)}/${stale.p95.toFixed(0)} ms</b></div>
+                    <div class="latency-cam-stat">period p50 <b>${period ? period.p50.toFixed(1) : '—'} ms</b></div>
+                    <div class="latency-cam-stat">effective fps <b>${fps != null ? fps.toFixed(1) : '—'} Hz</b></div>
+                `;
+                camGrid.appendChild(card);
+            }
+        }
+    }
+
+    // Footer.
+    const recordsEl = document.getElementById('latency-meta-records');
+    if (recordsEl) recordsEl.textContent = `${data.n_records || 0} records`;
+    const droppedEl = document.getElementById('latency-meta-dropped');
+    if (droppedEl) droppedEl.textContent = data.dropped_records ? `${data.dropped_records} dropped` : '';
+    const updatedEl = document.getElementById('latency-meta-updated');
+    if (updatedEl) updatedEl.textContent = data.t ? `updated ${new Date(data.t * 1000).toLocaleTimeString()}` : '';
 }
 
 async function _fetchRLTMetrics() {

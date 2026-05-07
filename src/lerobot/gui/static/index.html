@@ -190,6 +190,7 @@
                     <div class="run-bottom-tabs" id="run-bottom-tabs">
                         <button class="run-bottom-tab active" data-tab="output" onclick="_switchBottomTab('output')">Output</button>
                         <button class="run-bottom-tab" data-tab="rl" onclick="_switchBottomTab('rl')" id="run-bottom-tab-rl" style="display:none">RL Training</button>
+                        <button class="run-bottom-tab" data-tab="latency" onclick="_switchBottomTab('latency')" id="run-bottom-tab-latency" style="display:none">Latency</button>
                     </div>
                     <!-- Output tab -->
                     <div class="run-bottom-panel" id="run-bottom-panel-output">
@@ -278,6 +279,28 @@
                                     <div class="rlt-chart-title">Update Rate (actor updates/sec)</div>
                                     <canvas id="rlt-chart-update-rate" width="400" height="80"></canvas>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Latency tab -->
+                    <div class="run-bottom-panel" id="run-bottom-panel-latency" style="display:none">
+                        <div class="latency-dashboard">
+                            <div class="latency-section">
+                                <div class="latency-section-title">Loop Health</div>
+                                <div class="latency-grid" id="latency-grid-system">
+                                    <!-- Populated by run.js _updateLatencyDashboard -->
+                                </div>
+                            </div>
+                            <div class="latency-section">
+                                <div class="latency-section-title">Cameras</div>
+                                <div class="latency-cam-grid" id="latency-grid-cameras">
+                                    <div class="latency-empty">No camera data yet — waiting for first snapshot…</div>
+                                </div>
+                            </div>
+                            <div class="latency-meta" id="latency-meta">
+                                <span id="latency-meta-records">0 records</span>
+                                <span id="latency-meta-dropped"></span>
+                                <span id="latency-meta-updated"></span>
                             </div>
                         </div>
                     </div>

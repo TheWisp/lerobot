@@ -55,8 +55,10 @@ lerobot-teleoperate \
 
 import logging
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pprint import pformat
+from typing import Any
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
@@ -103,6 +105,11 @@ from lerobot.teleoperators import (  # noqa: F401
     unitree_g1,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
+from lerobot.utils.latency import (
+    LatencyAggregator,
+    LatencySnapshotWriter,
+    LatencyTracer,
+)
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data, shutdown_rerun
@@ -124,6 +131,47 @@ class TeleoperateConfig:
     display_port: int | None = None
     # Whether to  display compressed images in Rerun
     display_compressed_images: bool = False
+    # Latency monitoring: capture per-stage timing into an in-memory aggregator
+    # and publish a JSON snapshot for the GUI to read.
+    # See src/lerobot/gui/docs/latency_monitoring.md.
+    latency_monitor: bool = False
+    # Where to write latency_snapshot.json (when --latency_monitor=true).
+    # The GUI reads from this fixed location to render the live overlays.
+    latency_output_dir: str = "outputs/teleop"
+
+
+def _maybe_span(tracer: LatencyTracer | None, name: str):
+    """Context manager around a tracer span; nullcontext when tracer is None."""
+    return tracer.span(name) if tracer is not None else nullcontext()
+
+
+def _format_latency_summary(snap: dict[str, Any]) -> str:
+    """One-line digest of an aggregator snapshot — used for stderr at 1 Hz."""
+    stages = snap.get("stages", {})
+
+    def p50_p95(key: str) -> str | None:
+        s = stages.get(key)
+        if not s:
+            return None
+        return f"{s.get('p50', 0):.1f}/{s.get('p95', 0):.1f}ms"
+
+    parts: list[str] = []
+    if (s := p50_p95("loop_dt_ms")) is not None:
+        parts.append(f"loop {s}")
+    if (s := p50_p95("e2e_obs_to_action_ms")) is not None:
+        parts.append(f"e2e {s}")
+    if (mr := stages.get("motor_read_ms")) is not None:
+        parts.append(f"mread {mr.get('p50', 0):.1f}ms")
+    if (send := stages.get("action_send_ms")) is not None:
+        parts.append(f"send {send.get('p50', 0):.1f}ms")
+    cam_keys = sorted(k for k in stages if k.startswith("cam_") and k.endswith("_stale_ms"))
+    for k in cam_keys:
+        cam_name = k[len("cam_") : -len("_stale_ms")]
+        parts.append(f"{cam_name} stale {stages[k].get('p50', 0):.0f}ms")
+    parts.append(f"overrun {snap.get('overrun_ratio', 0) * 100:.0f}%")
+    if (residual := stages.get("residual_ms")) is not None:
+        parts.append(f"residual p95 {residual.get('p95', 0):+.1f}ms")
+    return " · ".join(parts)
 
 
 def teleop_loop(
@@ -137,6 +185,8 @@ def teleop_loop(
     duration: float | None = None,
     display_compressed_images: bool = False,
     obs_stream_steps: list | None = None,
+    latency_aggregator: LatencyAggregator | None = None,
+    latency_writer: LatencySnapshotWriter | None = None,
 ):
     """
     This function continuously reads actions from a teleoperation device, processes them through optional
@@ -156,33 +206,55 @@ def teleop_loop(
     """
 
     display_len = max(len(key) for key in robot.action_features)
+    tracer = (
+        LatencyTracer(latency_aggregator, loop_kind="teleop", target_fps=fps)
+        if latency_aggregator is not None
+        else None
+    )
+    last_summary_at: float = 0.0
     start = time.perf_counter()
     while True:
         loop_start = time.perf_counter()
+        if tracer is not None:
+            tracer.start()
 
-        # Get robot observation
-        obs = robot.get_observation()
+        # Get robot observation. We wrap the whole call in a single span;
+        # in our typical SOFollower path this is dominated by motor sync_read,
+        # because cameras use cached read_latest() (microseconds). Finer
+        # breakdown (motor vs. cam consume) is V2.
+        with _maybe_span(tracer, "motor_read"):
+            obs = robot.get_observation()
+
+        # Per-camera staleness/period — read latest_timestamp from each camera
+        # after get_observation so we capture what was just consumed.
+        if tracer is not None:
+            cams = getattr(robot, "cameras", None) or {}
+            for cam_key, cam in cams.items():
+                ts = getattr(cam, "latest_timestamp", None)
+                if ts is not None:
+                    tracer.cam_consume(cam_key, ts)
 
         # Run obs processors + stream writer (for GUI live viewer with overlays)
-        if obs_stream_steps:
-            obs_for_stream = obs
-            for step in obs_stream_steps:
-                obs_for_stream = step.observation(obs_for_stream)
+        with _maybe_span(tracer, "process_obs"):
+            if obs_stream_steps:
+                obs_for_stream = obs
+                for step in obs_stream_steps:
+                    obs_for_stream = step.observation(obs_for_stream)
 
         if robot.name == "unitree_g1":
             teleop.send_feedback(obs)
 
-        # Get teleop action
-        raw_action = teleop.get_action()
-
-        # Process teleop action through pipeline
-        teleop_action = teleop_action_processor((raw_action, obs))
-
-        # Process action for robot through pipeline
-        robot_action_to_send = robot_action_processor((teleop_action, obs))
+        with _maybe_span(tracer, "process_action"):
+            # Get teleop action
+            raw_action = teleop.get_action()
+            # Process teleop action through pipeline
+            teleop_action = teleop_action_processor((raw_action, obs))
+            # Process action for robot through pipeline
+            robot_action_to_send = robot_action_processor((teleop_action, obs))
 
         # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
-        _ = robot.send_action(robot_action_to_send)
+        with _maybe_span(tracer, "action_send"):
+            _ = robot.send_action(robot_action_to_send)
 
         if display_data:
             log_rerun_data(
@@ -201,8 +273,22 @@ def teleop_loop(
         dt_s = time.perf_counter() - loop_start
         precise_sleep(max(1 / fps - dt_s, 0.0))
         loop_s = time.perf_counter() - loop_start
-        print(f"Teleop loop time: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
-        move_cursor_up(1)
+
+        if tracer is not None:
+            tracer.commit()
+            if latency_writer is not None:
+                latency_writer.maybe_write(latency_aggregator)
+            now = time.time()
+            if now - last_summary_at >= 1.0:
+                last_summary_at = now
+                snap = latency_aggregator.snapshot(percentiles=(50, 95))
+                if snap["n_records"] > 0:
+                    logging.info("[latency] %s", _format_latency_summary(snap))
+        else:
+            # Legacy line-rewriting print, only when monitoring is off (else
+            # the 1 Hz INFO log is the cleaner UX).
+            print(f"Teleop loop time: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
+            move_cursor_up(1)
 
         if duration is not None and time.perf_counter() - start >= duration:
             return
@@ -242,6 +328,13 @@ def teleoperate(cfg: TeleoperateConfig):
     if obs_stream_writer is not None:
         obs_stream_steps.append(obs_stream_writer)
 
+    latency_aggregator: LatencyAggregator | None = None
+    latency_writer: LatencySnapshotWriter | None = None
+    if cfg.latency_monitor:
+        latency_aggregator = LatencyAggregator()
+        latency_writer = LatencySnapshotWriter(cfg.latency_output_dir, loop_kind="teleop")
+        logging.info("Latency monitoring enabled; snapshots → %s", latency_writer.path)
+
     teleop.connect()
     robot.connect()
 
@@ -257,6 +350,8 @@ def teleoperate(cfg: TeleoperateConfig):
             robot_observation_processor=robot_observation_processor,
             display_compressed_images=display_compressed_images,
             obs_stream_steps=obs_stream_steps,
+            latency_aggregator=latency_aggregator,
+            latency_writer=latency_writer,
         )
     except KeyboardInterrupt:
         pass
