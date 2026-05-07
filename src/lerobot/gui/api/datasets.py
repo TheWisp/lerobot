@@ -152,6 +152,8 @@ def _invalidate_episode_start_indices(dataset_id: str) -> None:
     _episode_start_indices.pop(dataset_id, None)
     _episode_action_stats.pop(dataset_id, None)
     _per_episode_features_cache.pop(dataset_id, None)
+    _per_episode_source_cache.pop(dataset_id, None)
+    _per_episode_warnings_cache.pop(dataset_id, None)
 
 
 # Cache of per-episode action stats keyed by dataset_id. Surfaced via
@@ -815,6 +817,13 @@ class FeatureSchema(BaseModel):
     # per-episode field broadcast across the per-frame column. Edits coerce to the
     # whole episode to preserve the broadcast invariant. Detected once per dataset
     # open via _detect_per_episode_features() and cached.
+    per_episode_source: str | None = None
+    # How was ``is_per_episode`` set? "declared" means the writer wrote
+    # ``"per_episode": true`` in ``info.json`` — authoritative, persists across
+    # saves. "detected" means the GUI scanned the parquet and inferred it from
+    # uniform-within-episode values — empirical, can flip if a single frame
+    # changes. ``None`` when ``is_per_episode`` is False. Power users can
+    # surface this in tooltips to know which.
     observed_min: float | None = None
     observed_max: float | None = None
     # Dataset-wide observed extrema, sourced from ``meta/stats.json`` (aggregated
@@ -853,21 +862,54 @@ class DatasetInfo(BaseModel):
 
 
 _per_episode_features_cache: dict[str, set[str]] = {}
+# Per-name source tag: "declared" (info.json said so — authoritative) vs
+# "detected" (the GUI inferred it from uniform-within-episode data).
+_per_episode_source_cache: dict[str, dict[str, str]] = {}
+# Warnings surfaced when a feature was declared per_episode but the data
+# isn't actually uniform within every episode. Surfaced via DatasetInfo
+# warnings so the user knows their data violates their own declaration.
+_per_episode_warnings_cache: dict[str, list[str]] = {}
+
+
+def _per_episode_source_for(dataset_id: str, name: str) -> str | None:
+    """Return ``"declared"`` / ``"detected"`` / ``None`` for a feature on a
+    previously-detected dataset. Reads the cache populated by
+    :func:`_detect_per_episode_features`.
+    """
+    return _per_episode_source_cache.get(dataset_id, {}).get(name)
+
+
+def _per_episode_warnings_for(dataset_id: str) -> list[str]:
+    """Return the (possibly empty) warning list cached by the last
+    detector run for ``dataset_id``."""
+    return list(_per_episode_warnings_cache.get(dataset_id, []))
 
 
 def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
-    """Identify features whose values are uniform within every episode.
+    """Identify features that are per-episode — declared OR detected.
 
     Pre: ``dataset`` is fully loaded.
-    Post: returns a set of feature names. Only considers features that
-    are non-image, non-video, non-DEFAULT_FEATURES, non-action,
-    non-observation.* — the same gate the staging endpoint uses to
-    decide editability. Result is cached per ``dataset_id``.
+    Post: returns a set of feature names. The set is the union of:
 
-    Detection is by reading the data parquet shards once. For each
-    feature, group rows by ``episode_index`` and check that every group
-    has at most one unique value. We treat lists / numpy arrays as not
-    per-episode (only scalars and strings can plausibly be broadcast).
+    1. **Declared**: features whose info.json entry has ``per_episode: true``.
+       Authoritative — survives saves, doesn't flip if the data drifts.
+    2. **Detected**: features without the declaration whose values happen
+       to be uniform within every episode (nunique-per-group ≤ 1).
+       Heuristic — kept for backward compat with datasets pre-flag.
+
+    Side effects (cached by ``dataset_id``):
+
+    * ``_per_episode_source_cache[dataset_id]`` records the source
+      ("declared" or "detected") per feature, so the schema endpoint can
+      surface ``per_episode_source`` to the GUI.
+    * ``_per_episode_warnings_cache[dataset_id]`` records any feature
+      that was declared but whose data isn't actually uniform — the user's
+      declaration is being trusted but their data violates it. The
+      :class:`DatasetInfo` response surfaces these in ``warnings``.
+
+    Only considers features that are non-image, non-video, non-DEFAULT_FEATURES,
+    non-action, non-observation.* — the same gate the staging endpoint uses
+    to decide editability.
     """
     if dataset_id in _per_episode_features_cache:
         return _per_episode_features_cache[dataset_id]
@@ -875,6 +917,7 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
     skip_dtypes = {"image", "video"}
     default_features = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
 
+    declared: set[str] = set()
     candidate_features: list[str] = []
     for name, ft in dataset.meta.features.items():
         if ft.get("dtype") in skip_dtypes:
@@ -887,17 +930,29 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
         shape = ft.get("shape") or [1]
         if len(shape) > 1 or (len(shape) == 1 and shape[0] != 1):
             continue
+        if ft.get("per_episode") is True:
+            declared.add(name)
+            # Still scan declared features below — to verify the data
+            # actually matches the declaration. If it doesn't, we trust
+            # the declaration but emit a warning so the user can fix the data.
         candidate_features.append(name)
 
+    source_map: dict[str, str] = dict.fromkeys(declared, "declared")
+    warnings: list[str] = []
+
     if not candidate_features:
-        _per_episode_features_cache[dataset_id] = set()
+        _per_episode_features_cache[dataset_id] = declared
+        _per_episode_source_cache[dataset_id] = source_map
+        _per_episode_warnings_cache[dataset_id] = warnings
         return _per_episode_features_cache[dataset_id]
 
-    per_episode: set[str] = set()
     data_dir = Path(dataset.root) / "data"
     parquet_files = sorted(data_dir.glob("*/*.parquet"))
     if not parquet_files:
-        _per_episode_features_cache[dataset_id] = set()
+        # No data to scan — trust declared, nothing to detect.
+        _per_episode_features_cache[dataset_id] = declared
+        _per_episode_source_cache[dataset_id] = source_map
+        _per_episode_warnings_cache[dataset_id] = warnings
         return _per_episode_features_cache[dataset_id]
 
     cols_to_read = ["episode_index", *candidate_features]
@@ -917,15 +972,40 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
                 nunique_by_feature[name] = max(nunique_by_feature[name], int(nunique_max))
     except Exception as e:
         logger.warning(f"per-episode-feature detection failed for {dataset_id}: {e}")
-        _per_episode_features_cache[dataset_id] = set()
+        # Detection scan failed — fall back to declared-only.
+        _per_episode_features_cache[dataset_id] = declared
+        _per_episode_source_cache[dataset_id] = source_map
+        _per_episode_warnings_cache[dataset_id] = warnings
         return _per_episode_features_cache[dataset_id]
 
+    per_episode: set[str] = set(declared)
     for name, nu in nunique_by_feature.items():
-        if 0 < nu <= 1:
-            per_episode.add(name)
+        is_uniform = 0 < nu <= 1
+        if name in declared:
+            # Verify the declaration. If the data isn't uniform, trust the
+            # declaration (per the design — declared > detected) but warn so
+            # the user knows their data has drifted.
+            if not is_uniform:
+                msg = (
+                    f"Feature {name!r} is declared per_episode=true in info.json, "
+                    f"but its data is not uniform within every episode "
+                    f"(max nunique-per-episode = {nu}). The GUI is treating it "
+                    f"as per-episode anyway — fix the data or remove the flag."
+                )
+                logger.warning(msg)
+                warnings.append(msg)
+        else:
+            if is_uniform:
+                per_episode.add(name)
+                source_map[name] = "detected"
 
     _per_episode_features_cache[dataset_id] = per_episode
-    logger.info(f"detected per-episode features for {dataset_id}: {sorted(per_episode)}")
+    _per_episode_source_cache[dataset_id] = source_map
+    _per_episode_warnings_cache[dataset_id] = warnings
+    logger.info(
+        f"per-episode features for {dataset_id}: declared={sorted(declared)} "
+        f"detected={sorted(per_episode - declared)} warnings={len(warnings)}"
+    )
     return per_episode
 
 
@@ -1009,6 +1089,7 @@ def _build_features_schema(
     *,
     subtask_synthesis: bool = False,
     stats: dict | None = None,
+    per_episode_source: dict[str, str] | None = None,
 ) -> dict[str, FeatureSchema]:
     """Convert ``ds.meta.features`` into the JSON-friendly FeatureSchema dict.
 
@@ -1030,6 +1111,7 @@ def _build_features_schema(
     observed ``(min, max)`` populated.
     """
     per_episode = per_episode or set()
+    per_episode_source = per_episode_source or {}
     out: dict[str, FeatureSchema] = {}
     for name, ft in features.items():
         if subtask_synthesis and name == SUBTASK_STORAGE_FEATURE:
@@ -1056,6 +1138,7 @@ def _build_features_schema(
             shape=shape_list,
             names=names,
             is_per_episode=name in per_episode,
+            per_episode_source=per_episode_source.get(name),
             observed_min=obs_min,
             observed_max=obs_max,
             declared_min=decl_min,
@@ -1071,6 +1154,7 @@ def _build_features_schema(
             shape=[1],
             names=None,
             is_per_episode=SUBTASK_STORAGE_FEATURE in per_episode,
+            per_episode_source=per_episode_source.get(SUBTASK_STORAGE_FEATURE),
         )
     return out
 
@@ -1089,6 +1173,11 @@ def _dataset_info_from(
     ``features`` name list and the full ``features_schema`` mapping.
     """
     per_episode = _detect_per_episode_features(dataset_id, dataset)
+    per_episode_source = dict(_per_episode_source_cache.get(dataset_id, {}))
+    pe_warnings = _per_episode_warnings_for(dataset_id)
+    # Merge declared-but-inconsistent warnings into the per-call ``warnings``
+    # list so the GUI surfaces them alongside any other open-time issues.
+    warnings_out = list(warnings or []) + pe_warnings
     # Synthesize the user-facing "subtask" string feature only when the
     # dataset has BOTH the storage column AND the lookup table — an
     # incomplete dataset (one but not the other) would not let us decode.
@@ -1115,9 +1204,10 @@ def _dataset_info_from(
             per_episode=per_episode,
             subtask_synthesis=subtask_synthesis,
             stats=getattr(dataset.meta, "stats", None),
+            per_episode_source=per_episode_source,
         ),
         errors=errors or [],
-        warnings=warnings or [],
+        warnings=warnings_out,
     )
 
 

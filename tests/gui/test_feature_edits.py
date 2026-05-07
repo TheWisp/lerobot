@@ -1234,6 +1234,112 @@ class TestPerEpisodeBroadcastCoercion:
         assert info.features_schema["success"].is_per_episode is True
 
 
+class TestDeclaredPerEpisodeFlag:
+    """``per_episode: true`` in info.json is the authoritative declaration —
+    the detector trusts it and surfaces ``per_episode_source = "declared"``.
+    For features without the flag, the detector falls back to the legacy
+    nunique scan and surfaces ``per_episode_source = "detected"``. If a
+    declared feature's data isn't actually uniform, a warning is added to
+    DatasetInfo.warnings.
+    """
+
+    @staticmethod
+    def _ds_with_declared_success(tmp_path, lerobot_dataset_factory, *, uniform_data: bool):
+        """Plant a ``success`` feature with ``per_episode: true`` declared.
+        ``uniform_data=True`` writes uniform-per-episode values (declaration
+        and data agree); ``False`` writes varying values within episodes
+        (declaration says per-episode, data disagrees)."""
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=40)
+        ds.meta.features["success"] = {
+            "dtype": "bool",
+            "shape": [1],
+            "names": None,
+            "per_episode": True,
+        }
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            if uniform_data:
+                df["success"] = df["episode_index"].astype(int) % 2 == 0
+            else:
+                # Varying within each episode: alternate by frame_index.
+                df["success"] = df["frame_index"].astype(int) % 2 == 0
+            df.to_parquet(shard, compression="snappy", index=False)
+        return ds
+
+    def test_declared_feature_marked_with_source_declared(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        app, state = app_with_state
+        ds = self._ds_with_declared_success(tmp_path, lerobot_dataset_factory, uniform_data=True)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        info = datasets_module._dataset_info_from(dataset_id, ds)
+        assert info.features_schema["success"].is_per_episode is True
+        assert info.features_schema["success"].per_episode_source == "declared"
+        assert info.warnings == []  # data matches declaration
+
+    def test_declared_but_inconsistent_data_warns(self, app_with_state, tmp_path, lerobot_dataset_factory):
+        """The declaration is authoritative — the GUI still treats the feature
+        as per-episode — but a warning is surfaced so the user knows their
+        data violates the invariant they declared."""
+        app, state = app_with_state
+        ds = self._ds_with_declared_success(tmp_path, lerobot_dataset_factory, uniform_data=False)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        info = datasets_module._dataset_info_from(dataset_id, ds)
+        # Trust the declaration:
+        assert info.features_schema["success"].is_per_episode is True
+        assert info.features_schema["success"].per_episode_source == "declared"
+        # And surface the inconsistency as a warning:
+        assert any("success" in w and "per_episode" in w for w in info.warnings), info.warnings
+        assert any("not uniform" in w for w in info.warnings), info.warnings
+
+    def test_undeclared_uniform_feature_marked_detected(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        """Backward compatibility: a feature WITHOUT the flag whose data is
+        uniform-per-episode is still classified as per-episode (heuristic
+        fallback), but with ``per_episode_source = "detected"`` so the GUI
+        can distinguish it from the declared case."""
+        app, state = app_with_state
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=40)
+        # No per_episode flag — pure detection path.
+        ds.meta.features["success"] = {
+            "dtype": "bool",
+            "shape": [1],
+            "names": None,
+        }
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            df["success"] = df["episode_index"].astype(int) % 2 == 0
+            df.to_parquet(shard, compression="snappy", index=False)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        info = datasets_module._dataset_info_from(dataset_id, ds)
+        assert info.features_schema["success"].is_per_episode is True
+        assert info.features_schema["success"].per_episode_source == "detected"
+
+    def test_undeclared_non_uniform_feature_stays_per_frame(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        app, state = app_with_state
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=40)
+        ds.meta.features["reward"] = {"dtype": "float32", "shape": [1], "names": None}
+        for shard in (ds.root / "data").glob("*/*.parquet"):
+            df = pd.read_parquet(shard)
+            df["reward"] = df["frame_index"].astype(np.float32)
+            df.to_parquet(shard, compression="snappy", index=False)
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        info = datasets_module._dataset_info_from(dataset_id, ds)
+        assert info.features_schema["reward"].is_per_episode is False
+        assert info.features_schema["reward"].per_episode_source is None
+
+
 # ── Declared bounds + categorical at the staging endpoint ──────────────────
 
 
