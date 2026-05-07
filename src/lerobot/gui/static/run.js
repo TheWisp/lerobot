@@ -2012,6 +2012,16 @@ async function startObsStreamViewer() {
         `;
         cell.appendChild(label);
 
+        // Per-camera latency overlay. Populated by _updateLatencyDashboard
+        // when the latency snapshot includes this camera. The short name
+        // (last dot-separated segment) is what the tracer uses (cam_<short>_*).
+        const shortName = _camShortName(key);
+        const overlay = document.createElement('div');
+        overlay.className = 'cam-latency-overlay';
+        overlay.dataset.camShort = shortName;
+        overlay.style.display = 'none';
+        cell.appendChild(overlay);
+
         grid.appendChild(cell);
         imgElements[key] = img;
     }
@@ -2102,6 +2112,38 @@ function _showLatencyTab(show) {
     if (tab) tab.style.display = show ? '' : 'none';
 }
 
+// Camera key in the obs stream is the full feature path (e.g. "top" or
+// "observation.images.top"); the latency tracer uses just the last
+// dot-segment to build "cam_<short>_stale_ms" / "cam_<short>_period_ms".
+// This must match the cam_key used by the robot's get_observation().
+function _camShortName(featureKey) {
+    const idx = featureKey.lastIndexOf('.');
+    return idx >= 0 ? featureKey.slice(idx + 1) : featureKey;
+}
+
+function _updateCameraOverlays(stages) {
+    const overlays = document.querySelectorAll('.cam-latency-overlay');
+    if (!overlays.length) return;
+    for (const overlay of overlays) {
+        const short = overlay.dataset.camShort;
+        const stale = stages[`cam_${short}_stale_ms`];
+        const period = stages[`cam_${short}_period_ms`];
+        if (!stale) {
+            overlay.style.display = 'none';
+            continue;
+        }
+        const fps = (period && period.p50) ? (1000 / period.p50) : null;
+        const stalePalette = stale.p95 < 40 ? 'ok' : stale.p95 < 70 ? 'warn' : 'bad';
+        overlay.style.display = '';
+        overlay.className = `cam-latency-overlay ${stalePalette}`;
+        const fpsTxt = fps != null ? `${fps.toFixed(1)}&nbsp;Hz` : '—';
+        overlay.innerHTML = `
+            <div class="cam-latency-line">${fpsTxt}</div>
+            <div class="cam-latency-line">stale&nbsp;${stale.p50.toFixed(0)}/${stale.p95.toFixed(0)}&nbsp;ms</div>
+        `;
+    }
+}
+
 function _startLatencyPoll() {
     _stopLatencyPoll();
     _showLatencyTab(true);
@@ -2162,6 +2204,9 @@ function _renderLatencyCard(parent, key, title, p50, p95, budget, sparkData) {
 function _updateLatencyDashboard(data) {
     const stages = data.stages || {};
     const series = data.series || {};
+
+    // Per-camera tile overlays (live frames in the obs stream viewer).
+    _updateCameraOverlays(stages);
 
     // System metrics row.
     const sysGrid = document.getElementById('latency-grid-system');
