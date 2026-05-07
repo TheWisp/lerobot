@@ -948,8 +948,16 @@ def swap_features(
 # Implementation lives in :mod:`lerobot.datasets.feature_value_edits` to
 # isolate it from this file's busy refactor history. Re-exported here so
 # existing imports (``from lerobot.datasets.dataset_tools import
-# set_feature_values, FeatureValueEdit``) keep working.
+# set_feature_values, FeatureValueEdit``) keep working. The ``F401`` noqa
+# is needed because ruff can't see cross-module callers and would
+# otherwise auto-strip the apparently-unused import.
 # ============================================================================
+
+from lerobot.datasets.feature_value_edits import (  # noqa: E402, F401
+    FeatureValueEdit,
+    StatsRecomputationError,
+    set_feature_values,
+)
 
 
 def _fractions_to_episode_indices(
