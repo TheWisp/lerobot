@@ -113,6 +113,9 @@ class LatencySnapshotWriter:
         snap["loop_kind"] = self._loop_kind
         if self._target_period_ms is not None:
             snap["target_period_ms"] = self._target_period_ms
+        # Representative iterations so the GUI can render Gantt timelines.
+        # Cheap (~5 small records); the frontend picks one to display.
+        snap["iterations"] = aggregator.representative_iterations()
 
         if not self._dir_ready:
             self._dir.mkdir(parents=True, exist_ok=True)

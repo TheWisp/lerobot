@@ -162,3 +162,52 @@ class LatencyAggregator:
                 snap["series"][key] = [[t, v] for t, v in downsampled]
 
         return snap
+
+    def representative_iterations(self) -> dict[str, dict[str, Any]]:
+        """Return a small set of "interesting" iterations for Gantt rendering.
+
+        Picks one record near each of {p50, p95, p99, max} of ``loop_dt_ms``,
+        plus the most recent record. The frontend lets the operator switch
+        between them so they can compare a typical iteration against a
+        worst-case one.
+
+        Returns a dict ``{label: record_subset}`` where each subset contains
+        only the timeline-relevant keys (``spans``, ``cam_events``,
+        ``loop_dt_ms``, ``step``, ``t``). Returns an empty dict if the
+        aggregator has no records.
+        """
+        if not self._records:
+            return {}
+
+        # Index records by loop_dt_ms for percentile selection.
+        with_loop = [(r.get("loop_dt_ms", 0.0), r) for r in self._records if "loop_dt_ms" in r]
+        if not with_loop:
+            return {}
+        with_loop.sort(key=lambda x: x[0])
+        loops = [x[0] for x in with_loop]
+
+        def pick_for(p: float) -> dict[str, Any]:
+            target = float(np.percentile(np.asarray(loops), p))
+            # Find the record whose loop_dt is closest to the target percentile.
+            best_idx = min(range(len(with_loop)), key=lambda i: abs(with_loop[i][0] - target))
+            return _gantt_record_subset(with_loop[best_idx][1])
+
+        result = {
+            "median": pick_for(50),
+            "p95": pick_for(95),
+            "p99": pick_for(99),
+            "max": _gantt_record_subset(with_loop[-1][1]),
+            "latest": _gantt_record_subset(self._records[-1]),
+        }
+        return result
+
+
+def _gantt_record_subset(record: dict[str, Any]) -> dict[str, Any]:
+    """Pull only the keys needed to render one iteration's Gantt timeline."""
+    return {
+        "step": record.get("step"),
+        "t": record.get("t"),
+        "loop_dt_ms": record.get("loop_dt_ms"),
+        "spans": record.get("spans", {}),
+        "cam_events": record.get("cam_events", {}),
+    }

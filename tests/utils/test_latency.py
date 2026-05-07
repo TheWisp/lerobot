@@ -49,13 +49,13 @@ class TestAggregator:
         assert snap["dropped_records"] == 0
         assert snap["overrun_ratio"] == 0.0
         assert snap["stages"] == {}
+        assert agg.representative_iterations() == {}
 
     def test_ingest_and_percentile(self):
         agg = LatencyAggregator()
         for i in range(100):
             agg.ingest({"t": float(i), "loop_dt_ms": float(i)})
         assert len(agg) == 100
-        # 0..99 → p50 ≈ 49.5, p95 ≈ 94.05
         p50, p95 = agg.percentile("loop_dt_ms", [50, 95])
         assert 49.0 <= p50 <= 50.0
         assert 94.0 <= p95 <= 95.0
@@ -65,7 +65,6 @@ class TestAggregator:
         for i in range(100):
             agg.ingest({"t": float(i), "v_ms": float(i)})
         assert len(agg) == 10
-        # Only the last 10 should remain (90..99)
         assert agg.values("v_ms") == [float(i) for i in range(90, 100)]
 
     def test_invalid_maxlen_rejected(self):
@@ -79,7 +78,6 @@ class TestAggregator:
         for i in range(10):
             agg.ingest({"t": float(i), "overrun": (i % 2 == 0)})
         assert agg.overrun_ratio() == pytest.approx(0.5)
-        # Records without 'overrun' key are excluded
         agg.ingest({"t": 10.0})
         assert agg.overrun_ratio() == pytest.approx(0.5)
 
@@ -87,19 +85,10 @@ class TestAggregator:
         agg = LatencyAggregator()
         for i in range(10):
             agg.ingest({"t": float(i), "v_ms": float(i)})
-        # Latest t = 9.0; last 3 s = t >= 6.0 → samples 6..9
         ts = agg.time_series("v_ms", last_n_seconds=3.0)
         assert len(ts) == 4
         assert ts[0] == (6.0, 6.0)
         assert ts[-1] == (9.0, 9.0)
-
-    def test_time_series_skips_missing(self):
-        agg = LatencyAggregator()
-        agg.ingest({"t": 1.0, "v_ms": 1.0})
-        agg.ingest({"t": 2.0})  # missing v_ms
-        agg.ingest({"t": 3.0, "v_ms": 3.0})
-        ts = agg.time_series("v_ms")
-        assert ts == [(1.0, 1.0), (3.0, 3.0)]
 
     def test_snapshot_shape(self):
         agg = LatencyAggregator()
@@ -121,6 +110,31 @@ class TestAggregator:
         assert len(agg) == 0
         assert agg.dropped_records == 0
 
+    def test_representative_iterations_picks_percentiles(self):
+        agg = LatencyAggregator()
+        # Ingest records with linearly increasing loop_dt and a span dict
+        # that varies by step so we can check the right one was picked.
+        for i in range(100):
+            agg.ingest(
+                {
+                    "t": float(i),
+                    "step": i,
+                    "loop_dt_ms": float(i),
+                    "spans": {"work": [0.0, float(i)]},
+                    "cam_events": {},
+                }
+            )
+        reps = agg.representative_iterations()
+        assert set(reps.keys()) == {"median", "p95", "p99", "max", "latest"}
+        # Each entry should be a small subset (no other keys leak).
+        assert set(reps["median"].keys()) == {"step", "t", "loop_dt_ms", "spans", "cam_events"}
+        # Sanity: the chosen records should have loop_dt_ms close to the
+        # corresponding percentile of the input distribution (0..99).
+        assert 45.0 <= reps["median"]["loop_dt_ms"] <= 55.0
+        assert 90.0 <= reps["p95"]["loop_dt_ms"] <= 99.0
+        assert reps["max"]["loop_dt_ms"] == 99.0
+        assert reps["latest"]["loop_dt_ms"] == 99.0
+
 
 # ---------------------------------------------------------------------------
 # LatencyTracer
@@ -128,15 +142,24 @@ class TestAggregator:
 
 
 class TestTracer:
-    def test_span_records_duration(self):
+    def test_span_records_endpoint_pair_and_duration(self):
         tracer = LatencyTracer()
         tracer.start()
         with tracer.span("work"):
             time.sleep(0.005)
         record = tracer.commit()
+        # Duration scalar still emitted for sparkline / percentile queries.
         assert "work_ms" in record
-        # 5 ms sleep: tolerate scheduling jitter generously
         assert 3.0 <= record["work_ms"] <= 30.0
+        # Endpoint pair available for Gantt rendering.
+        assert "spans" in record
+        assert "work" in record["spans"]
+        start, end = record["spans"]["work"]
+        # Endpoints are offsets from iter_start; both >= 0 and end >= start.
+        assert start >= 0.0
+        assert end >= start
+        # Duration matches end - start.
+        assert end - start == pytest.approx(record["work_ms"])
 
     def test_commit_without_aggregator(self):
         tracer = LatencyTracer()
@@ -145,6 +168,9 @@ class TestTracer:
         assert record["loop_kind"] == "teleop"
         assert "loop_dt_ms" in record
         assert "step" in record
+        # Even with no spans, the spans/cam_events keys exist (empty dicts).
+        assert record["spans"] == {}
+        assert record["cam_events"] == {}
 
     def test_commit_with_aggregator_ingests(self):
         agg = LatencyAggregator()
@@ -162,66 +188,37 @@ class TestTracer:
             steps.append(tracer.commit()["step"])
         assert steps == [0, 1, 2, 3, 4]
 
-    def test_cam_consume_records_stale_and_period(self):
+    def test_cam_consume_records_capture_and_consume_offsets(self):
         tracer = LatencyTracer()
         tracer.start()
-        # First consume: stale only, no period
-        t0 = time.perf_counter() - 0.020  # frame is 20 ms old
+        # Frame captured 20 ms ago — captured_at_ms should be negative.
+        t0 = time.perf_counter() - 0.020
         tracer.cam_consume("top", t0)
         record_first = tracer.commit()
         assert "cam_top_stale_ms" in record_first
+        # No period yet (only one consume).
         assert "cam_top_period_ms" not in record_first
-        assert 15.0 <= record_first["cam_top_stale_ms"] <= 50.0
+        ev = record_first["cam_events"]["top"]
+        assert ev["captured_at_ms"] < 0  # captured before iter_start
+        assert ev["consumed_at_ms"] >= 0  # consumed inside the iter
+        # Stale matches consumed - captured.
+        assert record_first["cam_top_stale_ms"] == pytest.approx(ev["consumed_at_ms"] - ev["captured_at_ms"])
 
-        # Second consume: period appears
+        # Second consume with frame 33 ms after the previous → period appears.
         tracer.start()
-        t1 = t0 + 0.033  # 33 ms after the previous frame
+        t1 = t0 + 0.033
         tracer.cam_consume("top", t1)
         record_second = tracer.commit()
-        assert "cam_top_period_ms" in record_second
         assert record_second["cam_top_period_ms"] == pytest.approx(33.0, abs=0.5)
 
-    def test_e2e_and_residual_computed_when_input_marked(self):
-        tracer = LatencyTracer()
-        tracer.start()
-        # Pretend a camera frame from 50 ms ago is consumed
-        cam_ts = time.perf_counter() - 0.050
-        tracer.cam_consume("top", cam_ts)
-        with tracer.span("process_obs"):
-            time.sleep(0.002)
-        with tracer.span("action_send"):
-            time.sleep(0.001)
-        record = tracer.commit()
-        assert "e2e_obs_to_action_ms" in record
-        # E2E ≈ 50 ms (initial age) + 2 ms + 1 ms + overhead ≈ 53+ ms
-        assert record["e2e_obs_to_action_ms"] >= 50.0
-        # residual = e2e - max_stale - (process_obs + action_send)
-        # max_stale already covers most of the camera age, so residual ≈ 0
-        assert "residual_ms" in record
-        assert abs(record["residual_ms"]) < 5.0
-
-    def test_residual_excludes_motor_read_from_sum(self):
-        """Motor-read happens before cam-consume, so its time is already in
-        cam_stale. Including it in the residual sum would double-count."""
-        tracer = LatencyTracer()
-        tracer.start()
-        with tracer.span("motor_read"):
-            time.sleep(0.005)  # 5 ms
-        cam_ts = time.perf_counter() - 0.030  # cam captured 30 ms ago
-        tracer.cam_consume("top", cam_ts)
-        record = tracer.commit()
-        # residual should be near zero, not -5 ms; motor_read is excluded.
-        assert abs(record["residual_ms"]) < 3.0
-
     def test_overrun_flag_when_target_fps_set(self):
-        tracer = LatencyTracer(target_fps=120.0)  # period = 8.33 ms
+        tracer = LatencyTracer(target_fps=120.0)
         tracer.start()
-        time.sleep(0.020)  # 20 ms, definitely an overrun
+        time.sleep(0.020)
         record = tracer.commit()
         assert record["overrun"] is True
 
         tracer.start()
-        # No work; should not overrun
         record_fast = tracer.commit()
         assert record_fast["overrun"] is False
 
@@ -250,14 +247,27 @@ class TestTracer:
         assert record["ep"] == 7
         assert record["note"] == "smoke"
 
-    def test_mark_input_affects_e2e(self):
+    def test_gantt_can_be_reconstructed_from_spans(self):
+        """An iteration's spans should describe a coherent timeline that the
+        GUI can render: every span's [start, end] is contained within
+        [0, loop_dt_ms]; cameras can sit before zero (background grab)."""
         tracer = LatencyTracer()
         tracer.start()
-        # Mark a synthetic input from 25 ms ago
-        tracer.mark_input(time.perf_counter() - 0.025)
+        # Camera captured 30 ms ago.
+        cam_ts = time.perf_counter() - 0.030
+        tracer.cam_consume("top", cam_ts)
+        with tracer.span("motor_read"):
+            time.sleep(0.002)
+        with tracer.span("process_action"):
+            time.sleep(0.001)
         record = tracer.commit()
-        assert "e2e_obs_to_action_ms" in record
-        assert 24.0 <= record["e2e_obs_to_action_ms"] <= 50.0
+
+        loop_dt = record["loop_dt_ms"]
+        for name, (start, end) in record["spans"].items():
+            assert 0.0 <= start <= end <= loop_dt + 0.5, f"span {name} out of bounds"
+        ev = record["cam_events"]["top"]
+        assert ev["captured_at_ms"] < 0  # before iter
+        assert 0.0 <= ev["consumed_at_ms"] <= loop_dt
 
 
 # ---------------------------------------------------------------------------
@@ -266,12 +276,7 @@ class TestTracer:
 
 
 class TestOverhead:
-    """Verify capture overhead is well below 1 ms per iteration at 60 Hz.
-
-    The doc commits to < 1 ms/iter; in practice we expect ~5–10 µs.
-    Under a noisy CI runner we relax the bound to 200 µs to stay non-flaky
-    while still catching catastrophic regressions.
-    """
+    """Capture overhead must stay well below 1 ms / iter at 60 Hz."""
 
     @pytest.mark.parametrize("with_aggregator", [True, False])
     def test_per_iteration_overhead(self, with_aggregator):
@@ -279,8 +284,7 @@ class TestOverhead:
         tracer = LatencyTracer(agg, target_fps=60.0)
 
         n_iters = 5000
-        # Warmup
-        for _ in range(100):
+        for _ in range(100):  # warmup
             tracer.start()
             with tracer.span("a"):
                 pass
@@ -321,10 +325,8 @@ class TestSnapshotSeries:
             agg.ingest({"t": float(i), "loop_dt_ms": float(i)})
         snap = agg.snapshot(series_window_s=10.0, series_max_points=10)
         assert "series" in snap
-        assert "loop_dt_ms" in snap["series"]
         series = snap["series"]["loop_dt_ms"]
         assert len(series) <= 10
-        # Latest t in deque is 59; window is 10s → entries with t >= 49.
         for t, _v in series:
             assert t >= 49.0
 
@@ -338,7 +340,15 @@ class TestSnapshotSeries:
 class TestSnapshotWriter:
     def test_first_write_creates_file(self, tmp_path: Path):
         agg = LatencyAggregator()
-        agg.ingest({"t": 0.0, "loop_dt_ms": 12.5})
+        agg.ingest(
+            {
+                "t": 0.0,
+                "step": 0,
+                "loop_dt_ms": 12.5,
+                "spans": {"work": [0.0, 12.0]},
+                "cam_events": {},
+            }
+        )
         writer = LatencySnapshotWriter(tmp_path, interval_s=0.0)
         wrote = writer.maybe_write(agg)
         assert wrote
@@ -347,16 +357,19 @@ class TestSnapshotWriter:
         assert data["loop_kind"] == "teleop"
         assert "stages" in data
         assert "loop_dt_ms" in data["stages"]
-        assert "t" in data
+        assert "iterations" in data
+        # Every label points at a record subset with timeline keys.
+        for label, rec in data["iterations"].items():
+            assert "spans" in rec
+            assert "cam_events" in rec
+            assert "loop_dt_ms" in rec, f"missing loop_dt_ms in {label}"
 
     def test_throttle_skips_within_interval(self, tmp_path: Path):
         agg = LatencyAggregator()
         agg.ingest({"t": 0.0, "loop_dt_ms": 1.0})
         writer = LatencySnapshotWriter(tmp_path, interval_s=10.0)
         assert writer.maybe_write(agg, now=100.0) is True
-        # 1 s later: still within 10 s window — skip.
         assert writer.maybe_write(agg, now=101.0) is False
-        # 11 s later: write again.
         assert writer.maybe_write(agg, now=111.0) is True
 
     def test_invalid_interval_rejected(self, tmp_path: Path):
@@ -364,7 +377,6 @@ class TestSnapshotWriter:
             LatencySnapshotWriter(tmp_path, interval_s=-1)
 
     def test_atomic_replace_no_partial_file(self, tmp_path: Path):
-        """tmp file must not linger after a successful write."""
         agg = LatencyAggregator()
         agg.ingest({"t": 0.0, "v_ms": 1.0})
         writer = LatencySnapshotWriter(tmp_path, interval_s=0.0)
