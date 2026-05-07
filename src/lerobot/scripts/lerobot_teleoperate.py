@@ -270,12 +270,21 @@ def teleop_loop(
                 print(f"{motor:<{display_len}} | {value:>7.2f}")
             move_cursor_up(len(robot_action_to_send) + 3)
 
+        # Commit BEFORE precise_sleep so loop_dt_ms reflects iteration *work*
+        # time, not work + sleep. Otherwise overrun fires every iteration —
+        # precise_sleep slightly overshoots its target by design, so loop_dt
+        # is always ε > target_period and overrun% reads 100. This way
+        # overrun fires only when actual work exceeds 1000/fps.
+        if tracer is not None:
+            tracer.commit()
+
         dt_s = time.perf_counter() - loop_start
         precise_sleep(max(1 / fps - dt_s, 0.0))
         loop_s = time.perf_counter() - loop_start
 
         if tracer is not None:
-            tracer.commit()
+            # Snapshot publish + 1 Hz stderr summary run on idle time after
+            # sleep. Cost is bounded (~50–200 µs at 1 Hz amortized).
             if latency_writer is not None:
                 latency_writer.maybe_write(latency_aggregator)
             now = time.time()
@@ -332,7 +341,11 @@ def teleoperate(cfg: TeleoperateConfig):
     latency_writer: LatencySnapshotWriter | None = None
     if cfg.latency_monitor:
         latency_aggregator = LatencyAggregator()
-        latency_writer = LatencySnapshotWriter(cfg.latency_output_dir, loop_kind="teleop")
+        latency_writer = LatencySnapshotWriter(
+            cfg.latency_output_dir,
+            loop_kind="teleop",
+            target_fps=float(cfg.fps),
+        )
         logging.info("Latency monitoring enabled; snapshots → %s", latency_writer.path)
 
     teleop.connect()

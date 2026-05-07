@@ -2165,15 +2165,42 @@ async function _fetchLatencyMetrics() {
     } catch (e) { /* ignore — next poll will retry */ }
 }
 
-// Status thresholds (ms) for the system cards. Loop budgets vary with FPS;
-// these defaults are tuned for 60 Hz teleop. A future revision can drive
-// them from the active config (target_period_ms = 1000/fps).
-const _LAT_BUDGETS = {
-    loop_dt_ms:           { ok: 12,  warn: 20  },
-    e2e_obs_to_action_ms: { ok: 50,  warn: 80  },
-    motor_read_ms:        { ok: 6,   warn: 10  },
-    action_send_ms:       { ok: 2,   warn: 5   },
-    residual_ms_abs:      { ok: 1,   warn: 3   },
+// Color thresholds for the system cards.
+//
+// Two of these (loop_dt_ms, motor_read_ms) are derived from the loop's
+// target_period_ms (1000/fps), which the snapshot writer publishes — so
+// they automatically scale to whatever FPS the teleop session is running.
+// The rest are heuristic constants tuned for typical Feetech / 30 Hz
+// camera setups; calibration drift detection (V2) will replace them.
+//
+// `ok`   → green: comfortably within budget.
+// `warn` → yellow: approaching or just over the budget.
+// `bad`  → red: clearly over budget; investigate.
+function _budgetsFromTarget(targetPeriodMs) {
+    // Fall back to 60 Hz when no target period is published (e.g. a session
+    // that started before this field existed, or non-teleop loops).
+    const t = targetPeriodMs || (1000 / 60);
+    return {
+        loop_dt_ms:           { ok: 0.7 * t, warn: t },         // 70% / 100% of FPS budget
+        e2e_obs_to_action_ms: { ok: 50,      warn: 80 },        // typical 30 Hz cam + work
+        motor_read_ms:        { ok: 0.4 * t, warn: 0.7 * t },   // motor read shouldn't dominate
+        action_send_ms:       { ok: 2,       warn: 5 },         // sync_write is fire-and-forget
+        residual_ms_abs:      { ok: 1,       warn: 3 },         // doc commits to ~0
+    };
+}
+
+// Per-card explanatory tooltips. Shown on hover via the standard `title`
+// attribute. Keep terse — they should answer "what is this and why does
+// the color change" in two sentences.
+const _LAT_TOOLTIPS = {
+    loop_dt_ms: 'Wall-clock time per iteration (work only; sleep excluded). Yellow when ≥70% of the 1000/FPS budget; red when over budget.',
+    e2e_obs_to_action_ms: 'Time from the oldest input timestamp (typically a camera frame) to the moment the action was sent over the bus. Captures input staleness — "how old was the world model the action committed to". Differs from Loop because it spans more than one iteration when frames are stale.',
+    motor_read_ms: 'Cost of bus.sync_read("Present_Position") inside get_observation. Includes Feetech/Dynamixel round-trip time and any retries.',
+    action_send_ms: 'Cost of bus.sync_write("Goal_Position"). Fire-and-forget on Feetech, so this is bus-TX only — not motor motion.',
+    residual_ms: 'e2e − (max camera staleness + post-consume stages). Should be near zero. Persistent positive residual means a stage is happening that we are not measuring (GIL pause, GC, queue wait).',
+    overrun: 'Fraction of iterations where work time exceeded the FPS budget. Sleep is excluded.',
+    cam_stale: 'Age of the cached camera frame at the moment the consumer reads it (now − cam.latest_timestamp). Yellow when p95 exceeds ~1.2× the camera frame period.',
+    cam_period: 'Wall-clock interval between successive frame captures by the camera grab thread. Inverse is effective FPS.',
 };
 
 function _classifyLatency(value, budget) {
@@ -2183,9 +2210,10 @@ function _classifyLatency(value, budget) {
     return 'bad';
 }
 
-function _renderLatencyCard(parent, key, title, p50, p95, budget, sparkData) {
+function _renderLatencyCard(parent, key, title, p50, p95, budget, sparkData, tooltip) {
     const card = document.createElement('div');
     card.className = 'latency-card';
+    if (tooltip) card.title = tooltip;
     const cls = _classifyLatency(p95 != null ? p95 : p50, budget);
     card.innerHTML = `
         <div class="latency-card-title">${title}</div>
@@ -2204,6 +2232,8 @@ function _renderLatencyCard(parent, key, title, p50, p95, budget, sparkData) {
 function _updateLatencyDashboard(data) {
     const stages = data.stages || {};
     const series = data.series || {};
+    const targetPeriodMs = data.target_period_ms || null;
+    const budgets = _budgetsFromTarget(targetPeriodMs);
 
     // Per-camera tile overlays (live frames in the obs stream viewer).
     _updateCameraOverlays(stages);
@@ -2224,7 +2254,7 @@ function _updateLatencyDashboard(data) {
             const sparkPoints = (series[item.key] || []).map(([_t, v]) => v);
             _renderLatencyCard(sysGrid, item.key, item.title,
                 stage.p50 ?? 0, stage.p95 ?? null,
-                _LAT_BUDGETS[item.key], sparkPoints);
+                budgets[item.key], sparkPoints, _LAT_TOOLTIPS[item.key]);
         }
 
         // Residual: classify by absolute magnitude (negative is fine but
@@ -2233,8 +2263,9 @@ function _updateLatencyDashboard(data) {
         if (residual) {
             const card = document.createElement('div');
             card.className = 'latency-card';
+            card.title = _LAT_TOOLTIPS.residual_ms;
             const absP95 = Math.abs(residual.p95 ?? 0);
-            const cls = _classifyLatency(absP95, _LAT_BUDGETS.residual_ms_abs);
+            const cls = _classifyLatency(absP95, budgets.residual_ms_abs);
             card.innerHTML = `
                 <div class="latency-card-title">Residual (e2e − sum of stages)</div>
                 <div class="latency-card-value ${cls}">${(residual.p50 ?? 0).toFixed(2)} ms <span class="latency-card-sub">p95 ${(residual.p95 ?? 0).toFixed(2)}</span></div>
@@ -2247,11 +2278,17 @@ function _updateLatencyDashboard(data) {
         const overrun = (data.overrun_ratio || 0) * 100;
         const ovCard = document.createElement('div');
         ovCard.className = 'latency-card';
+        ovCard.title = _LAT_TOOLTIPS.overrun + (
+            targetPeriodMs ? ` Budget: ${targetPeriodMs.toFixed(2)} ms (${(1000 / targetPeriodMs).toFixed(0)} Hz target).` : ''
+        );
         const ovCls = overrun < 1 ? 'ok' : overrun < 5 ? 'warn' : 'bad';
+        const budgetLabel = targetPeriodMs
+            ? `> ${targetPeriodMs.toFixed(1)} ms (${(1000 / targetPeriodMs).toFixed(0)} Hz)`
+            : 'budget unknown';
         ovCard.innerHTML = `
             <div class="latency-card-title">Overrun</div>
             <div class="latency-card-value ${ovCls}">${overrun.toFixed(1)}%</div>
-            <div class="latency-card-sub">Iterations exceeding the FPS budget.</div>
+            <div class="latency-card-sub">Iterations with work time ${budgetLabel}.</div>
         `;
         sysGrid.appendChild(ovCard);
     }
@@ -2271,9 +2308,15 @@ function _updateLatencyDashboard(data) {
                 const stale = stages[staleKey];
                 const period = stages[periodKey];
                 const fps = period && period.p50 ? (1000 / period.p50) : null;
-                const stalePalette = stale.p95 < 40 ? 'ok' : stale.p95 < 70 ? 'warn' : 'bad';
+                // Stale threshold scales with the camera's actual period (when
+                // we know it): yellow at 1.2× period, red at 2× period.
+                const stalePeriod = period ? period.p50 : null;
+                const okStale = stalePeriod ? stalePeriod * 1.2 : 40;
+                const warnStale = stalePeriod ? stalePeriod * 2 : 70;
+                const stalePalette = stale.p95 < okStale ? 'ok' : stale.p95 < warnStale ? 'warn' : 'bad';
                 const card = document.createElement('div');
                 card.className = 'latency-cam-card';
+                card.title = `${_LAT_TOOLTIPS.cam_stale}\n\n${_LAT_TOOLTIPS.cam_period}`;
                 card.innerHTML = `
                     <div class="latency-cam-card-title">${camName}</div>
                     <div class="latency-cam-stat">stale p50/p95 <b class="${stalePalette}">${stale.p50.toFixed(0)}/${stale.p95.toFixed(0)} ms</b></div>
