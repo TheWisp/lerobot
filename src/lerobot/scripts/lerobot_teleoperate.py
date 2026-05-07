@@ -158,8 +158,6 @@ def _format_latency_summary(snap: dict[str, Any]) -> str:
     parts: list[str] = []
     if (s := p50_p95("loop_dt_ms")) is not None:
         parts.append(f"loop {s}")
-    if (s := p50_p95("e2e_obs_to_action_ms")) is not None:
-        parts.append(f"e2e {s}")
     if (mr := stages.get("motor_read_ms")) is not None:
         parts.append(f"mread {mr.get('p50', 0):.1f}ms")
     if (send := stages.get("action_send_ms")) is not None:
@@ -169,8 +167,6 @@ def _format_latency_summary(snap: dict[str, Any]) -> str:
         cam_name = k[len("cam_") : -len("_stale_ms")]
         parts.append(f"{cam_name} stale {stages[k].get('p50', 0):.0f}ms")
     parts.append(f"overrun {snap.get('overrun_ratio', 0) * 100:.0f}%")
-    if (residual := stages.get("residual_ms")) is not None:
-        parts.append(f"residual p95 {residual.get('p95', 0):+.1f}ms")
     return " · ".join(parts)
 
 

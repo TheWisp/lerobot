@@ -16,14 +16,21 @@
 
 """Per-iteration latency tracer for real-time loops.
 
-Each iteration: call ``start()``, wrap timed regions in ``span()``, record
-camera consumption with ``cam_consume()``, and finalize with ``commit()``.
-The tracer is designed to be cheap (~5–10 µs/iter) and is a no-op when its
-aggregator is None.
+Each iteration records (start_ms, end_ms) offsets per span (relative to
+``iter_start``), plus per-camera (captured_at_ms, consumed_at_ms) pairs
+where ``captured_at_ms`` may be negative (cameras grab in a background
+thread before the iteration begins). Together these reconstruct a Gantt
+timeline of one iteration — see ``src/lerobot/gui/docs/latency_monitoring.md``.
 
-See ``src/lerobot/gui/docs/latency_monitoring.md`` for the contract; in
-particular, the residual cross-check formula and which stages are
-considered "post-consume".
+Why timestamp pairs instead of just durations:
+- Visual gap detection in the Gantt replaces the previous numeric
+  ``residual_ms`` cross-check.
+- Overlapping work (camera capture vs. main-loop work) is representable.
+- The same primitive serves teleop and policy without loop-kind branching.
+
+Per-stage duration scalars (``motor_read_ms``, etc.) are still emitted in
+the record — derived from the span's end-start — so the dashboard's
+sparklines and percentile queries are unchanged.
 """
 
 from __future__ import annotations
@@ -34,19 +41,6 @@ from contextlib import contextmanager
 from typing import Any
 
 from lerobot.utils.latency.aggregator import LatencyAggregator
-
-# Stages that happen AFTER all inputs have been assembled in the iteration.
-# These contribute additively to the e2e latency residual. Camera staleness
-# already includes the time the loop spent reading motors before reading the
-# cached camera frame, so motor_read_ms is intentionally NOT in this set.
-_POST_CONSUME_KEYS: tuple[str, ...] = (
-    "process_obs_ms",
-    "process_action_ms",
-    "action_send_ms",
-    "infer_total_ms",
-    "dataset_write_ms",
-    "video_encode_ms",
-)
 
 
 class LatencyTracer:
@@ -59,11 +53,15 @@ class LatencyTracer:
       - ``commit()`` is called exactly once at the end of each iteration.
 
     Postconditions:
-      - Each ``commit()`` produces a fresh dict and (if ``aggregator`` is
-        provided) appends it to the aggregator's bounded deque.
-      - When ``input_oldest`` was set during the iteration (via
-        ``cam_consume`` or ``mark_input``), ``commit()`` adds
-        ``e2e_obs_to_action_ms`` and ``residual_ms`` to the record.
+      - Each ``commit()`` produces a fresh dict with:
+        - ``spans``: { name: [start_ms, end_ms] } offsets from iter_start.
+        - ``cam_events``: { cam_key: { captured_at_ms, consumed_at_ms } }.
+        - ``<name>_ms``: duration scalar per span (derived).
+        - ``cam_<key>_stale_ms``, ``cam_<key>_period_ms``: derived camera
+          observability scalars.
+        - ``loop_dt_ms``: total iteration time (commit minus iter_start).
+        - ``overrun``: bool when ``target_fps`` is set.
+      - When an aggregator was provided, the record is appended to its deque.
     """
 
     def __init__(
@@ -76,21 +74,23 @@ class LatencyTracer:
         self.loop_kind = loop_kind
         self._target_period_ms: float | None = (1000.0 / float(target_fps)) if target_fps else None
         self._record: dict[str, Any] = {}
-        self._iter_start: float = 0.0
+        self._spans: dict[str, list[float]] = {}
+        self._cam_events: dict[str, dict[str, float]] = {}
+        self._iter_start_perf: float = 0.0
         # Per-camera last latest_ts seen, for period jitter computation.
         self._cam_last_ts: dict[str, float] = {}
-        # Oldest input timestamp (perf_counter domain) for E2E latency.
-        self._input_oldest: float | None = None
         self._step: int = 0
         self._started: bool = False
 
     @property
     def step(self) -> int:
-        """Step counter; incremented on each ``commit()``."""
         return self._step
 
     def start(self, ep: int | None = None) -> None:
         """Begin a new iteration. Resets the per-iter record."""
+        self._iter_start_perf = time.perf_counter()
+        self._spans = {}
+        self._cam_events = {}
         self._record = {
             "loop_kind": self.loop_kind,
             "t": time.time(),
@@ -98,15 +98,21 @@ class LatencyTracer:
         }
         if ep is not None:
             self._record["ep"] = ep
-        self._iter_start = time.perf_counter()
-        self._input_oldest = None
         self._started = True
+
+    def _offset_ms(self, perf_ts: float) -> float:
+        """Convert an absolute perf_counter timestamp to ms-from-iter_start.
+
+        Negative values are valid (e.g. a camera frame captured before the
+        iteration started).
+        """
+        return (perf_ts - self._iter_start_perf) * 1000.0
 
     @contextmanager
     def span(self, name: str) -> Iterator[None]:
-        """Time a code block; result stored as ``f'{name}_ms'`` in the record.
+        """Time a code block; record both endpoints as ms offsets from iter_start.
 
-        Reentrant within an iteration: nested spans are supported, but each
+        Reentrant within an iteration; nested spans are supported. Each
         ``name`` should be unique within an iteration (the second write
         overwrites the first).
         """
@@ -115,36 +121,36 @@ class LatencyTracer:
         try:
             yield
         finally:
-            self._record[f"{name}_ms"] = (time.perf_counter() - t0) * 1000.0
+            t1 = time.perf_counter()
+            start_off = self._offset_ms(t0)
+            end_off = self._offset_ms(t1)
+            self._spans[name] = [start_off, end_off]
+            # Duration scalar for sparklines / percentile queries.
+            self._record[f"{name}_ms"] = end_off - start_off
 
     def cam_consume(self, cam_key: str, latest_ts: float) -> None:
-        """Record camera staleness and period at the moment of consumption.
+        """Record a camera frame consumption event.
 
-        Preconditions:
-          - ``latest_ts`` is in the same time domain as ``time.perf_counter()``
-            (which is what cameras' grab threads use; see ``camera_opencv.py``).
-          - Called at the moment the consumer reads the cached frame.
+        ``latest_ts`` is the camera's ``latest_timestamp`` (perf_counter
+        domain) — i.e. when the grab thread cached this frame. The
+        ``captured_at_ms`` offset will typically be negative because the
+        capture happened before the iteration began.
         """
         assert self._started, "LatencyTracer.start() must be called before cam_consume()"
         now = time.perf_counter()
-        stale_ms = (now - latest_ts) * 1000.0
-        self._record[f"cam_{cam_key}_stale_ms"] = stale_ms
+        captured_at_ms = self._offset_ms(latest_ts)
+        consumed_at_ms = self._offset_ms(now)
+        self._cam_events[cam_key] = {
+            "captured_at_ms": captured_at_ms,
+            "consumed_at_ms": consumed_at_ms,
+        }
+        # Derived scalar: staleness at the moment of consumption.
+        self._record[f"cam_{cam_key}_stale_ms"] = consumed_at_ms - captured_at_ms
+        # Period: time between successive captures (camera-grab cadence).
         prev_ts = self._cam_last_ts.get(cam_key)
         if prev_ts is not None:
             self._record[f"cam_{cam_key}_period_ms"] = (latest_ts - prev_ts) * 1000.0
         self._cam_last_ts[cam_key] = latest_ts
-        if self._input_oldest is None or latest_ts < self._input_oldest:
-            self._input_oldest = latest_ts
-
-    def mark_input(self, t: float | None = None) -> None:
-        """Mark a non-camera input timestamp (e.g. just-read motor sample) for E2E.
-
-        When ``t`` is None, uses ``time.perf_counter()`` (i.e., "right now").
-        """
-        assert self._started, "LatencyTracer.start() must be called before mark_input()"
-        ts = time.perf_counter() if t is None else t
-        if self._input_oldest is None or ts < self._input_oldest:
-            self._input_oldest = ts
 
     def set_field(self, key: str, value: Any) -> None:
         """Add a non-timing field to the record (e.g. dataset write counts)."""
@@ -152,7 +158,7 @@ class LatencyTracer:
         self._record[key] = value
 
     def commit(self) -> dict[str, Any]:
-        """Finalize the record. Computes loop_dt, e2e, residual, overrun.
+        """Finalize the record. Appends ``spans``/``cam_events``/``loop_dt_ms``/``overrun``.
 
         Postconditions:
           - Returns the finalized record dict.
@@ -161,13 +167,10 @@ class LatencyTracer:
         """
         assert self._started, "LatencyTracer.commit() requires a prior start()"
         end = time.perf_counter()
-        loop_dt_ms = (end - self._iter_start) * 1000.0
+        loop_dt_ms = (end - self._iter_start_perf) * 1000.0
         self._record["loop_dt_ms"] = loop_dt_ms
-
-        if self._input_oldest is not None:
-            e2e_ms = (end - self._input_oldest) * 1000.0
-            self._record["e2e_obs_to_action_ms"] = e2e_ms
-            self._record["residual_ms"] = self._compute_residual(e2e_ms)
+        self._record["spans"] = self._spans
+        self._record["cam_events"] = self._cam_events
 
         if self._target_period_ms is not None:
             self._record["overrun"] = loop_dt_ms > self._target_period_ms
@@ -179,15 +182,3 @@ class LatencyTracer:
         self._step += 1
         self._started = False
         return record
-
-    def _compute_residual(self, e2e_ms: float) -> float:
-        """e2e − (max stale + post-consume stages).
-
-        Camera staleness already absorbs motor-read time in our typical loop
-        (motors are read before cameras), so motor_read is not in the sum.
-        See ``latency_monitoring.md`` for the rationale.
-        """
-        stale_keys = [k for k in self._record if k.startswith("cam_") and k.endswith("_stale_ms")]
-        max_stale = max((self._record[k] for k in stale_keys), default=0.0)
-        post_consume = sum(self._record.get(k, 0.0) for k in _POST_CONSUME_KEYS)
-        return e2e_ms - max_stale - post_consume

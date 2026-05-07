@@ -292,6 +292,26 @@
                                 </div>
                             </div>
                             <div class="latency-section">
+                                <div class="latency-section-title">
+                                    Iteration timeline
+                                    <span class="latency-gantt-controls">
+                                        <select id="latency-gantt-pick" title="Which iteration to render">
+                                            <option value="median" selected>median</option>
+                                            <option value="p95">p95</option>
+                                            <option value="p99">p99</option>
+                                            <option value="max">max</option>
+                                            <option value="latest">latest</option>
+                                        </select>
+                                        <span id="latency-gantt-meta"></span>
+                                    </span>
+                                </div>
+                                <div class="latency-gantt-panel" id="latency-gantt-panel"
+                                     title="Per-iteration timeline. Bars are tracer spans; diamonds are camera frame captures (often before t=0 because cameras grab in a background thread). Gaps in the timeline indicate uninstrumented work; overlaps indicate parallel stages.">
+                                    <canvas id="latency-gantt-canvas"></canvas>
+                                    <div class="latency-empty" id="latency-gantt-empty">No timeline yet — waiting for first snapshot…</div>
+                                </div>
+                            </div>
+                            <div class="latency-section">
                                 <div class="latency-section-title">Cameras</div>
                                 <div class="latency-cam-grid" id="latency-grid-cameras">
                                     <div class="latency-empty">No camera data yet — waiting for first snapshot…</div>

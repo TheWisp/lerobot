@@ -2121,6 +2121,184 @@ function _camShortName(featureKey) {
     return idx >= 0 ? featureKey.slice(idx + 1) : featureKey;
 }
 
+// Color palette for span bars in the Gantt. Picked to be distinct without
+// being garish; consistent across iterations so the operator builds muscle
+// memory ("the wide green bar is process_action").
+const _GANTT_SPAN_COLORS = {
+    motor_read:     '#4fc3f7',
+    process_obs:    '#9b59b6',
+    process_action: '#2ecc71',
+    action_send:    '#e67e22',
+    infer_total:    '#e74c3c',
+    infer_forward:  '#e74c3c',
+    dataset_write:  '#95a5a6',
+    video_encode:   '#7f8c8d',
+};
+const _GANTT_DEFAULT_SPAN_COLOR = '#aaaaaa';
+
+let _latestIterations = {};  // Cached for the dropdown selector.
+
+function _renderGantt(iterations) {
+    _latestIterations = iterations;
+    const select = document.getElementById('latency-gantt-pick');
+    const which = (select && select.value) || 'median';
+    const rec = iterations[which];
+    const empty = document.getElementById('latency-gantt-empty');
+    const canvas = document.getElementById('latency-gantt-canvas');
+    if (!canvas) return;
+
+    if (!rec || !rec.spans || Object.keys(rec.spans).length === 0) {
+        if (empty) empty.style.display = '';
+        canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+        const meta = document.getElementById('latency-gantt-meta');
+        if (meta) meta.textContent = '';
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+
+    const meta = document.getElementById('latency-gantt-meta');
+    if (meta) {
+        meta.textContent = `step ${rec.step ?? '?'} · loop ${(rec.loop_dt_ms || 0).toFixed(1)} ms`;
+    }
+
+    _drawGantt(canvas, rec);
+}
+
+function _drawGantt(canvas, rec) {
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = rect.height;
+    ctx.clearRect(0, 0, W, H);
+
+    const spans = rec.spans || {};
+    const camEvents = rec.cam_events || {};
+    const loopDt = rec.loop_dt_ms || 0;
+
+    // Compute the time range. cam captures can be negative (background grab
+    // before iter_start); we extend leftward to fit them.
+    let minMs = 0;
+    let maxMs = loopDt;
+    for (const [_n, [s, e]] of Object.entries(spans)) {
+        if (s < minMs) minMs = s;
+        if (e > maxMs) maxMs = e;
+    }
+    for (const ev of Object.values(camEvents)) {
+        if (ev.captured_at_ms < minMs) minMs = ev.captured_at_ms;
+        if (ev.consumed_at_ms > maxMs) maxMs = ev.consumed_at_ms;
+    }
+    if (maxMs - minMs < 1) maxMs = minMs + 1;  // Avoid zero range.
+
+    const padL = 6, padR = 12, padT = 16, padB = 18;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+
+    const xOf = ms => padL + plotW * (ms - minMs) / (maxMs - minMs);
+
+    // Vertical zero line — separates background camera grab (left) from
+    // in-iteration work (right). Subtle but important visually.
+    const zeroX = xOf(0);
+    ctx.strokeStyle = '#444';
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(zeroX, padT - 2);
+    ctx.lineTo(zeroX, H - padB + 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#666';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('iter_start', zeroX, padT - 4);
+
+    // Loop-end line (right edge of the iteration's work).
+    const endX = xOf(loopDt);
+    ctx.strokeStyle = '#444';
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(endX, padT - 2);
+    ctx.lineTo(endX, H - padB + 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillText('action_sent', endX, padT - 4);
+
+    // X-axis tick labels at the extents.
+    ctx.fillStyle = '#888';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`${minMs.toFixed(1)} ms`, padL, H - 4);
+    ctx.textAlign = 'right';
+    ctx.fillText(`${maxMs.toFixed(1)} ms`, W - padR, H - 4);
+
+    // Lay out span bars in declaration order. Two rows max; if there are
+    // many spans, stack them on a single row (last write wins for color).
+    const spanNames = Object.keys(spans);
+    const rowCount = Math.max(spanNames.length, 1);
+    const rowH = Math.min(20, Math.max(8, plotH / (rowCount + 1)));  // +1 for cam row
+    spanNames.forEach((name, i) => {
+        const [s, e] = spans[name];
+        const x0 = xOf(s);
+        const x1 = xOf(e);
+        const y = padT + i * rowH;
+        const w = Math.max(2, x1 - x0);  // Always visible even for very short spans.
+        ctx.fillStyle = _GANTT_SPAN_COLORS[name] || _GANTT_DEFAULT_SPAN_COLOR;
+        ctx.fillRect(x0, y, w, rowH - 4);
+        // Label — name and duration if there's room.
+        const dur = e - s;
+        const label = w > 50 ? `${name}  ${dur.toFixed(1)} ms` : name;
+        ctx.fillStyle = '#0a0a1a';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(label, x0 + 3, y + rowH - 7);
+    });
+
+    // Camera capture markers as diamonds in their own row at the bottom of
+    // the plot. The X position is the capture timestamp (often negative).
+    const camRow = padT + spanNames.length * rowH + 2;
+    const camKeys = Object.keys(camEvents);
+    camKeys.forEach((key, i) => {
+        const ev = camEvents[key];
+        const x = xOf(ev.captured_at_ms);
+        const cx = xOf(ev.consumed_at_ms);
+        const y = camRow + 6;
+
+        // Stale segment: thin line from capture to consume — visualizes how
+        // long the frame sat in cache before we read it.
+        ctx.strokeStyle = '#666';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(cx, y);
+        ctx.stroke();
+
+        // Capture diamond.
+        ctx.fillStyle = '#4fc3f7';
+        ctx.beginPath();
+        ctx.moveTo(x, y - 4); ctx.lineTo(x + 4, y); ctx.lineTo(x, y + 4); ctx.lineTo(x - 4, y); ctx.closePath();
+        ctx.fill();
+        // Consume diamond (smaller, hollow).
+        ctx.strokeStyle = '#4fc3f7';
+        ctx.beginPath();
+        ctx.moveTo(cx, y - 3); ctx.lineTo(cx + 3, y); ctx.lineTo(cx, y + 3); ctx.lineTo(cx - 3, y); ctx.closePath();
+        ctx.stroke();
+
+        ctx.fillStyle = '#888';
+        ctx.font = '9px monospace';
+        ctx.textAlign = 'left';
+        const stale = ev.consumed_at_ms - ev.captured_at_ms;
+        ctx.fillText(`${key}  stale ${stale.toFixed(0)} ms`, Math.max(padL + 2, x + 6), y - 4);
+    });
+}
+
+// Re-render the Gantt when the operator switches the percentile picker.
+document.addEventListener('change', e => {
+    if (e.target && e.target.id === 'latency-gantt-pick') {
+        _renderGantt(_latestIterations);
+    }
+});
+
 function _updateCameraOverlays(stages) {
     const overlays = document.querySelectorAll('.cam-latency-overlay');
     if (!overlays.length) return;
@@ -2194,10 +2372,8 @@ function _budgetsFromTarget(targetPeriodMs) {
 // the color change" in two sentences.
 const _LAT_TOOLTIPS = {
     loop_dt_ms: 'Wall-clock time per iteration (work only; sleep excluded). The per-iteration budget is 1000 ms ÷ target FPS — at 60 fps that is 16.67 ms; at 30 fps, 33.33 ms. Yellow at ≥70% of budget; red when over.',
-    e2e_obs_to_action_ms: 'Time from the oldest input timestamp (typically a camera frame) to the moment the action was sent over the bus. Captures input staleness — "how old was the world model the action committed to". Differs from Loop because it includes how stale the camera frame already was when the iteration started.',
     motor_read_ms: 'Cost of bus.sync_read("Present_Position") inside get_observation. Includes Feetech/Dynamixel round-trip time and any retries.',
     action_send_ms: 'Cost of bus.sync_write("Goal_Position"). Fire-and-forget on Feetech, so this is bus-TX only — not motor motion.',
-    residual_ms: 'e2e − (max camera staleness + post-consume stages). Should be near zero. Persistent positive residual means a stage is happening that we are not measuring (GIL pause, GC, queue wait).',
     overrun: 'Fraction of iterations whose work time exceeded the per-iteration budget (1000 ms ÷ target FPS). Sleep time is excluded — this only fires when the work itself is too slow to sustain the target rate.',
     cam_stale: 'Age of the cached camera frame at the moment the consumer reads it (now − cam.latest_timestamp). Yellow when p95 exceeds ~1.2× the camera frame period.',
     cam_period: 'Wall-clock interval between successive frame captures by the camera grab thread. Inverse is effective FPS.',
@@ -2238,15 +2414,17 @@ function _updateLatencyDashboard(data) {
     // Per-camera tile overlays (live frames in the obs stream viewer).
     _updateCameraOverlays(stages);
 
-    // System metrics row.
+    // System metrics row — sparkline cards for stages we want to track over
+    // time. The previous "End-to-End" and "Residual" cards are gone: their
+    // role (catching missing/miscounted stages, regression detection) is now
+    // served by the Gantt timeline below + per-stage sparkline trends here.
     const sysGrid = document.getElementById('latency-grid-system');
     if (sysGrid) {
         sysGrid.innerHTML = '';
         const sysOrder = [
-            { key: 'loop_dt_ms',           title: 'Loop'        },
-            { key: 'e2e_obs_to_action_ms', title: 'End-to-End'  },
-            { key: 'motor_read_ms',        title: 'Motor read'  },
-            { key: 'action_send_ms',       title: 'Action send' },
+            { key: 'loop_dt_ms',     title: 'Loop'        },
+            { key: 'motor_read_ms',  title: 'Motor read'  },
+            { key: 'action_send_ms', title: 'Action send' },
         ];
         for (const item of sysOrder) {
             const stage = stages[item.key];
@@ -2255,23 +2433,6 @@ function _updateLatencyDashboard(data) {
             _renderLatencyCard(sysGrid, item.key, item.title,
                 stage.p50 ?? 0, stage.p95 ?? null,
                 budgets[item.key], sparkPoints, _LAT_TOOLTIPS[item.key]);
-        }
-
-        // Residual: classify by absolute magnitude (negative is fine but
-        // surprising; either direction past the budget is worth flagging).
-        const residual = stages.residual_ms;
-        if (residual) {
-            const card = document.createElement('div');
-            card.className = 'latency-card';
-            card.title = _LAT_TOOLTIPS.residual_ms;
-            const absP95 = Math.abs(residual.p95 ?? 0);
-            const cls = _classifyLatency(absP95, budgets.residual_ms_abs);
-            card.innerHTML = `
-                <div class="latency-card-title">Residual (e2e − sum of stages)</div>
-                <div class="latency-card-value ${cls}">${(residual.p50 ?? 0).toFixed(2)} ms <span class="latency-card-sub">p95 ${(residual.p95 ?? 0).toFixed(2)}</span></div>
-                <div class="latency-card-sub">Near zero means the breakdown accounts for everything.</div>
-            `;
-            sysGrid.appendChild(card);
         }
 
         // Overrun ratio.
@@ -2292,6 +2453,9 @@ function _updateLatencyDashboard(data) {
         `;
         sysGrid.appendChild(ovCard);
     }
+
+    // Gantt timeline — pick one representative iteration and draw it.
+    _renderGantt(data.iterations || {});
 
     // Per-camera cards.
     const camGrid = document.getElementById('latency-grid-cameras');
