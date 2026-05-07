@@ -871,14 +871,6 @@ _per_episode_source_cache: dict[str, dict[str, str]] = {}
 _per_episode_warnings_cache: dict[str, list[str]] = {}
 
 
-def _per_episode_source_for(dataset_id: str, name: str) -> str | None:
-    """Return ``"declared"`` / ``"detected"`` / ``None`` for a feature on a
-    previously-detected dataset. Reads the cache populated by
-    :func:`_detect_per_episode_features`.
-    """
-    return _per_episode_source_cache.get(dataset_id, {}).get(name)
-
-
 def _per_episode_warnings_for(dataset_id: str) -> list[str]:
     """Return the (possibly empty) warning list cached by the last
     detector run for ``dataset_id``."""
@@ -923,7 +915,7 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
     # column (e.g. reward) initialized to a constant fill would look
     # uniform-per-episode and be silently coerced to whole-episode by
     # the staging endpoint — even though the schema says is_per_episode=false.
-    declared_per_episode: set[str] = set()
+    declared: set[str] = set()
     declared_not_per_episode: set[str] = set()
     candidate_features: list[str] = []
     for name, ft in dataset.meta.features.items():
@@ -933,18 +925,15 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
             continue
         if name == "action" or name.startswith("observation."):
             continue
-        if "per_episode" in ft:
-            if bool(ft["per_episode"]):
-                declared_per_episode.add(name)
-            else:
-                declared_not_per_episode.add(name)
-            # Either way, skip inference for this feature — declared wins.
+        declared_pe = ft.get("per_episode") if "per_episode" in ft else None
+        if declared_pe is False:
+            declared_not_per_episode.add(name)
             continue
         # Vectors and matrices can't reasonably be "uniform per episode" — skip.
         shape = ft.get("shape") or [1]
         if len(shape) > 1 or (len(shape) == 1 and shape[0] != 1):
             continue
-        if ft.get("per_episode") is True:
+        if declared_pe is True:
             declared.add(name)
             # Still scan declared features below — to verify the data
             # actually matches the declaration. If it doesn't, we trust
@@ -958,7 +947,9 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
         # Still record any declared per-episode features even when there's
         # nothing to infer (e.g. all features are declared one way or the
         # other already).
-        _per_episode_features_cache[dataset_id] = set(declared_per_episode)
+        _per_episode_features_cache[dataset_id] = set(declared)
+        _per_episode_source_cache[dataset_id] = source_map
+        _per_episode_warnings_cache[dataset_id] = warnings
         return _per_episode_features_cache[dataset_id]
 
     data_dir = Path(dataset.root) / "data"
@@ -1012,11 +1003,6 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
         else:
             if is_uniform:
                 per_episode.add(name)
-    # Declared overrides win over inference: add explicit-true, drop
-    # explicit-false (the latter shouldn't appear in `per_episode` since
-    # it was filtered out of candidate_features, but defensive belt+braces).
-    per_episode |= declared_per_episode
-    per_episode -= declared_not_per_episode
                 source_map[name] = "detected"
 
     _per_episode_features_cache[dataset_id] = per_episode
@@ -1166,7 +1152,7 @@ def _build_features_schema(
             dtype=str(ft.get("dtype", "")),
             shape=shape_list,
             names=names,
-            is_per_episode=declared_per_episode or name in per_episode,
+            is_per_episode=is_per_ep or name in per_episode,
             per_episode_source=per_episode_source.get(name),
             observed_min=obs_min,
             observed_max=obs_max,
@@ -1475,6 +1461,110 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
 # ── Schema-add endpoints (in-place column add) ─────────────────────────
 
 
+def _migrate_next_success_inplace(dataset) -> None:
+    """Collapse per-frame ``next.success`` (bool) into per-episode ``success`` (int8 tri-state).
+
+    ``lerobot-eval`` rollouts on ``main`` write ``next.success`` as a per-frame
+    boolean column — typically all-False except the success-transition frame.
+    The new ``success`` feature is per-episode int8 tri-state (-1/0/+1). The
+    rename machinery only handles same-dtype renames, so this is a small
+    bespoke migration.
+
+    Mapping:
+      * any frame with ``next.success == True`` → +1 (success)
+      * all frames False                        → -1 (failure)
+
+    Then ``next.success`` is dropped. info.json + per-episode stats are
+    updated by the underlying ``add_features_inplace`` /
+    ``remove_features_inplace`` primitives.
+
+    Pre: ``next.success`` exists in ``dataset.meta.features`` with bool dtype,
+    and ``success`` does NOT exist. Caller (``add_default_features``) gates on
+    these. No-op for empty datasets — the underlying primitives raise.
+    """
+    import os
+
+    import numpy as np
+
+    from lerobot.datasets.dataset_tools import (
+        _add_new_feature_stats_to_episodes,
+        add_features_inplace,
+        remove_features_inplace,
+    )
+    from lerobot.datasets.utils import DATA_DIR
+
+    work_root = Path(dataset.root)
+    data_dir = work_root / DATA_DIR
+    parquet_files = sorted(data_dir.glob("*/*.parquet"))
+    if not parquet_files:
+        raise ValueError(f"No parquet files found in {data_dir}")
+
+    # ── Pass 1: compute per-episode tri-state (any-True → +1, else -1) ──
+    # next.success may be stored as scalar bool or shape-[1] list-of-bool.
+    # Coerce element extraction so both layouts collapse the same way.
+    def _scalarize(v: Any) -> bool:
+        if hasattr(v, "__len__") and not isinstance(v, (bytes, str)):
+            return bool(v[0]) if len(v) else False
+        return bool(v)
+
+    per_episode_value: dict[int, int] = {}
+    for shard in parquet_files:
+        df = pd.read_parquet(shard, columns=["episode_index", "next.success"])
+        for ep_idx, group in df.groupby("episode_index"):
+            ep_idx_int = int(ep_idx)
+            if per_episode_value.get(ep_idx_int) == 1:
+                continue  # already a success — multi-shard episode, no need to recheck
+            any_true = any(_scalarize(v) for v in group["next.success"].tolist())
+            per_episode_value[ep_idx_int] = 1 if any_true else -1
+
+    # ── Pass 2: add `success` int8[1] column with fill=0 ────────────────
+    # Reuses existing primitive so info.json + episode stats get the right
+    # entries (per_episode=True hint is preserved into info.json).
+    add_features_inplace(
+        dataset,
+        features={
+            "success": (
+                0,
+                {"dtype": "int8", "shape": [1], "names": None, "per_episode": True},
+            )
+        },
+        recompute_stats=False,  # we'll overwrite the column in pass 3 — stats
+                                # would be wrong if computed off the all-zeros fill
+    )
+
+    # ── Pass 3: rewrite each shard's `success` column from per_episode_value ──
+    pending_renames: list[tuple[Path, Path]] = []
+    try:
+        for shard in parquet_files:
+            df = pd.read_parquet(shard)
+            mapped = df["episode_index"].map(
+                lambda i: per_episode_value.get(int(i), 0)
+            )
+            df["success"] = pd.Series(mapped.to_numpy(), dtype=np.dtype("int8"))
+            tmp = shard.with_suffix(shard.suffix + ".tmp")
+            df.to_parquet(tmp, compression="snappy", index=False)
+            pending_renames.append((tmp, shard))
+    except Exception:
+        for tmp, _ in pending_renames:
+            if tmp.exists():
+                tmp.unlink()
+        raise
+    for tmp, final in pending_renames:
+        os.replace(tmp, final)
+
+    # ── Pass 4: recompute stats for `success` from the rewritten column ──
+    # add_features_inplace was called with recompute_stats=False, so stats
+    # are absent. Computing here (after pass 3 wrote correct values) avoids
+    # stale stats from the all-zeros initial fill. The helper overwrites
+    # existing stats columns; we wrote none, so it just adds them.
+    _add_new_feature_stats_to_episodes(
+        work_root, {"success": dataset.meta.features["success"]}
+    )
+
+    # ── Pass 5: drop next.success (drops shard column + stats + info.json) ──
+    remove_features_inplace(dataset, ["next.success"])
+
+
 # Default features the GUI offers to add via the banner. Any keys the user's
 # dataset is missing get appended in a single ``add_features_inplace`` call;
 # this is the convenience layer on top of the generic POST .../features.
@@ -1495,9 +1585,11 @@ _DEFAULT_FEATURE_SPECS = {
     "success": {
         "fill_value": 0,
         "info": {"dtype": "int8", "shape": [1], "names": None, "per_episode": True},
-        # next.done is bool, success is int8 tri-state — semantics differ
-        # (True/False vs success/unmarked/failure). Skipping auto-rename
-        # for safety; the user can still convert by hand if they want.
+        # next.success (bool, per-frame, written by lerobot-eval rollouts)
+        # can't be a plain rename target — dtype + cardinality both differ
+        # (per-frame bool → per-episode int8 tri-state). Migration is
+        # handled separately by _migrate_next_success_inplace, invoked from
+        # add_default_features before the rename/add planning loop.
         "rename_from": [],
     },
 }
@@ -1660,6 +1752,25 @@ async def add_default_features(dataset_id: str) -> AddFeatureResponse:
     async with _app_state.get_lock(dataset_id):
         dataset = _app_state.datasets[dataset_id]
 
+        # Special-case migration: next.success (bool, per-frame) → success
+        # (int8 tri-state, per-episode). Rename machinery rejects dtype
+        # changes, so this is a bespoke transform run before the planner.
+        # Gated on next.success being bool to avoid stomping unexpected dtypes.
+        migrated_next_success = False
+        if (
+            "next.success" in dataset.meta.features
+            and "success" not in dataset.meta.features
+            and dataset.meta.features["next.success"].get("dtype") == "bool"
+        ):
+            try:
+                _migrate_next_success_inplace(dataset)
+                migrated_next_success = True
+            except Exception as e:
+                logger.exception(
+                    f"_migrate_next_success_inplace failed for {dataset_id}: {e}"
+                )
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
         # Plan: split missing defaults into renames (alternate exists +
         # compatible) vs adds (everything else).
         renames: dict[str, str] = {}
@@ -1689,7 +1800,7 @@ async def add_default_features(dataset_id: str) -> AddFeatureResponse:
             else:
                 to_add[name] = (spec["fill_value"], target_info)
 
-        if not renames and not to_add:
+        if not renames and not to_add and not migrated_next_success:
             return AddFeatureResponse(
                 added=[], renamed=[], info=_dataset_info_from(dataset_id, dataset)
             )
@@ -1712,9 +1823,12 @@ async def add_default_features(dataset_id: str) -> AddFeatureResponse:
             raise HTTPException(status_code=500, detail=str(e)) from e
 
         _refresh_dataset_after_schema_change(dataset_id)
+        renamed_pairs = [f"{old}→{new}" for old, new in renames.items()]
+        if migrated_next_success:
+            renamed_pairs.append("next.success→success")
         return AddFeatureResponse(
             added=sorted(to_add.keys()),
-            renamed=sorted(f"{old}→{new}" for old, new in renames.items()),
+            renamed=sorted(renamed_pairs),
             info=_dataset_info_from(dataset_id, dataset),
         )
 
@@ -2267,6 +2381,7 @@ async def get_frames_batch(
 @router.get("/{dataset_id:path}/cache/stats")
 async def get_cache_stats(dataset_id: str) -> dict[str, Any]:
     """Get frame cache statistics."""
+    del dataset_id  # URL-scoped for symmetry with sibling routes; cache is global.
     return _app_state.frame_cache.stats()
 
 
