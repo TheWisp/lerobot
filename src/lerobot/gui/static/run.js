@@ -2193,12 +2193,12 @@ function _budgetsFromTarget(targetPeriodMs) {
 // attribute. Keep terse — they should answer "what is this and why does
 // the color change" in two sentences.
 const _LAT_TOOLTIPS = {
-    loop_dt_ms: 'Wall-clock time per iteration (work only; sleep excluded). Yellow when ≥70% of the 1000/FPS budget; red when over budget.',
-    e2e_obs_to_action_ms: 'Time from the oldest input timestamp (typically a camera frame) to the moment the action was sent over the bus. Captures input staleness — "how old was the world model the action committed to". Differs from Loop because it spans more than one iteration when frames are stale.',
+    loop_dt_ms: 'Wall-clock time per iteration (work only; sleep excluded). The per-iteration budget is 1000 ms ÷ target FPS — at 60 fps that is 16.67 ms; at 30 fps, 33.33 ms. Yellow at ≥70% of budget; red when over.',
+    e2e_obs_to_action_ms: 'Time from the oldest input timestamp (typically a camera frame) to the moment the action was sent over the bus. Captures input staleness — "how old was the world model the action committed to". Differs from Loop because it includes how stale the camera frame already was when the iteration started.',
     motor_read_ms: 'Cost of bus.sync_read("Present_Position") inside get_observation. Includes Feetech/Dynamixel round-trip time and any retries.',
     action_send_ms: 'Cost of bus.sync_write("Goal_Position"). Fire-and-forget on Feetech, so this is bus-TX only — not motor motion.',
     residual_ms: 'e2e − (max camera staleness + post-consume stages). Should be near zero. Persistent positive residual means a stage is happening that we are not measuring (GIL pause, GC, queue wait).',
-    overrun: 'Fraction of iterations where work time exceeded the FPS budget. Sleep is excluded.',
+    overrun: 'Fraction of iterations whose work time exceeded the per-iteration budget (1000 ms ÷ target FPS). Sleep time is excluded — this only fires when the work itself is too slow to sustain the target rate.',
     cam_stale: 'Age of the cached camera frame at the moment the consumer reads it (now − cam.latest_timestamp). Yellow when p95 exceeds ~1.2× the camera frame period.',
     cam_period: 'Wall-clock interval between successive frame captures by the camera grab thread. Inverse is effective FPS.',
 };
