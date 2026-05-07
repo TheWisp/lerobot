@@ -109,14 +109,28 @@ class LatencyAggregator:
             (r["t"], r[key]) for r in self._records if key in r and r[key] is not None and r["t"] >= cutoff
         ]
 
-    def snapshot(self, percentiles: tuple[float, ...] = (50, 95, 99)) -> dict[str, Any]:
+    def snapshot(
+        self,
+        percentiles: tuple[float, ...] = (50, 95, 99),
+        series_window_s: float | None = None,
+        series_max_points: int = 60,
+    ) -> dict[str, Any]:
         """Compact dict for stderr summary / GUI overlay polling.
+
+        Args:
+          percentiles: which percentiles to compute per stage.
+          series_window_s: when set, attach a downsampled time-series per stage
+            (suitable for sparklines), trimmed to the last ``series_window_s``
+            seconds and capped at ``series_max_points`` points.
 
         Postconditions:
           - Always contains ``n_records``, ``dropped_records``, ``overrun_ratio``,
             ``stages``.
-          - ``stages`` maps each ``*_ms`` key to a dict of ``{f"p{int(p)}": ms,
-            ..., "count": n}``. Empty if the aggregator has no records.
+          - ``stages`` maps each ``*_ms`` key to a dict of
+            ``{f"p{int(p)}": ms, ..., "count": n}``.
+          - When ``series_window_s`` is set, also contains ``series`` —
+            ``stage_key -> [[t, value], ...]`` (lists, not tuples, so the dict
+            is JSON-serializable).
         """
         snap: dict[str, Any] = {
             "n_records": len(self._records),
@@ -124,7 +138,8 @@ class LatencyAggregator:
             "overrun_ratio": self.overrun_ratio(),
             "stages": {},
         }
-        for key in self.stage_keys():
+        keys = self.stage_keys()
+        for key in keys:
             vals = self.values(key)
             if not vals:
                 continue
@@ -134,4 +149,16 @@ class LatencyAggregator:
             }
             stage_dict["count"] = len(vals)
             snap["stages"][key] = stage_dict
+
+        if series_window_s is not None:
+            assert series_max_points > 0
+            snap["series"] = {}
+            for key in keys:
+                ts = self.time_series(key, last_n_seconds=series_window_s)
+                if not ts:
+                    continue
+                stride = max(1, len(ts) // series_max_points)
+                downsampled = ts[::stride][-series_max_points:]
+                snap["series"][key] = [[t, v] for t, v in downsampled]
+
         return snap

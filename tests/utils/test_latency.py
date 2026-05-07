@@ -14,16 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for LatencyAggregator and LatencyTracer (V1 phase 1)."""
+"""Unit tests for LatencyAggregator, LatencyTracer, LatencySnapshotWriter."""
 
 from __future__ import annotations
 
+import json
 import math
 import time
+from pathlib import Path
 
 import pytest
 
-from lerobot.utils.latency import LatencyAggregator, LatencyTracer
+from lerobot.utils.latency import (
+    LatencyAggregator,
+    LatencySnapshotWriter,
+    LatencyTracer,
+)
 
 # ---------------------------------------------------------------------------
 # LatencyAggregator
@@ -301,3 +307,68 @@ class TestOverhead:
 
         # Strict goal is ~10 µs; CI is noisy. 200 µs catches a 20× regression.
         assert per_iter_us < 200.0, f"per-iter overhead {per_iter_us:.1f} µs > 200 µs"
+
+
+# ---------------------------------------------------------------------------
+# Snapshot series + LatencySnapshotWriter
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotSeries:
+    def test_snapshot_with_series_window(self):
+        agg = LatencyAggregator()
+        for i in range(60):
+            agg.ingest({"t": float(i), "loop_dt_ms": float(i)})
+        snap = agg.snapshot(series_window_s=10.0, series_max_points=10)
+        assert "series" in snap
+        assert "loop_dt_ms" in snap["series"]
+        series = snap["series"]["loop_dt_ms"]
+        assert len(series) <= 10
+        # Latest t in deque is 59; window is 10s → entries with t >= 49.
+        for t, _v in series:
+            assert t >= 49.0
+
+    def test_snapshot_without_series(self):
+        agg = LatencyAggregator()
+        agg.ingest({"t": 0.0, "v_ms": 1.0})
+        snap = agg.snapshot()
+        assert "series" not in snap
+
+
+class TestSnapshotWriter:
+    def test_first_write_creates_file(self, tmp_path: Path):
+        agg = LatencyAggregator()
+        agg.ingest({"t": 0.0, "loop_dt_ms": 12.5})
+        writer = LatencySnapshotWriter(tmp_path, interval_s=0.0)
+        wrote = writer.maybe_write(agg)
+        assert wrote
+        assert writer.path.exists()
+        data = json.loads(writer.path.read_text())
+        assert data["loop_kind"] == "teleop"
+        assert "stages" in data
+        assert "loop_dt_ms" in data["stages"]
+        assert "t" in data
+
+    def test_throttle_skips_within_interval(self, tmp_path: Path):
+        agg = LatencyAggregator()
+        agg.ingest({"t": 0.0, "loop_dt_ms": 1.0})
+        writer = LatencySnapshotWriter(tmp_path, interval_s=10.0)
+        assert writer.maybe_write(agg, now=100.0) is True
+        # 1 s later: still within 10 s window — skip.
+        assert writer.maybe_write(agg, now=101.0) is False
+        # 11 s later: write again.
+        assert writer.maybe_write(agg, now=111.0) is True
+
+    def test_invalid_interval_rejected(self, tmp_path: Path):
+        with pytest.raises(AssertionError):
+            LatencySnapshotWriter(tmp_path, interval_s=-1)
+
+    def test_atomic_replace_no_partial_file(self, tmp_path: Path):
+        """tmp file must not linger after a successful write."""
+        agg = LatencyAggregator()
+        agg.ingest({"t": 0.0, "v_ms": 1.0})
+        writer = LatencySnapshotWriter(tmp_path, interval_s=0.0)
+        writer.maybe_write(agg)
+        assert writer.path.exists()
+        tmp = tmp_path / "latency_snapshot.json.tmp"
+        assert not tmp.exists()

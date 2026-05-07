@@ -20,6 +20,7 @@ See ``src/lerobot/gui/docs/latency_monitoring.md`` for the design.
 """
 
 from lerobot.utils.latency.aggregator import LatencyAggregator
+from lerobot.utils.latency.snapshot import LatencySnapshotWriter
 from lerobot.utils.latency.tracer import LatencyTracer
 
-__all__ = ["LatencyAggregator", "LatencyTracer"]
+__all__ = ["LatencyAggregator", "LatencySnapshotWriter", "LatencyTracer"]

@@ -42,6 +42,11 @@ router = APIRouter(prefix="/api/run", tags=["run"])
 # context. The constant assignment itself isn't a UP041 target.
 _TIMEOUT_EXCS: tuple[type[BaseException], ...] = (TimeoutError, asyncio.TimeoutError)
 
+# Where the teleop subprocess writes its latency_snapshot.json. The frontend
+# reads this via /api/run/latency-metrics (cross-process). Mirrors the RLT
+# pattern (outputs/rlt_online/metrics.json).
+LATENCY_OUTPUT_DIR = "outputs/teleop"
+
 _app_state: AppState = None  # type: ignore
 
 
@@ -530,6 +535,10 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
     args.extend(_profile_to_cli_args(req.robot, "robot"))
     args.extend(_profile_to_cli_args(req.teleop, "teleop"))
     args.append(f"--fps={req.fps}")
+    # Always-on latency monitoring for GUI sessions; the GUI polls
+    # outputs/teleop/latency_snapshot.json for the live overlay.
+    args.append("--latency_monitor=true")
+    args.append(f"--latency_output_dir={LATENCY_OUTPUT_DIR}")
 
     # Ensure debug model is loaded if selected (lazy load, stays warm after teleop)
     extra_env = None
@@ -725,6 +734,34 @@ async def get_rlt_metrics() -> dict:
         "success_rate": 0,
         "total_successes": 0,
         "total_episodes": 0,
+        "series": {},
+    }
+
+
+@router.get("/latency-metrics")
+async def get_latency_metrics() -> dict:
+    """Return the latest latency snapshot written by the teleop subprocess.
+
+    The teleop process atomically replaces ``outputs/teleop/latency_snapshot.json``
+    once per second (see ``LatencySnapshotWriter``). This endpoint reads that
+    file. Returns an empty stub when no snapshot exists yet (e.g. before the
+    first second of a fresh teleop session, or when teleop isn't running).
+    """
+    snapshot_path = Path(LATENCY_OUTPUT_DIR) / "latency_snapshot.json"
+    try:
+        if snapshot_path.exists():
+            with open(snapshot_path, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:  # noqa: BLE001
+        # Atomic-replace race: a concurrent rename could leave the path
+        # momentarily missing or the file partially-readable on slow disks.
+        # Either is harmless — the next poll will succeed.
+        logger.debug("latency snapshot read failed: %s", e)
+    return {
+        "n_records": 0,
+        "dropped_records": 0,
+        "overrun_ratio": 0.0,
+        "stages": {},
         "series": {},
     }
 

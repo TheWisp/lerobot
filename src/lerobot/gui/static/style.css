@@ -333,6 +333,28 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .rlt-chart-box { background: #111; border: 1px solid #1a1a3e; border-radius: 4px; padding: 6px; display: flex; flex-direction: column; }
 .rlt-chart-title { font-size: 10px; color: #666; margin-bottom: 2px; }
 .rlt-chart-box canvas { width: 100% !important; flex: 1; min-height: 40px; max-height: 80px; }
+
+/* Latency dashboard — same visual language as the RL dashboard. */
+.latency-dashboard { flex: 1; display: flex; flex-direction: column; overflow-y: auto; background: #0a0a1a; padding: 8px; gap: 8px; }
+.latency-section { display: flex; flex-direction: column; gap: 4px; }
+.latency-section-title { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; padding: 0 4px; }
+.latency-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 6px; }
+.latency-card { background: #111; border: 1px solid #1a1a3e; border-radius: 4px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; min-height: 70px; }
+.latency-card-title { font-size: 10px; color: #888; }
+.latency-card-value { font-size: 16px; font-family: monospace; color: #e0e0e0; }
+.latency-card-value.ok { color: #2ecc71; }
+.latency-card-value.warn { color: #f1c40f; }
+.latency-card-value.bad { color: #e74c3c; }
+.latency-card-sub { font-size: 10px; color: #666; font-family: monospace; }
+.latency-card canvas { width: 100% !important; height: 28px !important; }
+.latency-cam-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px; }
+.latency-cam-card { background: #111; border: 1px solid #1a1a3e; border-radius: 4px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+.latency-cam-card-title { font-size: 11px; color: #ccc; font-weight: 600; }
+.latency-cam-stat { display: flex; justify-content: space-between; font-size: 11px; color: #888; font-family: monospace; }
+.latency-cam-stat b { color: #e0e0e0; font-weight: normal; }
+.latency-empty { padding: 12px; color: #666; font-size: 11px; font-style: italic; grid-column: 1 / -1; }
+.latency-meta { display: flex; gap: 16px; padding: 4px 8px; font-size: 10px; color: #555; font-family: monospace; }
+.latency-meta span { white-space: nowrap; }
 .run-terminals-split { flex: 1; display: flex; flex-direction: row; overflow: hidden; }
 .run-terminal-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .run-terminal-panel + .run-terminal-panel { border-left: 1px solid #0f3460; }
