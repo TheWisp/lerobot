@@ -990,6 +990,24 @@ def _sweep_orphan_tmp_shards(dataset_root: Path | str) -> int:
     return removed
 
 
+def _is_recorded_feature(name: str) -> bool:
+    """True for ``action`` and ``observation.*`` features.
+
+    These are recorded sensor / control data — modifying or removing them
+    breaks the contract that downstream components (training pipelines,
+    normalization stats, eval rollouts) rely on. Used by the in-place
+    schema-mutation primitives (``remove_features_inplace``,
+    ``rename_features_inplace``) to refuse operations that would corrupt
+    these columns.
+
+    Mirrors the GUI's ``isRecordedFeature`` predicate in
+    ``src/lerobot/gui/static/feature_editing.js`` and the inline check in
+    ``src/lerobot/gui/api/edits.py::_validate_feature_edit``. If you
+    update one, update the others.
+    """
+    return name == "action" or name.startswith("observation.")
+
+
 def _atomic_swap_files(rename_pairs: list[tuple[Path, Path]]) -> None:
     """Atomically swap a batch of files. All-or-nothing.
 
@@ -1244,6 +1262,11 @@ def remove_features_inplace(
                 f"Cannot remove image/video feature '{name}' in-place "
                 "— use the forked remove_feature() instead"
             )
+        if _is_recorded_feature(name):
+            raise ValueError(
+                f"Cannot remove recorded feature '{name}' — action / observation.* "
+                "are sensor / control data the rest of the pipeline depends on"
+            )
 
     work_root = Path(dataset.root)
     info_path = work_root / INFO_PATH
@@ -1381,6 +1404,12 @@ def rename_features_inplace(
             raise ValueError(
                 f"Cannot rename image/video feature '{old}' in-place "
                 "— use the forked rename_feature() instead"
+            )
+        if _is_recorded_feature(old) or _is_recorded_feature(new):
+            raise ValueError(
+                f"Cannot rename recorded feature in-place (refused: {old} → {new}) "
+                "— action / observation.* are sensor / control data; "
+                "use the forked rename_feature() instead if you really need this"
             )
         new_names_seen.add(new)
 

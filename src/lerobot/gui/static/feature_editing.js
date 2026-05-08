@@ -407,32 +407,71 @@
         return data;
     }
 
-    // ── Editability classification ──────────────────────────────────────
+    // ── Feature classification ──────────────────────────────────────────
+    //
+    // One source of truth for "is this feature special?" Each predicate
+    // answers a single question; higher-level predicates (isEditable,
+    // isDeletable, isHiddenByDefault) compose them. Mirrors the backend's
+    // checks in gui/api/edits.py and datasets/dataset_tools.py — keep
+    // these in sync.
+    //
+    // Categories:
+    //   internal     — auto-managed bookkeeping columns (timestamp etc.)
+    //   binary       — stored as separate files (image, video)
+    //   recorded     — sensor / control data the rest of the pipeline
+    //                  depends on (action, observation.*)
+    //   bannerManaged — has a dedicated banner / migration flow
+    //                  (reward, success); generic dialog/delete refused
 
     const DEFAULT_FEATURES = new Set([
         "timestamp", "frame_index", "episode_index", "index", "task_index",
     ]);
     const READONLY_DTYPES = new Set(["image", "video"]);
+    // DEFAULT_FEATURE_NAMES (reward / success) is declared near the top of
+    // this module — the banner handlers reference it before this section
+    // executes, so its declaration has to come first. Predicates below use
+    // that single source of truth.
+
+    function isInternalFeature(name) {
+        return DEFAULT_FEATURES.has(name);
+    }
+    function isBinaryFeature(ft) {
+        return !!ft && READONLY_DTYPES.has(ft.dtype);
+    }
+    function isRecordedFeature(name) {
+        return name === "action" || name.startsWith("observation.");
+    }
+    function isBannerManaged(name) {
+        return DEFAULT_FEATURE_NAMES.includes(name);
+    }
 
     function isEditable(name, ft) {
         if (!ft) return false;
-        if (DEFAULT_FEATURES.has(name)) return false;
-        if (READONLY_DTYPES.has(ft.dtype)) return false;
-        if (name === "action") return false;
-        if (name.startsWith("observation.")) return false;
+        if (isInternalFeature(name)) return false;
+        if (isBinaryFeature(ft)) return false;
+        if (isRecordedFeature(name)) return false;
+        return true;
+    }
+
+    function isDeletable(name, ft) {
+        // Same exclusions as isEditable (you can't drop what you can't
+        // edit — recorded data and internal bookkeeping are off-limits)
+        // PLUS banner-managed defaults (reward / success have a separate
+        // flow). Equivalent: anything you'd add via the generic dialog
+        // is also deletable via the per-row ✕ / Inspector ✕.
+        if (!ft) return false;
+        if (!isEditable(name, ft)) return false;
+        if (isBannerManaged(name)) return false;
         return true;
     }
 
     function isHiddenByDefault(name, ft) {
-        // Hidden by default: only DEFAULT_FEATURES (timestamp / frame_index /
-        // index / episode_index / task_index — internal bookkeeping) and
-        // image/video features (their own grid). action / observation.* are
-        // SHOWN by default — the user wants them on the timeline as
-        // recorded-data overlays, even though they're read-only in V1.
-        // Pin/unpin still works to override per-feature.
-        if (DEFAULT_FEATURES.has(name)) return true;
-        if (READONLY_DTYPES.has(ft.dtype)) return true;
-        return false;
+        // Hidden by default: only internal bookkeeping and binary blobs
+        // (image/video have their own grid). Recorded data (action /
+        // observation.*) is SHOWN by default as timeline overlays —
+        // the user wants to see what was recorded, even though it's
+        // read-only in V1. Pin/unpin still works to override per-feature.
+        return isInternalFeature(name) || isBinaryFeature(ft);
     }
 
     function getActiveTrim(datasetId, episodeIdx, episodeLength) {
@@ -568,6 +607,17 @@
         // Wire edit widgets (auto-staging on change). Disabled widgets are
         // skipped naturally — they have no listeners that could fire.
         wireWidgets(body);
+
+        // Inspector-card delete buttons share the same handler / confirm
+        // flow as the timeline-row delete; the only difference is the
+        // mount point. Per-episode features are hidden from the timeline
+        // rows unless pinned, so this is the primary delete path for them.
+        body.querySelectorAll(".card-delete-btn").forEach(btn => {
+            btn.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                deleteFeature(btn.getAttribute("data-feature"));
+            });
+        });
     }
 
     function renderFeatureCard(name, ft, frameFrom, frameTo, datasetId, episodeIndex, originRow, opts) {
@@ -627,11 +677,20 @@
                 `[${formatNumber(ft.observed_min)} … ${formatNumber(ft.observed_max)}]</span>`;
         }
 
+        // Inspector-card delete (✕). Same eligibility as the timeline-row
+        // ✕ — uses the shared isDeletable predicate. This is the only
+        // delete affordance for per-episode features (which are hidden
+        // from the timeline rows by default unless pinned), so it's the
+        // primary path for those.
+        const cardDeleteBtn = isDeletable(name, ft)
+            ? `<button class="card-delete-btn" data-feature="${escapeHtml(name)}" type="button" title="Delete this feature column">✕</button>`
+            : "";
         return `
             <div class="feature-card ${focused ? "focused" : ""} ${editable ? "" : "readonly"}" data-feature="${escapeHtml(name)}">
                 <div class="card-header">
                     <span class="card-name">${escapeHtml(name)}${observedRange}${headerExtras}</span>
                     <span class="card-dtype">${escapeHtml(dtype)}[${shape}]</span>
+                    ${cardDeleteBtn}
                 </div>
                 <div class="card-summary">${cardSummary(name, ft, datasetId, episodeIndex, effFrom, effTo)}</div>
                 <div class="card-widget">${widget}</div>
@@ -1284,14 +1343,11 @@
         const readonlyTag = editable ? "" : `<div class="row-readonly">read-only</div>`;
         const rowClass = editable ? "feature-row" : "feature-row readonly";
 
-        // Per-row delete (✕). Hidden for DEFAULT_FEATURES, image/video,
-        // and the default columns (reward, success) — those go through
-        // the banner / dialog flow so the user doesn't accidentally drop
-        // a column the rest of the GUI relies on.
-        const isDeletable = !DEFAULT_FEATURES.has(name)
-            && !READONLY_DTYPES.has(ft.dtype)
-            && !DEFAULT_FEATURE_NAMES.includes(name);
-        const deleteBtn = isDeletable
+        // Per-row delete (✕). isDeletable handles all the exclusions —
+        // recorded data (action/observation.*), internal bookkeeping
+        // (timestamp/etc.), banner-managed defaults (reward/success),
+        // and binary blobs (image/video).
+        const deleteBtn = isDeletable(name, ft)
             ? `<button class="row-delete-btn" data-feature="${escapeHtml(name)}" type="button" title="Delete this feature column">✕</button>`
             : "";
 

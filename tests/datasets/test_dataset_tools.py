@@ -1783,18 +1783,24 @@ def test_add_features_inplace_recomputes_stats(small_dataset_no_video):
 
 
 def test_rename_features_inplace_renames_data_columns(small_dataset_no_video):
-    """Renaming a column updates parquet shards in place; videos untouched."""
+    """Renaming a column updates parquet shards in place; videos untouched.
+
+    Uses a non-recorded custom feature — recorded features (action /
+    observation.*) are guarded by the rename in-place primitive itself
+    and have a dedicated validation test.
+    """
     import pyarrow.parquet as pq
 
     ds = small_dataset_no_video
-    rename_features_inplace(ds, renames={"observation.state": "obs_state"})
+    add_features_inplace(ds, features={"to_rename": (0.0, {"dtype": "float32", "shape": [1], "names": None})})
+    rename_features_inplace(ds, renames={"to_rename": "renamed"})
 
-    assert "obs_state" in ds.meta.features
-    assert "observation.state" not in ds.meta.features
+    assert "renamed" in ds.meta.features
+    assert "to_rename" not in ds.meta.features
 
     for f in (ds.root / "data").rglob("*.parquet"):
         cols = pq.read_table(f).column_names
-        assert "obs_state" in cols and "observation.state" not in cols
+        assert "renamed" in cols and "to_rename" not in cols
 
 
 def test_rename_features_inplace_migrates_stats_columns(small_dataset_no_video):
@@ -1802,13 +1808,14 @@ def test_rename_features_inplace_migrates_stats_columns(small_dataset_no_video):
     import pyarrow.parquet as pq
 
     ds = small_dataset_no_video
-    rename_features_inplace(ds, renames={"observation.state": "obs_state"})
+    add_features_inplace(ds, features={"to_rename": (0.0, {"dtype": "float32", "shape": [1], "names": None})})
+    rename_features_inplace(ds, renames={"to_rename": "renamed"})
 
     eps_dir = ds.root / "meta" / "episodes"
     for f in eps_dir.rglob("*.parquet"):
         cols = pq.read_table(f).column_names
-        assert any(c.startswith("stats/obs_state/") for c in cols)
-        assert not any(c.startswith("stats/observation.state/") for c in cols)
+        assert any(c.startswith("stats/renamed/") for c in cols)
+        assert not any(c.startswith("stats/to_rename/") for c in cols)
 
 
 def test_rename_features_inplace_applies_spec_overrides(small_dataset_no_video):
@@ -1816,14 +1823,15 @@ def test_rename_features_inplace_applies_spec_overrides(small_dataset_no_video):
     import json
 
     ds = small_dataset_no_video
+    add_features_inplace(ds, features={"to_rename": (0.0, {"dtype": "float32", "shape": [1], "names": None})})
     rename_features_inplace(
         ds,
-        renames={"observation.state": "obs_state"},
-        spec_overrides={"obs_state": {"per_episode": False}},
+        renames={"to_rename": "renamed"},
+        spec_overrides={"renamed": {"per_episode": False}},
     )
     with open(ds.root / "meta" / "info.json") as f:
         info = json.load(f)
-    assert info["features"]["obs_state"].get("per_episode") is False
+    assert info["features"]["renamed"].get("per_episode") is False
 
 
 @pytest.mark.parametrize(
@@ -1834,6 +1842,11 @@ def test_rename_features_inplace_applies_spec_overrides(small_dataset_no_video):
         ({"observation.state": "action"}, "already exists"),
         ({"observation.state": "timestamp"}, "DEFAULT_FEATURES"),
         ({"timestamp": "ts2"}, "DEFAULT_FEATURES"),
+        # Recorded sensor / control data is not renameable in-place — the
+        # forked rename_feature() exists for the rare case where a user
+        # really needs this. Both source-side ("observation.state") and
+        # destination-side ("foo" → "action" or "observation.X") are blocked.
+        ({"observation.state": "obs_renamed"}, "recorded"),
     ],
 )
 def test_rename_features_inplace_validation(small_dataset_no_video, renames, fragment):
@@ -1874,6 +1887,10 @@ def test_remove_features_inplace_drops_data_columns(small_dataset_no_video):
     [
         ("missing_feature", "not found"),
         ("timestamp", "DEFAULT_FEATURE"),
+        # Recorded data: action / observation.* are off-limits because
+        # downstream training / eval / stats pipelines depend on them.
+        ("action", "recorded"),
+        ("observation.state", "recorded"),
     ],
 )
 def test_remove_features_inplace_validation(small_dataset_no_video, name, fragment):

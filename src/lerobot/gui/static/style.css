@@ -479,6 +479,35 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     align-items: center;
     justify-content: space-between;
     margin-bottom: 6px;
+    position: relative;
+}
+/* Inspector-card delete (✕). Mirrors the per-row ✕ on the timeline,
+   placed so per-episode features (which are hidden from the timeline
+   rows by default) still get a reachable delete affordance. Tracked
+   as I3-followup in src/lerobot/gui/docs/add_feature_review.md. */
+.feature-card .card-delete-btn {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: #888;
+    width: 18px;
+    height: 18px;
+    line-height: 16px;
+    padding: 0;
+    border-radius: 3px;
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0.3;
+    transition: opacity 0.1s, color 0.1s, border-color 0.1s, background 0.1s;
+}
+.feature-card:hover .card-delete-btn { opacity: 1; }
+.feature-card .card-delete-btn:hover {
+    color: #e57373;
+    border-color: #e57373;
+    background: #2a1a1a;
+    opacity: 1;
 }
 .feature-card .card-name { color: #4fc3f7; font-weight: 600; }
 .feature-card .card-dtype { color: #888; font-size: 10px; }
