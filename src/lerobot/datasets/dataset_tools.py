@@ -960,6 +960,506 @@ from lerobot.datasets.feature_value_edits import (  # noqa: E402, F401
 )
 
 
+# ──────────────────────────────────────────────────────────────────────
+# add_features_inplace — schema-additive in-place column add
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _sweep_orphan_tmp_shards(dataset_root: Path | str) -> int:
+    """Delete ``.tmp`` siblings under ``data/`` and ``meta/`` left by a crashed save.
+
+    Safe to call on dataset open. Only removes files matching ``*.tmp`` —
+    real shards and metadata files are untouched. Returns the number of
+    files deleted.
+    """
+    root = Path(dataset_root)
+    removed = 0
+    for sub in ("data", "meta"):
+        sub_dir = root / sub
+        if not sub_dir.exists():
+            continue
+        for tmp in sub_dir.rglob("*.tmp"):
+            try:
+                tmp.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
+
+
+def add_features_inplace(
+    dataset: LeRobotDataset,
+    features: dict[str, tuple],
+    *,
+    recompute_stats: bool = True,
+) -> None:
+    """Add new feature columns to an existing dataset in place.
+
+    Each entry in ``features`` maps a feature name to ``(fill_value, feature_info)``:
+
+    - ``fill_value`` is a scalar broadcast across every row of every shard.
+    - ``feature_info`` follows the same schema used by :func:`modify_features`
+      (``{"dtype": ..., "shape": ..., "names": ...}``) and may include an
+      optional ``"per_episode": True`` hint. The hint is preserved verbatim
+      through ``info.json`` so consumers (e.g. the GUI editor) can coerce
+      sub-range edits to whole episodes.
+
+    Videos are NOT touched. Only ``data/chunk-*/file-*.parquet`` shards and
+    ``meta/info.json`` are rewritten. Per-episode stats columns for the new
+    feature(s) are populated when ``recompute_stats=True`` (default).
+
+    Atomicity: each parquet shard is written to a ``.tmp`` sibling and
+    renamed via ``os.replace`` (per-file atomic). ``info.json`` is rewritten
+    last. A crash mid-rename can leave a partially applied save; orphan
+    ``.tmp`` files are removable via :func:`_sweep_orphan_tmp_shards`.
+
+    Args:
+        dataset: The dataset to extend. Must already be loaded.
+        features: ``{name: (fill_value, feature_info)}`` for each new column.
+        recompute_stats: When True (default), recompute per-episode stats
+            for the new columns by re-aggregating each affected episode's
+            data. Pass False to skip if stats will be computed separately.
+
+    Raises:
+        ValueError: For empty input, name collisions, ``DEFAULT_FEATURES``
+            collisions, missing ``dtype``/``shape``, malformed ``shape``,
+            or non-bool ``per_episode``.
+    """
+    from lerobot.datasets.utils import DATA_DIR, INFO_PATH
+    from lerobot.utils.constants import DEFAULT_FEATURES
+    from lerobot.utils.io_utils import write_json
+
+    if not features:
+        raise ValueError("features dict is empty")
+
+    required_keys = {"dtype", "shape"}
+    existing = dataset.meta.features
+    for name, (_, info) in features.items():
+        # DEFAULT_FEATURES check first — these names also appear in
+        # `dataset.meta.features` (auto-merged at create time), so the
+        # generic "already exists" message would otherwise mask them.
+        if name in DEFAULT_FEATURES:
+            raise ValueError(f"Feature '{name}' is a reserved DEFAULT_FEATURE")
+        if name in existing:
+            raise ValueError(f"Feature '{name}' already exists in dataset")
+        if not required_keys.issubset(info.keys()):
+            raise ValueError(f"feature_info for '{name}' must include keys: {required_keys}")
+        shape = info["shape"]
+        if (
+            not isinstance(shape, (list, tuple))
+            or len(shape) == 0
+            or not all(isinstance(d, int) and d > 0 for d in shape)
+        ):
+            raise ValueError(
+                f"feature_info['shape'] for '{name}' must be a non-empty list of positive ints"
+            )
+        if "per_episode" in info and not isinstance(info["per_episode"], bool):
+            raise ValueError(f"feature_info['per_episode'] for '{name}' must be a bool")
+
+    work_root = Path(dataset.root)
+    info_path = work_root / INFO_PATH
+    data_dir = work_root / DATA_DIR
+
+    parquet_files = sorted(data_dir.glob("*/*.parquet"))
+    if not parquet_files:
+        raise ValueError(f"No parquet files found in {data_dir}")
+
+    # Build the new feature dict (declared schema only — fills happen in shards).
+    new_feature_specs = {name: dict(info) for name, (_, info) in features.items()}
+
+    # ── Pass 1: write .tmp shards with appended columns ────────────────
+    # For each new feature, build a numpy column with the declared dtype
+    # so the on-disk parquet matches the schema. Without the explicit
+    # ``astype``, pandas would auto-promote (float32 → float64, int8 →
+    # int64) when constructing the Series from a Python list of scalars.
+    pending_renames: list[tuple[Path, Path]] = []  # [(tmp, final), ...]
+    try:
+        for shard_path in parquet_files:
+            df = pd.read_parquet(shard_path)
+            n_rows = len(df)
+            for name, (fill, info) in features.items():
+                col_values = _shape_value_for_column(fill, info, n_rows)
+                dtype_str = info.get("dtype", "")
+                shape = list(info.get("shape") or [1])
+                is_scalar = shape in ([], [1])
+                if dtype_str == "string":
+                    df[name] = pd.Series(col_values, dtype="object")
+                elif is_scalar and dtype_str:
+                    # Scalar columns: cast through numpy so the declared
+                    # dtype lands on disk verbatim (no float32→double drift).
+                    df[name] = pd.Series(col_values, dtype=np.dtype(dtype_str))
+                else:
+                    # Vector / matrix: pandas keeps these as object lists;
+                    # parquet stores them as fixed-size lists. The element
+                    # dtype is preserved by _shape_value_for_column already.
+                    df[name] = col_values
+            tmp_path = shard_path.with_suffix(shard_path.suffix + ".tmp")
+            df.to_parquet(tmp_path, compression="snappy", index=False)
+            pending_renames.append((tmp_path, shard_path))
+    except Exception:
+        for tmp_path, _ in pending_renames:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        raise
+
+    # ── Pass 2: rename all .tmp → final (per-file atomic) ──────────────
+    for tmp_path, final_path in pending_renames:
+        os.replace(tmp_path, final_path)
+
+    # ── Update info.json last (atomic via .tmp + rename) ───────────────
+    import json as _json
+
+    with info_path.open("r") as f:
+        info_dict = _json.load(f)
+    for name, spec in new_feature_specs.items():
+        info_dict["features"][name] = spec
+    info_tmp = info_path.with_suffix(info_path.suffix + ".tmp")
+    write_json(info_dict, info_tmp)
+    os.replace(info_tmp, info_path)
+
+    # Refresh the in-memory metadata so callers see the new schema.
+    dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
+    feature_dict_after = dataset.meta.features
+
+    # ── Compute + append stats columns for the NEW features only ───────
+    # The general-purpose ``_recompute_episode_stats_from_data`` only
+    # writes columns that already exist in the episodes parquet, so it
+    # silently drops stats for newly-added features. Handle the
+    # additive-only path here directly.
+    if recompute_stats:
+        new_feature_subset = {n: feature_dict_after[n] for n in new_feature_specs}
+        _add_new_feature_stats_to_episodes(work_root, new_feature_subset)
+
+    try:
+        dataset.finalize()
+    except Exception as e:
+        logging.warning(f"dataset.finalize() failed (non-fatal for in-place schema add): {e}")
+
+
+def remove_features_inplace(
+    dataset: "LeRobotDataset",
+    names: list[str] | str,
+) -> None:
+    """Remove feature columns from an existing dataset in place.
+
+    Drops the named columns from every parquet shard under ``data/``,
+    drops the matching ``stats/<feature>/*`` columns from
+    ``meta/episodes/*.parquet``, and removes the entries from
+    ``info.json``. Videos are NOT touched — refuses to remove image /
+    video features (those have on-disk filenames that need a real fork).
+
+    Args:
+        dataset: The dataset to mutate. Must already be loaded.
+        names: One feature name or a list of feature names to drop.
+
+    Raises:
+        ValueError: For empty input, missing names, ``DEFAULT_FEATURES``
+            collisions, or attempts to drop image/video features.
+    """
+    from lerobot.datasets.utils import DATA_DIR, INFO_PATH
+    from lerobot.utils.constants import DEFAULT_FEATURES
+    from lerobot.utils.io_utils import write_json
+
+    name_list = [names] if isinstance(names, str) else list(names)
+    if not name_list:
+        raise ValueError("names list is empty")
+
+    existing = dataset.meta.features
+    for name in name_list:
+        if name in DEFAULT_FEATURES:
+            raise ValueError(f"Cannot remove DEFAULT_FEATURE '{name}'")
+        if name not in existing:
+            raise ValueError(f"Feature '{name}' not found in dataset")
+        if existing[name].get("dtype") in ("image", "video"):
+            raise ValueError(
+                f"Cannot remove image/video feature '{name}' in-place "
+                "— use the forked remove_feature() instead"
+            )
+
+    work_root = Path(dataset.root)
+    info_path = work_root / INFO_PATH
+    data_dir = work_root / DATA_DIR
+
+    parquet_files = sorted(data_dir.glob("*/*.parquet"))
+    if not parquet_files:
+        raise ValueError(f"No parquet files found in {data_dir}")
+
+    # ── Pass 1: drop columns in each data shard via .tmp ───────────────
+    pending_renames: list[tuple[Path, Path]] = []
+    try:
+        for shard_path in parquet_files:
+            df = pd.read_parquet(shard_path)
+            cols_to_drop = [n for n in name_list if n in df.columns]
+            if cols_to_drop:
+                df = df.drop(columns=cols_to_drop)
+            tmp_path = shard_path.with_suffix(shard_path.suffix + ".tmp")
+            df.to_parquet(tmp_path, compression="snappy", index=False)
+            pending_renames.append((tmp_path, shard_path))
+    except Exception:
+        for tmp_path, _ in pending_renames:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        raise
+
+    for tmp_path, final_path in pending_renames:
+        os.replace(tmp_path, final_path)
+
+    # ── Drop stats columns in each episodes parquet ────────────────────
+    eps_dir = work_root / "meta" / "episodes"
+    if eps_dir.exists():
+        prefixes = [f"stats/{n}/" for n in name_list]
+        for parquet_path in sorted(eps_dir.rglob("*.parquet")):
+            edf = pd.read_parquet(parquet_path)
+            cols_to_drop = [
+                c for c in edf.columns
+                if any(c.startswith(p) for p in prefixes)
+            ]
+            if cols_to_drop:
+                edf = edf.drop(columns=cols_to_drop)
+                tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
+                edf.to_parquet(tmp_path, compression="snappy", index=False)
+                os.replace(tmp_path, parquet_path)
+
+    # ── Update info.json last (atomic via .tmp + rename) ───────────────
+    import json as _json
+
+    with info_path.open("r") as f:
+        info_dict = _json.load(f)
+    for name in name_list:
+        info_dict["features"].pop(name, None)
+
+    info_tmp = info_path.with_suffix(info_path.suffix + ".tmp")
+    write_json(info_dict, info_tmp)
+    os.replace(info_tmp, info_path)
+
+    dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
+
+    try:
+        dataset.finalize()
+    except Exception as e:
+        logging.warning(f"dataset.finalize() failed (non-fatal for remove): {e}")
+
+
+def rename_features_inplace(
+    dataset: "LeRobotDataset",
+    renames: dict[str, str],
+    *,
+    spec_overrides: dict[str, dict] | None = None,
+) -> None:
+    """Rename feature columns in an existing dataset in place.
+
+    Renames every parquet column under ``data/`` and the matching
+    ``stats/<feature>/*`` columns in ``meta/episodes/*.parquet``.
+    Updates ``info.json`` last (atomic via ``.tmp + rename``). Videos
+    are NOT touched — this function refuses to rename image / video
+    features because their on-disk filenames also encode the feature
+    name (use the forked :func:`rename_feature` for those).
+
+    Args:
+        dataset: The dataset to mutate. Must already be loaded.
+        renames: ``{old_name: new_name}``. Multiple renames are applied
+            in one pass.
+        spec_overrides: Optional ``{new_name: {key: value, ...}}`` —
+            keys merged into the renamed feature's spec in
+            ``info.json``. Useful when the rename also flips a hint
+            (e.g. ``per_episode``) that the source column didn't declare.
+
+    Raises:
+        ValueError: For empty input, missing ``old_name``, existing
+            ``new_name``, ``DEFAULT_FEATURES`` collisions, or attempts
+            to rename image/video features.
+    """
+    from lerobot.datasets.utils import DATA_DIR, INFO_PATH
+    from lerobot.utils.constants import DEFAULT_FEATURES
+    from lerobot.utils.io_utils import write_json
+
+    if not renames:
+        raise ValueError("renames dict is empty")
+
+    spec_overrides = spec_overrides or {}
+    existing = dataset.meta.features
+
+    # ── Validate ───────────────────────────────────────────────────────
+    new_names_seen: set[str] = set()
+    for old, new in renames.items():
+        # DEFAULT_FEATURES check first — these names also appear in
+        # `dataset.meta.features` (auto-merged at create time), so the
+        # "already exists" branch would otherwise mask them.
+        if old in DEFAULT_FEATURES or new in DEFAULT_FEATURES:
+            raise ValueError(
+                f"Cannot rename DEFAULT_FEATURES (refused: {old} → {new})"
+            )
+        if old not in existing:
+            raise ValueError(f"Feature '{old}' not found in dataset")
+        if new in existing and new != old:
+            raise ValueError(f"Feature '{new}' already exists in dataset")
+        if new in new_names_seen:
+            raise ValueError(f"Duplicate rename target: '{new}'")
+        if existing[old].get("dtype") in ("image", "video"):
+            raise ValueError(
+                f"Cannot rename image/video feature '{old}' in-place "
+                "— use the forked rename_feature() instead"
+            )
+        new_names_seen.add(new)
+
+    work_root = Path(dataset.root)
+    info_path = work_root / INFO_PATH
+    data_dir = work_root / DATA_DIR
+
+    parquet_files = sorted(data_dir.glob("*/*.parquet"))
+    if not parquet_files:
+        raise ValueError(f"No parquet files found in {data_dir}")
+
+    # ── Pass 1: rename columns in each data shard via .tmp ─────────────
+    pending_renames: list[tuple[Path, Path]] = []
+    try:
+        for shard_path in parquet_files:
+            df = pd.read_parquet(shard_path)
+            df = df.rename(columns=renames)
+            tmp_path = shard_path.with_suffix(shard_path.suffix + ".tmp")
+            df.to_parquet(tmp_path, compression="snappy", index=False)
+            pending_renames.append((tmp_path, shard_path))
+    except Exception:
+        for tmp_path, _ in pending_renames:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        raise
+
+    for tmp_path, final_path in pending_renames:
+        os.replace(tmp_path, final_path)
+
+    # ── Rename stats columns in each episodes parquet ──────────────────
+    eps_dir = work_root / "meta" / "episodes"
+    if eps_dir.exists():
+        for parquet_path in sorted(eps_dir.rglob("*.parquet")):
+            edf = pd.read_parquet(parquet_path)
+            col_renames: dict[str, str] = {}
+            for old, new in renames.items():
+                old_prefix = f"stats/{old}/"
+                new_prefix = f"stats/{new}/"
+                for col in edf.columns:
+                    if col.startswith(old_prefix):
+                        col_renames[col] = new_prefix + col[len(old_prefix):]
+            if col_renames:
+                edf = edf.rename(columns=col_renames)
+                tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
+                edf.to_parquet(tmp_path, compression="snappy", index=False)
+                os.replace(tmp_path, parquet_path)
+
+    # ── Update info.json last (atomic via .tmp + rename) ───────────────
+    import json as _json
+
+    with info_path.open("r") as f:
+        info_dict = _json.load(f)
+    feats = info_dict["features"]
+    for old, new in renames.items():
+        spec = dict(feats.pop(old))
+        if new in spec_overrides:
+            spec.update(spec_overrides[new])
+        feats[new] = spec
+
+    info_tmp = info_path.with_suffix(info_path.suffix + ".tmp")
+    write_json(info_dict, info_tmp)
+    os.replace(info_tmp, info_path)
+
+    # Refresh in-memory metadata.
+    dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
+
+    try:
+        dataset.finalize()
+    except Exception as e:
+        logging.warning(f"dataset.finalize() failed (non-fatal for rename): {e}")
+
+
+def _add_new_feature_stats_to_episodes(
+    dataset_root: Path,
+    new_features: dict,
+) -> None:
+    """Compute and append per-episode ``stats/<feature>/*`` columns for newly-added features.
+
+    Reads each episode's data slice for the new columns, computes stats via
+    :func:`compute_episode_stats`, and writes the resulting columns into
+    every ``meta/episodes/*.parquet`` shard. Columns that already exist are
+    overwritten; columns that don't exist are added.
+    """
+    from lerobot.datasets.compute_stats import compute_episode_stats
+    from lerobot.utils.utils import flatten_dict
+
+    work_root = Path(dataset_root)
+    data_dir = work_root / DATA_DIR
+    eps_dir = work_root / "meta" / "episodes"
+
+    # Skip image/video/string — compute_episode_stats can't compute on them
+    # and the caller path doesn't add such features anyway.
+    eligible = {
+        n: spec for n, spec in new_features.items()
+        if spec.get("dtype") not in ("image", "video", "string")
+    }
+    if not eligible:
+        return
+
+    # Collect per-episode data slices for the new columns only.
+    per_ep_data: dict[int, dict[str, np.ndarray]] = {}
+    for parquet_path in sorted(data_dir.glob("*/*.parquet")):
+        df = pd.read_parquet(parquet_path, columns=["episode_index", *eligible.keys()])
+        for ep_idx, group in df.groupby("episode_index"):
+            ep_idx = int(ep_idx)
+            ep_bucket = per_ep_data.setdefault(ep_idx, {})
+            for name in eligible:
+                col_data = group[name].values
+                if len(col_data) == 0:
+                    continue
+                first = col_data[0]
+                if isinstance(first, (list, np.ndarray)):
+                    arr = np.stack([np.asarray(v) for v in col_data])
+                else:
+                    arr = np.asarray(col_data)
+                if name in ep_bucket:
+                    ep_bucket[name] = np.concatenate([ep_bucket[name], arr], axis=0)
+                else:
+                    ep_bucket[name] = arr
+
+    if not per_ep_data:
+        return
+
+    # Compute stats per episode and gather flattened columns.
+    per_ep_flat_stats: dict[int, dict[str, Any]] = {}
+    for ep_idx, ep_arrays in per_ep_data.items():
+        stats = compute_episode_stats(ep_arrays, eligible)
+        per_ep_flat_stats[ep_idx] = flatten_dict({"stats": stats})
+
+    # Write the new columns into each episodes parquet shard. Use the same
+    # drop-and-rebuild pattern as ``_recompute_episode_stats_from_data`` so
+    # pyarrow can infer the column dtype uniformly across rows (assigning
+    # numpy arrays into freshly-added object columns confuses the writer).
+    for parquet_path in sorted(eps_dir.rglob("*.parquet")):
+        edf = pd.read_parquet(parquet_path)
+        if "episode_index" not in edf.columns:
+            continue
+        relevant_eps = [
+            ep for ep in per_ep_flat_stats if (edf["episode_index"] == ep).any()
+        ]
+        if not relevant_eps:
+            continue
+
+        rebuilt_rows = []
+        for ep_idx in relevant_eps:
+            row_idx = edf.index[edf["episode_index"] == ep_idx][0]
+            row_dict = edf.loc[row_idx].to_dict()
+            for col_name, value in per_ep_flat_stats[ep_idx].items():
+                row_dict[col_name] = value
+            rebuilt_rows.append(row_dict)
+            edf = edf.drop(index=row_idx)
+
+        new_rows_df = pd.DataFrame(rebuilt_rows)
+        edf = pd.concat([edf, new_rows_df], ignore_index=True)
+        edf = edf.sort_values("episode_index").reset_index(drop=True)
+
+        tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
+        edf.to_parquet(tmp_path, compression="snappy", index=False)
+        os.replace(tmp_path, parquet_path)
+
+
 def _fractions_to_episode_indices(
     total_episodes: int,
     splits: dict[str, float],

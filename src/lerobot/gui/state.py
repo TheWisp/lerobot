@@ -87,6 +87,18 @@ class AppState:
         """Get pending edits for a specific dataset."""
         return [e for e in self.pending_edits if e.dataset_id == dataset_id]
 
+    def pending_feature_set_edits_for_dataset(self, dataset_id: str) -> list[PendingEdit]:
+        """Pending ``feature_set`` edits scoped to one dataset.
+
+        Used as the guard for schema mutations: the schema-add path refuses
+        to run while value edits on the same dataset are queued, since
+        cross-mutation races could leave parquet shards inconsistent.
+        """
+        return [
+            e for e in self.pending_edits
+            if e.dataset_id == dataset_id and e.edit_type == "feature_set"
+        ]
+
     def is_episode_deleted(self, dataset_id: str, episode_index: int) -> bool:
         """Check if an episode is marked for deletion."""
         return any(

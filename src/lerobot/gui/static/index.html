@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=27">
+    <link rel="stylesheet" href="/static/style.css?v=31">
 </head>
 <body>
     <div class="tab-bar">
@@ -71,6 +71,20 @@
                      the same horizontal coordinate system (.row-label + .row-track),
                      so trim handles, envelope tints, the selection band, and the
                      playhead all line up across every row. -->
+                <!-- Banner offering to add MUST-have default features (reward, success)
+                     when an opened dataset's schema is missing them. Hidden by default;
+                     shown by FeatureEditing.maybeShowDefaultsBanner() on dataset open. -->
+                <div id="default-features-banner" class="default-features-banner" hidden>
+                    <span class="banner-icon">⚠️</span>
+                    <span class="banner-text">
+                        This dataset is missing default features:
+                        <strong id="banner-missing-list"></strong>.
+                        <span id="banner-rename-note" class="banner-rename-note" hidden></span>
+                    </span>
+                    <button id="banner-add-btn" class="btn-small" type="button">Add missing features</button>
+                    <button id="banner-dismiss-btn" class="btn-small secondary" type="button">Dismiss</button>
+                </div>
+
                 <div class="timeline-stack">
                     <div class="scrubber-row">
                         <div class="row-label">
@@ -368,8 +382,34 @@
     <!-- Toast notifications -->
     <div class="toast-container" id="toast-container"></div>
 
+    <!-- "Add feature" dialog (generic schema-add for non-default features). -->
+    <dialog id="add-feature-dialog" class="add-feature-dialog">
+        <form method="dialog" id="add-feature-form">
+            <h3>Add feature</h3>
+            <label>Name <input type="text" name="name" required pattern="[a-zA-Z_][a-zA-Z0-9_.]*" placeholder="e.g. quality_score"></label>
+            <label>Dtype
+                <select name="dtype">
+                    <option value="float32">float32</option>
+                    <option value="int64">int64</option>
+                    <option value="int8">int8</option>
+                    <option value="bool">bool</option>
+                    <option value="string">string</option>
+                </select>
+            </label>
+            <label>Shape <input type="text" name="shape" value="[1]"></label>
+            <label class="checkbox-row"><input type="checkbox" name="per_episode"> Per-episode (one value per episode)</label>
+            <label>Initial fill value <input type="text" name="fill_value" value="0"></label>
+            <div class="dialog-error" id="add-feature-error" hidden></div>
+            <menu>
+                <button value="cancel" type="button" id="add-feature-cancel">Cancel</button>
+                <button id="add-feature-submit" value="default">Add</button>
+            </menu>
+        </form>
+    </dialog>
+
     <script src="/static/app.js?v=32"></script>
-    <script src="/static/feature_editing.js?v=17"></script>
+    <script src="/static/feature_editing.js?v=20"></script>
+    <script src="/static/add_feature_dialog.js?v=1"></script>
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=39"></script>
     <script src="/static/model.js?v=3"></script>
