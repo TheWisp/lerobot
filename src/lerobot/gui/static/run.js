@@ -2136,7 +2136,37 @@ const _GANTT_SPAN_COLORS = {
 };
 const _GANTT_DEFAULT_SPAN_COLOR = '#aaaaaa';
 
-let _latestIterations = {};  // Cached for the dropdown selector.
+let _latestIterations = {};       // Cached for the dropdown selector.
+let _ganttRange = null;           // [minMs, maxMs] — only widens across renders.
+
+// Snap the X-axis range to multiples of this many ms so small per-iteration
+// jitter doesn't keep redrawing the timeline at slightly different scales.
+const _GANTT_AXIS_STEP_MS = 10;
+
+function _computeStableRange(iterations) {
+    // Pessimistic union over ALL representative iterations so switching
+    // between median/p95/max in the dropdown doesn't rescale the axis.
+    let minMs = 0;
+    let maxMs = 0;
+    for (const rec of Object.values(iterations)) {
+        if (!rec) continue;
+        if ((rec.loop_dt_ms || 0) > maxMs) maxMs = rec.loop_dt_ms;
+        for (const [, [s, e]] of Object.entries(rec.spans || {})) {
+            if (s < minMs) minMs = s;
+            if (e > maxMs) maxMs = e;
+        }
+        for (const ev of Object.values(rec.cam_events || {})) {
+            if (ev.captured_at_ms < minMs) minMs = ev.captured_at_ms;
+            if (ev.consumed_at_ms > maxMs) maxMs = ev.consumed_at_ms;
+        }
+    }
+    // Round to a coarse grid so small jitter doesn't move the bounds.
+    const step = _GANTT_AXIS_STEP_MS;
+    minMs = Math.floor(minMs / step) * step;
+    maxMs = Math.ceil(maxMs / step) * step;
+    if (maxMs - minMs < step) maxMs = minMs + step;
+    return [minMs, maxMs];
+}
 
 function _renderGantt(iterations) {
     _latestIterations = iterations;
@@ -2161,10 +2191,20 @@ function _renderGantt(iterations) {
         meta.textContent = `step ${rec.step ?? '?'} · loop ${(rec.loop_dt_ms || 0).toFixed(1)} ms`;
     }
 
-    _drawGantt(canvas, rec);
+    // Stable range: compute from all reps, then take the union with the
+    // previous render's range (only widen, never shrink). Keeps the axis
+    // visually stable even as new outliers stretch the worst case.
+    const [newMin, newMax] = _computeStableRange(iterations);
+    if (_ganttRange === null) {
+        _ganttRange = [newMin, newMax];
+    } else {
+        _ganttRange = [Math.min(_ganttRange[0], newMin), Math.max(_ganttRange[1], newMax)];
+    }
+
+    _drawGantt(canvas, rec, _ganttRange);
 }
 
-function _drawGantt(canvas, rec) {
+function _drawGantt(canvas, rec, [minMs, maxMs]) {
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
@@ -2177,20 +2217,6 @@ function _drawGantt(canvas, rec) {
     const spans = rec.spans || {};
     const camEvents = rec.cam_events || {};
     const loopDt = rec.loop_dt_ms || 0;
-
-    // Compute the time range. cam captures can be negative (background grab
-    // before iter_start); we extend leftward to fit them.
-    let minMs = 0;
-    let maxMs = loopDt;
-    for (const [_n, [s, e]] of Object.entries(spans)) {
-        if (s < minMs) minMs = s;
-        if (e > maxMs) maxMs = e;
-    }
-    for (const ev of Object.values(camEvents)) {
-        if (ev.captured_at_ms < minMs) minMs = ev.captured_at_ms;
-        if (ev.consumed_at_ms > maxMs) maxMs = ev.consumed_at_ms;
-    }
-    if (maxMs - minMs < 1) maxMs = minMs + 1;  // Avoid zero range.
 
     const padL = 6, padR = 12, padT = 16, padB = 18;
     const plotW = W - padL - padR;
@@ -2228,44 +2254,63 @@ function _drawGantt(canvas, rec) {
     ctx.fillStyle = '#888';
     ctx.font = '10px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(`${minMs.toFixed(1)} ms`, padL, H - 4);
+    ctx.fillText(`${minMs.toFixed(0)} ms`, padL, H - 4);
     ctx.textAlign = 'right';
-    ctx.fillText(`${maxMs.toFixed(1)} ms`, W - padR, H - 4);
+    ctx.fillText(`${maxMs.toFixed(0)} ms`, W - padR, H - 4);
 
-    // Lay out span bars in declaration order. Two rows max; if there are
-    // many spans, stack them on a single row (last write wins for color).
+    // Reserve a fixed sliver at the bottom for the camera markers (one
+    // sub-row per camera so labels don't stack on top of each other).
+    const camKeys = Object.keys(camEvents);
+    const camRowCount = Math.max(camKeys.length, 1);
+    const camRowH = 12;
+    const camAreaH = camKeys.length > 0 ? (camRowCount * camRowH + 4) : 0;
+
+    // Lay out span bars in declaration order in the remaining vertical space.
     const spanNames = Object.keys(spans);
-    const rowCount = Math.max(spanNames.length, 1);
-    const rowH = Math.min(20, Math.max(8, plotH / (rowCount + 1)));  // +1 for cam row
+    const spanCount = Math.max(spanNames.length, 1);
+    const spanRegionH = plotH - camAreaH;
+    const rowH = Math.min(20, Math.max(10, spanRegionH / spanCount));
+
     spanNames.forEach((name, i) => {
         const [s, e] = spans[name];
         const x0 = xOf(s);
         const x1 = xOf(e);
         const y = padT + i * rowH;
-        const w = Math.max(2, x1 - x0);  // Always visible even for very short spans.
+        const w = Math.max(2, x1 - x0);
         ctx.fillStyle = _GANTT_SPAN_COLORS[name] || _GANTT_DEFAULT_SPAN_COLOR;
         ctx.fillRect(x0, y, w, rowH - 4);
-        // Label — name and duration if there's room.
+        // Label — name and duration if there's room. Drawn outside the bar
+        // (to the right) when the bar is too narrow to hold any text, so
+        // names are always readable.
         const dur = e - s;
-        const label = w > 50 ? `${name}  ${dur.toFixed(1)} ms` : name;
         ctx.fillStyle = '#0a0a1a';
         ctx.font = '10px monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(label, x0 + 3, y + rowH - 7);
+        const labelInside = w > 80
+            ? `${name}  ${dur.toFixed(1)} ms`
+            : (w > 36 ? name : '');
+        if (labelInside) {
+            ctx.fillText(labelInside, x0 + 3, y + rowH - 7);
+        } else {
+            // Place the label outside the bar to the right, in muted color.
+            ctx.fillStyle = '#aaa';
+            ctx.fillText(`${name} ${dur.toFixed(1)}ms`, x1 + 4, y + rowH - 7);
+        }
     });
 
-    // Camera capture markers as diamonds in their own row at the bottom of
-    // the plot. The X position is the capture timestamp (often negative).
-    const camRow = padT + spanNames.length * rowH + 2;
-    const camKeys = Object.keys(camEvents);
+    // Camera markers — one sub-row per camera so the captured-→-consumed
+    // line and the diamonds don't overlap with sibling cameras' markers.
+    // Labels are intentionally NOT drawn here (per-camera staleness/period
+    // is shown in the Cameras card row below the panel; duplicating it on
+    // the Gantt was the source of overlapping text).
+    const camAreaTop = H - padB - camAreaH + 2;
     camKeys.forEach((key, i) => {
         const ev = camEvents[key];
         const x = xOf(ev.captured_at_ms);
         const cx = xOf(ev.consumed_at_ms);
-        const y = camRow + 6;
+        const y = camAreaTop + i * camRowH + camRowH / 2;
 
-        // Stale segment: thin line from capture to consume — visualizes how
-        // long the frame sat in cache before we read it.
+        // Stale segment.
         ctx.strokeStyle = '#666';
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -2273,22 +2318,22 @@ function _drawGantt(canvas, rec) {
         ctx.lineTo(cx, y);
         ctx.stroke();
 
-        // Capture diamond.
+        // Capture diamond (filled).
         ctx.fillStyle = '#4fc3f7';
         ctx.beginPath();
-        ctx.moveTo(x, y - 4); ctx.lineTo(x + 4, y); ctx.lineTo(x, y + 4); ctx.lineTo(x - 4, y); ctx.closePath();
+        ctx.moveTo(x, y - 3); ctx.lineTo(x + 3, y); ctx.lineTo(x, y + 3); ctx.lineTo(x - 3, y); ctx.closePath();
         ctx.fill();
-        // Consume diamond (smaller, hollow).
+        // Consume diamond (hollow).
         ctx.strokeStyle = '#4fc3f7';
         ctx.beginPath();
-        ctx.moveTo(cx, y - 3); ctx.lineTo(cx + 3, y); ctx.lineTo(cx, y + 3); ctx.lineTo(cx - 3, y); ctx.closePath();
+        ctx.moveTo(cx, y - 2.5); ctx.lineTo(cx + 2.5, y); ctx.lineTo(cx, y + 2.5); ctx.lineTo(cx - 2.5, y); ctx.closePath();
         ctx.stroke();
 
+        // Tiny camera label at the right edge so the row is identifiable.
         ctx.fillStyle = '#888';
         ctx.font = '9px monospace';
-        ctx.textAlign = 'left';
-        const stale = ev.consumed_at_ms - ev.captured_at_ms;
-        ctx.fillText(`${key}  stale ${stale.toFixed(0)} ms`, Math.max(padL + 2, x + 6), y - 4);
+        ctx.textAlign = 'right';
+        ctx.fillText(key, padL + plotW, y + 3);
     });
 }
 
@@ -2332,6 +2377,9 @@ function _startLatencyPoll() {
 
 function _stopLatencyPoll() {
     if (_latencyPollTimer) { clearInterval(_latencyPollTimer); _latencyPollTimer = null; }
+    // Reset the only-widen X axis so the next session starts fresh instead
+    // of inheriting the worst-case bounds from the previous run.
+    _ganttRange = null;
 }
 
 async function _fetchLatencyMetrics() {
