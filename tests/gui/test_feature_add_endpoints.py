@@ -28,7 +28,6 @@ from lerobot.gui.api import datasets as datasets_module
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState, PendingEdit
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────
 
 
@@ -72,11 +71,13 @@ def opened_dataset(app_with_state, tmp_path, empty_lerobot_dataset_factory):
     )
     for _ in range(2):
         for _ in range(4):
-            ds.add_frame({
-                "action": np.zeros(2, dtype=np.float32),
-                "observation.state": np.zeros(2, dtype=np.float32),
-                "task": "t",
-            })
+            ds.add_frame(
+                {
+                    "action": np.zeros(2, dtype=np.float32),
+                    "observation.state": np.zeros(2, dtype=np.float32),
+                    "task": "t",
+                }
+            )
         ds.save_episode()
     ds.finalize()
 
@@ -114,18 +115,33 @@ def _get_json(app, path: str):
 class TestPostFeatures:
     def test_unknown_dataset_returns_404(self, app_with_state):
         app, _state = app_with_state
-        resp = _post_json(app, "/api/datasets/no-such-ds/features", {
-            "name": "x", "dtype": "float32", "shape": [1], "per_episode": False, "fill_value": 0.0,
-        })
+        resp = _post_json(
+            app,
+            "/api/datasets/no-such-ds/features",
+            {
+                "name": "x",
+                "dtype": "float32",
+                "shape": [1],
+                "per_episode": False,
+                "fill_value": 0.0,
+            },
+        )
         assert resp.status_code == 404
 
     def test_adds_per_frame_column(self, app_with_state, opened_dataset):
         app, _state = app_with_state
         dataset_id, _ds = opened_dataset
-        resp = _post_json(app, f"/api/datasets/{dataset_id}/features", {
-            "name": "custom_metric", "dtype": "float32", "shape": [1],
-            "per_episode": False, "fill_value": 0.0,
-        })
+        resp = _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {
+                "name": "custom_metric",
+                "dtype": "float32",
+                "shape": [1],
+                "per_episode": False,
+                "fill_value": 0.0,
+            },
+        )
         assert resp.status_code == 200, resp.text
         payload = resp.json()
         assert payload["added"] == ["custom_metric"]
@@ -135,20 +151,34 @@ class TestPostFeatures:
     def test_rejects_default_feature_name(self, app_with_state, opened_dataset):
         app, _state = app_with_state
         dataset_id, _ds = opened_dataset
-        resp = _post_json(app, f"/api/datasets/{dataset_id}/features", {
-            "name": "timestamp", "dtype": "float32", "shape": [1],
-            "per_episode": False, "fill_value": 0.0,
-        })
+        resp = _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {
+                "name": "timestamp",
+                "dtype": "float32",
+                "shape": [1],
+                "per_episode": False,
+                "fill_value": 0.0,
+            },
+        )
         assert resp.status_code == 400
         assert "DEFAULT_FEATURE" in resp.json()["detail"]
 
     def test_rejects_existing_name(self, app_with_state, opened_dataset):
         app, _state = app_with_state
         dataset_id, _ds = opened_dataset
-        resp = _post_json(app, f"/api/datasets/{dataset_id}/features", {
-            "name": "action", "dtype": "float32", "shape": [1],
-            "per_episode": False, "fill_value": 0.0,
-        })
+        resp = _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {
+                "name": "action",
+                "dtype": "float32",
+                "shape": [1],
+                "per_episode": False,
+                "fill_value": 0.0,
+            },
+        )
         assert resp.status_code == 400
         assert "already exists" in resp.json()["detail"]
 
@@ -157,10 +187,17 @@ class TestPostFeatures:
         app, _state = app_with_state
         dataset_id, _ds = opened_dataset
         for name in ("reward", "success"):
-            resp = _post_json(app, f"/api/datasets/{dataset_id}/features", {
-                "name": name, "dtype": "float32", "shape": [1],
-                "per_episode": False, "fill_value": 0.0,
-            })
+            resp = _post_json(
+                app,
+                f"/api/datasets/{dataset_id}/features",
+                {
+                    "name": name,
+                    "dtype": "float32",
+                    "shape": [1],
+                    "per_episode": False,
+                    "fill_value": 0.0,
+                },
+            )
             assert resp.status_code == 400, f"{name}: {resp.text}"
             assert "default feature" in resp.json()["detail"].lower()
 
@@ -168,10 +205,17 @@ class TestPostFeatures:
         """per_episode flag round-trips and surfaces in features_schema."""
         app, _state = app_with_state
         dataset_id, _ds = opened_dataset
-        resp = _post_json(app, f"/api/datasets/{dataset_id}/features", {
-            "name": "pe_flag", "dtype": "bool", "shape": [1],
-            "per_episode": True, "fill_value": False,
-        })
+        resp = _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {
+                "name": "pe_flag",
+                "dtype": "bool",
+                "shape": [1],
+                "per_episode": True,
+                "fill_value": False,
+            },
+        )
         assert resp.status_code == 200, resp.text
         info = resp.json()["info"]
         assert info["features_schema"]["pe_flag"]["is_per_episode"] is True
@@ -220,12 +264,14 @@ class TestPostFeaturesDefaults:
         ds = empty_lerobot_dataset_factory(root=tmp_path / "ds_with_next", features=features)
         for _ in range(2):
             for _ in range(3):
-                ds.add_frame({
-                    "action": np.zeros(2, dtype=np.float32),
-                    "observation.state": np.zeros(2, dtype=np.float32),
-                    "next.reward": np.array([0.5], dtype=np.float32),
-                    "task": "t",
-                })
+                ds.add_frame(
+                    {
+                        "action": np.zeros(2, dtype=np.float32),
+                        "observation.state": np.zeros(2, dtype=np.float32),
+                        "next.reward": np.array([0.5], dtype=np.float32),
+                        "task": "t",
+                    }
+                )
             ds.save_episode()
         ds.finalize()
 
@@ -249,9 +295,7 @@ class TestPostFeaturesDefaults:
             assert "next.reward" not in t.column_names
             assert all(v == 0.5 for v in t.column("reward").to_pylist())
 
-    def test_added_reward_does_not_get_inferred_as_per_episode(
-        self, app_with_state, opened_dataset
-    ):
+    def test_added_reward_does_not_get_inferred_as_per_episode(self, app_with_state, opened_dataset):
         """After adding reward (declared per_episode=false), staging a range
         edit on it does NOT get coerced to whole-episode by inference.
 
@@ -270,15 +314,20 @@ class TestPostFeaturesDefaults:
         ep_length = int(ds.meta.episodes[0]["length"])
         # Pick a sub-range strictly inside the episode.
         sub_from, sub_to = 1, max(2, ep_length - 1)
-        resp = _post_json(app, "/api/edits/feature-set", {
-            "dataset_id": dataset_id,
-            "episode_index": 0,
-            "feature": "reward",
-            "frame_from": sub_from,
-            "frame_to": sub_to,
-            "value": 0.5,
-        })
+        resp = _post_json(
+            app,
+            "/api/edits/feature-set",
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "reward",
+                "frame_from": sub_from,
+                "frame_to": sub_to,
+                "value": 0.5,
+            },
+        )
         assert resp.status_code == 200, resp.text
+
         # The pending edit should preserve the staged sub-range, not be
         # widened to [0, ep_length).
         async def get_edits():
@@ -286,6 +335,7 @@ class TestPostFeaturesDefaults:
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as client:
                 return await client.get("/api/edits")
+
         pending = asyncio.run(get_edits()).json()["edits"]
         feature_set_edits = [e for e in pending if e["params"].get("feature") == "reward"]
         assert feature_set_edits, "no pending feature_set edit found for reward"
@@ -309,12 +359,14 @@ class TestPostFeaturesDefaults:
         ds = empty_lerobot_dataset_factory(root=tmp_path / "ds_wrong_dtype", features=features)
         for _ in range(2):
             for _ in range(3):
-                ds.add_frame({
-                    "action": np.zeros(2, dtype=np.float32),
-                    "observation.state": np.zeros(2, dtype=np.float32),
-                    "next.reward": np.array([1], dtype=np.int64),
-                    "task": "t",
-                })
+                ds.add_frame(
+                    {
+                        "action": np.zeros(2, dtype=np.float32),
+                        "observation.state": np.zeros(2, dtype=np.float32),
+                        "next.reward": np.array([1], dtype=np.int64),
+                        "task": "t",
+                    }
+                )
             ds.save_episode()
         ds.finalize()
         dataset_id = str(ds.root)
@@ -333,32 +385,56 @@ class TestPostFeaturesDefaults:
 class TestPendingEditGuard:
     def test_state_helper_filters_correctly(self):
         state = AppState(frame_cache=FrameCache(max_bytes=1_000))
-        state.add_edit(PendingEdit(
-            edit_type="feature_set", dataset_id="ds1", episode_index=0,
-            params={"feature": "reward", "frame_from": 0, "frame_to": 5, "value": 1.0},
-        ))
-        state.add_edit(PendingEdit(
-            edit_type="trim", dataset_id="ds1", episode_index=0, params={},
-        ))
-        state.add_edit(PendingEdit(
-            edit_type="feature_set", dataset_id="other_ds", episode_index=0,
-            params={"feature": "x", "frame_from": 0, "frame_to": 1, "value": 0},
-        ))
+        state.add_edit(
+            PendingEdit(
+                edit_type="feature_set",
+                dataset_id="ds1",
+                episode_index=0,
+                params={"feature": "reward", "frame_from": 0, "frame_to": 5, "value": 1.0},
+            )
+        )
+        state.add_edit(
+            PendingEdit(
+                edit_type="trim",
+                dataset_id="ds1",
+                episode_index=0,
+                params={},
+            )
+        )
+        state.add_edit(
+            PendingEdit(
+                edit_type="feature_set",
+                dataset_id="other_ds",
+                episode_index=0,
+                params={"feature": "x", "frame_from": 0, "frame_to": 1, "value": 0},
+            )
+        )
         assert len(state.pending_feature_set_edits_for_dataset("ds1")) == 1
         assert state.pending_feature_set_edits_for_dataset("ds_missing") == []
 
     def test_post_features_blocked_by_pending_feature_edits(self, app_with_state, opened_dataset):
         app, state = app_with_state
         dataset_id, _ds = opened_dataset
-        state.add_edit(PendingEdit(
-            edit_type="feature_set", dataset_id=dataset_id, episode_index=0,
-            params={"feature": "action", "frame_from": 0, "frame_to": 1, "value": [0.0, 0.0]},
-        ))
+        state.add_edit(
+            PendingEdit(
+                edit_type="feature_set",
+                dataset_id=dataset_id,
+                episode_index=0,
+                params={"feature": "action", "frame_from": 0, "frame_to": 1, "value": [0.0, 0.0]},
+            )
+        )
         try:
-            resp = _post_json(app, f"/api/datasets/{dataset_id}/features", {
-                "name": "x", "dtype": "float32", "shape": [1],
-                "per_episode": False, "fill_value": 0.0,
-            })
+            resp = _post_json(
+                app,
+                f"/api/datasets/{dataset_id}/features",
+                {
+                    "name": "x",
+                    "dtype": "float32",
+                    "shape": [1],
+                    "per_episode": False,
+                    "fill_value": 0.0,
+                },
+            )
             assert resp.status_code == 409
             assert "pending" in resp.json()["detail"].lower()
         finally:
@@ -374,11 +450,13 @@ class TestPendingEditGuard:
         ds = empty_lerobot_dataset_factory(root=tmp_path / "ds", features=features)
         for _ in range(2):
             for _ in range(3):
-                ds.add_frame({
-                    "action": np.zeros(2, dtype=np.float32),
-                    "observation.state": np.zeros(2, dtype=np.float32),
-                    "task": "t",
-                })
+                ds.add_frame(
+                    {
+                        "action": np.zeros(2, dtype=np.float32),
+                        "observation.state": np.zeros(2, dtype=np.float32),
+                        "task": "t",
+                    }
+                )
             ds.save_episode()
         ds.finalize()
 
@@ -403,6 +481,7 @@ class TestPendingEditGuard:
 
     def test_delete_feature_drops_column(self, app_with_state, opened_dataset):
         """DELETE /features/{name} drops the column."""
+
         async def del_call(client, path):
             return await client.delete(path)
 
@@ -410,10 +489,17 @@ class TestPendingEditGuard:
         dataset_id, _ds = opened_dataset
 
         # Add a column we can then drop.
-        _post_json(app, f"/api/datasets/{dataset_id}/features", {
-            "name": "scratch", "dtype": "float32", "shape": [1],
-            "per_episode": False, "fill_value": 0.0,
-        })
+        _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {
+                "name": "scratch",
+                "dtype": "float32",
+                "shape": [1],
+                "per_episode": False,
+                "fill_value": 0.0,
+            },
+        )
 
         async def run():
             async with httpx.AsyncClient(
@@ -457,10 +543,14 @@ class TestPendingEditGuard:
     def test_post_defaults_blocked_by_pending_feature_edits(self, app_with_state, opened_dataset):
         app, state = app_with_state
         dataset_id, _ds = opened_dataset
-        state.add_edit(PendingEdit(
-            edit_type="feature_set", dataset_id=dataset_id, episode_index=0,
-            params={"feature": "action", "frame_from": 0, "frame_to": 1, "value": [0.0, 0.0]},
-        ))
+        state.add_edit(
+            PendingEdit(
+                edit_type="feature_set",
+                dataset_id=dataset_id,
+                episode_index=0,
+                params={"feature": "action", "frame_from": 0, "frame_to": 1, "value": [0.0, 0.0]},
+            )
+        )
         try:
             resp = _post_json(app, f"/api/datasets/{dataset_id}/features/defaults", None)
             assert resp.status_code == 409

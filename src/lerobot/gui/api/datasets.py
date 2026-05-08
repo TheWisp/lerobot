@@ -1144,10 +1144,7 @@ def _build_features_schema(
         # This matters for freshly-added per-frame features whose constant
         # initial fill would otherwise look like uniform-per-episode and
         # mis-coerce range edits to the whole episode.
-        if "per_episode" in ft:
-            is_per_ep = bool(ft["per_episode"])
-        else:
-            is_per_ep = name in per_episode
+        is_per_ep = bool(ft["per_episode"]) if "per_episode" in ft else name in per_episode
         out[name] = FeatureSchema(
             dtype=str(ft.get("dtype", "")),
             shape=shape_list,
@@ -1529,7 +1526,7 @@ def _migrate_next_success_inplace(dataset) -> None:
             )
         },
         recompute_stats=False,  # we'll overwrite the column in pass 3 — stats
-                                # would be wrong if computed off the all-zeros fill
+        # would be wrong if computed off the all-zeros fill
     )
 
     # ── Pass 3: rewrite each shard's `success` column from per_episode_value ──
@@ -1537,9 +1534,7 @@ def _migrate_next_success_inplace(dataset) -> None:
     try:
         for shard in parquet_files:
             df = pd.read_parquet(shard)
-            mapped = df["episode_index"].map(
-                lambda i: per_episode_value.get(int(i), 0)
-            )
+            mapped = df["episode_index"].map(lambda i: per_episode_value.get(int(i), 0))
             df["success"] = pd.Series(mapped.to_numpy(), dtype=np.dtype("int8"))
             tmp = shard.with_suffix(shard.suffix + ".tmp")
             df.to_parquet(tmp, compression="snappy", index=False)
@@ -1547,6 +1542,7 @@ def _migrate_next_success_inplace(dataset) -> None:
     except Exception:
         for tmp, _ in pending_renames:
             if tmp.exists():
+                # safe-destruct: our own .tmp file we just wrote in this function
                 tmp.unlink()
         raise
     for tmp, final in pending_renames:
@@ -1557,9 +1553,7 @@ def _migrate_next_success_inplace(dataset) -> None:
     # are absent. Computing here (after pass 3 wrote correct values) avoids
     # stale stats from the all-zeros initial fill. The helper overwrites
     # existing stats columns; we wrote none, so it just adds them.
-    _add_new_feature_stats_to_episodes(
-        work_root, {"success": dataset.meta.features["success"]}
-    )
+    _add_new_feature_stats_to_episodes(work_root, {"success": dataset.meta.features["success"]})
 
     # ── Pass 5: drop next.success (drops shard column + stats + info.json) ──
     remove_features_inplace(dataset, ["next.success"])
@@ -1635,9 +1629,7 @@ def _refresh_dataset_after_schema_change(dataset_id: str) -> None:
     from lerobot.gui.cache_invalidation import invalidate_caches
 
     _dataset_info_mtime.pop(dataset_id, None)
-    invalidate_caches(
-        _app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices
-    )
+    invalidate_caches(_app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices)
 
 
 @router.post("/{dataset_id:path}/features", response_model=AddFeatureResponse)
@@ -1766,9 +1758,7 @@ async def add_default_features(dataset_id: str) -> AddFeatureResponse:
                 _migrate_next_success_inplace(dataset)
                 migrated_next_success = True
             except Exception as e:
-                logger.exception(
-                    f"_migrate_next_success_inplace failed for {dataset_id}: {e}"
-                )
+                logger.exception(f"_migrate_next_success_inplace failed for {dataset_id}: {e}")
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
         # Plan: split missing defaults into renames (alternate exists +
@@ -1794,32 +1784,25 @@ async def add_default_features(dataset_id: str) -> AddFeatureResponse:
                 # next.reward); merge in the default's hint so the
                 # renamed column gets the right is_per_episode behavior.
                 rename_overrides[name] = {
-                    k: v for k, v in target_info.items()
-                    if k in ("per_episode", "names")
+                    k: v for k, v in target_info.items() if k in ("per_episode", "names")
                 }
             else:
                 to_add[name] = (spec["fill_value"], target_info)
 
         if not renames and not to_add and not migrated_next_success:
-            return AddFeatureResponse(
-                added=[], renamed=[], info=_dataset_info_from(dataset_id, dataset)
-            )
+            return AddFeatureResponse(added=[], renamed=[], info=_dataset_info_from(dataset_id, dataset))
 
         try:
             # Renames first so the new names are present before any
             # subsequent add validates against an updated schema.
             if renames:
-                rename_features_inplace(
-                    dataset, renames=renames, spec_overrides=rename_overrides
-                )
+                rename_features_inplace(dataset, renames=renames, spec_overrides=rename_overrides)
             if to_add:
                 add_features_inplace(dataset, features=to_add)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
-            logger.exception(
-                f"add_default_features failed for {dataset_id}: {e}"
-            )
+            logger.exception(f"add_default_features failed for {dataset_id}: {e}")
             raise HTTPException(status_code=500, detail=str(e)) from e
 
         _refresh_dataset_after_schema_change(dataset_id)
@@ -1885,9 +1868,7 @@ async def remove_dataset_feature(dataset_id: str, feature_name: str) -> RemoveFe
             raise HTTPException(status_code=500, detail=str(e)) from e
 
         _refresh_dataset_after_schema_change(dataset_id)
-        return RemoveFeatureResponse(
-            removed=[feature_name], info=_dataset_info_from(dataset_id, dataset)
-        )
+        return RemoveFeatureResponse(removed=[feature_name], info=_dataset_info_from(dataset_id, dataset))
 
 
 @router.delete("/{dataset_id:path}")
