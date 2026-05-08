@@ -1909,32 +1909,17 @@ def test_sweep_orphan_tmp_shards(tmp_path):
 # ──────────────────────────────────────────────────────────────────────
 # Crash-recovery / atomicity for add_features_inplace
 # Tracked as I2 in src/lerobot/gui/docs/add_feature_review.md.
-#
-# These tests assert the CORRECT (transactional) behavior we want.
-# They are marked xfail(strict=True) until the fix lands — at which
-# point they will XPASS, pytest will report it as a failure, and the
-# author shipping the fix must remove the xfail marker.
 # ──────────────────────────────────────────────────────────────────────
 
 
-_I2_XFAIL_REASON = (
-    "atomicity not yet implemented; tracked as I2 in "
-    "src/lerobot/gui/docs/add_feature_review.md. Remove this xfail "
-    "marker when the fix (manifest-based 2PC or rollback-on-error) lands."
-)
-
-
-@pytest.mark.xfail(strict=True, reason=_I2_XFAIL_REASON)
 def test_add_features_inplace_info_json_replace_failure_is_atomic(monkeypatch, small_dataset_no_video):
     """If the FINAL os.replace (info.json) fails, the dataset must be left
     in its ORIGINAL pre-call state — neither the data shards nor info.json
     should reflect the partial change.
 
-    Currently this test xfails: the writer commits data shards before the
-    info.json swap, so a crash on the final swap leaves shards advertising
-    a column that info.json doesn't list. Schema-aware readers
-    (LeRobotDataset) will believe the column doesn't exist while raw
-    pyarrow readers will see it — the desync the I2 fix needs to close.
+    The atomicity guarantee comes from _atomic_swap_files, which hardlinks
+    each dst → .bak before replacing, then restores from .bak on any
+    failure during the swap loop.
     """
     import os
 
@@ -1976,7 +1961,6 @@ def test_add_features_inplace_info_json_replace_failure_is_atomic(monkeypatch, s
     assert "to_persist" not in info_on_disk["features"]
 
 
-@pytest.mark.xfail(strict=True, reason=_I2_XFAIL_REASON)
 def test_add_features_inplace_partial_data_shard_rename_is_atomic(
     monkeypatch, tmp_path, empty_lerobot_dataset_factory
 ):
@@ -1984,10 +1968,9 @@ def test_add_features_inplace_partial_data_shard_rename_is_atomic(
     loop), the dataset must be left in its ORIGINAL pre-call state — either
     every shard has the new column or none do, never a mix.
 
-    Currently this test xfails: Pass 2 has no rollback, so the first shard
-    successfully renamed already carries the new column while subsequent
-    shards still hold the original schema. Mixed-schema datasets are the
-    silent-corruption hazard the I2 fix needs to close.
+    The atomicity guarantee comes from _atomic_swap_files, which restores
+    every successfully-swapped dst from its .bak hardlink when any later
+    swap raises.
 
     Forces a multi-shard dataset by post-copying the lone parquet from the
     factory output (which produces 1 shard for tiny test datasets).

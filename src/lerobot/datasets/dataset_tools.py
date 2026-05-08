@@ -990,6 +990,61 @@ def _sweep_orphan_tmp_shards(dataset_root: Path | str) -> int:
     return removed
 
 
+def _atomic_swap_files(rename_pairs: list[tuple[Path, Path]]) -> None:
+    """Atomically swap a batch of files. All-or-nothing.
+
+    Each pair is ``(src, dst)``: ``src`` (the freshly-written ``.tmp`` produced
+    by the caller's Pass 1) replaces ``dst`` (the existing on-disk file). On
+    any failure during the swap loop, all completed swaps are reverted by
+    restoring the original ``dst`` from a hardlink-backed ``.bak`` sibling,
+    and any unfinished ``src`` files are unlinked.
+
+    Pre: every ``dst`` exists; every ``src`` exists at call time. The
+    ``dst.with_suffix(dst.suffix + ".bak")`` path must be available (no
+    pre-existing ``.bak`` collision).
+    Post: on success, all dsts have new content and no ``.bak`` / ``.tmp``
+    siblings remain. On failure, all dsts hold their original content and
+    no ``.bak`` / ``.tmp`` siblings remain; the original exception propagates.
+
+    Cost: one ``os.link`` (hardlink, near-zero) per pair before its
+    ``os.replace``. Doubles inode count briefly during the swap window.
+    """
+    completed: list[tuple[Path, Path]] = []  # [(dst, bak), ...] — successfully swapped
+    try:
+        for src, dst in rename_pairs:
+            bak = dst.with_suffix(dst.suffix + ".bak")
+            os.link(dst, bak)  # hardlink: original survives at both dst and bak
+            try:
+                os.replace(src, dst)
+                completed.append((dst, bak))
+            except Exception:
+                # Pass-through dst → bak hardlink wasn't committed yet; clean it up.
+                # safe-destruct: just-created hardlink, original still at dst
+                bak.unlink()
+                raise
+    except Exception:
+        # Restore originals from .bak in reverse order. Best-effort: if any
+        # individual restore fails, log and continue so we don't block other
+        # restores from running.
+        for dst, bak in reversed(completed):
+            try:
+                os.replace(bak, dst)
+            except Exception as e:
+                logging.warning(f"_atomic_swap_files: rollback restore failed for {dst}: {e}")
+        # Clean up any unfinished sources (caller's .tmp files that were
+        # never moved). For completed swaps, src no longer exists (os.replace
+        # consumed it), so the existence check filters those out.
+        for src, _ in rename_pairs:
+            if src.exists():
+                # safe-destruct: caller's .tmp file, never committed
+                src.unlink()
+        raise
+    # All swaps succeeded — drop backups (originals no longer needed).
+    for _, bak in completed:
+        # safe-destruct: original superseded by committed new content
+        bak.unlink()
+
+
 def add_features_inplace(
     dataset: LeRobotDataset,
     features: dict[str, tuple],
@@ -1104,11 +1159,11 @@ def add_features_inplace(
                 tmp_path.unlink()
         raise
 
-    # ── Pass 2: rename all .tmp → final (per-file atomic) ──────────────
-    for tmp_path, final_path in pending_renames:
-        os.replace(tmp_path, final_path)
-
-    # ── Update info.json last (atomic via .tmp + rename) ───────────────
+    # ── Pass 1.5: write info.json.tmp (still no swaps yet) ─────────────
+    # Materializing the new info.json before Pass 2 lets us bundle its swap
+    # with the data-shard swaps in a single atomic batch — a crash at any
+    # point (mid-Pass-2 or just before the info.json swap) rolls back to
+    # the pre-call state instead of leaving a desync.
     import json as _json
 
     with info_path.open("r") as f:
@@ -1116,8 +1171,20 @@ def add_features_inplace(
     for name, spec in new_feature_specs.items():
         info_dict["features"][name] = spec
     info_tmp = info_path.with_suffix(info_path.suffix + ".tmp")
-    write_json(info_dict, info_tmp)
-    os.replace(info_tmp, info_path)
+    try:
+        write_json(info_dict, info_tmp)
+    except Exception:
+        for tmp_path, _ in pending_renames:
+            if tmp_path.exists():
+                # safe-destruct: our own .tmp file we just wrote in this function
+                tmp_path.unlink()
+        raise
+
+    # ── Pass 2: atomic swap of all data shards + info.json ─────────────
+    # Either every dst (data shards + info.json) gets the new content, or
+    # they all stay at the original. _atomic_swap_files cleans up .tmp /
+    # .bak siblings on both success and failure paths.
+    _atomic_swap_files([*pending_renames, (info_tmp, info_path)])
 
     # Refresh the in-memory metadata so callers see the new schema.
     dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
@@ -1204,23 +1271,31 @@ def remove_features_inplace(
                 tmp_path.unlink()
         raise
 
-    for tmp_path, final_path in pending_renames:
-        os.replace(tmp_path, final_path)
-
-    # ── Drop stats columns in each episodes parquet ────────────────────
+    # ── Pass 1.5: drop stats columns in each episodes parquet ──────────
+    # Stats parquets are written to .tmp here but NOT swapped — they're
+    # bundled into the atomic batch below alongside the data shards and
+    # info.json.
+    stats_renames: list[tuple[Path, Path]] = []
     eps_dir = work_root / "meta" / "episodes"
     if eps_dir.exists():
         prefixes = [f"stats/{n}/" for n in name_list]
-        for parquet_path in sorted(eps_dir.rglob("*.parquet")):
-            edf = pd.read_parquet(parquet_path)
-            cols_to_drop = [c for c in edf.columns if any(c.startswith(p) for p in prefixes)]
-            if cols_to_drop:
-                edf = edf.drop(columns=cols_to_drop)
-                tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
-                edf.to_parquet(tmp_path, compression="snappy", index=False)
-                os.replace(tmp_path, parquet_path)
+        try:
+            for parquet_path in sorted(eps_dir.rglob("*.parquet")):
+                edf = pd.read_parquet(parquet_path)
+                cols_to_drop = [c for c in edf.columns if any(c.startswith(p) for p in prefixes)]
+                if cols_to_drop:
+                    edf = edf.drop(columns=cols_to_drop)
+                    tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
+                    edf.to_parquet(tmp_path, compression="snappy", index=False)
+                    stats_renames.append((tmp_path, parquet_path))
+        except Exception:
+            for tmp_path, _ in [*pending_renames, *stats_renames]:
+                if tmp_path.exists():
+                    # safe-destruct: our own .tmp file we just wrote in this function
+                    tmp_path.unlink()
+            raise
 
-    # ── Update info.json last (atomic via .tmp + rename) ───────────────
+    # ── Pass 1.6: write info.json.tmp ──────────────────────────────────
     import json as _json
 
     with info_path.open("r") as f:
@@ -1229,8 +1304,17 @@ def remove_features_inplace(
         info_dict["features"].pop(name, None)
 
     info_tmp = info_path.with_suffix(info_path.suffix + ".tmp")
-    write_json(info_dict, info_tmp)
-    os.replace(info_tmp, info_path)
+    try:
+        write_json(info_dict, info_tmp)
+    except Exception:
+        for tmp_path, _ in [*pending_renames, *stats_renames]:
+            if tmp_path.exists():
+                # safe-destruct: our own .tmp file we just wrote in this function
+                tmp_path.unlink()
+        raise
+
+    # ── Pass 2: atomic swap of all data shards + stats + info.json ─────
+    _atomic_swap_files([*pending_renames, *stats_renames, (info_tmp, info_path)])
 
     dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
 
@@ -1324,28 +1408,33 @@ def rename_features_inplace(
                 tmp_path.unlink()
         raise
 
-    for tmp_path, final_path in pending_renames:
-        os.replace(tmp_path, final_path)
-
-    # ── Rename stats columns in each episodes parquet ──────────────────
+    # ── Pass 1.5: rename stats columns to .tmp (no swap yet) ───────────
+    stats_renames: list[tuple[Path, Path]] = []
     eps_dir = work_root / "meta" / "episodes"
     if eps_dir.exists():
-        for parquet_path in sorted(eps_dir.rglob("*.parquet")):
-            edf = pd.read_parquet(parquet_path)
-            col_renames: dict[str, str] = {}
-            for old, new in renames.items():
-                old_prefix = f"stats/{old}/"
-                new_prefix = f"stats/{new}/"
-                for col in edf.columns:
-                    if col.startswith(old_prefix):
-                        col_renames[col] = new_prefix + col[len(old_prefix) :]
-            if col_renames:
-                edf = edf.rename(columns=col_renames)
-                tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
-                edf.to_parquet(tmp_path, compression="snappy", index=False)
-                os.replace(tmp_path, parquet_path)
+        try:
+            for parquet_path in sorted(eps_dir.rglob("*.parquet")):
+                edf = pd.read_parquet(parquet_path)
+                col_renames: dict[str, str] = {}
+                for old, new in renames.items():
+                    old_prefix = f"stats/{old}/"
+                    new_prefix = f"stats/{new}/"
+                    for col in edf.columns:
+                        if col.startswith(old_prefix):
+                            col_renames[col] = new_prefix + col[len(old_prefix) :]
+                if col_renames:
+                    edf = edf.rename(columns=col_renames)
+                    tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
+                    edf.to_parquet(tmp_path, compression="snappy", index=False)
+                    stats_renames.append((tmp_path, parquet_path))
+        except Exception:
+            for tmp_path, _ in [*pending_renames, *stats_renames]:
+                if tmp_path.exists():
+                    # safe-destruct: our own .tmp file we just wrote in this function
+                    tmp_path.unlink()
+            raise
 
-    # ── Update info.json last (atomic via .tmp + rename) ───────────────
+    # ── Pass 1.6: write info.json.tmp ──────────────────────────────────
     import json as _json
 
     with info_path.open("r") as f:
@@ -1358,8 +1447,17 @@ def rename_features_inplace(
         feats[new] = spec
 
     info_tmp = info_path.with_suffix(info_path.suffix + ".tmp")
-    write_json(info_dict, info_tmp)
-    os.replace(info_tmp, info_path)
+    try:
+        write_json(info_dict, info_tmp)
+    except Exception:
+        for tmp_path, _ in [*pending_renames, *stats_renames]:
+            if tmp_path.exists():
+                # safe-destruct: our own .tmp file we just wrote in this function
+                tmp_path.unlink()
+        raise
+
+    # ── Pass 2: atomic swap of all data shards + stats + info.json ─────
+    _atomic_swap_files([*pending_renames, *stats_renames, (info_tmp, info_path)])
 
     # Refresh in-memory metadata.
     dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
