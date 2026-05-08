@@ -556,3 +556,145 @@ class TestPendingEditGuard:
             assert resp.status_code == 409
         finally:
             state.pending_edits.clear()
+
+
+# ── Open-response shape contract ─────────────────────────────────────
+#
+# Pins what the GET /api/datasets and POST /api/datasets responses must
+# include. The frontend's banner / Inspector / row rendering all depend
+# on `features_schema` being populated for each open dataset; if it ever
+# starts coming back empty, the banner falsely claims reward/success
+# are missing for datasets that already have them (user-reported regression).
+
+
+class TestOpenResponseSchemaContract:
+    def _build_dataset_with(self, root, factory, *, extra_features: dict, frames_per_ep: int = 4):
+        """Construct a dataset with action / observation.state plus arbitrary
+        extra_features. Returns the LeRobotDataset (write-mode finalized)."""
+        features = {
+            "action": {"dtype": "float32", "shape": (2,), "names": None},
+            "observation.state": {"dtype": "float32", "shape": (2,), "names": None},
+            **extra_features,
+        }
+        ds = factory(root=root, features=features)
+        for _ in range(2):
+            for _ in range(frames_per_ep):
+                frame = {
+                    "action": np.zeros(2, dtype=np.float32),
+                    "observation.state": np.zeros(2, dtype=np.float32),
+                    "task": "t",
+                }
+                # Fill any extra features with sensible defaults so add_frame
+                # accepts them (it requires every declared feature to be present).
+                for fname, spec in extra_features.items():
+                    dtype = spec["dtype"]
+                    shape = spec.get("shape") or (1,)
+                    if dtype == "float32":
+                        frame[fname] = np.zeros(shape, dtype=np.float32)
+                    elif dtype == "int8":
+                        frame[fname] = np.zeros(shape, dtype=np.int8)
+                    elif dtype == "int64":
+                        frame[fname] = np.zeros(shape, dtype=np.int64)
+                    elif dtype == "bool":
+                        frame[fname] = np.zeros(shape, dtype=bool)
+                    else:
+                        frame[fname] = np.zeros(shape, dtype=np.float32)
+                ds.add_frame(frame)
+            ds.save_episode()
+        ds.finalize()
+        return ds
+
+    def test_open_response_carries_reward_and_success_when_present(
+        self, app_with_state, tmp_path, empty_lerobot_dataset_factory
+    ):
+        """A dataset that already has reward + success on disk must
+        report both in features_schema — the banner uses this to decide
+        whether to show 'missing default features'. If fs comes back
+        empty or missing these keys, the banner false-positives."""
+        _app, state = app_with_state
+        ds = self._build_dataset_with(
+            tmp_path / "ds",
+            empty_lerobot_dataset_factory,
+            extra_features={
+                "reward": {"dtype": "float32", "shape": (1,), "names": None},
+                "success": {"dtype": "int8", "shape": (1,), "names": None, "per_episode": True},
+            },
+        )
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        # Build the same DatasetInfo the API would return (without the HTTP
+        # round-trip, since this test is about the response shape).
+        info = datasets_module._dataset_info_from(dataset_id, ds)
+        fs = info.features_schema
+
+        assert "reward" in fs, f"reward missing from features_schema: {sorted(fs.keys())}"
+        assert "success" in fs, f"success missing from features_schema: {sorted(fs.keys())}"
+        assert fs["reward"].dtype == "float32"
+        assert fs["success"].dtype == "int8"
+        # success was declared per_episode=True in info.json — must round-trip.
+        assert fs["success"].is_per_episode is True
+
+    def test_list_datasets_endpoint_includes_features_schema(
+        self, app_with_state, tmp_path, empty_lerobot_dataset_factory
+    ):
+        """GET /api/datasets returns the full DatasetInfo for each open
+        dataset, including features_schema. The frontend's
+        restoreOpenedDatasets / page-reload path calls this to rebuild
+        window.datasets — if features_schema is missing here, the banner
+        false-positives."""
+        app, state = app_with_state
+        ds = self._build_dataset_with(
+            tmp_path / "ds",
+            empty_lerobot_dataset_factory,
+            extra_features={
+                "reward": {"dtype": "float32", "shape": (1,), "names": None},
+                "success": {"dtype": "int8", "shape": (1,), "names": None, "per_episode": True},
+            },
+        )
+        dataset_id = str(ds.root)
+        state.datasets[dataset_id] = ds
+
+        async def get_list():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.get("/api/datasets")
+
+        resp = asyncio.run(get_list())
+        assert resp.status_code == 200
+        items = resp.json()
+        match = next((d for d in items if d["id"] == dataset_id), None)
+        assert match is not None, f"dataset {dataset_id} missing from list response"
+        assert "features_schema" in match, "list response missing features_schema field"
+        fs = match["features_schema"]
+        assert "reward" in fs, f"reward missing from list features_schema: {sorted(fs.keys())}"
+        assert "success" in fs, f"success missing from list features_schema: {sorted(fs.keys())}"
+
+    def test_features_legacy_list_and_features_schema_agree(
+        self, app_with_state, tmp_path, empty_lerobot_dataset_factory
+    ):
+        """The legacy `features: list[str]` field and `features_schema:
+        dict[str, FeatureSchema]` must contain the same set of feature
+        names (modulo the subtask synthesis). If they ever drift, the
+        frontend has two sources of truth that disagree."""
+        _app, state = app_with_state
+        ds = self._build_dataset_with(
+            tmp_path / "ds",
+            empty_lerobot_dataset_factory,
+            extra_features={
+                "reward": {"dtype": "float32", "shape": (1,), "names": None},
+                "success": {"dtype": "int8", "shape": (1,), "names": None, "per_episode": True},
+                "custom_score": {"dtype": "float32", "shape": (1,), "names": None},
+            },
+        )
+        state.datasets[str(ds.root)] = ds
+
+        info = datasets_module._dataset_info_from(str(ds.root), ds)
+        legacy = set(info.features)
+        schema = set(info.features_schema.keys())
+        assert legacy == schema, (
+            f"features list and features_schema disagree:\n"
+            f"  only in features:        {sorted(legacy - schema)}\n"
+            f"  only in features_schema: {sorted(schema - legacy)}"
+        )

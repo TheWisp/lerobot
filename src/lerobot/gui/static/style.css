@@ -478,17 +478,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     margin-bottom: 6px;
-    position: relative;
+}
+/* Right-side group of card-header: dtype + delete-✕. Grouped so the
+   ✕ sits next to the dtype rather than absolute-positioned and
+   overlapping it (user-reported overlap on the previous design). */
+.feature-card .card-header-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
 }
 /* Inspector-card delete (✕). Mirrors the per-row ✕ on the timeline,
-   placed so per-episode features (which are hidden from the timeline
-   rows by default) still get a reachable delete affordance. Tracked
-   as I3-followup in src/lerobot/gui/docs/add_feature_review.md. */
+   provides the only delete affordance for per-episode features
+   (which are hidden from the timeline rows by default unless pinned). */
 .feature-card .card-delete-btn {
-    position: absolute;
-    top: -2px;
-    right: -2px;
     background: transparent;
     border: 1px solid transparent;
     color: #888;
@@ -501,6 +506,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     cursor: pointer;
     opacity: 0.3;
     transition: opacity 0.1s, color 0.1s, border-color 0.1s, background 0.1s;
+    flex-shrink: 0;
 }
 .feature-card:hover .card-delete-btn { opacity: 1; }
 .feature-card .card-delete-btn:hover {

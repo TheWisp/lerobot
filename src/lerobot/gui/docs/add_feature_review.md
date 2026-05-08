@@ -359,6 +359,36 @@ Only the API endpoints (`add_dataset_feature`, `add_default_features`, `remove_d
 
 ---
 
+## 🟡 N9. Banner-managed defaults set is incomplete (`subtask_index` missing)
+
+The PR added `reward` and `success` to `_DEFAULT_FEATURE_SPECS` (banner offers to add them when missing). But `subtask_index` — the storage-side counterpart of the synthesized `subtask` string feature — is arguably **more** core to the V1 design than reward/success: the design doc calls RECAP-style subtask labeling the flagship use case, the GUI already special-cases `subtask` → `subtask_index` in the synthetic-name translation logic ([`edits.py:_resolve_synthetic_feature`](../api/edits.py)), and `lerobot/scripts/lerobot_eval.py` doesn't write `next.success` everywhere — but every recording flow eventually wants subtask annotation.
+
+Asymmetry is user-reported: "I'm pretty sure subtask is a default feature (more default than success and reward, actually)?"
+
+**Two design directions** (post-V1):
+
+1. **Add `subtask_index` to `_DEFAULT_FEATURE_SPECS`** with `dtype=int64, shape=[1], per_episode=True` (matching the existing per-episode coercion behavior of `subtask`). Banner offers to add it when missing. Plus the lookup table at `meta/subtasks.parquet` that the synthesis already requires — banner has to provision that too. Bigger surface than reward/success because of the lookup.
+
+2. **Drop the dedicated banner entirely** in favor of a **"Common features" preset list inside the "+ Add feature" dialog** (already noted as a TODO follow-up). Each preset (reward / success / subtask_index / quality_score) fills the dialog with the right dtype/shape/per_episode/fill defaults. Same one-click convenience, no parallel banner UI, the `isBannerManaged` predicate goes away. Special migration paths (`next.reward → reward`, `next.success → success`) become explicit "Migrate from existing column?" sub-flows.
+
+(2) is cleaner architecturally; (1) is closer to the current PR's spirit. Either way, the current state — reward and success special-cased, subtask_index left out — is the asymmetry to fix.
+
+---
+
+## 🟡 N10. `features_schema` open-response contract pinned by integration test
+
+User reported: opening `/tmp/feature-editing-test-dataset` (which has reward + success on disk) showed the banner falsely claiming both were missing. Backend was confirmed correct via direct `_dataset_info_from` and `GET /api/datasets` checks — the response carries reward + success in `features_schema`. Root cause: stale browser cache of `feature_editing.js` from before the `?v=` cache-buster bumps.
+
+To prevent regression of the **backend contract**, three integration tests were added in `tests/gui/test_feature_add_endpoints.py::TestOpenResponseSchemaContract`:
+
+1. `test_open_response_carries_reward_and_success_when_present` — explicit `reward` and `success` end up in `features_schema`, with correct dtype and `per_episode` flag.
+2. `test_list_datasets_endpoint_includes_features_schema` — the `GET /api/datasets` list endpoint (used by page-reload restore) returns full `features_schema` for each open dataset.
+3. `test_features_legacy_list_and_features_schema_agree` — the legacy `features: list[str]` and `features_schema: dict` agree on the set of feature names. If they ever drift, the frontend has two sources of truth.
+
+These pin the response shape; if the banner false-positives in the future, these tests will narrow it to either the frontend, the cache, or a regression in `_dataset_info_from`.
+
+---
+
 ## Summary table
 
 | ID  | Severity | Title                                                           | Action                                          |

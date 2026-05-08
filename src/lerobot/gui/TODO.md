@@ -43,7 +43,7 @@ Follow-ups (post-V1, listed in design doc):
 - [ ] Multi-range selection
 - [ ] Loop-on-selection during playback
 - [ ] Curve editor for continuous features (reward, value, advantage)
-- [ ] **Multi-dim numeric vector visualization** for `action` / `observation.*` — design between stacked-rows / overlaid-curves / collapsed-expandable
+- [ ] **Multi-dim numeric vector visualization** for `action` / `observation.*` — current state: up to 32 components rendered as overlaid lines with a 16-color palette (post-PR3), but for a 14-DOF action the lines cluster into a dense band and the components aren't individually readable. Decided direction: **expandable per-dim rows** — chevron toggle on the row label; collapsed (default) shows the overlaid view, expanded shows a stack of mini-rows (~16px each), one per component, with `ft.names[i]` labels (or `[i]` fallback). State persisted per-dataset-session via `featureRowState.expanded` (already declared, not yet wired).
 - [ ] Schema mutations: add / remove / rename features via `modify_features`
 - [ ] URDF / 3D trajectory views
 - [Mid] **Compact per-episode-feature storage** (tech debt): per-episode features are currently marked via `info.json` but stored by replicating the same value across every frame in `data/*.parquet` — wasteful for what is logically one value per episode. Find a more compact representation (e.g. dedicated columns in `meta/episodes/*.parquet`, or sparse encoding in `data/*.parquet`) while staying backward-compatible with readers that expect the per-frame layout.

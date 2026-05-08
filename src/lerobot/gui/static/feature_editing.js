@@ -682,6 +682,11 @@
         // delete affordance for per-episode features (which are hidden
         // from the timeline rows by default unless pinned), so it's the
         // primary path for those.
+        //
+        // Grouped with the dtype label inside .card-header-right so they
+        // sit next to each other on the right edge instead of overlapping
+        // (the original `position: absolute` placement collided with the
+        // dtype text — user-reported).
         const cardDeleteBtn = isDeletable(name, ft)
             ? `<button class="card-delete-btn" data-feature="${escapeHtml(name)}" type="button" title="Delete this feature column">✕</button>`
             : "";
@@ -689,8 +694,10 @@
             <div class="feature-card ${focused ? "focused" : ""} ${editable ? "" : "readonly"}" data-feature="${escapeHtml(name)}">
                 <div class="card-header">
                     <span class="card-name">${escapeHtml(name)}${observedRange}${headerExtras}</span>
-                    <span class="card-dtype">${escapeHtml(dtype)}[${shape}]</span>
-                    ${cardDeleteBtn}
+                    <span class="card-header-right">
+                        <span class="card-dtype">${escapeHtml(dtype)}[${shape}]</span>
+                        ${cardDeleteBtn}
+                    </span>
                 </div>
                 <div class="card-summary">${cardSummary(name, ft, datasetId, episodeIndex, effFrom, effTo)}</div>
                 <div class="card-widget">${widget}</div>
