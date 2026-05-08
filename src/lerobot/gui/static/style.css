@@ -656,6 +656,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     border-right: 1px solid #0f3460;
     overflow: hidden;
     background: #16213e;
+    position: relative;
 }
 .feature-row .row-label .row-name { color: #ddd; font-size: 11px; font-weight: 600; }
 .feature-row .row-label .row-dtype { color: #888; font-size: 10px; }
@@ -873,8 +874,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .feature-row-addbtn .feature-add-btn:hover { border-color: #4fc3f7; color: #4fc3f7; }
 
 /* ── Per-row delete button (✕) ──────────────────────────────────────── */
+/* Anchored to the top-right of the row label so it's always reachable
+   regardless of how much room the name/dtype/readonly tag take. The
+   parent .row-label gets `position: relative` (above) so this absolute
+   positioning is scoped to the cell. */
 .feature-row .row-label .row-delete-btn {
-    margin-left: auto;
+    position: absolute;
+    top: 4px;
+    right: 4px;
     background: transparent;
     border: 1px solid transparent;
     color: #888;
@@ -885,14 +892,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     border-radius: 3px;
     font-size: 11px;
     cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.1s;
+    /* Faded when not hovering — visible enough to be discoverable but
+       not visually noisy. Brightens to full opacity on row hover. The
+       previous `opacity: 0` made the button invisible until very
+       deliberate hover, which made the affordance undiscoverable for
+       most users. */
+    opacity: 0.3;
+    transition: opacity 0.1s, color 0.1s, border-color 0.1s, background 0.1s;
+    z-index: 1;
 }
 .feature-row:hover .row-label .row-delete-btn { opacity: 1; }
 .feature-row .row-label .row-delete-btn:hover {
     color: #e57373;
     border-color: #e57373;
     background: #2a1a1a;
+    opacity: 1;
 }
 
 /* ── Success tri-state segment control ──────────────────────────────── */
