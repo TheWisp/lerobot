@@ -7,6 +7,20 @@ Tracker for issues found during review of [PR #3](https://github.com/TheWisp/ler
 - 🔴 **blocker** — fix before merge
 - 🟠 **important** — fix soon, before users hit it in anger
 - 🟡 **nit** — follow-up, file as issue
+- ✅ **fixed** — landed on main
+
+## Fixed (post-merge fix-forward)
+
+| ID      | Commit        | Notes                                                                                                                  |
+| ------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| B1      | `6ae00a9c6`   | Missing imports for `add_features_inplace`. Mechanical.                                                                |
+| Quality | `22a3f7e80`   | SIM108 + missing safe-destruct + ruff format leftovers.                                                                |
+| I2      | `76d26c146`   | `_atomic_swap_files` helper makes add / remove / rename atomic. Real red → green TDD cycle (xfail tests drove it).     |
+| B2      | `8b76de1da`   | Per-episode widgets stage edit without prior selection (frontend `_resolvedRangeFor`).                                 |
+| I1      | (this commit) | Banner surfaces lossy-migration plan; explicit `confirm()` before triggering `next.success` migration.                 |
+| I3      | (this commit) | Read-only inspector renders formatted vector view (`renderReadOnlyView`); replaces "read-only in V1" placeholder tag.  |
+| I4      | (this commit) | Multi-dim viz cap bumped 8 → 32; covers ALOHA / SO-100 / humanoid DOF cleanly.                                         |
+| I5      | (this commit) | Dialog centered via position/inset/margin auto; explicit confirm with frame/episode counts; dataset-wide warning copy. |
 
 ---
 

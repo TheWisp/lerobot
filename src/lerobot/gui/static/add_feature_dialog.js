@@ -126,6 +126,19 @@
             per_episode: f.per_episode.checked,
             fill_value: fillValue,
         };
+        // Confirm: this rewrites every parquet shard, can't be undone via
+        // Discard. Cheap to keep here even though the dialog has a warning
+        // banner — explicit second click before something irreversible.
+        const totalEpisodes = window.datasets?.[datasetId]?.total_episodes ?? "?";
+        const totalFrames = window.datasets?.[datasetId]?.total_frames ?? "?";
+        const ok = window.confirm(
+            `Add column "${name}" (${body.dtype}[${shape.join(",")}]) ` +
+            `with initial fill ${JSON.stringify(fillValue)} ` +
+            `to ${totalFrames} frames across ${totalEpisodes} episodes?\n\n` +
+            "This rewrites the dataset's parquet shards in place. " +
+            "Cannot be undone via Discard."
+        );
+        if (!ok) return;
         const submitBtn = document.getElementById("add-feature-submit");
         submitBtn.disabled = true;
         try {

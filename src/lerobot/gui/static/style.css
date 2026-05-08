@@ -505,6 +505,59 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     font-size: 10px;
     font-style: italic;
 }
+
+/* Read-only formatted value display (action / observation.* / etc.). Tracked
+   as I3 in src/lerobot/gui/docs/add_feature_review.md — replaces the bare
+   "read-only in V1" placeholder so the user can actually inspect recorded
+   values. */
+.feature-card .readonly-scalar {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    color: #cdd9e5;
+    padding: 3px 6px;
+    background: #1a1f29;
+    border: 1px solid #2a3140;
+    border-radius: 3px;
+    display: inline-block;
+}
+.feature-card .readonly-vector {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 4px;
+    max-height: 240px;
+    overflow-y: auto;
+    width: 100%;
+    padding: 4px 0;
+}
+.feature-card .readonly-cell {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 2px 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    background: #1a1f29;
+    border: 1px solid #2a3140;
+    border-radius: 3px;
+}
+.feature-card .readonly-cell .readonly-label {
+    color: #6f7c92;
+    flex-shrink: 0;
+}
+.feature-card .readonly-cell .readonly-value {
+    color: #cdd9e5;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.feature-card .readonly-range-hint {
+    display: block;
+    margin-top: 4px;
+    font-size: 10px;
+    font-style: italic;
+    color: #6f7c92;
+}
 .feature-card .card-summary { color: #888; font-size: 11px; margin-bottom: 6px; }
 .feature-card .card-widget { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .feature-card input[type="number"],
@@ -738,15 +791,32 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 
 /* ── Add Feature dialog ─────────────────────────────────────────────── */
+/* showModal() places <dialog> at the top of the viewport by default;
+   inset:0 + margin:auto centers it both axes. Tracked as I5 in
+   src/lerobot/gui/docs/add_feature_review.md. */
 .add-feature-dialog {
     padding: 16px 20px;
     min-width: 360px;
+    max-width: 480px;
     border: 1px solid #555;
     border-radius: 6px;
     background: #2a2a2a;
     color: #ddd;
+    position: fixed;
+    inset: 0;
+    margin: auto;
 }
 .add-feature-dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+.add-feature-dialog .dialog-warning {
+    margin: 0 0 12px 0;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: #f0d090;
+    background: #2a2520;
+    border: 1px solid #c0922b;
+    border-radius: 3px;
+    line-height: 1.4;
+}
 .add-feature-dialog h3 { margin: 0 0 12px 0; font-size: 14px; }
 .add-feature-dialog form > label { display: block; margin: 8px 0; font-size: 12px; }
 .add-feature-dialog input[type="text"],

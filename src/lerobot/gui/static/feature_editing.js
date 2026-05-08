@@ -156,6 +156,25 @@
         return out;
     }
 
+    // Lossy migrations: per-frame bool next.success → per-episode int8
+    // success (frame-level success timing is unrecoverable). The rename
+    // machinery doesn't handle dtype changes, so the backend runs a
+    // bespoke migration; we surface it here so the user sees the cost
+    // before clicking Add.
+    function _plannedLossyMigrations(datasetId) {
+        const ds = window.datasets && window.datasets[datasetId];
+        const fs = (ds && ds.features_schema) || {};
+        const out = [];
+        if (!fs.success && fs["next.success"]?.dtype === "bool") {
+            out.push({
+                from: "next.success",
+                to: "success",
+                reason: "per-frame bool → per-episode tri-state; frame-level success timing will be lost",
+            });
+        }
+        return out;
+    }
+
     function maybeShowDefaultsBanner(datasetId) {
         const banner = document.getElementById("default-features-banner");
         if (!banner) return;
@@ -165,15 +184,26 @@
             return;
         }
         document.getElementById("banner-missing-list").textContent = missing.join(", ");
-        // Show rename plan when applicable (e.g. "next.reward → reward")
-        // so the user understands the existing column will be reused
-        // rather than duplicated.
+        // Show rename plan + lossy-migration plan when applicable. Lossy
+        // migrations are surfaced separately because they're irreversible —
+        // the user needs to know they'll lose data before clicking Add.
         const renames = _plannedRenames(datasetId);
+        const lossy = _plannedLossyMigrations(datasetId);
         const noteEl = document.getElementById("banner-rename-note");
         if (noteEl) {
+            const parts = [];
             if (renames.length) {
                 const items = renames.map(r => `<code>${r.from}</code> → <code>${r.to}</code>`).join(", ");
-                noteEl.innerHTML = `Will preserve existing data: ${items}.`;
+                parts.push(`Will preserve existing data: ${items}.`);
+            }
+            if (lossy.length) {
+                const items = lossy.map(m =>
+                    `<code>${m.from}</code> → <code>${m.to}</code> (${escapeHtml(m.reason)})`
+                ).join("; ");
+                parts.push(`<strong>Lossy migration:</strong> ${items}.`);
+            }
+            if (parts.length) {
+                noteEl.innerHTML = parts.join("<br>");
                 noteEl.hidden = false;
             } else {
                 noteEl.hidden = true;
@@ -196,6 +226,25 @@
     }
 
     async function addDefaultsFor(datasetId) {
+        // Hard confirm before any lossy migration. The backend's
+        // _migrate_next_success_inplace permanently drops next.success
+        // and replaces it with a per-episode tri-state — frame-level
+        // timing is unrecoverable. The user MUST acknowledge before we
+        // POST. Plain renames (next.reward → reward) and adds-from-fill
+        // are reversible enough that we don't gate on them.
+        const lossy = _plannedLossyMigrations(datasetId);
+        if (lossy.length) {
+            const lines = lossy.map(m =>
+                `  • ${m.from} → ${m.to}\n    ${m.reason}`
+            ).join("\n");
+            const ok = window.confirm(
+                "About to perform a LOSSY migration on this dataset:\n\n" +
+                lines + "\n\n" +
+                "This rewrites parquet shards in place and CANNOT be undone via Discard.\n\n" +
+                "Continue?"
+            );
+            if (!ok) return;
+        }
         const addBtn = document.getElementById("banner-add-btn");
         const dismissBtn = document.getElementById("banner-dismiss-btn");
         const originalText = addBtn.textContent;
@@ -548,7 +597,11 @@
 
         let widget = "";
         if (!schemaEditable) {
-            widget = `<span class="card-readonly-tag">read-only in V1</span>`;
+            // Read-only features (action / observation.* / images / DEFAULT_FEATURES)
+            // still need to show their actual values so the user can inspect
+            // recorded data. Earlier this rendered just a "read-only" placeholder
+            // tag — that left high-DOF vectors completely unreadable.
+            widget = renderReadOnlyView(name, ft, effFrom, effTo, datasetId, episodeIndex);
         } else if (!callerEditable) {
             // Per-frame card without a selection: render the widget but
             // disabled, so the user sees current values without being able
@@ -618,6 +671,47 @@
             return `${unique.size} unique values`;
         }
         return "&nbsp;";
+    }
+
+    // Read-only display for features that aren't editable in V1 (action /
+    // observation.* / images / DEFAULT_FEATURES). Renders the current
+    // frame's value in a typed format so the user can still inspect recorded
+    // data — the schema row already shows the row label "read-only".
+    function renderReadOnlyView(name, ft, frameFrom, frameTo, datasetId, episodeIndex) {
+        const dtype = ft.dtype || "";
+        if (dtype === "image" || dtype === "video") {
+            return `<span class="card-readonly-tag">${escapeHtml(dtype)} (rendered in viewer)</span>`;
+        }
+        const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
+        if (slice == null || !slice.length) {
+            return `<span class="card-readonly-tag">no data in selection</span>`;
+        }
+        // Pick a representative frame: first frame of the selection.
+        const sample = slice[0];
+        const isVector = Array.isArray(sample);
+        // Multi-frame range: show the sample plus a hint that it's a snapshot.
+        const rangeHint = (slice.length > 1)
+            ? `<span class="readonly-range-hint">(frame ${frameFrom} of ${slice.length})</span>`
+            : "";
+        if (isVector) {
+            // shape [N] — render every component as label/value pairs. Long
+            // vectors get a scrollable container; component names from
+            // ft.names take precedence over numeric indices when present.
+            const names = Array.isArray(ft.names) ? ft.names : null;
+            const cells = sample.map((v, i) => {
+                const label = names?.[i] != null ? names[i] : `[${i}]`;
+                const valStr = (typeof v === "number") ? formatNumber(v) : escapeHtml(String(v));
+                return `<div class="readonly-cell"><span class="readonly-label">${escapeHtml(String(label))}</span><span class="readonly-value">${valStr}</span></div>`;
+            }).join("");
+            return `<div class="readonly-vector">${cells}</div>${rangeHint}`;
+        }
+        // Scalar.
+        let valStr;
+        if (typeof sample === "number") valStr = formatNumber(sample);
+        else if (typeof sample === "boolean") valStr = sample ? "✓ true" : "✗ false";
+        else if (typeof sample === "string") valStr = `"${escapeHtml(sample)}"`;
+        else valStr = escapeHtml(String(sample));
+        return `<div class="readonly-scalar">${valStr}</div>${rangeHint}`;
     }
 
     function renderWidgetForType(name, ft, frameFrom, frameTo, datasetId, episodeIndex, opts) {
@@ -1353,15 +1447,30 @@
             );
         }
 
-        // Numeric: scalar → line; vector → mini multi-line (up to 8); large → single line of norms.
+        // Numeric: scalar → line; vector → mini multi-line (up to MULTI_LINE_CAP);
+        // very-large vectors fall back to L2-norm-per-frame.
+        //
+        // The cap was 8 originally — dropping a 14-DOF ALOHA action to a single
+        // L2-norm line, surprising users (the row label correctly says
+        // float32[14] but the visualization shows one curve, looking like a
+        // bug). 32 covers typical robot DOF (so-100 leader+follower=12, ALOHA
+        // bimanual=14, humanoids ≤ 30) and keeps the SVG cheap.
+        const MULTI_LINE_CAP = 32;
         const scalarSeries = (typeof series[0] === "number") ? series : null;
         if (scalarSeries) {
             return numericLineSvg(scalarSeries, length);
         }
-        if (Array.isArray(series[0]) && series[0].length <= 8) {
-            // Mini multi-line: overlay up to 8 series.
+        if (Array.isArray(series[0]) && series[0].length <= MULTI_LINE_CAP) {
             const dims = series[0].length;
-            const colors = ["#5b8def", "#d97757", "#4caf50", "#b58900", "#9b59b6", "#16a085", "#e74c3c", "#7f8c8d"];
+            // 16-color palette; recycles on shape > 16. Palette tuned to be
+            // distinguishable on a dark background and not collide with
+            // common UI accent colors.
+            const colors = [
+                "#5b8def", "#d97757", "#4caf50", "#b58900",
+                "#9b59b6", "#16a085", "#e74c3c", "#7f8c8d",
+                "#3498db", "#e67e22", "#27ae60", "#f1c40f",
+                "#8e44ad", "#1abc9c", "#c0392b", "#95a5a6",
+            ];
             const lines = [];
             for (let d = 0; d < dims; d++) {
                 const dim = series.map(row => row[d]);
@@ -1370,7 +1479,9 @@
             return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${lines.join("")}</svg>`;
         }
         if (Array.isArray(series[0])) {
-            // Large vector: just render the norm of each vector.
+            // Very large vector (> MULTI_LINE_CAP dims): drop to L2 norm.
+            // This is honest about the visualization being lossy — overlaying
+            // 50+ overlapping lines is unreadable anyway.
             const norms = series.map(row => {
                 let s = 0;
                 for (const x of row) s += (typeof x === "number") ? x * x : 0;
