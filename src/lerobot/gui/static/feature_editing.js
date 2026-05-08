@@ -1340,7 +1340,11 @@
             }
         }
 
-        const readonlyTag = editable ? "" : `<div class="row-readonly">read-only</div>`;
+        // Read-only state is conveyed by the row class (CSS dims the
+        // label background and adds a left border) and by the Inspector
+        // card on click. The previous design rendered an explicit
+        // "read-only" line in the row label, which got clipped by the
+        // 36px row height plus the row-label's overflow:hidden.
         const rowClass = editable ? "feature-row" : "feature-row readonly";
 
         // Per-row delete (✕). isDeletable handles all the exclusions —
@@ -1356,7 +1360,6 @@
                 <div class="row-label">
                     <div class="row-name">${escapeHtml(name)}</div>
                     <div class="row-dtype">${escapeHtml(dtype)}[${shape}]</div>
-                    ${readonlyTag}
                     ${deleteBtn}
                 </div>
                 <div class="row-track" data-feature="${escapeHtml(name)}" data-length="${length}">

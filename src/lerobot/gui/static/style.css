@@ -689,7 +689,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 .feature-row .row-label .row-name { color: #ddd; font-size: 11px; font-weight: 600; }
 .feature-row .row-label .row-dtype { color: #888; font-size: 10px; }
-.feature-row .row-label .row-readonly { color: #999; font-size: 9px; font-style: italic; }
+/* Read-only state: dimmed label name + a thin border-left stripe so the
+   row stands apart from editable rows even though the explicit
+   "read-only" tag was dropped (the 36px row didn't fit a 3rd line and
+   it got clipped). Inspector card still shows the verbose tag on click. */
+.feature-row.readonly .row-label { border-left: 2px solid #4a5468; }
+.feature-row.readonly .row-label .row-name { color: #9aa4b8; font-style: italic; }
+.feature-row.readonly .row-label .row-dtype { color: #6f7a8e; }
 .feature-row .row-track {
     flex: 1;
     position: relative;
