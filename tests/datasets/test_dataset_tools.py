@@ -1655,11 +1655,13 @@ def small_dataset_no_video(tmp_path, empty_lerobot_dataset_factory):
     )
     for _ in range(2):
         for _ in range(5):
-            dataset.add_frame({
-                "action": np.zeros(2, dtype=np.float32),
-                "observation.state": np.zeros(2, dtype=np.float32),
-                "task": "t",
-            })
+            dataset.add_frame(
+                {
+                    "action": np.zeros(2, dtype=np.float32),
+                    "observation.state": np.zeros(2, dtype=np.float32),
+                    "task": "t",
+                }
+            )
         dataset.save_episode()
     dataset.finalize()
     return dataset
@@ -1714,13 +1716,16 @@ def test_add_features_inplace_per_episode_success(small_dataset_no_video):
         assert all(v == 0 for v in table.column("success").to_pylist())
 
 
-@pytest.mark.parametrize("name,info,fragment", [
-    ("action", {"dtype": "float32", "shape": [1], "names": None}, "already exists"),
-    ("timestamp", {"dtype": "float32", "shape": [1], "names": None}, "DEFAULT_FEATURE"),
-    ("ok_name", {"dtype": "float32"}, "must include keys"),  # missing shape
-    ("ok_name", {"dtype": "float32", "shape": []}, "positive ints"),
-    ("ok_name", {"dtype": "float32", "shape": [1], "per_episode": "yes"}, "must be a bool"),
-])
+@pytest.mark.parametrize(
+    "name,info,fragment",
+    [
+        ("action", {"dtype": "float32", "shape": [1], "names": None}, "already exists"),
+        ("timestamp", {"dtype": "float32", "shape": [1], "names": None}, "DEFAULT_FEATURE"),
+        ("ok_name", {"dtype": "float32"}, "must include keys"),  # missing shape
+        ("ok_name", {"dtype": "float32", "shape": []}, "positive ints"),
+        ("ok_name", {"dtype": "float32", "shape": [1], "per_episode": "yes"}, "must be a bool"),
+    ],
+)
 def test_add_features_inplace_validation(small_dataset_no_video, name, info, fragment):
     """Each rejection case raises ValueError with a recognizable message."""
     with pytest.raises(ValueError, match=fragment):
@@ -1748,10 +1753,12 @@ def test_add_features_inplace_preserves_declared_dtype(small_dataset_no_video):
     )
     for f in (ds.root / "data").rglob("*.parquet"):
         table = pq.read_table(f)
-        assert str(table.schema.field("f32_col").type) == "float", \
+        assert str(table.schema.field("f32_col").type) == "float", (
             f"f32_col got {table.schema.field('f32_col').type}, expected float"
-        assert str(table.schema.field("i8_col").type) == "int8", \
+        )
+        assert str(table.schema.field("i8_col").type) == "int8", (
             f"i8_col got {table.schema.field('i8_col').type}, expected int8"
+        )
         assert str(table.schema.field("i64_col").type) == "int64"
         assert str(table.schema.field("bool_col").type) == "bool"
 
@@ -1819,13 +1826,16 @@ def test_rename_features_inplace_applies_spec_overrides(small_dataset_no_video):
     assert info["features"]["obs_state"].get("per_episode") is False
 
 
-@pytest.mark.parametrize("renames,fragment", [
-    ({}, "empty"),
-    ({"missing_feature": "new_name"}, "not found"),
-    ({"observation.state": "action"}, "already exists"),
-    ({"observation.state": "timestamp"}, "DEFAULT_FEATURES"),
-    ({"timestamp": "ts2"}, "DEFAULT_FEATURES"),
-])
+@pytest.mark.parametrize(
+    "renames,fragment",
+    [
+        ({}, "empty"),
+        ({"missing_feature": "new_name"}, "not found"),
+        ({"observation.state": "action"}, "already exists"),
+        ({"observation.state": "timestamp"}, "DEFAULT_FEATURES"),
+        ({"timestamp": "ts2"}, "DEFAULT_FEATURES"),
+    ],
+)
 def test_rename_features_inplace_validation(small_dataset_no_video, renames, fragment):
     with pytest.raises(ValueError, match=fragment):
         rename_features_inplace(small_dataset_no_video, renames=renames)
@@ -1834,6 +1844,7 @@ def test_rename_features_inplace_validation(small_dataset_no_video, renames, fra
 def test_remove_features_inplace_drops_data_columns(small_dataset_no_video):
     """remove_features_inplace drops the column from data + stats + info.json."""
     import json
+
     import pyarrow.parquet as pq
 
     ds = small_dataset_no_video
@@ -1858,10 +1869,13 @@ def test_remove_features_inplace_drops_data_columns(small_dataset_no_video):
     assert "to_drop" not in info["features"]
 
 
-@pytest.mark.parametrize("name,fragment", [
-    ("missing_feature", "not found"),
-    ("timestamp", "DEFAULT_FEATURE"),
-])
+@pytest.mark.parametrize(
+    "name,fragment",
+    [
+        ("missing_feature", "not found"),
+        ("timestamp", "DEFAULT_FEATURE"),
+    ],
+)
 def test_remove_features_inplace_validation(small_dataset_no_video, name, fragment):
     with pytest.raises(ValueError, match=fragment):
         remove_features_inplace(small_dataset_no_video, names=name)
@@ -1890,3 +1904,153 @@ def test_sweep_orphan_tmp_shards(tmp_path):
     # Real files untouched.
     assert (data_dir / "file-000.parquet").exists()
     assert (info_dir / "info.json").exists()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Crash-recovery / atomicity for add_features_inplace
+# Tracked as I2 in src/lerobot/gui/docs/add_feature_review.md.
+#
+# These tests assert the CORRECT (transactional) behavior we want.
+# They are marked xfail(strict=True) until the fix lands — at which
+# point they will XPASS, pytest will report it as a failure, and the
+# author shipping the fix must remove the xfail marker.
+# ──────────────────────────────────────────────────────────────────────
+
+
+_I2_XFAIL_REASON = (
+    "atomicity not yet implemented; tracked as I2 in "
+    "src/lerobot/gui/docs/add_feature_review.md. Remove this xfail "
+    "marker when the fix (manifest-based 2PC or rollback-on-error) lands."
+)
+
+
+@pytest.mark.xfail(strict=True, reason=_I2_XFAIL_REASON)
+def test_add_features_inplace_info_json_replace_failure_is_atomic(monkeypatch, small_dataset_no_video):
+    """If the FINAL os.replace (info.json) fails, the dataset must be left
+    in its ORIGINAL pre-call state — neither the data shards nor info.json
+    should reflect the partial change.
+
+    Currently this test xfails: the writer commits data shards before the
+    info.json swap, so a crash on the final swap leaves shards advertising
+    a column that info.json doesn't list. Schema-aware readers
+    (LeRobotDataset) will believe the column doesn't exist while raw
+    pyarrow readers will see it — the desync the I2 fix needs to close.
+    """
+    import os
+
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    real_replace = os.replace
+
+    def flaky_replace(src, dst, *args, **kwargs):
+        # Fail only when renaming info.json.tmp → info.json. Data-shard
+        # renames (which happen earlier) succeed normally.
+        if str(src).endswith("info.json.tmp"):
+            raise OSError("simulated crash on info.json swap")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr("lerobot.datasets.dataset_tools.os.replace", flaky_replace)
+
+    with pytest.raises(OSError, match="simulated crash"):
+        add_features_inplace(
+            ds,
+            features={
+                "to_persist": (0.0, {"dtype": "float32", "shape": [1], "names": None}),
+            },
+        )
+
+    # Atomicity: data shards must NOT carry the new column when the
+    # info.json swap failed — the function should have rolled back.
+    for f in (ds.root / "data").rglob("*.parquet"):
+        cols = pq.read_table(f).column_names
+        assert "to_persist" not in cols, (
+            f"data shard {f} still has new column after info.json failure (desync)"
+        )
+
+    # info.json: also unchanged.
+    import json
+
+    with (ds.root / "meta" / "info.json").open() as f:
+        info_on_disk = json.load(f)
+    assert "to_persist" not in info_on_disk["features"]
+
+
+@pytest.mark.xfail(strict=True, reason=_I2_XFAIL_REASON)
+def test_add_features_inplace_partial_data_shard_rename_is_atomic(
+    monkeypatch, tmp_path, empty_lerobot_dataset_factory
+):
+    """If os.replace fails partway through Pass 2 (the data-shard rename
+    loop), the dataset must be left in its ORIGINAL pre-call state — either
+    every shard has the new column or none do, never a mix.
+
+    Currently this test xfails: Pass 2 has no rollback, so the first shard
+    successfully renamed already carries the new column while subsequent
+    shards still hold the original schema. Mixed-schema datasets are the
+    silent-corruption hazard the I2 fix needs to close.
+
+    Forces a multi-shard dataset by post-copying the lone parquet from the
+    factory output (which produces 1 shard for tiny test datasets).
+    """
+    import os
+    import shutil
+
+    import pyarrow.parquet as pq
+
+    # Build a single-shard dataset, then fork the lone parquet into a second
+    # shard so we have ≥2 in pending_renames. The shards aren't required to
+    # have valid lerobot-format relationships for this test — we only care
+    # about the rename loop's behavior.
+    features = {
+        "action": {"dtype": "float32", "shape": (2,), "names": None},
+        "observation.state": {"dtype": "float32", "shape": (2,), "names": None},
+    }
+    ds = empty_lerobot_dataset_factory(root=tmp_path / "ds", features=features)
+    for _ in range(4):
+        ds.add_frame(
+            {
+                "action": np.zeros(2, dtype=np.float32),
+                "observation.state": np.zeros(2, dtype=np.float32),
+                "task": "t",
+            }
+        )
+    ds.save_episode()
+    ds.finalize()
+
+    # Duplicate the lone shard so the writer sees two parquets to rewrite.
+    shards_before = sorted((ds.root / "data").rglob("*.parquet"))
+    assert len(shards_before) == 1, f"factory unexpectedly produced {len(shards_before)} shards; adjust test"
+    forked = shards_before[0].with_name("file-001.parquet")
+    shutil.copy2(shards_before[0], forked)
+
+    real_replace = os.replace
+    n_data_replaces = [0]
+
+    def flaky_replace(src, dst, *args, **kwargs):
+        # Don't fail the info.json swap — the failure is mid Pass 2.
+        if str(src).endswith("info.json.tmp"):
+            return real_replace(src, dst, *args, **kwargs)
+        n_data_replaces[0] += 1
+        if n_data_replaces[0] == 2:
+            raise OSError("simulated crash mid Pass 2")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr("lerobot.datasets.dataset_tools.os.replace", flaky_replace)
+
+    with pytest.raises(OSError, match="simulated crash"):
+        add_features_inplace(ds, features={"split": (0.0, {"dtype": "float32", "shape": [1], "names": None})})
+
+    # Atomicity: every shard must agree on whether the column exists. The
+    # rollback path either restores all originals or completes all renames;
+    # mixed state is corruption.
+    shards_after = sorted((ds.root / "data").rglob("*.parquet"))
+    has_split = [("split" in pq.read_table(s).column_names) for s in shards_after]
+    # Expected after a transactional rollback: NO shard has the column
+    # (function raised, so the column wasn't supposed to land).
+    assert not any(has_split), (
+        f"shards have inconsistent or partially-applied schema: {has_split}. "
+        "Atomicity requires the rollback to revert successful renames."
+    )
+    # No orphan tmps either — they should be cleaned by the rollback.
+    tmps = list((ds.root / "data").rglob("*.tmp"))
+    assert not tmps, f"orphan .tmp files left after rollback: {tmps}"
