@@ -953,12 +953,14 @@ def swap_features(
 # otherwise auto-strip the apparently-unused import.
 # ============================================================================
 
+from typing import Any  # noqa: E402
+
 from lerobot.datasets.feature_value_edits import (  # noqa: E402, F401
     FeatureValueEdit,
     StatsRecomputationError,
+    _shape_value_for_column,
     set_feature_values,
 )
-
 
 # ──────────────────────────────────────────────────────────────────────
 # add_features_inplace — schema-additive in-place column add
@@ -980,6 +982,7 @@ def _sweep_orphan_tmp_shards(dataset_root: Path | str) -> int:
             continue
         for tmp in sub_dir.rglob("*.tmp"):
             try:
+                # safe-destruct: orphan .tmp files from interrupted atomic-write saves
                 tmp.unlink()
                 removed += 1
             except OSError:
@@ -1050,9 +1053,7 @@ def add_features_inplace(
             or len(shape) == 0
             or not all(isinstance(d, int) and d > 0 for d in shape)
         ):
-            raise ValueError(
-                f"feature_info['shape'] for '{name}' must be a non-empty list of positive ints"
-            )
+            raise ValueError(f"feature_info['shape'] for '{name}' must be a non-empty list of positive ints")
         if "per_episode" in info and not isinstance(info["per_episode"], bool):
             raise ValueError(f"feature_info['per_episode'] for '{name}' must be a bool")
 
@@ -1099,6 +1100,7 @@ def add_features_inplace(
     except Exception:
         for tmp_path, _ in pending_renames:
             if tmp_path.exists():
+                # safe-destruct: our own .tmp file we just wrote in this function
                 tmp_path.unlink()
         raise
 
@@ -1198,6 +1200,7 @@ def remove_features_inplace(
     except Exception:
         for tmp_path, _ in pending_renames:
             if tmp_path.exists():
+                # safe-destruct: our own .tmp file we just wrote in this function
                 tmp_path.unlink()
         raise
 
@@ -1210,10 +1213,7 @@ def remove_features_inplace(
         prefixes = [f"stats/{n}/" for n in name_list]
         for parquet_path in sorted(eps_dir.rglob("*.parquet")):
             edf = pd.read_parquet(parquet_path)
-            cols_to_drop = [
-                c for c in edf.columns
-                if any(c.startswith(p) for p in prefixes)
-            ]
+            cols_to_drop = [c for c in edf.columns if any(c.startswith(p) for p in prefixes)]
             if cols_to_drop:
                 edf = edf.drop(columns=cols_to_drop)
                 tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
@@ -1286,9 +1286,7 @@ def rename_features_inplace(
         # `dataset.meta.features` (auto-merged at create time), so the
         # "already exists" branch would otherwise mask them.
         if old in DEFAULT_FEATURES or new in DEFAULT_FEATURES:
-            raise ValueError(
-                f"Cannot rename DEFAULT_FEATURES (refused: {old} → {new})"
-            )
+            raise ValueError(f"Cannot rename DEFAULT_FEATURES (refused: {old} → {new})")
         if old not in existing:
             raise ValueError(f"Feature '{old}' not found in dataset")
         if new in existing and new != old:
@@ -1322,6 +1320,7 @@ def rename_features_inplace(
     except Exception:
         for tmp_path, _ in pending_renames:
             if tmp_path.exists():
+                # safe-destruct: our own .tmp file we just wrote in this function
                 tmp_path.unlink()
         raise
 
@@ -1339,7 +1338,7 @@ def rename_features_inplace(
                 new_prefix = f"stats/{new}/"
                 for col in edf.columns:
                     if col.startswith(old_prefix):
-                        col_renames[col] = new_prefix + col[len(old_prefix):]
+                        col_renames[col] = new_prefix + col[len(old_prefix) :]
             if col_renames:
                 edf = edf.rename(columns=col_renames)
                 tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
@@ -1392,8 +1391,7 @@ def _add_new_feature_stats_to_episodes(
     # Skip image/video/string — compute_episode_stats can't compute on them
     # and the caller path doesn't add such features anyway.
     eligible = {
-        n: spec for n, spec in new_features.items()
-        if spec.get("dtype") not in ("image", "video", "string")
+        n: spec for n, spec in new_features.items() if spec.get("dtype") not in ("image", "video", "string")
     }
     if not eligible:
         return
@@ -1436,9 +1434,7 @@ def _add_new_feature_stats_to_episodes(
         edf = pd.read_parquet(parquet_path)
         if "episode_index" not in edf.columns:
             continue
-        relevant_eps = [
-            ep for ep in per_ep_flat_stats if (edf["episode_index"] == ep).any()
-        ]
+        relevant_eps = [ep for ep in per_ep_flat_stats if (edf["episode_index"] == ep).any()]
         if not relevant_eps:
             continue
 
