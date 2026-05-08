@@ -910,20 +910,50 @@
         return `${datasetId}|${feature}|${episodeIndex}|${frameFrom}|${frameTo}`;
     }
 
-    async function stageFeatureEdit(featureName, value) {
-        if (!selection) return;
+    // Resolve the effective range for a feature edit:
+    //   1. an explicit drag-select wins (whatever the user picked)
+    //   2. otherwise, per-episode features synthesize whole-episode range — the
+    //      backend would coerce to that anyway, so a bare click on a per-episode
+    //      widget (e.g. ✓ Success) without a prior selection should still stage
+    //   3. per-frame features without a selection: return null (caller no-ops
+    //      with a status message — silently dropping the click is the bug
+    //      previously seen on per-episode widgets)
+    function _resolvedRangeFor(featureName) {
+        if (selection) return selection;
         const datasetId = window.currentDataset;
+        const epIdx = window.currentEpisode;
+        if (datasetId == null || epIdx == null) return null;
+        const ft = window.datasets?.[datasetId]?.features_schema?.[featureName];
+        if (!ft?.is_per_episode) return null;
+        const ep = window.episodes?.[datasetId]?.find(e => e.episode_index === epIdx);
+        if (!ep || !ep.length) return null;
+        return {
+            datasetId,
+            episodeIndex: epIdx,
+            frameFrom: 0,
+            frameTo: ep.length,
+            originRow: featureName,
+        };
+    }
+
+    async function stageFeatureEdit(featureName, value) {
+        const sel = _resolvedRangeFor(featureName);
+        if (!sel) {
+            window.setStatus && window.setStatus("Drag-select a frame range first");
+            return;
+        }
+        const datasetId = sel.datasetId;
         const body = {
             dataset_id: datasetId,
-            episode_index: selection.episodeIndex,
+            episode_index: sel.episodeIndex,
             feature: featureName,
-            frame_from: selection.frameFrom,
-            frame_to: selection.frameTo,
+            frame_from: sel.frameFrom,
+            frame_to: sel.frameTo,
             value: value,
         };
         const stageKey = _stageKey(
-            datasetId, featureName, selection.episodeIndex,
-            selection.frameFrom, selection.frameTo
+            datasetId, featureName, sel.episodeIndex,
+            sel.frameFrom, sel.frameTo
         );
         // Same key as last successful stage? Skip the 409-dialog round-trip
         // and confirm overlap upfront — the backend collapses the prior
@@ -984,7 +1014,7 @@
             // the user's selection: the user dragged a sub-range for a
             // reason and snapping it to the whole episode every time they
             // tweak success/control_mode is jarring.
-            let coercedFrom = selection.frameFrom, coercedTo = selection.frameTo;
+            let coercedFrom = sel.frameFrom, coercedTo = sel.frameTo;
             try {
                 const responseBody = await res.json();
                 if (responseBody && Array.isArray(responseBody.coerced_range)) {
@@ -998,7 +1028,7 @@
             // range so two stages on the same per-episode feature collapse
             // even when the user's selection drifted between them.
             _lastStagedKey = _stageKey(
-                datasetId, featureName, selection.episodeIndex,
+                datasetId, featureName, sel.episodeIndex,
                 coercedFrom, coercedTo
             );
             // Refresh pending edits list (app.js owns the global state).
