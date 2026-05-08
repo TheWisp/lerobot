@@ -41,7 +41,8 @@ Follow-ups (post-V1, listed in design doc):
 - [ ] **Multi-dim numeric vector visualization** for `action` / `observation.*` — design between stacked-rows / overlaid-curves / collapsed-expandable
 - [ ] Schema mutations: add / remove / rename features via `modify_features`
 - [ ] URDF / 3D trajectory views
-- [ ] True first-class per-episode features (format extension to `info.json` `episode_features` + `episodes.parquet` writer)
+- [Mid] **Compact per-episode-feature storage** (tech debt): per-episode features are currently marked via `info.json` but stored by replicating the same value across every frame in `data/*.parquet` — wasteful for what is logically one value per episode. Find a more compact representation (e.g. dedicated columns in `meta/episodes/*.parquet`, or sparse encoding in `data/*.parquet`) while staying backward-compatible with readers that expect the per-frame layout.
+- [Mid] **Remove implicit "episode-wide if uniform" detection** (tech debt, depends on the compact storage above): today a feature is recognized as episode-wide if all its frame values within an episode are identical. That heuristic is fragile (one stray edit makes it look per-frame again) and only exists because we lacked an explicit format. Once compact storage is in place, drop the heuristic in favor of the explicit `episode_features` declaration.
 - [ ] Episode-list shortcuts: tri-state `success` checkbox column with bulk-set; inline-editable `task` per episode
 - [ ] First-class `subtask_index` writer at recording time (`add_frame(subtask=...)` analog to `add_frame(task=...)`); today only the read hook + offline annotation Space exist
 
