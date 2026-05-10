@@ -800,3 +800,52 @@ async def move_to_rest_position_endpoint(req: RestPositionMoveRequest) -> dict:
     if result["status"] == "error":
         raise HTTPException(500, result["message"])
     return result
+
+
+def _do_recover(profile: dict) -> dict:
+    """Build the robot from *profile* and run non-physical recovery.
+
+    Pre: no other process / handler is currently holding the robot's port(s).
+    Recovery opens each bus directly, bypassing the strict handshake that the
+    normal ``connect()`` path uses, so it must own the serial port.
+    """
+    from lerobot.motors.recovery import recover_robot
+
+    try:
+        robot = _make_robot_from_profile(profile)
+    except Exception as e:
+        logger.exception("Failed to build robot for recover")
+        return {"status": "error", "message": f"could not build robot: {e}"}
+
+    try:
+        reports = recover_robot(robot)
+        return {
+            "status": "ok",
+            "reports": [r.to_dict() for r in reports],
+        }
+    except Exception as e:
+        logger.exception("Recover failed")
+        return {"status": "error", "message": str(e)}
+
+
+class RecoverRequest(BaseModel):
+    robot: dict[str, Any]
+
+
+@router.post("/recover")
+async def recover_endpoint(req: RecoverRequest) -> dict:
+    """Attempt non-physical recovery of a wedged robot.
+
+    Opens each bus without the strict handshake, pings every expected motor,
+    disables torque on responders, and applies a driver-specific trick
+    (Feetech: clear overload latch via direct ``Torque_Enable=0`` write) to
+    non-responders. Returns one report per bus.
+
+    Pre: caller must ensure no active teleop / record / replay session is
+    holding the robot's serial port(s).
+    """
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _do_recover, req.robot)
+    if result["status"] == "error":
+        raise HTTPException(500, result["message"])
+    return result

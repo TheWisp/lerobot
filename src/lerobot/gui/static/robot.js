@@ -890,6 +890,7 @@ function renderRestPositionSection() {
     } else {
         html += '<button class="btn-small" id="record-rest-btn" onclick="startRestRecording()">Record Rest Position</button>';
         html += `<button class="btn-small secondary" id="move-rest-btn" onclick="moveToRestPosition()" ${hasRest ? '' : 'disabled'}>Move to Rest</button>`;
+        html += '<button class="btn-small secondary" id="recover-robot-btn" onclick="recoverRobot()" title="Unwedge a robot whose motors are stuck in overload protection. Arm goes limp on success.">Recover</button>';
         html += '<button class="btn-small danger" id="clear-rest-btn" onclick="clearRestPosition()" ' + (hasRest ? '' : 'disabled') + '>Clear</button>';
     }
     html += '</div>';
@@ -1002,6 +1003,149 @@ function clearRestPosition() {
     currentProfile.data.rest_position = {};
     _rerender();
     _updateDirtyState();
+}
+
+async function recoverRobot() {
+    /* Non-physical recovery of a wedged motor chain.
+     *
+     * Flow:
+     *   1. Confirm with the user (the arm goes limp on success — gravity caveat).
+     *   2. POST /api/robot/recover.
+     *   3. If the report is fully clean (no still_unreachable_ids, no errors)
+     *      AND a rest position is saved for this profile, automatically chain
+     *      into POST /api/robot/move-to-rest-position. Use a longer
+     *      duration_s when any motor was recovered from overload, so torque
+     *      ramps gently and the just-recovered motor is less likely to
+     *      re-trip mid-trajectory.
+     *   4. Otherwise, surface the report and the gravity caveat.
+     *
+     * Pre: caller must ensure no active teleop / record / replay session is
+     * holding the robot's serial port(s). Recovery opens each bus directly,
+     * bypassing the strict handshake, so it must own the port.
+     */
+    if (!currentProfile) return;
+
+    const restPos = currentProfile.data.rest_position;
+    const hasRest = restPos && Object.keys(restPos).length > 0;
+
+    const confirmMsg = hasRest
+        ? 'Attempt non-physical recovery? On success the arm will be moved to the saved rest position. Make sure no teleop/record session is using the port.'
+        : 'Attempt non-physical recovery? The arm will go LIMP on success — support it physically before clicking. Make sure no teleop/record session is using the port.';
+    if (!confirm(confirmMsg)) return;
+
+    const btn = document.getElementById('recover-robot-btn');
+    const statusEl = document.getElementById('rest-position-status');
+    if (btn) { btn.textContent = 'Recovering...'; btn.disabled = true; }
+    if (statusEl) statusEl.textContent = 'Opening buses and pinging motors...';
+
+    let reports;
+    try {
+        const res = await fetch('/api/robot/recover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ robot: currentProfile.data }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || 'Recovery failed');
+        }
+        const result = await res.json();
+        reports = result.reports || [];
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '';
+        showToast('Recovery failed', e.message, 'error');
+        if (btn) { btn.textContent = 'Recover'; btn.disabled = false; }
+        return;
+    }
+
+    // Aggregate across buses
+    const stillUnreachable = [];
+    const recovered = [];
+    const errored = [];
+    const noteLines = [];
+    for (const r of reports) {
+        for (const id of r.still_unreachable_ids || []) stillUnreachable.push(`${r.port || '?'}:${id}`);
+        for (const id of r.recovered_ids || []) recovered.push(`${r.port || '?'}:${id}`);
+        for (const [id, msg] of Object.entries(r.errors || {})) errored.push(`${r.port || '?'}:${id} (${msg})`);
+        for (const n of r.notes || []) noteLines.push(`${r.port || '?'}: ${n}`);
+    }
+
+    // The backend emits a "no MotorsBus instances found on <RobotName>" note
+    // when robot.recover_robot() found no SerialMotorsBus instances to act on.
+    // That covers both legitimately-unsupported robots (Reachy2 over gRPC,
+    // sim envs) and robot subclasses that store buses in non-standard places
+    // (lists/dicts/lazy properties) where __dict__ introspection misses them.
+    // Either way, recovery did *not* touch any motor — surface it as
+    // unsupported instead of toasting "Recovered, arm is limp" (which would
+    // be a lie).
+    const unsupported = reports.some(
+        r => (r.notes || []).some(n => n.includes('no MotorsBus')),
+    );
+    if (unsupported) {
+        const robotType = currentProfile?.data?.type || 'this robot';
+        const msg = `Recovery is not supported for "${robotType}" — no serial motor buses to act on.`;
+        if (statusEl) statusEl.textContent = msg;
+        showToast('Not supported', msg, 'error');
+        if (btn) { btn.textContent = 'Recover'; btn.disabled = false; }
+        return;
+    }
+
+    const clean = stillUnreachable.length === 0 && errored.length === 0;
+
+    if (!clean) {
+        // Report problems and stop — don't auto-move when state is uncertain.
+        const lines = [];
+        if (stillUnreachable.length) lines.push(`Still unreachable (power-cycle): ${stillUnreachable.join(', ')}`);
+        if (errored.length) lines.push(`Errors: ${errored.join('; ')}`);
+        if (noteLines.length) lines.push(noteLines.join('; '));
+        if (statusEl) statusEl.textContent = lines.join(' — ');
+        showToast('Recovery incomplete', stillUnreachable.length ? 'Some motors need a power cycle' : 'See status for details', 'error');
+        if (btn) { btn.textContent = 'Recover'; btn.disabled = false; }
+        return;
+    }
+
+    // Clean recovery — chain into Move-to-Rest if a rest position exists.
+    if (!hasRest) {
+        const summary = recovered.length
+            ? `Recovered ${recovered.join(', ')}; arm is limp. Support it and re-pose.`
+            : 'Recovery complete; arm is limp. Support it and re-pose.';
+        if (statusEl) statusEl.textContent = summary;
+        showToast('Recovered', 'Arm is limp — support it physically', 'success');
+        if (btn) { btn.textContent = 'Recover'; btn.disabled = false; }
+        return;
+    }
+
+    // Auto-chain Move-to-Rest. Double duration when anything was recovered to
+    // ramp torque gently and reduce re-trip likelihood on the recovered motor.
+    const duration_s = recovered.length ? 6.0 : 3.0;
+    if (statusEl) statusEl.textContent = `Recovered. Moving to rest position (${duration_s}s)...`;
+
+    try {
+        const res = await fetch('/api/robot/move-to-rest-position', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                robot: currentProfile.data,
+                rest_position: restPos,
+                duration_s,
+            }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || 'Move to rest failed after recovery');
+        }
+        if (statusEl) statusEl.textContent = '';
+        const msg = recovered.length
+            ? `Recovered ${recovered.join(', ')} and returned to rest position.`
+            : 'Recovered and returned to rest position.';
+        showToast('Done', msg, 'success');
+    } catch (e) {
+        // Recovery worked but move-to-rest didn't — arm is still limp.
+        if (statusEl) statusEl.textContent = `Recovered, but move-to-rest failed: ${e.message}. Arm is limp — support it.`;
+        showToast('Partial', 'Recovered but move-to-rest failed — arm is limp', 'error');
+    } finally {
+        if (btn) { btn.textContent = 'Recover'; btn.disabled = false; }
+    }
 }
 
 async function _saveRestPositionToProfile() {
