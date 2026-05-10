@@ -65,6 +65,8 @@ class LatencySnapshotWriter:
         series_max_points: int = DEFAULT_SERIES_MAX_POINTS,
         loop_kind: str = "teleop",
         target_fps: float | None = None,
+        process: str | None = None,
+        track: str | None = None,
     ):
         assert interval_s >= 0, f"interval_s must be non-negative, got {interval_s}"
         self._dir = Path(output_dir)
@@ -74,6 +76,13 @@ class LatencySnapshotWriter:
         self._series_window_s = series_window_s
         self._series_max_points = series_max_points
         self._loop_kind = loop_kind
+        # ``process`` / ``track`` identify a snapshot in a multi-thread
+        # process (e.g. HVLA writes one snapshot per thread: track=main vs
+        # track=inference, both with process=hvla). Single-loop callers
+        # can omit them — they default to ``loop_kind`` so existing
+        # consumers see the same identifier in both fields.
+        self._process = process if process is not None else loop_kind
+        self._track = track if track is not None else loop_kind
         # The loop's nominal iteration budget in ms (1000/fps). Published in
         # every snapshot so the GUI can scale color thresholds to the actual
         # FPS instead of hardcoding for 60 Hz.
@@ -111,6 +120,8 @@ class LatencySnapshotWriter:
         )
         snap["t"] = t
         snap["loop_kind"] = self._loop_kind
+        snap["process"] = self._process
+        snap["track"] = self._track
         if self._target_period_ms is not None:
             snap["target_period_ms"] = self._target_period_ms
         # Two flavors of timeline data, both cheap to produce:

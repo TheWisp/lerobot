@@ -899,6 +899,47 @@ class TestLatencySourcesListing:
         assert sources["hvla_infer"]["fresh"] is False
         assert sources["hvla_infer"]["age_s"] is None
 
+    def test_default_registry_lists_hvla_main_and_inference(self):
+        """The shipped LATENCY_SOURCES must include both HVLA tracks so the
+        dashboard can render them stacked. Subdirs (not different
+        filenames) under outputs/hvla_runs/ keep the snapshot writer
+        simple."""
+        from lerobot.gui.api import run as run_module
+
+        assert "hvla_main" in run_module.LATENCY_SOURCES
+        assert "hvla_infer" in run_module.LATENCY_SOURCES
+        assert run_module.LATENCY_SOURCES["hvla_main"].endswith("/main")
+        assert run_module.LATENCY_SOURCES["hvla_infer"].endswith("/inference")
+
+    def test_lists_include_process_and_track_when_present(self, tmp_path, monkeypatch):
+        """Multi-thread loops publish ``process`` / ``track`` in the
+        snapshot envelope so the dashboard can group sources by process.
+        Single-track loops omit them; the listing reflects what's there."""
+        from lerobot.gui.api import run as run_module
+
+        main_dir = tmp_path / "main"
+        main_dir.mkdir()
+        (main_dir / "latency_snapshot.json").write_text(
+            json.dumps({"loop_kind": "hvla_main", "process": "hvla", "track": "main", "stages": {}})
+        )
+        infer_dir = tmp_path / "inference"
+        infer_dir.mkdir()
+        (infer_dir / "latency_snapshot.json").write_text(
+            json.dumps({"loop_kind": "hvla_infer", "process": "hvla", "track": "inference", "stages": {}})
+        )
+        monkeypatch.setattr(
+            run_module,
+            "LATENCY_SOURCES",
+            {"hvla_main": str(main_dir), "hvla_infer": str(infer_dir)},
+        )
+
+        result = asyncio.run(run_module.list_latency_sources())
+        sources = {s["key"]: s for s in result["sources"]}
+        assert sources["hvla_main"]["loop_kind"] == "hvla_main"
+        assert sources["hvla_main"]["fresh"] is True
+        assert sources["hvla_infer"]["loop_kind"] == "hvla_infer"
+        assert sources["hvla_infer"]["fresh"] is True
+
     def test_stale_snapshot_marked_not_fresh(self, tmp_path, monkeypatch):
         """A snapshot whose mtime is more than 5s old is reported with
         ``fresh=False`` — the loop has likely stopped publishing."""

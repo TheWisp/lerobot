@@ -53,10 +53,16 @@ LATENCY_OUTPUT_DIR = "outputs/teleop"
 # kind means appending to this map and (if needed) plumbing the output_dir
 # through that script's CLI args. Keys must match the ``loop_kind`` field
 # the writer publishes.
+# HVLA writes one snapshot per thread under outputs/hvla_runs/<track>/, so
+# the dashboard can render the control thread (track=main) and the
+# inference thread (track=inference) as stacked tracks of the same
+# process. Single-track loops (teleop, record) write directly into their
+# loop directory.
 LATENCY_SOURCES: dict[str, str] = {
     "teleop": "outputs/teleop",
     "record": "outputs/teleop",  # record uses the same dir as teleop today
-    "hvla_infer": "outputs/hvla_runs",
+    "hvla_main": "outputs/hvla_runs/main",
+    "hvla_infer": "outputs/hvla_runs/inference",
 }
 
 _app_state: AppState = None  # type: ignore
@@ -716,10 +722,11 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             args.append(f"--reset-time-s={req.reset_time_s}")
 
     # Always enable latency monitoring when launched from the GUI so the
-    # dashboard's "hvla_infer" source has data without requiring an extra
-    # checkbox. The output dir matches LATENCY_SOURCES["hvla_infer"].
+    # dashboard's hvla tracks have data without requiring an extra
+    # checkbox. s1_process appends /main and /inference to this parent
+    # path; the resulting subdirs match LATENCY_SOURCES.
     args.append("--latency-monitor")
-    args.append(f"--latency-output-dir={LATENCY_SOURCES['hvla_infer']}")
+    args.append("--latency-output-dir=outputs/hvla_runs")
 
     await _launch_subprocess(args, command="hvla", config=req.model_dump())
     return {"status": "started", "command": "hvla", "pid": _active_process.pid}
