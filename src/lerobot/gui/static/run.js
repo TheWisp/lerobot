@@ -2130,7 +2130,8 @@ const _GANTT_SPAN_COLORS = {
     process_action:  '#2ecc71',
     action_send:     '#e67e22',
     infer_total:     '#e74c3c',
-    infer_forward:   '#e74c3c',
+    inference:       '#e74c3c',
+    infer_forward:   '#e74c3c',  // legacy V2 doc name; kept for back-compat
     dataset_write:   '#95a5a6',
     video_encode:    '#7f8c8d',
 };
