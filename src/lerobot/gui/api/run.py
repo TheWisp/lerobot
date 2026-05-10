@@ -47,6 +47,18 @@ _TIMEOUT_EXCS: tuple[type[BaseException], ...] = (TimeoutError, asyncio.TimeoutE
 # pattern (outputs/rlt_online/metrics.json).
 LATENCY_OUTPUT_DIR = "outputs/teleop"
 
+# Known latency snapshot sources. Each subprocess (teleop / record / HVLA)
+# writes ``latency_snapshot.json`` into one of these directories; the GUI
+# polls them via /api/run/latency-metrics?source=<key>. Adding a new loop
+# kind means appending to this map and (if needed) plumbing the output_dir
+# through that script's CLI args. Keys must match the ``loop_kind`` field
+# the writer publishes.
+LATENCY_SOURCES: dict[str, str] = {
+    "teleop": "outputs/teleop",
+    "record": "outputs/teleop",  # record uses the same dir as teleop today
+    "hvla_infer": "outputs/hvla_runs",
+}
+
 _app_state: AppState = None  # type: ignore
 
 
@@ -703,6 +715,12 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             args.append(f"--episode-time-s={req.episode_time_s}")
             args.append(f"--reset-time-s={req.reset_time_s}")
 
+    # Always enable latency monitoring when launched from the GUI so the
+    # dashboard's "hvla_infer" source has data without requiring an extra
+    # checkbox. The output dir matches LATENCY_SOURCES["hvla_infer"].
+    args.append("--latency-monitor")
+    args.append(f"--latency-output-dir={LATENCY_SOURCES['hvla_infer']}")
+
     await _launch_subprocess(args, command="hvla", config=req.model_dump())
     return {"status": "started", "command": "hvla", "pid": _active_process.pid}
 
@@ -744,15 +762,21 @@ async def get_rlt_metrics() -> dict:
 
 
 @router.get("/latency-metrics")
-async def get_latency_metrics() -> dict:
-    """Return the latest latency snapshot written by the teleop subprocess.
+async def get_latency_metrics(source: str = "teleop") -> dict:
+    """Return the latest latency snapshot for the requested source.
 
-    The teleop process atomically replaces ``outputs/teleop/latency_snapshot.json``
-    once per second (see ``LatencySnapshotWriter``). This endpoint reads that
-    file. Returns an empty stub when no snapshot exists yet (e.g. before the
-    first second of a fresh teleop session, or when teleop isn't running).
+    ``source`` is a key in ``LATENCY_SOURCES`` (default: "teleop"). Each
+    subprocess (teleop / record / HVLA inference) atomically replaces
+    ``<source_dir>/latency_snapshot.json`` once per second; this endpoint
+    reads the matching file. Returns an empty stub when no snapshot exists
+    yet (fresh session, source not running, or unknown source).
     """
-    snapshot_path = Path(LATENCY_OUTPUT_DIR) / "latency_snapshot.json"
+    source_dir = LATENCY_SOURCES.get(source)
+    if source_dir is None:
+        # Unknown source — return the empty stub rather than 404 so the
+        # dashboard's polling loop doesn't have to special-case errors.
+        return _empty_latency_snapshot()
+    snapshot_path = Path(source_dir) / "latency_snapshot.json"
     try:
         if snapshot_path.exists():
             with open(snapshot_path, encoding="utf-8") as f:
@@ -761,7 +785,11 @@ async def get_latency_metrics() -> dict:
         # Atomic-replace race: a concurrent rename could leave the path
         # momentarily missing or the file partially-readable on slow disks.
         # Either is harmless — the next poll will succeed.
-        logger.debug("latency snapshot read failed: %s", e)
+        logger.debug("latency snapshot read failed (source=%s): %s", source, e)
+    return _empty_latency_snapshot()
+
+
+def _empty_latency_snapshot() -> dict:
     return {
         "n_records": 0,
         "dropped_records": 0,
@@ -769,6 +797,45 @@ async def get_latency_metrics() -> dict:
         "stages": {},
         "series": {},
     }
+
+
+@router.get("/latency-sources")
+async def list_latency_sources() -> dict:
+    """List which latency snapshot sources are available and recent.
+
+    A source is considered "fresh" when its snapshot file was written in the
+    last 5 seconds (the writer publishes at ~1 Hz; 5s tolerates jitter and
+    pause/resume). Stale snapshots are reported with ``fresh=False`` so the
+    dashboard can grey them out instead of dropping them entirely (useful
+    for post-mortem viewing of the last run).
+
+    Returns: ``{"sources": [{"key": str, "loop_kind": str, "fresh": bool,
+    "age_s": float | None}, ...]}``.
+    """
+    out: list[dict] = []
+    now = time.time()
+    for key, dir_path in LATENCY_SOURCES.items():
+        snap_path = Path(dir_path) / "latency_snapshot.json"
+        if not snap_path.exists():
+            out.append({"key": key, "loop_kind": None, "fresh": False, "age_s": None})
+            continue
+        try:
+            mtime = snap_path.stat().st_mtime
+            age_s = max(0.0, now - mtime)
+            with open(snap_path, encoding="utf-8") as f:
+                snap = json.load(f)
+            out.append(
+                {
+                    "key": key,
+                    "loop_kind": snap.get("loop_kind"),
+                    "fresh": age_s <= 5.0,
+                    "age_s": age_s,
+                }
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("latency-sources read failed (key=%s): %s", key, e)
+            out.append({"key": key, "loop_kind": None, "fresh": False, "age_s": None})
+    return {"sources": out}
 
 
 @router.get("/rlt-config")

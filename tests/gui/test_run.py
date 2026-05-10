@@ -800,3 +800,121 @@ class TestTimeoutExcsRegression:
             return "missed"
 
         assert asyncio.run(go()) == "caught"
+
+
+# ============================================================================
+# /latency-metrics + /latency-sources — multi-source snapshot routing
+# ============================================================================
+
+
+class TestLatencyMetricsSources:
+    """The /latency-metrics endpoint reads ``latency_snapshot.json`` from a
+    directory chosen by the ``source`` query param. The default ``teleop``
+    source preserves backwards-compatible behaviour for existing callers."""
+
+    def test_default_source_is_teleop(self, tmp_path, monkeypatch):
+        """Calling without ?source=... reads the teleop snapshot."""
+        from lerobot.gui.api import run as run_module
+
+        # Point teleop at a temp dir we control, drop a fake snapshot in it.
+        teleop_dir = tmp_path / "teleop"
+        teleop_dir.mkdir()
+        (teleop_dir / "latency_snapshot.json").write_text(
+            json.dumps({"loop_kind": "teleop", "n_records": 42, "stages": {}})
+        )
+        monkeypatch.setitem(run_module.LATENCY_SOURCES, "teleop", str(teleop_dir))
+
+        result = asyncio.run(run_module.get_latency_metrics())
+        assert result["loop_kind"] == "teleop"
+        assert result["n_records"] == 42
+
+    def test_explicit_source_routes_correctly(self, tmp_path, monkeypatch):
+        from lerobot.gui.api import run as run_module
+
+        hvla_dir = tmp_path / "hvla"
+        hvla_dir.mkdir()
+        (hvla_dir / "latency_snapshot.json").write_text(
+            json.dumps({"loop_kind": "hvla_infer", "n_records": 7, "stages": {}})
+        )
+        monkeypatch.setitem(run_module.LATENCY_SOURCES, "hvla_infer", str(hvla_dir))
+
+        result = asyncio.run(run_module.get_latency_metrics(source="hvla_infer"))
+        assert result["loop_kind"] == "hvla_infer"
+        assert result["n_records"] == 7
+
+    def test_unknown_source_returns_empty_stub(self):
+        """Unknown sources don't 404 — the dashboard's polling loop
+        shouldn't have to special-case errors."""
+        from lerobot.gui.api import run as run_module
+
+        result = asyncio.run(run_module.get_latency_metrics(source="does_not_exist"))
+        assert result == {
+            "n_records": 0,
+            "dropped_records": 0,
+            "overrun_ratio": 0.0,
+            "stages": {},
+            "series": {},
+        }
+
+    def test_missing_snapshot_returns_empty_stub(self, tmp_path, monkeypatch):
+        """Source is registered but no snapshot file exists yet (fresh
+        session). Should return the empty stub, not raise."""
+        from lerobot.gui.api import run as run_module
+
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        monkeypatch.setitem(run_module.LATENCY_SOURCES, "teleop", str(empty_dir))
+
+        result = asyncio.run(run_module.get_latency_metrics(source="teleop"))
+        assert result["n_records"] == 0
+
+
+class TestLatencySourcesListing:
+    """``/latency-sources`` enumerates which snapshot files actually exist
+    and whether they're recent. The dashboard polls this to decide which
+    loops to render."""
+
+    def test_lists_only_existing_snapshots(self, tmp_path, monkeypatch):
+        """Non-existent snapshot files should still appear in the list with
+        ``fresh=False``, so the dashboard can render a placeholder for
+        known-but-currently-quiet loops."""
+        from lerobot.gui.api import run as run_module
+
+        teleop_dir = tmp_path / "teleop"
+        teleop_dir.mkdir()
+        (teleop_dir / "latency_snapshot.json").write_text(
+            json.dumps({"loop_kind": "teleop", "n_records": 1, "stages": {}})
+        )
+        monkeypatch.setattr(
+            run_module,
+            "LATENCY_SOURCES",
+            {"teleop": str(teleop_dir), "hvla_infer": str(tmp_path / "no_such_dir")},
+        )
+
+        result = asyncio.run(run_module.list_latency_sources())
+        sources = {s["key"]: s for s in result["sources"]}
+        assert sources["teleop"]["loop_kind"] == "teleop"
+        assert sources["teleop"]["fresh"] is True
+        assert sources["hvla_infer"]["loop_kind"] is None
+        assert sources["hvla_infer"]["fresh"] is False
+        assert sources["hvla_infer"]["age_s"] is None
+
+    def test_stale_snapshot_marked_not_fresh(self, tmp_path, monkeypatch):
+        """A snapshot whose mtime is more than 5s old is reported with
+        ``fresh=False`` — the loop has likely stopped publishing."""
+        import os
+
+        from lerobot.gui.api import run as run_module
+
+        teleop_dir = tmp_path / "teleop"
+        teleop_dir.mkdir()
+        snap_path = teleop_dir / "latency_snapshot.json"
+        snap_path.write_text(json.dumps({"loop_kind": "teleop", "stages": {}}))
+        old_mtime = snap_path.stat().st_mtime - 60
+        os.utime(snap_path, (old_mtime, old_mtime))
+        monkeypatch.setattr(run_module, "LATENCY_SOURCES", {"teleop": str(teleop_dir)})
+
+        result = asyncio.run(run_module.list_latency_sources())
+        teleop = result["sources"][0]
+        assert teleop["fresh"] is False
+        assert teleop["age_s"] >= 60.0
