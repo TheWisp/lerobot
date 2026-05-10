@@ -15,22 +15,26 @@
 ## File Structure
 
 **LeRobot core (data layer):**
+
 - Modify: `src/lerobot/datasets/dataset_tools.py` — new public `add_features_inplace()`, helpers, `_sweep_orphan_tmp_shards()`.
 - Modify: `src/lerobot/datasets/dataset_metadata.py` — preserve `per_episode` hint when reading/writing `info.json`.
 - Modify (light): `src/lerobot/datasets/feature_utils.py` — accept `per_episode` key in feature spec without erroring.
 
 **GUI backend:**
+
 - Modify: `src/lerobot/gui/api/datasets.py` — two new POST endpoints, surface declared `per_episode` in `FeatureSchema`, call orphan-`.tmp` sweep in dataset open path.
 - Modify: `src/lerobot/gui/api/playback.py` — emit `dataset.schema_changed` WS event.
 - Modify: `src/lerobot/gui/state.py` — `pending_feature_set_edits_for_dataset()` helper for the guard.
 
 **GUI frontend:**
+
 - Modify: `src/lerobot/gui/static/feature_editing.js` — banner, success widget renderer, schema-changed handler, "+ Add feature" button hook.
 - Create: `src/lerobot/gui/static/add_feature_dialog.js` — dialog modal logic.
 - Modify: `src/lerobot/gui/static/index.html` — load new JS, banner DOM slot, dialog DOM template.
 - Modify: `src/lerobot/gui/static/style.css` — banner, dialog, segment-control styles.
 
 **Tests:**
+
 - Modify: `tests/datasets/test_dataset_tools.py` — add `add_features_inplace` tests inline (matches existing convention).
 - Modify: `tests/datasets/test_dataset_metadata.py` — `per_episode` round-trip.
 - Create: `tests/gui/test_feature_add_endpoints.py` — endpoint coverage.
@@ -41,6 +45,7 @@
 ## Task 1: `per_episode` hint round-trips through `info.json`
 
 **Files:**
+
 - Modify: `src/lerobot/datasets/dataset_metadata.py` (preserve key when copying features)
 - Modify: `src/lerobot/datasets/feature_utils.py` (accept the key without erroring)
 - Test: `tests/datasets/test_dataset_metadata.py`
@@ -116,6 +121,7 @@ git commit -m "feat(datasets): preserve per_episode hint in info.json features d
 ## Task 2: `add_features_inplace()` — basic per-frame add (reward)
 
 **Files:**
+
 - Modify: `src/lerobot/datasets/dataset_tools.py` (new public function)
 - Test: `tests/datasets/test_dataset_tools.py`
 
@@ -319,6 +325,7 @@ git commit -m "feat(datasets): add_features_inplace — per-frame schema-add wit
 ## Task 3: `add_features_inplace()` — per-episode `success` with hint preservation
 
 **Files:**
+
 - Test: `tests/datasets/test_dataset_tools.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -389,6 +396,7 @@ git commit -m "test(datasets): per-episode int8 feature add preserves per_episod
 ## Task 4: Validation rejections
 
 **Files:**
+
 - Test: `tests/datasets/test_dataset_tools.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -463,6 +471,7 @@ git commit -m "test(datasets): add_features_inplace validation rejections"
 ## Task 5: Stats recomputation for new columns
 
 **Files:**
+
 - Test: `tests/datasets/test_dataset_tools.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -521,6 +530,7 @@ uv run pytest tests/datasets/test_dataset_tools.py::test_add_features_inplace_re
 - [ ] **Step 3: If FAIL, debug the stats path**
 
 The recompute helper signature is `_recompute_episode_stats_from_data(root, episode_index, features)`. Verify:
+
 1. `dataset.meta.episodes_stats` returns a mapping keyed by episode index. If not, find the right iterator (search the file for usages of `_recompute_episode_stats_from_data`).
 2. The reload step (`dataset.meta = ...`) actually picks up the updated `info.json`. If the meta class doesn't take a fresh-load constructor, use the same pattern as elsewhere in `dataset_tools.py`.
 
@@ -538,6 +548,7 @@ git commit -m "feat(datasets): recompute per-episode stats after add_features_in
 ## Task 6: Orphan `.tmp` cleanup helper
 
 **Files:**
+
 - Modify: `src/lerobot/datasets/dataset_tools.py`
 - Test: `tests/datasets/test_dataset_tools.py`
 
@@ -618,6 +629,7 @@ git commit -m "feat(datasets): _sweep_orphan_tmp_shards for crash-recovery clean
 ## Task 7: GUI endpoint `POST /api/datasets/{id}/features`
 
 **Files:**
+
 - Modify: `src/lerobot/gui/api/datasets.py`
 - Modify: `src/lerobot/gui/api/models.py` (request body model)
 - Test: `tests/gui/test_feature_add_endpoints.py` (new)
@@ -771,6 +783,7 @@ git commit -m "feat(gui): POST /api/datasets/{id}/features — in-place schema a
 ## Task 8: GUI endpoint `POST /api/datasets/{id}/features/defaults`
 
 **Files:**
+
 - Modify: `src/lerobot/gui/api/datasets.py`
 - Test: `tests/gui/test_feature_add_endpoints.py`
 
@@ -872,6 +885,7 @@ git commit -m "feat(gui): POST /features/defaults adds missing reward/success"
 ## Task 9: Pending-edits guard
 
 **Files:**
+
 - Modify: `src/lerobot/gui/state.py` (helper)
 - Modify: `src/lerobot/gui/api/datasets.py` (use the helper in both endpoints)
 - Test: `tests/gui/test_state.py`, `tests/gui/test_feature_add_endpoints.py`
@@ -973,6 +987,7 @@ git commit -m "feat(gui): block schema add when pending feature_set edits exist"
 ## Task 10: `dataset.schema_changed` WS event
 
 **Files:**
+
 - Modify: `src/lerobot/gui/api/playback.py` (or wherever WS broadcasting lives)
 - Modify: `src/lerobot/gui/api/datasets.py` (call broadcaster)
 - Test: `tests/gui/test_feature_add_endpoints.py`
@@ -1051,6 +1066,7 @@ git commit -m "feat(gui): emit dataset.schema_changed WS event on schema add"
 ## Task 11: Surface declared `per_episode` in `FeatureSchema`
 
 **Files:**
+
 - Modify: `src/lerobot/gui/api/models.py` (verify `per_episode` field is populated from declared spec, not just inference)
 - Modify: `src/lerobot/gui/api/datasets.py` (FeatureSchema construction)
 - Test: `tests/gui/test_feature_endpoints.py`
@@ -1115,6 +1131,7 @@ git commit -m "feat(gui): declared per_episode hint wins over inference in Featu
 ## Task 12: Frontend banner for missing default features
 
 **Files:**
+
 - Modify: `src/lerobot/gui/static/feature_editing.js`
 - Modify: `src/lerobot/gui/static/index.html` (banner DOM slot)
 - Modify: `src/lerobot/gui/static/style.css` (banner styling)
@@ -1132,7 +1149,9 @@ In `src/lerobot/gui/static/index.html`, just inside the data-tab container, befo
     This dataset is missing default features:
     <strong id="banner-missing-list"></strong>.
   </span>
-  <button id="banner-add-btn" class="btn btn-primary">Add missing features</button>
+  <button id="banner-add-btn" class="btn btn-primary">
+    Add missing features
+  </button>
   <button id="banner-dismiss-btn" class="btn btn-secondary">Dismiss</button>
 </div>
 ```
@@ -1153,9 +1172,15 @@ Append to `src/lerobot/gui/static/style.css`:
   margin: 0 0 8px 0;
   font-size: 13px;
 }
-.default-features-banner .banner-icon { font-size: 16px; }
-.default-features-banner .banner-text { flex: 1; }
-.default-features-banner button { white-space: nowrap; }
+.default-features-banner .banner-icon {
+  font-size: 16px;
+}
+.default-features-banner .banner-text {
+  flex: 1;
+}
+.default-features-banner button {
+  white-space: nowrap;
+}
 ```
 
 - [ ] **Step 3: Wire banner logic in `feature_editing.js`**
@@ -1183,51 +1208,56 @@ Add the helpers (anywhere in the module IIFE, before the `}())`):
 
 ```javascript
 function maybeShowDefaultsBanner(datasetId) {
-    const ds = window.datasets && window.datasets[datasetId];
-    const fs = (ds && ds.features_schema) || {};
-    const missing = ["reward", "success"].filter(n => !fs[n]);
-    const banner = document.getElementById("default-features-banner");
-    if (!banner) return;
-    if (missing.length === 0 || bannerDismissed.has(datasetId)) {
-        banner.hidden = true;
-        return;
-    }
-    document.getElementById("banner-missing-list").textContent = missing.join(", ");
-    banner.hidden = false;
-    banner.dataset.datasetId = datasetId;
-    document.getElementById("banner-add-btn").onclick = () => addDefaultsFor(datasetId);
-    document.getElementById("banner-dismiss-btn").onclick = () => {
-        bannerDismissed.add(datasetId);
-        banner.hidden = true;
-    };
+  const ds = window.datasets && window.datasets[datasetId];
+  const fs = (ds && ds.features_schema) || {};
+  const missing = ["reward", "success"].filter((n) => !fs[n]);
+  const banner = document.getElementById("default-features-banner");
+  if (!banner) return;
+  if (missing.length === 0 || bannerDismissed.has(datasetId)) {
+    banner.hidden = true;
+    return;
+  }
+  document.getElementById("banner-missing-list").textContent =
+    missing.join(", ");
+  banner.hidden = false;
+  banner.dataset.datasetId = datasetId;
+  document.getElementById("banner-add-btn").onclick = () =>
+    addDefaultsFor(datasetId);
+  document.getElementById("banner-dismiss-btn").onclick = () => {
+    bannerDismissed.add(datasetId);
+    banner.hidden = true;
+  };
 }
 
 function hideDefaultsBanner() {
-    const banner = document.getElementById("default-features-banner");
-    if (banner) banner.hidden = true;
+  const banner = document.getElementById("default-features-banner");
+  if (banner) banner.hidden = true;
 }
 
 async function addDefaultsFor(datasetId) {
-    const btn = document.getElementById("banner-add-btn");
-    btn.disabled = true;
-    btn.textContent = "Adding…";
-    try {
-        const r = await fetch(`/api/datasets/${encodeURIComponent(datasetId)}/features/defaults`, {method: "POST"});
-        if (!r.ok) {
-            const detail = (await r.json().catch(() => ({}))).detail || r.statusText;
-            alert(`Failed to add defaults: ${detail}`);
-            return;
-        }
-        // schema_changed WS event will trigger schema reload + re-render.
-        // Also force-refresh schema here in case WS is slow.
-        if (typeof window.refreshDatasetInfo === "function") {
-            await window.refreshDatasetInfo(datasetId);
-        }
-        hideDefaultsBanner();
-    } finally {
-        btn.disabled = false;
-        btn.textContent = "Add missing features";
+  const btn = document.getElementById("banner-add-btn");
+  btn.disabled = true;
+  btn.textContent = "Adding…";
+  try {
+    const r = await fetch(
+      `/api/datasets/${encodeURIComponent(datasetId)}/features/defaults`,
+      { method: "POST" },
+    );
+    if (!r.ok) {
+      const detail = (await r.json().catch(() => ({}))).detail || r.statusText;
+      alert(`Failed to add defaults: ${detail}`);
+      return;
     }
+    // schema_changed WS event will trigger schema reload + re-render.
+    // Also force-refresh schema here in case WS is slow.
+    if (typeof window.refreshDatasetInfo === "function") {
+      await window.refreshDatasetInfo(datasetId);
+    }
+    hideDefaultsBanner();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Add missing features";
+  }
 }
 ```
 
@@ -1259,6 +1289,7 @@ git commit -m "feat(gui): banner offering to add missing reward/success defaults
 ## Task 13: "+ Add feature" button + dialog modal
 
 **Files:**
+
 - Create: `src/lerobot/gui/static/add_feature_dialog.js`
 - Modify: `src/lerobot/gui/static/feature_editing.js` (mount the button)
 - Modify: `src/lerobot/gui/static/index.html` (script tag, dialog DOM template)
@@ -1272,8 +1303,11 @@ Inside `<body>`, near other modals:
 <dialog id="add-feature-dialog" class="add-feature-dialog">
   <form method="dialog" id="add-feature-form">
     <h3>Add feature</h3>
-    <label>Name <input name="name" required pattern="[a-zA-Z_][a-zA-Z0-9_.]*"></label>
-    <label>Dtype
+    <label
+      >Name <input name="name" required pattern="[a-zA-Z_][a-zA-Z0-9_.]*"
+    /></label>
+    <label
+      >Dtype
       <select name="dtype">
         <option value="float32">float32</option>
         <option value="int64">int64</option>
@@ -1282,9 +1316,12 @@ Inside `<body>`, near other modals:
         <option value="string">string</option>
       </select>
     </label>
-    <label>Shape <input name="shape" value="[1]"></label>
-    <label><input type="checkbox" name="per_episode"> Per-episode (one value per episode)</label>
-    <label>Initial fill value <input name="fill_value" value="0"></label>
+    <label>Shape <input name="shape" value="[1]" /></label>
+    <label
+      ><input type="checkbox" name="per_episode" /> Per-episode (one value per
+      episode)</label
+    >
+    <label>Initial fill value <input name="fill_value" value="0" /></label>
     <div class="dialog-error" id="add-feature-error" hidden></div>
     <menu>
       <button value="cancel">Cancel</button>
@@ -1305,11 +1342,35 @@ Add the script tag (next to the existing `feature_editing.js` line):
 Append to `src/lerobot/gui/static/style.css`:
 
 ```css
-.add-feature-dialog { padding: 16px 20px; min-width: 360px; border-radius: 8px; border: 1px solid #ccc; }
-.add-feature-dialog form > label { display: block; margin: 8px 0; font-size: 13px; }
-.add-feature-dialog input[type="text"], .add-feature-dialog input:not([type]), .add-feature-dialog select { width: 100%; padding: 4px 6px; }
-.add-feature-dialog menu { display: flex; gap: 8px; justify-content: flex-end; padding: 0; margin: 12px 0 0 0; }
-.dialog-error { color: #b00; font-size: 12px; margin-top: 6px; }
+.add-feature-dialog {
+  padding: 16px 20px;
+  min-width: 360px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+}
+.add-feature-dialog form > label {
+  display: block;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.add-feature-dialog input[type="text"],
+.add-feature-dialog input:not([type]),
+.add-feature-dialog select {
+  width: 100%;
+  padding: 4px 6px;
+}
+.add-feature-dialog menu {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 0;
+  margin: 12px 0 0 0;
+}
+.dialog-error {
+  color: #b00;
+  font-size: 12px;
+  margin-top: 6px;
+}
 ```
 
 - [ ] **Step 3: Implement `add_feature_dialog.js`**
@@ -1319,119 +1380,131 @@ Create `src/lerobot/gui/static/add_feature_dialog.js`:
 ```javascript
 // Generic "Add feature" dialog — for non-default custom features only.
 (function () {
-    "use strict";
+  "use strict";
 
-    const dialog = () => document.getElementById("add-feature-dialog");
-    const form = () => document.getElementById("add-feature-form");
-    const errBox = () => document.getElementById("add-feature-error");
+  const dialog = () => document.getElementById("add-feature-dialog");
+  const form = () => document.getElementById("add-feature-form");
+  const errBox = () => document.getElementById("add-feature-error");
 
-    const DTYPE_DEFAULTS = {
-        float32: "0", int64: "0", int8: "0", bool: "false", string: "",
+  const DTYPE_DEFAULTS = {
+    float32: "0",
+    int64: "0",
+    int8: "0",
+    bool: "false",
+    string: "",
+  };
+
+  function resetForm() {
+    const f = form();
+    f.reset();
+    f.shape.value = "[1]";
+    f.fill_value.value = DTYPE_DEFAULTS.float32;
+    errBox().hidden = true;
+  }
+
+  function autoUpdateFill() {
+    const f = form();
+    const dtype = f.dtype.value;
+    const isPerEpisodeBool = f.per_episode.checked && dtype === "bool";
+    f.fill_value.value = isPerEpisodeBool
+      ? "true"
+      : (DTYPE_DEFAULTS[dtype] ?? "0");
+  }
+
+  function parseFillValue(raw, dtype) {
+    if (dtype === "bool") return raw.trim().toLowerCase() === "true";
+    if (dtype === "string") return raw;
+    if (dtype === "float32") return parseFloat(raw);
+    return parseInt(raw, 10);
+  }
+
+  function parseShape(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+      throw new Error("Shape must be a JSON list, e.g. [1]");
+    }
+    const arr = JSON.parse(trimmed);
+    if (
+      !Array.isArray(arr) ||
+      !arr.every((n) => Number.isInteger(n) && n > 0)
+    ) {
+      throw new Error("Shape must be a list of positive ints");
+    }
+    return arr;
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    errBox().hidden = true;
+    const f = form();
+    const datasetId = window.currentDataset;
+    if (!datasetId) {
+      errBox().textContent = "No dataset open";
+      errBox().hidden = false;
+      return;
+    }
+    const name = f.name.value.trim();
+    if (name === "reward" || name === "success") {
+      errBox().textContent = `'${name}' is a default feature — use the banner instead.`;
+      errBox().hidden = false;
+      return;
+    }
+    let shape, fillValue;
+    try {
+      shape = parseShape(f.shape.value);
+      fillValue = parseFillValue(f.fill_value.value, f.dtype.value);
+    } catch (err) {
+      errBox().textContent = err.message;
+      errBox().hidden = false;
+      return;
+    }
+    const body = {
+      name,
+      dtype: f.dtype.value,
+      shape,
+      per_episode: f.per_episode.checked,
+      fill_value: fillValue,
     };
-
-    function resetForm() {
-        const f = form();
-        f.reset();
-        f.shape.value = "[1]";
-        f.fill_value.value = DTYPE_DEFAULTS.float32;
-        errBox().hidden = true;
+    const r = await fetch(
+      `/api/datasets/${encodeURIComponent(datasetId)}/features`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    if (!r.ok) {
+      const detail = (await r.json().catch(() => ({}))).detail || r.statusText;
+      errBox().textContent = `Add failed: ${detail}`;
+      errBox().hidden = false;
+      return;
     }
-
-    function autoUpdateFill() {
-        const f = form();
-        const dtype = f.dtype.value;
-        const isPerEpisodeBool = f.per_episode.checked && dtype === "bool";
-        f.fill_value.value = isPerEpisodeBool ? "true" : DTYPE_DEFAULTS[dtype] ?? "0";
+    if (typeof window.refreshDatasetInfo === "function") {
+      await window.refreshDatasetInfo(datasetId);
     }
+    dialog().close();
+  }
 
-    function parseFillValue(raw, dtype) {
-        if (dtype === "bool") return raw.trim().toLowerCase() === "true";
-        if (dtype === "string") return raw;
-        if (dtype === "float32") return parseFloat(raw);
-        return parseInt(raw, 10);
+  function open() {
+    resetForm();
+    const d = dialog();
+    if (!d) {
+      console.warn("[add-feature] dialog DOM not present");
+      return;
     }
+    d.showModal();
+  }
 
-    function parseShape(raw) {
-        const trimmed = raw.trim();
-        if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
-            throw new Error("Shape must be a JSON list, e.g. [1]");
-        }
-        const arr = JSON.parse(trimmed);
-        if (!Array.isArray(arr) || !arr.every(n => Number.isInteger(n) && n > 0)) {
-            throw new Error("Shape must be a list of positive ints");
-        }
-        return arr;
-    }
+  document.addEventListener("DOMContentLoaded", () => {
+    const f = form();
+    if (!f) return;
+    f.dtype.addEventListener("change", autoUpdateFill);
+    f.per_episode.addEventListener("change", autoUpdateFill);
+    f.addEventListener("submit", submit);
+  });
 
-    async function submit(e) {
-        e.preventDefault();
-        errBox().hidden = true;
-        const f = form();
-        const datasetId = window.currentDataset;
-        if (!datasetId) {
-            errBox().textContent = "No dataset open";
-            errBox().hidden = false;
-            return;
-        }
-        const name = f.name.value.trim();
-        if (name === "reward" || name === "success") {
-            errBox().textContent = `'${name}' is a default feature — use the banner instead.`;
-            errBox().hidden = false;
-            return;
-        }
-        let shape, fillValue;
-        try {
-            shape = parseShape(f.shape.value);
-            fillValue = parseFillValue(f.fill_value.value, f.dtype.value);
-        } catch (err) {
-            errBox().textContent = err.message;
-            errBox().hidden = false;
-            return;
-        }
-        const body = {
-            name,
-            dtype: f.dtype.value,
-            shape,
-            per_episode: f.per_episode.checked,
-            fill_value: fillValue,
-        };
-        const r = await fetch(`/api/datasets/${encodeURIComponent(datasetId)}/features`, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify(body),
-        });
-        if (!r.ok) {
-            const detail = (await r.json().catch(() => ({}))).detail || r.statusText;
-            errBox().textContent = `Add failed: ${detail}`;
-            errBox().hidden = false;
-            return;
-        }
-        if (typeof window.refreshDatasetInfo === "function") {
-            await window.refreshDatasetInfo(datasetId);
-        }
-        dialog().close();
-    }
-
-    function open() {
-        resetForm();
-        const d = dialog();
-        if (!d) {
-            console.warn("[add-feature] dialog DOM not present");
-            return;
-        }
-        d.showModal();
-    }
-
-    document.addEventListener("DOMContentLoaded", () => {
-        const f = form();
-        if (!f) return;
-        f.dtype.addEventListener("change", autoUpdateFill);
-        f.per_episode.addEventListener("change", autoUpdateFill);
-        f.addEventListener("submit", submit);
-    });
-
-    window.AddFeatureDialog = {open};
-}());
+  window.AddFeatureDialog = { open };
+})();
 ```
 
 - [ ] **Step 4: Mount the "+ Add feature" button**
@@ -1442,7 +1515,8 @@ In `feature_editing.js`, in the function that renders feature rows (search for `
 const addBtnRow = document.createElement("div");
 addBtnRow.className = "feature-row feature-row-addbtn";
 addBtnRow.innerHTML = `<button class="feature-add-btn">+ Add feature</button>`;
-addBtnRow.querySelector("button").onclick = () => window.AddFeatureDialog && window.AddFeatureDialog.open();
+addBtnRow.querySelector("button").onclick = () =>
+  window.AddFeatureDialog && window.AddFeatureDialog.open();
 container.appendChild(addBtnRow);
 ```
 
@@ -1468,6 +1542,7 @@ git commit -m "feat(gui): + Add feature dialog for generic custom column add"
 ## Task 14: Success widget renderer (tri-state segment control)
 
 **Files:**
+
 - Modify: `src/lerobot/gui/static/feature_editing.js`
 - Modify: `src/lerobot/gui/static/style.css`
 
@@ -1476,17 +1551,44 @@ git commit -m "feat(gui): + Add feature dialog for generic custom column add"
 Append to `src/lerobot/gui/static/style.css`:
 
 ```css
-.success-segment { display: inline-flex; gap: 0; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
-.success-segment button {
-  border: 0; background: transparent; padding: 6px 14px; font-size: 13px; cursor: pointer;
+.success-segment {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  overflow: hidden;
 }
-.success-segment button + button { border-left: 1px solid #ccc; }
-.success-segment button.active { background: #e0e0e0; font-weight: 600; }
-.success-segment button.failure.active { background: #fbe0e0; color: #b00; }
-.success-segment button.success.active { background: #e0f5e0; color: #0a0; }
-.feature-row-band-success-pos { background: #cfe9cf; }
-.feature-row-band-success-neg { background: #f5cfcf; }
-.feature-row-band-success-zero { background: #e6e6e6; }
+.success-segment button {
+  border: 0;
+  background: transparent;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.success-segment button + button {
+  border-left: 1px solid #ccc;
+}
+.success-segment button.active {
+  background: #e0e0e0;
+  font-weight: 600;
+}
+.success-segment button.failure.active {
+  background: #fbe0e0;
+  color: #b00;
+}
+.success-segment button.success.active {
+  background: #e0f5e0;
+  color: #0a0;
+}
+.feature-row-band-success-pos {
+  background: #cfe9cf;
+}
+.feature-row-band-success-neg {
+  background: #f5cfcf;
+}
+.feature-row-band-success-zero {
+  background: #e6e6e6;
+}
 ```
 
 - [ ] **Step 2: Register the success widget renderer**
@@ -1495,36 +1597,36 @@ In `feature_editing.js`, find the renderer registry (search for the pattern that
 
 ```javascript
 function renderInspectorWidget(name, schema, valuesInRange) {
-    if (name === "success" && schema.dtype === "int8" && schema.per_episode) {
-        return renderSuccessSegment(name, valuesInRange);
-    }
-    // ... existing dispatch by (dtype, shape) below
+  if (name === "success" && schema.dtype === "int8" && schema.per_episode) {
+    return renderSuccessSegment(name, valuesInRange);
+  }
+  // ... existing dispatch by (dtype, shape) below
 }
 
 function renderSuccessSegment(name, valuesInRange) {
-    const wrap = document.createElement("div");
-    wrap.className = "success-segment";
-    const states = [
-        {value: -1, label: "✗ Failure", cls: "failure"},
-        {value: 0,  label: "— Unmarked", cls: "unmarked"},
-        {value: 1,  label: "✓ Success", cls: "success"},
-    ];
-    const uniformValue = uniformOrNull(valuesInRange);
-    for (const s of states) {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = s.cls + (uniformValue === s.value ? " active" : "");
-        b.textContent = s.label;
-        b.onclick = () => stageFeatureSetForCurrentSelection(name, s.value);
-        wrap.appendChild(b);
-    }
-    return wrap;
+  const wrap = document.createElement("div");
+  wrap.className = "success-segment";
+  const states = [
+    { value: -1, label: "✗ Failure", cls: "failure" },
+    { value: 0, label: "— Unmarked", cls: "unmarked" },
+    { value: 1, label: "✓ Success", cls: "success" },
+  ];
+  const uniformValue = uniformOrNull(valuesInRange);
+  for (const s of states) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = s.cls + (uniformValue === s.value ? " active" : "");
+    b.textContent = s.label;
+    b.onclick = () => stageFeatureSetForCurrentSelection(name, s.value);
+    wrap.appendChild(b);
+  }
+  return wrap;
 }
 
 function uniformOrNull(arr) {
-    if (!arr || !arr.length) return null;
-    const first = arr[0];
-    return arr.every(v => v === first) ? first : null;
+  if (!arr || !arr.length) return null;
+  const first = arr[0];
+  return arr.every((v) => v === first) ? first : null;
 }
 ```
 
@@ -1558,6 +1660,7 @@ git commit -m "feat(gui): tri-state segment-control widget for success int8 per_
 ## Task 15: `dataset.schema_changed` WS handler in JS
 
 **Files:**
+
 - Modify: `src/lerobot/gui/static/app.js` (or wherever the playback WS message dispatch lives)
 - Modify: `src/lerobot/gui/static/feature_editing.js` (handler)
 
@@ -1606,6 +1709,7 @@ git commit -m "feat(gui): handle dataset.schema_changed WS event — re-render r
 ## Task 16: Orphan `.tmp` cleanup on dataset open
 
 **Files:**
+
 - Modify: `src/lerobot/gui/api/datasets.py` (call `_sweep_orphan_tmp_shards` in dataset-open path)
 - Test: `tests/gui/test_feature_add_endpoints.py`
 

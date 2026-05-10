@@ -19,22 +19,22 @@ Both surfaces hit the same new core API: `dataset_tools.add_features_inplace()`,
 
 ### `reward` (per-frame)
 
-| | |
-|---|---|
-| Schema | `{dtype: "float32", shape: [1], names: null}` |
-| Initial fill on add | `0.0` |
-| Timeline row | line plot, scaled to per-episode min/max |
-| Inspector widget | slider + number input (per [feature_editing.md](feature_editing.md) numeric scalar rule) |
+|                     |                                                                                          |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| Schema              | `{dtype: "float32", shape: [1], names: null}`                                            |
+| Initial fill on add | `0.0`                                                                                    |
+| Timeline row        | line plot, scaled to per-episode min/max                                                 |
+| Inspector widget    | slider + number input (per [feature_editing.md](feature_editing.md) numeric scalar rule) |
 
 ### `success` (per-episode, tri-state)
 
-| | |
-|---|---|
-| Schema | `{dtype: "int8", shape: [1], names: null, per_episode: true}` |
-| Initial fill on add | `0` (unmarked) |
-| Encoding | `1` = success, `0` = unmarked, `-1` = failure |
-| Timeline row | colored band — gray (`0`) / green (`+1`) / red (`-1`), full episode width |
-| Inspector widget | three-button segment control: `[ ✗ Failure ]  [ — Unmarked ]  [ ✓ Success ]`. Edit auto-coerced to whole episode via existing per-episode handling. |
+|                     |                                                                                                                                                     |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Schema              | `{dtype: "int8", shape: [1], names: null, per_episode: true}`                                                                                       |
+| Initial fill on add | `0` (unmarked)                                                                                                                                      |
+| Encoding            | `1` = success, `0` = unmarked, `-1` = failure                                                                                                       |
+| Timeline row        | colored band — gray (`0`) / green (`+1`) / red (`-1`), full episode width                                                                           |
+| Inspector widget    | three-button segment control: `[ ✗ Failure ]  [ — Unmarked ]  [ ✓ Success ]`. Edit auto-coerced to whole episode via existing per-episode handling. |
 
 Both are **visible by default** in the feature column (already in the [feature_editing.md](feature_editing.md) heuristic) and **pinned at the top**.
 
@@ -43,7 +43,7 @@ Both are **visible by default** in the feature column (already in the [feature_e
 On dataset open, if `reward` or `success` is absent from `info.json`'s `features` dict, render a top-of-data-tab banner:
 
 > ⚠️ This dataset is missing default features: **reward**, **success**.
-> [ Add missing features ]   [ Dismiss ]
+> [ Add missing features ] [ Dismiss ]
 
 - **Add** → `POST /api/datasets/{id}/features/defaults`. Modal shows progress (`Rewriting N parquet shards… ~10s`). On success: dataset metadata reloads, schema event pushed, banner disappears, rows appear.
 - **Dismiss** → banner hides for the rest of the **browser session** only (in-memory `bannerDismissed` set keyed by dataset_id; cleared on `onDatasetClosed` and on page reload). Reappears on next open — we want the user to add them eventually.
@@ -60,13 +60,13 @@ This work adds explicit `per_episode: true` to the feature spec dict in `info.js
 
 A "**+ Add feature**" button at the bottom of the feature-rows column opens a modal:
 
-| Field | Type | Notes |
-|---|---|---|
-| Name | text | required, unique vs existing schema, must match `[a-zA-Z_][a-zA-Z0-9_.]*`, not in `DEFAULT_FEATURES`, not `reward` or `success` (those go through the banner) |
-| Dtype | dropdown | `bool`, `int8`, `int64`, `float32`, `string` (V1 — vectors and images excluded) |
-| Shape | text | default `[1]`; for V1 the editor only supports `[1]` and `[N≤8]` cleanly per [feature_editing.md](feature_editing.md) edit-affordances table |
-| Per-episode | checkbox | declared hint; defaults to off |
-| Fill value | text | auto-defaulted from dtype (`0` for numerics, `False` for bool, `""` for string); editable. **If per-episode + bool, default flips to `True`** (matches the "successful demo by default" pattern) |
+| Field       | Type     | Notes                                                                                                                                                                                            |
+| ----------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Name        | text     | required, unique vs existing schema, must match `[a-zA-Z_][a-zA-Z0-9_.]*`, not in `DEFAULT_FEATURES`, not `reward` or `success` (those go through the banner)                                    |
+| Dtype       | dropdown | `bool`, `int8`, `int64`, `float32`, `string` (V1 — vectors and images excluded)                                                                                                                  |
+| Shape       | text     | default `[1]`; for V1 the editor only supports `[1]` and `[N≤8]` cleanly per [feature_editing.md](feature_editing.md) edit-affordances table                                                     |
+| Per-episode | checkbox | declared hint; defaults to off                                                                                                                                                                   |
+| Fill value  | text     | auto-defaulted from dtype (`0` for numerics, `False` for bool, `""` for string); editable. **If per-episode + bool, default flips to `True`** (matches the "successful demo by default" pattern) |
 
 Submit → `POST /api/datasets/{id}/features` with `{name, dtype, shape, per_episode, fill_value}` → in-place rewrite → schema reload.
 
@@ -178,22 +178,26 @@ In [`feature_editing.js`](../static/feature_editing.js) and a new [`add_feature_
 ## Critical files
 
 **LeRobot core:**
+
 - [src/lerobot/datasets/dataset_tools.py](../../datasets/dataset_tools.py) — new `add_features_inplace()`; reuses existing parquet helpers and `compute_stats.py`.
 - [src/lerobot/datasets/feature_utils.py](../../datasets/feature_utils.py) — extend `validate_feature_dtype_and_shape` if needed for the `int8` + `per_episode` combo.
 - [src/lerobot/datasets/dataset_metadata.py](../../datasets/dataset_metadata.py) — preserve the `per_episode` hint when round-tripping `info.json`.
 
 **GUI backend:**
+
 - [src/lerobot/gui/api/datasets.py](../api/datasets.py) — two new POST endpoints; `FeatureSchema.per_episode` already present, surface the declared value (not just inferred).
 - [src/lerobot/gui/api/playback.py](../api/playback.py) — emit `dataset.schema_changed` over the WS.
 - [src/lerobot/gui/state.py](../state.py) — pending-edits guard helper for the schema-add safety rail.
 
 **GUI frontend:**
+
 - [src/lerobot/gui/static/feature_editing.js](../static/feature_editing.js) — register success renderer; subscribe to `schema_changed`; render banner; render "+ Add feature" button.
 - new `src/lerobot/gui/static/add_feature_dialog.js` — modal dialog logic.
 - [src/lerobot/gui/static/index.html](../static/index.html) — load the new JS file; banner DOM slot.
 - [src/lerobot/gui/static/style.css](../static/style.css) — banner, dialog, success segment control styles.
 
 **Tests:**
+
 - new `tests/datasets/test_add_features_inplace.py` — schema additions; per-episode hint round-trip; stats recomputation for new columns; orphan `.tmp` cleanup; rejection of name collisions / `DEFAULT_FEATURES` / bad dtypes.
 - new `tests/gui/test_feature_add_endpoints.py` — POST `.../features` and POST `.../features/defaults`; pending-edit guard; cache invalidation.
 - extend [tests/gui/test_state.py](../../../tests/gui/test_state.py) for pending-edit safety rail.
@@ -205,6 +209,7 @@ In [`feature_editing.js`](../static/feature_editing.js) and a new [`add_feature_
 `uv run pytest tests/gui tests/datasets -svv -k "add_feature"` after implementation.
 
 Manual:
+
 1. Open `KeWangRobotics/sim_pick` (lacks `reward` / `success`) → banner appears → click Add → progress modal → rows appear → drag-select → edit values → Save → reload → values persist, schema persists.
 2. Open `+ Add feature` dialog → add a custom `int64[1]` per-frame feature → row appears with line plot → edit via slider → Save → reload → new feature persists.
 3. Add a per-episode bool feature via dialog → confirm full-episode coercion → toggle for one episode → confirm timeline shows uniform band.
