@@ -128,6 +128,23 @@ class LatencyTracer:
             # Duration scalar for sparklines / percentile queries.
             self._record[f"{name}_ms"] = end_off - start_off
 
+    def add_span(self, name: str, start_perf: float, end_perf: float | None = None) -> None:
+        """Record a span from already-captured ``perf_counter`` values.
+
+        Use when the natural code structure (if/elif branches, early
+        ``continue``, etc.) makes a ``with span(name):`` block awkward.
+        Capture the start before the work and pass it here afterwards.
+
+        ``end_perf=None`` uses ``time.perf_counter()`` at call time.
+        """
+        assert self._started, "LatencyTracer.start() must be called before add_span()"
+        if end_perf is None:
+            end_perf = time.perf_counter()
+        start_off = self._offset_ms(start_perf)
+        end_off = self._offset_ms(end_perf)
+        self._spans[name] = [start_off, end_off]
+        self._record[f"{name}_ms"] = end_off - start_off
+
     def cam_consume(self, cam_key: str, latest_ts: float) -> None:
         """Record a camera frame consumption event.
 

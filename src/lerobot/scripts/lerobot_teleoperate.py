@@ -55,10 +55,8 @@ lerobot-teleoperate \
 
 import logging
 import time
-from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pprint import pformat
-from typing import Any
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
@@ -109,6 +107,8 @@ from lerobot.utils.latency import (
     LatencyAggregator,
     LatencySnapshotWriter,
     LatencyTracer,
+    format_latency_summary,
+    maybe_span,
 )
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
@@ -138,36 +138,6 @@ class TeleoperateConfig:
     # Where to write latency_snapshot.json (when --latency_monitor=true).
     # The GUI reads from this fixed location to render the live overlays.
     latency_output_dir: str = "outputs/teleop"
-
-
-def _maybe_span(tracer: LatencyTracer | None, name: str):
-    """Context manager around a tracer span; nullcontext when tracer is None."""
-    return tracer.span(name) if tracer is not None else nullcontext()
-
-
-def _format_latency_summary(snap: dict[str, Any]) -> str:
-    """One-line digest of an aggregator snapshot — used for stderr at 1 Hz."""
-    stages = snap.get("stages", {})
-
-    def p50_p95(key: str) -> str | None:
-        s = stages.get(key)
-        if not s:
-            return None
-        return f"{s.get('p50', 0):.1f}/{s.get('p95', 0):.1f}ms"
-
-    parts: list[str] = []
-    if (s := p50_p95("loop_dt_ms")) is not None:
-        parts.append(f"loop {s}")
-    if (gobs := stages.get("get_observation_ms")) is not None:
-        parts.append(f"obs {gobs.get('p50', 0):.1f}ms")
-    if (send := stages.get("action_send_ms")) is not None:
-        parts.append(f"send {send.get('p50', 0):.1f}ms")
-    cam_keys = sorted(k for k in stages if k.startswith("cam_") and k.endswith("_stale_ms"))
-    for k in cam_keys:
-        cam_name = k[len("cam_") : -len("_stale_ms")]
-        parts.append(f"{cam_name} stale {stages[k].get('p50', 0):.0f}ms")
-    parts.append(f"overrun {snap.get('overrun_ratio', 0) * 100:.0f}%")
-    return " · ".join(parts)
 
 
 def teleop_loop(
@@ -219,7 +189,7 @@ def teleop_loop(
         # microseconds-fast) cam.read_latest() per camera. In practice the
         # span time is dominated by the motor sync_read; finer breakdown
         # (motor vs. cam consume) is V2.
-        with _maybe_span(tracer, "get_observation"):
+        with maybe_span(tracer, "get_observation"):
             obs = robot.get_observation()
 
         # Per-camera staleness/period — read latest_timestamp from each camera
@@ -232,7 +202,7 @@ def teleop_loop(
                     tracer.cam_consume(cam_key, ts)
 
         # Run obs processors + stream writer (for GUI live viewer with overlays)
-        with _maybe_span(tracer, "process_obs"):
+        with maybe_span(tracer, "process_obs"):
             if obs_stream_steps:
                 obs_for_stream = obs
                 for step in obs_stream_steps:
@@ -241,7 +211,7 @@ def teleop_loop(
         if robot.name == "unitree_g1":
             teleop.send_feedback(obs)
 
-        with _maybe_span(tracer, "process_action"):
+        with maybe_span(tracer, "process_action"):
             # Get teleop action
             raw_action = teleop.get_action()
             # Process teleop action through pipeline
@@ -250,7 +220,7 @@ def teleop_loop(
             robot_action_to_send = robot_action_processor((teleop_action, obs))
 
         # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
-        with _maybe_span(tracer, "action_send"):
+        with maybe_span(tracer, "action_send"):
             _ = robot.send_action(robot_action_to_send)
 
         if display_data:
@@ -289,7 +259,7 @@ def teleop_loop(
                 last_summary_at = now
                 snap = latency_aggregator.snapshot(percentiles=(50, 95))
                 if snap["n_records"] > 0:
-                    logging.info("[latency] %s", _format_latency_summary(snap))
+                    logging.info("[latency] %s", format_latency_summary(snap))
         else:
             # Legacy line-rewriting print, only when monitoring is off (else
             # the 1 Hz INFO log is the cleaner UX).

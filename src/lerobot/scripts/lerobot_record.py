@@ -156,6 +156,13 @@ from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.feature_utils import build_dataset_frame, combine_feature_dicts
 from lerobot.utils.import_utils import register_third_party_plugins
+from lerobot.utils.latency import (
+    LatencyAggregator,
+    LatencySnapshotWriter,
+    LatencyTracer,
+    format_latency_summary,
+    maybe_span,
+)
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import (
     init_logging,
@@ -251,6 +258,15 @@ class RecordConfig:
     # Action interpolation multiplier for smoother policy control (1=off, 2=2x, 3=3x)
     # Only applies when using a policy (not teleop)
     interpolation_multiplier: int = 1
+    # Latency monitoring: capture per-stage timing into an in-memory aggregator
+    # and publish a JSON snapshot for the GUI to read. Mirrors the teleop flag.
+    # See src/lerobot/gui/docs/latency_monitoring.md.
+    latency_monitor: bool = False
+    # Where to write latency_snapshot.json (when --latency_monitor=true).
+    # Same default as teleop so the GUI's polling endpoint reads from one
+    # known location regardless of which workflow is active. The GUI's
+    # _ensure_no_active_process() ensures only one writer at a time.
+    latency_output_dir: str = "outputs/teleop"
 
     def __post_init__(self):
         # HACK: We parse again the cli args here to get the pretrained path if there was one.
@@ -327,6 +343,8 @@ def record_loop(
     interpolator: ActionInterpolator | None = None,
     display_compressed_images: bool = False,
     play_sounds: bool = True,
+    latency_aggregator: LatencyAggregator | None = None,
+    latency_writer: LatencySnapshotWriter | None = None,
 ) -> list[dict]:
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -391,25 +409,57 @@ def record_loop(
     # Collect intervention episode buffers for deferred saving (avoids mid-episode lag)
     pending_intervention_episodes: list[dict] = []
 
+    tracer = (
+        LatencyTracer(latency_aggregator, loop_kind="record", target_fps=fps)
+        if latency_aggregator is not None
+        else None
+    )
+    last_summary_at: float = 0.0
+
     timestamp = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
+        if tracer is not None:
+            tracer.start()
 
         if events["exit_early"]:
             events["exit_early"] = False
             break
 
-        # Get robot observation
-        obs = robot.get_observation()
+        # Get robot observation. The span includes follower sync_read +
+        # cached cam.read_latest() per camera (cameras are microseconds-fast
+        # because grab threads cache them; the time is dominated by the
+        # motor sync_read).
+        with maybe_span(tracer, "get_observation"):
+            obs = robot.get_observation()
+
+        # Per-camera staleness/period — read latest_timestamp from each
+        # camera right after get_observation. Only adds entries to the
+        # tracer's record; cheap.
+        if tracer is not None:
+            cams = getattr(robot, "cameras", None) or {}
+            for cam_key, cam in cams.items():
+                ts = getattr(cam, "latest_timestamp", None)
+                if ts is not None:
+                    tracer.cam_consume(cam_key, ts)
 
         # Applies a pipeline to the raw robot observation, default is IdentityProcessor
-        obs_processed = robot_observation_processor(obs)
+        with maybe_span(tracer, "process_obs"):
+            obs_processed = robot_observation_processor(obs)
 
         if policy is not None or dataset is not None or intervention_dataset is not None:
             # Use main dataset features (intervention_dataset has the same features)
             features = dataset.features if dataset is not None else intervention_dataset.features
             observation_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
+
+        # The action-selection block below has many branches (policy with /
+        # without interpolation, intervention, teleop-only, dual teleop, no-op).
+        # We time the whole thing as a single ``process_action`` span via
+        # add_span so we don't have to wrap each branch in its own ``with``.
+        # ``continue``s inside the branches simply discard this iteration's
+        # tracer record (next start() resets), which is the right behavior.
+        process_action_t0 = time.perf_counter() if tracer is not None else 0.0
 
         # Check for intervention if teleop supports it (only during main recording with policy)
         # Skip during reset phase (intervention_dataset is None) to avoid confusing behavior
@@ -652,22 +702,36 @@ def record_loop(
                 )
             continue
 
+        # Close the process_action span here — by this point an action
+        # was selected from one of the branches above. Iterations that
+        # `continue`d above are discarded by the next start() and never
+        # commit, so their absent process_action span is intentional.
+        if tracer is not None:
+            tracer.add_span("process_action", process_action_t0)
+
         # Send action to robot
         # Action can eventually be clipped using `max_relative_target`,
         # so action actually sent is saved in the dataset. action = postprocessor.process(action)
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
-        _sent_action = robot.send_action(robot_action_to_send)
+        with maybe_span(tracer, "action_send"):
+            _sent_action = robot.send_action(robot_action_to_send)
 
         # Write to dataset (only on real policy frames, not interpolated-only iterations)
         if dataset is not None and is_record_frame:
-            action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
-            frame = {**observation_frame, **action_frame, "task": single_task}
-            dataset.add_frame(frame)
+            with maybe_span(tracer, "dataset_write"):
+                action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
+                frame = {**observation_frame, **action_frame, "task": single_task}
+                dataset.add_frame(frame)
 
         if display_data:
             log_rerun_data(
                 observation=obs_processed, action=action_values, compress_images=display_compressed_images
             )
+
+        # Commit BEFORE precise_sleep so loop_dt_ms reflects iteration *work*
+        # time, not work + sleep — same rationale as teleop_loop.
+        if tracer is not None:
+            tracer.commit()
 
         dt_s = time.perf_counter() - start_loop_t
 
@@ -678,6 +742,19 @@ def record_loop(
             )
 
         precise_sleep(max(sleep_time_s, 0.0))
+
+        # Snapshot publish + 1 Hz stderr summary after sleep so they consume
+        # idle time, not work-budget. Both throttle internally so the cost
+        # at 60 Hz is negligible.
+        if tracer is not None:
+            if latency_writer is not None:
+                latency_writer.maybe_write(latency_aggregator)
+            now = time.time()
+            if now - last_summary_at >= 1.0:
+                last_summary_at = now
+                snap = latency_aggregator.snapshot(percentiles=(50, 95))
+                if snap["n_records"] > 0:
+                    logging.info("[latency] %s", format_latency_summary(snap))
 
         # Update intervention tracking for next iteration
         was_intervening = is_intervention
@@ -863,6 +940,17 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
         listener, events = init_keyboard_listener()
 
+        latency_aggregator: LatencyAggregator | None = None
+        latency_writer: LatencySnapshotWriter | None = None
+        if cfg.latency_monitor:
+            latency_aggregator = LatencyAggregator()
+            latency_writer = LatencySnapshotWriter(
+                cfg.latency_output_dir,
+                loop_kind="record",
+                target_fps=float(cfg.dataset.fps),
+            )
+            logging.info("Latency monitoring enabled; snapshots → %s", latency_writer.path)
+
         if not cfg.dataset.streaming_encoding:
             logging.info(
                 "Streaming encoding is disabled. If you have capable hardware, consider enabling it for way faster episode saving. --dataset.streaming_encoding=true --dataset.encoder_threads=2 # --dataset.vcodec=auto. More info in the documentation: https://huggingface.co/docs/lerobot/streaming_video_encoding"
@@ -890,6 +978,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 control_time_s=cfg.dataset.reset_time_s,
                 single_task=cfg.dataset.single_task,
                 display_data=cfg.display_data,
+                latency_aggregator=latency_aggregator,
+                latency_writer=latency_writer,
             )
 
         dataset_ctx = VideoEncodingManager(dataset) if cfg.dataset.record_images else nullcontext()
@@ -925,6 +1015,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         interpolator=interpolator,
                         display_compressed_images=display_compressed_images,
                         play_sounds=cfg.play_sounds,
+                        latency_aggregator=latency_aggregator,
+                        latency_writer=latency_writer,
                     )
 
                     import time as _time

@@ -580,6 +580,11 @@ async def start_record(req: RecordRequest) -> dict:
         args.append("--resume=true")
     if req.intervention_repo_id:
         args.append(f"--intervention_repo_id={req.intervention_repo_id}")
+    # Always-on latency monitoring for GUI sessions, same output dir as
+    # teleop. _ensure_no_active_process guarantees only one writer is
+    # active at a time, so the shared snapshot path is race-free.
+    args.append("--latency_monitor=true")
+    args.append(f"--latency_output_dir={LATENCY_OUTPUT_DIR}")
 
     extra_env = None
     if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":

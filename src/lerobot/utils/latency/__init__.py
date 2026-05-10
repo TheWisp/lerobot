@@ -19,8 +19,66 @@
 See ``src/lerobot/gui/docs/latency_monitoring.md`` for the design.
 """
 
+from contextlib import nullcontext
+from typing import Any
+
 from lerobot.utils.latency.aggregator import LatencyAggregator
 from lerobot.utils.latency.snapshot import LatencySnapshotWriter
 from lerobot.utils.latency.tracer import LatencyTracer
 
-__all__ = ["LatencyAggregator", "LatencySnapshotWriter", "LatencyTracer"]
+
+def maybe_span(tracer: LatencyTracer | None, name: str):
+    """Context manager around a tracer span; nullcontext when ``tracer`` is None.
+
+    Lets call sites use the same ``with maybe_span(tracer, "name"):``
+    pattern whether monitoring is enabled or not — the cost when off is
+    a nullcontext enter/exit, ~50 ns.
+    """
+    return tracer.span(name) if tracer is not None else nullcontext()
+
+
+# Stages we know how to render in the stderr digest. Order is the
+# preferred display order; only stages actually present in a snapshot
+# are emitted, so this works for teleop, record, and (V2) inference.
+_DIGEST_STAGES: tuple[tuple[str, str], ...] = (
+    ("get_observation_ms", "obs"),
+    ("process_obs_ms", "p_obs"),
+    ("process_action_ms", "p_act"),
+    ("infer_total_ms", "infer"),
+    ("action_send_ms", "send"),
+    ("dataset_write_ms", "dswr"),
+)
+
+
+def format_latency_summary(snap: dict[str, Any]) -> str:
+    """One-line digest of an aggregator snapshot for stderr at 1 Hz.
+
+    Generic across loop kinds: prints loop p50/p95, then each known stage
+    that's present in the snapshot, then per-camera staleness, then
+    overrun%. Stages absent from the snapshot are skipped silently.
+    """
+    stages = snap.get("stages", {})
+
+    parts: list[str] = []
+    loop = stages.get("loop_dt_ms")
+    if loop:
+        parts.append(f"loop {loop.get('p50', 0):.1f}/{loop.get('p95', 0):.1f}ms")
+    for key, label in _DIGEST_STAGES:
+        s = stages.get(key)
+        if s:
+            parts.append(f"{label} {s.get('p50', 0):.1f}ms")
+    cam_keys = sorted(k for k in stages if k.startswith("cam_") and k.endswith("_stale_ms"))
+    for k in cam_keys:
+        cam_name = k[len("cam_") : -len("_stale_ms")]
+        parts.append(f"{cam_name} stale {stages[k].get('p50', 0):.0f}ms")
+    parts.append(f"overrun {snap.get('overrun_ratio', 0) * 100:.0f}%")
+    return " · ".join(parts)
+
+
+__all__ = [
+    "LatencyAggregator",
+    "LatencySnapshotWriter",
+    "LatencyTracer",
+    "format_latency_summary",
+    "maybe_span",
+]
