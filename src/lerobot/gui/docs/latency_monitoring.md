@@ -621,6 +621,50 @@ Both surfaces poll at 1–4 Hz. The aggregator's snapshot endpoint is cheap (~50
 
 ---
 
+## Post-V1 additions
+
+### `LatencySession` — the per-loop helper
+
+The first time `lerobot-record` was instrumented, it became clear that every loop wires the same six lines: build aggregator, build tracer, build snapshot writer, throttle the stderr summary, commit on every iteration, swallow errors so the next iteration starts clean. `LatencySession` ([utils/latency/session.py](../../utils/latency/session.py)) bundles all of that:
+
+```python
+session = LatencySession.from_config(
+    enabled=cfg.latency_monitor,
+    loop_kind="teleop",
+    target_fps=float(cfg.fps),
+    output_dir=cfg.latency_output_dir if cfg.latency_monitor else None,
+)
+# In the loop body:
+with session.iteration():
+    with session.span("get_observation"):
+        obs = robot.get_observation()
+    session.cam_consume_all(getattr(robot, "cameras", None))
+    with session.span("process_obs"):
+        ...
+    with session.span("action_send"):
+        robot.send_action(...)
+```
+
+`LatencySession.disabled()` returns a no-op session whose methods all short-circuit; call sites have no `if tracer is None` branches. For loops with branchy `continue` paths that can't fit in a single `with iteration():` block (e.g. `record_loop`), use the explicit `start_iter()` / `end_iter()` pair — `continue`-skipped iterations are simply discarded and the next `start_iter()` resets cleanly.
+
+### HVLA inference profiling
+
+The `InferenceThread` ([policies/hvla/s1_inference.py](../../policies/hvla/s1_inference.py)) takes an optional `latency_session` and stamps the four GPU stages — `enc_obs`, `rl_tok`, `s1_denoise`, `actor` — sequentially from `t_infer_start`. CUDA-event durations from the existing `_TimedBlock` timers are read after the end-of-inference `cuda.synchronize()`, then converted to wall-clock spans. The Gantt visual shows them in execution order; cumulative durations match `(t_infer_end - t_infer_start)` modulo dispatch overhead. The `obs_stale_ms` field carries the obs→infer-start delay, and `inference_ms` / `total_delay_ms` are the umbrella scalars.
+
+Enable via `--latency-monitor` on `lerobot.policies.hvla.launch`, or unconditionally when launched from the GUI. Snapshot lands in `outputs/hvla_runs/latency_snapshot.json` so it doesn't collide with the teleop snapshot.
+
+### Multi-source GUI endpoint
+
+Multiple loops can run concurrently (e.g. teleop + HVLA inference, when running HVLA with a teleop intervention path). The dashboard has to display them side-by-side, so the snapshot endpoint takes a `source` query param:
+
+- `GET /api/run/latency-metrics?source=teleop` — teleop snapshot (default; back-compat for existing callers)
+- `GET /api/run/latency-metrics?source=hvla_infer` — HVLA inference snapshot
+- `GET /api/run/latency-sources` — lists all known sources with `{key, loop_kind, fresh, age_s}`. Snapshots older than 5 s are reported with `fresh=False` so the dashboard can grey them out instead of dropping them.
+
+`LATENCY_SOURCES` in [api/run.py](../../gui/api/run.py) is the registry; adding a new loop kind means appending to the dict and (if the script's CLI doesn't yet expose `--latency-output-dir`) plumbing it through.
+
+---
+
 ## Open questions
 
 - **GUI transport**: the per-camera corner overlay and bottom dashboard both want a JSON snapshot of the aggregator at 1–4 Hz. Three options: (a) extend `ObservationStream` shared-mem with a `latency` block (matches the existing live-frame plumbing); (b) add a polled HTTP endpoint following the RLT `get_rlt_metrics` pattern at [api/run.py:697](../../gui/api/run.py#L697) (simplest, already a known pattern); (c) WebSocket push (lowest latency, most code). Default leaning: **(b)** — RLT already proves the pattern works, both surfaces poll the same endpoint, no new transport machinery.
