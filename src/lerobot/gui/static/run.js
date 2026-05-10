@@ -2143,6 +2143,23 @@ let _ganttRange = null;           // [minMs, maxMs] — only widens across rende
 // jitter doesn't keep redrawing the timeline at slightly different scales.
 const _GANTT_AXIS_STEP_MS = 10;
 
+// Pick a "nice" tick interval (1, 2, 5, 10, 20, 50, ... ms) that produces
+// roughly `targetCount` ticks across `range_ms`. Standard chart-axis trick:
+// scale to a power of 10, snap to {1, 2, 5}, scale back. Avoids ugly tick
+// values like "13.7 ms" between gridlines.
+function _niceTickStep(range_ms, targetCount) {
+    const raw = range_ms / Math.max(targetCount, 1);
+    const exp = Math.floor(Math.log10(raw));
+    const base = Math.pow(10, exp);
+    const norm = raw / base;
+    let nice;
+    if (norm <= 1) nice = 1;
+    else if (norm <= 2) nice = 2;
+    else if (norm <= 5) nice = 5;
+    else nice = 10;
+    return nice * base;
+}
+
 function _computeStableRange(iterations) {
     // Pessimistic union over ALL representative iterations so switching
     // between median/p95/max in the dropdown doesn't rescale the axis.
@@ -2293,7 +2310,33 @@ function _drawGantt(canvas, rec, [minMs, maxMs]) {
     ctx.setLineDash([]);
     ctx.fillText('action_sent', endX, padT - 4);
 
-    // X-axis tick labels at the extents.
+    // X-axis: pick a "nice" tick interval based on the visible range, then
+    // draw subtle vertical gridlines + ms labels at each tick. Lets the
+    // operator read camera staleness (or any duration) directly off the
+    // canvas instead of guessing from bar lengths.
+    const range = maxMs - minMs;
+    const tickStep = _niceTickStep(range, 8);  // aim for ~8 ticks max
+    const firstTick = Math.ceil(minMs / tickStep) * tickStep;
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    for (let v = firstTick; v <= maxMs; v += tickStep) {
+        const x = xOf(v);
+        // Skip ticks too close to the iter_start / action_sent lines so
+        // their labels don't visually collide with those distinguished ones.
+        const tooCloseToZero = Math.abs(x - zeroX) < 14;
+        const tooCloseToEnd = Math.abs(x - endX) < 14;
+        if (!tooCloseToZero && !tooCloseToEnd) {
+            ctx.strokeStyle = '#1f1f3a';
+            ctx.beginPath();
+            ctx.moveTo(x, padT - 2);
+            ctx.lineTo(x, H - padB);
+            ctx.stroke();
+            ctx.fillStyle = '#666';
+            ctx.fillText(`${v}`, x, H - 4);
+        }
+    }
+    // Always show the extent labels at the corners as a fallback for
+    // narrow ranges where no tick happens to land near the edges.
     ctx.fillStyle = '#888';
     ctx.font = '10px monospace';
     ctx.textAlign = 'left';
