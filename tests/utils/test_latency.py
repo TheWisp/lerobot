@@ -311,6 +311,18 @@ class TestTracer:
             steps.append(tracer.commit()["step"])
         assert steps == [0, 1, 2, 3, 4]
 
+    def test_iter_start_perf_recorded(self):
+        """The wall-clock perf_counter at iteration start lands in the
+        record so multi-track dashboards (HVLA main + inference) can
+        align spans on a shared time axis without joining records."""
+        tracer = LatencyTracer()
+        before = time.perf_counter()
+        tracer.start()
+        record = tracer.commit()
+        after = time.perf_counter()
+        assert "iter_start_perf" in record
+        assert before <= record["iter_start_perf"] <= after
+
     def test_cam_consume_records_capture_and_consume_offsets(self):
         tracer = LatencyTracer()
         tracer.start()

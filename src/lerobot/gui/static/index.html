@@ -283,55 +283,14 @@
                             </div>
                         </div>
                     </div>
-                    <!-- Latency tab -->
+                    <!-- Latency tab.
+                         The body is built by run.js: one .latency-track block per
+                         fresh source returned by /api/run/latency-sources. Multi-
+                         thread loops (HVLA) render two stacked tracks (main +
+                         inference); single-thread loops render one. -->
                     <div class="run-bottom-panel" id="run-bottom-panel-latency" style="display:none">
-                        <div class="latency-dashboard">
-                            <div class="latency-section">
-                                <div class="latency-section-title">Loop Health</div>
-                                <div class="latency-grid" id="latency-grid-system">
-                                    <!-- Populated by run.js _updateLatencyDashboard -->
-                                </div>
-                            </div>
-                            <div class="latency-section">
-                                <div class="latency-section-title">
-                                    Iteration timeline
-                                    <span class="latency-gantt-controls">
-                                        <select id="latency-gantt-pick" title="Aggregate views synthesize a typical iteration where each stage independently shows its own percentile. Sample views show one real captured iteration whose per-stage values are whatever happened in that one iteration.">
-                                            <optgroup label="Aggregate (per-stage percentile)">
-                                                <option value="aggregate_median" selected>median</option>
-                                                <option value="aggregate_p95">p95</option>
-                                            </optgroup>
-                                            <optgroup label="Sample (real iteration)">
-                                                <option value="median">median sample</option>
-                                                <option value="p95">p95 sample</option>
-                                                <option value="p99">p99 sample</option>
-                                                <option value="max">worst (max loop)</option>
-                                                <option value="latest">latest</option>
-                                            </optgroup>
-                                        </select>
-                                        <span id="latency-gantt-meta"></span>
-                                    </span>
-                                </div>
-                                <div class="latency-gantt-panel" id="latency-gantt-panel"
-                                     title="Per-iteration timeline. Bars are tracer spans; diamonds are camera frame captures (often before t=0 because cameras grab in a background thread). Gaps in the timeline indicate uninstrumented work; overlaps indicate parallel stages.">
-                                    <div class="latency-gantt-canvas-wrap">
-                                        <canvas id="latency-gantt-canvas"></canvas>
-                                    </div>
-                                    <div class="latency-gantt-legend" id="latency-gantt-legend"></div>
-                                    <div class="latency-empty" id="latency-gantt-empty">No timeline yet — waiting for first snapshot…</div>
-                                </div>
-                            </div>
-                            <div class="latency-section">
-                                <div class="latency-section-title">Cameras</div>
-                                <div class="latency-cam-grid" id="latency-grid-cameras">
-                                    <div class="latency-empty">No camera data yet — waiting for first snapshot…</div>
-                                </div>
-                            </div>
-                            <div class="latency-meta" id="latency-meta">
-                                <span id="latency-meta-records">0 records</span>
-                                <span id="latency-meta-dropped"></span>
-                                <span id="latency-meta-updated"></span>
-                            </div>
+                        <div class="latency-dashboard" id="latency-tracks">
+                            <div class="latency-empty" id="latency-no-sources">No latency data yet — waiting for first snapshot…</div>
                         </div>
                     </div>
                 </div>
