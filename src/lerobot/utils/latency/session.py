@@ -96,18 +96,30 @@ class LatencySession:
         target_fps: float | None = None,
         output_dir: str | os.PathLike[str] | None = None,
         summary_interval_s: float = 1.0,
+        process: str | None = None,
+        track: str | None = None,
     ) -> LatencySession:
         """Build either a real session or a no-op (when ``enabled=False``).
 
         ``output_dir`` is the directory for ``latency_snapshot.json``.
         Pass ``None`` to skip the snapshot writer entirely (still
         keeps the in-memory aggregator and stderr summary).
+
+        ``process`` / ``track`` are stamped into the snapshot envelope so
+        the GUI can group multi-thread loops (e.g. HVLA's main + inference
+        threads). Both default to ``loop_kind`` for single-track loops.
         """
         if not enabled:
             return _DisabledSession()
         agg = LatencyAggregator()
         writer = (
-            LatencySnapshotWriter(output_dir, loop_kind=loop_kind, target_fps=target_fps)
+            LatencySnapshotWriter(
+                output_dir,
+                loop_kind=loop_kind,
+                target_fps=target_fps,
+                process=process,
+                track=track,
+            )
             if output_dir is not None
             else None
         )

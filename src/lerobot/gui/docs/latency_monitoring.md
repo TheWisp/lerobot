@@ -18,12 +18,22 @@ V1 lands the infrastructure on the teleop loop because it's the simplest closed 
 
 Two distinct concerns we keep separate:
 
-|                         | Concern                                               | Target                                                                                                                                                                                                       | Lever if exceeded                                    |
-| ----------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
-| **Capture overhead**    | wall-clock cost added to the hot path by the tracer   | **< 1 ms / iteration** at the worst case (≈ 16 ms budget at 60 Hz). Realistic actual cost: ~10–50 µs per iteration for a dozen `perf_counter` calls + a `queue.put_nowait`. Not sub-µs — that was hyperbole. | uniform sampling (1-in-N), or coarsen the stage list |
-| **Reporting freshness** | how stale the numbers shown in the overlay/stderr are | **100 ms – 1 s is fine** (and even desirable — the human can't read updates faster than ~4 Hz anyway)                                                                                                        | tighten the aggregator's flush interval if needed    |
+|                         | Concern                                               | Target                                                                                                | Lever if exceeded                                    |
+| ----------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| **Capture overhead**    | wall-clock cost added to the hot path by the tracer   | **< 100 µs / iteration** at the worst case (≈ 0.3% of a 30 Hz budget).                                | uniform sampling (1-in-N), or coarsen the stage list |
+| **Reporting freshness** | how stale the numbers shown in the overlay/stderr are | **100 ms – 1 s is fine** (and even desirable — the human can't read updates faster than ~4 Hz anyway) | tighten the aggregator's flush interval if needed    |
 
 These are independent. Capture overhead is on the producer; reporting freshness is on the consumer side of the queue. The GUI showing 1-second-old stats has zero impact on the teleop loop's iteration time.
+
+**Measured cost on a 3+ GHz x86 box (Python 3.12)** — see `TestOverhead` in [test_latency_session.py](../../../../tests/utils/test_latency_session.py):
+
+| Path                                                         | Per-iteration cost | % of 30 Hz budget |
+| ------------------------------------------------------------ | ------------------ | ----------------- |
+| `LatencySession.disabled()` (no-op overrides)                | ~0.7 µs            | 0.002%            |
+| Enabled, empty iteration (`start_iter`/`end_iter` only)      | ~0.9 µs            | 0.003%            |
+| Enabled, realistic shape (4 spans + 3 cameras + `set_field`) | ~11 µs             | 0.033%            |
+
+Thresholds in `TestOverhead` are set ~6× above measured cost: tight enough to catch a regression, loose enough to tolerate slow CI hardware. The 1 Hz snapshot write and 1 Hz stderr summary are amortized — both gated by `time.time()` comparisons that cost ~100 ns when not yet due.
 
 If `--latency-log` causes any measurable overrun in profiling, we add `--latency-sample` (e.g. 0.1 = 1-in-10) before optimizing the tracer further. Honest > clever.
 
