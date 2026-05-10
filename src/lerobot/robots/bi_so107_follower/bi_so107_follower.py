@@ -137,39 +137,48 @@ class BiSO107Follower(Robot):
         return cam.async_read()
 
     def get_observation(self) -> dict[str, Any]:
+        from lerobot.utils.latency import current_span
+
         obs_dict = {}
 
-        # Add "left_" prefix
-        left_obs = self.left_arm.get_observation()
+        # Per-arm motor reads. Each arm's get_observation runs sync_read on
+        # its bus; ``motor_read_left`` / ``motor_read_right`` let the
+        # dashboard show whether one arm is dominating (e.g. when one bus
+        # is over-cabled or has retries) rather than just a combined number.
+        with current_span("motor_read_left"):
+            left_obs = self.left_arm.get_observation()
         obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
 
-        # Add "right_" prefix
-        right_obs = self.right_arm.get_observation()
+        with current_span("motor_read_right"):
+            right_obs = self.right_arm.get_observation()
         obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
 
         # Per-camera frame reads. Strategy is ``latest`` by default — see
         # ``BiSO107FollowerConfig.camera_read_strategy`` for the trade-off.
+        # Per-camera spans isolate which one (if any) is the hot stage when
+        # using ``wait_for_new``.
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
 
             # For RealSense cameras with depth enabled, read aligned color+depth together
             from lerobot.cameras.realsense import RealSenseCamera
 
-            if isinstance(cam, RealSenseCamera) and cam.use_depth:
-                try:
-                    color_frame, depth_frame = cam.read_color_and_aligned_depth()
-                    obs_dict[cam_key] = color_frame
-                    obs_dict[f"{cam_key}_depth"] = depth_frame
-                    dt_ms = (time.perf_counter() - start) * 1e3
-                    logger.debug(f"{self} read {cam_key} + aligned depth: {dt_ms:.1f}ms")
-                except Exception as e:
-                    logger.warning(f"{self} failed to read aligned frames for {cam_key}: {e}")
-                    # Fallback: try reading color only via the configured strategy.
+            with current_span(f"camera_read_{cam_key}"):
+                if isinstance(cam, RealSenseCamera) and cam.use_depth:
+                    try:
+                        color_frame, depth_frame = cam.read_color_and_aligned_depth()
+                        obs_dict[cam_key] = color_frame
+                        obs_dict[f"{cam_key}_depth"] = depth_frame
+                        dt_ms = (time.perf_counter() - start) * 1e3
+                        logger.debug(f"{self} read {cam_key} + aligned depth: {dt_ms:.1f}ms")
+                    except Exception as e:
+                        logger.warning(f"{self} failed to read aligned frames for {cam_key}: {e}")
+                        # Fallback: try reading color only via the configured strategy.
+                        obs_dict[cam_key] = self._read_camera_frame(cam)
+                else:
                     obs_dict[cam_key] = self._read_camera_frame(cam)
-            else:
-                obs_dict[cam_key] = self._read_camera_frame(cam)
-                dt_ms = (time.perf_counter() - start) * 1e3
-                logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+                    dt_ms = (time.perf_counter() - start) * 1e3
+                    logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
         return obs_dict
 

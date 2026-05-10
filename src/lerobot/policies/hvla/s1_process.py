@@ -247,8 +247,6 @@ def _log_joint_jump(
     )
     # Save observation snapshot for offline analysis
     if save_dir and obs_images:
-        import os
-
         import cv2
 
         drop_dir = os.path.join(save_dir, f"joint_jump_{step_count}")
@@ -924,7 +922,6 @@ def run_s1(
             # flat-series format (saved before the 3-group refactor),
             # convert it here so episode-level history isn't lost.
             import json
-            import os
 
             metrics_path = str(rlt_state["output_dir"] / "metrics.json")
             if os.path.exists(metrics_path):

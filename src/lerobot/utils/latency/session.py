@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
@@ -49,6 +50,30 @@ from lerobot.utils.latency.snapshot import LatencySnapshotWriter
 from lerobot.utils.latency.tracer import LatencyTracer
 
 logger = logging.getLogger(__name__)
+
+# Thread-local "current session" registry. ``start_iter()`` registers the
+# session as current for the calling thread; ``end_iter()`` clears it. Code
+# deep in a call stack (e.g. ``Robot.get_observation``) can then declare
+# sub-spans via ``current_span("motor_read")`` without taking the session
+# as a kwarg through every layer.
+#
+# Per-thread (not per-process) on purpose: HVLA's main control thread and
+# inference thread each have their own session — the robot is only ever
+# touched by the main thread, and sub-spans there should land in the main
+# session, not in whatever the inference thread happens to be doing.
+_thread_session = threading.local()
+
+
+def current_span(name: str):
+    """Span on the active session for the calling thread, else nullcontext.
+
+    Use at the bottom of the call stack (e.g. inside ``Robot.get_observation``)
+    so a robot can publish sub-spans without taking a session through its
+    public signature. When monitoring is disabled (no session active on this
+    thread), the cost is one nullcontext enter/exit (~50 ns).
+    """
+    session = getattr(_thread_session, "session", None)
+    return session.span(name) if session is not None else nullcontext()
 
 
 class LatencySession:
@@ -177,12 +202,23 @@ class LatencySession:
         branches that should skip the commit). ``continue``-skipped
         iterations are simply discarded — the next ``start_iter()``
         resets the tracer's per-iteration state.
+
+        Also registers self as the current session for this thread so
+        sub-spans declared deep in the call stack (e.g. inside
+        ``Robot.get_observation``) attach to this iteration.
         """
         self._tracer.start(ep=ep)
+        _thread_session.session = self
 
     def end_iter(self) -> None:
-        """Finalize the current iteration: commit + (throttled) publish/log."""
+        """Finalize the current iteration: commit + (throttled) publish/log.
+
+        Clears the thread-local current-session registration so any
+        ``current_span()`` calls between iterations are no-ops rather
+        than attaching to a stale tracer.
+        """
         self._tracer.commit()
+        _thread_session.session = None
         self._after_commit()
 
     def span(self, name: str):

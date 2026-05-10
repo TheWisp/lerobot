@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lerobot.utils.latency import LatencySession
+from lerobot.utils.latency import LatencySession, current_span
 
 # ---------------------------------------------------------------------------
 # Disabled session — must be a true no-op
@@ -316,6 +316,114 @@ class TestProcessTrackSchema:
 # regression or raise the bound deliberately (with a comment explaining
 # why).
 # ---------------------------------------------------------------------------
+
+
+class TestCurrentSpan:
+    """``current_span`` lets deep call sites (e.g. Robot.get_observation)
+    publish sub-spans without taking a session through their public
+    signature. The thread-local registration is set on start_iter() and
+    cleared on end_iter()."""
+
+    def test_no_session_outside_iteration_is_nullcontext(self):
+        """Before any session ever starts an iteration on this thread,
+        current_span must be a no-op (nullcontext)."""
+        # Don't actually start any session — just call current_span on a
+        # fresh thread-local. We do this on a fresh thread so any prior
+        # tests that left state behind can't pollute the result.
+        import threading
+
+        result = []
+
+        def body():
+            with current_span("anything"):
+                result.append("entered")
+
+        t = threading.Thread(target=body)
+        t.start()
+        t.join()
+        assert result == ["entered"]  # didn't raise
+
+    def test_current_span_attaches_to_active_session(self):
+        session = LatencySession.from_config(enabled=True, loop_kind="teleop", target_fps=30)
+        with session.iteration():
+            with current_span("deep_call"):
+                time.sleep(0.001)
+        record = list(session.aggregator._records)[0]
+        assert "deep_call_ms" in record
+        assert record["deep_call_ms"] >= 0.5
+
+    def test_current_span_cleared_after_end_iter(self):
+        """Between iterations, current_span must NOT attach to a stale
+        tracer — that would either raise (tracer not started) or silently
+        write into the next iteration's record."""
+        session = LatencySession.from_config(enabled=True, loop_kind="teleop", target_fps=30)
+        with session.iteration():
+            pass
+        # Outside the iteration: should be a no-op, not raise.
+        with current_span("between_iters"):
+            pass
+        # Next iteration should not contain "between_iters_ms".
+        with session.iteration():
+            pass
+        records = list(session.aggregator._records)
+        assert len(records) == 2
+        for rec in records:
+            assert "between_iters_ms" not in rec
+
+    def test_disabled_session_does_not_register(self):
+        """Disabled session's start_iter is a no-op, so it must not register
+        itself as the current session — current_span stays a nullcontext
+        even inside a disabled iteration block."""
+        session = LatencySession.disabled()
+        with session.iteration():
+            with current_span("noop"):
+                pass
+        # Nothing to assert structurally — the test passes if nothing raised
+        # and (manually verified) no record was created.
+        assert session.aggregator is None  # disabled session has no aggregator
+
+    def test_two_threads_have_independent_sessions(self):
+        """HVLA's main and inference threads each start their own session.
+        current_span on each thread must attach to that thread's session,
+        not whichever started most recently."""
+        import threading
+
+        s_main = LatencySession.from_config(enabled=True, loop_kind="hvla_main", target_fps=30)
+        s_infer = LatencySession.from_config(enabled=True, loop_kind="hvla_infer", target_fps=30)
+
+        # Use events to interleave: both threads start their iteration,
+        # both call current_span("work"), both end. Without thread-local
+        # isolation this would fail because one would clobber the other.
+        ready = threading.Barrier(2)
+        commit = threading.Barrier(2)
+
+        def main_thread():
+            with s_main.iteration():
+                ready.wait()
+                with current_span("work"):
+                    time.sleep(0.002)
+                commit.wait()
+
+        def infer_thread():
+            with s_infer.iteration():
+                ready.wait()
+                with current_span("work"):
+                    time.sleep(0.002)
+                commit.wait()
+
+        t1 = threading.Thread(target=main_thread)
+        t2 = threading.Thread(target=infer_thread)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        main_rec = list(s_main.aggregator._records)[0]
+        infer_rec = list(s_infer.aggregator._records)[0]
+        assert "work_ms" in main_rec
+        assert "work_ms" in infer_rec
+        # Each thread's span attached to its own session — neither record
+        # contains the other's data.
 
 
 class TestOverhead:
