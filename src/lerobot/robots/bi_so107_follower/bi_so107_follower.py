@@ -147,10 +147,15 @@ class BiSO107Follower(Robot):
                 except Exception as e:
                     logger.warning(f"{self} failed to read aligned frames for {cam_key}: {e}")
                     # Fallback: try reading color only
-                    obs_dict[cam_key] = cam.async_read()
+                    obs_dict[cam_key] = cam.read_latest()
             else:
-                # For non-RealSense or depth-disabled cameras, use async_read
-                obs_dict[cam_key] = cam.async_read()
+                # Cached non-blocking read. Matches PR #2987's migration of
+                # the single-arm robots from async_read to read_latest;
+                # this bimanual variant has its own get_observation() and
+                # was missed by that PR. async_read here was blocking on
+                # new_frame_event.wait() up to ~33ms per camera, which
+                # made the record loop overrun its FPS budget.
+                obs_dict[cam_key] = cam.read_latest()
                 dt_ms = (time.perf_counter() - start) * 1e3
                 logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
