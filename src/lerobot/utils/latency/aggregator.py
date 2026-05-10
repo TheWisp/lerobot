@@ -52,6 +52,11 @@ class LatencyAggregator:
         self._records: deque[dict[str, Any]] = deque(maxlen=maxlen)
         self._maxlen = maxlen
         self.dropped_records: int = 0
+        # Sticky picks for representative_iterations(): label -> step. Keeps
+        # the chosen record stable across snapshots so the GUI Gantt stops
+        # re-picking a different "median-ish" record every second (which made
+        # the camera markers visibly jitter).
+        self._sticky_picks: dict[str, int] = {}
 
     @property
     def maxlen(self) -> int:
@@ -68,6 +73,7 @@ class LatencyAggregator:
     def clear(self) -> None:
         self._records.clear()
         self.dropped_records = 0
+        self._sticky_picks.clear()
 
     def stage_keys(self) -> list[str]:
         """All ``*_ms`` keys seen across the buffer, sorted."""
@@ -163,13 +169,27 @@ class LatencyAggregator:
 
         return snap
 
+    # Stickiness band: we re-use the previously-chosen record for a label
+    # as long as its loop_dt is within ±STICKY_BAND × target percentile.
+    # 0.10 = ±10%, which is the "feels stable to the eye" threshold we
+    # tuned against bimanual teleop's natural per-iteration jitter.
+    _STICKY_BAND = 0.10
+
     def representative_iterations(self) -> dict[str, dict[str, Any]]:
         """Return a small set of "interesting" iterations for Gantt rendering.
 
-        Picks one record near each of {p50, p95, p99, max} of ``loop_dt_ms``,
-        plus the most recent record. The frontend lets the operator switch
-        between them so they can compare a typical iteration against a
-        worst-case one.
+        Picks one record near each of {p50, p95, p99} of ``loop_dt_ms``,
+        the single max record, and the most recent record. The frontend
+        lets the operator switch between them in a dropdown.
+
+        Picks for percentile labels are **sticky**: once a record is chosen,
+        it's reused on subsequent calls as long as it's still in the deque
+        and its loop_dt is within ±10% of the new percentile target. This
+        prevents the Gantt from jittering when the percentile target shifts
+        slightly and a different record happens to be marginally closer.
+
+        ``max`` is naturally stable (single highest record). ``latest``
+        always returns the most recent record (no stickiness).
 
         Returns a dict ``{label: record_subset}`` where each subset contains
         only the timeline-relevant keys (``spans``, ``cam_events``,
@@ -179,27 +199,36 @@ class LatencyAggregator:
         if not self._records:
             return {}
 
-        # Index records by loop_dt_ms for percentile selection.
         with_loop = [(r.get("loop_dt_ms", 0.0), r) for r in self._records if "loop_dt_ms" in r]
         if not with_loop:
             return {}
         with_loop.sort(key=lambda x: x[0])
-        loops = [x[0] for x in with_loop]
+        loops = np.asarray([x[0] for x in with_loop])
+        # Quick lookup of records still alive in the deque, by step.
+        by_step: dict[int, dict[str, Any]] = {r["step"]: r for _, r in with_loop if "step" in r}
 
-        def pick_for(p: float) -> dict[str, Any]:
-            target = float(np.percentile(np.asarray(loops), p))
-            # Find the record whose loop_dt is closest to the target percentile.
+        def sticky_pick(label: str, p: float) -> dict[str, Any]:
+            target = float(np.percentile(loops, p))
+            prev_step = self._sticky_picks.get(label)
+            if prev_step is not None and prev_step in by_step:
+                prev_loop = by_step[prev_step].get("loop_dt_ms", 0.0)
+                if target == 0.0 or abs(prev_loop - target) <= self._STICKY_BAND * target:
+                    # Previous pick is still close enough; reuse for stability.
+                    return _gantt_record_subset(by_step[prev_step])
+            # First time, or previous pick fell out of the deque / drifted.
             best_idx = min(range(len(with_loop)), key=lambda i: abs(with_loop[i][0] - target))
-            return _gantt_record_subset(with_loop[best_idx][1])
+            chosen = with_loop[best_idx][1]
+            if "step" in chosen:
+                self._sticky_picks[label] = chosen["step"]
+            return _gantt_record_subset(chosen)
 
-        result = {
-            "median": pick_for(50),
-            "p95": pick_for(95),
-            "p99": pick_for(99),
+        return {
+            "median": sticky_pick("median", 50),
+            "p95": sticky_pick("p95", 95),
+            "p99": sticky_pick("p99", 99),
             "max": _gantt_record_subset(with_loop[-1][1]),
             "latest": _gantt_record_subset(self._records[-1]),
         }
-        return result
 
 
 def _gantt_record_subset(record: dict[str, Any]) -> dict[str, Any]:

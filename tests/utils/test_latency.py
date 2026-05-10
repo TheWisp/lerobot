@@ -110,6 +110,41 @@ class TestAggregator:
         assert len(agg) == 0
         assert agg.dropped_records == 0
 
+    def test_representative_iterations_are_sticky(self):
+        """Median/p95/p99 picks should reuse the previous record across calls
+        as long as it's still in the deque and close to the target.
+        Otherwise the GUI Gantt re-picks a different "median-ish" iteration
+        every snapshot and the camera markers visibly jitter."""
+        agg = LatencyAggregator(maxlen=500)
+        # Tight cluster around p50 = ~50: many records qualify as "median".
+        for i in range(200):
+            agg.ingest(
+                {
+                    "t": float(i),
+                    "step": i,
+                    # Loop_dt clusters tightly so several records compete for
+                    # "closest to p50" — exactly the case where stickiness matters.
+                    "loop_dt_ms": 50.0 + (i % 5) * 0.5,
+                    "spans": {"work": [0.0, 50.0 + (i % 5) * 0.5]},
+                    "cam_events": {},
+                }
+            )
+        first = agg.representative_iterations()["median"]
+        # Append more records that don't change the percentile much.
+        for i in range(200, 250):
+            agg.ingest(
+                {
+                    "t": float(i),
+                    "step": i,
+                    "loop_dt_ms": 50.0 + (i % 5) * 0.5,
+                    "spans": {"work": [0.0, 50.0 + (i % 5) * 0.5]},
+                    "cam_events": {},
+                }
+            )
+        second = agg.representative_iterations()["median"]
+        # Same step should be returned both times — sticky.
+        assert first["step"] == second["step"]
+
     def test_representative_iterations_picks_percentiles(self):
         agg = LatencyAggregator()
         # Ingest records with linearly increasing loop_dt and a span dict
