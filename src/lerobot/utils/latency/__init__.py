@@ -26,6 +26,9 @@ from lerobot.utils.latency.aggregator import LatencyAggregator
 from lerobot.utils.latency.snapshot import LatencySnapshotWriter
 from lerobot.utils.latency.tracer import LatencyTracer
 
+# Note: LatencySession imported lazily below to avoid a circular import
+# (session.py imports format_latency_summary from this module).
+
 
 def maybe_span(tracer: LatencyTracer | None, name: str):
     """Context manager around a tracer span; nullcontext when ``tracer`` is None.
@@ -44,7 +47,7 @@ _DIGEST_STAGES: tuple[tuple[str, str], ...] = (
     ("get_observation_ms", "obs"),
     ("process_obs_ms", "p_obs"),
     ("process_action_ms", "p_act"),
-    ("infer_total_ms", "infer"),
+    ("inference_ms", "infer"),
     ("action_send_ms", "send"),
     ("dataset_write_ms", "dswr"),
 )
@@ -75,8 +78,18 @@ def format_latency_summary(snap: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+def __getattr__(name: str):
+    """Lazy attribute resolution to break the session.py ↔ __init__.py circular import."""
+    if name == "LatencySession":
+        from lerobot.utils.latency.session import LatencySession
+
+        return LatencySession
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "LatencyAggregator",
+    "LatencySession",
     "LatencySnapshotWriter",
     "LatencyTracer",
     "format_latency_summary",
