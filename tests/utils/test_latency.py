@@ -145,6 +145,94 @@ class TestAggregator:
         # Same step should be returned both times — sticky.
         assert first["step"] == second["step"]
 
+    def test_aggregate_iteration_uses_per_stage_percentiles(self):
+        """The synthesized Gantt's per-stage durations should equal the
+        per-stage percentiles, NOT the per-stage values from a single
+        median-loop record (which is what representative_iterations
+        returns). This is the whole reason aggregate_iteration exists."""
+        agg = LatencyAggregator()
+        # 100 records where motor_read drifts 1..100 ms but action_send
+        # is constant at 5 ms. Median of motor_read = ~50; median of
+        # action_send = 5. A real median-loop record would happen to
+        # have whatever motor_read it had; the aggregate must show 50.
+        for i in range(1, 101):
+            agg.ingest(
+                {
+                    "t": float(i),
+                    "step": i,
+                    "loop_dt_ms": float(i + 5),
+                    "spans": {
+                        "motor_read": [0.0, float(i)],
+                        "action_send": [float(i), float(i + 5)],
+                    },
+                    "cam_events": {},
+                }
+            )
+
+        synth = agg.aggregate_iteration(50)
+        assert synth is not None
+        assert synth["synthetic"] is True
+        assert synth["n_aggregated"] == 100
+        assert synth["percentile"] == 50
+        # motor_read p50 ~= 50; action_send p50 = 5.
+        m_start, m_end = synth["spans"]["motor_read"]
+        a_start, a_end = synth["spans"]["action_send"]
+        assert m_start == 0.0
+        assert 49.0 <= (m_end - m_start) <= 51.0
+        # action_send is laid out *after* motor_read (cumulative cursor).
+        assert a_start == pytest.approx(m_end)
+        assert (a_end - a_start) == pytest.approx(5.0)
+
+    def test_aggregate_iteration_camera_events_use_per_cam_percentiles(self):
+        """Each camera's captured/consumed offsets get its own percentile.
+        A noisy wrist cam should not contaminate the front cam's number."""
+        agg = LatencyAggregator()
+        # front cam: stable -10 ms capture; wrist cam: noisy -5..-50 ms.
+        for i in range(50):
+            agg.ingest(
+                {
+                    "t": float(i),
+                    "step": i,
+                    "loop_dt_ms": 20.0,
+                    "spans": {},
+                    "cam_events": {
+                        "front": {"captured_at_ms": -10.0, "consumed_at_ms": 0.0},
+                        "wrist": {"captured_at_ms": -(5.0 + i), "consumed_at_ms": 0.0},
+                    },
+                }
+            )
+        synth = agg.aggregate_iteration(50)
+        assert synth["cam_events"]["front"]["captured_at_ms"] == pytest.approx(-10.0)
+        # Wrist median ~= -29.5 (i in 0..49 → 5..54, p50 ~ 29.5)
+        assert -32.0 <= synth["cam_events"]["wrist"]["captured_at_ms"] <= -27.0
+
+    def test_aggregate_iteration_empty_returns_none(self):
+        agg = LatencyAggregator()
+        assert agg.aggregate_iteration() is None
+
+    def test_aggregate_iteration_loop_dt_independent_of_span_sum(self):
+        """loop_dt_ms in the synthetic record uses its OWN percentile,
+        not the sum of stage percentiles. The visible gap on the right
+        of the Gantt indicates uninstrumented work — important signal."""
+        agg = LatencyAggregator()
+        for i in range(20):
+            agg.ingest(
+                {
+                    "t": float(i),
+                    "step": i,
+                    "loop_dt_ms": 30.0,  # constant 30 ms total
+                    "spans": {"work": [0.0, 10.0]},  # only 10 ms accounted for
+                    "cam_events": {},
+                }
+            )
+        synth = agg.aggregate_iteration(50)
+        assert synth["loop_dt_ms"] == pytest.approx(30.0)
+        # Span sum is only 10, so there's a 20 ms gap visible on the Gantt.
+        rightmost_end = max(end for _, end in synth["spans"].values())
+        assert rightmost_end == pytest.approx(10.0)
+        # The gap is loop_dt - rightmost = 20 ms.
+        assert (synth["loop_dt_ms"] - rightmost_end) == pytest.approx(20.0)
+
     def test_representative_iterations_picks_percentiles(self):
         agg = LatencyAggregator()
         # Ingest records with linearly increasing loop_dt and a span dict

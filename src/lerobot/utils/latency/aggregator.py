@@ -230,6 +230,92 @@ class LatencyAggregator:
             "latest": _gantt_record_subset(self._records[-1]),
         }
 
+    def aggregate_iteration(self, p: float = 50.0) -> dict[str, Any] | None:
+        """Synthesize a Gantt where each stage independently shows the p-th
+        percentile of *its own* distribution across all records.
+
+        Why this exists alongside ``representative_iterations``: those
+        return real captured iterations (so per-stage values are whatever
+        happened in that one iteration — useful for debugging the
+        correlation between stages in an outlier). The synthetic
+        aggregate answers a different question: "what does a typical
+        iteration look like, where each stage is at its typical value?"
+        It's stable across snapshots because each percentile is
+        computed independently — no jitter from picking different
+        records.
+
+        The synthesized iteration's spans are laid out cumulatively in
+        the order each span first appeared in the deque (motor_read,
+        then process_obs, etc., for the standard teleop ordering). The
+        sum of span p-values may not equal p of loop_dt_ms — uninstru-
+        mented work appears as a visible gap on the right edge of the
+        Gantt, and that's informative.
+
+        Camera capture/consume offsets use per-camera percentiles so
+        each camera's typical staleness is independently represented.
+
+        Returns ``None`` when the aggregator has no records.
+        """
+        if not self._records:
+            return None
+
+        # Collect span durations per name across all records, preserving
+        # the order in which each name first appeared (so the synthetic
+        # Gantt has the same shape the operator is used to).
+        span_durations: dict[str, list[float]] = {}
+        span_order: list[str] = []
+        for r in self._records:
+            spans = r.get("spans", {})
+            for name, endpoints in spans.items():
+                if name not in span_durations:
+                    span_durations[name] = []
+                    span_order.append(name)
+                start_ms, end_ms = endpoints
+                span_durations[name].append(end_ms - start_ms)
+
+        synth_spans: dict[str, list[float]] = {}
+        cursor = 0.0
+        for name in span_order:
+            durs = span_durations[name]
+            if not durs:
+                continue
+            dur_p = float(np.percentile(np.asarray(durs), p))
+            synth_spans[name] = [cursor, cursor + dur_p]
+            cursor += dur_p
+
+        # Camera events: per-cam captured/consumed offset percentiles.
+        cam_captured: dict[str, list[float]] = {}
+        cam_consumed: dict[str, list[float]] = {}
+        for r in self._records:
+            for cam_key, ev in r.get("cam_events", {}).items():
+                cam_captured.setdefault(cam_key, []).append(ev["captured_at_ms"])
+                cam_consumed.setdefault(cam_key, []).append(ev["consumed_at_ms"])
+        synth_cam_events: dict[str, dict[str, float]] = {}
+        for cam_key, captured in cam_captured.items():
+            if not captured:
+                continue
+            synth_cam_events[cam_key] = {
+                "captured_at_ms": float(np.percentile(np.asarray(captured), p)),
+                "consumed_at_ms": float(np.percentile(np.asarray(cam_consumed[cam_key]), p)),
+            }
+
+        # Loop_dt comes from its own percentile, NOT the sum of stage
+        # percentiles — the gap between the rightmost stage end and
+        # this loop_dt is the visible "uninstrumented work" indicator.
+        loop_durations = [r["loop_dt_ms"] for r in self._records if "loop_dt_ms" in r]
+        loop_dt = float(np.percentile(np.asarray(loop_durations), p)) if loop_durations else 0.0
+
+        return {
+            "step": None,  # synthetic — no real step
+            "t": None,
+            "loop_dt_ms": loop_dt,
+            "spans": synth_spans,
+            "cam_events": synth_cam_events,
+            "synthetic": True,
+            "n_aggregated": len(loop_durations),
+            "percentile": p,
+        }
+
 
 def _gantt_record_subset(record: dict[str, Any]) -> dict[str, Any]:
     """Pull only the keys needed to render one iteration's Gantt timeline."""

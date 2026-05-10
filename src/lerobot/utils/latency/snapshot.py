@@ -113,9 +113,20 @@ class LatencySnapshotWriter:
         snap["loop_kind"] = self._loop_kind
         if self._target_period_ms is not None:
             snap["target_period_ms"] = self._target_period_ms
-        # Representative iterations so the GUI can render Gantt timelines.
-        # Cheap (~5 small records); the frontend picks one to display.
+        # Two flavors of timeline data, both cheap to produce:
+        #
+        # - representative_iterations(): real captured iterations (median /
+        #   p95 / p99 / max / latest sample). Per-stage values inside each
+        #   reflect THAT specific iteration. Useful for outlier debugging
+        #   because correlations are real.
+        #
+        # - aggregate_iteration(p): synthetic timeline whose per-stage bars
+        #   each show the p-th percentile of that stage *independently*.
+        #   Stable across snapshots; answers "what does a typical iteration
+        #   look like?" without picking one specific record.
         snap["iterations"] = aggregator.representative_iterations()
+        snap["iterations"]["aggregate_median"] = aggregator.aggregate_iteration(50)
+        snap["iterations"]["aggregate_p95"] = aggregator.aggregate_iteration(95)
 
         if not self._dir_ready:
             self._dir.mkdir(parents=True, exist_ok=True)

@@ -2190,7 +2190,13 @@ function _renderGantt(iterations) {
 
     const meta = document.getElementById('latency-gantt-meta');
     if (meta) {
-        meta.textContent = `step ${rec.step ?? '?'} · loop ${(rec.loop_dt_ms || 0).toFixed(1)} ms`;
+        if (rec.synthetic) {
+            const p = rec.percentile != null ? `p${Math.round(rec.percentile)}` : 'aggregate';
+            const n = rec.n_aggregated || 0;
+            meta.textContent = `${p} of ${n} iters · loop ${(rec.loop_dt_ms || 0).toFixed(1)} ms`;
+        } else {
+            meta.textContent = `step ${rec.step ?? '?'} · loop ${(rec.loop_dt_ms || 0).toFixed(1)} ms`;
+        }
     }
 
     // Stable range: compute from all reps, then take the union with the
