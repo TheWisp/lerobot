@@ -2012,9 +2012,10 @@ async function startObsStreamViewer() {
         `;
         cell.appendChild(label);
 
-        // Per-camera latency overlay. Populated by _updateLatencyDashboard
-        // when the latency snapshot includes this camera. The short name
-        // (last dot-separated segment) is what the tracer uses (cam_<short>_*).
+        // Per-camera latency overlay. Populated by _updateCameraOverlays
+        // when the latency snapshot includes this camera (cam_* stages
+        // merged across all fresh tracks). The short name (last
+        // dot-separated segment) is what the tracer uses (cam_<short>_*).
         const shortName = _camShortName(key);
         const overlay = document.createElement('div');
         overlay.className = 'cam-latency-overlay';
@@ -2100,12 +2101,22 @@ function _stopRLTPoll() {
 }
 
 // =============================================================================
-// Latency dashboard — polls /api/run/latency-metrics at 1 Hz while a run is
-// active. The teleop subprocess writes outputs/teleop/latency_snapshot.json
-// every 1 s; we read it cross-process and render system + per-camera cards.
+// Latency dashboard — polls /api/run/latency-sources at 1 Hz to discover
+// which loops are publishing snapshots, then fetches each fresh source and
+// renders it as its own track. Multi-thread loops (e.g. HVLA's main +
+// inference threads) thus appear as two stacked tracks of the same process;
+// single-thread loops (teleop, record) render as one. The track DOM block
+// is built from a template per source key — the rendering functions here
+// take a ``scope`` element and query data-role children inside it, so the
+// same code drives one track or many.
 // =============================================================================
 
 let _latencyPollTimer = null;
+// Per-track render state keyed by source key (e.g. "teleop", "hvla_main").
+// Each entry holds the latest iterations dict (for the percentile picker
+// to re-render without a fresh fetch) and the only-widen Gantt X range
+// (so per-iteration jitter doesn't move the axis bounds visibly).
+const _trackStates = new Map();
 
 function _showLatencyTab(show) {
     const tab = document.getElementById('run-bottom-tab-latency');
@@ -2125,6 +2136,7 @@ function _camShortName(featureKey) {
 // being garish; consistent across iterations so the operator builds muscle
 // memory ("the wide green bar is process_action").
 const _GANTT_SPAN_COLORS = {
+    // Teleop / record
     get_observation: '#4fc3f7',
     process_obs:     '#9b59b6',
     process_action:  '#2ecc71',
@@ -2134,11 +2146,17 @@ const _GANTT_SPAN_COLORS = {
     infer_forward:   '#e74c3c',  // legacy V2 doc name; kept for back-compat
     dataset_write:   '#95a5a6',
     video_encode:    '#7f8c8d',
+    // HVLA main loop
+    publish_obs:     '#9b59b6',
+    get_chunk:       '#f1c40f',
+    // HVLA inference thread (GPU stages, sequential on the CUDA stream)
+    batch_prep:      '#3498db',
+    enc_obs:         '#5dade2',
+    rl_tok:          '#af7ac5',
+    s1_denoise:      '#e74c3c',
+    actor:           '#f39c12',
 };
 const _GANTT_DEFAULT_SPAN_COLOR = '#aaaaaa';
-
-let _latestIterations = {};       // Cached for the dropdown selector.
-let _ganttRange = null;           // [minMs, maxMs] — only widens across renders.
 
 // Snap the X-axis range to multiples of this many ms so small per-iteration
 // jitter doesn't keep redrawing the timeline at slightly different scales.
@@ -2186,27 +2204,27 @@ function _computeStableRange(iterations) {
     return [minMs, maxMs];
 }
 
-function _renderGantt(iterations) {
-    _latestIterations = iterations;
-    const select = document.getElementById('latency-gantt-pick');
-    const which = (select && select.value) || 'median';
+function _renderGantt(scope, iterations, state) {
+    state.latestIterations = iterations;
+    const select = scope.querySelector('[data-role="gantt-pick"]');
+    const which = (select && select.value) || 'aggregate_median';
     const rec = iterations[which];
-    const empty = document.getElementById('latency-gantt-empty');
-    const canvas = document.getElementById('latency-gantt-canvas');
+    const empty = scope.querySelector('[data-role="gantt-empty"]');
+    const canvas = scope.querySelector('[data-role="gantt-canvas"]');
     if (!canvas) return;
 
     if (!rec || !rec.spans || Object.keys(rec.spans).length === 0) {
         if (empty) empty.style.display = '';
         canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-        const meta = document.getElementById('latency-gantt-meta');
+        const meta = scope.querySelector('[data-role="gantt-meta"]');
         if (meta) meta.textContent = '';
-        const legend = document.getElementById('latency-gantt-legend');
+        const legend = scope.querySelector('[data-role="gantt-legend"]');
         if (legend) legend.innerHTML = '';
         return;
     }
     if (empty) empty.style.display = 'none';
 
-    const meta = document.getElementById('latency-gantt-meta');
+    const meta = scope.querySelector('[data-role="gantt-meta"]');
     if (meta) {
         if (rec.synthetic) {
             const p = rec.percentile != null ? `p${Math.round(rec.percentile)}` : 'aggregate';
@@ -2221,18 +2239,18 @@ function _renderGantt(iterations) {
     // previous render's range (only widen, never shrink). Keeps the axis
     // visually stable even as new outliers stretch the worst case.
     const [newMin, newMax] = _computeStableRange(iterations);
-    if (_ganttRange === null) {
-        _ganttRange = [newMin, newMax];
+    if (state.ganttRange === null) {
+        state.ganttRange = [newMin, newMax];
     } else {
-        _ganttRange = [Math.min(_ganttRange[0], newMin), Math.max(_ganttRange[1], newMax)];
+        state.ganttRange = [Math.min(state.ganttRange[0], newMin), Math.max(state.ganttRange[1], newMax)];
     }
 
-    _drawGantt(canvas, rec, _ganttRange);
-    _renderGanttLegend(rec);
+    _drawGantt(canvas, rec, state.ganttRange);
+    _renderGanttLegend(scope, rec);
 }
 
-function _renderGanttLegend(rec) {
-    const legend = document.getElementById('latency-gantt-legend');
+function _renderGanttLegend(scope, rec) {
+    const legend = scope.querySelector('[data-role="gantt-legend"]');
     if (!legend) return;
     legend.innerHTML = '';
     const spans = rec.spans || {};
@@ -2424,10 +2442,15 @@ function _drawGantt(canvas, rec, [minMs, maxMs]) {
     });
 }
 
-// Re-render the Gantt when the operator switches the percentile picker.
+// Re-render the Gantt when the operator switches the percentile picker on
+// any track. The track scope is the closest .latency-track ancestor; its
+// state lives in _trackStates keyed by data-track-key.
 document.addEventListener('change', e => {
-    if (e.target && e.target.id === 'latency-gantt-pick') {
-        _renderGantt(_latestIterations);
+    if (e.target && e.target.matches('[data-role="gantt-pick"]')) {
+        const track = e.target.closest('.latency-track');
+        if (!track) return;
+        const state = _trackStates.get(track.dataset.trackKey);
+        if (state) _renderGantt(track, state.latestIterations || {}, state);
     }
 });
 
@@ -2464,18 +2487,135 @@ function _startLatencyPoll() {
 
 function _stopLatencyPoll() {
     if (_latencyPollTimer) { clearInterval(_latencyPollTimer); _latencyPollTimer = null; }
-    // Reset the only-widen X axis so the next session starts fresh instead
-    // of inheriting the worst-case bounds from the previous run.
-    _ganttRange = null;
+    // Reset per-track state so the next session starts fresh instead of
+    // inheriting bounds / iteration caches from the previous run.
+    _trackStates.clear();
+    const container = document.getElementById('latency-tracks');
+    if (container) {
+        container.querySelectorAll('.latency-track').forEach(el => el.remove());
+    }
 }
 
 async function _fetchLatencyMetrics() {
+    // Discover available sources first; render only the fresh ones. Stale
+    // sources (>5s old) are dropped from the display until they publish
+    // again — this matches the polling cadence on the producer side.
+    let sourcesData;
     try {
-        const res = await fetch('/api/run/latency-metrics');
+        const res = await fetch('/api/run/latency-sources');
         if (!res.ok) return;
-        const data = await res.json();
-        _updateLatencyDashboard(data);
-    } catch (e) { /* ignore — next poll will retry */ }
+        sourcesData = await res.json();
+    } catch (e) { return; }
+    const fresh = (sourcesData.sources || []).filter(s => s.fresh);
+    _reconcileTracks(fresh);
+
+    // Fetch each fresh source in parallel and render. Cameras live on the
+    // robot, not on the inference thread; we collect cam_* stages from
+    // every track and feed them to _updateCameraOverlays once so the
+    // per-frame badges work regardless of which track owns the cameras.
+    const results = await Promise.all(fresh.map(async source => {
+        try {
+            const res = await fetch(`/api/run/latency-metrics?source=${encodeURIComponent(source.key)}`);
+            if (!res.ok) return null;
+            return { source, data: await res.json() };
+        } catch (e) { return null; }
+    }));
+    const mergedCamStages = {};
+    for (const result of results) {
+        if (!result) continue;
+        const { source, data } = result;
+        const trackEl = document.querySelector(`.latency-track[data-track-key="${CSS.escape(source.key)}"]`);
+        if (!trackEl) continue;
+        const state = _trackStates.get(source.key);
+        if (!state) continue;
+        _updateTrack(trackEl, data, state);
+        for (const [k, v] of Object.entries(data.stages || {})) {
+            if (k.startsWith('cam_')) mergedCamStages[k] = v;
+        }
+    }
+    _updateCameraOverlays(mergedCamStages);
+}
+
+function _reconcileTracks(sources) {
+    const container = document.getElementById('latency-tracks');
+    if (!container) return;
+    const noSources = document.getElementById('latency-no-sources');
+    if (noSources) noSources.style.display = sources.length === 0 ? '' : 'none';
+
+    // Remove tracks for sources that disappeared.
+    const wantKeys = new Set(sources.map(s => s.key));
+    container.querySelectorAll('.latency-track').forEach(el => {
+        if (!wantKeys.has(el.dataset.trackKey)) {
+            _trackStates.delete(el.dataset.trackKey);
+            el.remove();
+        }
+    });
+
+    // Add tracks that are new this poll.
+    const have = new Set(
+        [...container.querySelectorAll('.latency-track')].map(el => el.dataset.trackKey)
+    );
+    for (const source of sources) {
+        if (have.has(source.key)) continue;
+        container.appendChild(_makeTrackBlock(source));
+        _trackStates.set(source.key, { latestIterations: {}, ganttRange: null });
+    }
+}
+
+// Build a self-contained track DOM block. data-role attributes scope the
+// Loop Health grid, Gantt selector / canvas / legend, camera grid, and
+// meta footer so the rendering functions can find them with querySelector
+// inside the track element instead of using global IDs.
+function _makeTrackBlock(source) {
+    const track = document.createElement('div');
+    track.className = 'latency-track';
+    track.dataset.trackKey = source.key;
+    const display = source.loop_kind || source.key;
+    track.innerHTML = `
+        <div class="latency-track-header">${display}</div>
+        <div class="latency-section">
+            <div class="latency-section-title">Loop Health</div>
+            <div class="latency-grid" data-role="grid-system"></div>
+        </div>
+        <div class="latency-section">
+            <div class="latency-section-title">
+                Iteration timeline
+                <span class="latency-gantt-controls">
+                    <select data-role="gantt-pick" title="Aggregate views synthesize a typical iteration where each stage independently shows its own percentile. Sample views show one real captured iteration whose per-stage values are whatever happened in that one iteration.">
+                        <optgroup label="Aggregate (per-stage percentile)">
+                            <option value="aggregate_median" selected>median</option>
+                            <option value="aggregate_p95">p95</option>
+                        </optgroup>
+                        <optgroup label="Sample (real iteration)">
+                            <option value="median">median sample</option>
+                            <option value="p95">p95 sample</option>
+                            <option value="p99">p99 sample</option>
+                            <option value="max">worst (max loop)</option>
+                            <option value="latest">latest</option>
+                        </optgroup>
+                    </select>
+                    <span data-role="gantt-meta"></span>
+                </span>
+            </div>
+            <div class="latency-gantt-panel" title="Per-iteration timeline. Bars are tracer spans; diamonds are camera frame captures (often before t=0 because cameras grab in a background thread). Gaps in the timeline indicate uninstrumented work; overlaps indicate parallel stages.">
+                <div class="latency-gantt-canvas-wrap"><canvas data-role="gantt-canvas"></canvas></div>
+                <div class="latency-gantt-legend" data-role="gantt-legend"></div>
+                <div class="latency-empty" data-role="gantt-empty">No timeline yet — waiting for first snapshot…</div>
+            </div>
+        </div>
+        <div class="latency-section">
+            <div class="latency-section-title">Cameras</div>
+            <div class="latency-cam-grid" data-role="cam-grid">
+                <div class="latency-empty">No camera data — this track may not own cameras (e.g. inference thread).</div>
+            </div>
+        </div>
+        <div class="latency-meta">
+            <span data-role="meta-records">0 records</span>
+            <span data-role="meta-dropped"></span>
+            <span data-role="meta-updated"></span>
+        </div>
+    `;
+    return track;
 }
 
 // Color thresholds for the system cards.
@@ -2538,26 +2678,29 @@ function _renderLatencyCard(parent, key, title, p50, p95, budget, sparkData, too
     }
 }
 
-function _updateLatencyDashboard(data) {
+function _updateTrack(scope, data, state) {
     const stages = data.stages || {};
     const series = data.series || {};
     const targetPeriodMs = data.target_period_ms || null;
     const budgets = _budgetsFromTarget(targetPeriodMs);
 
-    // Per-camera tile overlays (live frames in the obs stream viewer).
-    _updateCameraOverlays(stages);
-
-    // System metrics row — sparkline cards for stages we want to track over
-    // time. The previous "End-to-End" and "Residual" cards are gone: their
-    // role (catching missing/miscounted stages, regression detection) is now
-    // served by the Gantt timeline below + per-stage sparkline trends here.
-    const sysGrid = document.getElementById('latency-grid-system');
+    // System metrics row — sparkline cards for the stages we want to track
+    // over time. Stages not in this set still appear in the Gantt below;
+    // the Loop Health row is just the headline numbers per loop kind.
+    const sysGrid = scope.querySelector('[data-role="grid-system"]');
     if (sysGrid) {
         sysGrid.innerHTML = '';
+        // Per-loop-kind stage ordering: HVLA tracks have different headline
+        // numbers (inference duration, GPU stages) than teleop / record.
+        // The data-driven approach keeps the JS oblivious to loop_kind —
+        // we render whichever of these stages happen to be present.
         const sysOrder = [
-            { key: 'loop_dt_ms',     title: 'Loop'        },
+            { key: 'loop_dt_ms',         title: 'Loop'            },
             { key: 'get_observation_ms', title: 'Get observation' },
-            { key: 'action_send_ms', title: 'Action send' },
+            { key: 'inference_ms',       title: 'Inference'       },
+            { key: 's1_denoise_ms',      title: 'S1 denoise'      },
+            { key: 'enc_obs_ms',         title: 'Encode obs'      },
+            { key: 'action_send_ms',     title: 'Action send'     },
         ];
         for (const item of sysOrder) {
             const stage = stages[item.key];
@@ -2588,14 +2731,14 @@ function _updateLatencyDashboard(data) {
     }
 
     // Gantt timeline — pick one representative iteration and draw it.
-    _renderGantt(data.iterations || {});
+    _renderGantt(scope, data.iterations || {}, state);
 
     // Per-camera cards.
-    const camGrid = document.getElementById('latency-grid-cameras');
+    const camGrid = scope.querySelector('[data-role="cam-grid"]');
     if (camGrid) {
         const camKeys = Object.keys(stages).filter(k => k.startsWith('cam_') && k.endsWith('_stale_ms'));
         if (camKeys.length === 0) {
-            camGrid.innerHTML = '<div class="latency-empty">No camera data yet — waiting for first snapshot…</div>';
+            camGrid.innerHTML = '<div class="latency-empty">No camera data — this track may not own cameras (e.g. inference thread).</div>';
         } else {
             camGrid.innerHTML = '';
             camKeys.sort();
@@ -2626,11 +2769,11 @@ function _updateLatencyDashboard(data) {
     }
 
     // Footer.
-    const recordsEl = document.getElementById('latency-meta-records');
+    const recordsEl = scope.querySelector('[data-role="meta-records"]');
     if (recordsEl) recordsEl.textContent = `${data.n_records || 0} records`;
-    const droppedEl = document.getElementById('latency-meta-dropped');
+    const droppedEl = scope.querySelector('[data-role="meta-dropped"]');
     if (droppedEl) droppedEl.textContent = data.dropped_records ? `${data.dropped_records} dropped` : '';
-    const updatedEl = document.getElementById('latency-meta-updated');
+    const updatedEl = scope.querySelector('[data-role="meta-updated"]');
     if (updatedEl) updatedEl.textContent = data.t ? `updated ${new Date(data.t * 1000).toLocaleTimeString()}` : '';
 }
 

@@ -94,6 +94,11 @@ class LatencyTracer:
         self._record = {
             "loop_kind": self.loop_kind,
             "t": time.time(),
+            # Wall-clock perf_counter at iteration start. Process-wide clock,
+            # so dashboards comparing tracks across threads of the same
+            # process can render them on a shared time axis without joining
+            # records.
+            "iter_start_perf": self._iter_start_perf,
             "step": self._step,
         }
         if ep is not None:
