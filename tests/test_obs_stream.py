@@ -10,8 +10,10 @@ import pytest
 from lerobot.robots.config import RobotConfig
 from lerobot.robots.obs_stream import (
     ENV_VAR,
+    SHM_PREFIX,
     ObservationStream,
     ObservationStreamReader,
+    cleanup_stale_streams,
 )
 from lerobot.robots.robot import Robot
 
@@ -497,3 +499,100 @@ class TestStaleStreamDetection:
         assert reader.read_image("cam") is None
         reader.close()
         stream2.cleanup()
+
+
+# ============================================================================
+# cleanup_stale_streams() — used by GUI lifecycle hooks
+# ============================================================================
+
+
+def _touch(path):
+    path.write_bytes(b"")
+
+
+class TestCleanupStaleStreams:
+    """Sweep used by GUI startup/shutdown to remove shm leaked by a writer
+    that died via SIGKILL/SIGABRT/segfault before its disconnect()
+    cleanup ran. Tested against tmp_path so it doesn't touch /dev/shm."""
+
+    def test_empty_dir_returns_zero(self, tmp_path):
+        assert cleanup_stale_streams(tmp_path) == 0
+
+    def test_nonexistent_dir_returns_zero(self, tmp_path):
+        # Don't crash if the shm path doesn't exist (macOS, weird containers).
+        missing = tmp_path / "does-not-exist"
+        assert cleanup_stale_streams(missing) == 0
+
+    def test_removes_only_matching_files(self, tmp_path):
+        # Files matching SHM_PREFIX → removed.
+        for suffix in ("meta", "obs", "act", "img_top", "img_left_wrist"):
+            _touch(tmp_path / f"{SHM_PREFIX}{suffix}")
+        # Files not matching → preserved (other tools' shm, user data).
+        unrelated = [
+            tmp_path / "some_other_app",
+            tmp_path / "lerobot_other_thing",  # different prefix
+            tmp_path / "lerobotobs_typo",  # missing underscore
+        ]
+        for p in unrelated:
+            _touch(p)
+
+        n = cleanup_stale_streams(tmp_path)
+
+        assert n == 5
+        assert not list(tmp_path.glob(f"{SHM_PREFIX}*"))
+        for p in unrelated:
+            assert p.exists(), f"unrelated file {p.name} was wrongly removed"
+
+    def test_idempotent(self, tmp_path):
+        _touch(tmp_path / f"{SHM_PREFIX}meta")
+        assert cleanup_stale_streams(tmp_path) == 1
+        assert cleanup_stale_streams(tmp_path) == 0
+
+    def test_unremovable_file_logs_and_continues(self, tmp_path, caplog):
+        # A read-only dir prevents unlink. Sweep should log a warning and
+        # continue rather than abort the whole pass.
+        sub = tmp_path / "ro"
+        sub.mkdir()
+        _touch(sub / f"{SHM_PREFIX}stuck")
+        sub.chmod(0o500)
+        try:
+            n = cleanup_stale_streams(sub)
+        finally:
+            sub.chmod(0o700)  # restore so pytest can clean up
+
+        assert n == 0
+        assert (sub / f"{SHM_PREFIX}stuck").exists()
+        assert any("could not remove" in r.message for r in caplog.records)
+
+    def test_count_reflects_only_actually_removed(self, tmp_path):
+        # Mix of removable + unremovable to verify the count stays accurate.
+        ok = tmp_path / f"{SHM_PREFIX}removable"
+        _touch(ok)
+        # Plant a path that looks like a match but is a directory — unlink()
+        # refuses, so it's not "removed" and shouldn't be counted.
+        wedge = tmp_path / f"{SHM_PREFIX}directory_not_file"
+        wedge.mkdir()
+
+        n = cleanup_stale_streams(tmp_path)
+
+        assert n == 1
+        assert not ok.exists()
+        assert wedge.exists()
+        os.rmdir(wedge)  # clean up the planted dir for pytest
+
+    def test_default_dir_is_dev_shm(self, simple_features):
+        """Smoke test against the real /dev/shm: create a real stream, sweep,
+        verify the segments are gone. This is the path the GUI lifecycle
+        hooks actually use."""
+        obs_ft, act_ft = simple_features
+        stream = ObservationStream(obs_ft, act_ft)
+        # At this point /dev/shm/lerobot_obs_* exists.
+        n = cleanup_stale_streams()  # default arg = /dev/shm
+        # Stream creates 4 blocks (meta, obs, act, cam=1 image) → 4 files.
+        assert n >= 4
+        # The stream object holds stale handles now; close them quietly so
+        # cleanup() doesn't raise.
+        try:
+            stream.cleanup()
+        except Exception:
+            pass

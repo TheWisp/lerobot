@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import logging.config
 from datetime import datetime
@@ -72,26 +73,73 @@ async def startup_event():
     run.set_app_state(_app_state)
     models.set_app_state(_app_state)
     logger.info(f"Initialized frame cache with {cache_size / 1_000_000:.0f} MB budget")
+    # Sweep stale obs-stream shared-memory segments left by a previously-
+    # crashed teleop/record subprocess. Without this, the GUI's reader
+    # auto-attaches to the leftover segments and serves frozen data,
+    # making it look like teleop is running when it isn't.
+    from lerobot.robots.obs_stream import cleanup_stale_streams
+
+    n = cleanup_stale_streams()
+    if n:
+        logger.info("Swept %d stale obs-stream shm segment(s) from a previous run", n)
+
+
+async def _terminate_active_process(*, sigint_grace_s: float = 5.0) -> bool:
+    """Kill the active teleop/record subprocess, if any.
+
+    Returns True if a subprocess was found and terminated (or was already
+    dead), False if there was no subprocess to begin with. Bounded: this
+    function will always return within roughly ``sigint_grace_s`` seconds
+    even if the subprocess ignores SIGINT.
+
+    Extracted from the shutdown hook so it can be unit-tested with a
+    mocked subprocess. A reference to ``_active_process`` is fetched
+    lazily here (not via top-level import) so we always see the current
+    value of the module global rather than a stale snapshot.
+    """
+    import asyncio
+    import signal
+
+    from lerobot.gui.api import run as run_module
+
+    proc = run_module._active_process
+    if proc is None or proc.returncode is not None:
+        return False
+
+    # SIGINT first so the subprocess gets a chance to run its
+    # disconnect() cleanup (which includes ObservationStream.cleanup()
+    # that unlinks the shm). Fall back to SIGKILL after the grace
+    # period. We intentionally do NOT await proc.wait() after kill():
+    # the original code didn't either, and uvicorn's shutdown hook is
+    # sensitive to long awaits (one stuck wait can wedge the whole
+    # event loop and the user's Ctrl+C is silently ignored). The OS
+    # reaps zombies when the parent (us) exits, and the defensive
+    # cleanup_stale_streams() below catches any leaked shm anyway.
+    proc.send_signal(signal.SIGINT)
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=sigint_grace_s)
+    except Exception:
+        with contextlib.suppress(Exception):
+            proc.kill()
+    return True
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Clean up subprocesses on server shutdown."""
-    import signal
-
-    from lerobot.gui.api.run import _active_process, _stop_debug_process
+    """Clean up subprocesses + their shared memory on server shutdown."""
+    from lerobot.gui.api.run import _stop_debug_process
+    from lerobot.robots.obs_stream import cleanup_stale_streams
 
     # Stop debug model process
     await _stop_debug_process()
-    # Stop active process (teleop/record/etc.)
-    if _active_process is not None and _active_process.returncode is None:
-        _active_process.send_signal(signal.SIGINT)
-        try:
-            import asyncio
-
-            await asyncio.wait_for(_active_process.wait(), timeout=5.0)
-        except Exception:
-            _active_process.kill()
+    # Stop active teleop/record subprocess (no-op if none).
+    await _terminate_active_process()
+    # Defensive sweep: even if the subprocess ran its own cleanup, also
+    # unlink any segments it may have leaked (SIGKILL path, abort, etc.).
+    # Safe at this point because the subprocess is no longer running.
+    n = cleanup_stale_streams()
+    if n:
+        logger.info("Swept %d stale obs-stream shm segment(s) on shutdown", n)
 
 
 # Include API routers

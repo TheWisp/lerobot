@@ -38,6 +38,51 @@ logger = logging.getLogger(__name__)
 ENV_VAR = "LEROBOT_OBS_STREAM"
 SHM_PREFIX = "lerobot_obs_"
 
+# Linux POSIX shared memory backing dir. /dev/shm/<name> is what
+# multiprocessing.shared_memory.SharedMemory uses on Linux.
+_SHM_DIR = "/dev/shm"  # nosec B108  # well-known POSIX shm path
+
+
+def cleanup_stale_streams(shm_dir: str | os.PathLike[str] = _SHM_DIR) -> int:
+    """Remove ``<shm_dir>/lerobot_obs_*`` segments left by a crashed writer.
+
+    A normal ``ObservationStream.cleanup()`` (called from the robot's
+    ``disconnect()``) unlinks the segments — but if the writer process
+    dies via SIGKILL, SIGABRT, segfault, etc. the cleanup never runs and
+    the segments persist in ``/dev/shm`` until a reboot.
+
+    A stale segment is *worse than nothing* for the GUI's reader path:
+    ``ObservationStreamReader()`` happily attaches to whatever exists and
+    serves frozen data, making the GUI think teleop is alive when it
+    isn't. Sweeping at process boundaries (GUI startup / shutdown) closes
+    that hole.
+
+    Safe to call only when no observation stream writer is active in
+    *any* process. The GUI calls this on startup (before any subprocess
+    runs) and on shutdown (after killing the active subprocess).
+
+    Args:
+      shm_dir: directory to scan. Defaults to the system POSIX shm path
+        (``/dev/shm`` on Linux); tests pass a tmp_path.
+
+    Returns the number of segments removed.
+    """
+    if not os.path.isdir(shm_dir):
+        return 0
+    removed = 0
+    for name in os.listdir(shm_dir):
+        if not name.startswith(SHM_PREFIX):
+            continue
+        path = os.path.join(shm_dir, name)
+        try:
+            # safe-destruct: shm we created (matches our SHM_PREFIX), only swept when no writer is active
+            os.unlink(path)
+            removed += 1
+        except OSError as e:
+            logger.warning("could not remove stale shm %s: %s", path, e)
+    return removed
+
+
 # Header per block: seq_write(i64) + seq_done(i64) + timestamp(f64) = 24 bytes
 _HDR = struct.Struct("<qqd")
 _HDR_SIZE = _HDR.size
