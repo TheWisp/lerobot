@@ -2182,6 +2182,8 @@ function _renderGantt(iterations) {
         canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
         const meta = document.getElementById('latency-gantt-meta');
         if (meta) meta.textContent = '';
+        const legend = document.getElementById('latency-gantt-legend');
+        if (legend) legend.innerHTML = '';
         return;
     }
     if (empty) empty.style.display = 'none';
@@ -2202,6 +2204,41 @@ function _renderGantt(iterations) {
     }
 
     _drawGantt(canvas, rec, _ganttRange);
+    _renderGanttLegend(rec);
+}
+
+function _renderGanttLegend(rec) {
+    const legend = document.getElementById('latency-gantt-legend');
+    if (!legend) return;
+    legend.innerHTML = '';
+    const spans = rec.spans || {};
+    const camEvents = rec.cam_events || {};
+    // Span entries with matching swatch colors and per-stage durations so
+    // the legend is also a quick numeric breakdown when a bar is too short
+    // to label inside the canvas.
+    for (const [name, [s, e]] of Object.entries(spans)) {
+        const item = document.createElement('div');
+        item.className = 'latency-gantt-legend-item';
+        const color = _GANTT_SPAN_COLORS[name] || _GANTT_DEFAULT_SPAN_COLOR;
+        item.innerHTML = `
+            <span class="latency-gantt-legend-swatch" style="background:${color}"></span>
+            <span>${name}</span>
+            <span class="latency-gantt-legend-dur">${(e - s).toFixed(1)} ms</span>
+        `;
+        legend.appendChild(item);
+    }
+    // Cameras as a single legend row (they all share the diamond marker
+    // color); per-camera staleness is already in the Cameras card row.
+    const camKeys = Object.keys(camEvents);
+    if (camKeys.length > 0) {
+        const camRow = document.createElement('div');
+        camRow.className = 'latency-gantt-legend-cam';
+        camRow.innerHTML = `
+            <span class="latency-gantt-legend-cam-marker">◆</span>
+            <span>cameras (${camKeys.length})</span>
+        `;
+        legend.appendChild(camRow);
+    }
 }
 
 function _drawGantt(canvas, rec, [minMs, maxMs]) {

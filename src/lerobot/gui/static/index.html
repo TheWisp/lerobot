@@ -308,7 +308,10 @@
                                 </div>
                                 <div class="latency-gantt-panel" id="latency-gantt-panel"
                                      title="Per-iteration timeline. Bars are tracer spans; diamonds are camera frame captures (often before t=0 because cameras grab in a background thread). Gaps in the timeline indicate uninstrumented work; overlaps indicate parallel stages.">
-                                    <canvas id="latency-gantt-canvas"></canvas>
+                                    <div class="latency-gantt-canvas-wrap">
+                                        <canvas id="latency-gantt-canvas"></canvas>
+                                    </div>
+                                    <div class="latency-gantt-legend" id="latency-gantt-legend"></div>
                                     <div class="latency-empty" id="latency-gantt-empty">No timeline yet — waiting for first snapshot…</div>
                                 </div>
                             </div>
