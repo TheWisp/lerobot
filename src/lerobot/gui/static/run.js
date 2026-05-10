@@ -2125,14 +2125,14 @@ function _camShortName(featureKey) {
 // being garish; consistent across iterations so the operator builds muscle
 // memory ("the wide green bar is process_action").
 const _GANTT_SPAN_COLORS = {
-    motor_read:     '#4fc3f7',
-    process_obs:    '#9b59b6',
-    process_action: '#2ecc71',
-    action_send:    '#e67e22',
-    infer_total:    '#e74c3c',
-    infer_forward:  '#e74c3c',
-    dataset_write:  '#95a5a6',
-    video_encode:   '#7f8c8d',
+    get_observation: '#4fc3f7',
+    process_obs:     '#9b59b6',
+    process_action:  '#2ecc71',
+    action_send:     '#e67e22',
+    infer_total:     '#e74c3c',
+    infer_forward:   '#e74c3c',
+    dataset_write:   '#95a5a6',
+    video_encode:    '#7f8c8d',
 };
 const _GANTT_DEFAULT_SPAN_COLOR = '#aaaaaa';
 
@@ -2430,7 +2430,7 @@ async function _fetchLatencyMetrics() {
 
 // Color thresholds for the system cards.
 //
-// Two of these (loop_dt_ms, motor_read_ms) are derived from the loop's
+// Two of these (loop_dt_ms, get_observation_ms) are derived from the loop's
 // target_period_ms (1000/fps), which the snapshot writer publishes — so
 // they automatically scale to whatever FPS the teleop session is running.
 // The rest are heuristic constants tuned for typical Feetech / 30 Hz
@@ -2444,11 +2444,9 @@ function _budgetsFromTarget(targetPeriodMs) {
     // that started before this field existed, or non-teleop loops).
     const t = targetPeriodMs || (1000 / 60);
     return {
-        loop_dt_ms:           { ok: 0.7 * t, warn: t },         // 70% / 100% of FPS budget
-        e2e_obs_to_action_ms: { ok: 50,      warn: 80 },        // typical 30 Hz cam + work
-        motor_read_ms:        { ok: 0.4 * t, warn: 0.7 * t },   // motor read shouldn't dominate
-        action_send_ms:       { ok: 2,       warn: 5 },         // sync_write is fire-and-forget
-        residual_ms_abs:      { ok: 1,       warn: 3 },         // doc commits to ~0
+        loop_dt_ms:         { ok: 0.7 * t, warn: t },         // 70% / 100% of FPS budget
+        get_observation_ms: { ok: 0.4 * t, warn: 0.7 * t },   // obs read shouldn't dominate
+        action_send_ms:     { ok: 2,       warn: 5 },         // sync_write is fire-and-forget
     };
 }
 
@@ -2457,7 +2455,7 @@ function _budgetsFromTarget(targetPeriodMs) {
 // the color change" in two sentences.
 const _LAT_TOOLTIPS = {
     loop_dt_ms: 'Wall-clock time per iteration (work only; sleep excluded). The per-iteration budget is 1000 ms ÷ target FPS — at 60 fps that is 16.67 ms; at 30 fps, 33.33 ms. Yellow at ≥70% of budget; red when over.',
-    motor_read_ms: 'Cost of bus.sync_read("Present_Position") inside get_observation. Includes Feetech/Dynamixel round-trip time and any retries.',
+    get_observation_ms: 'Cost of robot.get_observation(): the follower bus.sync_read("Present_Position") plus per-camera read_latest() calls. Cameras are cached by their grab thread so the camera reads are essentially free; this number is dominated by the motor sync_read (Feetech/Dynamixel round-trip + any retries).',
     action_send_ms: 'Cost of bus.sync_write("Goal_Position"). Fire-and-forget on Feetech, so this is bus-TX only — not motor motion.',
     overrun: 'Fraction of iterations whose work time exceeded the per-iteration budget (1000 ms ÷ target FPS). Sleep time is excluded — this only fires when the work itself is too slow to sustain the target rate.',
     cam_stale: 'Age of the cached camera frame at the moment the consumer reads it (now − cam.latest_timestamp). Yellow when p95 exceeds ~1.2× the camera frame period.',
@@ -2508,7 +2506,7 @@ function _updateLatencyDashboard(data) {
         sysGrid.innerHTML = '';
         const sysOrder = [
             { key: 'loop_dt_ms',     title: 'Loop'        },
-            { key: 'motor_read_ms',  title: 'Motor read'  },
+            { key: 'get_observation_ms', title: 'Get observation' },
             { key: 'action_send_ms', title: 'Action send' },
         ];
         for (const item of sysOrder) {

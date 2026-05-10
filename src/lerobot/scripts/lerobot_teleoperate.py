@@ -158,8 +158,8 @@ def _format_latency_summary(snap: dict[str, Any]) -> str:
     parts: list[str] = []
     if (s := p50_p95("loop_dt_ms")) is not None:
         parts.append(f"loop {s}")
-    if (mr := stages.get("motor_read_ms")) is not None:
-        parts.append(f"mread {mr.get('p50', 0):.1f}ms")
+    if (gobs := stages.get("get_observation_ms")) is not None:
+        parts.append(f"obs {gobs.get('p50', 0):.1f}ms")
     if (send := stages.get("action_send_ms")) is not None:
         parts.append(f"send {send.get('p50', 0):.1f}ms")
     cam_keys = sorted(k for k in stages if k.startswith("cam_") and k.endswith("_stale_ms"))
@@ -214,11 +214,12 @@ def teleop_loop(
         if tracer is not None:
             tracer.start()
 
-        # Get robot observation. We wrap the whole call in a single span;
-        # in our typical SOFollower path this is dominated by motor sync_read,
-        # because cameras use cached read_latest() (microseconds). Finer
-        # breakdown (motor vs. cam consume) is V2.
-        with _maybe_span(tracer, "motor_read"):
+        # Get robot observation. We wrap the whole call in a single span:
+        # this includes the follower's motor sync_read AND the (cached,
+        # microseconds-fast) cam.read_latest() per camera. In practice the
+        # span time is dominated by the motor sync_read; finer breakdown
+        # (motor vs. cam consume) is V2.
+        with _maybe_span(tracer, "get_observation"):
             obs = robot.get_observation()
 
         # Per-camera staleness/period — read latest_timestamp from each camera
