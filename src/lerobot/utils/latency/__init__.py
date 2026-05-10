@@ -93,6 +93,10 @@ def __getattr__(name: str):
         from lerobot.utils.latency.session import LatencySession
 
         return LatencySession
+    if name == "current_span":
+        from lerobot.utils.latency.session import current_span
+
+        return current_span
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -101,6 +105,7 @@ __all__ = [
     "LatencySession",
     "LatencySnapshotWriter",
     "LatencyTracer",
+    "current_span",
     "format_latency_summary",
     "maybe_span",
 ]
