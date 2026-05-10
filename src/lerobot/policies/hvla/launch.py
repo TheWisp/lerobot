@@ -179,6 +179,21 @@ def main():
         "iid noise). Set at launch time only — flipping mid-training "
         "mixes noise distributions in the replay buffer.",
     )
+    # --- Latency monitoring ---
+    parser.add_argument(
+        "--latency-monitor",
+        action="store_true",
+        help="Enable per-stage GPU/CPU latency tracing for the inference "
+        "thread. Publishes outputs/hvla_runs/latency_snapshot.json so the "
+        "GUI dashboard can display HVLA stage breakdowns (enc_obs, rl_tok, "
+        "s1_denoise, actor) alongside teleop/record metrics.",
+    )
+    parser.add_argument(
+        "--latency-output-dir",
+        type=str,
+        default="outputs/hvla_runs",
+        help="Directory for latency_snapshot.json (only when --latency-monitor)",
+    )
     args = parser.parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
@@ -306,6 +321,8 @@ def main():
             rlt_output_dir=args.rlt_output_dir,
             rlt_start_engaged=not args.rlt_start_disengaged,
             rlt_shared_noise_per_chunk=args.rlt_shared_noise_per_chunk,
+            latency_monitor=args.latency_monitor,
+            latency_output_dir=args.latency_output_dir,
         )
     finally:
         stop_event.set()

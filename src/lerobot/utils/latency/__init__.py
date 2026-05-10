@@ -42,14 +42,23 @@ def maybe_span(tracer: LatencyTracer | None, name: str):
 
 # Stages we know how to render in the stderr digest. Order is the
 # preferred display order; only stages actually present in a snapshot
-# are emitted, so this works for teleop, record, and (V2) inference.
+# are emitted, so this works for teleop, record, and HVLA inference
+# without per-loop branching.
 _DIGEST_STAGES: tuple[tuple[str, str], ...] = (
+    # Teleop / record stages
     ("get_observation_ms", "obs"),
     ("process_obs_ms", "p_obs"),
     ("process_action_ms", "p_act"),
     ("inference_ms", "infer"),
     ("action_send_ms", "send"),
     ("dataset_write_ms", "dswr"),
+    # HVLA inference-thread stages (none of these collide with the teleop
+    # set; if a loop_kind doesn't emit them they're silently skipped).
+    ("batch_prep_ms", "prep"),
+    ("enc_obs_ms", "enc"),
+    ("rl_tok_ms", "rl_tok"),
+    ("s1_denoise_ms", "denoise"),
+    ("actor_ms", "actor"),
 )
 
 

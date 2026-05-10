@@ -60,7 +60,6 @@ class TestDisabledSession:
         session.cam_consume("top", time.perf_counter())
         session.cam_consume_all({"top": SimpleNamespace(latest_timestamp=time.perf_counter())})
         session.cam_consume_all(None)
-        session.mark_input()
         session.set_field("ep", 1)
 
     def test_disabled_no_snapshot_written(self, tmp_path: Path):
