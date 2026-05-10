@@ -37,3 +37,33 @@ class BiSO107FollowerConfig(RobotConfig):
 
     # cameras (shared between both arms)
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+
+    # How to read each camera frame in get_observation:
+    #   "latest"       — return whatever is in the grab thread's buffer right
+    #                    now (cam.read_latest). Never blocks; may return a
+    #                    duplicate of the previous frame when the consumer
+    #                    is faster than the camera. Default — keeps the
+    #                    control loop at its target FPS even if a camera lags.
+    #   "wait_for_new" — wait until a fresh frame arrives (cam.async_read).
+    #                    Never duplicates; the loop period stretches to the
+    #                    slowest camera's effective FPS. Use when the policy
+    #                    was trained on a strict-no-duplicate dataset and you
+    #                    want to mirror that contract.
+    #
+    # Why "latest" is the default: in a multi-camera setup the first camera
+    # iterated under "wait_for_new" pays the full async_read wait while
+    # every subsequent camera's grab thread has already cached a fresh
+    # frame — the result is one super-fresh camera and the others
+    # randomly stale (large cross-camera time skew), plus the loop period
+    # stretching to the slowest camera. Empirical (white profile, 4 cams,
+    # FlowMatchingS1): the swap dropped get_observation p50 from 66 ms →
+    # 14 ms and doubled the effective control rate from 15 Hz to 30 Hz,
+    # with overrun ratio falling from 99.5% to 0.0%. Cross-camera
+    # staleness also tightened.
+    #
+    # Only affects cameras that go through async_read. RealSense aligned
+    # color+depth (read_color_and_aligned_depth) keeps its existing
+    # behaviour because it has no non-blocking variant; in practice that
+    # method only blocks when the consumer is faster than the camera,
+    # which the loop-rate fix above already addresses.
+    camera_read_strategy: str = "latest"

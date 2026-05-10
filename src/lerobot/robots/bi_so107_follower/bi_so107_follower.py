@@ -120,6 +120,22 @@ class BiSO107Follower(Robot):
         self.left_arm.setup_motors()
         self.right_arm.setup_motors()
 
+    def _read_camera_frame(self, cam) -> Any:
+        """Read one camera frame using the configured strategy.
+
+        ``latest`` returns whatever is in the grab thread's buffer
+        (``cam.read_latest``). Falls back to ``cam.async_read`` on the
+        very first call before any frame has been captured (read_latest
+        raises in that case; async_read blocks until one arrives).
+        """
+        if self.config.camera_read_strategy == "latest":
+            try:
+                return cam.read_latest()
+            except RuntimeError:
+                # No frame captured yet — block once to populate the buffer.
+                return cam.async_read()
+        return cam.async_read()
+
     def get_observation(self) -> dict[str, Any]:
         obs_dict = {}
 
@@ -131,6 +147,8 @@ class BiSO107Follower(Robot):
         right_obs = self.right_arm.get_observation()
         obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
 
+        # Per-camera frame reads. Strategy is ``latest`` by default — see
+        # ``BiSO107FollowerConfig.camera_read_strategy`` for the trade-off.
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
 
@@ -146,16 +164,10 @@ class BiSO107Follower(Robot):
                     logger.debug(f"{self} read {cam_key} + aligned depth: {dt_ms:.1f}ms")
                 except Exception as e:
                     logger.warning(f"{self} failed to read aligned frames for {cam_key}: {e}")
-                    # Fallback: try reading color only
-                    obs_dict[cam_key] = cam.read_latest()
+                    # Fallback: try reading color only via the configured strategy.
+                    obs_dict[cam_key] = self._read_camera_frame(cam)
             else:
-                # Cached non-blocking read. Matches PR #2987's migration of
-                # the single-arm robots from async_read to read_latest;
-                # this bimanual variant has its own get_observation() and
-                # was missed by that PR. async_read here was blocking on
-                # new_frame_event.wait() up to ~33ms per camera, which
-                # made the record loop overrun its FPS budget.
-                obs_dict[cam_key] = cam.read_latest()
+                obs_dict[cam_key] = self._read_camera_frame(cam)
                 dt_ms = (time.perf_counter() - start) * 1e3
                 logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
