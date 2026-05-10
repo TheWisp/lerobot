@@ -295,12 +295,18 @@
                                 <div class="latency-section-title">
                                     Iteration timeline
                                     <span class="latency-gantt-controls">
-                                        <select id="latency-gantt-pick" title="Which iteration to render">
-                                            <option value="median" selected>median</option>
-                                            <option value="p95">p95</option>
-                                            <option value="p99">p99</option>
-                                            <option value="max">max</option>
-                                            <option value="latest">latest</option>
+                                        <select id="latency-gantt-pick" title="Aggregate views synthesize a typical iteration where each stage independently shows its own percentile. Sample views show one real captured iteration whose per-stage values are whatever happened in that one iteration.">
+                                            <optgroup label="Aggregate (per-stage percentile)">
+                                                <option value="aggregate_median" selected>median</option>
+                                                <option value="aggregate_p95">p95</option>
+                                            </optgroup>
+                                            <optgroup label="Sample (real iteration)">
+                                                <option value="median">median sample</option>
+                                                <option value="p95">p95 sample</option>
+                                                <option value="p99">p99 sample</option>
+                                                <option value="max">worst (max loop)</option>
+                                                <option value="latest">latest</option>
+                                            </optgroup>
                                         </select>
                                         <span id="latency-gantt-meta"></span>
                                     </span>
