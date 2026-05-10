@@ -478,6 +478,11 @@ def run_s1(
     rlt_output_dir: str = "outputs/rlt_online",
     rlt_start_engaged: bool = True,
     rlt_shared_noise_per_chunk: bool = False,
+    # Latency monitoring (mirrors --latency_monitor / --latency_output_dir
+    # from teleop/record). Snapshot is published to <output_dir>/latency_snapshot.json
+    # so the GUI dashboard can render HVLA inference timings alongside teleop/record.
+    latency_monitor: bool = False,
+    latency_output_dir: str | None = None,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -978,6 +983,19 @@ def run_s1(
 
     # --- Pipelined inference thread ---
     from lerobot.policies.hvla.s1_inference import InferenceThread
+    from lerobot.utils.latency import LatencySession
+
+    # target_fps is the per-action cadence the main loop runs at. The
+    # inference thread runs at ~ fps / max(query_interval_steps, 1) when a
+    # query interval is set, but the per-stage GPU breakdown is the same;
+    # passing fps gives the dashboard a meaningful overrun reference for
+    # the no-query-interval case.
+    inference_session = LatencySession.from_config(
+        enabled=latency_monitor,
+        loop_kind="hvla_infer",
+        target_fps=float(fps),
+        output_dir=latency_output_dir if latency_monitor else None,
+    )
 
     infer_thread = InferenceThread(
         policy=policy,
@@ -998,6 +1016,7 @@ def run_s1(
         rlt_agent=rlt_agent,
         rlt_state=rlt_state,
         rlt_replay=rlt_replay,
+        latency_session=inference_session,
     )
 
     # Instantiate the intervention recorder once per process. It owns the

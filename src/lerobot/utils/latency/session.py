@@ -199,10 +199,6 @@ class LatencySession:
             if ts is not None:
                 self._tracer.cam_consume(cam_key, ts)
 
-    def mark_input(self, t: float | None = None) -> None:
-        """Mark a non-camera input timestamp for the e2e calculation."""
-        self._tracer.mark_input(t)
-
     def set_field(self, key: str, value: Any) -> None:
         """Add a non-timing field to the current iteration's record."""
         self._tracer.set_field(key, value)
@@ -271,9 +267,6 @@ class _DisabledSession(LatencySession):
         pass
 
     def cam_consume_all(self, cameras: dict[str, Any] | None) -> None:
-        pass
-
-    def mark_input(self, t: float | None = None) -> None:
         pass
 
     def set_field(self, key: str, value: Any) -> None:
