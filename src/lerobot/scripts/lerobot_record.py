@@ -161,8 +161,8 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.latency import LatencySession
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import (
-    init_logging,
     log_say,
+    setup_run_logging,
 )
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
@@ -258,11 +258,11 @@ class RecordConfig:
     # and publish a JSON snapshot for the GUI to read. Mirrors the teleop flag.
     # See src/lerobot/gui/docs/latency_monitoring.md.
     latency_monitor: bool = False
-    # Where to write latency_snapshot.json (when --latency_monitor=true).
-    # Same default as teleop so the GUI's polling endpoint reads from one
-    # known location regardless of which workflow is active. The GUI's
-    # _ensure_no_active_process() ensures only one writer at a time.
-    latency_output_dir: str = "outputs/teleop"
+    # Where to write latency_snapshot.json (when --latency_monitor=true)
+    # AND the per-run log file. Distinct from teleop's "outputs/teleop"
+    # so the GUI latency dashboard treats record as its own source key
+    # (LATENCY_SOURCES["record"]) and doesn't double-render the panel.
+    latency_output_dir: str = "outputs/record"
 
     def __post_init__(self):
         # HACK: We parse again the cli args here to get the pretrained path if there was one.
@@ -855,7 +855,7 @@ def record_loop(
 
 @parser.wrap()
 def record(cfg: RecordConfig) -> LeRobotDataset:
-    init_logging()
+    setup_run_logging(cfg.latency_output_dir, "record")
     logging.info(pformat(asdict(cfg)))
     if cfg.display_data:
         init_rerun(session_name="recording", ip=cfg.display_ip, port=cfg.display_port)
