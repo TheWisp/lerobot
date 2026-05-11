@@ -202,6 +202,7 @@ class TestSnapshotPublish:
         with session.iteration():
             with session.span("work"):
                 pass
+        session.writer.flush()  # writer runs async on a background thread
         snap_path = tmp_path / "latency_snapshot.json"
         assert snap_path.exists()
         data = json.loads(snap_path.read_text())
@@ -285,6 +286,7 @@ class TestProcessTrackSchema:
         session.writer._interval_s = 0.0
         with session.iteration():
             pass
+        session.writer.flush()
         data = json.loads((tmp_path / "latency_snapshot.json").read_text())
         assert data["process"] == "hvla"
         assert data["track"] == "main"
@@ -303,6 +305,7 @@ class TestProcessTrackSchema:
         session.writer._interval_s = 0.0
         with session.iteration():
             pass
+        session.writer.flush()
         data = json.loads((tmp_path / "latency_snapshot.json").read_text())
         assert data["process"] == "teleop"
         assert data["track"] == "teleop"

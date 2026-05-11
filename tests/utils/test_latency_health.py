@@ -337,6 +337,7 @@ class TestSessionIntegration:
         for _ in range(100):
             session.aggregator.ingest({"loop_dt_ms": 100.0, "t": time.time(), "overrun": True})
         session._after_commit()
+        session.writer.flush()
         data = json.loads((tmp_path / "latency_snapshot.json").read_text())
         assert "health" in data
         assert "issues" in data["health"]
