@@ -183,6 +183,20 @@ class BiSO107Follower(Robot):
         return obs_dict
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        # Dry-run mode: drop the command but return the requested action
+        # unchanged so callers expecting the "sent" dict back keep working.
+        # First-call logging makes the mode obvious in the run log so
+        # nobody mistakes a quiet motor bus for normal behaviour.
+        if self.config.dry_run:
+            if not getattr(self, "_dry_run_logged", False):
+                logger.warning(
+                    "%s: dry_run=True — send_action is a no-op. Motors will NOT move. "
+                    "Disable dry_run in the robot config to drive the arms.",
+                    self,
+                )
+                self._dry_run_logged = True
+            return action
+
         # Remove "left_" prefix
         left_action = {
             key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")
