@@ -244,12 +244,20 @@ class LatencyAggregator:
         computed independently — no jitter from picking different
         records.
 
-        The synthesized iteration's spans are laid out cumulatively in
-        the order each span first appeared in the deque (motor_read,
-        then process_obs, etc., for the standard teleop ordering). The
-        sum of span p-values may not equal p of loop_dt_ms — uninstru-
-        mented work appears as a visible gap on the right edge of the
-        Gantt, and that's informative.
+        Layout: each span is placed at
+        ``[percentile(start_offsets), percentile(start_offsets) + percentile(durations)]``.
+        Independent percentiles of start and duration preserve nesting:
+        if A contains B in every input record (e.g. ``get_observation``
+        contains ``motor_read_left``), then percentile-of-start and
+        percentile-of-end remain ordered the same way, so A still
+        contains B in the aggregate. Earlier versions cascaded all
+        spans end-to-end in dict-insertion order, which silently broke
+        nesting whenever child spans were inserted into the record dict
+        before their parent (every nested case, since the inner span's
+        ``__exit__`` fires first).
+
+        Uninstrumented work appears as the gap between the rightmost
+        span's end and ``loop_dt_ms``.
 
         Camera capture/consume offsets use per-camera percentiles so
         each camera's typical staleness is independently represented.
@@ -259,9 +267,10 @@ class LatencyAggregator:
         if not self._records:
             return None
 
-        # Collect span durations per name across all records, preserving
-        # the order in which each name first appeared (so the synthetic
-        # Gantt has the same shape the operator is used to).
+        # Collect per-span start offsets and durations across all
+        # records. Preserve the order each name first appeared so the
+        # legend/sidebar listing stays stable across snapshots.
+        span_starts: dict[str, list[float]] = {}
         span_durations: dict[str, list[float]] = {}
         span_order: list[str] = []
         for r in self._records:
@@ -269,19 +278,21 @@ class LatencyAggregator:
             for name, endpoints in spans.items():
                 if name not in span_durations:
                     span_durations[name] = []
+                    span_starts[name] = []
                     span_order.append(name)
                 start_ms, end_ms = endpoints
+                span_starts[name].append(start_ms)
                 span_durations[name].append(end_ms - start_ms)
 
         synth_spans: dict[str, list[float]] = {}
-        cursor = 0.0
         for name in span_order:
             durs = span_durations[name]
+            starts = span_starts[name]
             if not durs:
                 continue
+            start_p = float(np.percentile(np.asarray(starts), p))
             dur_p = float(np.percentile(np.asarray(durs), p))
-            synth_spans[name] = [cursor, cursor + dur_p]
-            cursor += dur_p
+            synth_spans[name] = [start_p, start_p + dur_p]
 
         # Camera events: per-cam captured/consumed offset percentiles.
         cam_captured: dict[str, list[float]] = {}
