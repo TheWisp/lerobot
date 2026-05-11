@@ -263,6 +263,10 @@ class RecordConfig:
     # so the GUI latency dashboard treats record as its own source key
     # (LATENCY_SOURCES["record"]) and doesn't double-render the panel.
     latency_output_dir: str = "outputs/record"
+    # Duration (seconds) of the programmatic ramp-to-start for file-backed
+    # teleops (e.g. trajectory_replay) during the auto-reset phase between
+    # episodes. Short by default since this is robot-driven, not human-driven.
+    auto_reset_duration_s: float = 3.0
 
     def __post_init__(self):
         # HACK: We parse again the cli args here to get the pretrained path if there was one.
@@ -1034,12 +1038,6 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 "Streaming encoding is disabled. If you have capable hardware, consider enabling it for way faster episode saving. --dataset.streaming_encoding=true --dataset.encoder_threads=2 # --dataset.vcodec=auto. More info in the documentation: https://huggingface.co/docs/lerobot/streaming_video_encoding"
             )
 
-        # Auto-reset duration for file-backed teleops (trajectory_replay).
-        # Short and fixed: this is a programmatic ramp-to-start, not a
-        # human-driven reset. Configurable later if the iteration flow
-        # needs it.
-        _auto_reset_duration_s = 3.0
-
         def run_reset_phase():
             """Run a reset phase to allow setting up / resetting the environment.
 
@@ -1061,7 +1059,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 if getattr(teleop, "is_exhausted", False):
                     teleop.disconnect()
                     teleop.connect()
-                move_to_rest_position(robot, teleop.start_pose, duration_s=_auto_reset_duration_s)
+                move_to_rest_position(robot, teleop.start_pose, duration_s=cfg.auto_reset_duration_s)
                 return
 
             # Always disable torque on leader for reset phase so operator can teleop freely
