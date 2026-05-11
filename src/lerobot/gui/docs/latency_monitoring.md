@@ -673,6 +673,67 @@ Multiple loops can run concurrently (e.g. teleop + HVLA inference, when running 
 
 `LATENCY_SOURCES` in [api/run.py](../../gui/api/run.py) is the registry; adding a new loop kind means appending to the dict and (if the script's CLI doesn't yet expose `--latency-output-dir`) plumbing it through.
 
+### Persistent per-episode quality metadata (record loop)
+
+The live `LoopHealthDetector` fires WARN logs during recording but the
+operator may not be looking. After the recording finishes, the dataset
+on disk should answer two questions on its own:
+
+- _"Did this run record cleanly overall?"_ → `meta/recording_health.json`
+- _"Which episodes were bad?"_ → `meta/episodes_health.jsonl` (one JSON
+  line per saved episode)
+
+Both files live inside the dataset directory (`<dataset.root>/meta/`) so
+they travel with the data — sync the dataset to the Hub, the quality
+verdict goes with it. The data panel in the GUI reads these files to
+render red/yellow badges next to bad episodes without having to
+re-derive anything.
+
+Schemas:
+
+```json
+// meta/episodes_health.jsonl  (one line per save_episode)
+{
+  "episode_index": 5,
+  "n_records": 600,
+  "duration_s": 20.0,
+  "target_period_ms": 33.33,
+  "overrun_ratio": 0.12,
+  "loop_dt_ms": {"p50": 31.0, "p95": 42.0, "p99": 55.0, "max": 67.0},
+  "cameras": {"front": {"stale_p50": 14, "stale_p95": 22, "period_p50": 33.3, "fps_effective": 30.0}, ...},
+  "healthy": false,
+  "issues": [{"rule": "overrun_high", "message": "12.0% of frames over the 33.3 ms budget (threshold 5%)."}]
+}
+```
+
+```json
+// meta/recording_health.json  (one file per recording session)
+{
+  "loop_kind": "record",
+  "n_records": 18000,
+  "duration_s": 600.5,
+  "target_period_ms": 33.33,
+  "overrun_ratio": 0.03,
+  ...
+  "healthy": true,
+  "issues": []
+}
+```
+
+The per-episode verdict thresholds are intentionally stricter than the
+live `LoopHealthDetector`'s (5% vs 10% overrun) because the post-hoc
+check covers the whole episode while the live one watches a rolling
+window. An episode with one bad second out of sixty may not have fired
+the live warning (the window cleared) but is still arguably unhealthy
+for training — so the persistent file flags it for review. See
+`DEFAULT_VERDICT_THRESHOLDS` in [recording_health.py](../../utils/latency/recording_health.py).
+
+Tagging is required for per-episode breakdown: `record_loop` calls
+`latency_session.set_field("ep", episode_index)` at the top of every
+iteration. Reset and setup phases pass `episode_index=None`, so those
+records carry no `ep` tag and are excluded from any specific episode's
+verdict.
+
 ### Thread-safety contract
 
 The latency package contains **zero locks**. Thread safety is achieved by partitioning state per-thread rather than synchronising shared state. Two principles keep this working; both are easy to break by accident, so they're written down here:

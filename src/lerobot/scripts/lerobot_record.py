@@ -70,6 +70,7 @@ lerobot-record \
 """
 
 import copy
+import json
 import logging
 import subprocess
 import time
@@ -311,6 +312,89 @@ class RecordConfig:
 """
 
 
+def _write_episode_health(
+    latency_session: LatencySession,
+    dataset: LeRobotDataset,
+    episode_index: int,
+    fps: int,
+) -> None:
+    """Compute and persist quality stats for a just-saved episode.
+
+    Filters the aggregator's records to the ones tagged ``ep=episode_index``,
+    builds a summary + verdict, appends a JSON line to
+    ``<dataset.root>/meta/episodes_health.jsonl``, and logs a verdict
+    line at INFO (healthy) or WARNING (issues). Intentionally cheap —
+    no expensive recomputation, no extra I/O on the loop path.
+    """
+    from lerobot.utils.latency.recording_health import (
+        filter_by_episode,
+        summarize,
+        verdict,
+    )
+
+    target_period_ms = 1000.0 / float(fps)
+    ep_records = filter_by_episode(list(latency_session.aggregator._records), episode_index)
+    if not ep_records:
+        return
+    summary = summarize(ep_records, target_period_ms=target_period_ms)
+    summary["episode_index"] = episode_index
+    health = verdict(summary)
+    summary["healthy"] = health["healthy"]
+    summary["issues"] = health["issues"]
+
+    meta_dir = dataset.root / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    out_path = meta_dir / "episodes_health.jsonl"
+    with open(out_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(summary, separators=(",", ":")) + "\n")
+
+    if health["healthy"]:
+        logging.info(
+            "Episode %d health: OK (%.1f%% overrun, loop_dt p95=%.1fms)",
+            episode_index,
+            summary["overrun_ratio"] * 100,
+            summary["loop_dt_ms"]["p95"],
+        )
+    else:
+        issue_str = "; ".join(f"{i['rule']}: {i['message']}" for i in health["issues"])
+        logging.warning(
+            "Episode %d health: UNHEALTHY — %s. See meta/episodes_health.jsonl.",
+            episode_index,
+            issue_str,
+        )
+
+
+def _write_recording_health(
+    latency_session: LatencySession,
+    dataset: LeRobotDataset,
+    fps: int,
+) -> None:
+    """Persist the aggregate quality summary for the whole recording session.
+
+    Distinct from ``_write_episode_health`` in two ways: (1) it covers
+    every iteration in the aggregator, not one episode's slice; (2) it
+    writes a single JSON file rather than appending a line, so the data
+    panel can read it as the "did this session record cleanly?" verdict
+    without scanning every episode line.
+    """
+    from lerobot.utils.latency.recording_health import summarize, verdict
+
+    target_period_ms = 1000.0 / float(fps)
+    all_records = list(latency_session.aggregator._records)
+    if not all_records:
+        return
+    summary = summarize(all_records, target_period_ms=target_period_ms)
+    health = verdict(summary)
+    summary["healthy"] = health["healthy"]
+    summary["issues"] = health["issues"]
+    summary["loop_kind"] = latency_session.loop_kind
+
+    meta_dir = dataset.root / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    with open(meta_dir / "recording_health.json", "w", encoding="utf-8") as f:
+        json.dump(summary, f, separators=(",", ":"))
+
+
 @safe_stop_image_writer
 def record_loop(
     robot: Robot,
@@ -338,6 +422,7 @@ def record_loop(
     display_compressed_images: bool = False,
     play_sounds: bool = True,
     latency_session: LatencySession | None = None,
+    episode_index: int | None = None,
 ) -> list[dict]:
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -410,6 +495,13 @@ def record_loop(
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
         latency_session.start_iter()
+        # Tag every record with the episode index so the post-episode
+        # quality summary can filter records by ``ep`` and the data panel
+        # can render per-episode badges from meta/episodes_health.jsonl.
+        # ``None`` for reset / non-episode phases — those records are
+        # excluded from any episode's verdict.
+        if episode_index is not None:
+            latency_session.set_field("ep", episode_index)
 
         if events["exit_early"]:
             events["exit_early"] = False
@@ -963,7 +1055,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     run_reset_phase()
 
                 while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
-                    log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
+                    current_episode_index = dataset.num_episodes
+                    log_say(f"Recording episode {current_episode_index}", cfg.play_sounds)
                     pending_intervention_episodes = record_loop(
                         robot=robot,
                         events=events,
@@ -984,6 +1077,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         display_compressed_images=display_compressed_images,
                         play_sounds=cfg.play_sounds,
                         latency_session=latency_session,
+                        episode_index=current_episode_index,
                     )
 
                     import time as _time
@@ -1008,6 +1102,20 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         continue
 
                     dataset.save_episode()
+
+                    # Per-episode quality summary — append to
+                    # meta/episodes_health.jsonl so the data panel can
+                    # render badges next to bad episodes, and log a one-
+                    # line verdict so headless operators see it in stderr.
+                    # Live warnings already fired during recording via
+                    # LoopHealthDetector; this is the persistent record.
+                    if latency_session.enabled and latency_session.aggregator is not None:
+                        _write_episode_health(
+                            latency_session,
+                            dataset,
+                            current_episode_index,
+                            cfg.dataset.fps,
+                        )
 
                     # Save intervention episodes AFTER main episode (ensures matching)
                     if intervention_dataset is not None and pending_intervention_episodes:
@@ -1034,6 +1142,16 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     recorded_episodes += 1
     finally:
         log_say("Stop recording", cfg.play_sounds, blocking=True)
+
+        # Aggregate quality summary for the whole recording session.
+        # Written before dataset.finalize() so the file lands alongside
+        # episodes_health.jsonl in meta/. Best-effort: swallow any
+        # filesystem hiccup so it can't mask the actual recording result.
+        if dataset is not None and latency_session.enabled and latency_session.aggregator is not None:
+            try:
+                _write_recording_health(latency_session, dataset, cfg.dataset.fps)
+            except Exception as e:  # noqa: BLE001
+                logging.warning("Could not write recording_health.json: %s", e)
 
         if dataset:
             dataset.finalize()
