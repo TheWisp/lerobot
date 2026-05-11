@@ -68,6 +68,20 @@ doesn't yet read this — wire it up:
 
 Verdict thresholds live in `src/lerobot/utils/latency/recording_health.py::DEFAULT_VERDICT_THRESHOLDS` — surface them somewhere the user can tweak per-dataset if needed (probably not in V1).
 
+### Control-Lag Analyzer
+
+Cross-correlation of `action[:, j]` vs `observation.state[:, j]` per joint gives the effective control lag for free, from any existing dataset — no extra recording, no extra hardware. Prototype lives at `/tmp/analyze_control_lag.py`; ran clean on three SO-107 datasets (199K / 179K / 137K frames each) and converged on a uniform 3–4 frame baseline (~100–133 ms at 30 Hz). The fact that the lag is the same across all 14 joints — not a gradient from heavy shoulders to light gripper — points at the sampling rate + default PID gains as the systemic floor rather than per-joint mechanics.
+
+Worth landing as a proper tool:
+
+- [ ] **Promote the analyzer** out of `/tmp` to `src/lerobot/utils/analyzers/control_lag.py` with a `lerobot-analyze-control-lag <dataset_dir>` CLI entry (or as a function callable from the data panel backend).
+- [ ] **Integrate into `meta/recording_health.json`**: append a `control_lag` block with `{joint_name: {lag_frames, lag_ms, corr, n_moving}}` so the verdict has a measured number rather than just "did the loop hit its budget." Computed once at end of recording from the freshly-written parquet, no live overhead.
+- [ ] **Data panel visualisation**: a small per-joint bar chart on the dataset summary, color-coded against expected baseline (~4 frames at 30 Hz for hobby servos). Outliers (e.g. one joint at 7+ frames) flag specific hardware issues — backlash, retries, loose mount.
+- [ ] **Gripper handling**: gripper position has nonlinear contact dynamics so its lag correlation is ~0.94 vs ~0.99 for other joints. Either filter to no-contact segments before correlating, or flag the gripper number as low-confidence in the UI.
+- [ ] **Cross-dataset comparison view**: same set of joints across N datasets to spot drift (servo wear, firmware change, mount loosening). Lives naturally next to the per-episode-quality badges work above — same data-panel concept.
+
+Caveat: this measures _tracking lag_ (action-to-state convergence during continuous motion), which is a strict superset of the pure command-to-actuation dead time discussed in the latency design doc. The rig-based C2A calibration (IMU + MCU master clock) is still the only way to isolate the few-ms servo dead time itself — but for "is the control loop tracking?" / "did this hardware regress?", cross-correlation is enough and free.
+
 ### Dataset Merge
 
 See [docs/data_tab.md](docs/data_tab.md) for full design.
