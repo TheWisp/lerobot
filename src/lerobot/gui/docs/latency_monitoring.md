@@ -673,6 +673,43 @@ Multiple loops can run concurrently (e.g. teleop + HVLA inference, when running 
 
 `LATENCY_SOURCES` in [api/run.py](../../gui/api/run.py) is the registry; adding a new loop kind means appending to the dict and (if the script's CLI doesn't yet expose `--latency-output-dir`) plumbing it through.
 
+### Thread-safety contract
+
+The latency package contains **zero locks**. Thread safety is achieved by partitioning state per-thread rather than synchronising shared state. Two principles keep this working; both are easy to break by accident, so they're written down here:
+
+**1. One session per thread. Sessions never cross thread boundaries.**
+
+Each `LatencySession` owns its own `LatencyTracer`, `LatencyAggregator`, `LatencySnapshotWriter`, and `LoopHealthDetector`. The owning thread is whichever one calls `start_iter` / `end_iter` / `span` etc. Multi-thread loops (the canonical example is HVLA's control thread + inference thread) construct **two distinct sessions** with two distinct aggregators and two distinct snapshot files — never one session shared across both threads.
+
+Concretely in HVLA: `s1_process.run_s1` constructs `main_session` (used only by the control thread) and `inference_session` (passed into `InferenceThread`, used only by the daemon thread inside `_loop`). Each thread does `from_config(...)` ⇒ gets a fresh `LatencyAggregator` ⇒ owns it for the rest of its life.
+
+> ⚠️ **Don't do this**: constructing two `LatencySession`s that share one aggregator (e.g. by passing the same `LatencyAggregator` instance to two `LatencySession.__init__` calls). The public API (`from_config`) prevents this — but the constructor is permissive. If a future refactor exposes shared aggregators, the deque's append/iteration race becomes real and we'd need locking.
+
+**2. `current_span` is per-thread by construction.**
+
+The thread-local that `start_iter` writes (`_thread_session.session = self`) and `end_iter` clears uses Python's `threading.local()`. Each thread sees its own attribute storage — the inference thread cannot accidentally observe the control thread's "current session," and vice versa. No coordination needed.
+
+> ⚠️ **Don't do this**: calling `current_span("...")` from a coroutine that yielded mid-iteration. Coroutines share an OS thread but switch context arbitrarily, so the "current session" registered at `start_iter` could be the wrong one by the time the coroutine resumes. We don't use asyncio/gevent inside any loop body today; if that ever changes, switch to `contextvars` instead of `threading.local`.
+
+**3. Cross-process IPC uses atomic `os.replace`.**
+
+The snapshot file is the _only_ place where the loop process and the GUI process exchange data. `LatencySnapshotWriter._write` writes to `latency_snapshot.json.tmp` then atomically renames over `latency_snapshot.json`. POSIX guarantees the GUI reader sees either the complete old file or the complete new file, never a partial — and the GUI also catches and swallows any read exception as belt-and-suspenders. So even though producer and consumer are on different processes (and therefore different threads), they never coordinate explicitly.
+
+> ⚠️ **Don't do this**: writing to the snapshot file directly without going through `LatencySnapshotWriter._write`. Skipping the tmp+rename dance reintroduces the partial-read race.
+
+**Why partition over lock?**
+
+The hot path runs at 30–60 Hz with sub-µs budget for monitoring overhead. Even an uncontended `threading.Lock` acquire is ~1 µs; a contended one is much worse. By making sessions thread-private, the hot path is pure attribute access (`time.perf_counter()`, dict writes, deque append). Measured cost: ~11 µs/iter at the realistic shape, including the detector throttle ticks — 0.03% of a 30 Hz budget. See `TestOverhead` in [test_latency_session.py](../../../../tests/utils/test_latency_session.py).
+
+**What this means for new loops:**
+
+When adding `LatencySession` to a new loop, the rules are:
+
+- Call `LatencySession.from_config(...)` once, in the thread that will own the loop. Do not construct manually.
+- Drive `start_iter` / `end_iter` from that same thread. Do not hand the session off.
+- For multi-thread setups (background inference, async writer), each thread that needs latency data gets its own `from_config(...)` call, its own `loop_kind`, and (for multi-thread processes) a distinct `track` field on the snapshot envelope.
+- Read snapshots from the GUI process via `/api/run/latency-metrics?source=...` — never read the file directly from a different thread of the producer process.
+
 ---
 
 ## Open questions
