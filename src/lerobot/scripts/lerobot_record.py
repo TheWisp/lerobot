@@ -896,6 +896,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     dataset = None
     intervention_dataset = None
     listener = None
+    # Initialise latency_session up-front so the ``finally`` block can
+    # reference it even if a setup step (robot.connect / make_policy /
+    # ...) raises before the real session is constructed below.
+    latency_session: LatencySession = LatencySession.disabled()
 
     try:
         if cfg.resume:
