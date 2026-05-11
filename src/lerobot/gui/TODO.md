@@ -222,6 +222,9 @@ Per-camera `OurStreamingVideoEncoder.push_frame()` (inside `dataset_write`):
 - `motor_read_left/right` are stable (~1.2-1.4x p95/p50). No work to do here.
 - `process_action`, `action_send` together cost 0.27 ms p50. Not worth touching.
 - `IdentityProcessorStep` in the default pipeline costs 0 ms — confirmed no-op.
+### Run Log Files (other entry points)
+
+- [Mid] **Apply the teleop log-file pattern to other run scripts**. `lerobot-teleoperate` now writes `outputs/teleop/teleop_<ts>.log` and routes uncaught exceptions (main thread + background threads) through `logging.error`, so the per-run log captures full tracebacks for post-mortem. The same is missing for `lerobot-record`, `-replay`, `-calibrate`, `-eval` — they all call `init_logging()` with no `log_file` and don't install excepthooks, so a hardware crash mid-recording or a serial-bus error during calibrate leaves no on-disk record. Either copy the small helper into each script, or promote `_install_exception_logging()` + the log-path resolution into `lerobot.utils.utils` so each script just opts in via one call. Scope-tight version of the latter: a `setup_run_logging(output_dir, run_name)` helper that returns the log path.
 
 ### Latency Panel UX
 

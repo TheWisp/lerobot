@@ -54,8 +54,12 @@ lerobot-teleoperate \
 """
 
 import logging
+import sys
+import threading
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
 from pprint import pformat
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
@@ -241,9 +245,41 @@ def teleop_loop(
             return
 
 
+def _install_exception_logging() -> None:
+    """Route uncaught exceptions (main thread and background threads) through
+    ``logging.error`` so the per-run log file captures full tracebacks. Without
+    this, ``Exception in thread ...`` and the final ``Traceback`` would go to
+    stderr only and disappear from any post-mortem.
+    """
+
+    def _main_hook(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
+
+    def _thread_hook(args: threading.ExceptHookArgs) -> None:
+        if issubclass(args.exc_type, SystemExit):
+            return
+        name = args.thread.name if args.thread is not None else "<unknown>"
+        logging.error(
+            "Uncaught exception in thread %s",
+            name,
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = _main_hook
+    threading.excepthook = _thread_hook
+
+
 @parser.wrap()
 def teleoperate(cfg: TeleoperateConfig):
-    init_logging()
+    log_dir = Path(cfg.latency_output_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"teleop_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    init_logging(log_file=log_file)
+    _install_exception_logging()
+    logging.info("Teleop log file: %s", log_file)
     logging.info(pformat(asdict(cfg)))
     if cfg.display_data:
         init_rerun(session_name="teleoperation", ip=cfg.display_ip, port=cfg.display_port)
