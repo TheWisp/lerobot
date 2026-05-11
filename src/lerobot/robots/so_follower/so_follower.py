@@ -290,3 +290,20 @@ class SO107Follower(SOFollower):
         )
         self.cameras = make_cameras_from_configs(config.cameras)
         self._cached_motor_positions: dict[str, float] = {}
+
+    def configure(self) -> None:
+        # Reuse the base PID + operating-mode setup, then tighten the
+        # small-error responsiveness floor. Factory defaults are
+        # Minimum_Startup_Force=0 and CW/CCW_Dead_Zone=1. At ~0.088°/step
+        # resolution the 1-step deadband sits below sensor noise, but
+        # write zeros explicitly so a fresh motor matches every other
+        # SO-107 setup — otherwise the value silently persists in EEPROM
+        # from whatever the last configurator (or stock firmware) wrote.
+        # Kept local to SO-107 because that's the only platform on which
+        # we've measured no regression from these zeros.
+        super().configure()
+        with self.bus.torque_disabled():
+            for motor in self.bus.motors:
+                self.bus.write("Minimum_Startup_Force", motor, 0)
+                self.bus.write("CW_Dead_Zone", motor, 0)
+                self.bus.write("CCW_Dead_Zone", motor, 0)
