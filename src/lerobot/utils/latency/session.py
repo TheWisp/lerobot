@@ -43,11 +43,17 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lerobot.utils.latency.aggregator import LatencyAggregator
 from lerobot.utils.latency.snapshot import LatencySnapshotWriter
 from lerobot.utils.latency.tracer import LatencyTracer
+
+if TYPE_CHECKING:
+    # Type-only import keeps the LoopHealthDetector annotation in __init__
+    # honest for type checkers without paying for the import (and avoiding
+    # a potential circular if health.py ever takes a session dependency).
+    from lerobot.utils.latency.health import LoopHealthDetector
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +105,7 @@ class LatencySession:
         loop_kind: str,
         target_fps: float | None,
         summary_interval_s: float = 1.0,
+        detector: LoopHealthDetector | None = None,
     ):
         self.aggregator = aggregator
         self.writer = writer
@@ -107,6 +114,17 @@ class LatencySession:
         self._tracer = LatencyTracer(aggregator, loop_kind=loop_kind, target_fps=target_fps)
         self._summary_interval_s = summary_interval_s
         self._last_summary_at: float = 0.0
+        # Health detector. Runs at ``_health_interval_s`` cadence — NOT
+        # every iteration — because rule evaluations (np.percentile over
+        # the aggregator deque) cost ~50 µs each and add up to a 100× hot-
+        # path regression at 30 Hz. At 1 Hz the detector still fires log
+        # warnings promptly (rate-limited to once/min/rule anyway) and
+        # the snapshot's health.issues stays fresh for the GUI (which
+        # also polls at 1 Hz). ``None`` disables all checks.
+        self._detector = detector
+        self._active_issues: list[Any] = []
+        self._health_interval_s = summary_interval_s
+        self._last_health_check_at: float = 0.0
 
     # ------------------------------------------------------------------
     # Construction
@@ -148,12 +166,21 @@ class LatencySession:
             if output_dir is not None
             else None
         )
+        # Always wire up the default health detector when monitoring is
+        # enabled. It's a tiny cost per iteration and gives the operator
+        # a free safety net (overrun, slow tail, stale cameras, no data)
+        # without requiring any per-loop opt-in.
+        from lerobot.utils.latency.health import LoopHealthDetector
+
+        target_period_ms = (1000.0 / float(target_fps)) if target_fps else None
+        detector = LoopHealthDetector(loop_kind=loop_kind, target_period_ms=target_period_ms)
         return cls(
             aggregator=agg,
             writer=writer,
             loop_kind=loop_kind,
             target_fps=target_fps,
             summary_interval_s=summary_interval_s,
+            detector=detector,
         )
 
     @classmethod
@@ -256,10 +283,25 @@ class LatencySession:
     # ------------------------------------------------------------------
 
     def _after_commit(self) -> None:
-        """Snapshot publish + stderr summary, both throttled by interval."""
+        """Health check + snapshot publish + stderr summary.
+
+        All three are time-throttled (1 Hz default) — the loop calls
+        this on every iteration but the actual work amortizes to ~1 µs
+        per iteration. Health runs first so the snapshot picks up the
+        fresh issue list in the same throttle tick.
+        """
+        now = time.time()
+        if self._detector is not None and now - self._last_health_check_at >= self._health_interval_s:
+            self._last_health_check_at = now
+            last_record = self.aggregator._records[-1] if len(self.aggregator) > 0 else None
+            self._active_issues = self._detector.check(self.aggregator, last_record)
+            if self.writer is not None:
+                # The writer pulls the latest issue list off the session
+                # when it publishes — avoids passing it through every
+                # maybe_write call site.
+                self.writer.set_active_issues([i.to_dict() for i in self._active_issues])
         if self.writer is not None:
             self.writer.maybe_write(self.aggregator)
-        now = time.time()
         if now - self._last_summary_at >= self._summary_interval_s:
             self._last_summary_at = now
             snap = self.aggregator.snapshot(percentiles=(50, 95))

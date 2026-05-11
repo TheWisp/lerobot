@@ -67,3 +67,14 @@ class BiSO107FollowerConfig(RobotConfig):
     # method only blocks when the consumer is faster than the camera,
     # which the loop-rate fix above already addresses.
     camera_read_strategy: str = "latest"
+
+    # When True, ``send_action`` is a no-op: the motors never receive a
+    # command, but every other side effect (connect, calibrate, motor
+    # reads, camera reads, latency profiling) still runs. Lets automated
+    # tooling exercise the full control-loop stack — including this
+    # robot's get_observation timing and any policy under test — without
+    # physically driving the arms.
+    #
+    # Note: torque is still enabled on connect (the motors hold position
+    # so they don't drop under gravity), but no goal positions are sent.
+    dry_run: bool = False

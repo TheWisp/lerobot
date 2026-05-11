@@ -2684,6 +2684,31 @@ function _updateTrack(scope, data, state) {
     const targetPeriodMs = data.target_period_ms || null;
     const budgets = _budgetsFromTarget(targetPeriodMs);
 
+    // Health badge — driven by snapshot.health.issues (populated by the
+    // LoopHealthDetector on the producer side). Hidden when healthy; shows
+    // an "error"-colored badge when any issue's severity is error, otherwise
+    // a "warn"-colored one. Tooltip lists each issue's message so the
+    // operator can drill in without leaving the panel.
+    const issues = (data.health && data.health.issues) || [];
+    const header = scope.querySelector('.latency-track-header');
+    let badge = scope.querySelector('.latency-track-health');
+    if (header) {
+        if (issues.length === 0) {
+            if (badge) badge.remove();
+        } else {
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'latency-track-health';
+                header.appendChild(badge);
+            }
+            const hasError = issues.some(i => i.severity === 'error');
+            badge.classList.toggle('error', hasError);
+            badge.classList.toggle('warn', !hasError);
+            badge.textContent = `${issues.length} issue${issues.length > 1 ? 's' : ''}`;
+            badge.title = issues.map(i => `[${i.severity}] ${i.message}`).join('\n');
+        }
+    }
+
     // System metrics row — sparkline cards for the stages we want to track
     // over time. Stages not in this set still appear in the Gantt below;
     // the Loop Health row is just the headline numbers per loop kind.

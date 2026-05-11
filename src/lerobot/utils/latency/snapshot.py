@@ -89,6 +89,20 @@ class LatencySnapshotWriter:
         self._target_period_ms: float | None = (1000.0 / float(target_fps)) if target_fps else None
         self._last_write_at: float = 0.0
         self._dir_ready: bool = False
+        # Active health issues, refreshed by the session before every
+        # ``maybe_write`` call so each snapshot carries the current
+        # warning state. Empty list means "healthy" — the GUI hides the
+        # badge accordingly.
+        self._active_issues: list[dict[str, str]] = []
+
+    def set_active_issues(self, issues: list[dict[str, str]]) -> None:
+        """Replace the issue list embedded in the next snapshot.
+
+        Called once per iteration by ``LatencySession._after_commit`` —
+        cheap, just stores a reference. The actual JSON write only fires
+        when the time-throttle elapses.
+        """
+        self._active_issues = issues
 
     @property
     def path(self) -> Path:
@@ -138,6 +152,10 @@ class LatencySnapshotWriter:
         snap["iterations"] = aggregator.representative_iterations()
         snap["iterations"]["aggregate_median"] = aggregator.aggregate_iteration(50)
         snap["iterations"]["aggregate_p95"] = aggregator.aggregate_iteration(95)
+        # Health envelope. Always present so the GUI can render the
+        # badge logic without optional-field checks; empty issues list
+        # signals "healthy".
+        snap["health"] = {"issues": self._active_issues}
 
         if not self._dir_ready:
             self._dir.mkdir(parents=True, exist_ok=True)
