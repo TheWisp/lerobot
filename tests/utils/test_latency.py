@@ -210,6 +210,111 @@ class TestAggregator:
         agg = LatencyAggregator()
         assert agg.aggregate_iteration() is None
 
+    def test_aggregate_iteration_preserves_nesting(self):
+        """Regression test: spans that nest in every input record must
+        also nest in the aggregate.
+
+        The earlier cascade layout placed spans end-to-end in dict
+        insertion order. Child spans (whose ``__exit__`` fires first)
+        landed in the dict before their parents, so the aggregate showed
+        children laid out BEFORE their parents — visually breaking the
+        nested structure operators see in real-iteration samples.
+
+        Concrete shape used here: ``get_observation`` contains
+        ``motor_read_left`` in every record (motor_read_left's start
+        offset is always >= get_observation's, end <= get_observation's).
+        After aggregation the same containment must hold.
+        """
+        agg = LatencyAggregator()
+        for i in range(50):
+            # Outer span [0, 10ms]; inner span starts at 1-3ms and ends
+            # well before 10ms. Crucially the child is inserted FIRST in
+            # dict order — the tracer always closes the inner span before
+            # the outer, so the inner gets dict-inserted first. The
+            # aggregator must NOT use dict order to decide layout.
+            spans = {}
+            inner_start = 1.0 + (i % 3)
+            inner_end = inner_start + 3.0
+            spans["motor_read_left"] = [inner_start, inner_end]
+            spans["get_observation"] = [0.0, 10.0]
+            agg.ingest({"t": float(i), "step": i, "loop_dt_ms": 12.0, "spans": spans, "cam_events": {}})
+
+        synth = agg.aggregate_iteration(50)
+        outer_s, outer_e = synth["spans"]["get_observation"]
+        inner_s, inner_e = synth["spans"]["motor_read_left"]
+        assert outer_s <= inner_s <= inner_e <= outer_e, (
+            f"motor_read_left {[inner_s, inner_e]} not contained in get_observation {[outer_s, outer_e]}"
+        )
+
+    @pytest.mark.parametrize("percentile", [50, 75, 95])
+    def test_aggregate_iteration_containment_invariant(self, percentile):
+        """Property-based test: for every pair of spans (A, B) where A
+        contains B in *every* input record, A must contain B in the
+        aggregate at any percentile.
+
+        Catches future regressions where someone changes the layout
+        algorithm — no need to enumerate per-span expectations. Add a
+        new span anywhere in the codebase and this test still covers it
+        as long as the new span has a deterministic parent relationship
+        with at least one existing span.
+        """
+        agg = LatencyAggregator()
+        # Build records that mirror the real teleop nesting:
+        #   get_observation:    contains motor_read_*, camera_read_*
+        #   process_obs, action_send: siblings of get_observation
+        import random
+
+        rng = random.Random(0)
+        records: list[dict] = []
+        for i in range(40):
+            obs_dur = rng.uniform(4.0, 8.0)
+            ml_start = rng.uniform(0.0, 0.5)
+            ml_end = ml_start + rng.uniform(0.8, 1.5)
+            mr_start = ml_end + rng.uniform(0.0, 0.3)
+            mr_end = mr_start + rng.uniform(0.8, 1.5)
+            cam_start = mr_end + rng.uniform(0.0, 0.5)
+            cam_end = min(cam_start + rng.uniform(0.5, 1.0), obs_dur - 0.1)
+            proc_dur = rng.uniform(0.5, 2.0)
+            send_dur = rng.uniform(0.1, 0.4)
+            spans = {
+                # Insert children before parents (matches __exit__ order).
+                "motor_read_left": [ml_start, ml_end],
+                "motor_read_right": [mr_start, mr_end],
+                "camera_read_top": [cam_start, cam_end],
+                "get_observation": [0.0, obs_dur],
+                "process_obs": [obs_dur, obs_dur + proc_dur],
+                "action_send": [obs_dur + proc_dur, obs_dur + proc_dur + send_dur],
+            }
+            rec = {"t": float(i), "step": i, "loop_dt_ms": 15.0, "spans": spans, "cam_events": {}}
+            agg.ingest(rec)
+            records.append(rec)
+
+        synth = agg.aggregate_iteration(percentile)
+        spans = synth["spans"]
+
+        # For each pair, if A contained B in every input record, A must
+        # contain B in the aggregate.
+        names = list(spans.keys())
+        checked_pairs = 0
+        for a in names:
+            for b in names:
+                if a == b:
+                    continue
+                a_contains_b_always = all(
+                    r["spans"][a][0] <= r["spans"][b][0] and r["spans"][b][1] <= r["spans"][a][1]
+                    for r in records
+                )
+                if not a_contains_b_always:
+                    continue
+                checked_pairs += 1
+                a_s, a_e = spans[a]
+                b_s, b_e = spans[b]
+                assert a_s <= b_s <= b_e <= a_e, (
+                    f"[p={percentile}] {a} {[a_s, a_e]} should contain {b} {[b_s, b_e]}"
+                )
+        # Sanity: at least the get_observation containments must have fired.
+        assert checked_pairs >= 3, f"expected get_observation to contain ≥3 children, saw {checked_pairs}"
+
     def test_aggregate_iteration_loop_dt_independent_of_span_sum(self):
         """loop_dt_ms in the synthetic record uses its OWN percentile,
         not the sum of stage percentiles. The visible gap on the right
