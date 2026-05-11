@@ -67,19 +67,44 @@ doesn't yet read this — wire it up:
 
 Verdict thresholds live in `src/lerobot/utils/latency/recording_health.py::DEFAULT_VERDICT_THRESHOLDS` — surface them somewhere the user can tweak per-dataset if needed (probably not in V1).
 
-### Control-Lag Analyzer
+### Control-Lag Analyzer & Feetech PID Sweep (2026-05-11)
 
-Cross-correlation of `action[:, j]` vs `observation.state[:, j]` per joint gives the effective control lag for free, from any existing dataset — no extra recording, no extra hardware. Prototype lives at `/tmp/analyze_control_lag.py`; ran clean on three SO-107 datasets (199K / 179K / 137K frames each) and converged on a uniform 3–4 frame baseline (~100–133 ms at 30 Hz). The fact that the lag is the same across all 14 joints — not a gradient from heavy shoulders to light gripper — points at the sampling rate + default PID gains as the systemic floor rather than per-joint mechanics.
+Cross-correlation of `action[:, j]` vs `observation.state[:, j]` per joint measures the effective tracking lag. Analyzer landed at [scripts/analyze_control_lag.py](../../../scripts/analyze_control_lag.py). Filters joints by correlation strength (≥0.95) to avoid spurious lag readings on near-static joints.
 
-Worth landing as a proper tool:
+**Parameter sweep on bi_so107_follower (white profile), trajectory_replay of `white.trajectory.json`, 1 episode each:**
 
-- [ ] **Promote the analyzer** out of `/tmp` to `src/lerobot/utils/analyzers/control_lag.py` with a `lerobot-analyze-control-lag <dataset_dir>` CLI entry (or as a function callable from the data panel backend).
-- [ ] **Integrate into `meta/recording_health.json`**: append a `control_lag` block with `{joint_name: {lag_frames, lag_ms, corr, n_moving}}` so the verdict has a measured number rather than just "did the loop hit its budget." Computed once at end of recording from the freshly-written parquet, no live overhead.
-- [ ] **Data panel visualisation**: a small per-joint bar chart on the dataset summary, color-coded against expected baseline (~4 frames at 30 Hz for hobby servos). Outliers (e.g. one joint at 7+ frames) flag specific hardware issues — backlash, retries, loose mount.
-- [ ] **Gripper handling**: gripper position has nonlinear contact dynamics so its lag correlation is ~0.94 vs ~0.99 for other joints. Either filter to no-contact segments before correlating, or flag the gripper number as low-confidence in the UI.
-- [ ] **Cross-dataset comparison view**: same set of joints across N datasets to spot drift (servo wear, firmware change, mount loosening). Lives naturally next to the per-episode-quality badges work above — same data-panel concept.
+| Config                                                                            |   Mean lag |  Median lag |    σ_state | Confident joints |
+| --------------------------------------------------------------------------------- | ---------: | ----------: | ---------: | ---------------: |
+| **P=16 (current main)**                                                           |   120.0 ms |    133.3 ms |     0.0092 |            10/14 |
+| P=16 + dz=0 + startup_force=0                                                     |   123.3 ms |    133.3 ms |     0.0086 |            10/14 |
+| P=32 + dz=0 + startup_force=0 (the `feature/motor-sensitivity-fix` branch bundle) |    86.7 ms |    100.0 ms |     0.0192 |            10/14 |
+| **P=48 (dz default, recommended)**                                                | **~67 ms** | **66.7 ms** | **0.0133** |            11/14 |
+| P=64 (dz default)                                                                 |    72.2 ms |     66.7 ms |     0.0300 |            12/14 |
+
+**Findings:**
+
+- **P_Coefficient is THE lever.** Bumping from 16 to 48 cuts mean lag from 120 → 67 ms (-44%) and improves the gripper from "barely tracking small commands" to "actually tracking" — at P=16 the gripper IGNORES fine motion because its commanded action stays within the firmware dead zone + the low gain can't overcome static friction.
+- **Dead-zone register changes do nothing on their own.** The `feature/motor-sensitivity-fix` branch's bundle attributed its win to "dead zones + startup force + P bump," but the data shows dz=0 alone gives 123 ms (statistically identical to baseline 120 ms). The bundle's gain came entirely from the P=32 bump.
+- **P=64 is over-tuned.** Marginal lag gain (-3 ms vs P=48), σ jumps from 0.013 → 0.030 (3.3× the P=16 baseline) — the original "P=16 to avoid shakiness" comment becomes valid at P=64.
+- **D_Coefficient and Goal_Speed (cascaded velocity feed-forward) not yet explored.** Could yield more if P=48's tracking still isn't enough for a specific use case. Out-of-loop work; the current finding (P=48) already cuts sensor-to-action by ~50 ms.
+
+**Recommended production change** (deferred — needs user decision because of training data implications):
+
+1. Port the `feature/motor-sensitivity-fix` branch's `p_coefficient` config field onto this branch (without the dead-zone fields, which don't help). Default to **16** to preserve existing behavior — DON'T silently break existing policies trained against P=16's slower tracking.
+2. Document P=48 as the recommended value for new datasets / new users. Datasets recorded at different P values are technically incompatible (the action→state response curve differs).
+3. Long-term: when the team agrees, switch the default to 48 and retrain affected policies. The gripper tracking fix is a correctness improvement, not just a latency one — old datasets where fine-motion gripper commands were silently dropped should be flagged.
+
+Datasets used: `~/.cache/huggingface/lerobot/thewisp/{p16_baseline,p16_dz0,pid_bundle,p48,p64}_*`. Re-runnable any time the so_follower.py P value is changed.
 
 Caveat: this measures _tracking lag_ (action-to-state convergence during continuous motion), which is a strict superset of the pure command-to-actuation dead time discussed in the latency design doc. The rig-based C2A calibration (IMU + MCU master clock) is still the only way to isolate the few-ms servo dead time itself — but for "is the control loop tracking?" / "did this hardware regress?", cross-correlation is enough and free.
+
+Outstanding work:
+
+- [ ] **Make P_Coefficient configurable** (port `feature/motor-sensitivity-fix` config-field pattern), defaulting to 16 for backwards compat.
+- [ ] **Integrate analyzer output into `meta/recording_health.json`** as a `control_lag` block so each recording carries its measured tracking lag in metadata.
+- [ ] **Per-motor PID tuning** if needed: the gripper has different torque limits and might want different P than the major joints.
+- [ ] **Try D_Coefficient sweep** (current hard-coded D=32) for further gains beyond P-only.
+- [ ] **Try cascaded position+velocity command** (write `Goal_Speed` alongside `Goal_Position` each iteration). The Feetech docs hint this can lower lag independent of PID tuning.
 
 ### Dataset Merge
 

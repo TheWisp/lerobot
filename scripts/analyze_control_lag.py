@@ -137,8 +137,13 @@ def main(dataset_name_or_path: str, max_lag: int) -> int:
     print(f"{'joint':<26}{'lag_fr':>8}{'lag_ms':>9}{'corr':>8}{'σ_state':>10}{'σ_action':>10}")
     print("-" * 71)
 
-    avg_lag_ms = []
-    avg_sigma = []
+    # Cross-correlation lag is only meaningful when the joint moved enough to
+    # produce a strong correlation. Idle / barely-moved joints often give
+    # spurious lag readings (random argmax over a flat objective). The
+    # headline averages weight or filter by correlation strength.
+    corr_threshold = 0.95
+    confident_lags_ms: list[float] = []
+    confident_sigmas: list[float] = []
     for j, name in enumerate(joints):
         a = action[:, j]
         s = state[:, j]
@@ -147,21 +152,33 @@ def main(dataset_name_or_path: str, max_lag: int) -> int:
         sig_state = plateau_std(s, plats)
         sig_action = plateau_std(a, plats)  # sanity: should be ~0 by construction
         lag_ms = k * (1000.0 / fps)
-        avg_lag_ms.append(lag_ms)
-        if np.isfinite(sig_state):
-            avg_sigma.append(sig_state)
+        marker = " "
+        if corr >= corr_threshold:
+            confident_lags_ms.append(lag_ms)
+            if np.isfinite(sig_state):
+                confident_sigmas.append(sig_state)
+            marker = "*"
         sig_state_s = f"{sig_state:>9.4f}" if np.isfinite(sig_state) else "      n/a"
         sig_action_s = f"{sig_action:>9.4f}" if np.isfinite(sig_action) else "      n/a"
-        print(f"{name:<26}{k:>8d}{lag_ms:>9.1f}{corr:>8.3f}{sig_state_s}{sig_action_s}")
+        print(f"{marker} {name:<24}{k:>8d}{lag_ms:>9.1f}{corr:>8.3f}{sig_state_s}{sig_action_s}")
 
     print()
-    print(
-        f"average lag: {np.mean(avg_lag_ms):.1f} ms ({np.mean(avg_lag_ms) * fps / 1000:.2f} frames at {fps} Hz)"
-    )
-    if avg_sigma:
-        print(f"average plateau σ_state: {np.mean(avg_sigma):.4f}")
+    print(f"* = corr >= {corr_threshold} (joint moved enough for the lag estimate to be meaningful)")
+    if confident_lags_ms:
+        mean_lag = float(np.mean(confident_lags_ms))
+        median_lag = float(np.median(confident_lags_ms))
+        print(
+            f"confident joints: {len(confident_lags_ms)}/{len(joints)}   "
+            f"mean lag: {mean_lag:.1f} ms ({mean_lag * fps / 1000:.2f} fr)   "
+            f"median: {median_lag:.1f} ms"
+        )
+        if confident_sigmas:
+            print(f"confident-joint mean plateau sigma_state: {np.mean(confident_sigmas):.4f}")
     else:
-        print("no plateaus detected in action signal (continuous motion?)")
+        print(
+            f"no joint had corr >= {corr_threshold} - trajectory may be too short or too smooth"
+            " for cross-correlation to converge"
+        )
     return 0
 
 
