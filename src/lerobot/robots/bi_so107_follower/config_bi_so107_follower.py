@@ -15,6 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from lerobot.cameras import CameraConfig
 
@@ -66,7 +67,7 @@ class BiSO107FollowerConfig(RobotConfig):
     # behaviour because it has no non-blocking variant; in practice that
     # method only blocks when the consumer is faster than the camera,
     # which the loop-rate fix above already addresses.
-    camera_read_strategy: str = "latest"
+    camera_read_strategy: Literal["latest", "wait_for_new"] = "latest"
 
     # When True, ``send_action`` is a no-op: the motors never receive a
     # command, but every other side effect (connect, calibrate, motor

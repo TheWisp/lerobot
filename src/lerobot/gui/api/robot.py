@@ -120,8 +120,33 @@ def _stringify_type(annotation: Any) -> str:
     return s
 
 
+def _literal_choices(annotation: Any) -> list[str] | None:
+    """If ``annotation`` is ``Literal["a", "b", ...]``, return the values as
+    strings so the frontend can render a dropdown. Otherwise return None.
+
+    Generic-by-design — any dataclass field annotated as ``Literal[...]``
+    automatically becomes a `<select>` in the robot config editor. To add
+    a new enum-ish field, change its annotation; no GUI code edit needed.
+    """
+    import typing
+
+    if typing.get_origin(annotation) is typing.Literal:
+        return [str(v) for v in typing.get_args(annotation)]
+    return None
+
+
 def _introspect_fields(cls: type) -> list[dict]:
     """Extract field info from a dataclass config class."""
+    # Resolve string annotations (PEP 563 / __future__ annotations) so
+    # ``Literal["latest", "wait_for_new"]`` is the actual ``Literal``
+    # generic, not a bare string. Without this, ``_literal_choices``
+    # always returns None for forward-reference-style annotations.
+    import typing
+
+    try:
+        type_hints = typing.get_type_hints(cls)
+    except Exception:
+        type_hints = {}
     result = []
     for f in dataclasses.fields(cls):
         if f.name in _SKIP_FIELDS:
@@ -136,14 +161,17 @@ def _introspect_fields(cls: type) -> list[dict]:
             # Don't call factory, just indicate it has a default
             default = None
 
-        result.append(
-            {
-                "name": f.name,
-                "type_str": _stringify_type(f.type),
-                "required": required,
-                "default": default,
-            }
-        )
+        resolved_type = type_hints.get(f.name, f.type)
+        entry = {
+            "name": f.name,
+            "type_str": _stringify_type(f.type),
+            "required": required,
+            "default": default,
+        }
+        choices = _literal_choices(resolved_type)
+        if choices is not None:
+            entry["choices"] = choices
+        result.append(entry)
     return result
 
 
