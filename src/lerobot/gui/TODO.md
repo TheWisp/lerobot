@@ -121,6 +121,69 @@ Untested but unlikely to help (documented for completeness):
 - **Per-iteration `Goal_Velocity` sync_write** alongside `Goal_Position`. Different from setting once at configure (which we tested) — would feed velocity targets every frame. Would double bus traffic per iteration. Worth trying only if someone needs to push past P=48 ceiling.
 - **Max_Torque_Limit / Protection_Current bump** on the gripper specifically (currently 500/250, half of other motors). Could give gripper more force at the cost of overload risk. Only worth if gripper-specific lag is the bottleneck for a specific task.
 
+### Predictive Lookahead Teleop (2026-05-11)
+
+**Goal**: cut the action-to-state lag operators feel during live bimanual teleop by predicting where the leader will be at `t + L` and sending that as the follower's command, instead of `leader(t)` directly. Validated on the bi_so107 hardware with a cylinder-insertion task.
+
+**Architecture** (prototyped in `scripts/proto_decoupled_teleop.py`, not yet productionized):
+
+- **Decoupled control / observation threads.** Control thread runs at ~200 Hz: read leader → compute predicted action → `sync_write` Goal_Position to the follower. Observation thread runs at ~30 Hz: `sync_read` follower state for adaptive measurement (and, in future, dataset writes). A shared `bus_lock` serializes follower-bus access. The leader is on separate USB ports so its reads don't contend.
+- **Velocity estimator: linear least-squares slope** over the last ~70 ms of leader reads (≈14 samples at 200 Hz). Alternatives tested and rejected: 2-point forward difference (noisier estimator, similar action smoothness on smooth data, worse on noisy live data); quadratic LSQ (captures acceleration but amplifies sensor noise into command jitter — `c·L²` term is the noise multiplier).
+- **Predictor-corrector for command smoothness.** Each tick:
+  - `raw_shifted = leader[t] + v_leader · L`
+  - `v_action = LSQ slope of recent action history` (smoother than `v_leader` because actions are already filtered)
+  - `predictor = a(n-1) + v_action · dt`
+  - `action[t] = α · raw_shifted + (1 − α) · predictor`
+  - α=0.3 (30 % fresh measurement + 70 % advance-from-previous-action). Kalman-flavored — the predictor propagates the smoothed action trajectory forward one tick. Cuts action excess jerk ~50 % vs the bare `leader + v_leader · L`.
+- **Adaptive lookahead** with operator-comfort cap. Symmetric cross-correlation over a rolling 3-second window of (leader, state) measures the residual lag. Update rule: `L ← L + α_la · (residual − read_bias)`. Convergence is a true fixed point; the hard cap (operator-feel-tunable) is the only thing standing between adaptive and runaway when measurements are noisy.
+
+**Production settings, validated by operator on cylinder-insertion task**:
+
+```
+P_Coefficient        = 16  (stock, no override)
+velocity_method      = linear LSQ
+velocity_window_ms   = 70
+corrector_alpha      = 0.3
+max_lookahead_ms     = 110  ← operator-feel cap (per-arm tunable)
+control_fps          = 200, obs_fps = 30
+```
+
+**Live A/B results** (25-second cylinder-insertion teleop, P=16/32/48 with same corrector + linear LSQ; `state-vs-leader lag` = signed cross-correlation, `plateau jitter` = `mean|state″|` during quiet-leader rows):
+
+| Metric                   |                P=16 (cap 110) |    P=32 (cap 90) |      P=48 (cap 90) |
+| ------------------------ | ----------------------------: | ---------------: | -----------------: |
+| state-vs-leader lag      |                        +36 ms |           +17 ms |             +13 ms |
+| Fidelity RMSE            |                          3.10 |             2.20 |               2.25 |
+| action excess jerk       |                      −0.00550 |         −0.00667 |           −0.00734 |
+| state excess jerk        |                      −0.01579 |         −0.01363 |           −0.01202 |
+| wrist plateau jitter avg |                       ~0.0035 |    ~0.0035–0.006 | **~0.0088–0.0105** |
+| operator feel            | **acceptable, slight jitter** | a bit more shaky |   more shaky still |
+
+P=16 is the production winner. Higher P buys ~20 ms less lag but visibly amplifies wrist tremor — confirms the upstream "Default 32, set to 16 to avoid shakiness" rationale at multiple operating points (coarse 30 Hz commands AND smooth 200 Hz + corrector). The wrists are the perceptual ceiling; shoulders/elbows would tolerate P=48 fine.
+
+**Things tested and ruled out** (documented to avoid re-discovery):
+
+- **Quadratic LSQ velocity.** Captures acceleration on deterministic data (trajectory_blind ran great), but on noisy live leader the `c·L²` term amplifies sensor noise into a 3-12× jitter increase in the command stream. Linear LSQ is the right sweet spot. See synthetic test in script doc.
+- **Uniform P=48.** Best fidelity (0.81 RMSE on trajectory_blind, ~0 ms residual lag) AND best cross-corr — but wrist amplification dominates the operator feel. Quadratic+P=48 was the "extremely shaky" combination.
+- **`max_lookahead_ms` past ~110.** Trying `cap=130` made adaptive saturate and the operator reported overshoot. The cap is the operator-perceptual jitter ceiling, not a safety bound. Treat as a tunable knob.
+- **Pure leader-history velocity for the predictor.** What was originally implemented as the "corrector" — using `v_leader · dt` instead of `v_action · dt` in the predictor step. The corrector still works, but the smoothness benefit is smaller because both arms (raw_shifted and predictor) carry the same noisy `v_leader`. Action-history velocity is the right answer for the predictor.
+
+**Open follow-ups**:
+
+- [ ] **Productionize into `lerobot-teleoperate`.** Move the runner logic out of the prototype script and into the proper teleop entry point. Adds two CLI knobs: `--lookahead-ms` (or `--max-lookahead-ms` for adaptive), `--corrector-alpha`. Defaults match the validated production settings above.
+- [ ] **Carry over to `lerobot-record`.** Same control architecture applies; the planning thread additionally writes dataset frames + the existing camera reads. Should improve recording quality (less drift between leader and follower → cleaner action-state pairs in the dataset).
+- [ ] **Per-joint P tuning.** Wrist amplification is the only thing keeping P=48 from being the right answer for the big joints. A config that runs P=48 on shoulders/elbows + P=16 on wrists/gripper would plausibly capture the responsiveness without the shake. Requires `SOFollower.configure()` to take a per-motor map. Untested.
+- [ ] **Per-arm operator-feel cap** as a calibrated config field. Default 110 ms is fine for the bi_so107 white profile; other arms with different motor τ or different operators may want different. Belongs in the robot's JSON config.
+- [ ] **Save raw (action, state, leader) tensors to `.npz`** during runs. Currently the prototype only prints aggregated metrics; raw arrays would let us post-process arbitrarily (different warmup, different per-regime splits, frequency analysis). Trivial extension.
+
+**Notes on metric design** (some hard-won):
+
+- **`fidelity RMSE` = state vs leader at matched timestamps.** No phase shift. Sign cancellation impossible (RMSE).
+- **`state-vs-leader lag`** = signed cross-correlation lag. The "by how many ms is follower behind leader at best alignment" metric. Negative = follower briefly leads.
+- **`excess jerk`** = `mean|x″| − mean|leader″|`. Subtracts the leader's own natural high-freq content; what remains is the algorithm/motor contribution. **Invariant across operator sessions** — comparable session-to-session in a way raw jerk is not.
+- **`plateau jitter`** = `mean|state″|` computed only on rows where the leader is quasi-stationary (velocity in the bottom 30% per-joint). This is the metric closest to "is the motor shaking when I'm holding still" — the regime where sensor noise + algorithm noise is most visible to the operator. **Averaging jerk over the whole run dilutes the plateau regime under the sweep regime; the regime-aware split is what actually maps to operator feel.**
+- **First 1 second of every run is dropped from analysis.** Startup transient (follower position vs leader position vs adaptive's initial guess) is wild and pollutes every metric. The lookahead-convergence trace is reported unfiltered so we can see how it climbed.
+
 ### Dataset Merge
 
 See [docs/data_tab.md](docs/data_tab.md) for full design.
@@ -349,6 +412,7 @@ Per-camera `OurStreamingVideoEncoder.push_frame()` (inside `dataset_write`):
 - [Mid] **Top-row metrics: only loop + overrun**: current cards (loop, get_observation, action_send, overrun) mix one umbrella stat with two partial stages and one rate — confusing because (a) loop already includes get_observation + action_send + other unshown stages like process_obs, (b) overrun is conceptually a different category. Replace with just `loop` and `overrun` as the headline row; move per-stage breakdowns to the Gantt + a separate compact stage table if useful.
 - [Mid] **camera_read_strategy as dropdown in robot config UI**: today it's an open text field. Two valid values (`latest`, `wait_for_new`) — render as a `<select>` so users don't typo and silently get fallback behaviour. Same pattern as other enum-ish robot fields. May require a small schema-driven render hint (e.g. metadata in the dataclass field) so this generalises beyond bi_so107.
 - [Discussion] **Color thresholds**: live panel shows 21.1 ms as yellow at a 30 Hz target (33.3 ms budget). Current rule fires yellow at ≥ 70% of budget; that's 23.3 ms, so 21 ms shouldn't be yellow — likely the comparison is against p95 (which IS > 23.3 if p50 is 21). Worth reviewing whether yellow should fire on p50 or p95, and whether the 70% threshold is right.
+- [Low] **Revisit Gantt vs flame graph**: today the Gantt renders nested spans (e.g. `motor_read_left` inside `get_observation`) as overlapping bars on the same row. First-time viewers read the overlap as parallelism — "is `get_observation` on another thread?" — when actually they're sequential on the same thread, just nested via `with span():`. A flame-graph style (parent on top, children stacked beneath, vertical = call depth) would make the nesting obvious without legend reading. Single-iteration view benefits the most; aggregate now also preserves nesting after the layout fix so the visualisation upgrade applies to both modes.
 
 ### Safe Trajectory Probe
 
