@@ -73,20 +73,27 @@ Cross-correlation of `action[:, j]` vs `observation.state[:, j]` per joint measu
 
 **Parameter sweep on bi_so107_follower (white profile), trajectory_replay of `white.trajectory.json`, 1 episode each:**
 
-| Config                                                                            |   Mean lag |  Median lag |    σ_state | Confident joints |
-| --------------------------------------------------------------------------------- | ---------: | ----------: | ---------: | ---------------: |
-| **P=16 (current main)**                                                           |   120.0 ms |    133.3 ms |     0.0092 |            10/14 |
-| P=16 + dz=0 + startup_force=0                                                     |   123.3 ms |    133.3 ms |     0.0086 |            10/14 |
-| P=32 + dz=0 + startup_force=0 (the `feature/motor-sensitivity-fix` branch bundle) |    86.7 ms |    100.0 ms |     0.0192 |            10/14 |
-| **P=48 (dz default, recommended)**                                                | **~67 ms** | **66.7 ms** | **0.0133** |            11/14 |
-| P=64 (dz default)                                                                 |    72.2 ms |     66.7 ms |     0.0300 |            12/14 |
+| Config                                                                        |   Mean lag |      Median |    σ_state | Verdict                         |
+| ----------------------------------------------------------------------------- | ---------: | ----------: | ---------: | ------------------------------- |
+| **P=16 (current main)**                                                       |   120.0 ms |    133.3 ms |     0.0092 | baseline                        |
+| P=16 + dz=0 + startup_force=0                                                 |   123.3 ms |    133.3 ms |     0.0086 | dz alone: no effect on lag      |
+| P=32 + dz=0 + startup_force=0 (`feature/motor-sensitivity-fix` branch bundle) |    86.7 ms |    100.0 ms |     0.0192 | -33 ms, σ 2x                    |
+| **P=48 (dz default, I=0, D=32)**                                              | **~67 ms** | **66.7 ms** | **0.0133** | **WINNER: -53 ms, σ 1.4x**      |
+| P=64                                                                          |    72.2 ms |     66.7 ms |     0.0300 | over-tuned: σ 3.3x for ~no gain |
+| P=48 + D=16                                                                   |    72.7 ms |     66.7 ms |     0.0139 | D doesn't help in smooth motion |
+| P=48 + D=0                                                                    |    72.7 ms |     66.7 ms |     0.0159 | D doesn't help                  |
+| P=48 + I=8                                                                    |    63.3 ms |     66.7 ms |     0.0610 | I causes windup, σ explodes 5x  |
+| P=48 + Goal_Velocity=4000                                                     |    70.0 ms |     66.7 ms |     0.0207 | velocity ceiling: no effect     |
 
 **Findings:**
 
-- **P_Coefficient is THE lever.** Bumping from 16 to 48 cuts mean lag from 120 → 67 ms (-44%) and improves the gripper from "barely tracking small commands" to "actually tracking" — at P=16 the gripper IGNORES fine motion because its commanded action stays within the firmware dead zone + the low gain can't overcome static friction.
-- **Dead-zone register changes do nothing on their own.** The `feature/motor-sensitivity-fix` branch's bundle attributed its win to "dead zones + startup force + P bump," but the data shows dz=0 alone gives 123 ms (statistically identical to baseline 120 ms). The bundle's gain came entirely from the P=32 bump.
-- **P=64 is over-tuned.** Marginal lag gain (-3 ms vs P=48), σ jumps from 0.013 → 0.030 (3.3× the P=16 baseline) — the original "P=16 to avoid shakiness" comment becomes valid at P=64.
-- **D_Coefficient and Goal_Speed (cascaded velocity feed-forward) not yet explored.** Could yield more if P=48's tracking still isn't enough for a specific use case. Out-of-loop work; the current finding (P=48) already cuts sensor-to-action by ~50 ms.
+- **P_Coefficient is the only lever that matters.** Bumping from 16 to 48 cuts mean lag from 120 → 67 ms (-44%) and improves the gripper from "barely tracking small commands" to "actually tracking" — at P=16 the gripper IGNORES fine motion because its commanded action stays within the firmware dead zone + the low gain can't overcome static friction.
+- **Dead-zone register changes do nothing for lag.** The `feature/motor-sensitivity-fix` branch's bundle attributed its win to "dead zones + startup force + P bump," but dz=0 alone gives 123 ms (statistically identical to baseline 120 ms). The bundle's gain came entirely from P=32. Dead zones affect _accuracy_ around target (fine motion in/out of the deadband) more than tracking lag itself.
+- **P=64 is over-tuned.** Marginal lag gain (-3 ms vs P=48), σ jumps to 0.030 (3.3× the P=16 baseline) — the original "P=16 to avoid shakiness" comment becomes valid past P=48.
+- **D doesn't help in smooth-motion regime.** D=32, 16, 0 all give ~67 ms — D dampens response to velocity changes, but human-recorded trajectories don't have abrupt step-like inputs that D would suppress. D is dead weight here. (Would matter on step inputs / sharp direction reversals.)
+- **I causes windup.** I=8 nominally shaved 4 ms off the lag, but σ jumped 5× — `left_shoulder_lift` σ went from 0.013 to 0.257. I integrates error during smooth tracking, builds up demand, overshoots and oscillates. Hard pass.
+- **Goal_Velocity (cascaded velocity feed-forward) doesn't help either.** Setting register 46 to 4000 (~280°/s ceiling) during configure gave 70 ms — within noise of plain P=48. Either the motor already uses max velocity by default, or velocity isn't the binding constraint (acceleration is, and that's already maxed at 254).
+- **Conclusion: P=48 is the software ceiling.** The remaining 67 ms is the physical floor — 1 frame (33 ms) of structural read-after-write delay + motor PID/dynamics floor + mechanical (inertia, backlash, friction).
 
 **Recommended production change** (deferred — needs user decision because of training data implications):
 
@@ -103,8 +110,12 @@ Outstanding work:
 - [ ] **Make P_Coefficient configurable** (port `feature/motor-sensitivity-fix` config-field pattern), defaulting to 16 for backwards compat.
 - [ ] **Integrate analyzer output into `meta/recording_health.json`** as a `control_lag` block so each recording carries its measured tracking lag in metadata.
 - [ ] **Per-motor PID tuning** if needed: the gripper has different torque limits and might want different P than the major joints.
-- [ ] **Try D_Coefficient sweep** (current hard-coded D=32) for further gains beyond P-only.
-- [ ] **Try cascaded position+velocity command** (write `Goal_Speed` alongside `Goal_Position` each iteration). The Feetech docs hint this can lower lag independent of PID tuning.
+
+Untested but unlikely to help (documented for completeness):
+
+- **Operating_Mode change** (currently POSITION). Velocity / position+current modes are different control schemes, riskier to swap blind. Not worth without a specific failure mode pointing here.
+- **Per-iteration `Goal_Velocity` sync_write** alongside `Goal_Position`. Different from setting once at configure (which we tested) — would feed velocity targets every frame. Would double bus traffic per iteration. Worth trying only if someone needs to push past P=48 ceiling.
+- **Max_Torque_Limit / Protection_Current bump** on the gripper specifically (currently 500/250, half of other motors). Could give gripper more force at the cost of overload risk. Only worth if gripper-specific lag is the bottleneck for a specific task.
 
 ### Dataset Merge
 
