@@ -167,28 +167,50 @@ See [docs/model_tab.md](docs/model_tab.md) for full design.
 
 ### Recording Loop Performance
 
-Baseline from a 2-episode bi_so107_follower record run with trajectory_replay, 4 cameras at 1280×720 @ 30 fps (2026-05-11, snapshot in `outputs/record/latency_snapshot.json`): loop p50=24.9 ms / p95=28.2 ms / p99=30.8 ms, overrun 0.55%. Healthy at 30 fps but ~75% of the 33.3 ms budget is used; concrete optimizations below are ordered by (impact ÷ effort). Doing items 1-4 takes loop p50 from ~25 ms to ~18-19 ms.
+**Measured baseline** — 2-episode bi_so107_follower record run with trajectory_replay, 4 cameras at 1280×720 @ 30 fps, instrumented build with `attach_pipeline_step_spans` + temporary per-encoder probes (2026-05-11, 729 iterations, snapshot in `outputs/record_instr/latency_snapshot.json`):
 
-**Architecture (pipeline)**
+| stage           |    p50 ms |    p95 ms | p95/p50 | attribution (measured)                               |
+| --------------- | --------: | --------: | ------: | ---------------------------------------------------- |
+| loop_dt         |     23.76 |     27.98 |    1.2x | overrun 0.69%                                        |
+| get_observation |      2.31 |      8.72 |    3.8x | motor reads + cached cam reads                       |
+| process_obs     | **11.54** | **19.86** |    1.7x | **99.8% DepthEdgeOverlayProcessorStep**              |
+| process_action  |      0.02 |      0.02 |       — | file-backed leader                                   |
+| action_send     |      0.25 |      0.31 |    1.2x | sync_write to follower bus                           |
+| dataset_write   |  **4.56** | **11.91** |    2.6x | **4 × per-camera `push_frame` (∑ medians ≈ 4.4 ms)** |
 
-- [High] **Off-loop `dataset.add_frame()`.** Biggest win — moves 4.5 ms p50 / 12 ms p95 off the control thread entirely. `add_frame()` in [datasets/dataset_writer.py:229-297](../../datasets/dataset_writer.py) writes to `episode_buffer` which only needs to be consistent at `save_episode()` time; nothing in the next iteration depends on it. Wrap the call in a background queue + worker, copy the frame dict before queueing to avoid aliasing, ensure ordering is preserved when `save_episode()` reads the buffer. Saving: **3-8 ms p50, more at p95**. Effort: medium (thread-safe queue + frame-dict copy + lifecycle coordination).
-- [High] **Streaming encoder timeout-block on the control thread.** [datasets/video_utils.py:828](../../datasets/video_utils.py) — `queue.put(..., timeout=0.1)` blocks when libsvtav1 falls behind (4 × 30 fps feed vs. preset-10 throughput). Cheap mitigations: bump `encoder_queue_maxsize` (default 30); try `--dataset.vcodec=auto` for hardware encoder (h264_nvenc); or switch to the per-camera `OurStreamingVideoEncoder` path at [datasets/dataset_writer.py:278-280](../../datasets/dataset_writer.py) which uses non-blocking `push_frame()`. Saving: closes the 4.5→12 ms p95 gap. Effort: trivial (config tuning) to low (encoder swap).
-- [Mid] **Move per-camera streaming video encoder to `multiprocessing.Process`.** Today it runs as a Python thread per camera; libsvtav1 is CPU-bound so it holds the GIL during encode and stalls the control loop momentarily. Moving to a real subprocess + shared-memory frame handoff isolates the encoder fully. Saving: ~2-5 ms when video encoding is active. Effort: medium (process lifecycle + shm protocol).
+Per-camera `OurStreamingVideoEncoder.push_frame()` (inside `dataset_write`):
 
-**Per-frame (cut work)**
+| camera                               | p50 ms | p95 ms | p95/p50 |
+| ------------------------------------ | -----: | -----: | ------: |
+| front (1280×720 OpenCV)              |   0.81 |   6.36 |    7.8x |
+| left_wrist (1280×720 OpenCV)         |   1.15 |   7.70 |    6.7x |
+| right_wrist (1280×720 OpenCV)        |   1.15 |   6.80 |    5.9x |
+| top (1280×720 RealSense color+depth) |   1.26 |   8.16 |    6.5x |
 
-- [High] **Optimize `DepthEdgeOverlayProcessorStep` instead of just opt-out.** Today the step is unconditional ([robots/bi_so107_follower/bi_so107_follower.py:225-247](../../robots/bi_so107_follower/bi_so107_follower.py)) and costs ~7 ms p50 on a 1280×720 depth frame. Three stackable wins inside [processor/depth_edge_processor.py:249-288](../../processor/depth_edge_processor.py):
-  1. **Downsample 4× before Sobel + Gaussian, upscale edges back** — Sobel is the long pole; quarter-resolution edge detection then `cv2.resize(INTER_LINEAR)` looks visually identical for this use case. Saving: ~3-4 ms. Effort: low.
-  2. **Skip edge detection on alternate frames** (reuse last mask). The overlay is for human-eye debugging, not policy input; 15 Hz refresh is fine. Saving: ~2-3 ms (amortized). Effort: low.
-  3. **Cache the percentile threshold every N frames** rather than computing on every frame's full gradient array. Saving: ~0.5-1 ms. Effort: trivial.
-     Combined: 7 ms → ~2 ms while preserving the overlay. Plus the `depth_edge_overlay: bool = True` config flag for full opt-out when the policy doesn't need it.
-- [Mid] **Hoist tensor→numpy conversion out of the per-frame hot path.** [datasets/dataset_writer.py:241-243](../../datasets/dataset_writer.py) does unconditional `.numpy()` calls on every frame dict value. If the source is already `np.ndarray` (the common case for OpenCV cameras), this is a no-op check; if it's `torch.Tensor`, it's a CPU sync + copy. Cache the per-feature dtype check at dataset creation so the runtime check is a single `isinstance` boolean. Saving: 0.5-1.5 ms when cameras emit torch tensors; 0 otherwise. Effort: trivial.
-- [Mid] **`AsyncImageWriter` queue: non-blocking + drop-frame fallback.** [datasets/image_writer.py:174-180](../../datasets/image_writer.py) — `queue.put()` is blocking with default infinite timeout; if writers fall behind, the control thread stalls silently. Switch to `put(block=False)` with `except queue.Full: logger.warning("image writer queue full, dropping")`. Saving: 0.3-0.8 ms p99; converts a hidden stall into an observable drop. Effort: low.
-- [Low] **`obs_stream` writer: skip `np.ascontiguousarray` when already contiguous.** [robots/obs_stream.py:241-250](../../robots/obs_stream.py) — wrap with `if not img.flags['C_CONTIGUOUS']:` so the copy only happens when the camera actually emits a non-contiguous view. Saving: 0.2-0.5 ms. Effort: trivial.
+**What the data invalidated about the earlier static-analysis pass:**
 
-**Diagnostic**
+- ❌ **"DepthEdge ≈ 7 ms of 17.7 ms process_obs, with 8-10 ms unexplained gap."** Wrong. DepthEdge IS process_obs — 99.8% of it (11.52 / 11.54). No gap. Optimizing depth-edge captures the whole stage win, not a partial one.
+- ❌ **"obs_stream writer adds ~0.84 ms per frame."** Doesn't fire from CLI launches — the step is gated on `LEROBOT_OBS_STREAM=1`, only set by the GUI runner. Only relevant under GUI-launched recordings.
+- ❌ **"dataset_write p95 spike = `feed_frame()` timeout on the batch streaming encoder ([video_utils.py:828](../../datasets/video_utils.py))."** Wrong path. Default config (`streaming_encoding=False`, `record_images=True`, `batch_encoding_size=1`) goes through the per-camera `OurStreamingVideoEncoder.push_frame()` ([dataset_writer.py:278-280](../../datasets/dataset_writer.py)), not the batch `_streaming_encoder.feed_frame()`. The supposedly-non-blocking `push_frame` is bursting 6-8x p95/p50 anyway — different root cause.
+- ✅ **"Off-loop `dataset.add_frame()` removes 4.5 / 12 ms from the critical path."** Confirmed.
 
-- [Mid] **Attribute the ~8-10 ms unexplained gap in `process_obs`.** Depth-edge (~7 ms) + obs-stream writer (~0.84 ms) only sum to ~8 ms of the measured 17.7 ms p50. Add `latency_session.span("...")` blocks around each individual `obs_stream_step` in the pipeline ([scripts/lerobot_record.py](../../scripts/lerobot_record.py) and `lerobot_teleoperate.py`) to find which step (or inter-step bookkeeping) eats the rest. Doing this before any further per-frame optimization avoids guessing.
+**Actionable optimizations, ordered by measured impact ÷ effort:**
+
+- [High] **Cut `DepthEdgeOverlayProcessorStep` cost (the whole 11.5 ms p50).** Step is unconditional in [robots/bi_so107_follower/bi_so107_follower.py:225-247](../../robots/bi_so107_follower/bi_so107_follower.py); algorithm in [processor/depth_edge_processor.py](../../processor/depth_edge_processor.py). Three stackable wins, each independently profilable:
+  1. Downsample 4× before Sobel + Gaussian, upscale mask back via `cv2.resize(INTER_LINEAR)`.
+  2. Skip alternate frames (reuse last mask). The overlay is for human-eye debugging, not policy input.
+  3. Cache the percentile threshold every N frames.
+     Per-step savings need post-change measurement; combined target: process_obs under 4 ms. Plus a `depth_edge_overlay: bool = True` config flag for full opt-out when the policy doesn't consume the overlay.
+- [High] **Off-loop `dataset.add_frame()`.** Removes the measured 4.5 ms p50 / 12 ms p95 from the critical path. `add_frame()` in [datasets/dataset_writer.py:229-297](../../datasets/dataset_writer.py) writes to `episode_buffer` which only needs to be consistent at `save_episode()` time. Wrap in a thread-safe background queue + worker; copy the frame dict before enqueueing; preserve ordering for `save_episode()`. Medium effort.
+- [Mid] **Investigate per-camera `push_frame` 6-8x p95/p50 ratios.** All four `OurStreamingVideoEncoder` per-camera pushes burst together. Documented as non-blocking but evidence says otherwise. Hypotheses: encoder thread holds the GIL during encode (`libsvtav1` is CPU-bound) and blocks the control thread mid-push; or per-frame shared-memory copy contends for memory bandwidth. Probe by timing the `push_frame()` body internally vs. the queue.put; once attributed, fix is likely either to make the GIL-release tighter or to switch the encoder to a subprocess.
+- [Mid] **Investigate `get_observation` 3.8x p95/p50.** Stable on motor reads (~1.2-1.4x), so the tail comes from `cam.read_latest()` despite the cache. Possible cause: camera grab thread holds the cache lock during `numpy.copy()` into the cache slot. Cheap follow-up: per-camera consume-time span around `cam.read_latest()` in `bi_so107_follower.get_observation`.
+- [Low] **`AsyncImageWriter` non-blocking + drop-frame fallback.** [datasets/image_writer.py:174-180](../../datasets/image_writer.py) — `queue.put()` defaults to blocking with infinite timeout; switch to `put(block=False)` with logging on `queue.Full`. Not active in our per-camera config (image writer bypassed for video keys), but defensive in case a future config path reaches it.
+
+**Already-measured non-issues:**
+
+- `motor_read_left/right` are stable (~1.2-1.4x p95/p50). No work to do here.
+- `process_action`, `action_send` together cost 0.27 ms p50. Not worth touching.
+- `IdentityProcessorStep` in the default pipeline costs 0 ms — confirmed no-op.
 
 ### GUI Resource & Async Hygiene
 

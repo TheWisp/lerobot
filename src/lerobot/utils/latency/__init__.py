@@ -40,6 +40,38 @@ def maybe_span(tracer: LatencyTracer | None, name: str):
     return tracer.span(name) if tracer is not None else nullcontext()
 
 
+def attach_pipeline_step_spans(pipeline: Any, latency_session: Any, prefix: str = "obs") -> None:
+    """Attach per-step timing hooks to a ``RobotProcessorPipeline``.
+
+    For each step in ``pipeline.steps``, record a child span under the
+    active iteration named ``f"{prefix}_{step.__class__.__name__}"``.
+    Lets us attribute the umbrella ``process_obs`` cost back to specific
+    processor steps (depth-edge overlay, obs-stream writer, etc.) without
+    modifying the pipeline class.
+
+    No-op when ``latency_session`` is disabled — hooks aren't attached at
+    all, so there's zero per-step overhead in the default off case.
+    """
+    if not getattr(latency_session, "enabled", False):
+        return
+    import time as _time
+
+    starts: list[float] = []
+
+    def _before(idx: int, transition: Any) -> None:
+        starts.append(_time.perf_counter())
+
+    def _after(idx: int, transition: Any) -> None:
+        if not starts:
+            return  # defensive — shouldn't happen unless hooks desync
+        start = starts.pop()
+        step_name = type(pipeline.steps[idx]).__name__
+        latency_session.add_span(f"{prefix}_{step_name}", start, _time.perf_counter())
+
+    pipeline.before_step_hooks.append(_before)
+    pipeline.after_step_hooks.append(_after)
+
+
 # Stages we know how to render in the stderr digest. Order is the
 # preferred display order; only stages actually present in a snapshot
 # are emitted, so this works for teleop, record, and HVLA inference
@@ -105,6 +137,7 @@ __all__ = [
     "LatencySession",
     "LatencySnapshotWriter",
     "LatencyTracer",
+    "attach_pipeline_step_spans",
     "current_span",
     "format_latency_summary",
     "maybe_span",

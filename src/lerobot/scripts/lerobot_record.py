@@ -1022,6 +1022,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         )
         if latency_session.enabled and latency_session.writer is not None:
             logging.info("Latency monitoring enabled; snapshots → %s", latency_session.writer.path)
+            # Attribute the umbrella ``process_obs`` cost back to per-step
+            # spans so the snapshot shows which processor (depth-edge,
+            # obs-stream writer, normalize, …) eats the budget.
+            from lerobot.utils.latency import attach_pipeline_step_spans
+
+            attach_pipeline_step_spans(robot_observation_processor, latency_session, prefix="obs")
 
         if not cfg.dataset.streaming_encoding:
             logging.info(
