@@ -85,6 +85,8 @@ Cross-correlation of `action[:, j]` vs `observation.state[:, j]` per joint measu
 | P=48 + I=8                                                                    |    63.3 ms |     66.7 ms |     0.0610 | I causes windup, σ explodes 5x  |
 | P=48 + Goal_Velocity=4000                                                     |    70.0 ms |     66.7 ms |     0.0207 | velocity ceiling: no effect     |
 
+**Decoupled send/read rate probe (2026-05-11 follow-up):** `scripts/probe_motor_send_rate.py` connects motors only (no cameras, no dataset) and sends interpolated `goal_position` at a high rate while reading `present_position` at a separate, lower rate. With P=48 and 172 Hz effective send / 30 Hz read, mean lag drops to **60 ms** (from the 67 ms P=48 baseline). The previous "200 Hz coupled" attempt failed due to bus saturation (both sync_read and sync_write at the same high rate); decoupling lets the bus comfortably sustain 170+ Hz of sends. The architectural takeaway: **for trajectory_replay / open-loop replay, only the send rate matters; state reads can stay at observation rate.** This is the same multi-rate concept that would underlie a TimedActionQueue for chunked-policy execution. The 7 ms gain over plain P=48 is the predicted `T/2` reduction from sampling-related lag; the rest of the floor is the motor's intrinsic τ.
+
 **Findings:**
 
 - **P_Coefficient is the only lever that matters.** Bumping from 16 to 48 cuts mean lag from 120 → 67 ms (-44%) and improves the gripper from "barely tracking small commands" to "actually tracking" — at P=16 the gripper IGNORES fine motion because its commanded action stays within the firmware dead zone + the low gain can't overcome static friction.

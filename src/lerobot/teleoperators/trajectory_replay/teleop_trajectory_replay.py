@@ -153,7 +153,21 @@ class TrajectoryReplayTeleop(Teleoperator):
             # but for minutes-of-30fps (~thousands of frames) the linear
             # scan with a cached cursor is fine and stays simple.
             idx = self._locate_frame(elapsed)
-            frame = self._positions[idx]
+            # Linear interpolation between bracketing trajectory frames.
+            # When the loop runs faster than the trajectory's recorded fps
+            # (e.g., loop=200 Hz vs trajectory=30 Hz), this gives the motor
+            # a smooth ramp instead of a 6-7-iteration-long stairstep,
+            # reducing apparent tracking lag.
+            if idx + 1 < len(self._timestamps):
+                t0 = self._timestamps[idx]
+                t1 = self._timestamps[idx + 1]
+                dt = t1 - t0
+                alpha = (elapsed - t0) / dt if dt > 1e-9 else 0.0
+                p0 = self._positions[idx]
+                p1 = self._positions[idx + 1]
+                frame = [a + (b - a) * alpha for a, b in zip(p0, p1, strict=True)]
+            else:
+                frame = self._positions[idx]
         return {j: float(p) for j, p in zip(self._joints, frame, strict=True)}
 
     def _locate_frame(self, elapsed: float) -> int:
