@@ -441,6 +441,30 @@ def _add_frame_to_dataset(dataset, obs: dict, action_np: np.ndarray, joint_names
     dataset.add_frame(frame)
 
 
+def inference_target_fps_for(fps: int | float, query_interval_steps: int) -> float | None:
+    """Effective inference-thread FPS, given the control loop's fps and
+    the query interval.
+
+    The inference thread runs once per ``query_interval_steps`` control
+    frames (the main loop executes that many actions per inferred chunk
+    before re-querying). So its rate is the control rate divided by the
+    query interval:
+
+        inference_fps = fps / query_interval_steps
+
+    When ``query_interval_steps == 0`` the thread runs as fast as it can
+    — there's no meaningful FPS target, so return ``None`` and let the
+    latency-monitoring stack skip the overrun / budget rules.
+
+    Sharing this helper with the test suite (rather than inlining the
+    formula at the call site) makes the relationship explicit and
+    catchable if a future refactor changes the cadence.
+    """
+    if query_interval_steps <= 0:
+        return None
+    return float(fps) / query_interval_steps
+
+
 def run_s1(
     s1_checkpoint: str,
     shared_cache: SharedLatentCache,
@@ -999,17 +1023,18 @@ def run_s1(
         target_fps=float(fps),
         output_dir=main_dir,
     )
-    # target_fps for the inference thread reflects the per-action cadence
-    # the main loop expects; the inference thread itself runs at ~ fps /
-    # max(query_interval_steps, 1) when a query interval is set, but the
-    # per-stage GPU breakdown is the same and the overrun reference still
-    # makes sense for the no-query-interval case.
+    # The inference thread runs at its OWN cadence — once per
+    # ``query_interval_steps`` control frames, NOT once per control frame.
+    # See ``inference_target_fps_for`` for the derivation. Using the
+    # control loop's 1/fps as the inference budget would falsely flag the
+    # thread as "overrunning" whenever a single inference takes longer
+    # than one control period, even though that's the expected design.
     inference_session = LatencySession.from_config(
         enabled=latency_monitor,
         loop_kind="hvla_infer",
         process="hvla",
         track="inference",
-        target_fps=float(fps),
+        target_fps=inference_target_fps_for(fps, query_interval_steps),
         output_dir=inference_dir,
     )
 

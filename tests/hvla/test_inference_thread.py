@@ -881,3 +881,44 @@ class TestLatencySession:
         assert snap_path.exists()
         data = json.loads(snap_path.read_text())
         assert data["loop_kind"] == "hvla_infer"
+
+
+class TestInferenceTargetFps:
+    """The inference thread's budget is NOT the control loop's 1/fps —
+    it's 1/(fps / query_interval_steps), because the main loop executes
+    ``query_interval_steps`` actions per inferred chunk before re-querying.
+    Getting this wrong falsely flags the inference thread as overrunning
+    every time a single inference takes longer than one control frame,
+    which is the expected case for a non-trivial policy."""
+
+    def test_query_interval_2_at_30fps_gives_15hz_inference(self):
+        from lerobot.policies.hvla.s1_process import inference_target_fps_for
+
+        assert inference_target_fps_for(fps=30, query_interval_steps=2) == 15.0
+
+    def test_query_interval_1_matches_control_rate(self):
+        """When the policy re-queries every control frame, inference must
+        keep up at the full control rate."""
+        from lerobot.policies.hvla.s1_process import inference_target_fps_for
+
+        assert inference_target_fps_for(fps=30, query_interval_steps=1) == 30.0
+
+    def test_query_interval_0_returns_none(self):
+        """``query_interval_steps=0`` means "run as fast as possible" —
+        no meaningful fps target. Return None so the overrun / budget
+        rules silently skip."""
+        from lerobot.policies.hvla.s1_process import inference_target_fps_for
+
+        assert inference_target_fps_for(fps=30, query_interval_steps=0) is None
+
+    def test_negative_treated_as_zero(self):
+        """Defensive: a malformed config shouldn't crash the formula."""
+        from lerobot.policies.hvla.s1_process import inference_target_fps_for
+
+        assert inference_target_fps_for(fps=30, query_interval_steps=-1) is None
+
+    def test_higher_fps_scales_proportionally(self):
+        from lerobot.policies.hvla.s1_process import inference_target_fps_for
+
+        assert inference_target_fps_for(fps=60, query_interval_steps=4) == 15.0
+        assert inference_target_fps_for(fps=120, query_interval_steps=2) == 60.0
