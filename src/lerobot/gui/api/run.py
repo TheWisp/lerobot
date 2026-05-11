@@ -45,22 +45,27 @@ _TIMEOUT_EXCS: tuple[type[BaseException], ...] = (TimeoutError, asyncio.TimeoutE
 # Where the teleop subprocess writes its latency_snapshot.json. The frontend
 # reads this via /api/run/latency-metrics (cross-process). Mirrors the RLT
 # pattern (outputs/rlt_online/metrics.json).
-LATENCY_OUTPUT_DIR = "outputs/teleop"
+LATENCY_OUTPUT_DIR_TELEOP = "outputs/teleop"
+LATENCY_OUTPUT_DIR_RECORD = "outputs/record"
+# Back-compat alias: existing call sites pass this for teleop. Don't rename
+# without updating every caller.
+LATENCY_OUTPUT_DIR = LATENCY_OUTPUT_DIR_TELEOP
 
 # Known latency snapshot sources. Each subprocess (teleop / record / HVLA)
-# writes ``latency_snapshot.json`` into one of these directories; the GUI
-# polls them via /api/run/latency-metrics?source=<key>. Adding a new loop
-# kind means appending to this map and (if needed) plumbing the output_dir
-# through that script's CLI args. Keys must match the ``loop_kind`` field
-# the writer publishes.
+# writes ``latency_snapshot.json`` into its OWN directory so the dashboard
+# doesn't render the same data twice when two source keys would otherwise
+# share a file. /api/run/latency-metrics?source=<key> reads from the
+# matching directory. Adding a new loop kind means appending to this map
+# and (if needed) plumbing the output_dir through that script's CLI args.
+# Keys must match the ``loop_kind`` field the writer publishes.
 # HVLA writes one snapshot per thread under outputs/hvla_runs/<track>/, so
 # the dashboard can render the control thread (track=main) and the
 # inference thread (track=inference) as stacked tracks of the same
 # process. Single-track loops (teleop, record) write directly into their
 # loop directory.
 LATENCY_SOURCES: dict[str, str] = {
-    "teleop": "outputs/teleop",
-    "record": "outputs/teleop",  # record uses the same dir as teleop today
+    "teleop": LATENCY_OUTPUT_DIR_TELEOP,
+    "record": LATENCY_OUTPUT_DIR_RECORD,
     "hvla_main": "outputs/hvla_runs/main",
     "hvla_infer": "outputs/hvla_runs/inference",
 }
@@ -598,11 +603,12 @@ async def start_record(req: RecordRequest) -> dict:
         args.append("--resume=true")
     if req.intervention_repo_id:
         args.append(f"--intervention_repo_id={req.intervention_repo_id}")
-    # Always-on latency monitoring for GUI sessions, same output dir as
-    # teleop. _ensure_no_active_process guarantees only one writer is
-    # active at a time, so the shared snapshot path is race-free.
+    # Always-on latency monitoring for GUI sessions. Record writes to its
+    # own directory so the dashboard doesn't double-render when both
+    # teleop and record source keys exist in LATENCY_SOURCES.
+    # _ensure_no_active_process guarantees only one writer at a time.
     args.append("--latency_monitor=true")
-    args.append(f"--latency_output_dir={LATENCY_OUTPUT_DIR}")
+    args.append(f"--latency_output_dir={LATENCY_OUTPUT_DIR_RECORD}")
 
     extra_env = None
     if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":

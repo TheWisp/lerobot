@@ -2338,13 +2338,23 @@ function _drawGantt(canvas, rec, [minMs, maxMs]) {
     const firstTick = Math.ceil(minMs / tickStep) * tickStep;
     ctx.font = '9px monospace';
     ctx.textAlign = 'center';
+    // Edge-label width (corners always draw "{minMs} ms" / "{maxMs} ms").
+    // Reserve a band around each corner so tick labels never collide
+    // with the corner labels — that was the "-40 -40ms" overlap.
+    const leftEdgeX = padL;
+    const rightEdgeX = W - padR;
+    const cornerLabelHalfWidth = 32;  // covers "-180 ms" at 10 px monospace
     for (let v = firstTick; v <= maxMs; v += tickStep) {
         const x = xOf(v);
         // Skip ticks too close to the iter_start / action_sent lines so
         // their labels don't visually collide with those distinguished ones.
         const tooCloseToZero = Math.abs(x - zeroX) < 14;
         const tooCloseToEnd = Math.abs(x - endX) < 14;
-        if (!tooCloseToZero && !tooCloseToEnd) {
+        // Skip ticks too close to either corner — the corner extent
+        // labels always render and would visually merge with the tick.
+        const tooCloseToLeft = (x - leftEdgeX) < cornerLabelHalfWidth;
+        const tooCloseToRight = (rightEdgeX - x) < cornerLabelHalfWidth;
+        if (!tooCloseToZero && !tooCloseToEnd && !tooCloseToLeft && !tooCloseToRight) {
             ctx.strokeStyle = '#1f1f3a';
             ctx.beginPath();
             ctx.moveTo(x, padT - 2);
@@ -2374,7 +2384,10 @@ function _drawGantt(canvas, rec, [minMs, maxMs]) {
     const spanNames = Object.keys(spans);
     const spanCount = Math.max(spanNames.length, 1);
     const spanRegionH = plotH - camAreaH;
-    const rowH = Math.min(20, Math.max(10, spanRegionH / spanCount));
+    // Row height bumped from 20→30 max to give 10 px font + 4 px bar
+    // margin comfortable headroom; otherwise labels clip on dense
+    // iterations with 5+ spans plus 4 camera rows.
+    const rowH = Math.min(30, Math.max(15, spanRegionH / spanCount));
 
     spanNames.forEach((name, i) => {
         const [s, e] = spans[name];
@@ -2644,7 +2657,7 @@ function _budgetsFromTarget(targetPeriodMs) {
 // attribute. Keep terse — they should answer "what is this and why does
 // the color change" in two sentences.
 const _LAT_TOOLTIPS = {
-    loop_dt_ms: 'Wall-clock time per iteration (work only; sleep excluded). The per-iteration budget is 1000 ms ÷ target FPS — at 60 fps that is 16.67 ms; at 30 fps, 33.33 ms. Yellow at ≥70% of budget; red when over.',
+    loop_dt_ms: 'Wall-clock time per iteration (work only; sleep excluded). The per-iteration budget is 1000 ms ÷ target FPS — at 60 fps that is 16.67 ms; at 30 fps, 33.33 ms. Color is driven by the p95 tail (the value on the right), not p50: a typical iteration may sit well under budget while the tail still hits overrun. Yellow at p95 ≥ 70% of budget; red when p95 exceeds it.',
     get_observation_ms: 'Cost of robot.get_observation(): the follower bus.sync_read("Present_Position") plus per-camera read_latest() calls. Cameras are cached by their grab thread so the camera reads are essentially free; this number is dominated by the motor sync_read (Feetech/Dynamixel round-trip + any retries).',
     action_send_ms: 'Cost of bus.sync_write("Goal_Position"). Fire-and-forget on Feetech, so this is bus-TX only — not motor motion.',
     overrun: 'Fraction of iterations whose work time exceeded the per-iteration budget (1000 ms ÷ target FPS). Sleep time is excluded — this only fires when the work itself is too slow to sustain the target rate.',
@@ -2663,10 +2676,17 @@ function _renderLatencyCard(parent, key, title, p50, p95, budget, sparkData, too
     const card = document.createElement('div');
     card.className = 'latency-card';
     if (tooltip) card.title = tooltip;
+    // Color reflects the TAIL (p95) — that's what determines whether the
+    // loop is at risk of overrun under load, not the typical-case p50.
+    // The headline value shows BOTH so the operator can see at a glance
+    // which number is driving the color; the colored half is p95.
     const cls = _classifyLatency(p95 != null ? p95 : p50, budget);
+    const p95Html = p95 != null
+        ? ` <span class="latency-card-p95 ${cls}">p95 ${p95.toFixed(1)}</span>`
+        : '';
     card.innerHTML = `
         <div class="latency-card-title">${title}</div>
-        <div class="latency-card-value ${cls}">${p50.toFixed(1)} ms${p95 != null ? ` <span class="latency-card-sub">p95 ${p95.toFixed(1)}</span>` : ''}</div>
+        <div class="latency-card-value"><span class="latency-card-p50">p50 ${p50.toFixed(1)}</span>${p95Html}</div>
         <canvas data-spark-key="${key}"></canvas>
     `;
     parent.appendChild(card);
@@ -2715,17 +2735,19 @@ function _updateTrack(scope, data, state) {
     const sysGrid = scope.querySelector('[data-role="grid-system"]');
     if (sysGrid) {
         sysGrid.innerHTML = '';
-        // Per-loop-kind stage ordering: HVLA tracks have different headline
-        // numbers (inference duration, GPU stages) than teleop / record.
-        // The data-driven approach keeps the JS oblivious to loop_kind —
-        // we render whichever of these stages happen to be present.
+        // Top-row metrics are the LOAD-BEARING headline. Only show stats
+        // that are at a comparable level of granularity:
+        //   - loop_dt_ms: the umbrella (includes every stage, sleep
+        //     excluded)
+        //   - overrun_ratio: a derived rate, conceptually different from
+        //     a duration but still a headline KPI
+        // Per-stage breakdowns belong in the Gantt below, NOT here —
+        // mixing them at top creates misleading impression that loop
+        // ≈ obs + send (it doesn't; process_obs, process_action,
+        // inference, dataset_write are also inside loop and would
+        // distort the picture if absent from the headline).
         const sysOrder = [
-            { key: 'loop_dt_ms',         title: 'Loop'            },
-            { key: 'get_observation_ms', title: 'Get observation' },
-            { key: 'inference_ms',       title: 'Inference'       },
-            { key: 's1_denoise_ms',      title: 'S1 denoise'      },
-            { key: 'enc_obs_ms',         title: 'Encode obs'      },
-            { key: 'action_send_ms',     title: 'Action send'     },
+            { key: 'loop_dt_ms', title: 'Loop' },
         ];
         for (const item of sysOrder) {
             const stage = stages[item.key];

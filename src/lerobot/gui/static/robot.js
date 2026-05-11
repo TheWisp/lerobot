@@ -205,6 +205,19 @@ function renderFormField(field, value) {
     const label = `<label for="${id}">${esc(field.name)}${field.required ? ' *' : ''}</label>`;
     const typeStr = field.type_str.toLowerCase();
 
+    // Literal["a", "b", ...] fields render as a dropdown of the allowed
+    // values. Backend exposes `choices` whenever it detects a Literal
+    // annotation, so any new enum-ish field auto-renders without a JS edit.
+    if (Array.isArray(field.choices) && field.choices.length > 0) {
+        const opts = field.choices
+            .map(c => {
+                const sel = String(value) === String(c) ? 'selected' : '';
+                return `<option value="${esc(String(c))}" ${sel}>${esc(String(c))}</option>`;
+            })
+            .join('');
+        return label + `<select id="${id}">${opts}</select>`;
+    }
+
     if (typeStr === 'bool' || typeStr === 'bool | none') {
         const trueSelected = value === true ? 'selected' : '';
         const falseSelected = value === false ? 'selected' : '';
