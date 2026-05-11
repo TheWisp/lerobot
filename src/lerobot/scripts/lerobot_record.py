@@ -150,6 +150,7 @@ from lerobot.teleoperators import (  # noqa: F401
     openarm_mini,
     reachy2_teleoperator,
     so_leader,
+    trajectory_replay,
     unitree_g1,
 )
 from lerobot.teleoperators.keyboard import KeyboardTeleop
@@ -505,6 +506,12 @@ def record_loop(
 
         if events["exit_early"]:
             events["exit_early"] = False
+            break
+        # File-backed teleops (trajectory_replay) flip ``is_exhausted``
+        # once the recorded trajectory has fully played out. Treat that as
+        # a clean end-of-episode signal — the calling driver will then
+        # enter the reset phase as usual.
+        if teleop is not None and getattr(teleop, "is_exhausted", False):
             break
 
         # Get robot observation. The span includes follower sync_read +

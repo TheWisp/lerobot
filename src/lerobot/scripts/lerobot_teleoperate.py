@@ -104,6 +104,7 @@ from lerobot.teleoperators import (  # noqa: F401
     openarm_mini,
     reachy2_teleoperator,
     so_leader,
+    trajectory_replay,
     unitree_g1,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
@@ -242,6 +243,12 @@ def teleop_loop(
             move_cursor_up(1)
 
         if duration is not None and time.perf_counter() - start >= duration:
+            return
+        # File-backed teleops (trajectory_replay) flip ``is_exhausted`` once
+        # the recorded duration has elapsed. Treat that as a clean end-of-
+        # session signal, the same as ``duration`` expiring.
+        if getattr(teleop, "is_exhausted", False):
+            logging.info("Teleop exhausted (no more frames) — ending session.")
             return
 
 
