@@ -1042,8 +1042,36 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 "Streaming encoding is disabled. If you have capable hardware, consider enabling it for way faster episode saving. --dataset.streaming_encoding=true --dataset.encoder_threads=2 # --dataset.vcodec=auto. More info in the documentation: https://huggingface.co/docs/lerobot/streaming_video_encoding"
             )
 
+        # Auto-reset duration for file-backed teleops (trajectory_replay).
+        # Short and fixed: this is a programmatic ramp-to-start, not a
+        # human-driven reset. Configurable later if the iteration flow
+        # needs it.
+        _auto_reset_duration_s = 3.0
+
         def run_reset_phase():
-            """Run a reset phase to allow setting up / resetting the environment."""
+            """Run a reset phase to allow setting up / resetting the environment.
+
+            For human-driven teleops this is "free teleop for reset_time_s
+            seconds while the operator rearranges objects". For file-backed
+            teleops (e.g. ``trajectory_replay``), it instead programmatically
+            drives the robot back to the trajectory's start pose and re-arms
+            the teleop so the next episode can begin.
+            """
+            # File-backed (episodic) teleop: skip the manual record_loop
+            # reset — that path would just spin against an exhausted
+            # teleop. Drive the arm back to the trajectory's start pose
+            # and re-arm. Duck-typed via ``start_pose`` so any future
+            # episodic teleop only needs to expose that property.
+            if teleop is not None and hasattr(teleop, "start_pose"):
+                from lerobot.robots.rest_position import move_to_rest_position
+
+                log_say("Auto-reset: moving to trajectory start", cfg.play_sounds)
+                if getattr(teleop, "is_exhausted", False):
+                    teleop.disconnect()
+                    teleop.connect()
+                move_to_rest_position(robot, teleop.start_pose, duration_s=_auto_reset_duration_s)
+                return
+
             # Always disable torque on leader for reset phase so operator can teleop freely
             # (regardless of whether the previous episode ended with intervention or policy)
             if teleop is not None and hasattr(teleop, "disable_torque"):
@@ -1076,7 +1104,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             with intervention_ctx:
                 recorded_episodes = 0
 
-                if cfg.start_with_reset and not events["stop_recording"]:
+                # For file-backed teleops, ALWAYS do an initial move-to-start
+                # so episode 1's first emitted frame doesn't teleport the
+                # robot from wherever it happens to be at launch time. The
+                # ``start_with_reset`` flag is honoured for the human flow.
+                _is_episodic_teleop = teleop is not None and hasattr(teleop, "start_pose")
+                if not events["stop_recording"] and (cfg.start_with_reset or _is_episodic_teleop):
                     run_reset_phase()
 
                 while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
@@ -1110,9 +1143,14 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     _t_between = _time.monotonic()
 
                     # Execute a few seconds without recording to give time to manually reset the environment
-                    # Skip reset for the last episode to be recorded
+                    # Skip reset for the last episode to be recorded.
+                    # Exception: episodic teleops (trajectory_replay) always
+                    # park the arm at trajectory-start so the recorded
+                    # endpoint can't sag under gravity at disconnect.
                     if not events["stop_recording"] and (
-                        (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
+                        (recorded_episodes < cfg.dataset.num_episodes - 1)
+                        or events["rerecord_episode"]
+                        or _is_episodic_teleop
                     ):
                         run_reset_phase()
 

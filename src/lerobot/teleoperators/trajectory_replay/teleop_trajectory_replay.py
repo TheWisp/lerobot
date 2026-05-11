@@ -91,6 +91,22 @@ class TrajectoryReplayTeleop(Teleoperator):
     def frame_count(self) -> int:
         return len(self._timestamps)
 
+    @property
+    def start_pose(self) -> dict[str, float]:
+        """First-frame joint positions, suitable for ``move_to_rest_position``.
+
+        Recording's invariant is that frame 0 IS the rest_position of the
+        robot — recording always starts after a move-to-rest. Callers can
+        use this for an automated reset between episodes (e.g. multi-
+        episode dataset recording) without needing the profile's
+        rest_position dict separately.
+
+        Raises ``RuntimeError`` if called before ``connect()``.
+        """
+        if self._trajectory is None:
+            raise RuntimeError("start_pose accessed before connect()")
+        return {j: float(p) for j, p in zip(self._joints, self._positions[0], strict=True)}
+
     def connect(self, calibrate: bool = True) -> None:
         if not self.config.trajectory_path:
             raise ValueError("trajectory_path is empty; pass --teleop.trajectory_path=...")
