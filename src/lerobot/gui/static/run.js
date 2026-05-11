@@ -39,6 +39,16 @@ async function runTabInit() {
     _initSelectTitleSync();
     await _ensureModelDataLoaded();
     await pollRunStatus();
+
+    // Backstop reconciliation: SSE events are the primary trigger for
+    // re-polling, but if the stream drops at the wrong moment (server-side
+    // close racing with the `done` event, browser tab backgrounded, etc.)
+    // the frontend can be left thinking a long-dead subprocess is still
+    // running. A low-frequency poll closes that gap without user
+    // intervention; cost is one tiny GET every 5 s.
+    if (!window._runStatusPollTimer) {
+        window._runStatusPollTimer = setInterval(pollRunStatus, 5000);
+    }
 }
 
 /** Sync select title attribute to selected option text (for ellipsis tooltip). */
@@ -1679,7 +1689,14 @@ function connectOutputSSE() {
     };
 
     runEventSource.onerror = () => {
+        // SSE can drop for many reasons: server-side close after a `done`
+        // event raced with the connection teardown, network blip, browser
+        // backgrounding the tab, etc. If we don't reconcile here the
+        // frontend can stay locked at _isRunning=true forever even though
+        // the subprocess already exited — Stop AND Launch both end up
+        // greyed out and the user has to refresh the page to unstick.
         disconnectOutputSSE();
+        pollRunStatus();
     };
 }
 
