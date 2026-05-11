@@ -656,15 +656,23 @@ class IdentifyArmRequest(BaseModel):
 
 @router.post("/open-in-files")
 async def open_in_file_manager(body: dict) -> dict:
-    """Open a profile directory in the system file manager."""
+    """Open a profile directory in the system file manager.
+
+    The subprocess spawn happens in the default executor so a slow
+    fork/exec (heavy desktop session, many open FDs) cannot stall the
+    FastAPI event loop and block other in-flight requests.
+    """
     import subprocess as _subprocess
 
     kind = body.get("kind", "robot")
     profiles_dir = ROBOT_PROFILES_DIR if kind == "robot" else TELEOP_PROFILES_DIR
-    _ensure_dir(profiles_dir)
+
+    def _spawn() -> None:
+        _ensure_dir(profiles_dir)
+        _subprocess.Popen(["xdg-open", str(profiles_dir)])
 
     try:
-        _subprocess.Popen(["xdg-open", str(profiles_dir)])
+        await asyncio.get_event_loop().run_in_executor(None, _spawn)
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="xdg-open not found") from None
 

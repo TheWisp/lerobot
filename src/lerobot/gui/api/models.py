@@ -532,15 +532,24 @@ async def get_train_config(encoded_path: str) -> dict:
 
 @router.post("/open-in-files")
 async def open_in_file_manager(body: dict) -> dict:
-    """Open a directory in the system file manager."""
+    """Open a directory in the system file manager.
+
+    Spawns the subprocess in the default executor so a slow fork/exec
+    (heavy desktop session, many open FDs) cannot stall the FastAPI
+    event loop.
+    """
+    import asyncio
     import subprocess as _subprocess
 
     path = body.get("path", "")
     if not path or not Path(path).is_dir():
         raise HTTPException(status_code=400, detail=f"Not a valid directory: {path}")
 
-    try:
+    def _spawn() -> None:
         _subprocess.Popen(["xdg-open", path])
+
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, _spawn)
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="xdg-open not found") from None
 
