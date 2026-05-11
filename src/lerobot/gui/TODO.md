@@ -52,6 +52,22 @@ Follow-ups (post-V1, listed in design doc):
 - [ ] Episode-list shortcuts: tri-state `success` checkbox column with bulk-set; inline-editable `task` per episode
 - [ ] First-class `subtask_index` writer at recording time (`add_frame(subtask=...)` analog to `add_frame(task=...)`); today only the read hook + offline annotation Space exist
 
+### Per-Episode Quality Badges (Latency)
+
+`lerobot_record` now writes `meta/episodes_health.jsonl` (one line per
+episode) and `meta/recording_health.json` (session summary) into the
+dataset's meta dir. Each line carries `healthy`, `issues`, `overrun_ratio`,
+`loop_dt_ms` percentiles, and per-camera staleness. The data panel
+doesn't yet read this — wire it up:
+
+- [ ] **Render per-episode quality badge** in the episode list (yellow/red dot next to bad episodes; tooltip shows the issue messages from `episodes_health.jsonl`).
+- [ ] **Dataset-level health banner** when `recording_health.json` reports `healthy: false` — surfaces "this run had X% overrun, Y issues" on dataset open, so users can decide to keep / discard / fix before training.
+- [ ] **Filter / bulk-select bad episodes** for deletion via the existing data-panel deletion flow.
+- [ ] **Backend endpoint** `GET /api/datasets/{id}/health` returning the parsed contents of both files (or empty when the files aren't present — older recordings).
+- [ ] Schema docs in [latency_monitoring.md](../docs/latency_monitoring.md) — already covers the file format under "Persistent per-episode quality metadata".
+
+Verdict thresholds live in `src/lerobot/utils/latency/recording_health.py::DEFAULT_VERDICT_THRESHOLDS` — surface them somewhere the user can tweak per-dataset if needed (probably not in V1).
+
 ### Dataset Merge
 
 See [docs/data_tab.md](docs/data_tab.md) for full design.
