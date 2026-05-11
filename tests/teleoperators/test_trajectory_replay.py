@@ -89,7 +89,14 @@ class TestGetAction:
         assert a == {"a.pos": 1.0, "b.pos": 2.0}
         assert not t.is_exhausted
 
-    def test_frame_selected_by_elapsed_time(self, tmp_path):
+    def test_frame_interpolated_between_recorded_samples(self, tmp_path):
+        """Action is linearly interpolated between bracketing trajectory frames.
+
+        At a sample-time boundary the interpolation result equals the
+        recorded frame exactly; between samples it returns the lerp,
+        producing a smooth ramp instead of a stairstep when the loop
+        runs faster than the trajectory's native fps.
+        """
         t = _make_teleop(tmp_path)
         t.connect()
         with patch(
@@ -97,15 +104,21 @@ class TestGetAction:
         ) as mock_t:
             mock_t.return_value = 100.0
             t.get_action()  # primes _start_t = 100.0
-            # Elapsed 0.05s — still before frame 1 (t=0.1) — should return frame 0
+            # Elapsed 0.05s — alpha=0.5 between frame 0 [1.0, 2.0] and frame 1 [1.1, 2.1]
             mock_t.return_value = 100.05
-            assert t.get_action() == {"a.pos": 1.0, "b.pos": 2.0}
-            # Elapsed 0.11s — past frame 1 (t=0.1) — should return frame 1
+            a = t.get_action()
+            assert a["a.pos"] == pytest.approx(1.05)
+            assert a["b.pos"] == pytest.approx(2.05)
+            # Elapsed 0.11s — alpha=0.1 between frame 1 and frame 2 [1.2, 2.2]
             mock_t.return_value = 100.11
-            assert t.get_action() == {"a.pos": 1.1, "b.pos": 2.1}
-            # Elapsed 0.15s — between frames 1 and 2 — still on frame 1
+            a = t.get_action()
+            assert a["a.pos"] == pytest.approx(1.11)
+            assert a["b.pos"] == pytest.approx(2.11)
+            # Elapsed 0.15s — alpha=0.5 between frame 1 and frame 2
             mock_t.return_value = 100.15
-            assert t.get_action() == {"a.pos": 1.1, "b.pos": 2.1}
+            a = t.get_action()
+            assert a["a.pos"] == pytest.approx(1.15)
+            assert a["b.pos"] == pytest.approx(2.15)
 
     def test_exhausted_after_last_frame(self, tmp_path):
         t = _make_teleop(tmp_path)
