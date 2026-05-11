@@ -127,6 +127,18 @@ class TestGetAction:
             t.get_action()
 
 
+class TestStartPose:
+    def test_returns_first_frame_as_dict(self, tmp_path):
+        t = _make_teleop(tmp_path)
+        t.connect()
+        assert t.start_pose == {"a.pos": 1.0, "b.pos": 2.0}
+
+    def test_raises_if_not_connected(self, tmp_path):
+        t = _make_teleop(tmp_path)
+        with pytest.raises(RuntimeError, match="connect"):
+            _ = t.start_pose
+
+
 class TestDisconnect:
     def test_clears_state(self, tmp_path):
         t = _make_teleop(tmp_path)
