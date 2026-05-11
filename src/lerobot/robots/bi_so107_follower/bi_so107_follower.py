@@ -65,6 +65,28 @@ class BiSO107Follower(Robot):
         self.right_arm = SO107Follower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
 
+        # Install the depth-edge overlay as an in-camera post-grab processor
+        # on every RealSense camera that has depth enabled. The grab thread
+        # consumes the depth frame and caches the overlay-RGB directly, so
+        # the control loop never sees the depth frame or pays the overlay
+        # cost. Pre-refactor this ran as a downstream ``ObservationProcessor``
+        # on the control thread (~9.8 ms p50 per iteration); pushing it to
+        # the grab thread is the same idea as the streaming-encoder offload.
+        from lerobot.cameras.realsense import RealSenseCamera
+        from lerobot.processor import DepthEdgeOverlayProcessorStep
+
+        for cam_key, cam in self.cameras.items():
+            if isinstance(cam, RealSenseCamera) and cam.use_depth:
+                cam.post_grab_processor = DepthEdgeOverlayProcessorStep(
+                    camera_key=cam_key,
+                    threshold_percentile=90,  # Edge sensitivity (85-95, higher = fewer edges)
+                    blur_kernel=3,  # Noise reduction (1, 3, 5, 7)
+                    dilation_kernel=2,  # Edge thickness (0-5)
+                    alpha=0.7,  # Edge opacity (0.0-1.0)
+                    min_depth=0.2,  # Min depth in meters (20cm)
+                    max_depth=0.6,  # Max depth in meters (60cm)
+                )
+
     @property
     def _motors_ft(self) -> dict[str, type]:
         return {f"left_{motor}.pos": float for motor in self.left_arm.bus.motors} | {
@@ -164,7 +186,11 @@ class BiSO107Follower(Robot):
             from lerobot.cameras.realsense import RealSenseCamera
 
             with current_span(f"camera_read_{cam_key}"):
-                if isinstance(cam, RealSenseCamera) and cam.use_depth:
+                # If the camera has a post-grab processor installed, depth has
+                # already been consumed in the grab thread and the cached frame
+                # is the final processed RGB. Skip the aligned-depth path so we
+                # don't drag depth back across the thread boundary.
+                if isinstance(cam, RealSenseCamera) and cam.use_depth and cam.post_grab_processor is None:
                     try:
                         color_frame, depth_frame = cam.read_color_and_aligned_depth()
                         obs_dict[cam_key] = color_frame
@@ -223,25 +249,12 @@ class BiSO107Follower(Robot):
             cam.disconnect()
 
     def get_observation_processor_steps(self) -> list:
-        """Return custom observation processor steps for this robot."""
-        from lerobot.cameras.realsense import RealSenseCamera
-        from lerobot.processor import DepthEdgeOverlayProcessorStep
+        """Return custom observation processor steps for this robot.
 
-        steps = []
-
-        # Add depth edge detection for RealSense cameras with depth enabled
-        for cam_key, cam in self.cameras.items():
-            if isinstance(cam, RealSenseCamera) and cam.use_depth:
-                steps.append(
-                    DepthEdgeOverlayProcessorStep(
-                        camera_key=cam_key,
-                        threshold_percentile=90,  # Edge sensitivity (85-95, higher = fewer edges)
-                        blur_kernel=3,  # Noise reduction (1, 3, 5, 7)
-                        dilation_kernel=2,  # Edge thickness (0-5)
-                        alpha=0.7,  # Edge opacity (0.0-1.0)
-                        min_depth=0.2,  # Min depth in meters (20cm)
-                        max_depth=0.6,  # Max depth in meters (60cm)
-                    )
-                )
-
-        return steps
+        Empty by default: ``DepthEdgeOverlayProcessorStep`` used to live here
+        as a downstream step on the control thread, but is now installed
+        directly on the RealSense cameras as a ``post_grab_processor`` (see
+        ``__init__``). The grab thread consumes depth and caches the overlay-
+        RGB, so the control thread doesn't pay the ~9.8 ms per-iteration cost.
+        """
+        return []
