@@ -71,6 +71,35 @@ def interpolate_action(elapsed: float, traj: dict) -> dict[str, float]:
     return dict(zip(joints, frame, strict=True))
 
 
+def compute_velocity(elapsed: float, traj: dict) -> dict[str, float]:
+    """Centered-difference velocity at the bracketing trajectory frames.
+
+    Returns velocity in (position_unit / second). For Feetech Goal_Velocity
+    the bus's sync_write expects raw motor units; the velocity feed-forward
+    experiment scales these centrally before writing.
+    """
+    timestamps = traj["timestamps"]
+    positions = traj["positions"]
+    joints = traj["joints"]
+    n = len(timestamps)
+
+    if elapsed <= timestamps[0] or elapsed >= timestamps[-1]:
+        return dict.fromkeys(joints, 0.0)
+
+    idx = 0
+    while idx + 1 < n and timestamps[idx + 1] <= elapsed:
+        idx += 1
+
+    # Use the centered difference where possible; forward/backward at the ends.
+    lo = max(0, idx - 1)
+    hi = min(n - 1, idx + 2)
+    dt = timestamps[hi] - timestamps[lo]
+    if dt < 1e-9:
+        return dict.fromkeys(joints, 0.0)
+    p_lo, p_hi = positions[lo], positions[hi]
+    return {j: (p_hi[i] - p_lo[i]) / dt for i, j in enumerate(joints)}
+
+
 def main(args: argparse.Namespace) -> int:
     init_logging()
     traj_path = Path(args.trajectory).expanduser()
@@ -123,6 +152,27 @@ def main(args: argparse.Namespace) -> int:
             action = interpolate_action(elapsed, traj)
             t_send_start = time.perf_counter()
             robot.send_action(action)
+
+            # Optional velocity feed-forward: write Goal_Velocity (register 46)
+            # alongside Goal_Position. Centered-difference velocity from the
+            # trajectory, scaled by --vff-scale (Feetech motor units per
+            # position-unit-per-second — calibrate experimentally).
+            if args.velocity_ff:
+                vel = compute_velocity(elapsed, traj)
+                scale = args.vff_scale
+                left_vel = {
+                    k.removeprefix("left_").removesuffix(".pos"): int(v * scale)
+                    for k, v in vel.items()
+                    if k.startswith("left_")
+                }
+                right_vel = {
+                    k.removeprefix("right_").removesuffix(".pos"): int(v * scale)
+                    for k, v in vel.items()
+                    if k.startswith("right_")
+                }
+                robot.left_arm.bus.sync_write("Goal_Velocity", left_vel)
+                robot.right_arm.bus.sync_write("Goal_Velocity", right_vel)
+
             t_send_end = time.perf_counter()
             n_sends += 1
 
@@ -223,6 +273,19 @@ if __name__ == "__main__":
     parser.add_argument("--right-port", default="/dev/ttyACM2")
     parser.add_argument("--send-fps", type=int, default=200, help="Action send rate (Hz)")
     parser.add_argument("--read-fps", type=int, default=30, help="State read rate (Hz)")
+    parser.add_argument(
+        "--velocity-ff",
+        action="store_true",
+        help="Also write Goal_Velocity (register 46) per iteration alongside Goal_Position. "
+        "Tests whether feeding the motor an explicit velocity target reduces tracking lag.",
+    )
+    parser.add_argument(
+        "--vff-scale",
+        type=float,
+        default=100.0,
+        help="Scale factor: Goal_Velocity_raw = trajectory_velocity * vff_scale. "
+        "Needs calibration to motor velocity units; default 100 is a starting guess.",
+    )
     parser.add_argument(
         "--output",
         default="outputs/probe_motor_send_rate/last.csv",
