@@ -14,16 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Inline 1 Hz JSON snapshot writer for the GUI to read cross-process.
+"""1 Hz JSON snapshot writer for the GUI to read cross-process.
 
 Mirrors the RLT pattern (``policies/hvla/rlt/metrics.py`` →
 ``outputs/rlt_online/metrics.json``): the loop process writes a small
 ``latency_snapshot.json`` to a known location at ~1 Hz; the GUI's
 ``/api/latency-metrics`` endpoint reads it and serves to the frontend.
 
-Single-threaded by design — the write happens on the loop's own thread,
-gated by an elapsed-time check so it costs nothing on most iterations.
-At 1 Hz with ~5 KB JSON, amortized cost is well under 1 µs/iter.
+**Threading**: ``maybe_write`` runs on the loop thread (cheap — just
+takes a list copy of the aggregator's records and hands it to a
+background daemon thread). The heavy work — percentile computation
+across every stage, JSON serialisation, atomic file replace — runs
+off the loop thread so the loop doesn't pay an ~8 ms spike once per
+second. The earlier inline implementation caused visible periodic
+jitter on teleop at 30 Hz; see the design doc's "Thread-safety
+contract" section.
+
+Tests: call ``flush()`` to block until the pending write completes
+before asserting the file exists.
 """
 
 from __future__ import annotations
@@ -31,10 +39,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from lerobot.utils.latency.aggregator import LatencyAggregator
+
+if TYPE_CHECKING:
+    from lerobot.utils.latency.health import LoopHealthDetector
 
 logger = logging.getLogger(__name__)
 
@@ -89,45 +102,111 @@ class LatencySnapshotWriter:
         self._target_period_ms: float | None = (1000.0 / float(target_fps)) if target_fps else None
         self._last_write_at: float = 0.0
         self._dir_ready: bool = False
-        # Active health issues, refreshed by the session before every
-        # ``maybe_write`` call so each snapshot carries the current
-        # warning state. Empty list means "healthy" — the GUI hides the
-        # badge accordingly.
-        self._active_issues: list[dict[str, str]] = []
-
-    def set_active_issues(self, issues: list[dict[str, str]]) -> None:
-        """Replace the issue list embedded in the next snapshot.
-
-        Called once per iteration by ``LatencySession._after_commit`` —
-        cheap, just stores a reference. The actual JSON write only fires
-        when the time-throttle elapses.
-        """
-        self._active_issues = issues
+        # Background writer thread — see module docstring. One in-flight
+        # at a time; if a previous tick's writer is still running when
+        # the next tick fires, we skip (the next tick will publish a
+        # fresher snapshot anyway, no point queueing).
+        self._write_thread: threading.Thread | None = None
 
     @property
     def path(self) -> Path:
         return self._path
 
-    def maybe_write(self, aggregator: LatencyAggregator, now: float | None = None) -> bool:
-        """Write a snapshot if ``interval_s`` has elapsed since the last write.
+    def maybe_write(
+        self,
+        aggregator: LatencyAggregator,
+        now: float | None = None,
+        detector: LoopHealthDetector | None = None,
+    ) -> bool:
+        """Schedule a snapshot write if ``interval_s`` has elapsed.
 
-        Returns True when a write happened, False when skipped. Errors are
-        logged at WARNING and swallowed — never crashes the loop over a
-        snapshot failure.
+        Returns True when a write was scheduled, False when skipped. The
+        actual snapshot computation + health detector evaluation + JSON
+        serialisation + atomic file replace + digest log emission all
+        happen on a background daemon thread; this call costs ~µs on
+        the loop thread (a list snapshot of the aggregator's records +
+        thread spawn). Errors are logged at WARNING from the background
+        thread — never crashes the loop.
+
+        ``detector`` is optional; when provided, its rules are evaluated
+        on the snapshot copy from the background thread, and the
+        resulting issues are embedded in the published JSON.
+
+        If a previous tick's writer is still in flight (rare; only if the
+        disk is briefly slow), this call skips rather than queueing.
+        The next tick will publish a fresher snapshot.
         """
         t = time.time() if now is None else now
         if (t - self._last_write_at) < self._interval_s:
             return False
+        if self._write_thread is not None and self._write_thread.is_alive():
+            # Previous tick still running; skip this one. Don't update
+            # _last_write_at so the next tick will fire immediately on
+            # the next iteration past interval_s.
+            return False
         self._last_write_at = t
+        # Snapshot the aggregator's records on the loop thread (cheap;
+        # list(deque) is thread-safe on CPython). The background thread
+        # then operates on this immutable copy — no shared state with
+        # the loop's ongoing appends.
+        records_copy = list(aggregator._records)
+        dropped = aggregator.dropped_records
+        self._write_thread = threading.Thread(
+            target=self._write_async,
+            args=(records_copy, dropped, t, detector),
+            daemon=True,
+            name=f"latency-writer-{self._loop_kind}",
+        )
+        self._write_thread.start()
+        return True
+
+    def flush(self, timeout: float = 5.0) -> None:
+        """Block until the most recently scheduled write completes.
+
+        Tests call this before asserting the snapshot file exists. Loop
+        code should never need it — the background-thread design means
+        the loop doesn't wait for the writer.
+        """
+        if self._write_thread is not None:
+            self._write_thread.join(timeout=timeout)
+
+    def _write_async(
+        self,
+        records: list[dict],
+        dropped: int,
+        t: float,
+        detector: LoopHealthDetector | None,
+    ) -> None:
         try:
-            self._write(aggregator, t)
-            return True
+            self._write_records(records, dropped, t, detector)
         except Exception as e:  # noqa: BLE001
             logger.warning("latency snapshot write failed: %s", e)
-            return False
 
-    def _write(self, aggregator: LatencyAggregator, t: float) -> None:
-        snap = aggregator.snapshot(
+    def _write_records(
+        self,
+        records: list[dict],
+        dropped: int,
+        t: float,
+        detector: LoopHealthDetector | None,
+    ) -> None:
+        # Build a transient aggregator from the snapshot of records so
+        # we can reuse its snapshot() / representative_iterations() /
+        # aggregate_iteration() methods without touching the live one.
+        transient = LatencyAggregator(maxlen=max(len(records), 1))
+        for r in records:
+            transient.ingest(r)
+        transient.dropped_records = dropped
+        # Run health detector against the snapshot copy. Off-loop —
+        # rules can do as much percentile compute as they need.
+        issues: list[dict[str, str]] = []
+        if detector is not None:
+            last_record = records[-1] if records else None
+            try:
+                active = detector.check(transient, last_record)
+                issues = [i.to_dict() for i in active]
+            except Exception as e:  # noqa: BLE001
+                logger.warning("latency detector check failed: %s", e)
+        snap = transient.snapshot(
             percentiles=(50, 95, 99),
             series_window_s=self._series_window_s,
             series_max_points=self._series_max_points,
@@ -149,13 +228,22 @@ class LatencySnapshotWriter:
         #   each show the p-th percentile of that stage *independently*.
         #   Stable across snapshots; answers "what does a typical iteration
         #   look like?" without picking one specific record.
-        snap["iterations"] = aggregator.representative_iterations()
-        snap["iterations"]["aggregate_median"] = aggregator.aggregate_iteration(50)
-        snap["iterations"]["aggregate_p95"] = aggregator.aggregate_iteration(95)
+        snap["iterations"] = transient.representative_iterations()
+        snap["iterations"]["aggregate_median"] = transient.aggregate_iteration(50)
+        snap["iterations"]["aggregate_p95"] = transient.aggregate_iteration(95)
         # Health envelope. Always present so the GUI can render the
         # badge logic without optional-field checks; empty issues list
         # signals "healthy".
-        snap["health"] = {"issues": self._active_issues}
+        snap["health"] = {"issues": issues}
+        # Emit the 1 Hz digest log from this thread too — same stats we
+        # just computed, so it costs ~µs to format and saves the loop
+        # thread from running a separate (~10 ms on a 4k-record deque)
+        # snapshot pass. Importing locally to avoid a top-level
+        # circular dependency with ``lerobot.utils.latency.__init__``.
+        if snap["n_records"] > 0:
+            from lerobot.utils.latency import format_latency_summary
+
+            logger.info("[latency:%s] %s", self._loop_kind, format_latency_summary(snap))
 
         if not self._dir_ready:
             self._dir.mkdir(parents=True, exist_ok=True)

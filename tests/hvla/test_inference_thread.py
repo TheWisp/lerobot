@@ -877,6 +877,7 @@ class TestLatencySession:
             self._wait_for_records(session, 1)
         finally:
             thread.stop()
+        session.writer.flush()  # writer runs on a background thread
         snap_path = tmp_path / "latency_snapshot.json"
         assert snap_path.exists()
         data = json.loads(snap_path.read_text())

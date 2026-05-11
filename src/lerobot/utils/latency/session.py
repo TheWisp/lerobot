@@ -283,31 +283,35 @@ class LatencySession:
     # ------------------------------------------------------------------
 
     def _after_commit(self) -> None:
-        """Health check + snapshot publish + stderr summary.
+        """Schedule async snapshot publish; do no percentile work on the loop.
 
-        All three are time-throttled (1 Hz default) — the loop calls
-        this on every iteration but the actual work amortizes to ~1 µs
-        per iteration. Health runs first so the snapshot picks up the
-        fresh issue list in the same throttle tick.
+        Everything heavy — health detector rules, snapshot computation,
+        digest formatting, JSON serialisation, atomic file replace —
+        runs on the writer's background thread. The loop thread only
+        pays for the maybe_write check + list-snapshot of the records
+        deque + thread spawn, well under 1 ms even at 4096 records.
+
+        Earlier designs ran health checks and the digest log on the
+        loop thread, recomputing percentiles on a full deque every
+        second. That caused a ~20 ms 1 Hz spike — visible as periodic
+        jitter on real teleop at 30 Hz. The fold-into-writer move
+        eliminated it.
         """
-        now = time.time()
-        if self._detector is not None and now - self._last_health_check_at >= self._health_interval_s:
-            self._last_health_check_at = now
-            last_record = self.aggregator._records[-1] if len(self.aggregator) > 0 else None
-            self._active_issues = self._detector.check(self.aggregator, last_record)
-            if self.writer is not None:
-                # The writer pulls the latest issue list off the session
-                # when it publishes — avoids passing it through every
-                # maybe_write call site.
-                self.writer.set_active_issues([i.to_dict() for i in self._active_issues])
         if self.writer is not None:
-            self.writer.maybe_write(self.aggregator)
+            self.writer.maybe_write(self.aggregator, detector=self._detector)
+            return
+        # No writer (output_dir was None) — fallback: do the digest log
+        # inline. Cost still applies on the loop, but a user who
+        # explicitly disables the writer has accepted no GUI consumer,
+        # and the digest is the only feedback channel left.
+        now = time.time()
         if now - self._last_summary_at >= self._summary_interval_s:
             self._last_summary_at = now
+            if self._detector is not None:
+                last_record = self.aggregator._records[-1] if len(self.aggregator) > 0 else None
+                self._active_issues = self._detector.check(self.aggregator, last_record)
             snap = self.aggregator.snapshot(percentiles=(50, 95))
             if snap["n_records"] > 0:
-                # Lazy import to avoid pulling format_latency_summary
-                # back into the latency package's public surface twice.
                 from lerobot.utils.latency import format_latency_summary
 
                 logger.info("[latency:%s] %s", self.loop_kind, format_latency_summary(snap))

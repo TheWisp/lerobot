@@ -487,6 +487,7 @@ class TestSnapshotWriter:
         writer = LatencySnapshotWriter(tmp_path, interval_s=0.0)
         wrote = writer.maybe_write(agg)
         assert wrote
+        writer.flush()  # snapshot writer runs the heavy work in a background thread
         assert writer.path.exists()
         data = json.loads(writer.path.read_text())
         assert data["loop_kind"] == "teleop"
@@ -504,8 +505,10 @@ class TestSnapshotWriter:
         agg.ingest({"t": 0.0, "loop_dt_ms": 1.0})
         writer = LatencySnapshotWriter(tmp_path, interval_s=10.0)
         assert writer.maybe_write(agg, now=100.0) is True
+        writer.flush()
         assert writer.maybe_write(agg, now=101.0) is False
         assert writer.maybe_write(agg, now=111.0) is True
+        writer.flush()
 
     def test_invalid_interval_rejected(self, tmp_path: Path):
         with pytest.raises(AssertionError):
@@ -516,6 +519,7 @@ class TestSnapshotWriter:
         agg.ingest({"t": 0.0, "v_ms": 1.0})
         writer = LatencySnapshotWriter(tmp_path, interval_s=0.0)
         writer.maybe_write(agg)
+        writer.flush()
         assert writer.path.exists()
         tmp = tmp_path / "latency_snapshot.json.tmp"
         assert not tmp.exists()
