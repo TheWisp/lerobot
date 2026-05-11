@@ -368,6 +368,11 @@ def _detect_and_open_cameras() -> list[dict]:
 
         for cam_info in realsense_cams:
             cam_id = cam_info.get("id")
+            # `camera` holds an open handle until ownership is transferred to
+            # `_preview_cameras`. The finally clause disconnects if anything
+            # between connect() and the successful append raises — otherwise
+            # the V4L2 / librealsense FD would leak (TODO 2026-05-11 root cause).
+            camera = None
             try:
                 config = RealSenseCameraConfig(
                     serial_number_or_name=str(cam_id),
@@ -378,10 +383,15 @@ def _detect_and_open_cameras() -> list[dict]:
                 _preview_cameras.append(camera)
                 _preview_camera_info.append(cam_info)
                 all_cameras.append(cam_info)
+                camera = None  # ownership transferred
                 logger.info(f"Opened preview camera: RealSense {cam_id}")
             except Exception as e:
                 logger.warning(f"Failed to open RealSense {cam_id}: {e}")
                 all_cameras.append(cam_info)
+            finally:
+                if camera is not None:
+                    with contextlib.suppress(Exception):
+                        camera.disconnect()
     except Exception as e:
         logger.warning(f"RealSense camera detection failed: {e}")
 
@@ -406,6 +416,9 @@ def _detect_and_open_cameras() -> list[dict]:
                     if "RealSense" in hw_name:
                         logger.debug(f"Skipping {cam_id} (RealSense V4L2 node: {hw_name})")
                         continue
+            # Same ownership-transfer pattern as the RealSense branch above —
+            # `camera` is disconnected by the finally clause unless registered.
+            camera = None
             try:
                 config = OpenCVCameraConfig(
                     index_or_path=cam_id,
@@ -416,9 +429,14 @@ def _detect_and_open_cameras() -> list[dict]:
                 _preview_cameras.append(camera)
                 _preview_camera_info.append(cam_info)
                 all_cameras.append(cam_info)
+                camera = None  # ownership transferred
                 logger.info(f"Opened preview camera: OpenCV {cam_id}")
             except Exception as e:
                 logger.warning(f"Failed to open OpenCV {cam_id}: {e}")
+            finally:
+                if camera is not None:
+                    with contextlib.suppress(Exception):
+                        camera.disconnect()
     except Exception as e:
         logger.warning(f"OpenCV camera detection failed: {e}")
 
