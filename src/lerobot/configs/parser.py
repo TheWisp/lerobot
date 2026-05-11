@@ -16,6 +16,7 @@ import importlib
 import inspect
 import pkgutil
 import sys
+import typing
 from argparse import ArgumentError
 from collections.abc import Callable, Iterable, Sequence
 from functools import wraps
@@ -25,6 +26,8 @@ from types import ModuleType
 from typing import Any, TypeVar, cast
 
 import draccus
+from draccus.parsers.decoding import decode as _draccus_decode, get_decoding_fn as _draccus_get_decoding_fn
+from draccus.utils import DecodingError as _DraccusDecodingError
 
 from lerobot.utils.utils import has_method
 
@@ -65,6 +68,28 @@ F = TypeVar("F", bound=Callable[..., object])
 
 PATH_KEY = "path"
 PLUGIN_DISCOVERY_SUFFIX = "discover_packages_path"
+
+
+def _decode_literal(cls: Any, raw_value: Any, path: Sequence[str] = ()) -> Any:
+    """draccus decoder for ``typing.Literal[...]`` fields.
+
+    draccus has no built-in Literal handler. Without this, any config field
+    annotated ``Literal["a", "b"]`` fails with "No decoding function for type
+    typing.Literal[...]". We accept the raw value if it appears in the
+    Literal's args (and forgive ``str(arg) == str(raw)`` mismatches so e.g.
+    yaml integers parse against ``Literal[1, 2]``).
+    """
+    args = typing.get_args(cls)
+    if raw_value in args:
+        return raw_value
+    for allowed in args:
+        if str(allowed) == str(raw_value):
+            return allowed
+    raise _DraccusDecodingError(tuple(path), f"{raw_value!r} not in allowed values {list(args)}")
+
+
+_draccus_decode.register(typing.Literal, _decode_literal, include_subclasses=True)
+_draccus_get_decoding_fn.cache_clear()
 
 
 def get_cli_overrides(field_name: str, args: Sequence[str] | None = None) -> list[str] | None:
