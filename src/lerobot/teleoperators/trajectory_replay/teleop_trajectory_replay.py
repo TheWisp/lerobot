@@ -145,30 +145,83 @@ class TrajectoryReplayTeleop(Teleoperator):
             self._start_t = now
         elapsed = now - self._start_t
 
+        # Exhaustion is gated on wall time (elapsed), not the lookahead-
+        # shifted query time — the loop exits when the trajectory's wall
+        # duration is up, regardless of how far ahead we were peeking.
+        # When exhausted, clamp to the last recorded frame (which is the
+        # rest pose by recording invariant) rather than extrapolating off
+        # the end of the trajectory.
         if elapsed >= self._timestamps[-1]:
             self._exhausted = True
             frame = self._positions[-1]
         else:
-            # Binary search would be more efficient for very long traj,
-            # but for minutes-of-30fps (~thousands of frames) the linear
-            # scan with a cached cursor is fine and stays simple.
-            idx = self._locate_frame(elapsed)
-            # Linear interpolation between bracketing trajectory frames.
-            # When the loop runs faster than the trajectory's recorded fps
-            # (e.g., loop=200 Hz vs trajectory=30 Hz), this gives the motor
-            # a smooth ramp instead of a 6-7-iteration-long stairstep,
-            # reducing apparent tracking lag.
-            if idx + 1 < len(self._timestamps):
+            frame = self._action_at(elapsed)
+        return {j: float(p) for j, p in zip(self._joints, frame, strict=True)}
+
+    def _action_at(self, elapsed: float) -> list[float]:
+        """Resolve the action vector for a given elapsed wall-time.
+
+        Handles three cases:
+
+        1. Full visibility (``simulate_chunk_size is None``): linear
+           interpolation between bracketing trajectory frames, with the
+           query shifted by ``lookahead_s``.
+        2. Chunk simulation, query inside the active chunk: same linear
+           interpolation but only over frames the current chunk exposes.
+        3. Chunk simulation, query past chunk end: linear extrapolation
+           from the chunk's own last-two-frame forward difference —
+           modelling what a chunked policy must do when its lookahead
+           outruns the chunk it currently holds.
+        """
+        query_t = elapsed + self.config.lookahead_s
+        n = len(self._timestamps)
+
+        # The chunk window is determined by *elapsed* (current wall time),
+        # not by query_t — chunk arrival is a real-time event, the
+        # lookahead just shifts where we look INSIDE / PAST the chunk.
+        if self.config.simulate_chunk_size and self.config.simulate_chunk_size > 0:
+            size = self.config.simulate_chunk_size
+            current_idx = self._locate_frame(min(elapsed, self._timestamps[-1]))
+            chunk_start = (current_idx // size) * size
+            chunk_end = min(chunk_start + size - 1, n - 1)
+        else:
+            chunk_start = 0
+            chunk_end = n - 1
+
+        chunk_end_t = self._timestamps[chunk_end]
+
+        # Clamp left edge (before trajectory starts).
+        if query_t <= self._timestamps[chunk_start]:
+            return list(self._positions[chunk_start])
+
+        # Interpolation branch: query lands inside the chunk's visible window.
+        if query_t <= chunk_end_t:
+            idx = self._locate_frame_in_window(query_t, chunk_start, chunk_end)
+            if idx + 1 <= chunk_end:
                 t0 = self._timestamps[idx]
                 t1 = self._timestamps[idx + 1]
                 dt = t1 - t0
-                alpha = (elapsed - t0) / dt if dt > 1e-9 else 0.0
+                alpha = (query_t - t0) / dt if dt > 1e-9 else 0.0
                 p0 = self._positions[idx]
                 p1 = self._positions[idx + 1]
-                frame = [a + (b - a) * alpha for a, b in zip(p0, p1, strict=True)]
-            else:
-                frame = self._positions[idx]
-        return {j: float(p) for j, p in zip(self._joints, frame, strict=True)}
+                return [a + (b - a) * alpha for a, b in zip(p0, p1, strict=True)]
+            return list(self._positions[idx])
+
+        # Extrapolation branch: query is past the visible chunk. Use the
+        # forward difference of the last two chunk frames as a velocity
+        # estimate — same information a real chunked policy would have.
+        if chunk_end == chunk_start:
+            # Pathological 1-frame chunk: no velocity available, hold.
+            return list(self._positions[chunk_end])
+        t_prev = self._timestamps[chunk_end - 1]
+        t_last = self._timestamps[chunk_end]
+        dt = t_last - t_prev
+        p_prev = self._positions[chunk_end - 1]
+        p_last = self._positions[chunk_end]
+        if dt < 1e-9:
+            return list(p_last)
+        ahead = query_t - t_last
+        return [last + (last - prev) * (ahead / dt) for prev, last in zip(p_prev, p_last, strict=True)]
 
     def _locate_frame(self, elapsed: float) -> int:
         """Index of the latest frame whose timestamp <= elapsed."""
@@ -176,10 +229,24 @@ class TrajectoryReplayTeleop(Teleoperator):
         # case is O(1) amortized rather than O(N) per call.
         cursor = getattr(self, "_cursor", 0)
         n = len(self._timestamps)
+        # Reset cursor if it's stale (e.g., elapsed went backwards in tests).
+        if cursor >= n or self._timestamps[cursor] > elapsed:
+            cursor = 0
         while cursor + 1 < n and self._timestamps[cursor + 1] <= elapsed:
             cursor += 1
         self._cursor = cursor
         return cursor
+
+    def _locate_frame_in_window(self, t: float, lo: int, hi: int) -> int:
+        """Latest index in ``[lo, hi]`` whose timestamp <= t.
+
+        Linear scan from ``lo`` — chunks are small (typically <20 frames),
+        so a binary search isn't worth the complexity.
+        """
+        idx = lo
+        while idx + 1 <= hi and self._timestamps[idx + 1] <= t:
+            idx += 1
+        return idx
 
     def send_feedback(self, feedback: dict) -> None:
         # No physical leader — feedback is a no-op.

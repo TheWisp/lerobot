@@ -34,3 +34,17 @@ class TrajectoryReplayTeleopConfig(TeleoperatorConfig):
     # time. The trajectory's joint set must match the follower robot's
     # ``action_features``.
     trajectory_path: str = ""
+
+    # Predictive lookahead: when the loop asks for an action at wall-time t,
+    # return the trajectory's value at t + lookahead_s instead. Used to
+    # cancel motor response lag (~60 ms on Feetech STS3215 at P=48).
+    lookahead_s: float = 0.0
+
+    # Chunk simulation: pretend we only "received" the trajectory in chunks
+    # of N consecutive frames (like a chunked policy producing N future
+    # actions every N control steps). When the lookahead query lands past
+    # the current chunk's last frame, the source must extrapolate from the
+    # chunk's own velocity rather than peek at the next chunk — modelling
+    # what a real chunked policy faces. ``None`` (default) disables the
+    # simulation, exposing the full trajectory for interpolation.
+    simulate_chunk_size: int | None = None
