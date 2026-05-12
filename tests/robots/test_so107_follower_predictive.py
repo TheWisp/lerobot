@@ -484,3 +484,343 @@ class TestAdaptiveUpdate:
                 assert robot._controller._thread.is_alive()
             finally:
                 robot.disconnect()
+
+
+# ============================================================================
+# Adaptive xcorr correctness — algorithm-level tests
+# ============================================================================
+#
+# These tests build a _PredictiveLookaheadController directly without
+# starting its thread or touching a bus. They pre-populate _intent_log
+# and _state_log with synthetic signals that have a *known* shift, then
+# call _maybe_update_lookahead() directly and assert the controller
+# converges toward the synthetic ground truth.
+#
+# The threaded TestAdaptiveUpdate above only checks "the path doesn't
+# raise". This class checks "the path computes the right number." A
+# units bug in the time conversion (e.g. caller_rate vs control_rate
+# mismatch — bug fixed in c6537b40a) would surface here as the recovered
+# lag being scaled by a constant factor and these assertions would fail.
+
+
+def _make_isolated_controller(
+    *,
+    control_rate_hz: float = 200.0,
+    max_lookahead_ms: float = 110.0,
+    lookahead_ms: float = 0.0,
+    adaptive: bool = True,
+):
+    """Build a _PredictiveLookaheadController without starting its thread
+    or any bus traffic. The controller is fully usable for direct
+    set_intent / _maybe_update_lookahead calls — tests bypass start()
+    so the thread doesn't race with synthetic log injection.
+    """
+    from lerobot.robots.so107_follower_predictive.so107_follower_predictive import (
+        _PredictiveLookaheadController,
+    )
+
+    cfg = SO107FollowerPredictiveRobotConfig(
+        port="/dev/null",
+        adaptive=adaptive,
+        lookahead_ms=lookahead_ms,
+        max_lookahead_ms=max_lookahead_ms,
+        control_rate_hz=control_rate_hz,
+    )
+
+    robot = MagicMock()
+    robot.config = cfg
+    robot.bus = MagicMock()
+    robot.bus.motors = dict.fromkeys(_MOTOR_NAMES, None)
+    robot._bus_lock = threading.Lock()
+    # _PredictiveLookaheadController formats the robot into log messages
+    # via "%s". Give it a stable repr so failures are diagnosable.
+    robot.__str__ = lambda self: "test_isolated_controller"
+
+    return _PredictiveLookaheadController(robot)
+
+
+def _inject_sinusoid_pair(
+    controller,
+    tau_s: float,
+    *,
+    freq_hz: float = 1.0,
+    amp: float = 5.0,
+    state_rate_hz: float = 30.0,
+):
+    """Pre-populate _intent_log and _state_log with sinusoidal signals
+    where state(t) = intent(t - tau_s).
+
+    ``_intent_log`` is populated at the controller's control rate (that's
+    how _tick fills it in production). ``_state_log`` is populated at
+    ``state_rate_hz`` (default 30 Hz — the observation rate that
+    observe_state is called at in production), so the 200-element
+    deque's maxlen comfortably spans the 3-second xcorr window without
+    overflowing. Sampling state at the control rate would overflow the
+    deque to the last 1 s of data and break the xcorr.
+
+    Returns: the wall-clock ``now`` to pass to _maybe_update_lookahead.
+    """
+    import numpy as np
+
+    dt_ctrl = controller._control_dt
+    dt_state = 1.0 / state_rate_hz
+    duration = controller._WINDOW_S * 1.5 + 0.25  # window + headroom
+    t0 = 1000.0  # arbitrary anchor; perf_counter-comparable
+
+    # Intent: control-rate cadence (200 Hz default).
+    n_intent = int(duration / dt_ctrl)
+    for i in range(n_intent):
+        t = t0 + i * dt_ctrl
+        intent_val = amp * np.sin(2 * np.pi * freq_hz * t)
+        # Same value on every motor — the xcorr is per-joint but with
+        # identical signals all 7 joints agree on the recovered lag.
+        controller._intent_log.append((t, np.array([intent_val] * len(_MOTOR_NAMES))))
+
+    # State: observation-rate cadence (30 Hz default). state(t) =
+    # intent(t - tau_s) by construction.
+    n_state = int(duration / dt_state)
+    for i in range(n_state):
+        t = t0 + i * dt_state
+        state_val = amp * np.sin(2 * np.pi * freq_hz * (t - tau_s))
+        controller._state_log.append((t, np.array([state_val] * len(_MOTOR_NAMES))))
+
+    return t0 + duration
+
+
+class TestAdaptiveCorrectness:
+    """Direct tests on _PredictiveLookaheadController._maybe_update_lookahead.
+
+    These are the tests that would have caught the caller-rate-vs-
+    control-rate units bug (fixed in c6537b40a). Each test feeds the
+    controller a synthetic signal pair with a known time shift and
+    asserts the controller's L update lands at the right place.
+    """
+
+    def test_xcorr_recovers_positive_lag_when_state_lags_intent(self):
+        """state(t) = intent(t - 80 ms) → reported lag ≈ +80 ms.
+
+        Starting from L=0 with ADAPTIVE_ALPHA=0.5, the first update
+        moves L to 0.5 * 0.080 = 40 ms.
+        """
+        ctrl = _make_isolated_controller(lookahead_ms=0.0)
+        tau_s = 0.080
+        now = _inject_sinusoid_pair(ctrl, tau_s)
+        ctrl._maybe_update_lookahead(now)
+        # alpha = 0.5; new_L = 0.5 * (current_L + lag) when current_L = 0
+        # That's 0.5 * 0.080 = 0.040 s.
+        assert ctrl._lookahead_s == pytest.approx(0.5 * tau_s, abs=0.005)
+
+    def test_xcorr_units_invariant_to_control_rate(self):
+        """The recovered lag MUST be in seconds, not "control_dt units".
+
+        Regression for the bug fixed in c6537b40a: that bug scaled the
+        reported lag by (caller_rate / control_rate). The bug was
+        invisible at any single control_rate but blows up when the rate
+        changes. Asserting the same recovered lag at 100/200/500 Hz
+        pins the time-unit invariant.
+        """
+        tau_s = 0.080
+        for control_rate in (100.0, 200.0, 500.0):
+            ctrl = _make_isolated_controller(control_rate_hz=control_rate)
+            now = _inject_sinusoid_pair(ctrl, tau_s)
+            ctrl._maybe_update_lookahead(now)
+            assert ctrl._lookahead_s == pytest.approx(0.5 * tau_s, abs=0.005), (
+                f"control_rate={control_rate} Hz: expected L ≈ {0.5 * tau_s} s, got L = {ctrl._lookahead_s} s"
+            )
+
+    def test_xcorr_recovers_negative_lag_when_state_leads_intent(self):
+        """state(t) = intent(t + 50 ms) → reported lag ≈ −50 ms.
+
+        Negative lag must be reachable so adaptive can DECREASE L
+        when the operator overshoots; otherwise the loop is a
+        one-way ratchet.
+        """
+        ctrl = _make_isolated_controller(lookahead_ms=50.0)  # start L = 0.050 s
+        # state leading intent by 50ms — implies controller's current
+        # lookahead is already too large by 50ms.
+        now = _inject_sinusoid_pair(ctrl, -0.050)
+        ctrl._maybe_update_lookahead(now)
+        # new_L = 0.5 * (0.050 + (-0.050)) + 0.5 * 0.050
+        #       = 0.5 * 0 + 0.025 = 0.025 s
+        assert ctrl._lookahead_s == pytest.approx(0.025, abs=0.005)
+
+    def test_l_cap_is_enforced(self):
+        """Huge lag must clamp L to max_lookahead_s, not run away."""
+        ctrl = _make_isolated_controller(max_lookahead_ms=50.0, lookahead_ms=0.0)
+        # tau = 0.2s, max scan is _MAX_LAG_S = 0.3s so the peak is
+        # representable. With L=0 the update wants L→target=0.5*0.2=0.1s,
+        # which exceeds the 50 ms cap → clamps.
+        tau_s = 0.200
+        now = _inject_sinusoid_pair(ctrl, tau_s)
+        ctrl._maybe_update_lookahead(now)
+        assert ctrl._lookahead_s == pytest.approx(0.050, abs=1e-6)
+        assert ctrl._lookahead_s <= ctrl._max_lookahead_s + 1e-9
+
+    def test_l_floor_at_zero(self):
+        """Adaptive must not drive L negative even with strongly leading state."""
+        ctrl = _make_isolated_controller(lookahead_ms=5.0)  # start L = 0.005 s
+        now = _inject_sinusoid_pair(ctrl, -0.200)  # state leads intent by 200ms
+        ctrl._maybe_update_lookahead(now)
+        assert ctrl._lookahead_s >= 0.0
+
+    def test_amplitude_floor_skips_stationary_joints(self):
+        """A joint whose state is below _AMP_FLOOR (encoder noise) must
+        be ignored in the aggregation, so a single moving joint can
+        dominate the lag estimate without static joints' spurious
+        0.95 correlations dragging it toward 0."""
+        import numpy as np
+
+        ctrl = _make_isolated_controller()
+        tau_s = 0.060
+        dt_ctrl = ctrl._control_dt
+        dt_state = 1.0 / 30.0  # observe rate; see _inject_sinusoid_pair
+        duration = ctrl._WINDOW_S * 1.5 + 0.25
+        t0 = 1000.0
+        rng = np.random.default_rng(seed=42)
+
+        # Intent at control rate (200 Hz). Only joint 0 moves; rest have
+        # tiny noise. std < _AMP_FLOOR=1.0 ensures the amplitude gate
+        # excludes the noisy joints from the aggregation.
+        n_intent = int(duration / dt_ctrl)
+        for i in range(n_intent):
+            t = t0 + i * dt_ctrl
+            moving_intent = 5.0 * np.sin(2 * np.pi * 1.0 * t)
+            noise = rng.normal(0, 0.05, size=len(_MOTOR_NAMES) - 1)
+            ctrl._intent_log.append((t, np.concatenate([[moving_intent], noise])))
+
+        # State at observation rate (30 Hz) so the deque (maxlen=200)
+        # spans the 3s xcorr window. state[0] = moving_intent(t - tau).
+        n_state = int(duration / dt_state)
+        for i in range(n_state):
+            t = t0 + i * dt_state
+            moving_state = 5.0 * np.sin(2 * np.pi * 1.0 * (t - tau_s))
+            noise = rng.normal(0, 0.05, size=len(_MOTOR_NAMES) - 1)
+            ctrl._state_log.append((t, np.concatenate([[moving_state], noise])))
+
+        ctrl._maybe_update_lookahead(t0 + duration)
+        # The moving joint contributes; the noisy ones are filtered.
+        # Recovered L should track the moving joint's tau.
+        assert ctrl._lookahead_s == pytest.approx(0.5 * tau_s, abs=0.005)
+
+    def test_below_min_samples_skips_update(self):
+        """Too-little data must skip — don't update L from noise."""
+        ctrl = _make_isolated_controller()
+        starting_l = ctrl._lookahead_s
+        # Only inject a tiny fraction of the expected sample count.
+        import numpy as np
+
+        dt = ctrl._control_dt
+        for i in range(5):  # well below the threshold
+            t = 1000.0 + i * dt
+            ctrl._intent_log.append((t, np.zeros(len(_MOTOR_NAMES))))
+            ctrl._state_log.append((t, np.zeros(len(_MOTOR_NAMES))))
+        ctrl._maybe_update_lookahead(1000.0 + 5 * dt)
+        assert ctrl._lookahead_s == starting_l
+
+    def test_intent_log_populated_at_control_rate_not_caller_rate(self, follower):
+        """Direct regression for commit c6537b40a.
+
+        Before the fix, ``_intent_log`` was populated from ``set_intent``
+        (caller thread, ~30 Hz). After the fix it's populated from
+        ``_tick`` (control thread, 200+ Hz). The xcorr's
+        ``best_k * control_dt`` index-to-time conversion is only correct
+        under the latter — under the former, reported lag is scaled by
+        ``caller_rate / control_rate`` (= 30/200 = 0.15 in the field).
+
+        Asserting that the log grows at roughly control rate even when
+        send_action isn't being called catches a regression that reverts
+        the population path back into set_intent.
+        """
+        robot, _bus = follower
+        # Prime: one send_action so the controller has an intent to log.
+        robot.send_action({f"{m}.pos": 0.0 for m in _MOTOR_NAMES})
+
+        start = time.perf_counter()
+        n_before = len(robot._controller._intent_log)
+        sleep_s = 0.2
+        time.sleep(sleep_s)
+        elapsed = time.perf_counter() - start
+        log_delta = len(robot._controller._intent_log) - n_before
+
+        # At the fixture's 500 Hz control rate over ~200 ms we expect
+        # ~100 new entries. Pre-fix code would yield zero (only set_intent
+        # populates, no new send_action calls in this window).
+        expected_min = int(elapsed * robot.config.control_rate_hz * 0.5)
+        assert log_delta >= expected_min, (
+            f"_intent_log gained {log_delta} entries over {elapsed * 1000:.0f} ms "
+            f"at {robot.config.control_rate_hz} Hz. Expected ≥ {expected_min}. "
+            "Suggests intent log is populated at caller rate instead of "
+            "control rate (caller_rate/control_rate units bug, c6537b40a)."
+        )
+
+
+# ============================================================================
+# Chunk-lookup correctness — direct tests on the math
+# ============================================================================
+
+
+class TestChunkLookupMath:
+    """Direct tests on _PredictiveLookaheadController._lookup_in_chunk.
+
+    The exact-lookup branch is the hot path under chunked sources. These
+    tests verify the index math at multiple fps so a hardcoded-30 bug
+    would never silently pass.
+    """
+
+    def test_lookup_at_t_zero_returns_frame_zero(self):
+        """now = received_at, L = 0 → exact frame[0], no interpolation."""
+        import numpy as np
+
+        ctrl = _make_isolated_controller(lookahead_ms=0.0)
+        frames_arr = np.array([[1.0] * 7, [2.0] * 7, [3.0] * 7])
+        chunk = (100.0, 30.0, frames_arr)
+        result = ctrl._lookup_in_chunk(chunk, now=100.0)
+        np.testing.assert_allclose(result, frames_arr[0])
+
+    @pytest.mark.parametrize("fps", [15.0, 30.0, 60.0, 120.0])
+    def test_lookup_index_math_matches_fps(self, fps):
+        """target_idx = (elapsed + L) * fps — same math at any fps."""
+        import numpy as np
+
+        ctrl = _make_isolated_controller(lookahead_ms=0.0)
+        # 10 frames at the given fps. Each frame is k as its value.
+        frames_arr = np.array([[float(k)] * 7 for k in range(10)])
+        chunk = (100.0, fps, frames_arr)
+        # Query at elapsed = 2.5 / fps → target_idx = 2.5 → interp
+        # between frame[2]=2 and frame[3]=3 at alpha=0.5 → 2.5.
+        result = ctrl._lookup_in_chunk(chunk, now=100.0 + 2.5 / fps)
+        np.testing.assert_allclose(result, np.array([2.5] * 7))
+
+    def test_lookup_past_end_uses_tail_velocity(self):
+        """Past the last frame, extrapolate from forward diff of last two."""
+        import numpy as np
+
+        ctrl = _make_isolated_controller(lookahead_ms=0.0)
+        # 3 frames at 30 fps. Values 1.0, 1.5, 2.0 → tail v = (2.0-1.5)*30 = 15.0 units/s.
+        frames_arr = np.array([[1.0] * 7, [1.5] * 7, [2.0] * 7])
+        fps = 30.0
+        chunk = (100.0, fps, frames_arr)
+        # Query 0.1 s past last frame (last frame at elapsed = 2/30 ≈ 0.0667).
+        excess_s = 0.1
+        elapsed_past_end = 2.0 / fps + excess_s
+        result = ctrl._lookup_in_chunk(chunk, now=100.0 + elapsed_past_end)
+        # Predicted: 2.0 + 15.0 * 0.1 = 3.5
+        expected = 2.0 + 15.0 * excess_s
+        np.testing.assert_allclose(result, np.array([expected] * 7), atol=1e-9)
+
+    def test_lookahead_s_override_path(self):
+        """lookahead_s_override=0.0 must use L=0 even when controller's
+        _lookahead_s is set to something else. Regression for the
+        adaptive-log path that computes "intent at now" with L=0."""
+        import numpy as np
+
+        ctrl = _make_isolated_controller(lookahead_ms=50.0)
+        frames_arr = np.array([[float(k)] * 7 for k in range(10)])
+        fps = 30.0
+        chunk = (100.0, fps, frames_arr)
+        # With override=0, we get frame[0]. Without override, we'd see
+        # the L-shifted lookup (50 ms × 30 fps = 1.5 frames ahead).
+        result_override = ctrl._lookup_in_chunk(chunk, now=100.0, lookahead_s_override=0.0)
+        np.testing.assert_allclose(result_override, frames_arr[0])
+        result_default = ctrl._lookup_in_chunk(chunk, now=100.0)
+        np.testing.assert_allclose(result_default, np.array([1.5] * 7))
