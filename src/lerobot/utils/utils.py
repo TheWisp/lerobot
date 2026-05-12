@@ -62,14 +62,24 @@ def init_logging(
         accelerator: Optional Accelerator instance (for multi-GPU detection)
     """
 
-    def custom_format(record: logging.LogRecord) -> str:
-        dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        fnameline = f"{record.pathname}:{record.lineno}"
-        pid_str = f"[PID: {os.getpid()}] " if display_pid else ""
-        return f"{record.levelname} {pid_str}{dt} {fnameline[-15:]:>15} {record.getMessage()}"
+    class _LeRobotFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:
+            dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fnameline = f"{record.pathname}:{record.lineno}"
+            pid_str = f"[PID: {os.getpid()}] " if display_pid else ""
+            msg = f"{record.levelname} {pid_str}{dt} {fnameline[-15:]:>15} {record.getMessage()}"
+            # Preserve tracebacks attached via ``logging.exception(...)`` or
+            # ``logging.error(..., exc_info=...)``. The previous formatter
+            # silently dropped them.
+            if record.exc_info and not record.exc_text:
+                record.exc_text = self.formatException(record.exc_info)
+            if record.exc_text:
+                msg = msg + ("\n" if not msg.endswith("\n") else "") + record.exc_text
+            if record.stack_info:
+                msg = msg + ("\n" if not msg.endswith("\n") else "") + self.formatStack(record.stack_info)
+            return msg
 
-    formatter = logging.Formatter()
-    formatter.format = custom_format
+    formatter = _LeRobotFormatter()
 
     logger = logging.getLogger()
     logger.setLevel(logging.NOTSET)
