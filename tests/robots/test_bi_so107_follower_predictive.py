@@ -220,11 +220,18 @@ def test_attach_teleop_routes_per_arm(bi_follower):
     assert robot.right_arm._controller._teleop is None
 
 
-def test_attach_teleop_rejects_non_bimanual_teleop(bi_follower):
-    """Passing a single-arm-shaped teleop (no left_arm/right_arm attrs)
-    must fail loudly — silently binding the same teleop to both arms
-    would mix up left and right poses on the buses."""
+def test_attach_teleop_skips_non_bimanual_teleop(bi_follower):
+    """A non-bimanual teleop (e.g. TrajectoryReplayTeleop has no
+    left_arm/right_arm attrs but DOES support the chunk path via
+    send_action) shouldn't trigger an error from attach_teleop —
+    the bimanual robot just no-ops the attach and lets send_action
+    route the chunk. Binding the same single-arm teleop to both
+    arms would have mixed up left/right poses on the buses, so we
+    skip rather than do that. Test asserts: no exception, and
+    neither arm's controller has _teleop bound."""
     robot, _l, _r = bi_follower
     single_arm_teleop = MagicMock(spec=["get_action"])  # no left_arm / right_arm
-    with pytest.raises(TypeError, match="left_arm / right_arm sub-attributes"):
-        robot.attach_teleop(single_arm_teleop)
+    # Should NOT raise.
+    robot.attach_teleop(single_arm_teleop)
+    assert robot.left_arm._controller._teleop is None
+    assert robot.right_arm._controller._teleop is None

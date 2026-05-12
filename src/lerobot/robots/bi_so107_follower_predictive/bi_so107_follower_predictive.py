@@ -157,10 +157,18 @@ class BiSO107FollowerPredictive(BiSO107Follower):
             self.right_arm.attach_teleop(None)
             return
         if not hasattr(teleop, "left_arm") or not hasattr(teleop, "right_arm"):
-            raise TypeError(
-                f"BiSO107FollowerPredictive.attach_teleop expects a bimanual teleop with "
-                f"left_arm / right_arm sub-attributes; got {type(teleop).__name__}"
+            # Not a bimanual leader — likely a chunk-aware source like
+            # TrajectoryReplayTeleop. The dict-pull path doesn't apply
+            # (we'd silently feed the same dict to both arms). Skip the
+            # attach and let the send_action chunk path handle routing.
+            # Logged at INFO so it's visible without being alarming.
+            logger.info(
+                "%s: teleop %r is not bimanual (no left_arm/right_arm) — "
+                "skipping pull-path attach; send_action chunk path will be used",
+                self,
+                type(teleop).__name__,
             )
+            return
         self.left_arm.attach_teleop(teleop.left_arm)
         self.right_arm.attach_teleop(teleop.right_arm)
 
