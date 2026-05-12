@@ -121,6 +121,15 @@ class AppState:
         lock = self._dataset_locks.get(dataset_id)
         return lock is not None and lock.locked()
 
+    def discard_lock(self, dataset_id: str) -> None:
+        """Drop the asyncio.Lock for a dataset that's no longer open.
+
+        Without this, every distinct ``dataset_id`` ever seen in a session
+        accumulates an entry in ``_dataset_locks`` even after the dataset
+        is closed. Safe to call when no lock exists (no-op).
+        """
+        self._dataset_locks.pop(dataset_id, None)
+
 
 # ============================================================================
 # Persistence Functions

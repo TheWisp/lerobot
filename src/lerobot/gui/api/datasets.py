@@ -1915,6 +1915,17 @@ async def close_dataset(dataset_id: str) -> dict[str, str]:
 
     del _app_state.datasets[dataset_id]
     _dataset_info_mtime.pop(dataset_id, None)
+    # Drop every dataset-scoped cache + per-dataset lock. Without this, each
+    # close/re-open cycle left behind cached episode indices, per-episode
+    # action stats, the asyncio.Lock, and any frame-cache entries — a slow
+    # leak in long-running sessions and a correctness hazard if the same
+    # dataset_id is later re-opened against different on-disk content.
+    _invalidate_episode_start_indices(dataset_id)
+    from lerobot.gui.cache_invalidation import invalidate_caches
+
+    invalidate_caches(_app_state, dataset_id)
+    _app_state.clear_edits(dataset_id)
+    _app_state.discard_lock(dataset_id)
     _save_opened_state()
     logger.info(f"Closed dataset: {dataset_id}")
 

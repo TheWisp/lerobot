@@ -266,6 +266,26 @@ class TestDatasetLocking:
 
         asyncio.run(check())
 
+    def test_discard_lock_removes_entry(self, app_state):
+        """`discard_lock` drops the asyncio.Lock so closed datasets don't
+        accumulate entries in `_dataset_locks` for the life of the session.
+        """
+        app_state.get_lock("ds_a")
+        app_state.get_lock("ds_b")
+        # Internal: there are now two cached locks.
+        assert "ds_a" in app_state._dataset_locks
+        assert "ds_b" in app_state._dataset_locks
+
+        app_state.discard_lock("ds_a")
+        assert "ds_a" not in app_state._dataset_locks
+        assert "ds_b" in app_state._dataset_locks
+        # is_locked still reports False (no entry == no lock held).
+        assert app_state.is_locked("ds_a") is False
+
+    def test_discard_lock_noop_on_missing(self, app_state):
+        """Calling `discard_lock` on a dataset that was never locked is a no-op."""
+        app_state.discard_lock("never_seen")  # must not raise
+
 
 class TestEditPersistence:
     """Tests for saving and loading edits to/from disk."""
