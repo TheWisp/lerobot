@@ -2357,33 +2357,43 @@ async def get_frames_batch(
         raise HTTPException(status_code=400, detail="No camera available")
 
     # Collect frames
+    import asyncio
+
     from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
     # Calculate episode start index (cumulative sum, not per-file offset)
     episode_start = _get_episode_start_index(dataset_id, episode_idx)
 
+    def _decode_one_frame(i: int) -> bytes:
+        """Decode + encode one frame on cache miss. Caches every camera in
+        the decoded item to amortise the multi-camera read cost.
+
+        Runs inside `run_in_executor`. The frame_cache is internally
+        thread-safe (lock-guarded), so concurrent executor calls for
+        different frames are safe.
+        """
+        global_idx = episode_start + i
+        item = dataset[global_idx]
+        primary: bytes | None = None
+        for cam in camera_keys:
+            if cam in item:
+                cam_jpeg = encode_frame_to_jpeg(item[cam])
+                _app_state.frame_cache.put(dataset_id, episode_idx, i, cam, cam_jpeg)
+                if cam == camera_key:
+                    primary = cam_jpeg
+        if primary is None:
+            primary = encode_frame_to_jpeg(item[camera_key])
+            _app_state.frame_cache.put(dataset_id, episode_idx, i, camera_key, primary)
+        return primary
+
+    loop = asyncio.get_event_loop()
     frames = []
     for i in range(start, min(start + count, ep_length)):
-        global_idx = episode_start + i
-
-        # Check cache first
+        # Check cache first (cheap)
         jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key)
-
         if jpeg_bytes is None:
-            # Decode all cameras at once and cache them
-            item = dataset[global_idx]
-            for cam in camera_keys:
-                if cam in item:
-                    cam_jpeg = encode_frame_to_jpeg(item[cam])
-                    _app_state.frame_cache.put(dataset_id, episode_idx, i, cam, cam_jpeg)
-                    if cam == camera_key:
-                        jpeg_bytes = cam_jpeg
-
-            # Fallback
-            if jpeg_bytes is None:
-                jpeg_bytes = encode_frame_to_jpeg(item[camera_key])
-                _app_state.frame_cache.put(dataset_id, episode_idx, i, camera_key, jpeg_bytes)
-
+            # Decode-encode work is multi-ms per miss; push off the event loop.
+            jpeg_bytes = await loop.run_in_executor(None, _decode_one_frame, i)
         frames.append(
             {
                 "frame_idx": i,
