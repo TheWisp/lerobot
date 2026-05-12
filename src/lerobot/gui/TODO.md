@@ -3,7 +3,7 @@
 ## Data Tab
 
 - [High] **Warning/error panel**: dataset verification errors and warnings are currently buried in server log text. Add a visible warning panel (banner or sidebar) that surfaces verification results when a dataset is opened — errors as red, warnings as yellow. Users must not miss data integrity issues.
-- [High] **Open local dataset by path**: opening a copied/renamed local dataset fails because `LeRobotDataset.__init__` tries to reach HuggingFace Hub when the folder name doesn't match a cached `owner/name` repo_id. Spaces in folder names also rejected. Need to bypass Hub entirely for local-only datasets.
+- [Mid] **Open local dataset by path** — partial. Folder names with spaces / non-alphanumerics work for complete caches (handled by the synthesized "<parent>/<name>" repo_id + local-first metadata load). Incomplete caches with such names previously surfaced a confusing `"Repo id must use alphanumeric chars…"` from `huggingface_hub`; the pre-check in `_check_local_dataset_complete` now probes required meta files (`tasks.parquet`, `episodes/`) directly and surfaces the real diagnosis (fixed 2026-05-12). Remaining ask: a true `local_only=True` flag on `LeRobotDataset` that disables every Hub fallback (e.g. for version-tag resolution on incompatible-version datasets) — only worth the lift when a concrete failure mode forces it.
 - [ ] Parquet data display (action/state charts in timeline) — superseded by Feature Editing (see below); action/state co-display alongside cameras tracked as a follow-up there
 - [ ] Monitor local dataset changes — auto-refresh UI when new episodes recorded while GUI is open
 - [ ] Duplicate episode
