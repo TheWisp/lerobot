@@ -291,7 +291,12 @@ function _serializeProfile(data) {
 function _collectFormFields() {
     const schemas = currentProfile.kind === 'robot' ? robotSchemas : teleopSchemas;
     const schema = schemas?.find(s => s.type_name === currentProfile.data.type);
-    const fields = {};
+    // Start from the loaded fields so any non-schema fields are preserved
+    // — the backend's _SKIP_FIELDS (e.g. `calibration_dir`) hides certain
+    // fields from the editing UI but they still need to round-trip through
+    // save / launch. Starting from `{}` here would silently drop them and
+    // any subsequent save would erase the JSON's calibration_dir.
+    const fields = { ...(currentProfile?.data?.fields || {}) };
     if (schema) {
         for (const field of schema.fields) {
             const input = document.getElementById(`field-${field.name}`);
