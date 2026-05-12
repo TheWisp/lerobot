@@ -1054,8 +1054,16 @@ async def obs_stream_image(cam_key: str) -> Response:
 
     import cv2
 
-    _, jpeg = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 80])
-    jpeg_bytes = jpeg.tobytes()
+    def _encode() -> bytes:
+        # cv2.cvtColor + imencode is 5–10 ms for a 720p frame. Push it off
+        # the event loop so concurrent obs-stream image requests for other
+        # cameras + the obs_stream_state poll don't queue up behind it.
+        # cv2 releases the GIL during the C-side encode, so the default
+        # thread pool scales naturally.
+        _, jpeg = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return jpeg.tobytes()
+
+    jpeg_bytes = await asyncio.get_event_loop().run_in_executor(None, _encode)
     _jpeg_cache[cam_key] = (seq, jpeg_bytes)
     return Response(
         content=jpeg_bytes,
