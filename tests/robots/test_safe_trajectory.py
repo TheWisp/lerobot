@@ -169,6 +169,23 @@ class TestReplayTrajectory:
         ramp_last = robot.sent_actions[-3]
         assert ramp_last["a.pos"] == pytest.approx(10.0, abs=1e-9)
 
+    def test_rejects_missing_joint_in_observation_during_ramp(self):
+        # Robot's action_features advertises a.pos and b.pos, but its
+        # get_observation only returns a.pos — a bus-read miss for b.pos.
+        # The ramp must fail loudly rather than silently collapse to an
+        # instant jump on b.pos (start_pose missing → fallback to target).
+        robot = _make_mock_robot({"a.pos": 0.0, "b.pos": 0.0})
+        robot.get_observation.return_value = {"a.pos": 0.0, "cam_front": "img"}
+        traj = {
+            "schema_version": SCHEMA_VERSION,
+            "fps": 30,
+            "joints": ["a.pos", "b.pos"],
+            "timestamps": [0.0],
+            "positions": [[10.0, 20.0]],
+        }
+        with pytest.raises(RuntimeError, match="Cannot ramp.*missing joints"):
+            replay_trajectory(robot, traj, ramp_to_start_s=0.1)
+
     def test_rejects_unknown_joints(self):
         robot = _make_mock_robot({"a.pos": 0.0})
         traj = {

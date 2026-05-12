@@ -175,7 +175,17 @@ def replay_trajectory(
     # Smooth ramp from current pose to the trajectory's first frame.
     if ramp_to_start_s > 0:
         obs = robot.get_observation()
-        start_pose = {j: float(obs[j]) for j in joints if j in obs}
+        missing = [j for j in joints if j not in obs]
+        if missing:
+            # Falling back to target_pose for missing joints would silently
+            # collapse the ramp to an instant jump on those joints — exactly
+            # what the ramp is supposed to prevent. Fail loudly instead so
+            # the operator hears it before the motors move.
+            raise RuntimeError(
+                f"Cannot ramp: robot observation missing joints {missing} "
+                f"(present: {sorted(obs.keys())}). Check motor connectivity."
+            )
+        start_pose = {j: float(obs[j]) for j in joints}
         target_pose = {j: positions[0][i] for i, j in enumerate(joints)}
         ramp_hz = 50
         num_steps = max(1, int(ramp_to_start_s * ramp_hz))
@@ -184,9 +194,7 @@ def replay_trajectory(
         for step in range(1, num_steps + 1):
             t0 = time.perf_counter()
             alpha = step / num_steps
-            action = {
-                j: start_pose.get(j, target_pose[j]) * (1.0 - alpha) + target_pose[j] * alpha for j in joints
-            }
+            action = {j: start_pose[j] * (1.0 - alpha) + target_pose[j] * alpha for j in joints}
             robot.send_action(action)
             precise_sleep(max(dt - (time.perf_counter() - t0), 0.0))
 
