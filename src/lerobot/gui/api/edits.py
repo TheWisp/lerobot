@@ -931,9 +931,17 @@ async def _merge_into_locked(source_id: str, target_id: str, *, force: bool = Fa
     )
 
     try:
+        import asyncio
+
         from lerobot.datasets.dataset_tools import merge_into
 
-        merge_into(target_ds, source_ds, skip_validation=force)
+        # `merge_into` copies parquet data + videos — gigabytes for a
+        # full dataset, easily minutes of synchronous I/O. Push it to
+        # the default executor so SSE keepalives + other tabs'
+        # WebSockets / HTTP requests stay responsive during the merge.
+        await asyncio.get_event_loop().run_in_executor(
+            None, lambda: merge_into(target_ds, source_ds, skip_validation=force)
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
