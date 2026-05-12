@@ -59,6 +59,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .so_leader import SO107Leader
 
         return SO107Leader(config)
+    elif config.type == "so107_leader_highrate":
+        from .so107_leader_highrate import SO107LeaderHighRate
+
+        return SO107LeaderHighRate(config)
     elif config.type == "stretch3":
         from .stretch3_gamepad import Stretch3GamePad
 
@@ -99,6 +103,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .bi_so107_leader import BiSO107Leader
 
         return BiSO107Leader(config)
+    elif config.type == "bi_so107_leader_highrate":
+        from .bi_so107_leader_highrate import BiSO107LeaderHighRate
+
+        return BiSO107LeaderHighRate(config)
     elif config.type == "reachy2_teleoperator":
         from .reachy2_teleoperator import Reachy2Teleoperator
 
