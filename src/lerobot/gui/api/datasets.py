@@ -63,6 +63,19 @@ _prefetch_lock = threading.Lock()
 _PREFETCH_SEEK_THRESHOLD = 5
 
 
+def shutdown_prefetch_executor() -> None:
+    """Drop pending prefetch tasks and release the thread on server shutdown.
+
+    The executor's single worker is a daemon thread so it dies on process
+    exit anyway, but `shutdown(wait=False, cancel_futures=True)` also
+    cancels any queued futures — without it, a long-running prefetch
+    (a multi-second `_prefetch_episode` decode pass) would keep logging
+    progress after uvicorn has already torn down logging handlers,
+    producing the "I/O operation on closed file" stack traces.
+    """
+    _prefetch_executor.shutdown(wait=False, cancel_futures=True)
+
+
 def _check_local_dataset_complete(local_path: Path) -> tuple[bool, list[str]]:
     """Check whether a local dataset directory has all data + video files.
 

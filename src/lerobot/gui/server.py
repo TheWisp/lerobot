@@ -129,6 +129,7 @@ async def shutdown_event():
     """Clean up subprocesses + their shared memory on server shutdown."""
     import asyncio
 
+    from lerobot.gui.api.datasets import shutdown_prefetch_executor
     from lerobot.gui.api.robot import cleanup_in_process_resources
     from lerobot.gui.api.run import _stop_debug_process
     from lerobot.robots.obs_stream import cleanup_stale_streams
@@ -149,6 +150,11 @@ async def shutdown_event():
     # underlying disconnect()s do blocking serial / V4L2 I/O.
     with contextlib.suppress(Exception):
         await asyncio.get_event_loop().run_in_executor(None, cleanup_in_process_resources)
+    # Cancel any in-flight prefetch work + release the executor's worker
+    # thread so uvicorn's shutdown doesn't race against a long-running
+    # video-decode pass.
+    with contextlib.suppress(Exception):
+        shutdown_prefetch_executor()
 
 
 # Include API routers
