@@ -207,10 +207,23 @@ def teleop_loop(
                 teleop_action = teleop_action_processor((raw_action, obs))
                 # Process action for robot through pipeline
                 robot_action_to_send = robot_action_processor((teleop_action, obs))
+                # Chunk-aware path: if the teleop publishes an upcoming
+                # horizon, route the chunk to the robot so chunk-aware
+                # robots (SO107FollowerPredictive et al.) can perform
+                # exact-lookup lookahead at now + L instead of velocity
+                # extrapolation. The processor pipeline is dict-only by
+                # design (its converters validate isinstance(action, dict)),
+                # so chunks bypass it — frames[0] is what the dict path
+                # would have produced for "now" and the controller treats
+                # the chunk's later frames as the authoritative future.
+                # robot_action_to_send (the post-pipeline dict) is still
+                # used for the display block below so per-tick UX is
+                # unaffected.
+                action_to_send = teleop.get_action_with_horizon() or robot_action_to_send
 
             # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
             with latency_session.span("action_send"):
-                _ = robot.send_action(robot_action_to_send)
+                _ = robot.send_action(action_to_send)
 
             if display_data:
                 log_rerun_data(

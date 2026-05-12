@@ -815,8 +815,20 @@ def record_loop(
         # Action can eventually be clipped using `max_relative_target`,
         # so action actually sent is saved in the dataset. action = postprocessor.process(action)
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
+        # Chunk-aware path: if the teleop publishes a future horizon, the
+        # chunk goes to the robot verbatim so chunk-aware robots can do
+        # exact-lookup motor-τ compensation. The dict-shaped
+        # robot_action_to_send is the back-compat fallback (and the
+        # already-recorded action_values matches its frames[0] by contract).
+        # Only applies when teleop is a single Teleoperator (the policy /
+        # composite-teleop branches don't have a teleop instance to query).
+        action_to_send = robot_action_to_send
+        if isinstance(teleop, Teleoperator):
+            horizon = teleop.get_action_with_horizon()
+            if horizon is not None:
+                action_to_send = horizon
         with latency_session.span("action_send"):
-            _sent_action = robot.send_action(robot_action_to_send)
+            _sent_action = robot.send_action(action_to_send)
 
         # Write to dataset (only on real policy frames, not interpolated-only iterations)
         if dataset is not None and is_record_frame:

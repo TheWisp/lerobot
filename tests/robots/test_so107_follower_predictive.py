@@ -253,6 +253,86 @@ class TestSendAction:
 
 
 # ============================================================================
+# Chunk path
+# ============================================================================
+
+
+class TestActionChunk:
+    """Exact-lookup path: send_action(ActionChunk) feeds the controller a
+    horizon, controller picks the target at now + L by interpolation.
+    """
+
+    def _frame(self, value: float) -> dict[str, float]:
+        return {f"{m}.pos": value for m in _MOTOR_NAMES}
+
+    def test_send_action_returns_frame_zero_for_chunk(self, follower):
+        """The dataset writer records what send_action returns. For a
+        chunk that must be frames[0] (= "current intent"), not the
+        chunk itself."""
+        from lerobot.types import ActionChunk
+
+        robot, _bus = follower
+        chunk = ActionChunk(
+            fps=30.0,
+            frames=(self._frame(1.0), self._frame(1.1), self._frame(1.2)),
+        )
+        returned = robot.send_action(chunk)
+        assert returned == self._frame(1.0)
+
+    def test_controller_writes_via_chunk_lookup(self, follower):
+        """Chunk path → controller writes Goal_Position from the chunk's
+        future values (not by velocity-extrapolating past intents)."""
+        from lerobot.types import ActionChunk
+
+        robot, bus = follower
+        bus.sync_write_log.clear()
+        # Linear ramp: frame[k] = 5 + 0.1 * k. At fps=30, frame index
+        # for L=80ms is 80ms * 30fps = 2.4 → interp between frame 2 and 3.
+        frames = tuple(self._frame(5.0 + 0.1 * k) for k in range(20))
+        chunk = ActionChunk(fps=30.0, frames=frames)
+        robot.send_action(chunk)
+        # Wait a few ticks (rate is 500 Hz in tests = 2 ms / tick).
+        time.sleep(0.05)
+        goal_writes = [gd for name, gd in bus.sync_write_log if name == "Goal_Position"]
+        assert goal_writes, "controller never wrote Goal_Position"
+        # The very first goal write should reflect an L-shifted value
+        # somewhere between frame 0 (5.0) and a few frames in. Exact
+        # value depends on tick timing relative to send_action; just
+        # verify the controller is reading from the future, not
+        # holding at 5.0.
+        first_goal = goal_writes[0]
+        assert all(v > 5.0 for v in first_goal.values()), f"expected L-shifted future, got {first_goal}"
+
+    def test_chunk_with_missing_key_raises(self, follower):
+        """Strict-key check applies per-frame: a malformed frame in
+        the chunk must fail loud at set_intent time, not later in the
+        controller's tick."""
+        from lerobot.types import ActionChunk
+
+        robot, _bus = follower
+        good = self._frame(0.0)
+        bad = {k: v for k, v in good.items() if k != f"{_MOTOR_NAMES[-1]}.pos"}
+        chunk = ActionChunk(fps=30.0, frames=(good, bad))
+        with pytest.raises(ValueError, match="action missing keys"):
+            robot.send_action(chunk)
+
+    def test_chunk_then_dict_clears_chunk_state(self, follower):
+        """A single-dict send_action after a chunk drops the chunk
+        record — subsequent ticks fall back to the velocity-extrapolation
+        path. (Latest-send wins.)"""
+        from lerobot.types import ActionChunk
+
+        robot, _bus = follower
+        chunk = ActionChunk(fps=30.0, frames=(self._frame(0.0), self._frame(0.1)))
+        robot.send_action(chunk)
+        time.sleep(0.005)
+        robot.send_action(self._frame(0.5))
+        time.sleep(0.005)
+        # After the dict send, the controller's latest_chunk must be cleared.
+        assert robot._controller._latest_chunk is None
+
+
+# ============================================================================
 # get_observation feeds the controller's state log
 # ============================================================================
 

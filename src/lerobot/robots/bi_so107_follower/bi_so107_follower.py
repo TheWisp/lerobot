@@ -21,6 +21,7 @@ from typing import Any
 
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.robots.so_follower import SO107Follower, SO107FollowerConfig
+from lerobot.types import ActionChunk, action_first_frame
 
 from ..robot import Robot
 from .config_bi_so107_follower import BiSO107FollowerConfig
@@ -208,7 +209,11 @@ class BiSO107Follower(Robot):
 
         return obs_dict
 
-    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+    def send_action(self, action: dict[str, Any] | ActionChunk) -> dict[str, Any]:
+        # Plain bimanual doesn't consume the chunk horizon — falls back to
+        # frames[0]. The predictive bimanual overrides this method to keep
+        # the chunk intact and route per-arm sub-chunks downstream.
+        action = action_first_frame(action)
         # Dry-run mode: drop the command but return the requested action
         # unchanged so callers expecting the "sent" dict back keep working.
         # First-call logging makes the mode obvious in the run log so
