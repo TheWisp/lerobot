@@ -99,6 +99,29 @@ class TestCheckLocalDatasetComplete:
         assert not is_complete
         assert any("video file(s) missing" in p for p in problems), problems
 
+    def test_renamed_folder_with_spaces_still_reports_local_problems(self, tmp_path, lerobot_dataset_factory):
+        """Regression: a folder name like ``"my dataset copy"`` used to cause a
+        confusing ``"Repo id must use alphanumeric chars…"`` to surface when
+        meta/ was incomplete, because ``LeRobotDatasetMetadata.__init__`` would
+        fall through to a Hub fetch using the bare folder name. The pre-check
+        now diagnoses missing meta files directly so the user sees the actual
+        problem, not the HF validation error for the synthesized repo_id.
+        """
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=3, total_frames=30)
+        # Move the freshly-built dataset to a folder name that contains chars
+        # rejected by `huggingface_hub` repo-id validation.
+        renamed = tmp_path / "my dataset with spaces"
+        ds.root.rename(renamed)
+
+        # Drop a required meta file so the metadata loader can't fully load.
+        (renamed / "meta" / "tasks.parquet").unlink()
+
+        is_complete, problems = _check_local_dataset_complete(renamed)
+        assert not is_complete
+        # Real diagnosis surfaces, not "Repo id must use alphanumeric…".
+        assert any("tasks.parquet is missing" in p for p in problems), problems
+        assert not any("alphanumeric" in p.lower() for p in problems), problems
+
 
 # ── POST /api/datasets — 409 path on incomplete local cache ─────────────────
 

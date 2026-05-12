@@ -74,15 +74,39 @@ def _check_local_dataset_complete(local_path: Path) -> tuple[bool, list[str]]:
         ``(is_complete, problems)``. ``problems`` is a list of human-readable
         strings; empty when the cache is complete. Never raises.
     """
+    from huggingface_hub.errors import HFValidationError
+
     from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 
     if not (local_path / "meta" / "info.json").exists():
         return False, ["meta/info.json is missing"]
 
+    # If any meta-side file is missing, `LeRobotDatasetMetadata.__init__` falls
+    # through to `_pull_from_repo` → `snapshot_download`, which validates the
+    # `repo_id`. Folder names with spaces / non-alphanumeric characters (a
+    # legitimate local scenario — users rename / duplicate cached datasets)
+    # then surface as a confusing "Repo id must use alphanumeric chars…" error
+    # instead of the actual diagnosis (meta files missing). Probe the
+    # remaining required meta paths directly so we report the real problem.
+    missing_meta: list[str] = []
+    if not (local_path / "meta" / "tasks.parquet").exists():
+        missing_meta.append("meta/tasks.parquet")
+    if not (local_path / "meta" / "episodes").is_dir():
+        missing_meta.append("meta/episodes/")
+    if missing_meta:
+        return False, [f"{p} is missing" for p in missing_meta]
+
     try:
         # Passing root= ensures the metadata loader reads from disk; for a local
         # dataset that has meta/, no Hub fetch is triggered.
         meta = LeRobotDatasetMetadata(repo_id=local_path.name, root=local_path)
+    except HFValidationError:
+        # The constructor only validates `repo_id` against the Hub when local
+        # meta is incomplete enough to trigger a Hub fallback. Above we
+        # already covered the common "info.json present, episodes missing"
+        # case; reaching here means a subtler meta-side problem (a partial
+        # episodes/ tree, version mismatch, etc.).
+        return False, ["meta/ contents are inconsistent (failed to load on disk)"]
     except Exception as e:
         return False, [f"failed to load metadata: {e}"]
 
