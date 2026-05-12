@@ -2037,61 +2037,70 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
     else:
         camera_key = camera_keys[0]
 
+    import asyncio
     import time
 
-    # Check if this camera is already cached
+    # Check if this camera is already cached (cheap lock-protected dict lookup).
     jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key)
 
     if jpeg_bytes is None:
+        # Cache miss: do the heavy decode+encode work off the event loop.
+        # Otherwise every scrub on a long video stalls FastAPI's loop and
+        # cascades into stuck SSE keepalives + delayed concurrent requests.
         from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
-        if frame_idx < ep_length:
-            # Normal frame — decode via dataset[global_idx] (gets all cameras at once)
-            episode_start = _get_episode_start_index(dataset_id, episode_idx)
-            global_idx = episode_start + frame_idx
+        def _decode_and_cache() -> bytes:
+            if frame_idx < ep_length:
+                # Normal frame — decode via dataset[global_idx] (all cameras at once)
+                episode_start = _get_episode_start_index(dataset_id, episode_idx)
+                global_idx = episode_start + frame_idx
 
-            t0 = time.perf_counter()
-            item = dataset[global_idx]
-            t1 = time.perf_counter()
+                t0 = time.perf_counter()
+                item = dataset[global_idx]
+                t1 = time.perf_counter()
 
-            # Cache all cameras from this single decode
-            for cam in camera_keys:
-                if cam in item:
-                    cam_jpeg = encode_frame_to_jpeg(item[cam])
-                    _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, cam, cam_jpeg)
-                    if cam == camera_key:
-                        jpeg_bytes = cam_jpeg
-            t2 = time.perf_counter()
+                # Cache all cameras from this single decode
+                primary: bytes | None = None
+                for cam in camera_keys:
+                    if cam in item:
+                        cam_jpeg = encode_frame_to_jpeg(item[cam])
+                        _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, cam, cam_jpeg)
+                        if cam == camera_key:
+                            primary = cam_jpeg
+                t2 = time.perf_counter()
 
-            # Fallback if camera wasn't in camera_keys list
-            if jpeg_bytes is None:
-                jpeg_bytes = encode_frame_to_jpeg(item[camera_key])
-                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, jpeg_bytes)
-        else:
-            # Extra video frame beyond data length — decode directly from video file
-            from lerobot.datasets.video_utils import decode_video_frames_torchcodec
+                if primary is None:
+                    # Fallback when the requested camera isn't in camera_keys.
+                    primary = encode_frame_to_jpeg(item[camera_key])
+                    _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary)
+            else:
+                # Extra video frame beyond data length — decode directly from video file
+                from lerobot.datasets.video_utils import decode_video_frames_torchcodec
 
-            fps = dataset.fps
-            from_ts = ep.get(f"videos/{camera_key}/from_timestamp", 0.0)
-            timestamp = from_ts + frame_idx / fps
-            tolerance_s = 1 / fps * 0.7
+                fps = dataset.fps
+                from_ts = ep.get(f"videos/{camera_key}/from_timestamp", 0.0)
+                timestamp = from_ts + frame_idx / fps
+                tolerance_s = 1 / fps * 0.7
 
-            video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, camera_key)
+                video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, camera_key)
 
-            t0 = time.perf_counter()
-            frames = decode_video_frames_torchcodec(video_path, [timestamp], tolerance_s)
-            t1 = time.perf_counter()
+                t0 = time.perf_counter()
+                frames = decode_video_frames_torchcodec(video_path, [timestamp], tolerance_s)
+                t1 = time.perf_counter()
 
-            jpeg_bytes = encode_frame_to_jpeg(frames[0])
-            _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, jpeg_bytes)
-            t2 = time.perf_counter()
+                primary = encode_frame_to_jpeg(frames[0])
+                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary)
+                t2 = time.perf_counter()
 
-        decode_ms = (t1 - t0) * 1000
-        encode_ms = (t2 - t1) * 1000
-        logger.info(
-            f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: "
-            f"decode={decode_ms:.1f}ms encode={encode_ms:.1f}ms"
-        )
+            decode_ms = (t1 - t0) * 1000
+            encode_ms = (t2 - t1) * 1000
+            logger.info(
+                f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: "
+                f"decode={decode_ms:.1f}ms encode={encode_ms:.1f}ms"
+            )
+            return primary
+
+        jpeg_bytes = await asyncio.get_event_loop().run_in_executor(None, _decode_and_cache)
     else:
         logger.debug(f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache hit")
 
