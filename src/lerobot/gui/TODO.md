@@ -5,6 +5,7 @@
 - [High] **Warning/error panel**: dataset verification errors and warnings are currently buried in server log text. Add a visible warning panel (banner or sidebar) that surfaces verification results when a dataset is opened — errors as red, warnings as yellow. Users must not miss data integrity issues.
 - [High] **Open local dataset by path**: opening a copied/renamed local dataset fails because `LeRobotDataset.__init__` tries to reach HuggingFace Hub when the folder name doesn't match a cached `owner/name` repo_id. Spaces in folder names also rejected. Need to bypass Hub entirely for local-only datasets.
 - [ ] Parquet data display (action/state charts in timeline) — superseded by Feature Editing (see below); action/state co-display alongside cameras tracked as a follow-up there
+- [Mid] **Opening a new dataset from sources doesn't switch to it**: after using "Open" on a source folder to load a new dataset, the GUI stays on whatever dataset was previously selected instead of focusing the just-opened one. Should auto-select the new dataset (and likely make it the active tab in the dataset list).
 - [ ] Monitor local dataset changes — auto-refresh UI when new episodes recorded while GUI is open
 - [ ] Duplicate episode
 - [ ] Copy/move episodes between datasets
@@ -135,6 +136,12 @@ See [docs/model_tab.md](docs/model_tab.md) for full design.
 - [Mid] **Backend-driven Launch validation schema**. The Launch button's required-field rules currently live in JS-side `_WORKFLOW_VALIDATORS` and `_POLICY_VALIDATORS` registries in `gui/static/run.js`. Each policy_type's Pydantic/Draccus config already declares its required fields in Python — the JS registry has to be updated by hand whenever those declarations change, and silent drift between the two is invisible until a user clicks Launch and gets a backend 400. Replace with a `GET /api/policy-schemas/{policy_type}` (and similar for workflows) returning e.g. `{required: ["task"], required_when: {"rlt_token_checkpoint": "rlt_mode"}}`; the frontend consumes that verbatim, so adding a new policy means only one Python edit. Until then, any change to a policy's required fields must be reflected in both places.
 - [Mid] **Audit `torch.load()` for `weights_only=True`** (bandit B614, currently in global skips). Call sites: `src/lerobot/policies/act_vlm/modeling_act_vlm.py`, `src/lerobot/policies/hvla/s1/flow_matching/model.py`, `src/lerobot/policies/hvla/s1_process.py`. Since PyTorch 2.6 the default flipped to `weights_only=True`; our checkpoints predate that and contain non-tensor pickled metadata, so wholesale flip would break loaders. Plan: per-site, switch to `weights_only=True` and migrate any non-tensor state to a sidecar JSON / safetensors. Remove B614 from `pyproject.toml` `[tool.bandit].skips` once the audit completes.
 
+### Latency Panel
+
+- [Mid] **Fixed panel height not adaptive to content**: panel renders taller than the default panel height on at least one setup, leaving empty space (or clipping). Make the height fit its actual content instead of a hard-coded value.
+- [Mid] **Timeline span is dominated by max**: a single extreme sample stretches the y-axis so the median band collapses into a narrow stripe in the middle, defeating the point of the view. Options to explore: clip to a percentile (e.g. p95 / p99) with an out-of-range indicator, or switch to a log scale, or split into separate "typical" and "tail" views.
+- [Mid] **Distorted / unreadable labels in loop topline**: the current-value text on the right side renders very narrow / squished; the bottom-left label is also distorted and unreadable on top of the colored background. Investigate the CSS/SVG sizing (likely `transform: scale`, `text-anchor`, or `width` overconstraint) and fix the contrast on the bottom-left label.
+
 ### Dataset Debugging Overlay
 
 Live overlay during teleop/record showing how the current state compares to the dataset — helps the user identify gaps in data coverage and fill them efficiently.
@@ -187,6 +194,10 @@ Live overlay during teleop/record showing how the current state compares to the 
 ## UX
 
 - [Mid] Cross-reference navigation: clickable links from dataset/model/robot references to their tab (generic utility, not one-off per instance)
+- [High] **Dialog consistency pass**: today the GUI mixes two dialog styles. Native browser dialogs (`window.confirm` / `window.prompt` / `window.alert`) are used in places like Data tab's "add new source folder", Robot tab's recover, and Data tab's add-new-feature confirmation; custom centered modal dialogs are used in places like the add-new-feature UI itself, HF upload/download, and Hub sync. Need a design pass on a single dialog experience. Open questions:
+  - Should everything migrate to the custom modal, or are there cases where native dialogs are preferable (blocking, focus trap, escape key behavior)?
+  - For multi-step flows (e.g. add source → confirm → result), should each step replace the previous dialog, or stack on top of each other (and if stacking, what's the back/cancel semantics)?
+  - Need a small dialog component API that handles confirm / prompt / multi-step out of the box so consumers stop reaching for `window.confirm` ad-hoc.
 
 ## Dataset Tools
 
