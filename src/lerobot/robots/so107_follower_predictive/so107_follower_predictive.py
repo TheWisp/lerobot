@@ -55,7 +55,7 @@ import numpy as np
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.motors import Motor, MotorNormMode
 from lerobot.motors.feetech import FeetechMotorsBus
-from lerobot.types import RobotAction, RobotObservation
+from lerobot.types import ActionChunk, RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from lerobot.utils.robot_utils import precise_sleep
 
@@ -158,17 +158,30 @@ class SO107FollowerPredictive(SO107Follower):
         return obs_dict
 
     @check_if_not_connected
-    def send_action(self, action: RobotAction) -> RobotAction:
+    def send_action(self, action: RobotAction | ActionChunk) -> RobotAction:
         """Publish intent to the controller (non-blocking).
 
-        The recorded ``action`` is the operator's raw intent (this argument).
-        The actual motor command is ``intent(t + L)``, computed by the
-        controller's 200 Hz thread and never visible to the caller. State
-        observed via ``get_observation`` will track this intent with
-        residual ≈ τ − L (≈ 0 at adaptive convergence).
+        Two payload shapes:
+          * ``RobotAction`` (a dict) — single intent at "now". The
+            controller extrapolates ``now + L`` via velocity LSQ over
+            the recent intent stream. Used by leader-arm teleop.
+          * :class:`ActionChunk` — fixed-cadence horizon of intent
+            samples starting at "now". The controller picks the
+            lookahead target at index ``L * fps`` by interpolation;
+            falls back to chunk-tail velocity extrapolation past the
+            last frame. Used by trajectory replay + chunked policy
+            inference.
+
+        The recorded ``action`` is the operator's raw intent — ``frames[0]``
+        when a chunk was passed, the dict itself otherwise. State
+        observed via ``get_observation`` will track that intent with
+        residual ≈ τ − L (≈ 0 at adaptive convergence). The actual
+        motor command (the L-shifted target) is computed by the
+        controller's 200 Hz thread and never visible to the caller.
         """
-        self._controller.set_intent(time.perf_counter(), action)
-        return action
+        t = time.perf_counter()
+        self._controller.set_intent(t, action)
+        return dict(action.frames[0]) if isinstance(action, ActionChunk) else action
 
     @check_if_not_connected
     def disconnect(self):
@@ -294,6 +307,14 @@ class _PredictiveLookaheadController:
         # this each tick to know where to aim).
         self._target_lock = threading.Lock()
         self._latest_intent: np.ndarray | None = None
+        # Chunk record (one per send_action call that passed an ActionChunk).
+        # Layout: (received_at, fps, frames_arr) where frames_arr is
+        # shape (N, n_motors). ``None`` means the latest send_action was a
+        # single dict → controller takes the velocity-extrapolation path.
+        # Latest-chunk-wins: a fresh chunk fully replaces any previous one;
+        # a single-dict send replaces with None. Tracked under _target_lock
+        # alongside _latest_intent so a tick sees a consistent snapshot.
+        self._latest_chunk: tuple[float, float, np.ndarray] | None = None
 
         # Thread control
         self._stop_event = threading.Event()
@@ -322,15 +343,35 @@ class _PredictiveLookaheadController:
 
     # ── Caller-facing hooks (invoked from main thread) ────────────────────
 
-    def set_intent(self, t: float, action: RobotAction) -> None:
-        """Receive the latest intent from the caller. Non-blocking."""
-        arr = self._action_to_array(action)
-        with self._target_lock:
-            self._latest_intent = arr
-        # Log into the intent series for the adaptive cross-corr (separate
-        # deque from the in-flight target so the control thread's velocity
-        # estimate doesn't compete for the lock).
-        self._intent_log.append((t, arr))
+    def set_intent(self, t: float, action: RobotAction | ActionChunk) -> None:
+        """Receive the latest intent from the caller. Non-blocking.
+
+        For an ``ActionChunk``, ``frames[0]`` is the "current intent" used
+        both for the adaptive-update log and as the fallback when the
+        chunk is consumed. The rest of the chunk is held under
+        ``_latest_chunk`` for the control thread's exact-lookup path.
+
+        For a single ``RobotAction`` dict, ``_latest_chunk`` is cleared so
+        subsequent ticks fall back to velocity extrapolation.
+        """
+        if isinstance(action, ActionChunk):
+            frames_arr = self._frames_to_array(action.frames)
+            current_intent = frames_arr[0]
+            with self._target_lock:
+                self._latest_intent = current_intent
+                self._latest_chunk = (t, action.fps, frames_arr)
+        else:
+            current_intent = self._action_to_array(action)
+            with self._target_lock:
+                self._latest_intent = current_intent
+                self._latest_chunk = None
+        # Log frame 0 (= "current intent") into the adaptive cross-corr
+        # series. Done with one sample per send_action call regardless of
+        # chunk shape — the adaptive update compares observed state vs
+        # historical intent at matching wall-times and that contract is
+        # invariant to whether the controller used exact-lookup or
+        # extrapolation to compute the goal.
+        self._intent_log.append((t, current_intent))
 
     def observe_state(self, t: float, obs: RobotObservation) -> None:
         """Receive a state sample from get_observation(). Non-blocking."""
@@ -361,27 +402,38 @@ class _PredictiveLookaheadController:
     def _tick(self) -> None:
         with self._target_lock:
             intent = self._latest_intent
+            chunk = self._latest_chunk
         if intent is None:
             return  # no intent received yet; nothing to send
 
         now = time.perf_counter()
-        self._intent_ring.append((now, intent.copy()))
 
-        # 1. Leader-velocity estimate (linear LSQ over the window)
-        cutoff = now - self._velocity_window_s
-        win = [(t, p) for t, p in self._intent_ring if t >= cutoff]
-        if len(win) < 2:
-            raw_shifted = intent.copy()
+        # 1. Compute the lookahead target.
+        # Two paths:
+        #   * Chunk available → exact lookup at "now + L" by index =
+        #     (elapsed + L) * fps. Past the chunk's last frame, fall back
+        #     to chunk-tail velocity extrapolation (which is exactly
+        #     what a real chunked policy faces at boundaries).
+        #   * No chunk → velocity LSQ over the recent intent stream,
+        #     same as the leader-arm teleop case.
+        if chunk is not None:
+            raw_shifted = self._lookup_in_chunk(chunk, now)
         else:
-            ts = np.array([t for t, _ in win], dtype=np.float64)
-            ps = np.stack([p for _, p in win])
-            ts_c = ts - ts.mean()
-            denom = float((ts_c * ts_c).sum())
-            if denom > 1e-12:
-                v_leader = (ts_c @ ps) / denom
-                raw_shifted = intent + v_leader * self._lookahead_s
-            else:
+            self._intent_ring.append((now, intent.copy()))
+            cutoff = now - self._velocity_window_s
+            win = [(t, p) for t, p in self._intent_ring if t >= cutoff]
+            if len(win) < 2:
                 raw_shifted = intent.copy()
+            else:
+                ts = np.array([t for t, _ in win], dtype=np.float64)
+                ps = np.stack([p for _, p in win])
+                ts_c = ts - ts.mean()
+                denom = float((ts_c * ts_c).sum())
+                if denom > 1e-12:
+                    v_leader = (ts_c @ ps) / denom
+                    raw_shifted = intent + v_leader * self._lookahead_s
+                else:
+                    raw_shifted = intent.copy()
 
         # 2. Predictor-corrector smoothing
         alpha = self._corrector_alpha
@@ -494,7 +546,47 @@ class _PredictiveLookaheadController:
             self._max_lookahead_s * 1000,
         )
 
+    # ── Chunk lookup ─────────────────────────────────────────────────────
+
+    def _lookup_in_chunk(self, chunk: tuple[float, float, np.ndarray], now: float) -> np.ndarray:
+        """Exact-lookup target at ``now + L`` using a received chunk.
+
+        Within the chunk: linear interpolation between adjacent frames.
+        Past the chunk's last frame: linear extrapolation from the
+        chunk's tail velocity. Sub-frame interpolation matches what
+        TrajectoryReplayTeleop already does for its own playback head;
+        keeping the math symmetric avoids a subtle bias between "what
+        was recorded" and "what was replayed".
+        """
+        received_at, fps, frames_arr = chunk
+        n_frames = frames_arr.shape[0]
+        elapsed = now - received_at
+        target_idx_f = (elapsed + self._lookahead_s) * fps
+        if target_idx_f <= n_frames - 1:
+            lo = max(0, int(target_idx_f))
+            hi = min(n_frames - 1, lo + 1)
+            alpha = target_idx_f - lo
+            return frames_arr[lo] * (1.0 - alpha) + frames_arr[hi] * alpha
+        # Past chunk end — extrapolate from the tail velocity. Using the
+        # last two frames keeps the extrapolation responsive to the most
+        # recent dynamics of the source rather than averaging the whole
+        # chunk, which would over-smooth at sharp transitions (e.g. an
+        # end-of-trajectory deceleration).
+        tail_v = (frames_arr[-1] - frames_arr[-2]) * fps if n_frames >= 2 else np.zeros_like(frames_arr[-1])
+        excess_s = (target_idx_f - (n_frames - 1)) / fps
+        return frames_arr[-1] + tail_v * excess_s
+
     # ── Helpers ──────────────────────────────────────────────────────────
+
+    def _frames_to_array(self, frames: tuple[dict[str, float], ...]) -> np.ndarray:
+        """Stack ``ActionChunk.frames`` into shape ``(N, n_motors)``.
+
+        Each frame goes through ``_action_to_array`` so the strict-key
+        check applies — a missing motor in any frame raises immediately
+        instead of producing a malformed chunk that the lookup path
+        would silently propagate.
+        """
+        return np.stack([self._action_to_array(f) for f in frames])
 
     def _action_to_array(self, action: RobotAction) -> np.ndarray:
         # Strict: every motor key must be present. A short dict here would

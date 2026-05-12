@@ -45,6 +45,9 @@ docstring on ``SO107FollowerPredictive`` for the long-form rationale.
 from __future__ import annotations
 
 import logging
+from typing import Any
+
+from lerobot.types import ActionChunk
 
 from ..bi_so107_follower.bi_so107_follower import BiSO107Follower
 from ..robot import Robot
@@ -136,3 +139,52 @@ class BiSO107FollowerPredictive(BiSO107Follower):
                     min_depth=0.2,
                     max_depth=0.6,
                 )
+
+    def send_action(self, action: dict[str, Any] | ActionChunk) -> dict[str, Any]:
+        """Route bimanual intent to each predictive arm.
+
+        For an ``ActionChunk``: split each frame's prefixed keys into two
+        per-arm sub-chunks (same fps) and forward each to its arm. Both
+        arms therefore get the full chunk horizon — exact-lookup runs
+        independently per-arm. The recorded action is the prefixed
+        frames[0] (= "current intent" for both arms combined), preserving
+        the dataset-writer contract.
+
+        For a plain dict: delegate to ``BiSO107Follower.send_action``,
+        which handles dry-run + per-arm prefix translation.
+        """
+        if not isinstance(action, ActionChunk):
+            return super().send_action(action)
+
+        if self.config.dry_run:
+            # Don't even route — return the current frame so callers
+            # recording the action keep working.
+            if not getattr(self, "_dry_run_logged", False):
+                logger.warning(
+                    "%s: dry_run=True - send_action is a no-op. Motors will NOT move. "
+                    "Disable dry_run in the robot config to drive the arms.",
+                    self,
+                )
+                self._dry_run_logged = True
+            return dict(action.frames[0])
+
+        # Split: each frame is {left_*: ..., right_*: ...} -> ({*: ...}, {*: ...})
+        left_frames = tuple(
+            {k.removeprefix("left_"): v for k, v in f.items() if k.startswith("left_")} for f in action.frames
+        )
+        right_frames = tuple(
+            {k.removeprefix("right_"): v for k, v in f.items() if k.startswith("right_")}
+            for f in action.frames
+        )
+        left_chunk = ActionChunk(fps=action.fps, frames=left_frames)
+        right_chunk = ActionChunk(fps=action.fps, frames=right_frames)
+
+        left_sent = self.left_arm.send_action(left_chunk)
+        right_sent = self.right_arm.send_action(right_chunk)
+
+        # Re-prefix and return — the dataset writer records this as the
+        # action for the current tick.
+        return {
+            **{f"left_{k}": v for k, v in left_sent.items()},
+            **{f"right_{k}": v for k, v in right_sent.items()},
+        }

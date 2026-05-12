@@ -19,6 +19,17 @@
 The whole control loop runs unchanged — only the leader oracle is swapped
 for a file reader. After the last frame, ``is_exhausted`` flips to True so
 the calling loop can exit cleanly (one trajectory = one episode).
+
+Lookahead lives in the consuming robot, not here. The teleop exposes
+two methods:
+
+  * ``get_action()`` — single intent at "now", interpolated between
+    bracketing trajectory frames. Back-compat path: any loop driver
+    that doesn't recognise ``ActionChunk`` keeps working unchanged.
+  * ``get_action_with_horizon()`` — a sliding window of upcoming
+    intent samples as an ``ActionChunk`` starting at "now". Chunk-aware
+    robots (e.g. ``SO107FollowerPredictive``) use this for exact-lookup
+    motor-τ compensation at ``now + L``.
 """
 
 import json
@@ -27,7 +38,7 @@ import time
 from pathlib import Path
 
 from lerobot.robots.safe_trajectory import validate_trajectory
-from lerobot.types import RobotAction
+from lerobot.types import ActionChunk, RobotAction
 
 from ..teleoperator import Teleoperator
 from .configuration_trajectory_replay import TrajectoryReplayTeleopConfig
@@ -58,6 +69,7 @@ class TrajectoryReplayTeleop(Teleoperator):
         self._timestamps: list[float] = []
         self._positions: list[list[float]] = []
         self._joints: list[str] = []
+        self._fps: float = 0.0
         self._start_t: float | None = None
         self._exhausted: bool = False
 
@@ -117,18 +129,22 @@ class TrajectoryReplayTeleop(Teleoperator):
         validate_trajectory(traj)
         if not traj["timestamps"]:
             raise ValueError(f"Trajectory at {path} is empty")
+        fps = float(traj.get("fps", 0))
+        if fps <= 0:
+            raise ValueError(f"Trajectory at {path} has non-positive fps={fps}")
         self._trajectory = traj
         self._timestamps = list(traj["timestamps"])
         self._positions = list(traj["positions"])
         self._joints = list(traj["joints"])
+        self._fps = fps
         self._start_t = None
         self._exhausted = False
         logger.info(
-            "TrajectoryReplayTeleop loaded %s: %d frames over %.1fs (recorded at %d fps)",
+            "TrajectoryReplayTeleop loaded %s: %d frames over %.1fs (recorded at %.1f fps)",
             path,
             len(self._timestamps),
             self.duration_s,
-            traj.get("fps", 0),
+            fps,
         )
 
     def calibrate(self) -> None:
@@ -138,115 +154,100 @@ class TrajectoryReplayTeleop(Teleoperator):
         pass
 
     def get_action(self) -> RobotAction:
+        """Return the single intent for the current wall-clock tick.
+
+        Back-compat path: any loop driver that doesn't call
+        ``get_action_with_horizon`` keeps working as before. The predictive
+        robot will fall back to its velocity-extrapolation path in that
+        case — slightly less accurate than exact-lookup but still correct.
+        """
+        elapsed = self._elapsed_now()
+        if elapsed >= self._timestamps[-1]:
+            self._exhausted = True
+            frame = list(self._positions[-1])
+        else:
+            frame = self._interp_at(elapsed)
+        return {j: float(p) for j, p in zip(self._joints, frame, strict=True)}
+
+    def get_action_with_horizon(self) -> ActionChunk:
+        """Return a chunk of upcoming intent samples starting at "now".
+
+        ``frames[0]`` matches ``get_action()`` at the same tick (same
+        ``_elapsed_now`` snapshot). The remainder is generated at
+        ``self._fps`` cadence by interpolating the trajectory at
+        ``elapsed + k / fps``.
+
+        Past the trajectory's end the chunk holds at the rest pose; the
+        consumer is expected to honour ``is_exhausted`` and stop the loop.
+        """
+        elapsed = self._elapsed_now()
+        if elapsed >= self._timestamps[-1]:
+            self._exhausted = True
+
+        fps = self._fps
+        # +1 so the integer count covers exactly the requested window:
+        # window_s = 0.5 s @ 30 fps → 15 inter-frame spans + 1 = 16 frames.
+        # max(2, ...) so we always have at least two frames for the
+        # consumer's chunk-tail extrapolation if it needs it.
+        n_frames = max(2, int(self.config.chunk_window_s * fps) + 1)
+        frames = tuple(
+            {j: float(p) for j, p in zip(self._joints, self._interp_at(elapsed + k / fps), strict=True)}
+            for k in range(n_frames)
+        )
+        return ActionChunk(fps=fps, frames=frames)
+
+    # ── Internals ───────────────────────────────────────────────────────
+
+    def _elapsed_now(self) -> float:
+        """Wall-time elapsed since the first ``get_action*`` call.
+
+        Anchoring on first-call (rather than ``connect()``) lets the
+        loop driver do setup work between connect and the first tick
+        without burning trajectory time. Both ``get_action`` and
+        ``get_action_with_horizon`` go through this, so they agree on
+        the anchor regardless of which one is called first.
+        """
         if self._trajectory is None:
-            raise RuntimeError("TrajectoryReplayTeleop.get_action() called before connect()")
+            raise RuntimeError("TrajectoryReplayTeleop accessed before connect()")
         now = time.perf_counter()
         if self._start_t is None:
             self._start_t = now
-        elapsed = now - self._start_t
+        return now - self._start_t
 
-        # Exhaustion is gated on wall time (elapsed), not the lookahead-
-        # shifted query time — the loop exits when the trajectory's wall
-        # duration is up, regardless of how far ahead we were peeking.
-        # When exhausted, clamp to the last recorded frame (which is the
-        # rest pose by recording invariant) rather than extrapolating off
-        # the end of the trajectory.
-        if elapsed >= self._timestamps[-1]:
-            self._exhausted = True
-            frame = self._positions[-1]
-        else:
-            frame = self._action_at(elapsed)
-        return {j: float(p) for j, p in zip(self._joints, frame, strict=True)}
-
-    def _action_at(self, elapsed: float) -> list[float]:
-        """Resolve the action vector for a given elapsed wall-time.
-
-        Handles three cases:
-
-        1. Full visibility (``simulate_chunk_size is None``): linear
-           interpolation between bracketing trajectory frames, with the
-           query shifted by ``lookahead_s``.
-        2. Chunk simulation, query inside the active chunk: same linear
-           interpolation but only over frames the current chunk exposes.
-        3. Chunk simulation, query past chunk end: linear extrapolation
-           from the chunk's own last-two-frame forward difference —
-           modelling what a chunked policy must do when its lookahead
-           outruns the chunk it currently holds.
-        """
-        query_t = elapsed + self.config.lookahead_s
+    def _interp_at(self, query_t: float) -> list[float]:
+        """Linear interpolation at ``query_t``. Clamps to the endpoints."""
         n = len(self._timestamps)
-
-        # The chunk window is determined by *elapsed* (current wall time),
-        # not by query_t — chunk arrival is a real-time event, the
-        # lookahead just shifts where we look INSIDE / PAST the chunk.
-        if self.config.simulate_chunk_size and self.config.simulate_chunk_size > 0:
-            size = self.config.simulate_chunk_size
-            current_idx = self._locate_frame(min(elapsed, self._timestamps[-1]))
-            chunk_start = (current_idx // size) * size
-            chunk_end = min(chunk_start + size - 1, n - 1)
-        else:
-            chunk_start = 0
-            chunk_end = n - 1
-
-        chunk_end_t = self._timestamps[chunk_end]
-
-        # Clamp left edge (before trajectory starts).
-        if query_t <= self._timestamps[chunk_start]:
-            return list(self._positions[chunk_start])
-
-        # Interpolation branch: query lands inside the chunk's visible window.
-        if query_t <= chunk_end_t:
-            idx = self._locate_frame_in_window(query_t, chunk_start, chunk_end)
-            if idx + 1 <= chunk_end:
-                t0 = self._timestamps[idx]
-                t1 = self._timestamps[idx + 1]
-                dt = t1 - t0
-                alpha = (query_t - t0) / dt if dt > 1e-9 else 0.0
-                p0 = self._positions[idx]
-                p1 = self._positions[idx + 1]
-                return [a + (b - a) * alpha for a, b in zip(p0, p1, strict=True)]
+        if query_t >= self._timestamps[-1]:
+            return list(self._positions[-1])
+        if query_t <= self._timestamps[0]:
+            return list(self._positions[0])
+        idx = self._locate_frame(query_t)
+        if idx + 1 >= n:
             return list(self._positions[idx])
-
-        # Extrapolation branch: query is past the visible chunk. Use the
-        # forward difference of the last two chunk frames as a velocity
-        # estimate — same information a real chunked policy would have.
-        if chunk_end == chunk_start:
-            # Pathological 1-frame chunk: no velocity available, hold.
-            return list(self._positions[chunk_end])
-        t_prev = self._timestamps[chunk_end - 1]
-        t_last = self._timestamps[chunk_end]
-        dt = t_last - t_prev
-        p_prev = self._positions[chunk_end - 1]
-        p_last = self._positions[chunk_end]
-        if dt < 1e-9:
-            return list(p_last)
-        ahead = query_t - t_last
-        return [last + (last - prev) * (ahead / dt) for prev, last in zip(p_prev, p_last, strict=True)]
+        t0 = self._timestamps[idx]
+        t1 = self._timestamps[idx + 1]
+        dt = t1 - t0
+        alpha = (query_t - t0) / dt if dt > 1e-9 else 0.0
+        p0 = self._positions[idx]
+        p1 = self._positions[idx + 1]
+        return [a + (b - a) * alpha for a, b in zip(p0, p1, strict=True)]
 
     def _locate_frame(self, elapsed: float) -> int:
-        """Index of the latest frame whose timestamp <= elapsed."""
-        # Maintain a cursor (`_cursor`) so the common forward-walking
-        # case is O(1) amortized rather than O(N) per call.
+        """Index of the latest frame whose timestamp <= elapsed.
+
+        Maintains a forward-walking cursor so the common case is O(1)
+        amortised. Resets if the query goes backwards (e.g. in tests or
+        when a new chunk extrapolates past the end and we then re-query
+        an earlier elapsed within the same tick).
+        """
         cursor = getattr(self, "_cursor", 0)
         n = len(self._timestamps)
-        # Reset cursor if it's stale (e.g., elapsed went backwards in tests).
         if cursor >= n or self._timestamps[cursor] > elapsed:
             cursor = 0
         while cursor + 1 < n and self._timestamps[cursor + 1] <= elapsed:
             cursor += 1
         self._cursor = cursor
         return cursor
-
-    def _locate_frame_in_window(self, t: float, lo: int, hi: int) -> int:
-        """Latest index in ``[lo, hi]`` whose timestamp <= t.
-
-        Linear scan from ``lo`` — chunks are small (typically <20 frames),
-        so a binary search isn't worth the complexity.
-        """
-        idx = lo
-        while idx + 1 <= hi and self._timestamps[idx + 1] <= t:
-            idx += 1
-        return idx
 
     def send_feedback(self, feedback: dict) -> None:
         # No physical leader — feedback is a no-op.
@@ -257,6 +258,7 @@ class TrajectoryReplayTeleop(Teleoperator):
         self._timestamps = []
         self._positions = []
         self._joints = []
+        self._fps = 0.0
         self._start_t = None
         self._exhausted = False
         if hasattr(self, "_cursor"):

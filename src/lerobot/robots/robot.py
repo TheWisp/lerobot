@@ -19,7 +19,7 @@ from pathlib import Path
 import draccus
 
 from lerobot.motors import MotorCalibration
-from lerobot.types import RobotAction, RobotObservation
+from lerobot.types import ActionChunk, RobotAction, RobotObservation
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 
 from .config import RobotConfig
@@ -197,17 +197,24 @@ class Robot(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def send_action(self, action: RobotAction) -> RobotAction:
+    def send_action(self, action: RobotAction | ActionChunk) -> RobotAction:
         """
         Send an action command to the robot.
 
         Args:
-            action (RobotAction): Dictionary representing the desired action. Its structure should match
-                :pymeth:`action_features`.
+            action: Either a ``RobotAction`` dict (single intent at the
+                current tick — historical shape) or an :class:`ActionChunk`
+                exposing a fixed-cadence horizon of intent samples.
+                Chunk-aware robots (e.g. ``SO107FollowerPredictive``) use
+                the horizon for exact-lookahead lookup; chunk-unaware
+                robots call :func:`lerobot.types.action_first_frame` at
+                the top of ``send_action`` to fall back to ``frames[0]``.
 
         Returns:
-            RobotAction: The action actually sent to the motors potentially clipped or modified, e.g. by
-                safety limits on velocity.
+            RobotAction: The action actually sent to the motors, potentially
+                clipped or modified. Always a dict (= ``frames[0]`` when a
+                chunk was passed) — the dataset writer records this and
+                relies on the dict shape.
         """
         pass
 

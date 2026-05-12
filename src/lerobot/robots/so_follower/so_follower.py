@@ -24,7 +24,7 @@ from lerobot.motors.feetech import (
     FeetechMotorsBus,
     OperatingMode,
 )
-from lerobot.types import RobotAction, RobotObservation
+from lerobot.types import ActionChunk, RobotAction, RobotObservation, action_first_frame
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from lerobot.utils.utils import log_say
 
@@ -220,12 +220,17 @@ class SOFollower(Robot):
         return obs_dict
 
     @check_if_not_connected
-    def send_action(self, action: RobotAction) -> RobotAction:
+    def send_action(self, action: RobotAction | ActionChunk) -> RobotAction:
         """Command arm to move to a target joint configuration.
 
         The relative action magnitude may be clipped depending on the configuration parameter
         `max_relative_target`. In this case, the action sent differs from original action.
         Thus, this function always returns the action actually sent.
+
+        If ``action`` is an :class:`ActionChunk`, this robot doesn't consume the
+        horizon — only ``frames[0]`` is used. Predictive / chunk-aware robots
+        override ``send_action`` to interpolate at ``now + L``. See
+        :class:`lerobot.robots.so107_follower_predictive.SO107FollowerPredictive`.
 
         Raises:
             RobotDeviceNotConnectedError: if robot is not connected.
@@ -234,6 +239,7 @@ class SOFollower(Robot):
             RobotAction: the action sent to the motors, potentially clipped.
         """
 
+        action = action_first_frame(action)
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
         # Cap goal position when too far away from present position.
