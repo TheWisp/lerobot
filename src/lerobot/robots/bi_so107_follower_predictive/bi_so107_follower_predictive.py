@@ -140,6 +140,30 @@ class BiSO107FollowerPredictive(BiSO107Follower):
                     max_depth=0.6,
                 )
 
+    def attach_teleop(self, teleop) -> None:
+        """Route per-arm teleop bindings to each predictive arm.
+
+        Expects a bimanual leader teleop with ``left_arm`` / ``right_arm``
+        sub-teleop attributes (BiSO107Leader / BiSO107LeaderHighRate both
+        expose this). Each predictive arm's controller polls its own
+        arm's teleop directly — no cross-arm coordination, no shared
+        cache. The two controllers operate independently at their own
+        rates against independent bus reads.
+
+        ``None`` detaches both arms.
+        """
+        if teleop is None:
+            self.left_arm.attach_teleop(None)
+            self.right_arm.attach_teleop(None)
+            return
+        if not hasattr(teleop, "left_arm") or not hasattr(teleop, "right_arm"):
+            raise TypeError(
+                f"BiSO107FollowerPredictive.attach_teleop expects a bimanual teleop with "
+                f"left_arm / right_arm sub-attributes; got {type(teleop).__name__}"
+            )
+        self.left_arm.attach_teleop(teleop.left_arm)
+        self.right_arm.attach_teleop(teleop.right_arm)
+
     def send_action(self, action: dict[str, Any] | ActionChunk) -> dict[str, Any]:
         """Route bimanual intent to each predictive arm.
 

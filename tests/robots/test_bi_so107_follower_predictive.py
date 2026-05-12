@@ -198,3 +198,33 @@ def test_get_observation_returns_prefixed_keys(bi_follower):
     # exactly the expected prefixed names.
     motor_keys = {k for k in obs if k.endswith(".pos")}
     assert motor_keys == expected
+
+
+def test_attach_teleop_routes_per_arm(bi_follower):
+    """A bimanual leader teleop with left_arm / right_arm sub-attributes
+    must be split per-arm — each follower controller polls its own
+    arm's teleop, not the bimanual wrapper."""
+    robot, _l, _r = bi_follower
+
+    bi_teleop = MagicMock()
+    bi_teleop.left_arm = MagicMock()
+    bi_teleop.right_arm = MagicMock()
+
+    robot.attach_teleop(bi_teleop)
+
+    assert robot.left_arm._controller._teleop is bi_teleop.left_arm
+    assert robot.right_arm._controller._teleop is bi_teleop.right_arm
+
+    robot.attach_teleop(None)
+    assert robot.left_arm._controller._teleop is None
+    assert robot.right_arm._controller._teleop is None
+
+
+def test_attach_teleop_rejects_non_bimanual_teleop(bi_follower):
+    """Passing a single-arm-shaped teleop (no left_arm/right_arm attrs)
+    must fail loudly — silently binding the same teleop to both arms
+    would mix up left and right poses on the buses."""
+    robot, _l, _r = bi_follower
+    single_arm_teleop = MagicMock(spec=["get_action"])  # no left_arm / right_arm
+    with pytest.raises(TypeError, match="left_arm / right_arm sub-attributes"):
+        robot.attach_teleop(single_arm_teleop)

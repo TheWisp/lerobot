@@ -311,6 +311,16 @@ def teleoperate(cfg: TeleoperateConfig):
     teleop.connect()
     robot.connect()
 
+    # Chunk-aware / predictive robots can poll the teleop directly at
+    # their own control rate (e.g. 200 Hz) instead of waiting for
+    # send_action pushes from the 30 Hz loop. Default Robot.attach_teleop
+    # is a no-op for non-predictive robots, so this is unconditionally
+    # safe to call. The loop's send_action path still runs for dataset
+    # recording — when the teleop is bound, send_action's intent is
+    # ignored by the controller, but the dict return value is still
+    # what the dataset writer records.
+    robot.attach_teleop(teleop)
+
     try:
         teleop_loop(
             teleop=teleop,

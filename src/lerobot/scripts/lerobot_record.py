@@ -1044,6 +1044,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         robot.connect()
         if teleop is not None:
             teleop.connect()
+            # Predictive / chunk-aware robots can poll teleop.get_action()
+            # at their own control rate. Default no-op for plain robots.
+            # See SO107FollowerPredictive.attach_teleop for details.
+            robot.attach_teleop(teleop)
 
         listener, events = init_keyboard_listener()
 

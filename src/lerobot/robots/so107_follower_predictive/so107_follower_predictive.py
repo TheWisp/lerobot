@@ -157,6 +157,29 @@ class SO107FollowerPredictive(SO107Follower):
 
         return obs_dict
 
+    def attach_teleop(self, teleop) -> None:
+        """Bind a teleop the controller polls at control rate.
+
+        With a teleop attached, the controller's 200 Hz tick calls
+        ``teleop.get_action()`` directly to get the latest intent
+        sample, bypassing ``_latest_intent`` set by ``send_action``.
+        This is the path that benefits from a high-rate leader
+        (``SO107LeaderHighRate``) whose ``get_action`` is a fast
+        cached read — the controller's velocity LSQ then sees one
+        distinct sample per tick (eliminating the under-shoot bias
+        of stair-stepped 30 Hz intents).
+
+        ``send_action`` continues to work as before; whichever path
+        wrote most recently wins each tick. The loop driver typically
+        keeps calling ``send_action`` for dataset recording. When a
+        teleop is attached, the recorded action is what the loop
+        driver passes in — usually ``teleop.get_action()`` — so the
+        dataset still gets the operator's intent.
+
+        Pass ``teleop=None`` to detach.
+        """
+        self._controller.set_teleop(teleop)
+
     @check_if_not_connected
     def send_action(self, action: RobotAction | ActionChunk) -> RobotAction:
         """Publish intent to the controller (non-blocking).
@@ -316,6 +339,16 @@ class _PredictiveLookaheadController:
         # alongside _latest_intent so a tick sees a consistent snapshot.
         self._latest_chunk: tuple[float, float, np.ndarray] | None = None
 
+        # Optional direct teleop binding. When set, ``_tick`` polls
+        # ``teleop.get_action()`` each iteration instead of reading
+        # ``_latest_intent`` (which is updated at the caller's
+        # send_action cadence — typically 30 Hz). Polling a high-rate
+        # teleop (SO107LeaderHighRate) at the controller's 200 Hz tick
+        # gives the velocity LSQ ~14 distinct samples in a 70 ms
+        # window — enough for an unbiased velocity estimate. Setting
+        # this to None reverts to the send_action-driven path.
+        self._teleop = None
+
         # Thread control
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -381,6 +414,23 @@ class _PredictiveLookaheadController:
         if state_arr is not None:
             self._state_log.append((t, state_arr))
 
+    def set_teleop(self, teleop) -> None:
+        """Bind an intent source the control thread polls each tick.
+
+        When set, ``_tick`` calls ``teleop.get_action()`` to get the
+        latest intent dict. This bypasses the ``send_action`` →
+        ``set_intent`` → ``_latest_intent`` push path. Use with a
+        high-rate teleop (e.g. SO107LeaderHighRate) whose
+        ``get_action()`` is a fast cached read; the controller's
+        velocity LSQ then sees one fresh sample per tick.
+
+        Pass ``None`` to detach. The teleop is expected to be
+        thread-safe with respect to concurrent ``get_action`` calls
+        (SO107LeaderHighRate guarantees this via its background-thread
+        cache).
+        """
+        self._teleop = teleop
+
     # ── Background control loop ───────────────────────────────────────────
 
     def _control_loop(self) -> None:
@@ -402,11 +452,29 @@ class _PredictiveLookaheadController:
                 next_tick = time.perf_counter()
 
     def _tick(self) -> None:
-        with self._target_lock:
-            intent = self._latest_intent
-            chunk = self._latest_chunk
-        if intent is None:
-            return  # no intent received yet; nothing to send
+        # Pull-path: a bound teleop is the authoritative intent source.
+        # Polling here at control rate gives the velocity LSQ one fresh
+        # sample per tick (vs. the push-path's stair-stepped 30 Hz).
+        # The polled intent is treated as a dict (no chunk semantics
+        # for the leader case — chunks come through send_action from
+        # sources that have a real future like trajectory_replay).
+        teleop = self._teleop
+        if teleop is not None:
+            try:
+                action = teleop.get_action()
+            except Exception:
+                logger.exception("%s teleop.get_action() failed", self._robot)
+                return
+            if not action:
+                return  # teleop returned empty — wait for next tick
+            intent = self._action_to_array(action)
+            chunk = None  # leader teleop never publishes a chunk
+        else:
+            with self._target_lock:
+                intent = self._latest_intent
+                chunk = self._latest_chunk
+            if intent is None:
+                return  # no intent received yet; nothing to send
 
         now = time.perf_counter()
 
