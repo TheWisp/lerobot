@@ -191,6 +191,16 @@ Live overlay during teleop/record showing how the current state compares to the 
   # Should match nothing.
   ```
 
+## Bug Reporting
+
+The "Report bug" button in the tab-bar (top right) stores a report **on the GUI server** under `~/.cache/lerobot/bug_reports/<timestamp>_<slug>/` with `report.json` + `screenshot.png`. Backend: `gui/api/bug_reports.py`. Frontend: `gui/static/bug_report.js`. Nothing is sent off the server.
+
+- [Mid] **Upload to GitHub issue**: optional "Upload" button on a saved report. Use `gh issue create --repo <owner>/<repo> --title ... --body-file report.json --attach screenshot.png` (piggy-backs on `gh auth login` configured on the GUI server). If `gh` is missing or unauthenticated, the button is disabled with a tooltip. Add `GET /api/bug_reports/{id}/gh-status` to surface readiness, and `POST /api/bug_reports/{id}/upload-gh` to do the upload. Server-side save stays the default; upload is opt-in per report.
+- [Low] **Vendor html2canvas**: today the client lazy-loads html2canvas from jsdelivr. Air-gapped / restricted-network setups need a vendored copy at `gui/static/vendor/html2canvas.min.js` with the loader preferring the local path. ~150 KB.
+- [Low] **Recent reports panel**: small "View past reports" section that lists what `GET /api/bug_reports` returns. On localhost the server path is also the user's path, so a "copy path" affordance is enough; once hosted, the panel should offer "download report" (zip the directory) instead, since the server filesystem won't be the user's.
+- [Low] **Camera/video tiles in screenshots**: html2canvas renders `<video>` and `<canvas>` elements blank or as poster frames. For reports about a live camera glitch this drops the most useful pixels. Workaround: also snapshot each visible `<video>` / `<canvas>` via its own `.captureStream()` / `getContext('2d').getImageData()` and stitch them into the report directory as separate PNGs.
+- [Low] **Per-user scoping when hosted**: today every report lands in one shared directory keyed by timestamp+slug. Fine for a single-operator localhost setup; on a hosted deployment we'd want `<user>/<timestamp>_<slug>/` (or a small SQLite index) so triage can filter by submitter and one user can't see another's reports. Postpone until there's a real auth story.
+
 ## UX
 
 - [Mid] Cross-reference navigation: clickable links from dataset/model/robot references to their tab (generic utility, not one-off per instance)

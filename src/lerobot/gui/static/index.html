@@ -14,6 +14,7 @@
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
         <span id="hf-auth-indicator" style="margin-left:auto; font-size:11px; color:var(--text-secondary, #666); padding-right:12px; cursor:default;" title="HuggingFace Hub login status"></span>
+        <button id="bug-report-btn" class="bug-report-btn" onclick="openBugReportDialog()" title="Report a bug — screenshot is captured automatically">Report bug</button>
     </div>
 
     <!-- Data tab (existing) -->
@@ -382,6 +383,33 @@
     <!-- Toast notifications -->
     <div class="toast-container" id="toast-container"></div>
 
+    <!-- Bug report modal -->
+    <div id="bug-report-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:420px; max-width:560px;">
+            <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Report a bug</h3>
+            <p style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
+                Stored on the GUI server under <code style="color:var(--text-primary, #ccc);">~/.cache/lerobot/bug_reports/</code>. Not sent anywhere else.
+            </p>
+            <div style="margin-bottom:10px;">
+                <label for="bug-report-title" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Title</label>
+                <input id="bug-report-title" type="text" placeholder="Short summary of the issue" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+            </div>
+            <div style="margin-bottom:10px;">
+                <label for="bug-report-description" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">What happened? (optional)</label>
+                <textarea id="bug-report-description" rows="5" placeholder="Steps to reproduce, what you expected, what you saw instead." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box; resize:vertical; font-family:inherit;"></textarea>
+            </div>
+            <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-secondary, #999); margin-bottom:12px; user-select:none;">
+                <input type="checkbox" id="bug-report-include-screenshot" checked>
+                Attach screenshot of the current view
+            </label>
+            <div id="bug-report-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button id="bug-report-cancel" onclick="closeBugReportDialog()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
+                <button id="bug-report-submit" onclick="submitBugReport()" style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Submit</button>
+            </div>
+        </div>
+    </div>
+
     <!-- "Add feature" dialog (generic schema-add for non-default features). -->
     <dialog id="add-feature-dialog" class="add-feature-dialog">
         <form method="dialog" id="add-feature-form">
@@ -419,5 +447,6 @@
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=39"></script>
     <script src="/static/model.js?v=3"></script>
+    <script src="/static/bug_report.js?v=1"></script>
 </body>
 </html>

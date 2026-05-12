@@ -9,6 +9,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .tab:hover { color: #ccc; background: rgba(255,255,255,0.04); }
 .tab.active { color: #4fc3f7; border-bottom-color: #4fc3f7; }
 
+.bug-report-btn { align-self: center; margin-right: 4px; padding: 4px 12px; background: transparent; color: #888; border: 1px solid #2a4a6f; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 11px; transition: color 0.15s, border-color 0.15s, background 0.15s; }
+.bug-report-btn:hover { color: #ccc; border-color: #4fc3f7; background: rgba(79,195,247,0.08); }
+
 /* Tab content */
 .tab-content { display: none; flex: 1; overflow: hidden; }
 .tab-content.active { display: flex; flex-direction: column; }
