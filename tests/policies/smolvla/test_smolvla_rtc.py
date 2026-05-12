@@ -28,6 +28,7 @@ from tests.utils import require_cuda, skip_if_package_missing
 
 
 @skip_if_package_missing("transformers")
+@skip_if_package_missing("num2words")
 @require_cuda
 def test_smolvla_rtc_initialization():
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy  # noqa: F401
@@ -66,6 +67,7 @@ def test_smolvla_rtc_initialization():
 
 
 @skip_if_package_missing("transformers")
+@skip_if_package_missing("num2words")
 @require_cuda
 def test_smolvla_rtc_initialization_without_rtc_config():
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy  # noqa: F401
@@ -88,6 +90,7 @@ def test_smolvla_rtc_initialization_without_rtc_config():
 
 
 @skip_if_package_missing("transformers")
+@skip_if_package_missing("num2words")
 @require_cuda
 @pytest.mark.skipif(True, reason="Requires pretrained SmolVLA model weights")
 def test_smolvla_rtc_inference_with_prev_chunk():
@@ -171,6 +174,7 @@ def test_smolvla_rtc_inference_with_prev_chunk():
 
 
 @skip_if_package_missing("transformers")
+@skip_if_package_missing("num2words")
 @require_cuda
 @pytest.mark.skipif(True, reason="Requires pretrained SmolVLA model weights")
 def test_smolvla_rtc_inference_without_prev_chunk():
@@ -245,6 +249,7 @@ def test_smolvla_rtc_inference_without_prev_chunk():
 
 
 @skip_if_package_missing("transformers")
+@skip_if_package_missing("num2words")
 @require_cuda
 @pytest.mark.skipif(True, reason="Requires pretrained SmolVLA model weights")
 def test_smolvla_rtc_validation_rules():

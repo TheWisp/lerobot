@@ -29,6 +29,10 @@ import torch
 from torch import Tensor
 
 pytest.importorskip("transformers")
+# MultiTaskDiTPolicy imports diffusers at module load — guard the import
+# so a missing optional dep produces a clean skip instead of an
+# ImportError mid-collection.
+pytest.importorskip("diffusers")
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",
