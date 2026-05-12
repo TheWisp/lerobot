@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -179,7 +180,14 @@ def save_edits_to_file(root: Path, edits: list[PendingEdit]) -> None:
         "edits": [_edit_to_dict(e) for e in edits],
     }
 
-    edits_file.write_text(json.dumps(data, indent=2))
+    # Atomic write: stage to a sibling .tmp and rename. A power-loss /
+    # process-kill between `write_text` chunks would otherwise leave the
+    # user with a half-written JSON the next session refuses to parse —
+    # which means silently-lost pending edits even though the user saw
+    # the "Saved …" toast.
+    tmp_file = edits_file.with_suffix(edits_file.suffix + ".tmp")
+    tmp_file.write_text(json.dumps(data, indent=2))
+    os.replace(tmp_file, edits_file)
     logger.info(f"Saved {len(edits)} edits to {edits_file}")
 
 
