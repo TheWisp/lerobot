@@ -15,6 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from typing import Literal
 
 from ..config import RobotConfig
 from ..so_follower.config_so_follower import SOFollowerConfig
@@ -54,9 +55,26 @@ class SO107FollowerPredictiveRobotConfig(RobotConfig, SOFollowerConfig):
     # on bi_so107 is 0.3 (70 % predictor + 30 % fresh leader-based shift).
     corrector_alpha: float = 1.0
 
-    # Window over which leader velocity is estimated (LSQ slope). Too
-    # short → noise amplified; too long → phase lag in the estimate.
+    # Window over which leader velocity is estimated. Too short →
+    # noise amplified; too long → phase lag (for centered estimators).
     velocity_window_ms: float = 70.0
+
+    # How the controller computes v_leader from the window:
+    #   * ``"quad"``    — LSQ quadratic fit, slope evaluated at the
+    #                     most-recent sample's time. Unbiased estimate of
+    #                     v(now) under acceleration. Backtest winner on
+    #                     real teleop motion (scripts/backtest_velocity_
+    #                     estimators.py). Default.
+    #   * ``"linear"``  — LSQ linear slope (original prototype behaviour).
+    #                     Centered velocity estimator → biased under
+    #                     acceleration. Kept selectable for parity with
+    #                     prior measurements / regression-debugging.
+    #   * ``"forward_diff"`` — Two-sample causal difference at the window
+    #                          tail. Lowest bias but highest noise
+    #                          sensitivity at the control rate; fine for
+    #                          smooth high-rate sources, marginal at
+    #                          30 Hz dict-push sources.
+    velocity_estimator: Literal["quad", "linear", "forward_diff"] = "quad"
 
     # Control-thread rate. The bus comfortably sustains 170+ Hz at P=48
     # under sync_write-only load. 200 Hz is the prototype default.

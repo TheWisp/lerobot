@@ -91,6 +91,7 @@ class BiSO107FollowerPredictive(BiSO107Follower):
             "control_rate_hz": config.control_rate_hz,
             "adaptive": config.adaptive,
             "max_step_deg": config.max_step_deg,
+            "velocity_estimator": config.velocity_estimator,
         }
 
         left_arm_config = SO107FollowerPredictiveRobotConfig(
