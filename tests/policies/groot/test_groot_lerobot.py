@@ -34,6 +34,10 @@ from lerobot.utils.device_utils import auto_select_torch_device
 from tests.utils import require_cuda
 
 pytest.importorskip("transformers")
+# Groot's modeling stack imports peft at module load via gr00t.eagle2_hg_model;
+# without the groot extra installed the test crashes with ImportError instead
+# of skipping. Guard the import explicitly.
+pytest.importorskip("peft")
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",
