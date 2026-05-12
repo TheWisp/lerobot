@@ -179,6 +179,15 @@ class SO107FollowerPredictive(SO107Follower):
         Pass ``teleop=None`` to detach.
         """
         self._controller.set_teleop(teleop)
+        if teleop is None:
+            logger.info("%s: teleop detached; controller falls back to send_action push path", self)
+        else:
+            logger.info(
+                "%s: bound to teleop %r — controller polls teleop.get_action() at %.0f Hz",
+                self,
+                type(teleop).__name__,
+                self.config.control_rate_hz,
+            )
 
     @check_if_not_connected
     def send_action(self, action: RobotAction | ActionChunk) -> RobotAction:
