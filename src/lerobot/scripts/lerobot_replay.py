@@ -85,8 +85,8 @@ from lerobot.utils.constants import ACTION
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import (
-    init_logging,
     log_say,
+    setup_run_logging,
 )
 
 
@@ -108,11 +108,15 @@ class ReplayConfig:
     dataset: DatasetReplayConfig
     # Use vocal synthesis to read events.
     play_sounds: bool = True
+    # Where to write the per-run log file. Used as the output_dir for
+    # setup_run_logging so crashes (main thread + background threads) land
+    # in a per-timestamp log file instead of being lost to stderr.
+    log_output_dir: str = "outputs/replay"
 
 
 @parser.wrap()
 def replay(cfg: ReplayConfig):
-    init_logging()
+    setup_run_logging(cfg.log_output_dir, "replay")
     logging.info(pformat(asdict(cfg)))
 
     robot_action_processor = make_default_robot_action_processor()
