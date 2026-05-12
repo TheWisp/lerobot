@@ -118,12 +118,23 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
                 await websocket.send_json({"type": "locked", "message": "Dataset is being modified"})
                 return
 
-            jpeg_bytes = _app_state.frame_cache.get_or_decode(
-                dataset_id=dataset_id,
-                episode_idx=episode_idx,
-                frame_idx=frame_idx,
-                camera_key=camera_key,
-                decode_fn=decode_frame,
+            # `get_or_decode` is hot on cache hits (~1 µs dict lookup) but on
+            # misses runs torchcodec frame decode + libjpeg-turbo encode,
+            # both of which can take 1-10 ms per frame. Running that on the
+            # event loop blocks every other coroutine (other WS playback
+            # tabs, HTTP requests, the run.py SSE keepalive) — so push the
+            # whole call into the default executor. The C extensions
+            # release the GIL during their hot paths so this scales with
+            # the thread pool.
+            jpeg_bytes = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _app_state.frame_cache.get_or_decode(
+                    dataset_id=dataset_id,
+                    episode_idx=episode_idx,
+                    frame_idx=frame_idx,
+                    camera_key=camera_key,
+                    decode_fn=decode_frame,
+                ),
             )
 
             await websocket.send_json(
