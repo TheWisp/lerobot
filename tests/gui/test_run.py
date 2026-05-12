@@ -130,6 +130,36 @@ class TestProfileToCliArgs:
         assert "--robot.port=/dev/ttyACM0" in args
         assert not any("cameras" in a for a in args)
 
+    def test_calibration_dir_round_trips_through_cli(self):
+        """Regression for commit 1b49664ba.
+
+        ``calibration_dir`` lives in ``_SKIP_FIELDS`` on the backend schema
+        (it's not rendered as a normal form input in the GUI), but the
+        profile JSON on disk still carries it and the launcher MUST pass
+        it through as a CLI arg when present in the profile data —
+        otherwise ``Robot.__init__`` falls back to the wrong default path
+        and the calibration JSON isn't found, triggering a recalibration
+        prompt that stalls the GUI subprocess silently.
+
+        The dropping bug was on the frontend (``_collectFormFields``
+        rebuilt the fields dict from the schema only, erasing any
+        non-schema keys before sending to ``/api/run/teleoperate``).
+        Fixed by having the frontend preserve loaded-data fields. This
+        test pins the backend's contract: given a profile that contains
+        ``calibration_dir``, the launcher emits it.
+        """
+        profile = {
+            "type": "bi_so107_follower_predictive",
+            "fields": {
+                "id": "white",
+                "left_arm_port": "/dev/ttyACM0",
+                "right_arm_port": "/dev/ttyACM2",
+                "calibration_dir": "/home/test/cal/so107_follower",
+            },
+        }
+        args = _profile_to_cli_args(profile, "robot")
+        assert "--robot.calibration_dir=/home/test/cal/so107_follower" in args
+
 
 # ============================================================================
 # _ensure_no_active_process
