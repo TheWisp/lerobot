@@ -168,6 +168,77 @@ def test_successful_connect_does_not_disconnect():
     assert len(robot_module._preview_cameras) == 2
 
 
+def test_cleanup_in_process_resources_releases_everything():
+    """Server-shutdown hook releases preview cameras + recording robots.
+
+    Without this cleanup the OS still reclaims FDs on process death, but
+    motor torque / serial port handoff is never run cleanly, leaving the
+    hardware in whatever state the user last touched. The helper must:
+    - disconnect every preview camera and clear the lists
+    - stop any safe-trajectory recorder and disconnect its robot
+    - disconnect the rest-position recording robot
+    """
+    from lerobot.gui.api.robot import cleanup_in_process_resources
+
+    cam_a = MagicMock()
+    cam_b = MagicMock()
+    robot_module._preview_cameras.extend([cam_a, cam_b])
+    robot_module._preview_camera_info.extend([{"id": "a"}, {"id": "b"}])
+
+    rest_robot = MagicMock()
+    robot_module._rest_recording_robot = rest_robot
+
+    traj_robot = MagicMock()
+    traj_recorder = MagicMock()
+    robot_module._trajectory_recording_robot = traj_robot
+    robot_module._trajectory_recorder = traj_recorder
+
+    try:
+        cleanup_in_process_resources()
+    finally:
+        robot_module._rest_recording_robot = None
+        robot_module._trajectory_recording_robot = None
+        robot_module._trajectory_recorder = None
+
+    cam_a.disconnect.assert_called_once()
+    cam_b.disconnect.assert_called_once()
+    rest_robot.disconnect.assert_called_once()
+    traj_robot.disconnect.assert_called_once()
+    traj_recorder.stop.assert_called_once()
+    assert robot_module._preview_cameras == []
+    assert robot_module._preview_camera_info == []
+    assert robot_module._rest_recording_robot is None
+    assert robot_module._trajectory_recording_robot is None
+    assert robot_module._trajectory_recorder is None
+
+
+def test_cleanup_in_process_resources_survives_disconnect_errors():
+    """A camera or robot raising during disconnect must not break the rest
+    of the sweep — `cleanup_in_process_resources` runs on shutdown so each
+    step has to be best-effort.
+    """
+    from lerobot.gui.api.robot import cleanup_in_process_resources
+
+    bad_cam = MagicMock()
+    bad_cam.disconnect.side_effect = RuntimeError("camera HW gone")
+    robot_module._preview_cameras.append(bad_cam)
+    robot_module._preview_camera_info.append({"id": "bad"})
+
+    bad_robot = MagicMock()
+    bad_robot.disconnect.side_effect = RuntimeError("motor bus locked")
+    robot_module._rest_recording_robot = bad_robot
+
+    try:
+        cleanup_in_process_resources()  # must not raise
+    finally:
+        robot_module._rest_recording_robot = None
+
+    bad_cam.disconnect.assert_called_once()
+    bad_robot.disconnect.assert_called_once()
+    assert robot_module._preview_cameras == []
+    assert robot_module._rest_recording_robot is None
+
+
 def test_partial_failure_does_not_leak_other_cameras():
     """One camera failing mid-iteration must not affect the others."""
     mock_opencv_cls, opencv_instances = _make_mock_camera_class([None, RuntimeError("cam 2 failed"), None])

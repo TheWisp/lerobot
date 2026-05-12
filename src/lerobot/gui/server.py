@@ -127,6 +127,9 @@ async def _terminate_active_process(*, sigint_grace_s: float = 5.0) -> bool:
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up subprocesses + their shared memory on server shutdown."""
+    import asyncio
+
+    from lerobot.gui.api.robot import cleanup_in_process_resources
     from lerobot.gui.api.run import _stop_debug_process
     from lerobot.robots.obs_stream import cleanup_stale_streams
 
@@ -140,6 +143,12 @@ async def shutdown_event():
     n = cleanup_stale_streams()
     if n:
         logger.info("Swept %d stale obs-stream shm segment(s) on shutdown", n)
+    # Release in-process hardware: preview cameras the Robot tab opened,
+    # plus any rest-position / safe-trajectory recording robot the user
+    # started but never finished. Run in the default executor — the
+    # underlying disconnect()s do blocking serial / V4L2 I/O.
+    with contextlib.suppress(Exception):
+        await asyncio.get_event_loop().run_in_executor(None, cleanup_in_process_resources)
 
 
 # Include API routers

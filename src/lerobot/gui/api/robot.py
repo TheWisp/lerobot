@@ -453,6 +453,37 @@ def _close_preview_cameras() -> None:
     _preview_camera_info.clear()
 
 
+def cleanup_in_process_resources() -> None:
+    """Disconnect every in-process hardware resource the robot router holds.
+
+    Called from the server's shutdown hook so cameras and any orphaned
+    rest-position / safe-trajectory recording robot are released cleanly
+    (motors detorqued, serial ports closed, V4L2 nodes freed) instead of
+    relying on interpreter shutdown to drop the FDs.
+
+    Defensive on every step — if disconnect raises we still null out the
+    module global so a retry doesn't double-free.
+    """
+    global _rest_recording_robot, _trajectory_recording_robot, _trajectory_recorder
+
+    _close_preview_cameras()
+
+    if _trajectory_recorder is not None:
+        with contextlib.suppress(Exception):
+            _trajectory_recorder.stop()
+        _trajectory_recorder = None
+
+    if _trajectory_recording_robot is not None:
+        with contextlib.suppress(Exception):
+            _trajectory_recording_robot.disconnect()
+        _trajectory_recording_robot = None
+
+    if _rest_recording_robot is not None:
+        with contextlib.suppress(Exception):
+            _rest_recording_robot.disconnect()
+        _rest_recording_robot = None
+
+
 @router.post("/detect-cameras")
 async def detect_cameras() -> list[dict]:
     """Detect available cameras and open them for preview."""
