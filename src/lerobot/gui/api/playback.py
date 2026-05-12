@@ -286,3 +286,10 @@ async def playback_stream(websocket: WebSocket, dataset_id: str):
         playing = False
         if play_task and not play_task.done():
             play_task.cancel()
+            # Await so the cancellation actually propagates before the
+            # handler returns — otherwise `play_loop` may still be in
+            # flight, hitting `send_frame` on a closed WebSocket and
+            # spamming logs. Same pattern used everywhere else in this
+            # handler when cancelling play_task.
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await play_task
