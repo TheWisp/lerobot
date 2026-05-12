@@ -2518,18 +2518,24 @@ async def visualize_episode(dataset_id: str, episode_idx: int) -> dict[str, str]
     from datetime import datetime as _dt
 
     log_path = log_dir / f"rerun_viz_{_dt.now().strftime('%Y%m%d_%H%M%S')}_ep{episode_idx}.log"
-    log_fh = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 - subprocess owns the handle until exit
-
+    # Open the log file, hand it to the subprocess as stdout/stderr, then
+    # close the parent's copy. The subprocess inherits its own FD via fork,
+    # so it can still write to the file. Without the close(), every viz
+    # launch leaks one FD in the GUI server process until garbage
+    # collection runs — and the server is long-lived.
+    log_fh = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 - handed to subprocess; closed below
     try:
-        subprocess.Popen(
-            cmd,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    except Exception as e:
+        try:
+            subprocess.Popen(
+                cmd,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to launch visualizer: {e}") from e
+    finally:
         log_fh.close()
-        raise HTTPException(status_code=500, detail=f"Failed to launch visualizer: {e}") from e
     logger.info(f"Rerun viz log: {log_path}")
 
     return {"status": "ok", "message": f"Launched Rerun for episode {episode_idx}"}
