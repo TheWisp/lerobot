@@ -321,6 +321,7 @@ class _PredictiveLookaheadController:
         self._control_dt = 1.0 / cfg.control_rate_hz
         self._max_step = cfg.max_step_deg
         self._adaptive = cfg.adaptive
+        self._velocity_estimator: str = cfg.velocity_estimator
 
         # Mutable state (control thread)
         self._lookahead_s = cfg.lookahead_ms / 1000.0
@@ -523,13 +524,8 @@ class _PredictiveLookaheadController:
             else:
                 ts = np.array([t for t, _ in win], dtype=np.float64)
                 ps = np.stack([p for _, p in win])
-                ts_c = ts - ts.mean()
-                denom = float((ts_c * ts_c).sum())
-                if denom > 1e-12:
-                    v_leader = (ts_c @ ps) / denom
-                    raw_shifted = intent + v_leader * self._lookahead_s
-                else:
-                    raw_shifted = intent.copy()
+                v_leader = self._estimate_velocity(ts, ps)
+                raw_shifted = intent + v_leader * self._lookahead_s if v_leader is not None else intent.copy()
 
         # 2. Predictor-corrector smoothing
         alpha = self._corrector_alpha
@@ -648,6 +644,93 @@ class _PredictiveLookaheadController:
             self._lookahead_s * 1000,
             self._max_lookahead_s * 1000,
         )
+
+    # ── Velocity estimators ──────────────────────────────────────────────
+    #
+    # Three implementations selectable by ``config.velocity_estimator``:
+    #
+    #   * ``"quad"``         — LSQ quadratic fit, slope evaluated at the
+    #                          most-recent sample's time. Unbiased v(now)
+    #                          for any motion with bounded acceleration
+    #                          over the window. Backtest winner on real
+    #                          teleop motion AND 1-3 Hz sinusoids.
+    #   * ``"linear"``       — LSQ linear slope (centered velocity).
+    #                          Original prototype behaviour. Biased by
+    #                          ~a·w/2 under acceleration → systematically
+    #                          inflates measured apparent τ by 50-80 ms in
+    #                          the leader-teleop case (vs. chunk-path
+    #                          ground truth ~95 ms).
+    #   * ``"forward_diff"`` — Two-sample causal difference. Lowest bias,
+    #                          highest noise. Tied with quad on the
+    #                          recorded backtest, slightly noisier in
+    #                          theory.
+    #
+    # All three return ``np.ndarray`` of shape (n_motors,) for the
+    # estimated velocity at "now", or ``None`` when the window is
+    # degenerate (single sample, all-same timestamps).
+    # Backtest comparison: scripts/backtest_velocity_estimators.py.
+
+    def _estimate_velocity(self, ts: np.ndarray, ps: np.ndarray) -> np.ndarray | None:
+        """Dispatch to the configured estimator."""
+        if self._velocity_estimator == "quad":
+            return self._velocity_lsq_quad_end(ts, ps)
+        if self._velocity_estimator == "linear":
+            return self._velocity_lsq_linear(ts, ps)
+        if self._velocity_estimator == "forward_diff":
+            return self._velocity_forward_diff(ts, ps)
+        # Unknown — fall back to linear with a one-time warning. Should not
+        # be reachable because the field is Literal-typed at construction,
+        # but defensive in case someone instantiates the controller
+        # bypassing the dataclass init.
+        logger.warning(
+            "Unknown velocity_estimator=%r; falling back to 'linear'",
+            self._velocity_estimator,
+        )
+        return self._velocity_lsq_linear(ts, ps)
+
+    @staticmethod
+    def _velocity_lsq_linear(ts: np.ndarray, ps: np.ndarray) -> np.ndarray | None:
+        """Original prototype behaviour. Slope = centered velocity over the
+        window. Returns slope for each joint. Biased under acceleration."""
+        ts_c = ts - ts.mean()
+        denom = float((ts_c * ts_c).sum())
+        if denom < 1e-12:
+            return None
+        return (ts_c @ ps) / denom
+
+    @staticmethod
+    def _velocity_lsq_quad_end(ts: np.ndarray, ps: np.ndarray) -> np.ndarray | None:
+        """Fit p(t) = a + b·t + c·t² with t expressed relative to the
+        most-recent sample. The slope at the most-recent sample is the
+        coefficient b. Same column-rank check as linear; falls back to
+        linear on rank deficiency (e.g. only 2 samples available)."""
+        if ts.shape[0] < 3:
+            # Quadratic fit needs at least 3 points to be defined.
+            return _PredictiveLookaheadController._velocity_lsq_linear(ts, ps)
+        t_rel = ts - ts[-1]  # ≤ 0; slope at t_rel=0 is the "now" slope
+        # Design matrix for [a, b, c] in p = a + b·t + c·t²
+        design = np.stack([np.ones_like(t_rel), t_rel, t_rel * t_rel], axis=1)
+        # lstsq returns coefficients shape (3,) or (3, n_motors) depending
+        # on ps shape; ps is (n, n_motors), result is (3, n_motors). The
+        # slope at t_rel=0 is coef[1].
+        try:
+            coef, *_ = np.linalg.lstsq(design, ps, rcond=None)
+        except np.linalg.LinAlgError:
+            return _PredictiveLookaheadController._velocity_lsq_linear(ts, ps)
+        return coef[1]
+
+    @staticmethod
+    def _velocity_forward_diff(ts: np.ndarray, ps: np.ndarray) -> np.ndarray | None:
+        """v(now) ≈ (p[-1] − p[-2]) / dt. Two-sample causal difference at
+        the tail of the window. Unbiased, but noise-sensitive at small
+        dt — fine when the source's intent log is smooth, marginal when
+        samples carry measurement noise."""
+        if ts.shape[0] < 2:
+            return None
+        dt = float(ts[-1] - ts[-2])
+        if abs(dt) < 1e-9:
+            return None
+        return (ps[-1] - ps[-2]) / dt
 
     # ── Chunk lookup ─────────────────────────────────────────────────────
 

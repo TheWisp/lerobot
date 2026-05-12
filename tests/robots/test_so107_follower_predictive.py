@@ -918,3 +918,150 @@ class TestChunkLookupMath:
         np.testing.assert_allclose(result_override, frames_arr[0])
         result_default = ctrl._lookup_in_chunk(chunk, now=100.0)
         np.testing.assert_allclose(result_default, np.array([1.5] * 7))
+
+
+# ============================================================================
+# Velocity estimator dispatch — algorithm correctness
+# ============================================================================
+#
+# Verifies each of the three velocity estimators ("quad", "linear",
+# "forward_diff") returns the expected slope on synthetic motion. The
+# "quad" estimator is the new default per the backtest
+# (scripts/backtest_velocity_estimators.py); these tests pin its
+# unbiased-under-acceleration property and the dispatch wiring.
+
+
+class TestVelocityEstimators:
+    """Algorithm-level tests on the three estimators.
+
+    Each estimator is a static method, so we test them directly without
+    spinning up a controller instance.
+    """
+
+    def _ts(self, n: int, dt: float = 0.005, t0: float = 0.0):
+        import numpy as np
+
+        return t0 + dt * np.arange(n, dtype=np.float64)
+
+    def test_linear_on_constant_velocity_returns_v(self):
+        """All three estimators must recover the true velocity exactly
+        when the signal is a perfect line — the easy case."""
+        import numpy as np
+
+        from lerobot.robots.so107_follower_predictive.so107_follower_predictive import (
+            _PredictiveLookaheadController,
+        )
+
+        ts = self._ts(20)
+        v_true = 5.0  # units / s
+        ps = np.stack([v_true * ts] * 7, axis=1)  # (n, 7), same on every joint
+        for name, fn in (
+            ("linear", _PredictiveLookaheadController._velocity_lsq_linear),
+            ("quad", _PredictiveLookaheadController._velocity_lsq_quad_end),
+            ("forward_diff", _PredictiveLookaheadController._velocity_forward_diff),
+        ):
+            v = fn(ts, ps)
+            assert v is not None, f"{name} returned None for clean linear signal"
+            np.testing.assert_allclose(v, [v_true] * 7, atol=1e-9, err_msg=f"{name} biased on constant v")
+
+    def test_quad_unbiased_under_acceleration_but_linear_is_biased(self):
+        """Synthetic accelerating signal p(t) = 0.5·a·t². True v(t_end) = a·t_end.
+
+        ``linear`` reports slope ≈ a·t_midpoint = a·t_end/2 (HALF the right
+        answer in the limit). ``quad`` recovers a·t_end exactly. This is
+        the head-to-head that justifies the "quad" default — the same
+        artifact responsible for ~75 ms of apparent τ inflation on the
+        leader-teleop path.
+        """
+        import numpy as np
+
+        from lerobot.robots.so107_follower_predictive.so107_follower_predictive import (
+            _PredictiveLookaheadController,
+        )
+
+        ts = self._ts(20)  # 0..0.095 s
+        a = 100.0  # accel units/s²
+        # Centered around 0 so v at midpoint is a·t_mid = a·0.0475 ≈ 4.75
+        # and v at end is a·t_end = a·0.095 ≈ 9.5.
+        ps = np.stack([0.5 * a * ts * ts] * 7, axis=1)
+        v_end_true = a * ts[-1]
+        v_mid_expected = a * ts.mean()
+
+        v_lin = _PredictiveLookaheadController._velocity_lsq_linear(ts, ps)
+        v_quad = _PredictiveLookaheadController._velocity_lsq_quad_end(ts, ps)
+        v_fd = _PredictiveLookaheadController._velocity_forward_diff(ts, ps)
+
+        # Linear: returns midpoint slope, ≈ HALF the true end-slope.
+        np.testing.assert_allclose(v_lin, [v_mid_expected] * 7, atol=1e-6)
+        # Quad: returns end slope exactly (parabola is degree-2 → fit is exact).
+        np.testing.assert_allclose(v_quad, [v_end_true] * 7, atol=1e-6)
+        # Forward-diff: ≈ a · (t_end - dt/2) (slope of the last segment).
+        # This is between the linear and quad answers, closer to quad.
+        v_fd_expected = a * (ts[-1] - (ts[-1] - ts[-2]) / 2)
+        np.testing.assert_allclose(v_fd, [v_fd_expected] * 7, atol=1e-6)
+
+        # And the headline assertion: quad and linear DISAGREE on this signal.
+        assert abs(v_quad[0] - v_lin[0]) > 1.0  # ~4.75 apart by construction.
+
+    def test_quad_falls_back_to_linear_with_2_samples(self):
+        """Quadratic needs ≥ 3 samples; with fewer we transparently fall
+        back to linear so callers never see a None when they could have
+        gotten a slope estimate."""
+        import numpy as np
+
+        from lerobot.robots.so107_follower_predictive.so107_follower_predictive import (
+            _PredictiveLookaheadController,
+        )
+
+        ts = np.array([0.0, 0.005], dtype=np.float64)
+        ps = np.array([[1.0] * 7, [2.0] * 7], dtype=np.float64)
+        v = _PredictiveLookaheadController._velocity_lsq_quad_end(ts, ps)
+        assert v is not None
+        # 2-sample slope: (2-1)/0.005 = 200 on each joint
+        np.testing.assert_allclose(v, [200.0] * 7, atol=1e-6)
+
+    def test_estimators_return_none_on_degenerate_input(self):
+        """Single sample / all-same-timestamps → no slope possible."""
+        import numpy as np
+
+        from lerobot.robots.so107_follower_predictive.so107_follower_predictive import (
+            _PredictiveLookaheadController,
+        )
+
+        ts = np.array([1.0])
+        ps = np.array([[0.0] * 7])
+        for fn in (
+            _PredictiveLookaheadController._velocity_lsq_linear,
+            _PredictiveLookaheadController._velocity_forward_diff,
+        ):
+            assert fn(ts, ps) is None
+
+        # All-same timestamps → linear and forward_diff degenerate.
+        ts_flat = np.full(5, 1.0)
+        ps5 = np.zeros((5, 7))
+        assert _PredictiveLookaheadController._velocity_lsq_linear(ts_flat, ps5) is None
+        assert _PredictiveLookaheadController._velocity_forward_diff(ts_flat, ps5) is None
+
+    def test_controller_dispatches_to_configured_estimator(self):
+        """Setting ``velocity_estimator`` in the config selects the right
+        method at runtime. Regression for the dispatch wiring."""
+        for name in ("quad", "linear", "forward_diff"):
+            ctrl = _make_isolated_controller()
+            ctrl._velocity_estimator = name  # type: ignore[assignment]
+            # Construct an accelerating signal and check which value the
+            # dispatch returns. Each estimator gives a different answer.
+            import numpy as np
+
+            ts = self._ts(20)
+            ps = np.stack([0.5 * 100.0 * ts * ts] * 7, axis=1)
+            v = ctrl._estimate_velocity(ts, ps)
+            assert v is not None
+            if name == "quad":
+                # End slope exactly.
+                np.testing.assert_allclose(v, [100.0 * ts[-1]] * 7, atol=1e-6)
+            elif name == "linear":
+                # Midpoint slope.
+                np.testing.assert_allclose(v, [100.0 * ts.mean()] * 7, atol=1e-6)
+            elif name == "forward_diff":
+                dt = ts[-1] - ts[-2]
+                np.testing.assert_allclose(v, [100.0 * (ts[-1] - dt / 2)] * 7, atol=1e-6)

@@ -9,6 +9,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 from dataclasses import dataclass
+from typing import Literal
 
 from ..bi_so107_follower.config_bi_so107_follower import BiSO107FollowerConfig
 from ..config import RobotConfig
@@ -47,3 +48,4 @@ class BiSO107FollowerPredictiveConfig(BiSO107FollowerConfig):
     control_rate_hz: float = 200.0
     adaptive: bool = True
     max_step_deg: float = 3.0
+    velocity_estimator: Literal["quad", "linear", "forward_diff"] = "quad"
