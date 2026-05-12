@@ -30,6 +30,10 @@ Pipfile.lock
 ### Build & Distribution ###
 build/
 dist/
+# But DO commit the built Svelte islands so users get a working GUI from
+# pip install without needing Node.js. See gui/frontend/README.md.
+!src/lerobot/gui/static/dist/
+!src/lerobot/gui/static/dist/**
 sdist/
 wheels/
 downloads/

@@ -951,6 +951,16 @@ const _REQ = ' <span class="required-marker">*</span>';
 
 function renderRunForm() {
     if (_runFormRendered) return; // Only build once
+    // Reactive (Svelte) sidebar takes over when window.lerobotReactiveRun is
+    // true — set by gui/frontend's run-sidebar island when the URL has
+    // ?reactive=1. Skip the legacy render so the two don't race on #run-form.
+    // Belt-and-suspenders: check the URL directly so the legacy renderer
+    // skips even if the Svelte island hasn't set the global flag yet
+    // (script-loading order is technically synchronous-legacy first).
+    if (window.lerobotReactiveRun || new URLSearchParams(window.location.search).get('reactive') === '1') {
+        _runFormRendered = true;
+        return;
+    }
     _runFormRendered = true;
 
     const form = document.getElementById('run-form');

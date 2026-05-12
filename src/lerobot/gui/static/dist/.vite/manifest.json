@@ -1,0 +1,30 @@
+{
+  "_api-CznuXlF9.js": {
+    "file": "chunks/api-CznuXlF9.js",
+    "name": "api"
+  },
+  "src/islands/bug-report.ts": {
+    "file": "bug-report.js",
+    "name": "bug-report",
+    "src": "src/islands/bug-report.ts",
+    "isEntry": true,
+    "imports": [
+      "_api-CznuXlF9.js"
+    ],
+    "css": [
+      "bug-report.css"
+    ]
+  },
+  "src/islands/run-sidebar.ts": {
+    "file": "run-sidebar.js",
+    "name": "run-sidebar",
+    "src": "src/islands/run-sidebar.ts",
+    "isEntry": true,
+    "imports": [
+      "_api-CznuXlF9.js"
+    ],
+    "css": [
+      "run-sidebar.css"
+    ]
+  }
+}

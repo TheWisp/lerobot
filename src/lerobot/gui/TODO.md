@@ -177,7 +177,7 @@ Live overlay during teleop/record showing how the current state compares to the 
 
 ## Architecture
 
-- [**Critical**] **Reactive UI state management**: the current imperative DOM manipulation (innerHTML + manual toggle/refresh calls scattered across functions) is fundamentally broken. Field state (disabled, visible, selected) must be called at every possible code path that reveals the element, leading to endless monkey-patching. Migrate to a reactive pattern where UI state is derived from data (React, Preact, or even a minimal reactive store + render loop). This blocks every new UI feature.
+- [**Critical, in progress**] **Reactive UI state management** — Phase 1 landed on `proto/frontend-svelte` (Svelte 5 + Vite, island migration into `src/lerobot/gui/frontend/`). Bug-report modal fully ported; Run sidebar (Teleop + Replay) opt-in via `?reactive=1`. Pattern, build pipeline, and shared stores are in place — see `gui/frontend/README.md` for the playbook. Next: port the Policy workflow form, then wire `launchRun()` to read from the reactive store and drop the `?reactive=1` flag.
 - [High] **Coherent GUI-wide persistence policy.** Persistence is currently ad-hoc, per-feature: opened datasets live in `opened.json`; model sources in `model_sources.json`; robot/teleop profiles under `~/.config/lerobot/`; per-feature view state in scattered LocalStorage keys; **launch settings (Run tab, Model Debugger, RLT mode, episode counts, robot/teleop profile choice, etc.) aren't persisted at all and reset to defaults every session**. The result is two distinct failure modes for users:
   1. **Silent default surprise.** A toggle that controls destructive behaviour (e.g. RLT `--rlt-deploy` vs train mode) reverts to its default between sessions. The user reasonably assumes their last choice is still in effect, launches, and only realises mid-run (or later, reading logs) that the wrong mode ran. Real example: 2026-05-14, an HVLA + RLT rollout intended to be DEPLOY mode launched in TRAIN mode because `--rlt-deploy` wasn't toggled in the GUI — gradient updates ran for an entire evaluation session, contaminating the checkpoint.
   2. **Stale-choice surprise.** A persistent dropdown (robot profile, model checkpoint path) retains a previous selection from a different workflow; user launches without noticing. Reported once at least.
@@ -194,13 +194,15 @@ Live overlay during teleop/record showing how the current state compares to the 
 
   Likely deliverable: a `GuiPersistenceStore` server-side abstraction (single JSON file per concern, atomic write, schema-versioned for migrations) + a frontend wrapper that hydrates form fields on tab mount + a "Launch summary" modal that surfaces resolved settings before submission. Touches every tab — but the consolidation is the win.
 
+  **Relation to the reactive migration:** the Svelte `*.svelte.ts` stores already have the right shape to be the hydration target — each store owns one concern, exposes a derived snapshot, and reactively re-renders dependents on update. Wiring the persistence layer becomes "load JSON → assign into `$state`" on mount, and "watch with `$effect` → debounce save" on change. Doing the persistence policy *after* the reactive migration lands avoids re-plumbing each store; doing it before forces the persistence code to reach into legacy `document.getElementById` everywhere.
+
   Scaling concern: as platform features grow (HVLA, RLT, intervention, eval suites, dataset tools), the surface of "settings that could surprise the user if not persisted (or persisted incorrectly)" grows linearly. Doing this once at the policy level is cheaper than retrofitting per-tab.
 
-- [Mid] Cross-tab data synchronization — replace point-to-point refresh calls with pub/sub event bus
-- [High] Extract frontend to separate files (then optionally migrate to React/Vite)
+- [Mid] Cross-tab data synchronization — replace point-to-point refresh calls with pub/sub event bus. _(Partly addressed by the Svelte store pattern — each `*.svelte.ts` store is a single source of truth that all islands subscribe to.)_
+- [High, partially done] Extract frontend to separate files (then optionally migrate to React/Vite) — Svelte 5 + Vite chosen and bootstrapped. Legacy `static/*.js` files coexist with `static/dist/*` islands during the migration; will be deleted as their consumers move.
 - [Mid] FastAPI dependency injection for AppState — replace global `_app_state` with `Depends(get_app_state)`
 - [Mid] Consolidate module-level caches (`_episode_start_indices`, `_dataset_info_mtime`) into AppState
-- [High] **Decouple data loaders from UI state**: today, three loaders gate data fetching on UI flags:
+- [High, in progress] **Decouple data loaders from UI state** — `gui/frontend/src/stores/{profiles,datasets}.svelte.ts` implement the `ensureXxxLoaded()` shape called out in the original entry below. Stores never consult UI flags; any island subscribes and Svelte rerenders. Legacy `model.js` / `app.js` / `robot.js` still have the old `expanded`-gated fetches and need to either delegate to the new stores or be ported in lockstep with their tabs. Today's three loaders below:
   - `model.js::loadModelSources` only scans sources where `s.expanded` is true
   - `app.js::loadSources` (datasets) — same shape
   - `robot.js`'s `robotTabInitialized` / `teleopTabInitialized` one-shot guards force consumers like `run.js:23-35` to inline-fetch profiles as a workaround

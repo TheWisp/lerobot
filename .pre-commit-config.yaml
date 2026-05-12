@@ -15,7 +15,12 @@
 default_language_version:
     python: python3.12
 
-exclude: "tests/artifacts/.*\\.safetensors$"
+exclude: |
+  (?x)^(
+    tests/artifacts/.*\.safetensors$|
+    src/lerobot/gui/static/dist/.*|
+    src/lerobot/gui/frontend/package-lock\.json$
+  )$
 
 repos:
   ##### Meta #####
