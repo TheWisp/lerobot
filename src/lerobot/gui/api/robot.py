@@ -281,7 +281,13 @@ def _read_profile(profiles_dir: Path, name: str) -> dict:
 def _write_profile(profiles_dir: Path, data: ProfileData) -> None:
     _ensure_dir(profiles_dir)
     path = profiles_dir / f"{data.name}.json"
-    path.write_text(json.dumps(data.model_dump(), indent=2))
+    # Atomic write — same rationale as _write_trajectory: a half-written
+    # profile silently loses the user's saved port configuration.
+    import os
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data.model_dump(), indent=2))
+    os.replace(tmp, path)
     logger.info(f"Saved profile: {path}")
 
 
@@ -932,7 +938,15 @@ def _read_trajectory(name: str) -> dict | None:
 def _write_trajectory(name: str, trajectory: dict) -> Path:
     _ensure_dir(ROBOT_PROFILES_DIR)
     path = _trajectory_path(name)
-    path.write_text(json.dumps(trajectory))
+    # Atomic write: a recorded safe-trajectory is often hundreds of KB
+    # to several MB; a kill or panic between the file truncate and the
+    # write completing would leave the user with an empty / half-written
+    # JSON on the next session, silently losing the captured trajectory.
+    import os
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(trajectory))
+    os.replace(tmp, path)
     return path
 
 
