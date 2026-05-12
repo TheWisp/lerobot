@@ -685,68 +685,73 @@ def record_loop(
                     sync_timeout = 5.0  # seconds - avoid infinite beep loop if servo can't converge
                     sync_start = time.perf_counter()
                     beep_proc = None
-                    while True:
-                        pos = teleop.get_action()
-                        max_err = max(abs(pos.get(k, 0) - target[k]) for k in target)
-                        if max_err < settle_tolerance:
-                            if beep_proc is not None:
-                                beep_proc.terminate()
-                            break
+                    try:
+                        while True:
+                            pos = teleop.get_action()
+                            max_err = max(abs(pos.get(k, 0) - target[k]) for k in target)
+                            if max_err < settle_tolerance:
+                                break
 
-                        if time.perf_counter() - sync_start > sync_timeout:
-                            logging.warning(
-                                f"Servo sync timed out after {sync_timeout}s (max_err={max_err:.2f}), "
-                                "releasing torque anyway"
-                            )
-                            if beep_proc is not None:
-                                beep_proc.terminate()
-                            break
-
-                        # Adjust goal: for each joint, nudge goal by remaining error
-                        for k in target:
-                            error = pos.get(k, 0) - target[k]
-                            goal[k] = goal[k] - error
-                        teleop.send_feedback(goal)
-
-                        # Audio feedback: beeps when far, continuous tone when close
-                        almost_ready = max_err < settle_tolerance * 2
-                        if almost_ready:
-                            # Continuous high tone = "hold steady, almost there!"
-                            # Only start if not already playing
-                            if beep_proc is None or beep_proc.poll() is not None:
-                                sr = 8000
-                                dur = 1.0  # long tone, will be killed on convergence
-                                t = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
-                                tone = (np.sin(2 * np.pi * 1000 * t) * 16000).astype(np.int16)
-                                beep_proc = subprocess.Popen(
-                                    ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
-                                    stdin=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL,
+                            if time.perf_counter() - sync_start > sync_timeout:
+                                logging.warning(
+                                    f"Servo sync timed out after {sync_timeout}s (max_err={max_err:.2f}), "
+                                    "releasing torque anyway"
                                 )
-                                beep_proc.stdin.write(tone.tobytes())
-                                beep_proc.stdin.close()
-                            time.sleep(0.05)
-                        else:
-                            # Kill continuous tone if we regressed
-                            if beep_proc is not None and beep_proc.poll() is None:
-                                beep_proc.terminate()
-                                beep_proc = None
-                            # Intermittent beeps: large error → fast, small error → slow
-                            interval = min(0.5, max(0.05, 0.05 + 0.45 * (1 - max_err / 50)))
-                            if beep_proc is None or beep_proc.poll() is not None:
-                                sr = 8000
-                                dur = min(interval * 0.6, 0.08)
-                                t = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
-                                freq = 600 + min(max_err, 50) * 8  # 600-1000Hz
-                                tone = (np.sin(2 * np.pi * freq * t) * 16000).astype(np.int16)
-                                beep_proc = subprocess.Popen(
-                                    ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
-                                    stdin=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL,
-                                )
-                                beep_proc.stdin.write(tone.tobytes())
-                                beep_proc.stdin.close()
-                            time.sleep(interval)
+                                break
+
+                            # Adjust goal: for each joint, nudge goal by remaining error
+                            for k in target:
+                                error = pos.get(k, 0) - target[k]
+                                goal[k] = goal[k] - error
+                            teleop.send_feedback(goal)
+
+                            # Audio feedback: beeps when far, continuous tone when close
+                            almost_ready = max_err < settle_tolerance * 2
+                            if almost_ready:
+                                # Continuous high tone = "hold steady, almost there!"
+                                # Only start if not already playing
+                                if beep_proc is None or beep_proc.poll() is not None:
+                                    sr = 8000
+                                    dur = 1.0  # long tone, will be killed on convergence
+                                    t = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
+                                    tone = (np.sin(2 * np.pi * 1000 * t) * 16000).astype(np.int16)
+                                    beep_proc = subprocess.Popen(
+                                        ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+                                        stdin=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL,
+                                    )
+                                    beep_proc.stdin.write(tone.tobytes())
+                                    beep_proc.stdin.close()
+                                time.sleep(0.05)
+                            else:
+                                # Kill continuous tone if we regressed
+                                if beep_proc is not None and beep_proc.poll() is None:
+                                    beep_proc.terminate()
+                                    beep_proc = None
+                                # Intermittent beeps: large error → fast, small error → slow
+                                interval = min(0.5, max(0.05, 0.05 + 0.45 * (1 - max_err / 50)))
+                                if beep_proc is None or beep_proc.poll() is not None:
+                                    sr = 8000
+                                    dur = min(interval * 0.6, 0.08)
+                                    t = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
+                                    freq = 600 + min(max_err, 50) * 8  # 600-1000Hz
+                                    tone = (np.sin(2 * np.pi * freq * t) * 16000).astype(np.int16)
+                                    beep_proc = subprocess.Popen(
+                                        ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+                                        stdin=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL,
+                                    )
+                                    beep_proc.stdin.write(tone.tobytes())
+                                    beep_proc.stdin.close()
+                                time.sleep(interval)
+                    finally:
+                        # Always terminate any outstanding beep — both the
+                        # normal break paths above AND any exception from
+                        # teleop.get_action / send_feedback inside the loop
+                        # would otherwise leave `aplay` running until the
+                        # parent process exits.
+                        if beep_proc is not None and beep_proc.poll() is None:
+                            beep_proc.terminate()
 
                     settle_ms = (time.perf_counter() - start_loop_t) * 1e3
                     logging.info(f"Servo compensation converged in {settle_ms:.0f}ms (max_err={max_err:.2f})")
