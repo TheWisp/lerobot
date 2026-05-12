@@ -396,8 +396,16 @@ def _write_recording_health(
 
     meta_dir = dataset.root / "meta"
     meta_dir.mkdir(parents=True, exist_ok=True)
-    with open(meta_dir / "recording_health.json", "w", encoding="utf-8") as f:
+    # Atomic write so a crash during the final dump doesn't leave a
+    # half-written `recording_health.json` that confuses the GUI's
+    # dataset-health banner on next open.
+    import os
+
+    out_path = meta_dir / "recording_health.json"
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, separators=(",", ":"))
+    os.replace(tmp_path, out_path)
 
 
 @safe_stop_image_writer
