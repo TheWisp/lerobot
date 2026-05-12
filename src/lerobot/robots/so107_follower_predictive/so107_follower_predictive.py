@@ -129,12 +129,14 @@ class SO107FollowerPredictive(SO107Follower):
         # the user sees a single coherent startup message.
         self._controller.start()
         logger.info(
-            "%s connected (predictive controller: L=%.0fms, α=%.2f, %.0fHz, adaptive=%s)",
+            "%s connected (predictive controller: L=%.0fms, α=%.2f, %.0fHz, adaptive=%s, "
+            "velocity_estimator=%s)",
             self,
             self.config.lookahead_ms,
             self.config.corrector_alpha,
             self.config.control_rate_hz,
             self.config.adaptive,
+            self.config.velocity_estimator,
         )
 
     @check_if_not_connected
