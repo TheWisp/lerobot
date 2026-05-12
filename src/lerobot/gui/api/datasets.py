@@ -2693,15 +2693,24 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
             ) from e
 
         logger.info(f"Uploading dataset to {repo_id} from {dataset.root}")
+        # Same rationale as hub_download: `upload_folder` is sync and
+        # can take minutes for a multi-GB dataset. Push it into the
+        # default executor so the FastAPI event loop stays responsive
+        # to other requests during the upload.
         try:
+            import asyncio
+
             from huggingface_hub import upload_folder
 
             api.create_repo(repo_id=repo_id, repo_type="dataset", exist_ok=True, private=True)
-            upload_folder(
-                folder_path=str(dataset.root),
-                repo_id=repo_id,
-                repo_type="dataset",
-                commit_message="Update from LeRobot GUI",
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: upload_folder(
+                    folder_path=str(dataset.root),
+                    repo_id=repo_id,
+                    repo_type="dataset",
+                    commit_message="Update from LeRobot GUI",
+                ),
             )
         except Exception as e:
             logger.exception(f"Upload failed: {e}")
@@ -2736,13 +2745,23 @@ async def hub_download(dataset_id: str, request: HubDownloadRequest | None = Non
 
     async with lock:
         logger.info(f"Downloading dataset {repo_id} to {root}")
+        # `snapshot_download` is synchronous and runs for minutes on
+        # multi-GB datasets. Run it in the default executor so the
+        # FastAPI event loop can still serve SSE keepalives, WebSocket
+        # playback messages, and concurrent requests for OTHER datasets
+        # while the download is in progress.
         try:
+            import asyncio
+
             from huggingface_hub import snapshot_download
 
-            snapshot_download(
-                repo_id=repo_id,
-                repo_type="dataset",
-                local_dir=str(root),
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: snapshot_download(
+                    repo_id=repo_id,
+                    repo_type="dataset",
+                    local_dir=str(root),
+                ),
             )
         except Exception as e:
             logger.exception(f"Download failed: {e}")
