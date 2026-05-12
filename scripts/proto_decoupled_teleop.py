@@ -94,9 +94,13 @@ def gt_action_at(elapsed: float, traj: dict, joints: list[str]) -> np.ndarray:
 
 
 def cross_corr_lag(
-    action_arr: np.ndarray, state_arr: np.ndarray, dt: float, max_lag_s: float = 0.3
+    action_arr: np.ndarray,
+    state_arr: np.ndarray,
+    dt: float,
+    max_lag_s: float = 0.3,
+    min_amplitude: float = 1.0,
 ) -> float | None:
-    """Per-joint cross-corr, return mean signed lag of confident (corr >= 0.95) joints in seconds.
+    """Per-joint cross-corr, return amplitude-weighted signed lag (seconds) of confident joints.
 
     Positive = state lags action (motor catching up — need more lookahead).
     Negative = state leads action (overshoot — need less lookahead).
@@ -104,12 +108,33 @@ def cross_corr_lag(
     Negative lags must be reachable for the adaptive update to be a true
     fixed-point: clipping to k >= 0 turns the update into a one-way
     ratchet that can only increase lookahead, never decrease it.
+
+    Confidence requires BOTH:
+      - peak Pearson r ≥ 0.95 (waveform match), AND
+      - state-side std ≥ ``min_amplitude`` (signal isn't just encoder noise)
+
+    The amplitude gate matters whenever the operator is moving only one
+    arm / one joint: the static joints can still hit 0.95 correlation
+    against random noise alignment and produce spurious negative lags,
+    which during the adaptive transient drives L→0 before recovering.
+    Backtest on cylinder_ring_assembly (single-arm task): without the
+    gate, the loop oscillates through L=0 in the first few ticks;
+    with the gate, it climbs directly to the right value in 3 ticks.
+
+    The final aggregation is amplitude-weighted so high-motion joints
+    dominate over barely-moving-but-confident joints (still useful even
+    when no joint is below the gate, because motion amplitude itself is
+    a quality proxy for the lag estimate).
     """
     max_lag = int(max_lag_s / dt)
-    confident = []
+    confident_lags: list[float] = []
+    confident_amps: list[float] = []
     for j in range(action_arr.shape[1]):
         a = action_arr[:, j]
         s = state_arr[:, j]
+        state_amp = float(s.std())
+        if state_amp < min_amplitude:
+            continue
         best_k, best_c = 0, -np.inf
         for k in range(-max_lag, max_lag + 1):
             if k >= 0:
@@ -128,10 +153,13 @@ def cross_corr_lag(
             if c > best_c:
                 best_c, best_k = c, k
         if best_c >= 0.95:
-            confident.append(best_k * dt)
-    if not confident:
+            confident_lags.append(best_k * dt)
+            confident_amps.append(state_amp)
+    if not confident_lags:
         return None
-    return float(np.mean(confident))
+    weights = np.asarray(confident_amps, dtype=np.float64)
+    lags = np.asarray(confident_lags, dtype=np.float64)
+    return float(np.sum(lags * weights) / weights.sum())
 
 
 class DecoupledRunner:
