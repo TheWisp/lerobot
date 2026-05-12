@@ -172,13 +172,33 @@ class SO107FollowerPredictive(SO107Follower):
 
     @check_if_not_connected
     def disconnect(self):
-        # Stop the controller BEFORE closing the bus, otherwise its
-        # background thread can write into a closed port and raise.
-        self._controller.stop()
-        self.bus.disconnect(self.config.disable_torque_on_disconnect)
-        for cam in self.cameras.values():
-            cam.disconnect()
+        # Best-effort teardown: each phase is wrapped so an earlier
+        # failure does not leak resources from a later phase. The
+        # controller MUST stop first — its 200 Hz writer would crash
+        # writing into a closed bus.
+        errors: list[BaseException] = []
+        try:
+            self._controller.stop()
+        except BaseException as e:
+            logger.exception("predictive controller stop failed")
+            errors.append(e)
+        try:
+            self.bus.disconnect(self.config.disable_torque_on_disconnect)
+        except BaseException as e:
+            logger.exception("bus disconnect failed")
+            errors.append(e)
+        for cam_key, cam in self.cameras.items():
+            try:
+                cam.disconnect()
+            except BaseException as e:
+                logger.exception("camera %s disconnect failed", cam_key)
+                errors.append(e)
         logger.info(f"{self} disconnected.")
+        # Surface the first failure (Python lets caller see the rest via
+        # __context__ if they care). Re-raising is important so the
+        # operator hears about torque-disable failures etc.
+        if errors:
+            raise errors[0]
 
 
 # ============================================================================
