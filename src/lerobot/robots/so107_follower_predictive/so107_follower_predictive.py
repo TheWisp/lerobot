@@ -347,12 +347,21 @@ class _PredictiveLookaheadController:
         """Receive the latest intent from the caller. Non-blocking.
 
         For an ``ActionChunk``, ``frames[0]`` is the "current intent" used
-        both for the adaptive-update log and as the fallback when the
-        chunk is consumed. The rest of the chunk is held under
-        ``_latest_chunk`` for the control thread's exact-lookup path.
+        as the fallback when the chunk is consumed. The rest of the chunk
+        is held under ``_latest_chunk`` for the control thread's
+        exact-lookup path.
 
         For a single ``RobotAction`` dict, ``_latest_chunk`` is cleared so
         subsequent ticks fall back to velocity extrapolation.
+
+        NB: ``_intent_log`` is NOT populated here. It's populated from
+        ``_tick`` instead, at the control rate, so the adaptive xcorr can
+        use ``control_dt`` as its time unit cleanly (matches the
+        prototype in scripts/proto_decoupled_teleop.py where ``leader_log``
+        is appended inside the control loop). Logging here would have
+        sample spacing = caller rate (typically 30 Hz), and the xcorr
+        would mis-convert index shifts to time by a factor of
+        ``caller_rate / control_rate``.
         """
         if isinstance(action, ActionChunk):
             frames_arr = self._frames_to_array(action.frames)
@@ -365,13 +374,6 @@ class _PredictiveLookaheadController:
             with self._target_lock:
                 self._latest_intent = current_intent
                 self._latest_chunk = None
-        # Log frame 0 (= "current intent") into the adaptive cross-corr
-        # series. Done with one sample per send_action call regardless of
-        # chunk shape — the adaptive update compares observed state vs
-        # historical intent at matching wall-times and that contract is
-        # invariant to whether the controller used exact-lookup or
-        # extrapolation to compute the goal.
-        self._intent_log.append((t, current_intent))
 
     def observe_state(self, t: float, obs: RobotObservation) -> None:
         """Receive a state sample from get_observation(). Non-blocking."""
@@ -407,6 +409,23 @@ class _PredictiveLookaheadController:
             return  # no intent received yet; nothing to send
 
         now = time.perf_counter()
+
+        # Log "intent at now" (no lookahead) for the adaptive xcorr.
+        # Done from the control thread so the sample cadence matches
+        # ``control_dt`` — the xcorr then converts index shifts to time
+        # cleanly. Logging from set_intent() instead would sample at the
+        # caller's rate (typically 30 Hz) while the xcorr's ``dt`` would
+        # still be the control rate (200 Hz), under-reporting lag by a
+        # factor of caller_rate / control_rate.
+        # Chunk path: interpolate the chunk at "now" so the log captures
+        # the source's smooth intent, not the stair-stepped latest_intent.
+        # Dict path: use the latest_intent as-is — that's the truth (the
+        # caller didn't publish a smoother signal).
+        if chunk is not None:
+            intent_at_now = self._lookup_in_chunk(chunk, now, lookahead_s_override=0.0)
+        else:
+            intent_at_now = intent
+        self._intent_log.append((now, intent_at_now))
 
         # 1. Compute the lookahead target.
         # Two paths:
@@ -548,7 +567,12 @@ class _PredictiveLookaheadController:
 
     # ── Chunk lookup ─────────────────────────────────────────────────────
 
-    def _lookup_in_chunk(self, chunk: tuple[float, float, np.ndarray], now: float) -> np.ndarray:
+    def _lookup_in_chunk(
+        self,
+        chunk: tuple[float, float, np.ndarray],
+        now: float,
+        lookahead_s_override: float | None = None,
+    ) -> np.ndarray:
         """Exact-lookup target at ``now + L`` using a received chunk.
 
         Within the chunk: linear interpolation between adjacent frames.
@@ -557,11 +581,17 @@ class _PredictiveLookaheadController:
         TrajectoryReplayTeleop already does for its own playback head;
         keeping the math symmetric avoids a subtle bias between "what
         was recorded" and "what was replayed".
+
+        ``lookahead_s_override``: when not None, use this in place of
+        ``self._lookahead_s``. Used by the adaptive log path to compute
+        "intent at now" (L=0) regardless of the controller's current
+        lookahead.
         """
+        lookahead_s = self._lookahead_s if lookahead_s_override is None else lookahead_s_override
         received_at, fps, frames_arr = chunk
         n_frames = frames_arr.shape[0]
         elapsed = now - received_at
-        target_idx_f = (elapsed + self._lookahead_s) * fps
+        target_idx_f = (elapsed + lookahead_s) * fps
         if target_idx_f <= n_frames - 1:
             lo = max(0, int(target_idx_f))
             hi = min(n_frames - 1, lo + 1)
