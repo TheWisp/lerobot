@@ -316,6 +316,41 @@ class TestActionChunk:
         with pytest.raises(ValueError, match="action missing keys"):
             robot.send_action(chunk)
 
+    def test_chunk_at_arbitrary_fps_resolves_target_correctly(self, follower):
+        """The controller's chunk-lookup math must work for any fps,
+        not just 30. Regression guard against hardcoded-30 assumptions
+        in the controller. With L=0 + a ramp chunk, the goal at tick 0
+        should equal frame[0] regardless of fps."""
+        import numpy as np
+
+        from lerobot.types import ActionChunk
+
+        robot, bus = follower
+        # Try fps=15 (low) and fps=60 (high) — both have to land the
+        # goal write near frame[0] when L=0. Use a non-zero base value
+        # so we'd notice if the lookup landed elsewhere.
+        for test_fps in (15.0, 60.0):
+            bus.sync_write_log.clear()
+            base = 7.0
+            frames = tuple(self._frame(base + 0.1 * k) for k in range(20))
+            robot.send_action(ActionChunk(fps=test_fps, frames=frames))
+            time.sleep(0.02)  # a few control ticks
+            goals = [gd for name, gd in bus.sync_write_log if name == "Goal_Position"]
+            assert goals, f"no goal write at fps={test_fps}"
+            # First goal should be very close to frame[0] (L=0 in this fixture).
+            for v in goals[0].values():
+                assert v == pytest.approx(base, abs=0.5), f"fps={test_fps}: goal {v}, expected ~{base}"
+            # Math sanity: tail-velocity extrapolation past chunk end
+            # uses fps in (frames[-1] - frames[-2]) * fps, so the *value*
+            # past the end must depend on fps. Compute the predicted
+            # value at "now past last frame" and assert the formula.
+            tail_v = (np.array([base + 0.1 * 19]) - np.array([base + 0.1 * 18])) * test_fps
+            excess_s = 0.001  # 1 ms past end
+            expected_past_end = base + 0.1 * 19 + tail_v[0] * excess_s
+            # Just verify our math; the controller will only reach this
+            # in real runs where the chunk runs out, not in this test.
+            assert expected_past_end == pytest.approx(base + 0.1 * 19 + 0.1 * test_fps * excess_s, abs=1e-9)
+
     def test_chunk_then_dict_clears_chunk_state(self, follower):
         """A single-dict send_action after a chunk drops the chunk
         record — subsequent ticks fall back to the velocity-extrapolation

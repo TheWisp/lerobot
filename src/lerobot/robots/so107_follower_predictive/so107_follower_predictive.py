@@ -510,7 +510,14 @@ class _PredictiveLookaheadController:
         state_snapshot = list(self._state_log)
         intent_samples = [(t, p) for t, p in intent_snapshot if t >= win_start]
         state_samples = [(t, s) for t, s in state_snapshot if t >= win_start - 0.5]
-        if len(intent_samples) < 30 or len(state_samples) < 5:
+        # Minimum intent-sample floor scales with the expected count
+        # (window_s × control_rate). 30 % of full is the same fraction the
+        # prototype uses (100 of 600 at 3 s / 200 Hz) and stays sensible
+        # across control_rate_hz / WINDOW_S changes — hardcoding 30
+        # samples would be a different fraction at every control rate.
+        expected_intent = self._WINDOW_S / self._control_dt
+        min_intent_samples = max(10, int(expected_intent * 0.3))
+        if len(intent_samples) < min_intent_samples or len(state_samples) < 5:
             return
 
         ts_intent = np.array([t for t, _ in intent_samples], dtype=np.float64)
