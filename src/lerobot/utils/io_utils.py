@@ -39,17 +39,36 @@ def load_json(fpath: Path) -> Any:
 
 
 def write_json(data: dict, fpath: Path) -> None:
-    """Write data to a JSON file.
+    """Write data to a JSON file (atomic).
 
-    Creates parent directories if they don't exist.
+    Creates parent directories if they don't exist. The write is atomic:
+    we stage the content in a sibling ``.tmp`` file and ``os.replace`` it
+    onto the destination, so a crash / power loss mid-write either leaves
+    the previous file content intact or commits the full new content —
+    never a half-written file that parsers reject (which silently corrupts
+    dataset metadata: ``meta/info.json``, ``meta/stats.json``,
+    ``optim_param_groups.json``, ``scheduler_state.json``, …).
 
     Args:
         data (dict): The dictionary to write.
         fpath (Path): The path to the output JSON file.
     """
+    import contextlib
+    import os
+
     fpath.parent.mkdir(exist_ok=True, parents=True)
-    with open(fpath, "w") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+    tmp_path = fpath.with_suffix(fpath.suffix + ".tmp")
+    try:
+        with open(tmp_path, "w") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        os.replace(tmp_path, fpath)
+    except Exception:
+        # Clean up the partially-written tmp file so it doesn't linger
+        # alongside the (still-intact) destination.
+        with contextlib.suppress(FileNotFoundError):
+            # safe-destruct: our own .tmp staging file; destination is untouched
+            tmp_path.unlink()
+        raise
 
 
 def write_video(video_path: str | Path, stacked_frames: list, fps: int) -> None:
