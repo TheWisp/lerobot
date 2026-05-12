@@ -74,6 +74,7 @@ import tqdm
 
 from lerobot.datasets import LeRobotDataset
 from lerobot.utils.constants import ACTION, DONE, OBS_STATE, REWARD
+from lerobot.utils.utils import init_logging
 
 
 def to_hwc_uint8_numpy(chw_float32_torch: torch.Tensor) -> np.ndarray:
@@ -295,6 +296,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    # Without init_logging the module's `logging.info / warning` calls were
+    # silently dropped (no handler configured). The script then ran for many
+    # seconds opening a dataset + spinning up Rerun while the user saw no
+    # progress output — particularly bad because the GUI launches this in a
+    # subprocess and the only log readout IS those `logging.*` calls.
+    init_logging()
     parser = _build_parser()
     args = parser.parse_args()
     kwargs = vars(args)
