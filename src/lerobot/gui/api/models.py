@@ -61,9 +61,16 @@ def _read_sources() -> list[dict]:
 
 
 def _write_sources(sources: list[dict]) -> None:
+    """Persist model source folders to config (atomic write — same rationale
+    as gui.api.datasets._write_sources / _write_opened).
+    """
+    import os
+
     SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
     data = {"version": 1, "sources": sources}
-    SOURCES_FILE.write_text(json.dumps(data, indent=2))
+    tmp = SOURCES_FILE.with_suffix(SOURCES_FILE.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, SOURCES_FILE)
 
 
 # ============================================================================

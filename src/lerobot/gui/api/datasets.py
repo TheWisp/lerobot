@@ -607,9 +607,19 @@ def _read_opened() -> list[dict]:
 
 
 def _write_opened(opened: list[dict]) -> None:
-    """Persist the list of opened datasets."""
+    """Persist the list of opened datasets (atomic write).
+
+    Without staging, a crash between `write_text`'s truncate and the
+    actual byte write leaves the file empty / partial; the next session
+    would lose track of every dataset the user had open. Tiny file but
+    not self-recovering — better to be safe.
+    """
+    import os
+
     OPENED_FILE.parent.mkdir(parents=True, exist_ok=True)
-    OPENED_FILE.write_text(json.dumps({"version": 1, "datasets": opened}, indent=2))
+    tmp = OPENED_FILE.with_suffix(OPENED_FILE.suffix + ".tmp")
+    tmp.write_text(json.dumps({"version": 1, "datasets": opened}, indent=2))
+    os.replace(tmp, OPENED_FILE)
 
 
 def _save_opened_state() -> None:
@@ -642,10 +652,14 @@ def _read_sources() -> list[dict]:
 
 
 def _write_sources(sources: list[dict]) -> None:
-    """Persist source folders to config."""
+    """Persist source folders to config (atomic write)."""
+    import os
+
     SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
     data = {"version": 1, "sources": sources}
-    SOURCES_FILE.write_text(json.dumps(data, indent=2))
+    tmp = SOURCES_FILE.with_suffix(SOURCES_FILE.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, SOURCES_FILE)
 
 
 def _scan_source(source_path: str, max_depth: int = 3) -> list[dict]:
