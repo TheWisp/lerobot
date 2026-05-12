@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import argparse
 import importlib
 import inspect
 import pkgutil
@@ -26,6 +27,39 @@ from typing import Any, TypeVar, cast
 import draccus
 
 from lerobot.utils.utils import has_method
+
+# ---- argparse --help safety patch -------------------------------------------
+# draccus surfaces dataclass field comments as argparse help strings, and
+# argparse runs `help_text % vars(action)` on them. Any literal `%` followed
+# by a non-`%` character ("50% open", "99.5%", `%t`, `%o`, …) is then parsed
+# as a printf-style format directive and crashes `--help` with TypeError /
+# ValueError. Authors of field comments can't reasonably be expected to
+# remember to escape `%` as `%%`, so we wrap argparse's substitution to fall
+# back to a literal-percent-safe render whenever the format fails.
+_argparse_expand_help_orig = argparse.HelpFormatter._expand_help
+
+
+def _expand_help_safe(self: argparse.HelpFormatter, action: argparse.Action) -> str:
+    try:
+        return _argparse_expand_help_orig(self, action)
+    except (TypeError, ValueError, KeyError):
+        # Re-run the substitution on a `%`-escaped copy of the help text;
+        # if substitution still fails (e.g. literal "%(" without a matching
+        # closing paren), fall back to returning the help string verbatim.
+        raw = action.help
+        if raw is None:
+            return ""
+        escaped_action = argparse.Action.__new__(type(action))
+        escaped_action.__dict__.update(action.__dict__)
+        escaped_action.help = raw.replace("%", "%%")
+        try:
+            return _argparse_expand_help_orig(self, escaped_action)
+        except (TypeError, ValueError, KeyError):
+            return raw
+
+
+argparse.HelpFormatter._expand_help = _expand_help_safe  # type: ignore[method-assign]
+# -----------------------------------------------------------------------------
 
 F = TypeVar("F", bound=Callable[..., object])
 
