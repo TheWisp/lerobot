@@ -44,6 +44,10 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .so_follower import SO107Follower
 
         return SO107Follower(config)
+    elif config.type == "so107_follower_predictive":
+        from .so107_follower_predictive import SO107FollowerPredictive
+
+        return SO107FollowerPredictive(config)
     elif config.type == "lekiwi":
         from .lekiwi import LeKiwi
 
