@@ -340,8 +340,8 @@ Per-camera `OurStreamingVideoEncoder.push_frame()` (inside `dataset_write`):
 - [High] **Promote teleop's log-file + excepthook helper into a reusable utility.** `setup_run_logging(output_dir, run_name)` lives in [utils/utils.py](../../utils/utils.py); creates `<output_dir>/<run_name>_<ts>.log`, calls `init_logging`, and installs main-thread + thread-pool excepthooks. Covered by `tests/utils/test_setup_run_logging.py`. Adopted by `lerobot-teleoperate` and `lerobot-record` (2026-05-12). Remaining scripts to migrate, in priority order:
   1. [x] ~~**lerobot-record**: switched to `setup_run_logging` + per-run log file under `outputs/record/`. The `latency_output_dir` default also moved from `"outputs/teleop"` to `"outputs/record"` so the GUI dashboard treats the two workflows as distinct source keys.~~ Beep `subprocess.Popen` cleanup still open.
   2. **lerobot-train** — multi-process accelerate; worker failures go to stderr only. Add per-run log file in the training output dir; consider per-process suffixes for distributed debugging.
-  3. **lerobot-eval** — daemon prefetch thread at [scripts/lerobot_eval.py:784](../../scripts/lerobot_eval.py) isn't `join()`-ed on the success path; could leave a GPU prefetch process orphaned. Fix in the same pass.
-  4. **lerobot-replay** — minimal; just the log file + excepthook (no thread issues).
+  3. [x] ~~**lerobot-eval**~~ — `eval_main` now calls `setup_run_logging(cfg.output_dir, "eval")` so per-run logs land in the eval output dir, and the single-task daemon prefetch thread is `join()`-ed in a `try/finally` wrapping the for-loop so an aborted eval doesn't leave a GPU-prefetch worker hanging. (2026-05-12)
+  4. [x] ~~**lerobot-replay**~~ — `ReplayConfig.log_output_dir` field added (default `outputs/replay`); `replay()` calls `setup_run_logging` for per-run log file + excepthooks. (2026-05-12)
   5. **lerobot-calibrate**, **find-cameras**, **find-port** — lower urgency; manual one-off tools where the user is in front of the console anyway.
 
 ### Latency Panel UX
