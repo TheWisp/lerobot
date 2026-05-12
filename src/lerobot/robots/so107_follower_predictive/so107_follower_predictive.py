@@ -410,8 +410,15 @@ class _PredictiveLookaheadController:
         low-pass, hard cap.
         """
         win_start = now - self._WINDOW_S
-        intent_samples = [(t, p) for t, p in self._intent_log if t >= win_start]
-        state_samples = [(t, s) for t, s in self._state_log if t >= win_start - 0.5]
+        # Snapshot the cross-thread deques into lists before filtering.
+        # set_intent / observe_state can mutate _intent_log / _state_log
+        # concurrently from the caller thread; a comprehension iterating
+        # the deque directly can raise "deque mutated during iteration".
+        # list(deque) is atomic under the GIL and gives a stable view.
+        intent_snapshot = list(self._intent_log)
+        state_snapshot = list(self._state_log)
+        intent_samples = [(t, p) for t, p in intent_snapshot if t >= win_start]
+        state_samples = [(t, s) for t, s in state_snapshot if t >= win_start - 0.5]
         if len(intent_samples) < 30 or len(state_samples) < 5:
             return
 
@@ -470,13 +477,21 @@ class _PredictiveLookaheadController:
     # ── Helpers ──────────────────────────────────────────────────────────
 
     def _action_to_array(self, action: RobotAction) -> np.ndarray:
-        return np.array(
-            [float(action[k]) for k in self._motor_keys if k in action],
-            dtype=np.float64,
-        )
+        # Strict: every motor key must be present. A short dict here would
+        # produce a partial sync_write (the missing motors silently hold
+        # their last goal), which is unsafe — fail fast instead.
+        missing = [k for k in self._motor_keys if k not in action]
+        if missing:
+            raise ValueError(f"action missing keys for motors: {missing}")
+        return np.array([float(action[k]) for k in self._motor_keys], dtype=np.float64)
 
     def _observation_to_array(self, obs: RobotObservation) -> np.ndarray | None:
-        try:
-            return np.array([float(obs[k]) for k in self._motor_keys], dtype=np.float64)
-        except (KeyError, TypeError, ValueError):
+        # State samples drive the adaptive update only. A missing motor key
+        # here is unexpected (get_observation builds the dict from the same
+        # bus) so log + drop the sample rather than fail the whole tick —
+        # the controller can still extrapolate from the last good state.
+        missing = [k for k in self._motor_keys if k not in obs]
+        if missing:
+            logger.warning("state observation missing keys %s; dropping sample", missing)
             return None
+        return np.array([float(obs[k]) for k in self._motor_keys], dtype=np.float64)

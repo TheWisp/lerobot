@@ -526,8 +526,16 @@ class TestObsReaderCleanupOnLaunch:
             ):
                 mock_proc = AsyncMock()
                 mock_proc.pid = 9999
+                # readline() must return EOF (empty bytes) so the
+                # _read_stream tasks exit cleanly. Without this, the
+                # tasks loop indefinitely on AsyncMock return values
+                # and leak `Task exception was never retrieved` warnings
+                # at event-loop teardown (rstrip on a coroutine).
                 mock_proc.stdout = AsyncMock()
+                mock_proc.stdout.readline = AsyncMock(return_value=b"")
                 mock_proc.stderr = AsyncMock()
+                mock_proc.stderr.readline = AsyncMock(return_value=b"")
+                mock_proc.wait = AsyncMock(return_value=0)
                 mock_exec.return_value = mock_proc
                 await start_teleoperate(req)
 
