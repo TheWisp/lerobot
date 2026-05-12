@@ -253,6 +253,100 @@ class TestSendAction:
 
 
 # ============================================================================
+# attach_teleop — pull-path intent source
+# ============================================================================
+
+
+class TestAttachTeleop:
+    """When a teleop is bound via robot.attach_teleop, the controller's
+    tick polls teleop.get_action() at control rate instead of waiting
+    for send_action pushes. The new path is the one that makes a
+    high-rate leader (SO107LeaderHighRate) actually useful — without
+    it, intent samples only flow at the loop driver's cadence.
+    """
+
+    def test_attach_routes_through_controller(self, follower):
+        robot, _bus = follower
+        teleop = MagicMock()
+        teleop.get_action.return_value = {f"{m}.pos": 0.0 for m in _MOTOR_NAMES}
+        assert robot._controller._teleop is None
+        robot.attach_teleop(teleop)
+        assert robot._controller._teleop is teleop
+        robot.attach_teleop(None)
+        assert robot._controller._teleop is None
+
+    def test_controller_polls_teleop_at_control_rate(self, follower):
+        """A bound teleop's get_action MUST be called many times per
+        second from the controller thread. Catches a regression where
+        attach_teleop is wired but _tick still reads _latest_intent.
+        """
+        robot, _bus = follower
+        teleop = MagicMock()
+        teleop.get_action.return_value = {f"{m}.pos": 0.0 for m in _MOTOR_NAMES}
+        robot.attach_teleop(teleop)
+        # Fixture's control_rate_hz=500 → expect ~50 calls in 100 ms.
+        # Tolerate a loose lower bound; the upper bound doesn't matter
+        # for catching the bug.
+        time.sleep(0.1)
+        assert teleop.get_action.call_count >= 20, (
+            f"controller called teleop.get_action() only "
+            f"{teleop.get_action.call_count} times over ~100 ms at 500 Hz"
+        )
+
+    def test_attached_teleop_drives_goal_position(self, follower):
+        """A bound teleop's poses must end up as Goal_Position writes,
+        bypassing the send_action push path entirely.
+        """
+        robot, bus = follower
+        teleop = MagicMock()
+        # Distinct value so we can tell it apart from the fixture's default 0.0.
+        teleop.get_action.return_value = {f"{m}.pos": 7.5 for m in _MOTOR_NAMES}
+        robot.attach_teleop(teleop)
+        bus.sync_write_log.clear()
+        time.sleep(0.05)
+        goal_writes = [gd for name, gd in bus.sync_write_log if name == "Goal_Position"]
+        assert goal_writes
+        # First goal write should reflect the teleop's pose (modulo the
+        # max_step clamp; with fixture's max_step_deg=3 starting from 0,
+        # first goal is capped at ~3, not 7.5 — but it must be > 0 to
+        # confirm it came from the teleop, not the cached 0).
+        first = goal_writes[0]
+        for motor, val in first.items():
+            assert val > 0.0, f"{motor} write {val}; expected teleop's pose to drive it"
+
+    def test_teleop_get_action_error_is_caught_per_tick(self, follower):
+        """A failing teleop.get_action must not kill the controller
+        thread — the per-tick try/except should absorb it and the
+        thread keeps running for the next tick."""
+        robot, _bus = follower
+        teleop = MagicMock()
+        teleop.get_action.side_effect = RuntimeError("simulated bus error")
+        robot.attach_teleop(teleop)
+        time.sleep(0.05)
+        # Thread should still be alive after the error stream.
+        assert robot._controller._thread.is_alive()
+        # And get_action was actually being called (proves it WASN'T
+        # the falling-through-and-stalling bug).
+        assert teleop.get_action.call_count > 0
+
+    def test_detach_returns_to_send_action_path(self, follower):
+        """Attaching then detaching restores the push-based path.
+        send_action's intent should drive motors again."""
+        robot, bus = follower
+        teleop = MagicMock()
+        teleop.get_action.return_value = {f"{m}.pos": 5.0 for m in _MOTOR_NAMES}
+        robot.attach_teleop(teleop)
+        time.sleep(0.02)
+        robot.attach_teleop(None)
+        bus.sync_write_log.clear()
+        # Now drive via send_action — controller should use that.
+        robot.send_action({f"{m}.pos": 0.0 for m in _MOTOR_NAMES})
+        time.sleep(0.05)
+        goal_writes = [gd for name, gd in bus.sync_write_log if name == "Goal_Position"]
+        assert goal_writes
+
+
+# ============================================================================
 # Chunk path
 # ============================================================================
 
