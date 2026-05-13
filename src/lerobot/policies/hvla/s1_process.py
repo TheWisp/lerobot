@@ -2310,6 +2310,12 @@ def _stop_robot_controllers(robot) -> None:
     (~4 s of stack traces). Pre-empt by stopping any ``_controller``
     objects we can find. No-op for robots without a controller (plain
     so_follower etc.) — getattr returns None, the loop just skips.
+
+    Always pair with ``_start_robot_controllers`` on the resume path
+    (typically called from ``_enable_torque``). Otherwise the writer
+    thread stays dead for the rest of the session and ``send_action``
+    becomes a no-op (it updates ``_latest_intent`` / ``_latest_chunk``
+    but nothing writes to the bus → robot frozen).
     """
     for attr in ("left_arm", "right_arm", "arm"):
         arm = getattr(robot, attr, None)
@@ -2320,6 +2326,22 @@ def _stop_robot_controllers(robot) -> None:
             continue
         with contextlib.suppress(Exception):
             controller.stop()
+
+
+def _start_robot_controllers(robot) -> None:
+    """Restart any background controllers that ``_stop_robot_controllers``
+    stopped. Idempotent — the predictive controller's ``start()`` returns
+    early when its thread is already alive.
+    """
+    for attr in ("left_arm", "right_arm", "arm"):
+        arm = getattr(robot, attr, None)
+        if arm is None:
+            continue
+        controller = getattr(arm, "_controller", None)
+        if controller is None or not hasattr(controller, "start"):
+            continue
+        with contextlib.suppress(Exception):
+            controller.start()
 
 
 def _disable_torque(robot):
@@ -2335,6 +2357,12 @@ def _enable_torque(robot):
     for bus in _get_motor_buses(robot):
         with contextlib.suppress(Exception):
             bus.enable_torque()
+    # Symmetric with the soft-land path's stop: restart any background
+    # writer threads that were stopped to avoid the bus race. Without
+    # this restart, robots with a predictive lookahead controller stay
+    # frozen after the pre-record reset — send_action becomes a silent
+    # no-op because the writer thread is dead.
+    _start_robot_controllers(robot)
     logger.info("S1: Torque enabled")
 
 
