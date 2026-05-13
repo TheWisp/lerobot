@@ -324,6 +324,10 @@ class _PredictiveLookaheadController:
         self._max_step = cfg.max_step_deg
         self._adaptive = cfg.adaptive
         self._velocity_estimator: str = cfg.velocity_estimator
+        # Knobs for the "amp_gated_lp" estimator. Inert for other variants.
+        self._velocity_lowpass_hz: float = getattr(cfg, "velocity_lowpass_hz", 4.0)
+        self._amp_gate_lo: float = getattr(cfg, "amp_gate_lo", 1.0)
+        self._amp_gate_hi: float = getattr(cfg, "amp_gate_hi", 3.0)
 
         # Mutable state (control thread)
         self._lookahead_s = cfg.lookahead_ms / 1000.0
@@ -680,6 +684,10 @@ class _PredictiveLookaheadController:
             return self._velocity_lsq_linear(ts, ps)
         if self._velocity_estimator == "forward_diff":
             return self._velocity_forward_diff(ts, ps)
+        if self._velocity_estimator == "amp_gated_lp":
+            return self._velocity_amp_gated_lowpass(
+                ts, ps, self._velocity_lowpass_hz, self._amp_gate_lo, self._amp_gate_hi
+            )
         # Unknown — fall back to linear with a one-time warning. Should not
         # be reachable because the field is Literal-typed at construction,
         # but defensive in case someone instantiates the controller
@@ -733,6 +741,65 @@ class _PredictiveLookaheadController:
         if abs(dt) < 1e-9:
             return None
         return (ps[-1] - ps[-2]) / dt
+
+    @staticmethod
+    def _velocity_amp_gated_lowpass(
+        ts: np.ndarray,
+        ps: np.ndarray,
+        fc_hz: float,
+        amp_lo: float,
+        amp_hi: float,
+    ) -> np.ndarray | None:
+        """Amplitude-gated lowpass forward-difference, per joint.
+
+        Two intertwined effects:
+          1. **Lowpass V_est**: first-order EMA with cutoff ``fc_hz``
+             applied across per-sample forward differences. Suppresses
+             the 8-12 Hz human hand-tremor band that the multiplier
+             ``L · dε/dt`` would otherwise amplify into motor_cmd.
+          2. **Amplitude gate**: per joint, when peak-to-peak motion
+             over the window is below ``amp_lo``, return v=0 → motor_cmd
+             collapses to leader_pos (no lookahead, no derivative
+             amplification). Above ``amp_hi``, full lowpassed velocity.
+             Linear ramp between. Per-joint because each DOF has its
+             own stationary baseline (e.g. arm wrist barely moves while
+             gripper opens / closes).
+
+        Empirical motivation: see ``experiments/chunk_cadence/online_
+        estimator_gripper.py``. On a synthetic ±3-unit deliberate motion
+        with 0.5-unit 10 Hz tremor, the production ``quad`` estimator
+        drives gripper p2p to 11.0 (state oscillates 70 % wider than
+        intent); ``amp_gated_lp`` drives it to 6.5 (tracks intent
+        within rounding) while preserving full lookahead at large
+        motion amplitudes.
+
+        Returns shape (n_motors,) or None when the window is too short.
+        """
+        n_samples, n_motors = ps.shape
+        if n_samples < 3:
+            return _PredictiveLookaheadController._velocity_forward_diff(ts, ps)
+        # Per-sample forward differences (n_samples-1, n_motors).
+        dts = np.diff(ts)
+        dts_safe = np.where(np.abs(dts) > 1e-9, dts, 1.0)
+        diffs = np.diff(ps, axis=0) / dts_safe[:, None]
+        # First-order EMA with cutoff fc_hz, integrated across the window's
+        # samples. Equivalent to running ``v_smooth = α·diff + (1−α)·v_prev``
+        # from window start to end. Uses median dt for α to match the
+        # filter's design cutoff under (usually negligible) tick jitter.
+        dt_typ = float(np.median(dts))
+        rc = 1.0 / (2 * np.pi * fc_hz)
+        ema_alpha = dt_typ / (rc + dt_typ)
+        v_smooth = diffs[0].copy()
+        for i in range(1, diffs.shape[0]):
+            v_smooth = ema_alpha * diffs[i] + (1.0 - ema_alpha) * v_smooth
+        # Per-joint amplitude (peak-to-peak over the window).
+        amplitude = ps.max(axis=0) - ps.min(axis=0)
+        # Gate ∈ [0, 1] per joint. Hard zero below amp_lo, hard one above
+        # amp_hi, linear in between. clip avoids division pathology when
+        # amp_lo == amp_hi (configurable edge case).
+        denom = max(amp_hi - amp_lo, 1e-9)
+        gate = np.clip((amplitude - amp_lo) / denom, 0.0, 1.0)
+        return gate * v_smooth
 
     # ── Chunk lookup ─────────────────────────────────────────────────────
 
