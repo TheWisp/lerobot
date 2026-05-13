@@ -2299,6 +2299,29 @@ def _get_motor_buses(robot) -> list:
     return buses
 
 
+def _stop_robot_controllers(robot) -> None:
+    """Stop any background bus-driving controllers on the robot.
+
+    The predictive lookahead controller runs a 200 Hz writer thread
+    that sync_writes Goal_Position. If we proceed straight to
+    soft-landing (which writes Torque_Limit per motor on the same bus),
+    the two threads race for the half-duplex serial port and the
+    writer logs "Port is in use!" for the duration of the landing
+    (~4 s of stack traces). Pre-empt by stopping any ``_controller``
+    objects we can find. No-op for robots without a controller (plain
+    so_follower etc.) — getattr returns None, the loop just skips.
+    """
+    for attr in ("left_arm", "right_arm", "arm"):
+        arm = getattr(robot, attr, None)
+        if arm is None:
+            continue
+        controller = getattr(arm, "_controller", None)
+        if controller is None or not hasattr(controller, "stop"):
+            continue
+        with contextlib.suppress(Exception):
+            controller.stop()
+
+
 def _disable_torque(robot):
     """Disable torque on all motors so the robot can be moved by hand."""
     for bus in _get_motor_buses(robot):
@@ -2323,6 +2346,11 @@ def _soft_land(robot, duration_s=4.0, steps=20):
     """
     if not robot.is_connected:
         return
+
+    # Stop any background controllers before touching the bus directly —
+    # the predictive lookahead controller's 200 Hz writer would otherwise
+    # cascade "Port is in use!" errors for the duration of the landing.
+    _stop_robot_controllers(robot)
 
     buses = _get_motor_buses(robot)
     if not buses:
