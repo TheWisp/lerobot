@@ -167,9 +167,19 @@ class SOFollower(Robot):
                 self.bus.write("D_Coefficient", motor, 32)
 
                 if motor == "gripper":
-                    self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
-                    self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
-                    self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
+                    # Separate "how strong/fast" knobs from "how aggressively
+                    # to track." Keep P low (gentle tracking → no overshoot)
+                    # but remove torque/current/velocity/acceleration caps so
+                    # the motor reaches its physical max velocity. Net: motor
+                    # moves fast when far from target, slows gracefully near
+                    # it. P=16 keeps the loop-side damping the same as the
+                    # arm joints; D=32 (set above) helps prevent overshoot.
+                    # P_Coefficient already set to 16 above; not overridden.
+                    self.bus.write("Max_Torque_Limit", motor, 1000)  # full torque available
+                    self.bus.write("Protection_Current", motor, 400)  # up from 250
+                    self.bus.write("Overload_Torque", motor, 25)
+                    self.bus.write("Maximum_Velocity_Limit", motor, 254)  # near max byte value
+                    self.bus.write("Acceleration", motor, 0)  # 0 = no acceleration cap on Feetech
 
     def setup_motors(self) -> None:
         for motor in reversed(self.bus.motors):
