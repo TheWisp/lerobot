@@ -55,6 +55,7 @@ import numpy as np
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.motors import Motor, MotorNormMode
 from lerobot.motors.feetech import FeetechMotorsBus
+from lerobot.motors.locked_bus import LockedBus
 from lerobot.types import ActionChunk, RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from lerobot.utils.robot_utils import precise_sleep
@@ -86,25 +87,30 @@ class SO107FollowerPredictive(SO107Follower):
         self.config = config
 
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
-        self.bus = FeetechMotorsBus(
-            port=self.config.port,
-            motors={
-                "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
-                "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
-                "elbow_flex": Motor(3, "sts3215", norm_mode_body),
-                "forearm_roll": Motor(4, "sts3215", norm_mode_body),
-                "wrist_flex": Motor(5, "sts3215", norm_mode_body),
-                "wrist_roll": Motor(6, "sts3215", norm_mode_body),
-                "gripper": Motor(7, "sts3215", MotorNormMode.RANGE_0_100),
-            },
-            calibration=self.calibration,
+        # FeetechMotorsBus has no internal locking; wrap in LockedBus so
+        # the controller's 200 Hz writer thread + the main-loop's 30 Hz
+        # reader + any soft-land per-motor writes all serialize through
+        # the proxy's RLock. Replaces the prior caller-side ``_bus_lock``
+        # that only covered the controller's writes and missed every
+        # other concurrent path.
+        self.bus = LockedBus(
+            FeetechMotorsBus(
+                port=self.config.port,
+                motors={
+                    "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
+                    "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
+                    "elbow_flex": Motor(3, "sts3215", norm_mode_body),
+                    "forearm_roll": Motor(4, "sts3215", norm_mode_body),
+                    "wrist_flex": Motor(5, "sts3215", norm_mode_body),
+                    "wrist_roll": Motor(6, "sts3215", norm_mode_body),
+                    "gripper": Motor(7, "sts3215", MotorNormMode.RANGE_0_100),
+                },
+                calibration=self.calibration,
+            )
         )
         self.cameras = make_cameras_from_configs(config.cameras)
         self._cached_motor_positions: dict[str, float] = {}
 
-        # FeetechMotorsBus has no internal locking. The controller's 200 Hz
-        # writer thread + the main-loop's 30 Hz reader share this lock.
-        self._bus_lock = threading.Lock()
         # Controller instance is created here; its background thread is
         # started in ``connect()`` after the bus is open.
         self._controller = _PredictiveLookaheadController(self)
@@ -142,8 +148,7 @@ class SO107FollowerPredictive(SO107Follower):
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
         start = time.perf_counter()
-        with self._bus_lock:
-            obs_dict = self._sync_read_with_motor_fallback("Present_Position")
+        obs_dict = self._sync_read_with_motor_fallback("Present_Position")
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
@@ -291,8 +296,11 @@ class _PredictiveLookaheadController:
     The control thread runs at ``config.control_rate_hz``, polls the
     latest intent, extrapolates by ``L · v_leader``, applies the
     predictor-corrector smoothing, clamps the per-step delta, and writes
-    ``Goal_Position`` to the bus under ``robot._bus_lock``. The adaptive
-    cross-correlation update runs from the same thread every 2 s.
+    ``Goal_Position`` to the bus. Bus thread safety is provided by the
+    :class:`LockedBus` proxy that wraps ``robot.bus`` — every public I/O
+    method on the bus is internally serialized, so this controller and
+    the main thread coexist without caller-side coordination. The
+    adaptive cross-correlation update runs from the same thread every 2 s.
     """
 
     # Cross-corr scan radius (seconds).
@@ -311,7 +319,6 @@ class _PredictiveLookaheadController:
         cfg = robot.config
         self._robot = robot
         self._bus = robot.bus
-        self._bus_lock = robot._bus_lock
         # Lock-down: motor key ordering is captured once so we don't
         # rebuild the dict-to-array mapping every tick.
         self._motor_keys: list[str] = [f"{m}.pos" for m in self._bus.motors]
@@ -557,10 +564,9 @@ class _PredictiveLookaheadController:
             if np.any(np.abs(delta) > self._max_step):
                 shifted = self._last_action + np.clip(delta, -self._max_step, self._max_step)
 
-        # 4. Write to motors under the bus lock
+        # 4. Write to motors. Thread safety provided by LockedBus.
         goal_dict = {self._motor_keys[i].removesuffix(".pos"): float(shifted[i]) for i in range(len(shifted))}
-        with self._bus_lock:
-            self._bus.sync_write("Goal_Position", goal_dict)
+        self._bus.sync_write("Goal_Position", goal_dict)
         self._last_action = shifted
         self._action_ring.append((now, shifted.copy()))
 
