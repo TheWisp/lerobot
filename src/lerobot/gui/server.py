@@ -127,7 +127,15 @@ async def _terminate_active_process(*, sigint_grace_s: float = 5.0) -> bool:
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Clean up subprocesses + their shared memory on server shutdown."""
+    """Clean up subprocesses + their shared memory on server shutdown.
+
+    Each step is best-effort: a failure in one step MUST NOT block the
+    others, or a single misbehaving cleanup callback would silently leak
+    every later resource. Failures are logged with exc_info so the cause
+    isn't lost. Tracked partially in gui/TODO.md's "Foolproof shutdown-
+    cleanup registry" entry — this is the safety-net version pending
+    the registry pattern.
+    """
     import asyncio
 
     from lerobot.gui.api.datasets import shutdown_decode_executor, shutdown_prefetch_executor
@@ -136,26 +144,39 @@ async def shutdown_event():
     from lerobot.robots.obs_stream import cleanup_stale_streams
 
     # Stop debug model process
-    await _stop_debug_process()
+    try:
+        await _stop_debug_process()
+    except Exception:
+        logger.exception("shutdown: _stop_debug_process failed")
     # Stop active teleop/record subprocess (no-op if none).
-    await _terminate_active_process()
+    try:
+        await _terminate_active_process()
+    except Exception:
+        logger.exception("shutdown: _terminate_active_process failed")
     # Defensive sweep: even if the subprocess ran its own cleanup, also
     # unlink any segments it may have leaked (SIGKILL path, abort, etc.).
     # Safe at this point because the subprocess is no longer running.
-    n = cleanup_stale_streams()
-    if n:
-        logger.info("Swept %d stale obs-stream shm segment(s) on shutdown", n)
+    try:
+        n = cleanup_stale_streams()
+        if n:
+            logger.info("Swept %d stale obs-stream shm segment(s) on shutdown", n)
+    except Exception:
+        logger.exception("shutdown: cleanup_stale_streams failed")
     # Release in-process hardware: preview cameras the Robot tab opened,
     # plus any rest-position / safe-trajectory recording robot the user
     # started but never finished. Run in the default executor — the
     # underlying disconnect()s do blocking serial / V4L2 I/O.
-    with contextlib.suppress(Exception):
+    try:
         await asyncio.get_event_loop().run_in_executor(None, cleanup_in_process_resources)
+    except Exception:
+        logger.exception("shutdown: cleanup_in_process_resources failed")
     # Cancel any in-flight prefetch work + release the executor's worker
     # thread so uvicorn's shutdown doesn't race against a long-running
     # video-decode pass.
-    with contextlib.suppress(Exception):
+    try:
         shutdown_prefetch_executor()
+    except Exception:
+        logger.exception("shutdown: shutdown_prefetch_executor failed")
     with contextlib.suppress(Exception):
         shutdown_decode_executor()
     # Send mDNS goodbye packet so clients don't keep a stale
