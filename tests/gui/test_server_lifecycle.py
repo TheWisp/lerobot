@@ -194,6 +194,71 @@ class TestShutdownEventEndToEnd:
         proc.kill.assert_called_once()
 
 
+class TestShutdownEventBestEffort:
+    """A failure in any single cleanup step MUST NOT block the others.
+    Without per-step try/except, one misbehaving callback would silently
+    leak every later resource (subprocess, shm, hardware, executor)."""
+
+    def test_first_step_failure_does_not_block_later_steps(self, reset_active_process, tmp_path):
+        run_module._active_process = None
+
+        terminate_called = False
+        prefetch_shutdown_called = False
+        hw_cleanup_called = False
+
+        async def fail_stop_debug():
+            raise RuntimeError("simulated debug stop failure")
+
+        async def track_terminate():
+            nonlocal terminate_called
+            terminate_called = True
+
+        def track_hw_cleanup():
+            nonlocal hw_cleanup_called
+            hw_cleanup_called = True
+
+        def track_prefetch_shutdown():
+            nonlocal prefetch_shutdown_called
+            prefetch_shutdown_called = True
+
+        with (
+            patch("lerobot.gui.api.run._stop_debug_process", fail_stop_debug),
+            patch("lerobot.gui.server._terminate_active_process", track_terminate),
+            patch("lerobot.gui.api.robot.cleanup_in_process_resources", track_hw_cleanup),
+            patch("lerobot.gui.api.datasets.shutdown_prefetch_executor", track_prefetch_shutdown),
+            patch("lerobot.robots.obs_stream._SHM_DIR", str(tmp_path)),
+        ):
+            # Must not raise out of shutdown_event despite the first step failing.
+            asyncio.run(shutdown_event())
+
+        assert terminate_called, "second cleanup step skipped after first raised"
+        assert hw_cleanup_called, "hardware cleanup skipped after earlier step raised"
+        assert prefetch_shutdown_called, "prefetch shutdown skipped after earlier step raised"
+
+    def test_middle_step_failure_does_not_block_later_steps(self, reset_active_process, tmp_path):
+        run_module._active_process = None
+
+        prefetch_shutdown_called = False
+
+        def fail_cleanup_streams():
+            raise RuntimeError("simulated shm sweep failure")
+
+        def track_prefetch_shutdown():
+            nonlocal prefetch_shutdown_called
+            prefetch_shutdown_called = True
+
+        with (
+            patch("lerobot.gui.api.run._stop_debug_process", AsyncMock(return_value=None)),
+            patch("lerobot.robots.obs_stream.cleanup_stale_streams", fail_cleanup_streams),
+            patch("lerobot.gui.api.robot.cleanup_in_process_resources", MagicMock()),
+            patch("lerobot.gui.api.datasets.shutdown_prefetch_executor", track_prefetch_shutdown),
+            patch("lerobot.robots.obs_stream._SHM_DIR", str(tmp_path)),
+        ):
+            asyncio.run(shutdown_event())
+
+        assert prefetch_shutdown_called, "final cleanup step skipped after middle step raised"
+
+
 # ============================================================================
 # Bonus: a real subprocess that ignores SIGINT, end-to-end verification
 # ============================================================================
