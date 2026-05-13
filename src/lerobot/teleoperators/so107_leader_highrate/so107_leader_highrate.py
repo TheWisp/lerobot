@@ -36,6 +36,7 @@ import logging
 import threading
 import time
 
+from lerobot.motors.locked_bus import LockedBus
 from lerobot.utils.robot_utils import precise_sleep
 
 from ..so_leader.so_leader import SO107Leader
@@ -52,6 +53,12 @@ class SO107LeaderHighRate(SO107Leader):
 
     def __init__(self, config: SO107LeaderHighRateConfig):
         super().__init__(config)
+        # The parent constructed ``self.bus`` as a plain FeetechMotorsBus,
+        # which has no internal locking. Wrap it so the background read
+        # thread + any main-thread bus access (disable_torque from
+        # run_reset_phase, enable_torque, configure, etc.) serialize
+        # automatically — no caller-side coordination required.
+        self.bus = LockedBus(self.bus)
         # Latest cached pose (dict[str, float] or None before first read).
         # CPython reassignment is atomic at the reference level; we also
         # take ``_cache_lock`` for any read that's followed by use (the
