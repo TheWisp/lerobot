@@ -94,6 +94,7 @@ from lerobot.common.control_utils import (
     predict_action,
     sanity_check_dataset_name,
     sanity_check_dataset_robot_compatibility,
+    warn_on_policy_robot_type_mismatch,
 )
 from lerobot.configs import PreTrainedConfig, parser
 from lerobot.datasets import (
@@ -1027,6 +1028,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         postprocessor = None
         interpolator = None
         if cfg.policy is not None:
+            # Advisory: surface embodiment mismatch (e.g. policy trained on
+            # bi_so107_follower running on bi_so107_follower_predictive).
+            # Doesn't block; prompts interactively if the TTY allows.
+            warn_on_policy_robot_type_mismatch(cfg.policy.pretrained_path, robot)
             preprocessor, postprocessor = make_pre_post_processors(
                 policy_cfg=cfg.policy,
                 pretrained_path=cfg.policy.pretrained_path,
