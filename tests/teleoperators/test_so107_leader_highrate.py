@@ -223,6 +223,28 @@ class TestCacheBehavior:
                 teleop.disconnect()
 
 
+class TestStaleCache:
+    """Regression: disconnect() must clear the cache so a reconnect can't
+    return a stale pose from the previous session before the new read
+    thread has warmed up."""
+
+    def test_disconnect_clears_cache(self, leader):
+        teleop, _bus = leader
+        # Wait for the read thread to populate the cache.
+        for _ in range(50):
+            with teleop._cache_lock:
+                if teleop._cached_pose is not None:
+                    break
+            time.sleep(0.005)
+        assert teleop._cached_pose is not None
+
+        teleop.disconnect()
+        # After disconnect, the cache must be empty so a subsequent
+        # get_action() can't return data from the previous session.
+        with teleop._cache_lock:
+            assert teleop._cached_pose is None
+
+
 class TestReadRate:
     def test_thread_polls_at_configured_rate(self, leader):
         """Over a window, the cache should have been updated at

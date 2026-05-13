@@ -138,4 +138,12 @@ class SO107LeaderHighRate(SO107Leader):
             if self._read_thread.is_alive():
                 logger.warning("%s leader read thread did not stop within 2s", self)
         self._read_thread = None
+        # Drop the cached pose so a subsequent reconnect can't return a
+        # stale pose from the previous session before the new read thread
+        # has produced its first sample. With the cache cleared,
+        # get_action() falls through to the parent's blocking sync_read
+        # until the new thread warms up — preserving the "no stale data"
+        # invariant across reconnects.
+        with self._cache_lock:
+            self._cached_pose = None
         super().disconnect()
