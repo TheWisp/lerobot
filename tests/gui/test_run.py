@@ -1128,3 +1128,68 @@ class TestParentDeathDetector:
             if fake_gui.poll() is None:
                 fake_gui.kill()
                 fake_gui.wait(timeout=2.0)
+
+
+# ============================================================================
+# Launch-lock serialization (TOCTOU on _active_process)
+# ============================================================================
+
+
+class TestLaunchLockSerializes:
+    """Regression for the TOCTOU race documented in gui/TODO.md:
+    `_ensure_no_active_process()` is synchronous, then `await _launch_subprocess(...)`
+    is the first await — without a lock, a second request arriving during the
+    fork sees `_active_process is None`, passes the check, and overwrites the
+    in-flight launch — orphaning the first subprocess holding cameras /
+    serial. `_launch_lock` makes the check+launch atomic."""
+
+    def test_concurrent_launches_serialize(self):
+        """Second concurrent /teleoperate must wait on _launch_lock until the
+        first finishes, then observe _active_process and get 409."""
+        import asyncio as _asyncio
+
+        import lerobot.gui.api.run as run_module
+
+        first_started = _asyncio.Event()
+        release_first = _asyncio.Event()
+
+        async def slow_launch(args, command, config, extra_env=None):
+            # Mimic _launch_subprocess: set _active_process, then yield to the
+            # event loop and hold until the test releases. Without _launch_lock,
+            # the second start_teleoperate could observe _active_process is
+            # still None (or already set) inconsistently. With the lock, the
+            # second call blocks until this returns.
+            mock_proc = AsyncMock()
+            mock_proc.pid = 9999
+            mock_proc.returncode = None
+            run_module._active_process = mock_proc
+            run_module._active_command = command
+            first_started.set()
+            await release_first.wait()
+
+        async def run():
+            req1 = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP, fps=30)
+            req2 = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP, fps=30)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._active_command", None),
+                patch("lerobot.gui.api.run._launch_subprocess", slow_launch),
+            ):
+                t1 = _asyncio.create_task(start_teleoperate(req1))
+                await first_started.wait()
+
+                t2 = _asyncio.create_task(start_teleoperate(req2))
+                # Give t2 a slice of time to attempt the lock.
+                await _asyncio.sleep(0.05)
+                assert not t2.done(), "Second launch ran without waiting for the first — _launch_lock missing"
+
+                release_first.set()
+                await t1
+                with pytest.raises(HTTPException) as exc_info:
+                    await t2
+                assert exc_info.value.status_code == 409
+            # Restore module state for other tests.
+            run_module._active_process = None
+            run_module._active_command = None
+
+        asyncio.run(run())
