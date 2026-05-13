@@ -22,6 +22,7 @@ import shutil
 import tempfile
 import threading
 import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
@@ -261,14 +262,29 @@ def decode_video_frames_torchvision(
 
 
 class VideoDecoderCache:
-    """Thread-safe cache for video decoders to avoid expensive re-initialization."""
+    """Thread-safe cache for video decoders to avoid expensive re-initialization.
+
+    Each cached VideoDecoder wraps non-thread-safe FFmpeg state (an
+    AVFormatContext + AVCodecContext); concurrent ``decoder.get_frames_at``
+    calls on the same instance from different threads were observed to
+    SIGSEGV under the FastAPI server's threadpool. We attach a per-path
+    lock to each cache entry and expose ``decoder_for()`` as the
+    recommended access pattern — different videos still decode in parallel,
+    but a single video's decode calls are serialized.
+
+    ``get_decoder()`` is preserved for callers that already serialize
+    access externally (e.g. the GUI's prefetch thread which owns its own
+    private cache instance). New callers should prefer ``decoder_for``.
+    """
 
     def __init__(self):
-        self._cache: dict[str, tuple[Any, Any]] = {}
+        # (decoder, file_handle, lock) — lock is per-path, held while the
+        # caller is using the decoder.
+        self._cache: dict[str, tuple[Any, Any, Lock]] = {}
         self._lock = Lock()
 
-    def get_decoder(self, video_path: str):
-        """Get a cached decoder or create a new one."""
+    def _get_or_create(self, video_path: str) -> tuple[Any, Lock]:
+        """Internal: ensure a decoder + its lock exist for ``video_path``. Returns both."""
         if importlib.util.find_spec("torchcodec"):
             from torchcodec.decoders import VideoDecoder
         else:
@@ -278,19 +294,41 @@ class VideoDecoderCache:
             )
 
         video_path = str(video_path)
-
         with self._lock:
-            if video_path not in self._cache:
+            entry = self._cache.get(video_path)
+            if entry is None:
                 file_handle = fsspec.open(video_path).__enter__()
                 decoder = VideoDecoder(file_handle, seek_mode="approximate")
-                self._cache[video_path] = (decoder, file_handle)
+                entry = (decoder, file_handle, Lock())
+                self._cache[video_path] = entry
+        return entry[0], entry[2]
 
-            return self._cache[video_path][0]
+    def get_decoder(self, video_path: str):
+        """Get a cached decoder, creating it if needed.
+
+        WARNING: returned decoder is shared across threads. Callers MUST
+        serialize their own use (e.g. by owning a single-threaded cache,
+        as the GUI's prefetch worker does) or prefer :meth:`decoder_for`.
+        """
+        decoder, _ = self._get_or_create(video_path)
+        return decoder
+
+    @contextmanager
+    def decoder_for(self, video_path: str):
+        """Yield the cached decoder for ``video_path`` under its per-video lock.
+
+        Use this around any ``decoder.get_frames_at`` / ``decoder.metadata``
+        access from code paths that may run on multiple threads. Different
+        videos still decode in parallel; only same-video accesses serialize.
+        """
+        decoder, lock = self._get_or_create(video_path)
+        with lock:
+            yield decoder
 
     def clear(self):
         """Clear the cache and close file handles."""
         with self._lock:
-            for _, file_handle in self._cache.values():
+            for _, file_handle, _ in self._cache.values():
                 file_handle.close()
             self._cache.clear()
 
@@ -337,19 +375,22 @@ def decode_video_frames_torchcodec(
     if decoder_cache is None:
         decoder_cache = _default_decoder_cache
 
-    # Use cached decoder instead of creating new one each time
-    decoder = decoder_cache.get_decoder(str(video_path))
-
     loaded_ts = []
     loaded_frames = []
 
-    # get metadata for frame information
-    metadata = decoder.metadata
-    average_fps = metadata.average_fps
-    # convert timestamps to frame indices
-    frame_indices = [round(ts * average_fps) for ts in timestamps]
-    # retrieve frames based on indices
-    frames_batch = decoder.get_frames_at(indices=frame_indices)
+    # Hold the per-video lock for the entire decode. The VideoDecoder
+    # instance holds non-thread-safe FFmpeg state, so concurrent decodes on
+    # the same video from different FastAPI worker threads were observed to
+    # SIGSEGV. Different videos still decode in parallel (the lock is
+    # per-path, not global).
+    with decoder_cache.decoder_for(str(video_path)) as decoder:
+        # get metadata for frame information
+        metadata = decoder.metadata
+        average_fps = metadata.average_fps
+        # convert timestamps to frame indices
+        frame_indices = [round(ts * average_fps) for ts in timestamps]
+        # retrieve frames based on indices
+        frames_batch = decoder.get_frames_at(indices=frame_indices)
 
     for frame, pts in zip(frames_batch.data, frames_batch.pts_seconds, strict=True):
         loaded_frames.append(frame)
