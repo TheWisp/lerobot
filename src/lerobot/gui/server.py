@@ -265,6 +265,13 @@ def setup_logging(log_dir: Path | None = None) -> Path:
 
 def main():
     """CLI entry point."""
+    # Capture native-crash stack traces (SIGSEGV / SIGABRT in C extensions
+    # like torchcodec) to stderr so they show up in the server log instead
+    # of vanishing as a silent "core dumped".
+    import faulthandler
+
+    faulthandler.enable()
+
     parser = argparse.ArgumentParser(description="LeRobot Dataset GUI Server")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to (default: 8000)")
