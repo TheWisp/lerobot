@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ctypes
 import json
 import logging
 import os
 import signal
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -310,6 +312,48 @@ async def _wait_for_exit() -> None:
     _output_event.set()
 
 
+# ── Parent-death detector ────────────────────────────────────────────────
+#
+# Why: a SIGKILL on the GUI server (e.g. VS Code closing the terminal,
+# OOM kill, segfault) leaves any in-flight teleop/record subprocess
+# running indefinitely — observed in the wild as a `lerobot-teleoperate`
+# subprocess alive almost 2 hours after the GUI exited, holding ttyACM
+# ports and cameras and blocking the next launch.
+#
+# Phase 1 fix: use Linux's PR_SET_PDEATHSIG so the kernel sends SIGTERM
+# to the child the moment its parent dies, independent of FastAPI's
+# lifespan hooks. Set via preexec_fn (runs in the forked child before
+# exec, async-signal-safe — only a single libc.prctl call). Linux-only;
+# no-op elsewhere.
+#
+# Phase 2 (still TODO in gui/TODO.md): file-based heartbeat for the
+# corner case where SIGTERM races a stuck child.
+
+# PR_SET_PDEATHSIG value from <sys/prctl.h>. Kept as a module constant so
+# the preexec function doesn't reach into ctypes at signal-handler time.
+_PR_SET_PDEATHSIG = 1
+
+
+def _set_pdeathsig_preexec() -> None:
+    """preexec_fn for subprocess: ask the kernel to SIGTERM us if our parent dies.
+
+    Runs in the forked child between fork and exec. Stays minimal: a
+    single libc.prctl call. Failure is silent (we can't log from
+    preexec_fn — the parent would never see it). Worst case we just
+    don't get the auto-cleanup behaviour, which is the current state
+    anyway.
+    """
+    if sys.platform != "linux":
+        return
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        # prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0). The signal is
+        # cleared on exec of a setuid binary; not a concern here.
+        libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+    except (OSError, AttributeError):
+        pass
+
+
 async def _launch_subprocess(
     args: list[str], command: str, config: dict, extra_env: dict[str, str] | None = None
 ) -> None:
@@ -337,6 +381,7 @@ async def _launch_subprocess(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        preexec_fn=_set_pdeathsig_preexec,
     )
 
     _stream_tasks = [
@@ -384,6 +429,7 @@ async def _launch_debug_s2(config: DebugModelConfig) -> None:
         stdout=debug_log_fd,
         stderr=debug_log_fd,
         env=env,
+        preexec_fn=_set_pdeathsig_preexec,
     )
     os.close(debug_log_fd)  # subprocess inherited the fd, we can close our copy
 

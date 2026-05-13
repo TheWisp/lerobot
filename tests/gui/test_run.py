@@ -997,3 +997,134 @@ class TestLatencySourcesListing:
         teleop = result["sources"][0]
         assert teleop["fresh"] is False
         assert teleop["age_s"] >= 60.0
+
+
+# ============================================================================
+# Parent-death detector (PR_SET_PDEATHSIG)
+# ============================================================================
+
+
+class TestParentDeathDetector:
+    """The GUI launches subprocesses with preexec_fn=_set_pdeathsig_preexec
+    so a SIGKILL on the GUI server doesn't leave teleop/record processes
+    running indefinitely. Regression for the orphan-subprocess scenario
+    documented in gui/TODO.md."""
+
+    def test_launch_subprocess_passes_preexec(self):
+        """The teleop launch path must pass our pdeathsig preexec_fn."""
+        import lerobot.gui.api.run as run_module
+
+        async def run():
+            req = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP, fps=30)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("asyncio.create_subprocess_exec") as mock_exec,
+            ):
+                mock_proc = AsyncMock()
+                mock_proc.pid = 9999
+                mock_proc.stdout = AsyncMock()
+                mock_proc.stdout.readline = AsyncMock(return_value=b"")
+                mock_proc.stderr = AsyncMock()
+                mock_proc.stderr.readline = AsyncMock(return_value=b"")
+                mock_proc.wait = AsyncMock(return_value=0)
+                mock_exec.return_value = mock_proc
+                await start_teleoperate(req)
+                return mock_exec
+
+        mock_exec = asyncio.run(run())
+        assert mock_exec.called
+        kwargs = mock_exec.call_args.kwargs
+        assert "preexec_fn" in kwargs, (
+            "create_subprocess_exec must receive preexec_fn for the parent-death detector"
+        )
+        assert kwargs["preexec_fn"] is run_module._set_pdeathsig_preexec
+
+    def test_set_pdeathsig_preexec_is_callable_on_linux(self):
+        """The preexec function itself must run without raising on Linux.
+
+        It's called in the forked child between fork and exec; any
+        exception there would prevent the subprocess from starting at all.
+        """
+        import sys
+
+        from lerobot.gui.api.run import _set_pdeathsig_preexec
+
+        # On Linux this hits libc.prctl; on other platforms it's a no-op.
+        # Either way it must not raise.
+        _set_pdeathsig_preexec()
+        if sys.platform != "linux":
+            pytest.skip("PR_SET_PDEATHSIG integration test only runs on Linux")
+
+    @pytest.mark.skipif(
+        __import__("sys").platform != "linux",
+        reason="PR_SET_PDEATHSIG is Linux-only",
+    )
+    def test_child_dies_when_grandparent_killed(self, tmp_path):
+        """End-to-end: spawn a 'fake GUI' subprocess that itself spawns a
+        sleeping child with our preexec; kill the fake GUI; confirm the
+        child died. Proves the kernel-level mechanism actually fires."""
+        import os
+        import signal
+        import subprocess
+        import sys
+        import textwrap
+        import time
+
+        pidfile = tmp_path / "child.pid"
+
+        # The fake-GUI script: spawn a sleep-60 subprocess with our
+        # preexec_fn, write its PID to a file, then sleep forever.
+        fake_gui_src = textwrap.dedent(f"""
+            import subprocess, time, signal, ctypes
+
+            def preexec():
+                libc = ctypes.CDLL("libc.so.6", use_errno=True)
+                libc.prctl(1, signal.SIGTERM, 0, 0, 0)
+
+            child = subprocess.Popen(
+                ["sleep", "60"],
+                preexec_fn=preexec,
+            )
+            with open({str(pidfile)!r}, "w") as f:
+                f.write(str(child.pid))
+            time.sleep(60)
+        """)
+
+        fake_gui = subprocess.Popen([sys.executable, "-c", fake_gui_src])
+        try:
+            # Wait for the child to be spawned and pid recorded.
+            for _ in range(50):
+                if pidfile.exists():
+                    break
+                time.sleep(0.05)
+            assert pidfile.exists(), "fake GUI never reported child pid"
+            child_pid = int(pidfile.read_text().strip())
+
+            # Sanity check: child is alive.
+            os.kill(child_pid, 0)  # no-op, just probes existence
+
+            # Now kill the fake GUI with SIGKILL — no chance for clean shutdown.
+            fake_gui.kill()
+            fake_gui.wait(timeout=5.0)
+
+            # PR_SET_PDEATHSIG should have sent SIGTERM to the child the
+            # moment its parent (the fake GUI) died. Within a short window
+            # the child must no longer exist.
+            for _ in range(50):
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    return  # Child is gone — test passes
+                time.sleep(0.05)
+            # Reaching here means the child outlived its parent.
+            try:
+                os.kill(child_pid, signal.SIGKILL)  # cleanup
+            except ProcessLookupError:
+                pass
+            pytest.fail(
+                f"Child pid {child_pid} survived after grandparent died — PR_SET_PDEATHSIG did not fire."
+            )
+        finally:
+            if fake_gui.poll() is None:
+                fake_gui.kill()
+                fake_gui.wait(timeout=2.0)
