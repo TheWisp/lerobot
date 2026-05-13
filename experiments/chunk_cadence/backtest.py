@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from scipy.signal import savgol_filter
 
 from lerobot.robots.bi_so107_follower_predictive import (
     BiSO107FollowerPredictive,
@@ -115,13 +116,30 @@ def make_chunk(
     bias: np.ndarray,
     joint_names: list[str],
     chunk_fps: float,
+    smooth_window: int = 0,
+    bias_model: str = "overlap_only",
 ) -> ActionChunk | None:
-    """Build one ActionChunk with overlap-region bias applied.
+    """Build one ActionChunk with per-emission bias applied.
 
-    Bias is applied only to ``frames[update_every:]`` — the part of this
-    chunk that overlaps in wall time with the NEXT chunk (which has not
-    arrived yet). The first ``update_every`` frames are clean ground truth;
-    those are the frames this chunk uniquely owns until the next one lands.
+    ``bias_model`` controls where the bias lands within each chunk:
+
+    * ``"overlap_only"`` (default): bias added to ``frames[update_every:]``.
+      Represents an RTC policy where the leading edge (frames the next chunk
+      will replan) gets refined / drifts, but the first ``update_every``
+      frames — the part this chunk uniquely owns before being superseded —
+      stay clean. Side-effect: creates an internal step at frame ``update_every``
+      within each chunk.
+
+    * ``"uniform"``: bias added to ALL frames of the chunk. Represents an
+      RTC policy that emits an entire 50-frame plan per observation, with the
+      plan offset from ground-truth by a small per-emission ``bias_i``.
+      No internal step; jitter source is purely chunk-to-chunk transitions.
+
+    ``smooth_window`` (odd, ≥ 3): if set, apply a centered Savitzky-Golay
+    filter along the time axis of each chunk AFTER adding bias. Zero group
+    delay (centered filter); the controller's downstream linear interpolation
+    still hits the same wall-time-corresponding chunk index. Only the chunk's
+    frame values become smoother.
 
     Returns ``None`` when the source runs out of frames.
     """
@@ -129,8 +147,23 @@ def make_chunk(
     if end > len(gt):
         return None
     frames = gt[base_frame:end].copy()  # (chunk_size, n_joints)
-    # Apply bias to overlap region only.
-    frames[update_every:] += bias[None, :]
+    if bias_model == "overlap_only":
+        frames[update_every:] += bias[None, :]
+    elif bias_model == "uniform":
+        frames += bias[None, :]
+    else:
+        raise ValueError(f"unknown bias_model: {bias_model!r}")
+    if smooth_window and smooth_window >= 3:
+        # mode='nearest' replicates the edge value at chunk[0] and chunk[-1]
+        # so the SG fit doesn't pull toward zero. polyorder=3 preserves cubic
+        # local curvature in the trajectory.
+        frames = savgol_filter(
+            frames,
+            window_length=smooth_window,
+            polyorder=min(3, smooth_window - 1),
+            axis=0,
+            mode="nearest",
+        )
     return ActionChunk(
         fps=chunk_fps,
         frames=tuple(dict(zip(joint_names, row.tolist(), strict=True)) for row in frames),
@@ -283,6 +316,8 @@ def run(args: argparse.Namespace) -> None:
                     bias,
                     joint_names,
                     chunk_fps,
+                    smooth_window=args.chunk_smooth_window,
+                    bias_model=args.bias_model,
                 )
                 if chunk is None:
                     break
@@ -364,7 +399,15 @@ def run(args: argparse.Namespace) -> None:
 
     out_dir = Path(args.output_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"N{args.update_every}_L{int(args.lookahead_ms or 0)}_bias{args.bias_threshold_deg}_seed{args.bias_seed}"
+    # bm shorthand in filename: o=overlap_only, u=uniform. Kept compact so
+    # filenames don't bloat. Filename schema documented in the regex in
+    # summarize.py and the README.
+    bm_tag = {"overlap_only": "o", "uniform": "u"}.get(args.bias_model, args.bias_model)
+    stem = (
+        f"N{args.update_every}_L{int(args.lookahead_ms or 0)}_"
+        f"bias{args.bias_threshold_deg}_smooth{args.chunk_smooth_window}_"
+        f"bm{bm_tag}_seed{args.bias_seed}"
+    )
     np.savez(
         out_dir / f"trace_{stem}.npz",
         t=np.asarray([t["t"] for t in ticks]),
@@ -385,6 +428,8 @@ def run(args: argparse.Namespace) -> None:
         "bias_threshold_deg": args.bias_threshold_deg,
         "bias_sigma_deg": args.bias_sigma_deg,
         "bias_seed": args.bias_seed,
+        "bias_model": args.bias_model,
+        "chunk_smooth_window": args.chunk_smooth_window,
         "n_ticks": len(ticks),
         "n_emissions": last_emission_idx + 1,
         "duration_s": ticks[-1]["t"],
@@ -412,6 +457,26 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--bias-threshold-deg", type=float, default=0.5)
     p.add_argument("--bias-sigma-deg", type=float, default=0.1)
     p.add_argument("--bias-seed", type=int, default=42, help="Same seed → identical chunk stream")
+    p.add_argument(
+        "--chunk-smooth-window",
+        type=int,
+        default=0,
+        help="Odd window length (3, 5, 7, …) for centered Savitzky-Golay smoothing "
+        "applied to each chunk's frames AFTER bias. 0 = disabled (current behavior). "
+        "Zero group delay — the smoothed chunk lookup at index k uses chunk frames "
+        "k±w/2 symmetrically, so the wall-time-corresponding sample is preserved.",
+    )
+    p.add_argument(
+        "--bias-model",
+        choices=["overlap_only", "uniform"],
+        default="overlap_only",
+        help="Where each chunk's per-emission bias is applied. 'overlap_only' "
+        "(default): only frames [update_every, 50) get the bias — represents an "
+        "RTC policy that only refines the part the next chunk will replan. "
+        "'uniform': all 50 frames get the same bias_i — represents an RTC "
+        "policy that emits each chunk as a whole, with chunk-to-chunk drift "
+        "but no in-chunk discontinuity.",
+    )
     p.add_argument("--ramp-to-start-s", type=float, default=2.0)
     p.add_argument(
         "--rest-duration-s",

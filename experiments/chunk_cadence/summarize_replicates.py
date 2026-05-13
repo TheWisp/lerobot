@@ -24,7 +24,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze import analyze  # sibling module  # noqa: E402
 
-_NAME_RE = re.compile(r"trace_N(\d+)_L(\d+)_bias([\d.]+)_seed(\d+)\.npz$")
+_NAME_RE = re.compile(
+    r"trace_N(?P<N>\d+)_L(?P<L>\d+)_bias(?P<bias>[\d.]+)"
+    r"(?:_smooth(?P<sw>\d+))?"
+    r"(?:_bm(?P<bm>[ou]))?"
+    r"_seed(?P<seed>\d+)\.npz$"
+)
 _DIR_RE = re.compile(r"^(?P<source>.+?)_run(?P<run>\d+)$")
 
 
@@ -43,8 +48,13 @@ def _scan_runs(parent: Path) -> dict:
             mm = _NAME_RE.search(npz.name)
             if not mm:
                 continue
-            n, lk, bias, seed = int(mm[1]), int(mm[2]), float(mm[3]), int(mm[4])
-            key = (n, lk, bias, seed)
+            n = int(mm["N"])
+            lk = int(mm["L"])
+            bias = float(mm["bias"])
+            sw = int(mm["sw"]) if mm["sw"] else 0
+            bm = {"o": "overlap", "u": "uniform"}.get(mm["bm"] or "o", "overlap")
+            seed = int(mm["seed"])
+            key = (n, lk, bias, sw, bm, seed)
             by_source.setdefault(source, {}).setdefault(key, []).append((run, analyze(npz)))
     return by_source
 
@@ -70,14 +80,14 @@ def main() -> None:
     for source, cells in by_source.items():
         print(f"\n== {source} (replicates: {sorted({run for v in cells.values() for run, _ in v})}) ==")
         header = (
-            f"{'N':>3} {'L_ms':>5}  "
+            f"{'N':>3} {'bm':>8} {'sw':>3} {'L_ms':>5}  "
             f"{'state_lag_ms (mean±std)':>26}  "
             f"{'jitter_deg (mean±std)':>24}  "
             f"{'jump95 (mean±std)':>20}"
         )
         print(header)
         print("-" * len(header))
-        for (n, lk, _bias, _seed), runs in sorted(cells.items()):
+        for (n, lk, _bias, sw, bm, _seed), runs in sorted(cells.items()):
             lags = [-r["lag_no_lookahead_ms_median"] for _, r in runs]
             jitters = [
                 r["jitter_lookahead_mean_deg"] if lk > 0 else r["jitter_no_lookahead_mean_deg"]
@@ -89,7 +99,7 @@ def main() -> None:
             jmp_m, jmp_s = _mean_std(jumps)
             tag = "τ_motor" if lk == 0 else "residual"
             print(
-                f"{n:>3} {lk:>5d}  "
+                f"{n:>3} {bm:>8} {sw:>3d} {lk:>5d}  "
                 f"{lag_m:>7.1f} ± {lag_s:>5.2f} ({tag:>8})  "
                 f"{jit_m:>10.3f} ± {jit_s:>6.4f}     "
                 f"{jmp_m:>8.3f} ± {jmp_s:>5.3f}"
@@ -100,6 +110,8 @@ def main() -> None:
                     "update_every": n,
                     "lookahead_ms": lk,
                     "bias_threshold_deg": _bias,
+                    "smooth_window": sw,
+                    "bias_model": bm,
                     "n_replicates": len(runs),
                     "state_lag_ms_mean": lag_m,
                     "state_lag_ms_std": lag_s,
