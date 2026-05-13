@@ -235,3 +235,40 @@ def test_attach_teleop_skips_non_bimanual_teleop(bi_follower):
     robot.attach_teleop(single_arm_teleop)
     assert robot.left_arm._controller._teleop is None
     assert robot.right_arm._controller._teleop is None
+
+
+def test_send_action_rejects_chunk_missing_one_arms_keys(bi_follower):
+    """A frame missing all left_* keys (or right_*) would have produced an
+    empty per-arm sub-chunk, which then races: left_arm.send_action
+    succeeds, right_arm raises on the strict-key check — leaving the arms
+    out of sync. The composer must fail fast before either side-effect."""
+    from lerobot.types import ActionChunk
+
+    robot, _left_bus, _right_bus = bi_follower
+
+    # Frame 0 is well-formed; frame 1 omits all right_* keys.
+    frame_full = {f"left_{m}.pos": 1.0 for m in _MOTOR_NAMES}
+    frame_full.update({f"right_{m}.pos": 2.0 for m in _MOTOR_NAMES})
+    frame_left_only = {f"left_{m}.pos": 1.0 for m in _MOTOR_NAMES}
+    chunk = ActionChunk(fps=30.0, frames=(frame_full, frame_left_only))
+
+    with pytest.raises(ValueError, match="missing per-arm keys"):
+        robot.send_action(chunk)
+
+    # Error happened before either arm's _latest_intent was updated to a
+    # stale value — verify by re-sending a valid chunk and confirming
+    # both arms accept it cleanly.
+    valid_chunk = ActionChunk(fps=30.0, frames=(frame_full,))
+    robot.send_action(valid_chunk)  # must not raise
+
+
+def test_send_action_rejects_chunk_missing_first_arms_keys(bi_follower):
+    """Mirror of the above: frame missing all left_* keys."""
+    from lerobot.types import ActionChunk
+
+    robot, _l, _r = bi_follower
+    frame_right_only = {f"right_{m}.pos": 2.0 for m in _MOTOR_NAMES}
+    chunk = ActionChunk(fps=30.0, frames=(frame_right_only,))
+
+    with pytest.raises(ValueError, match="missing per-arm keys"):
+        robot.send_action(chunk)

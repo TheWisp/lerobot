@@ -209,6 +209,21 @@ class BiSO107FollowerPredictive(BiSO107Follower):
             {k.removeprefix("right_"): v for k, v in f.items() if k.startswith("right_")}
             for f in action.frames
         )
+        # Fail fast on mixed frames (frame missing one arm's keys). Without
+        # this guard, the empty side would pass ActionChunk's non-empty-tuple
+        # check, hit left_arm first, succeed, then raise on right_arm's
+        # strict-key check — leaving the arms out of sync. The fix is to
+        # detect the mismatch before any side-effect.
+        empty_left = [i for i, f in enumerate(left_frames) if not f]
+        empty_right = [i for i, f in enumerate(right_frames) if not f]
+        if empty_left or empty_right:
+            raise ValueError(
+                f"{self}: ActionChunk frames are missing per-arm keys. "
+                f"Frames with no left_* keys: {empty_left}. "
+                f"Frames with no right_* keys: {empty_right}. "
+                f"Every frame must carry both left_* and right_* keys to keep "
+                f"the arms in sync."
+            )
         left_chunk = ActionChunk(fps=action.fps, frames=left_frames)
         right_chunk = ActionChunk(fps=action.fps, frames=right_frames)
 
