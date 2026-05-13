@@ -528,22 +528,37 @@ def run_s1(
     logging.getLogger().addHandler(_run_fh)
     logger.info("S1: Run log → %s", run_log_file)
 
+    # keyboard listener removed — Ctrl+C via stop_event is sufficient
+    # Register robot/camera types for draccus. Auto-discover every
+    # submodule under lerobot.robots / lerobot.teleoperators so any new
+    # robot type (e.g. bi_so107_follower_predictive) is registered
+    # without an explicit import edit here. Each import is wrapped in
+    # contextlib.suppress(Exception) so packages whose optional SDK
+    # extras aren't installed stay silent. Same pattern as
+    # gui/api/robot.py::_ensure_configs_loaded.
+    import importlib
     import json
+    import pkgutil
 
     import draccus
 
+    # Side-effect import: registers the typing.Literal decoder against
+    # draccus. Without this, any config field annotated Literal[...]
+    # (e.g. camera_read_strategy on bi_so107) fails to decode here even
+    # though the GUI path works (which imports parser transitively).
+    import lerobot.configs.parser  # noqa: F401
+    import lerobot.robots as _lr_robots
+    import lerobot.teleoperators as _lr_teleops
     from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
     from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
     from lerobot.policies.hvla.s1.protocol import S2_LATENT_KEY
-
-    # keyboard listener removed — Ctrl+C via stop_event is sufficient
-    # Register robot/camera types for draccus
-    from lerobot.robots import (
-        bi_so107_follower,  # noqa: F401
-        make_robot_from_config,
-    )
+    from lerobot.robots import make_robot_from_config
     from lerobot.robots.config import RobotConfig
-    from lerobot.teleoperators import bi_so107_leader  # noqa: F401
+
+    for _pkg in (_lr_robots, _lr_teleops):
+        for _importer, _modname, _ispkg in pkgutil.walk_packages(_pkg.__path__, prefix=_pkg.__name__ + "."):
+            with contextlib.suppress(Exception):
+                importlib.import_module(_modname)
 
     device = torch.device(device)
 
