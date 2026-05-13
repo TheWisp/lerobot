@@ -167,19 +167,31 @@ class SOFollower(Robot):
                 self.bus.write("D_Coefficient", motor, 32)
 
                 if motor == "gripper":
-                    # Separate "how strong/fast" knobs from "how aggressively
-                    # to track." Keep P low (gentle tracking → no overshoot)
-                    # but remove torque/current/velocity/acceleration caps so
-                    # the motor reaches its physical max velocity. Net: motor
-                    # moves fast when far from target, slows gracefully near
-                    # it. P=16 keeps the loop-side damping the same as the
-                    # arm joints; D=32 (set above) helps prevent overshoot.
-                    # P_Coefficient already set to 16 above; not overridden.
-                    self.bus.write("Max_Torque_Limit", motor, 1000)  # full torque available
-                    self.bus.write("Protection_Current", motor, 400)  # up from 250
+                    # Per gripper register sweep (see
+                    # experiments/chunk_cadence/sweep_gripper_*.py):
+                    #   * P=24 is the free win — 12% faster settle than the
+                    #     loop default 16, with zero overshoot at all tested
+                    #     reversal times (P=32 introduces ~0.4-unit overshoot;
+                    #     P=48 ~1 unit). Within the gripper's 0-100 range,
+                    #     a 0-unit overshoot keeps reversal feel clean.
+                    #   * Acceleration=0 (no profile cap) was decisive in the
+                    #     sweep: Acc=4 collapsed peak velocity from 248 → 24
+                    #     units/s on the right side. Keep this.
+                    #   * Maximum_Velocity_Limit=254 — above the motor's hard
+                    #     physical ceiling (~270 u/s on this hardware), so
+                    #     setting it lower starts cutting in around 150.
+                    #   * Max_Torque_Limit / Protection_Current revert to the
+                    #     50%-of-max defaults: the doubled values neither
+                    #     raised peak velocity nor shortened settle time in
+                    #     the sweep — they only added thermal risk under
+                    #     prolonged grip. Overload_Torque=25 keeps the
+                    #     stall-fallback intact.
+                    self.bus.write("P_Coefficient", motor, 24)
+                    self.bus.write("Max_Torque_Limit", motor, 500)
+                    self.bus.write("Protection_Current", motor, 250)
                     self.bus.write("Overload_Torque", motor, 25)
-                    self.bus.write("Maximum_Velocity_Limit", motor, 254)  # near max byte value
-                    self.bus.write("Acceleration", motor, 0)  # 0 = no acceleration cap on Feetech
+                    self.bus.write("Maximum_Velocity_Limit", motor, 254)
+                    self.bus.write("Acceleration", motor, 0)
 
     def setup_motors(self) -> None:
         for motor in reversed(self.bus.motors):
