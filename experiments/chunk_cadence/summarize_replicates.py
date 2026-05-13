@@ -30,6 +30,8 @@ _NAME_RE = re.compile(
     r"(?:_bm(?P<bm>[ou]))?"
     r"_seed(?P<seed>\d+)\.npz$"
 )
+# Teleop trace files: trace_teleop_L<lk>_noise<n>_seed<s>.npz
+_TELEOP_RE = re.compile(r"trace_teleop_L(?P<L>\d+)_noise(?P<noise>[\d.]+)_seed(?P<seed>\d+)\.npz$")
 _DIR_RE = re.compile(r"^(?P<source>.+?)_run(?P<run>\d+)$")
 
 
@@ -45,6 +47,19 @@ def _scan_runs(parent: Path) -> dict:
         source = m.group("source")
         run = int(m.group("run"))
         for npz in sorted(child.glob("trace_*.npz")):
+            # Teleop schema first (more specific match).
+            tm = _TELEOP_RE.search(npz.name)
+            if tm:
+                lk = int(tm["L"])
+                noise = float(tm["noise"])
+                seed = int(tm["seed"])
+                # Encode teleop into the same key shape as chunked so the
+                # printer doesn't need a separate path. N=0 sentinel marks
+                # teleop; bias is reused to carry the intent noise; sw=0;
+                # bm='teleop' to identify the mode in the table.
+                key = (0, lk, noise, 0, "teleop", seed)
+                by_source.setdefault(source, {}).setdefault(key, []).append((run, analyze(npz)))
+                continue
             mm = _NAME_RE.search(npz.name)
             if not mm:
                 continue
