@@ -48,4 +48,9 @@ class BiSO107FollowerPredictiveConfig(BiSO107FollowerConfig):
     control_rate_hz: float = 200.0
     adaptive: bool = True
     max_step_deg: float = 3.0
-    velocity_estimator: Literal["quad", "linear", "forward_diff"] = "quad"
+    velocity_estimator: Literal["quad", "linear", "forward_diff", "amp_gated_lp"] = "quad"
+    # Knobs for ``amp_gated_lp`` — see SO107FollowerPredictiveRobotConfig
+    # for the long-form rationale.
+    velocity_lowpass_hz: float = 4.0
+    amp_gate_lo: float = 1.0
+    amp_gate_hi: float = 3.0

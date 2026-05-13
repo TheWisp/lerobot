@@ -74,7 +74,37 @@ class SO107FollowerPredictiveRobotConfig(RobotConfig, SOFollowerConfig):
     #                          sensitivity at the control rate; fine for
     #                          smooth high-rate sources, marginal at
     #                          30 Hz dict-push sources.
-    velocity_estimator: Literal["quad", "linear", "forward_diff"] = "quad"
+    #   * ``"amp_gated_lp"`` — EMA-lowpass V_est with per-joint amplitude
+    #                          gating. When recent leader-motion amplitude
+    #                          drops below ``amp_gate_lo``, lookahead is
+    #                          turned OFF (motor_cmd = leader_pos) so the
+    #                          hand-tremor derivative isn't amplified into
+    #                          motor noise. Above ``amp_gate_hi``, full
+    #                          lookahead via lowpassed forward-diff. Linear
+    #                          ramp between. Best estimator for the
+    #                          "small motion = wiggle" failure mode
+    #                          (experiments/chunk_cadence/online_estimator_
+    #                          gripper.py: state_p2p tracks intent_p2p to
+    #                          rounding, vs quad's +4.5 excess).
+    velocity_estimator: Literal["quad", "linear", "forward_diff", "amp_gated_lp"] = "quad"
+
+    # Knobs for ``amp_gated_lp``. Only consulted when that estimator is
+    # selected — ignored by quad / linear / forward_diff.
+    #
+    # ``velocity_lowpass_hz`` — cutoff of the per-tick 1st-order EMA
+    #     applied to the per-sample forward-diff before extrapolation.
+    #     Default 4 Hz attenuates the human 8-12 Hz tremor band while
+    #     passing real motion (≤2 Hz dominant). Lower → more smoothing
+    #     → more phase lag in V_est → less effective lookahead.
+    # ``amp_gate_lo`` / ``amp_gate_hi`` — peak-to-peak motion amplitude
+    #     (in joint units — degrees for arm joints, RANGE_0_100 for
+    #     gripper) over the velocity window below which the controller
+    #     becomes pure pass-through (no lookahead). Linear ramp between
+    #     lo and hi. Defaults validated on bi_so107 gripper sweep at
+    #     ±3-unit deliberate motion with 0.5-unit tremor.
+    velocity_lowpass_hz: float = 4.0
+    amp_gate_lo: float = 1.0
+    amp_gate_hi: float = 3.0
 
     # Control-thread rate. The bus comfortably sustains 170+ Hz at P=48
     # under sync_write-only load. 200 Hz is the prototype default.
