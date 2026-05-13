@@ -58,72 +58,37 @@ _configs_loaded = False
 
 
 def _ensure_configs_loaded():
-    """Import all config modules to trigger @register_subclass decorators.
+    """Import all robot/teleop config modules to trigger ``@register_subclass``.
 
-    Some modules have optional hardware dependencies (hebi, pyrealsense2, etc.)
-    that may not be installed, so each import is wrapped in try/except.
+    Auto-discovers every submodule under ``lerobot.robots`` and
+    ``lerobot.teleoperators`` via ``pkgutil.walk_packages``. Each import
+    is wrapped in ``contextlib.suppress(Exception)`` so packages whose
+    optional dependencies (hebi, pyrealsense2, reachy2_sdk, ...) aren't
+    installed stay silent. The walk is one level deep — we want the
+    per-package config modules (e.g. ``config_bi_so107_follower``), not
+    every transitive file (motors, kinematics, etc.).
 
-    TODO: replace the hard-coded list below with ``pkgutil.walk_packages``
-    auto-discovery of ``lerobot.robots`` and ``lerobot.teleoperators``
-    subpackages. The list-of-strings approach silently skips any new
-    robot or teleop package whose author forgot to add an entry here —
-    the new type then doesn't appear in the GUI dropdown and the
-    failure mode is "users open the Robot tab and just don't see the
-    option, with no error to point at the cause". This bit on
-    ``bi_so107_follower_predictive`` + ``velocity_estimator`` (2026-05-12,
-    field invisible until manually added to the list). Auto-discovery
-    is exactly what ``_get_known_fields`` already does at the bottom of
-    this file for the launch-side schema lookup — same call site
-    pattern, just lifted up to the top-level loader. Keep the
-    contextlib.suppress(Exception) wrapper for optional-SDK packages
-    (reachy2_sdk etc.) so missing extras stay silent.
+    Why auto-discovery: the previous hard-coded list silently dropped any
+    new robot/teleop package whose author forgot to add an entry — the
+    new type just didn't appear in the Robot tab dropdown with no error,
+    no log, no hint. Caught on bi_so107_follower_predictive (2026-05-12).
+    Mirrors the same pattern already used by ``_get_known_fields`` in
+    ``run.py``.
     """
     global _configs_loaded
     if _configs_loaded:
         return
 
-    _config_modules = [
-        # Robot configs
-        "lerobot.robots.bi_openarm_follower.config_bi_openarm_follower",
-        "lerobot.robots.bi_so107_follower.config_bi_so107_follower",
-        "lerobot.robots.bi_so107_follower_predictive.config_bi_so107_follower_predictive",
-        "lerobot.robots.bi_so_follower.config_bi_so_follower",
-        "lerobot.robots.earthrover_mini_plus.config_earthrover_mini_plus",
-        "lerobot.robots.hope_jr.config_hope_jr",
-        "lerobot.robots.koch_follower.config_koch_follower",
-        "lerobot.robots.lekiwi.config_lekiwi",
-        "lerobot.robots.omx_follower.config_omx_follower",
-        "lerobot.robots.openarm_follower.config_openarm_follower",
-        "lerobot.robots.reachy2.configuration_reachy2",
-        "lerobot.robots.so107_follower_predictive.config_so107_follower_predictive",
-        "lerobot.robots.so_follower.config_so_follower",
-        "lerobot.robots.unitree_g1.config_unitree_g1",
-        # Teleoperator configs
-        "lerobot.teleoperators.bi_openarm_leader.config_bi_openarm_leader",
-        "lerobot.teleoperators.bi_so107_leader.config_bi_so107_leader",
-        "lerobot.teleoperators.bi_so107_leader_highrate.config_bi_so107_leader_highrate",
-        "lerobot.teleoperators.bi_so_leader.config_bi_so_leader",
-        "lerobot.teleoperators.gamepad.configuration_gamepad",
-        "lerobot.teleoperators.homunculus.config_homunculus",
-        "lerobot.teleoperators.keyboard.configuration_keyboard",
-        "lerobot.teleoperators.koch_leader.config_koch_leader",
-        "lerobot.teleoperators.omx_leader.config_omx_leader",
-        "lerobot.teleoperators.openarm_leader.config_openarm_leader",
-        "lerobot.teleoperators.phone.config_phone",
-        "lerobot.teleoperators.reachy2_teleoperator.config_reachy2_teleoperator",
-        "lerobot.teleoperators.so107_leader_highrate.config_so107_leader_highrate",
-        "lerobot.teleoperators.so_leader.config_so_leader",
-        "lerobot.teleoperators.trajectory_replay.configuration_trajectory_replay",
-        "lerobot.teleoperators.unitree_g1.config_unitree_g1",
-    ]
-
     import importlib
+    import pkgutil
 
-    for module_name in _config_modules:
-        try:
-            importlib.import_module(module_name)
-        except (ImportError, ModuleNotFoundError) as e:
-            logger.debug(f"Skipping {module_name}: {e}")
+    import lerobot.robots
+    import lerobot.teleoperators
+
+    for pkg in (lerobot.robots, lerobot.teleoperators):
+        for _importer, modname, _ispkg in pkgutil.walk_packages(pkg.__path__, prefix=pkg.__name__ + "."):
+            with contextlib.suppress(Exception):
+                importlib.import_module(modname)
 
     _configs_loaded = True
 
