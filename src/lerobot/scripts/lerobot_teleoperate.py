@@ -109,6 +109,7 @@ from lerobot.teleoperators import (  # noqa: F401
 )
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.latency import LatencySession
+from lerobot.utils.latency.motion import MotionLogger
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import move_cursor_up, setup_run_logging
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data, shutdown_rerun
@@ -151,6 +152,7 @@ def teleop_loop(
     display_compressed_images: bool = False,
     obs_stream_steps: list | None = None,
     latency_session: LatencySession | None = None,
+    motion_logger: MotionLogger | None = None,
 ):
     """
     This function continuously reads actions from a teleoperation device, processes them through optional
@@ -226,6 +228,14 @@ def teleop_loop(
             # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
             with latency_session.span("action_send"):
                 _ = robot.send_action(action_to_send)
+
+            # Per-tick motion logging (intent + state). No-op when disabled.
+            # `raw_action` is the leader pose dict; `obs` is the follower's
+            # state read at the top of the iteration. MotionLogger filters
+            # to .pos keys so non-position obs (cameras) are silently
+            # skipped.
+            if motion_logger is not None:
+                motion_logger.tick(raw_action, obs)
 
             if display_data:
                 log_rerun_data(
@@ -308,6 +318,14 @@ def teleoperate(cfg: TeleoperateConfig):
     if latency_session.enabled and latency_session.writer is not None:
         logging.info("Latency monitoring enabled; snapshots → %s", latency_session.writer.path)
 
+    # Per-tick motion log (intent + state) — same output dir as the latency
+    # snapshot, timestamped filename so back-to-back runs don't clobber.
+    # Gated on latency_monitor so non-monitored runs have zero overhead.
+    motion_logger: MotionLogger | None = None
+    if cfg.latency_monitor:
+        motion_logger = MotionLogger(cfg.latency_output_dir)
+        logging.info("Motion logging enabled; trace → %s", motion_logger.path)
+
     teleop.connect()
     robot.connect()
 
@@ -334,10 +352,13 @@ def teleoperate(cfg: TeleoperateConfig):
             display_compressed_images=display_compressed_images,
             obs_stream_steps=obs_stream_steps,
             latency_session=latency_session,
+            motion_logger=motion_logger,
         )
     except KeyboardInterrupt:
         pass
     finally:
+        if motion_logger is not None:
+            motion_logger.close()
         if cfg.display_data:
             shutdown_rerun()
         teleop.disconnect()

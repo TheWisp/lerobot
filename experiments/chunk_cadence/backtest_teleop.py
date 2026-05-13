@@ -105,11 +105,17 @@ def _velocity_lsq_linear(ts: np.ndarray, ps: np.ndarray) -> np.ndarray | None:
 # ── Robot construction (same as backtest.py) ────────────────────────────────
 
 
-def build_robot(profile_path: Path, lookahead_ms_override: float | None):
+def build_robot(
+    profile_path: Path,
+    lookahead_ms_override: float | None,
+    corrector_alpha_override: float | None = None,
+):
     profile = json.loads(profile_path.read_text())
     fields = dict(profile.get("fields", {}))
     if lookahead_ms_override is not None:
         fields["lookahead_ms"] = lookahead_ms_override
+    if corrector_alpha_override is not None:
+        fields["corrector_alpha"] = corrector_alpha_override
     fields["adaptive"] = False
     fields["max_lookahead_ms"] = fields.get("lookahead_ms", 0.0)
     fields["cameras"] = {}
@@ -155,7 +161,11 @@ def run(args: argparse.Namespace) -> None:
     rng = np.random.default_rng(args.intent_noise_seed)
     n_joints = gt.shape[1]
 
-    robot, rest_position = build_robot(Path(args.robot_profile).expanduser(), args.lookahead_ms)
+    robot, rest_position = build_robot(
+        Path(args.robot_profile).expanduser(),
+        args.lookahead_ms,
+        args.corrector_alpha,
+    )
     robot.connect()
     try:
         if rest_position is not None:
@@ -271,9 +281,10 @@ def run(args: argparse.Namespace) -> None:
     out_dir = Path(args.output_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
     fps_tag = f"_fps{int(chunk_fps)}" if chunk_fps != source_fps else ""
+    alpha_tag = f"_alpha{args.corrector_alpha}" if args.corrector_alpha is not None else ""
     stem = (
         f"teleop{fps_tag}_L{int(args.lookahead_ms or 0)}_"
-        f"noise{args.intent_noise_deg}_seed{args.intent_noise_seed}"
+        f"noise{args.intent_noise_deg}{alpha_tag}_seed{args.intent_noise_seed}"
     )
     np.savez(
         out_dir / f"trace_{stem}.npz",
@@ -332,6 +343,14 @@ def parse_args() -> argparse.Namespace:
         help="Outer-loop tick rate (Hz). 0 = use the source trajectory's native fps. "
         "Higher values resample the source via linear interpolation, simulating a "
         "high-rate leader. Try 200.0 for SO107LeaderHighRate emulation.",
+    )
+    p.add_argument(
+        "--corrector-alpha",
+        type=float,
+        default=None,
+        help="Override the profile's corrector_alpha. 1.0 = no smoothing (raw_shifted "
+        "passes through); < 1.0 blends in the action-history predictor (causal LP "
+        "filter on output, adds latency proportional to (1-α)/α ticks).",
     )
     p.add_argument("--ramp-to-start-s", type=float, default=2.0)
     p.add_argument("--rest-duration-s", type=float, default=2.5)
