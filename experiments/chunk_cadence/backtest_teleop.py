@@ -133,7 +133,23 @@ def run(args: argparse.Namespace) -> None:
         len(gt) / source_fps,
         len(source_joints),
     )
-    chunk_fps = source_fps
+    # If requested, resample the source up to a higher rate via linear
+    # interpolation. Simulates what a high-rate leader (e.g.
+    # SO107LeaderHighRate at 200 Hz) would naturally produce — distinct
+    # intent values at every fast-rate tick rather than the same value
+    # held for many ticks.
+    chunk_fps = args.outer_fps if args.outer_fps > 0 else source_fps
+    if chunk_fps != source_fps:
+        new_t = np.arange(0, len(gt) / source_fps, 1.0 / chunk_fps)
+        old_t = np.arange(len(gt)) / source_fps
+        gt = np.stack([np.interp(new_t, old_t, gt[:, j]) for j in range(gt.shape[1])], axis=1)
+        logger.info(
+            "Resampled source %d→%d frames (%.0f Hz → %.0f Hz)",
+            len(old_t),
+            len(gt),
+            source_fps,
+            chunk_fps,
+        )
     velocity_window_s = args.velocity_window_ms / 1000.0
     lookahead_s = (args.lookahead_ms or 0.0) / 1000.0
     rng = np.random.default_rng(args.intent_noise_seed)
@@ -254,7 +270,11 @@ def run(args: argparse.Namespace) -> None:
 
     out_dir = Path(args.output_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"teleop_L{int(args.lookahead_ms or 0)}_noise{args.intent_noise_deg}_seed{args.intent_noise_seed}"
+    fps_tag = f"_fps{int(chunk_fps)}" if chunk_fps != source_fps else ""
+    stem = (
+        f"teleop{fps_tag}_L{int(args.lookahead_ms or 0)}_"
+        f"noise{args.intent_noise_deg}_seed{args.intent_noise_seed}"
+    )
     np.savez(
         out_dir / f"trace_{stem}.npz",
         t=np.asarray([t["t"] for t in ticks]),
@@ -305,6 +325,14 @@ def parse_args() -> argparse.Namespace:
         "Simulates leader-encoder / mechanical jitter. 0 = clean trajectory.",
     )
     p.add_argument("--intent-noise-seed", type=int, default=42)
+    p.add_argument(
+        "--outer-fps",
+        type=float,
+        default=0.0,
+        help="Outer-loop tick rate (Hz). 0 = use the source trajectory's native fps. "
+        "Higher values resample the source via linear interpolation, simulating a "
+        "high-rate leader. Try 200.0 for SO107LeaderHighRate emulation.",
+    )
     p.add_argument("--ramp-to-start-s", type=float, default=2.0)
     p.add_argument("--rest-duration-s", type=float, default=2.5)
     p.add_argument("--output-dir", default="outputs/chunk_cadence/teleop")
