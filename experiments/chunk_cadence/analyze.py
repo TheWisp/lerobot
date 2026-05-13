@@ -82,18 +82,38 @@ def _xcorr_lag(a: np.ndarray, b: np.ndarray, max_lag: int) -> int:
 def analyze(npz_path: Path) -> dict:
     d = np.load(npz_path, allow_pickle=False)
     t = d["t"]
-    motor_lookahead = d["motor_cmd_lookahead"]
-    motor_no_lookahead = d["motor_cmd_no_lookahead"]
     state = d["state"]
     joint_names = [str(j) for j in d["joint_names"]]
-    emission_idx = d["emission_idx"]
+    # Two file shapes supported:
+    #   * backtest.py / backtest_teleop.py traces have motor_cmd_lookahead
+    #     and motor_cmd_no_lookahead as separate post-hoc calculations.
+    #   * lerobot-teleoperate motion logs (utils.latency.motion) only carry
+    #     `intent` (leader pose dict per tick). For those, the controller's
+    #     true motor_cmd was internal and not logged; we use `intent` as the
+    #     no-lookahead baseline and skip the lookahead-side comparison
+    #     (treat both as `intent` so jitter / lag are computed against state
+    #     using what we DO have).
+    if "motor_cmd_lookahead" in d.files:
+        motor_lookahead = d["motor_cmd_lookahead"]
+        motor_no_lookahead = d["motor_cmd_no_lookahead"]
+        emission_idx = d["emission_idx"]
+    else:
+        motor_no_lookahead = d["intent"]
+        motor_lookahead = motor_no_lookahead  # no separate lookahead view in motion logs
+        emission_idx = np.zeros(len(t), dtype=np.int64)
     fps_est = 1.0 / np.median(np.diff(t)) if len(t) > 1 else 30.0
 
     # Jitter: each config its own smoothing (Reading B).
     smooth_lookahead = _savgol(motor_lookahead)
     smooth_no_lookahead = _savgol(motor_no_lookahead)
+    smooth_state = _savgol(state)
     jitter_lookahead = np.std(motor_lookahead - smooth_lookahead, axis=0)
     jitter_no_lookahead = np.std(motor_no_lookahead - smooth_no_lookahead, axis=0)
+    # State jitter: how much the actual joint position deviates from its
+    # own smoothed version. This is the user-felt "robot is shaky" number —
+    # motor_cmd jitter that the motor's own dynamics filter out doesn't
+    # show up here, only HF that actually drove the joint.
+    jitter_state = np.std(state - smooth_state, axis=0)
 
     # Action-to-state lag, per joint. The lookahead's motor_cmd should lead
     # state by ~lookahead_ms / 1000 * fps frames; the no-lookahead's
@@ -146,6 +166,8 @@ def analyze(npz_path: Path) -> dict:
         "jitter_no_lookahead_deg": jitter_no_lookahead.tolist(),
         "jitter_lookahead_mean_deg": float(jitter_lookahead.mean()),
         "jitter_no_lookahead_mean_deg": float(jitter_no_lookahead.mean()),
+        "jitter_state_deg": jitter_state.tolist(),
+        "jitter_state_mean_deg": float(jitter_state.mean()),
         "lag_lookahead_frames": lag_lookahead,
         "lag_no_lookahead_frames": lag_no_lookahead,
         "n_moving_joints": int(motion_mask.sum()),
