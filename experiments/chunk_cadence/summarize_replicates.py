@@ -30,8 +30,10 @@ _NAME_RE = re.compile(
     r"(?:_bm(?P<bm>[ou]))?"
     r"_seed(?P<seed>\d+)\.npz$"
 )
-# Teleop trace files: trace_teleop_L<lk>_noise<n>_seed<s>.npz
-_TELEOP_RE = re.compile(r"trace_teleop_L(?P<L>\d+)_noise(?P<noise>[\d.]+)_seed(?P<seed>\d+)\.npz$")
+# Teleop trace files: trace_teleop[_fps<f>]_L<lk>_noise<n>_seed<s>.npz
+_TELEOP_RE = re.compile(
+    r"trace_teleop(?:_fps(?P<fps>\d+))?_L(?P<L>\d+)_noise(?P<noise>[\d.]+)_seed(?P<seed>\d+)\.npz$"
+)
 _DIR_RE = re.compile(r"^(?P<source>.+?)_run(?P<run>\d+)$")
 
 
@@ -52,12 +54,13 @@ def _scan_runs(parent: Path) -> dict:
             if tm:
                 lk = int(tm["L"])
                 noise = float(tm["noise"])
+                fps = int(tm["fps"]) if tm["fps"] else 30
                 seed = int(tm["seed"])
                 # Encode teleop into the same key shape as chunked so the
-                # printer doesn't need a separate path. N=0 sentinel marks
-                # teleop; bias is reused to carry the intent noise; sw=0;
-                # bm='teleop' to identify the mode in the table.
-                key = (0, lk, noise, 0, "teleop", seed)
+                # printer doesn't need a separate path. N=fps (overloaded
+                # for teleop to carry the outer-loop rate). bias=noise.
+                # sw=0. bm='teleop@<fps>' to distinguish rates in the table.
+                key = (fps, lk, noise, 0, f"teleop@{fps}", seed)
                 by_source.setdefault(source, {}).setdefault(key, []).append((run, analyze(npz)))
                 continue
             mm = _NAME_RE.search(npz.name)
