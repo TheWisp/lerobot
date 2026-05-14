@@ -11,6 +11,20 @@
     <link rel="stylesheet" href="/static/dist/bug-report.css">
     <link rel="stylesheet" href="/static/dist/run-sidebar.css">
     <link rel="stylesheet" href="/static/dist/run-sidebar-preact.css">
+    <!-- Linear-style theme experiment. Opt-in via ?theme=linear; pure CSS
+         override (themes.css). Loaded last so its rules win over earlier
+         stylesheets at equal specificity. -->
+    <link rel="stylesheet" href="/static/themes.css">
+    <script>
+        // Tag <body> before first paint so the theme is applied
+        // synchronously and we don't flash the default look.
+        if (new URLSearchParams(location.search).get('theme') === 'linear') {
+            document.documentElement.classList.add('pre-theme-linear');
+            document.addEventListener('DOMContentLoaded', () => {
+                document.body.classList.add('theme-linear');
+            }, { once: true });
+        }
+    </script>
 </head>
 <body>
     <div class="tab-bar">

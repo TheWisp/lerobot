@@ -1,0 +1,235 @@
+/* Linear-inspired theme experiment.
+ *
+ * Pure CSS, zero JS framework changes. Opted into via `?theme=linear` —
+ * a tiny inline script in index.html adds `class="theme-linear"` to <body>.
+ *
+ * Design philosophy borrowed from Linear:
+ *   - Tight, deliberate color palette (graphite scale + 1 accent + state colors)
+ *   - One radius value used everywhere (6px), no mix
+ *   - Dense type scale (12 / 13 / 15px), tighter line heights
+ *   - Fast, mechanical transitions (60ms, no spring)
+ *   - 1px subtle borders, no glow / box-shadow halos
+ *
+ * Skipped:
+ *   - Linear's purple accent (#5e6ad2) — kept a muted cyan for continuity
+ *   - Their issue-pill, status, cycle, project affordances — not relevant
+ *
+ * This file overrides selected style.css rules ONLY when body.theme-linear
+ * is set. Default theme is untouched.
+ */
+
+body.theme-linear {
+  /* Design tokens */
+  --lin-bg-0: #0e0e10; /* deepest: page background */
+  --lin-bg-1: #14141a; /* sidebars, panels */
+  --lin-bg-2: #1c1c24; /* inputs, raised surfaces */
+  --lin-bg-3: #24242e; /* hover */
+  --lin-border: #28283a;
+  --lin-border-strong: #3a3a52;
+
+  --lin-text-0: #e6e6ea; /* primary */
+  --lin-text-1: #a4a4af; /* secondary */
+  --lin-text-2: #6f6f7e; /* tertiary / labels */
+
+  --lin-accent: #5fbcff; /* the one accent — muted cyan */
+  --lin-accent-dim: rgba(95, 188, 255, 0.16);
+  --lin-success: #4ade80;
+  --lin-warn: #f5a524;
+  --lin-danger: #f43f5e;
+
+  --lin-radius: 6px;
+  --lin-radius-sm: 4px;
+  --lin-font-sm: 12px;
+  --lin-font-md: 13px;
+  --lin-font-lg: 15px;
+  --lin-motion: 70ms ease-out;
+
+  background: var(--lin-bg-0);
+  color: var(--lin-text-0);
+}
+
+/* ----- Tab bar ----- */
+body.theme-linear .tab-bar {
+  background: var(--lin-bg-1);
+  border-bottom: 1px solid var(--lin-border);
+  padding: 0 12px;
+  height: 40px;
+}
+body.theme-linear .tab {
+  padding: 0 14px;
+  font-size: var(--lin-font-md);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--lin-text-2);
+  line-height: 40px;
+  border-bottom: 1px solid transparent;
+  transition: color var(--lin-motion), border-color var(--lin-motion), background var(--lin-motion);
+}
+body.theme-linear .tab:hover {
+  color: var(--lin-text-0);
+  background: transparent;
+}
+body.theme-linear .tab.active {
+  color: var(--lin-text-0);
+  border-bottom-color: var(--lin-accent);
+}
+
+/* ----- Bug-report button (top right) ----- */
+body.theme-linear .bug-report-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--lin-text-1);
+  background: var(--lin-bg-2);
+  border: 1px solid var(--lin-border);
+  border-radius: var(--lin-radius-sm);
+  transition: background var(--lin-motion), border-color var(--lin-motion), color var(--lin-motion);
+}
+body.theme-linear .bug-report-btn:hover {
+  background: var(--lin-bg-3);
+  color: var(--lin-text-0);
+  border-color: var(--lin-border-strong);
+}
+
+/* ----- HF auth indicator ----- */
+body.theme-linear #hf-auth-indicator {
+  color: var(--lin-text-2);
+  font-size: 11px;
+}
+
+/* ----- Sidebar (left) ----- */
+body.theme-linear .sidebar {
+  background: var(--lin-bg-1);
+  border-right: 1px solid var(--lin-border);
+}
+body.theme-linear .sidebar-header {
+  border-bottom: 1px solid var(--lin-border);
+  padding: 12px 14px;
+}
+body.theme-linear .sidebar-header h1 {
+  color: var(--lin-text-0);
+  font-size: var(--lin-font-lg);
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+body.theme-linear .section-label {
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  color: var(--lin-text-2);
+  padding: 6px 14px;
+}
+
+/* ----- Tree / source rows ----- */
+body.theme-linear .tree-header:hover,
+body.theme-linear .source-folder-header:hover,
+body.theme-linear .source-dataset:hover {
+  background: var(--lin-bg-2);
+}
+body.theme-linear .tree-header.active {
+  background: var(--lin-accent-dim);
+}
+
+/* ----- Inputs / selects (universal) ----- */
+body.theme-linear input[type="text"],
+body.theme-linear input[type="number"],
+body.theme-linear textarea,
+body.theme-linear select {
+  background: var(--lin-bg-2);
+  color: var(--lin-text-0);
+  border: 1px solid var(--lin-border);
+  border-radius: var(--lin-radius-sm);
+  font-size: var(--lin-font-sm);
+  transition: border-color var(--lin-motion), background var(--lin-motion);
+}
+body.theme-linear input[type="text"]:focus,
+body.theme-linear input[type="number"]:focus,
+body.theme-linear textarea:focus,
+body.theme-linear select:focus {
+  outline: none;
+  border-color: var(--lin-accent);
+  box-shadow: none; /* no glow */
+}
+
+/* ----- Reactive Run sidebar (Svelte + Preact) ----- */
+body.theme-linear .run-sidebar-reactive .workflow-btn,
+body.theme-linear .run-sidebar-reactive-preact .workflow-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--lin-radius-sm);
+  color: var(--lin-text-2);
+  font-size: 12px;
+  transition: color var(--lin-motion), background var(--lin-motion), border-color var(--lin-motion);
+}
+body.theme-linear .run-sidebar-reactive .workflow-btn:hover,
+body.theme-linear .run-sidebar-reactive-preact .workflow-btn:hover {
+  color: var(--lin-text-0);
+  background: var(--lin-bg-2);
+}
+body.theme-linear .run-sidebar-reactive .workflow-btn.active,
+body.theme-linear .run-sidebar-reactive-preact .workflow-btn.active {
+  color: var(--lin-text-0);
+  background: var(--lin-bg-2);
+  border-color: var(--lin-border-strong);
+}
+body.theme-linear .validation-banner {
+  background: rgba(245, 165, 36, 0.08);
+  color: var(--lin-warn);
+  border: 1px solid rgba(245, 165, 36, 0.25);
+  border-radius: var(--lin-radius-sm);
+  font-size: 11px;
+}
+body.theme-linear .validation-banner.ok {
+  background: rgba(74, 222, 128, 0.08);
+  color: var(--lin-success);
+  border-color: rgba(74, 222, 128, 0.25);
+}
+body.theme-linear .framework-badge {
+  background: var(--lin-bg-2);
+  color: var(--lin-text-2);
+  border: 1px solid var(--lin-border);
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ----- Buttons (Launch / Stop / generic small buttons) ----- */
+body.theme-linear .btn-launch {
+  background: var(--lin-accent);
+  color: var(--lin-bg-0);
+  border-radius: var(--lin-radius-sm);
+  font-weight: 600;
+  font-size: var(--lin-font-md);
+  border: none;
+  transition: background var(--lin-motion);
+}
+body.theme-linear .btn-launch:hover {
+  background: #80c9ff;
+}
+body.theme-linear .btn-stop {
+  background: var(--lin-bg-2);
+  color: var(--lin-text-1);
+  border: 1px solid var(--lin-border);
+  border-radius: var(--lin-radius-sm);
+  font-size: var(--lin-font-md);
+}
+body.theme-linear .btn-small {
+  background: var(--lin-bg-2);
+  color: var(--lin-text-0);
+  border: 1px solid var(--lin-border);
+  border-radius: var(--lin-radius-sm);
+}
+body.theme-linear .btn-small:hover {
+  background: var(--lin-bg-3);
+}
+
+/* ----- Body / global ----- */
+body.theme-linear {
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Inter",
+    "SF Pro Text",
+    "Segoe UI",
+    sans-serif;
+}
