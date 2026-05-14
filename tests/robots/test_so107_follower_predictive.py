@@ -1093,11 +1093,17 @@ class TestRateAgnosticIntent:
     estimation residual.
     """
 
+    # Ramp rate chosen so the joint moves > amp_gate_hi (default 3 deg)
+    # within velocity_window_s (default 70 ms) — i.e. gate = 1 in steady
+    # state. 60 deg/s × 70 ms = 4.2 deg p2p > 3.
+    _RAMP_DEG_PER_S = 60.0
+
     @staticmethod
     def _push_ramp_and_collect(
-        robot, bus, rate_hz: float, duration_s: float
+        robot, bus, rate_hz: float, duration_s: float, ramp_deg_per_s: float
     ) -> tuple[list[tuple[float, float]], float]:
-        """Push intent = 10 deg/s ramp at ``rate_hz`` for ``duration_s``.
+        """Push a deterministic ramp ``intent = ramp_deg_per_s * t`` at
+        ``rate_hz`` for ``duration_s``.
 
         Returns ``(trace, t0)`` where trace is
         ``[(write_timestamp_relative_to_t0, shoulder_pan_motor_cmd), ...]``.
@@ -1125,7 +1131,7 @@ class TestRateAgnosticIntent:
                 if sleep_for > 0:
                     time.sleep(sleep_for)
                 t_caller = time.perf_counter()
-                intent_val = 10.0 * (t_caller - t0)  # deg, ramping at 10 deg/s
+                intent_val = ramp_deg_per_s * (t_caller - t0)
                 robot.send_action(
                     {f"{m}.pos": intent_val for m in _MOTOR_NAMES},
                 )
@@ -1137,52 +1143,79 @@ class TestRateAgnosticIntent:
         return trace, t0
 
     def test_motor_cmd_consistent_across_push_rates(self, follower):
-        """30 Hz push and 200 Hz push of the same 10 deg/s ramp should
-        produce motor_cmd traces that match in the steady-state mid-run
-        window. The sampling is taken DURING the run, not after, so the
+        """30 Hz push and 200 Hz push of the same ramp should produce
+        motor_cmd traces that match in the steady-state mid-run window.
+        The sampling is taken DURING the run, not after, so the
         velocity-estimator window is always fresh.
 
-        Pre-fix the 30 Hz path under-extrapolated by ~50%; post-fix both
-        rates produce the same steady-state motor_cmd (intent + L · v)."""
+        Under stateful_lp (the default), motor_cmd at controller-tick
+        time ``now`` is ``intent + v · (L + elapsed_since_publish)``,
+        where ``v`` is the per-publish EMA velocity. That formula collapses
+        to ``v · (now + L)`` for a clean ramp, so the two push rates
+        should match within EMA convergence residual.
+
+        Pre-fix (window-based estimator with no elapsed extension): the
+        30 Hz path under-extrapolated by ~50% — both because n_samples
+        oscillated 2↔3 in the window AND because the controller treated
+        the latest-published intent as if it had just arrived.
+        """
         robot, bus = follower
         duration_s = 0.6  # long enough for warmup + steady-state sampling
 
         # Run at 30 Hz, capture trace.
-        trace_30, _ = self._push_ramp_and_collect(robot, bus, rate_hz=30, duration_s=duration_s)
+        trace_30, _ = self._push_ramp_and_collect(
+            robot,
+            bus,
+            rate_hz=30,
+            duration_s=duration_s,
+            ramp_deg_per_s=self._RAMP_DEG_PER_S,
+        )
         # Brief pause + reset the intent ring so the second run is isolated.
         time.sleep(0.05)
         robot._controller._intent_ring.clear()
         robot._controller._last_action = None  # reset per-step clamp baseline
+        robot._controller._v_lp_state = None
+        robot._controller._prev_publish_intent = None
+        robot._controller._prev_publish_t = None
 
         # Run at 200 Hz, capture trace.
-        trace_200, _ = self._push_ramp_and_collect(robot, bus, rate_hz=200, duration_s=duration_s)
+        trace_200, _ = self._push_ramp_and_collect(
+            robot,
+            bus,
+            rate_hz=200,
+            duration_s=duration_s,
+            ramp_deg_per_s=self._RAMP_DEG_PER_S,
+        )
 
         assert len(trace_30) > 50, f"30 Hz trace too short: {len(trace_30)}"
         assert len(trace_200) > 50, f"200 Hz trace too short: {len(trace_200)}"
 
         def _steady_state_motor_cmd(trace: list[tuple[float, float]]) -> float:
             """Median of motor_cmd in the steady-state window [0.2s, 0.45s].
-            Skips warmup (max_step_deg clamp) and the after-last-push tail
-            (where the velocity-estimator window can flush out)."""
+            Skips warmup (max_step_deg clamp + EMA convergence) and the
+            after-last-push tail (where the velocity-estimator window can
+            flush out)."""
             mid = [v for t, v in trace if 0.2 <= t <= 0.45]
             assert mid, "no writes in steady-state window"
             return float(np.median(mid))
 
-        # Each motor_cmd at time t should be ≈ intent(t) + L·v = 10t + 0.8.
-        # In the [0.2, 0.45] window, intent ranges from 2.0 to 4.5,
-        # so motor_cmd ranges from 2.8 to 5.3. Median ≈ 4.05.
+        # motor_cmd at tick time t ≈ v · (t + L). Median t in [0.2, 0.45]
+        # is 0.325, so expected ≈ 60 · 0.405 = 24.3.
         ss_30 = _steady_state_motor_cmd(trace_30)
         ss_200 = _steady_state_motor_cmd(trace_200)
-        expected_median = 10.0 * 0.325 + 0.08 * 10.0  # ≈ 4.05
+        lookahead_s = robot._controller._lookahead_s
+        expected_median = self._RAMP_DEG_PER_S * (0.325 + lookahead_s)
 
         # Headline assertion: the two push rates yield matching motor_cmds.
-        assert abs(ss_30 - ss_200) < 0.3, (
+        assert abs(ss_30 - ss_200) < 0.5, (
             f"motor_cmd steady-state: 30Hz={ss_30:.2f}, 200Hz={ss_200:.2f} — rate-agnostic invariant violated"
         )
 
-        # Sanity: both are in the right ballpark.
+        # Sanity: both are in the right ballpark. Wider tolerance because
+        # EMA velocity is biased low during convergence (especially at
+        # 30 Hz where α ≈ 0.45 per publish).
         for rate_label, ss in [("30Hz", ss_30), ("200Hz", ss_200)]:
-            assert abs(ss - expected_median) < 0.6, (
+            assert abs(ss - expected_median) < 2.0, (
                 f"{rate_label}: motor_cmd steady-state={ss:.2f}, expected≈{expected_median:.2f}"
             )
 
