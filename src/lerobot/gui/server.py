@@ -130,7 +130,7 @@ async def shutdown_event():
     """Clean up subprocesses + their shared memory on server shutdown."""
     import asyncio
 
-    from lerobot.gui.api.datasets import shutdown_prefetch_executor
+    from lerobot.gui.api.datasets import shutdown_decode_executor, shutdown_prefetch_executor
     from lerobot.gui.api.robot import cleanup_in_process_resources
     from lerobot.gui.api.run import _stop_debug_process
     from lerobot.robots.obs_stream import cleanup_stale_streams
@@ -156,6 +156,8 @@ async def shutdown_event():
     # video-decode pass.
     with contextlib.suppress(Exception):
         shutdown_prefetch_executor()
+    with contextlib.suppress(Exception):
+        shutdown_decode_executor()
 
 
 # Include API routers
