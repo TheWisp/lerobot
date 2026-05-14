@@ -11,21 +11,22 @@
 from dataclasses import dataclass
 
 from ..config import TeleoperatorConfig
+from ..highrate.config import HighRateLeaderConfig
 from ..so_leader.config_so_leader import SO107LeaderConfig
 
 
 @TeleoperatorConfig.register_subclass("so107_leader_highrate")
 @dataclass
-class SO107LeaderHighRateConfig(SO107LeaderConfig):
+class SO107LeaderHighRateConfig(HighRateLeaderConfig, SO107LeaderConfig):
     """SO-107 Leader configuration with a background bus-read thread.
 
     Inherits every field of :class:`SO107LeaderConfig` (port,
-    use_degrees, gripper_bounce, intervention_enabled) and adds a
-    single knob — the rate at which the background thread polls the
-    leader bus. ``get_action()`` returns the cached pose without
-    touching the bus, so callers (the 30 Hz record loop AND the
-    predictive controller's 200 Hz tick when attached) all see fresh
-    samples without contending on a serial port.
+    use_degrees, gripper_bounce, intervention_enabled) and adds the
+    ``read_rate_hz`` knob from :class:`HighRateLeaderConfig`.
+    ``get_action()`` returns the cached pose without touching the bus,
+    so callers (the 30 Hz record loop AND the predictive controller's
+    200 Hz tick when attached) all see fresh samples without contending
+    on a serial port.
 
     The point of the high-rate read is for the **consumer** to have
     access to distinct intent samples at a rate close to the leader's
@@ -33,13 +34,5 @@ class SO107LeaderHighRateConfig(SO107LeaderConfig):
     consumer polling at 200 Hz gets ~14 distinct samples in a 70 ms
     velocity-LSQ window vs. the ~2 distinct samples it gets when the
     leader is sampled at the record loop's 30 Hz. The LSQ velocity
-    estimate's under-shoot bias (≈ ½·window = 35 ms when sampled at
-    30 Hz) collapses.
+    estimate's under-shoot bias collapses.
     """
-
-    # Background poll rate. 200 Hz matches the predictive follower's
-    # control_rate_hz so the consumer's velocity LSQ sees one fresh
-    # sample per tick. Don't go higher than the Feetech bus can
-    # actually sustain — empirically ~170-200 Hz with P=48 sync_read
-    # of 7 motors per arm. Going higher just produces serial timeouts.
-    read_rate_hz: float = 200.0

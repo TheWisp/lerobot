@@ -83,15 +83,16 @@ class BiSO107FollowerPredictive(BiSO107Follower):
         # Shared controller settings projected onto each per-arm config.
         # Both arms get the same lookahead / alpha / control rate — see
         # the config docstring for why this is shared rather than per-arm.
+        # Enumerated via ``PredictiveControllerConfig.__dataclass_fields__``
+        # so adding a new controller knob automatically propagates here
+        # — the previous hand-maintained list silently dropped
+        # ``velocity_lowpass_hz`` / ``amp_gate_lo`` / ``amp_gate_hi``.
+        import dataclasses
+
+        from ..predictive.config import PredictiveControllerConfig
+
         per_arm_kwargs = {
-            "lookahead_ms": config.lookahead_ms,
-            "max_lookahead_ms": config.max_lookahead_ms,
-            "corrector_alpha": config.corrector_alpha,
-            "velocity_window_ms": config.velocity_window_ms,
-            "control_rate_hz": config.control_rate_hz,
-            "adaptive": config.adaptive,
-            "max_step_deg": config.max_step_deg,
-            "velocity_estimator": config.velocity_estimator,
+            f.name: getattr(config, f.name) for f in dataclasses.fields(PredictiveControllerConfig)
         }
 
         left_arm_config = SO107FollowerPredictiveRobotConfig(

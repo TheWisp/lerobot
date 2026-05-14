@@ -9,15 +9,15 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 from dataclasses import dataclass
-from typing import Literal
 
 from ..bi_so107_follower.config_bi_so107_follower import BiSO107FollowerConfig
 from ..config import RobotConfig
+from ..predictive.config import PredictiveControllerConfig
 
 
 @RobotConfig.register_subclass("bi_so107_follower_predictive")
 @dataclass
-class BiSO107FollowerPredictiveConfig(BiSO107FollowerConfig):
+class BiSO107FollowerPredictiveConfig(PredictiveControllerConfig, BiSO107FollowerConfig):
     """Config for the bimanual SO-107 follower with predictive-lookahead.
 
     Inherits every field of ``BiSO107FollowerConfig`` (per-arm ports,
@@ -25,10 +25,11 @@ class BiSO107FollowerPredictiveConfig(BiSO107FollowerConfig):
     ``bi_so107_follower`` profiles and ``.trajectory.json`` files
     load against this config unchanged.
 
-    The controller knobs are shared by both arms. Splitting them per-arm
-    is a small follow-up if asymmetric tuning is ever needed; until then
-    keeping them shared keeps the YAML / CLI surface small and matches
-    the prototype's symmetric tuning on bi_so107 + white profile.
+    Controller knobs come from :class:`PredictiveControllerConfig` and
+    are shared by both arms. Splitting them per-arm is a small follow-up
+    if asymmetric tuning is ever needed; until then keeping them shared
+    keeps the YAML / CLI surface small and matches the prototype's
+    symmetric tuning on bi_so107 + white profile.
 
     Why this is registered as a distinct ``robot_type``: dataset action /
     state alignment differs from ``bi_so107_follower`` (controller
@@ -37,22 +38,3 @@ class BiSO107FollowerPredictiveConfig(BiSO107FollowerConfig):
     prevents accidental mixing of the two recording regimes in training.
     See ``SO107FollowerPredictiveRobotConfig`` for the long-form rationale.
     """
-
-    # Mirror the defaults from SO107FollowerPredictiveRobotConfig — these
-    # are the values validated on bi_so107 + cylinder_ring_assembly in
-    # scripts/proto_decoupled_teleop.py and scripts/backtest_lookahead.py.
-    lookahead_ms: float = 80.0
-    max_lookahead_ms: float = 110.0
-    corrector_alpha: float = 1.0
-    velocity_window_ms: float = 70.0
-    control_rate_hz: float = 200.0
-    adaptive: bool = True
-    max_step_deg: float = 3.0
-    velocity_estimator: Literal["quad", "linear", "forward_diff", "amp_gated_lp", "stateful_lp"] = (
-        "stateful_lp"
-    )
-    # Knobs for ``amp_gated_lp`` — see SO107FollowerPredictiveRobotConfig
-    # for the long-form rationale.
-    velocity_lowpass_hz: float = 4.0
-    amp_gate_lo: float = 1.0
-    amp_gate_hi: float = 3.0

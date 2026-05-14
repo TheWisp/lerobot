@@ -112,7 +112,7 @@ def follower():
 
     with (
         patch(
-            "lerobot.robots.so107_follower_predictive.so107_follower_predictive.FeetechMotorsBus",
+            "lerobot.robots.so_follower.so_follower.FeetechMotorsBus",
             side_effect=_bus_side_effect,
         ),
         # Skip configure() — its bus.write side effects aren't relevant
@@ -544,7 +544,7 @@ class TestAdaptiveUpdate:
 
         with (
             patch(
-                "lerobot.robots.so107_follower_predictive.so107_follower_predictive.FeetechMotorsBus",
+                "lerobot.robots.so_follower.so_follower.FeetechMotorsBus",
                 side_effect=_bus_side_effect,
             ),
             patch.object(SO107FollowerPredictive, "configure", lambda self: None),
@@ -585,7 +585,7 @@ class TestAdaptiveUpdate:
 # Adaptive xcorr correctness — algorithm-level tests
 # ============================================================================
 #
-# These tests build a _PredictiveLookaheadController directly without
+# These tests build a PredictiveLookaheadController directly without
 # starting its thread or touching a bus. They pre-populate _intent_log
 # and _state_log with synthetic signals that have a *known* shift, then
 # call _maybe_update_lookahead() directly and assert the controller
@@ -605,14 +605,12 @@ def _make_isolated_controller(
     lookahead_ms: float = 0.0,
     adaptive: bool = True,
 ):
-    """Build a _PredictiveLookaheadController without starting its thread
+    """Build a PredictiveLookaheadController without starting its thread
     or any bus traffic. The controller is fully usable for direct
     set_intent / _maybe_update_lookahead calls — tests bypass start()
     so the thread doesn't race with synthetic log injection.
     """
-    from lerobot.robots.so107_follower_predictive.so107_follower_predictive import (
-        _PredictiveLookaheadController,
-    )
+    from lerobot.robots.predictive.controller import PredictiveLookaheadController
 
     cfg = SO107FollowerPredictiveRobotConfig(
         port="/dev/null",
@@ -627,11 +625,11 @@ def _make_isolated_controller(
     robot.bus = MagicMock()
     robot.bus.motors = dict.fromkeys(_MOTOR_NAMES, None)
     robot._bus_lock = threading.Lock()
-    # _PredictiveLookaheadController formats the robot into log messages
+    # PredictiveLookaheadController formats the robot into log messages
     # via "%s". Give it a stable repr so failures are diagnosable.
     robot.__str__ = lambda self: "test_isolated_controller"
 
-    return _PredictiveLookaheadController(robot)
+    return PredictiveLookaheadController(robot)
 
 
 def _inject_sinusoid_pair(
@@ -683,7 +681,7 @@ def _inject_sinusoid_pair(
 
 
 class TestAdaptiveCorrectness:
-    """Direct tests on _PredictiveLookaheadController._maybe_update_lookahead.
+    """Direct tests on PredictiveLookaheadController._maybe_update_lookahead.
 
     These are the tests that would have caught the caller-rate-vs-
     control-rate units bug (fixed in c6537b40a). Each test feeds the
@@ -855,7 +853,7 @@ class TestAdaptiveCorrectness:
 
 
 class TestChunkLookupMath:
-    """Direct tests on _PredictiveLookaheadController._lookup_in_chunk.
+    """Direct tests on PredictiveLookaheadController._lookup_in_chunk.
 
     The exact-lookup branch is the hot path under chunked sources. These
     tests verify the index math at multiple fps so a hardcoded-30 bug
@@ -949,17 +947,15 @@ class TestVelocityEstimators:
         when the signal is a perfect line — the easy case."""
         import numpy as np
 
-        from lerobot.robots.so107_follower_predictive.so107_follower_predictive import (
-            _PredictiveLookaheadController,
-        )
+        from lerobot.robots.predictive.controller import PredictiveLookaheadController
 
         ts = self._ts(20)
         v_true = 5.0  # units / s
         ps = np.stack([v_true * ts] * 7, axis=1)  # (n, 7), same on every joint
         for name, fn in (
-            ("linear", _PredictiveLookaheadController._velocity_lsq_linear),
-            ("quad", _PredictiveLookaheadController._velocity_lsq_quad_end),
-            ("forward_diff", _PredictiveLookaheadController._velocity_forward_diff),
+            ("linear", PredictiveLookaheadController._velocity_lsq_linear),
+            ("quad", PredictiveLookaheadController._velocity_lsq_quad_end),
+            ("forward_diff", PredictiveLookaheadController._velocity_forward_diff),
         ):
             v = fn(ts, ps)
             assert v is not None, f"{name} returned None for clean linear signal"
@@ -976,9 +972,7 @@ class TestVelocityEstimators:
         """
         import numpy as np
 
-        from lerobot.robots.so107_follower_predictive.so107_follower_predictive import (
-            _PredictiveLookaheadController,
-        )
+        from lerobot.robots.predictive.controller import PredictiveLookaheadController
 
         ts = self._ts(20)  # 0..0.095 s
         a = 100.0  # accel units/s²
@@ -988,9 +982,9 @@ class TestVelocityEstimators:
         v_end_true = a * ts[-1]
         v_mid_expected = a * ts.mean()
 
-        v_lin = _PredictiveLookaheadController._velocity_lsq_linear(ts, ps)
-        v_quad = _PredictiveLookaheadController._velocity_lsq_quad_end(ts, ps)
-        v_fd = _PredictiveLookaheadController._velocity_forward_diff(ts, ps)
+        v_lin = PredictiveLookaheadController._velocity_lsq_linear(ts, ps)
+        v_quad = PredictiveLookaheadController._velocity_lsq_quad_end(ts, ps)
+        v_fd = PredictiveLookaheadController._velocity_forward_diff(ts, ps)
 
         # Linear: returns midpoint slope, ≈ HALF the true end-slope.
         np.testing.assert_allclose(v_lin, [v_mid_expected] * 7, atol=1e-6)
@@ -1010,13 +1004,11 @@ class TestVelocityEstimators:
         gotten a slope estimate."""
         import numpy as np
 
-        from lerobot.robots.so107_follower_predictive.so107_follower_predictive import (
-            _PredictiveLookaheadController,
-        )
+        from lerobot.robots.predictive.controller import PredictiveLookaheadController
 
         ts = np.array([0.0, 0.005], dtype=np.float64)
         ps = np.array([[1.0] * 7, [2.0] * 7], dtype=np.float64)
-        v = _PredictiveLookaheadController._velocity_lsq_quad_end(ts, ps)
+        v = PredictiveLookaheadController._velocity_lsq_quad_end(ts, ps)
         assert v is not None
         # 2-sample slope: (2-1)/0.005 = 200 on each joint
         np.testing.assert_allclose(v, [200.0] * 7, atol=1e-6)
@@ -1025,23 +1017,21 @@ class TestVelocityEstimators:
         """Single sample / all-same-timestamps → no slope possible."""
         import numpy as np
 
-        from lerobot.robots.so107_follower_predictive.so107_follower_predictive import (
-            _PredictiveLookaheadController,
-        )
+        from lerobot.robots.predictive.controller import PredictiveLookaheadController
 
         ts = np.array([1.0])
         ps = np.array([[0.0] * 7])
         for fn in (
-            _PredictiveLookaheadController._velocity_lsq_linear,
-            _PredictiveLookaheadController._velocity_forward_diff,
+            PredictiveLookaheadController._velocity_lsq_linear,
+            PredictiveLookaheadController._velocity_forward_diff,
         ):
             assert fn(ts, ps) is None
 
         # All-same timestamps → linear and forward_diff degenerate.
         ts_flat = np.full(5, 1.0)
         ps5 = np.zeros((5, 7))
-        assert _PredictiveLookaheadController._velocity_lsq_linear(ts_flat, ps5) is None
-        assert _PredictiveLookaheadController._velocity_forward_diff(ts_flat, ps5) is None
+        assert PredictiveLookaheadController._velocity_lsq_linear(ts_flat, ps5) is None
+        assert PredictiveLookaheadController._velocity_forward_diff(ts_flat, ps5) is None
 
     def test_controller_dispatches_to_configured_estimator(self):
         """Setting ``velocity_estimator`` in the config selects the right

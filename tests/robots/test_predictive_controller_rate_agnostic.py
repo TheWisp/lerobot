@@ -32,9 +32,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from lerobot.robots.so107_follower_predictive.so107_follower_predictive import (
-    _PredictiveLookaheadController as Ctrl,
-)
+from lerobot.robots.predictive.controller import PredictiveLookaheadController as Ctrl
 from lerobot.types import ActionChunk
 
 # =============================================================================

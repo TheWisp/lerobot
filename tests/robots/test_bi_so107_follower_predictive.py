@@ -99,7 +99,7 @@ def bi_follower():
 
     with (
         patch(
-            "lerobot.robots.so107_follower_predictive.so107_follower_predictive.FeetechMotorsBus",
+            "lerobot.robots.so_follower.so_follower.FeetechMotorsBus",
             side_effect=_bus_side_effect,
         ),
         patch.object(SO107FollowerPredictive, "configure", lambda self: None),
@@ -138,7 +138,7 @@ def test_controller_settings_shared_across_arms(bi_follower):
     robot, _l, _r = bi_follower
     for arm in (robot.left_arm, robot.right_arm):
         assert arm.config.lookahead_ms == 80.0
-        assert arm.config.max_lookahead_ms == 110.0
+        assert arm.config.max_lookahead_ms == 150.0  # PredictiveControllerConfig default
         assert arm.config.corrector_alpha == 1.0
         assert arm.config.velocity_window_ms == 70.0
         assert arm.config.control_rate_hz == 500.0
