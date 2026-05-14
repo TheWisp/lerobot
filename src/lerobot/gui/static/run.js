@@ -1086,6 +1086,11 @@ function renderRunForm() {
     html += `<input type="number" id="run-hvla-query-interval" placeholder="2" min="0">`;
     html += `<label>Denoise Steps (default 10)</label>`;
     html += `<input type="number" id="run-hvla-denoise-steps" placeholder="10" min="1">`;
+    html += `<label title="How the policy frame is sent to the robot each tick. 'chunk' (default) packs the remaining chunk frames as an ActionChunk → predictive robots use the exact-lookup path for zero-estimation-error lookahead. 'dict' sends only the current frame → predictive robots fall back to velocity-LSQ extrapolation (rate-agnostic post-fix but still has EMA residual). Use 'dict' for A/B comparison or as rollback. Non-predictive robots are unaffected.">Action Send Shape</label>`;
+    html += `<select id="run-hvla-send-action-shape" title="Default 'chunk' is the recommended best-perf path. Switch to 'dict' for A/B comparison against pre-fix behaviour.">`;
+    html += `<option value="chunk">chunk (default — predictive exact-lookup)</option>`;
+    html += `<option value="dict">dict (single frame — A/B / rollback)</option>`;
+    html += `</select>`;
     html += `<label>Record Dataset</label>`;
     html += `<input type="text" id="run-hvla-record-dataset" placeholder="eval/hvla_eval (optional)" value="" oninput="_toggleHvlaRecordFields()">`;
     html += `<label>Episodes</label>`;
@@ -1432,6 +1437,7 @@ async function launchRun() {
                 s1_query_interval: parseInt(document.getElementById('run-hvla-query-interval')?.value) || null,
                 denoise_steps: parseInt(document.getElementById('run-hvla-denoise-steps')?.value) || null,
                 decode_subtask: document.getElementById('run-hvla-decode-subtask')?.checked || false,
+                send_action_shape: document.getElementById('run-hvla-send-action-shape')?.value || 'chunk',
                 record_dataset: recordDs,
                 num_episodes: parseInt(document.getElementById('run-hvla-episodes')?.value) || 1,
                 episode_time_s: parseFloat(document.getElementById('run-hvla-episode-time')?.value) || 60,

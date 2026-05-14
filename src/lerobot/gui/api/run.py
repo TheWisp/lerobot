@@ -223,6 +223,15 @@ class HVLARunRequest(BaseModel):
     rlt_output_dir: str = "outputs/rlt_online"
     rlt_start_engaged: bool = True
     rlt_shared_noise_per_chunk: bool = True  # default after v2_widened A/B
+    # Action send shape on the policy path. "chunk" (default) routes the
+    # remaining chunk frames as an ActionChunk → predictive robots use
+    # the chunk-exact-lookup path (zero estimation residual). "dict"
+    # sends only the single frame at idx → predictive robots fall back
+    # to the velocity-LSQ extrapolation path. Non-predictive robots are
+    # unaffected (they use frames[0] either way). Primarily for A/B
+    # testing the chunk-vs-dict latency improvement; default matches
+    # the recommended best-perf path.
+    send_action_shape: str = "chunk"
 
 
 # ============================================================================
@@ -798,6 +807,12 @@ async def start_hvla(req: HVLARunRequest) -> dict:
         # path; the resulting subdirs match LATENCY_SOURCES.
         args.append("--latency-monitor")
         args.append("--latency-output-dir=outputs/hvla_runs")
+
+        # Action send shape (default "chunk"). Only emit the flag when the
+        # value differs from the default to keep the CLI tidy in the GUI's
+        # subprocess log.
+        if req.send_action_shape != "chunk":
+            args.append(f"--send-action-shape={req.send_action_shape}")
 
         await _launch_subprocess(args, command="hvla", config=req.model_dump())
         return {"status": "started", "command": "hvla", "pid": _active_process.pid}
