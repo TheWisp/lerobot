@@ -38,6 +38,7 @@ import time
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from lerobot.robots.so107_follower_predictive import (
@@ -1065,3 +1066,187 @@ class TestVelocityEstimators:
             elif name == "forward_diff":
                 dt = ts[-1] - ts[-2]
                 np.testing.assert_allclose(v, [100.0 * (ts[-1] - dt / 2)] * 7, atol=1e-6)
+
+
+# ============================================================================
+# Integration: rate-agnostic intent ring (end-to-end via the mocked bus)
+# ============================================================================
+
+
+class TestRateAgnosticIntent:
+    """End-to-end integration: same trajectory pushed at different rates
+    should produce comparable motor_cmd output.
+
+    These tests exercise the FULL controller pipeline (set_intent →
+    intent_ring → _tick → velocity estimator → sync_write) against a
+    mocked bus that records every written goal_position. After running
+    for a fixed wall-clock duration at different push rates with the
+    same underlying ramp signal, the recorded motor_cmd traces should
+    converge to similar values within tolerance.
+
+    Pre-fix behaviour (intent ring filled per controller tick with
+    stair-stepped 30 Hz value): velocity estimator drastically
+    under-estimated source-rate change → motor_cmd lagged by far more
+    than the L=80ms target.
+
+    Post-fix: motor_cmd ≈ intent + L · v across rates, within
+    estimation residual.
+    """
+
+    @staticmethod
+    def _push_ramp_and_collect(
+        robot, bus, rate_hz: float, duration_s: float
+    ) -> tuple[list[tuple[float, float]], float]:
+        """Push intent = 10 deg/s ramp at ``rate_hz`` for ``duration_s``.
+
+        Returns ``(trace, t0)`` where trace is
+        ``[(write_timestamp_relative_to_t0, shoulder_pan_motor_cmd), ...]``.
+        ``t0`` is the start time of this run (controller's clock).
+        """
+        bus.sync_write_log.clear()
+        period = 1.0 / rate_hz
+        n_pushes = max(1, int(rate_hz * duration_s))
+        # Tag each sync_write with its perf_counter timestamp so we can
+        # slice the trace by elapsed time later.
+        tagged: list[tuple[float, dict]] = []
+        original_side_effect = bus.sync_write.side_effect
+
+        def _tagged_side_effect(data_name, goal_dict, **kwargs):
+            tagged.append((time.perf_counter(), dict(goal_dict)))
+            # Also keep the existing fixture log behaviour.
+            original_side_effect(data_name, goal_dict, **kwargs)
+
+        bus.sync_write.side_effect = _tagged_side_effect
+        try:
+            t0 = time.perf_counter()
+            for i in range(n_pushes):
+                t_target = t0 + i * period
+                sleep_for = t_target - time.perf_counter()
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+                t_caller = time.perf_counter()
+                intent_val = 10.0 * (t_caller - t0)  # deg, ramping at 10 deg/s
+                robot.send_action(
+                    {f"{m}.pos": intent_val for m in _MOTOR_NAMES},
+                )
+            # Brief drain so the last few writes settle.
+            time.sleep(0.02)
+        finally:
+            bus.sync_write.side_effect = original_side_effect
+        trace = [(t - t0, g["shoulder_pan"]) for t, g in tagged if "shoulder_pan" in g]
+        return trace, t0
+
+    def test_motor_cmd_consistent_across_push_rates(self, follower):
+        """30 Hz push and 200 Hz push of the same 10 deg/s ramp should
+        produce motor_cmd traces that match in the steady-state mid-run
+        window. The sampling is taken DURING the run, not after, so the
+        velocity-estimator window is always fresh.
+
+        Pre-fix the 30 Hz path under-extrapolated by ~50%; post-fix both
+        rates produce the same steady-state motor_cmd (intent + L · v)."""
+        robot, bus = follower
+        duration_s = 0.6  # long enough for warmup + steady-state sampling
+
+        # Run at 30 Hz, capture trace.
+        trace_30, _ = self._push_ramp_and_collect(robot, bus, rate_hz=30, duration_s=duration_s)
+        # Brief pause + reset the intent ring so the second run is isolated.
+        time.sleep(0.05)
+        robot._controller._intent_ring.clear()
+        robot._controller._last_action = None  # reset per-step clamp baseline
+
+        # Run at 200 Hz, capture trace.
+        trace_200, _ = self._push_ramp_and_collect(robot, bus, rate_hz=200, duration_s=duration_s)
+
+        assert len(trace_30) > 50, f"30 Hz trace too short: {len(trace_30)}"
+        assert len(trace_200) > 50, f"200 Hz trace too short: {len(trace_200)}"
+
+        def _steady_state_motor_cmd(trace: list[tuple[float, float]]) -> float:
+            """Median of motor_cmd in the steady-state window [0.2s, 0.45s].
+            Skips warmup (max_step_deg clamp) and the after-last-push tail
+            (where the velocity-estimator window can flush out)."""
+            mid = [v for t, v in trace if 0.2 <= t <= 0.45]
+            assert mid, "no writes in steady-state window"
+            return float(np.median(mid))
+
+        # Each motor_cmd at time t should be ≈ intent(t) + L·v = 10t + 0.8.
+        # In the [0.2, 0.45] window, intent ranges from 2.0 to 4.5,
+        # so motor_cmd ranges from 2.8 to 5.3. Median ≈ 4.05.
+        ss_30 = _steady_state_motor_cmd(trace_30)
+        ss_200 = _steady_state_motor_cmd(trace_200)
+        expected_median = 10.0 * 0.325 + 0.08 * 10.0  # ≈ 4.05
+
+        # Headline assertion: the two push rates yield matching motor_cmds.
+        assert abs(ss_30 - ss_200) < 0.3, (
+            f"motor_cmd steady-state: 30Hz={ss_30:.2f}, 200Hz={ss_200:.2f} — rate-agnostic invariant violated"
+        )
+
+        # Sanity: both are in the right ballpark.
+        for rate_label, ss in [("30Hz", ss_30), ("200Hz", ss_200)]:
+            assert abs(ss - expected_median) < 0.6, (
+                f"{rate_label}: motor_cmd steady-state={ss:.2f}, expected≈{expected_median:.2f}"
+            )
+
+
+# ============================================================================
+# Starvation warning
+# ============================================================================
+
+
+class TestStarvationWarning:
+    def test_warns_when_declared_period_elapses_without_sample(self, follower, caplog):
+        """When the caller declares period_s but stops publishing for
+        more than 3·period, a one-time WARNING fires explaining the gap.
+        """
+        import logging
+
+        robot, _bus = follower
+        # Push one sample with a declared 33 ms period.
+        robot.send_action(
+            {f"{m}.pos": 0.0 for m in _MOTOR_NAMES},
+            period_s=1.0 / 30.0,
+        )
+        # Now wait 4× the declared period without pushing again.
+        caplog.set_level(logging.WARNING)
+        # Need ≥1 s for the throttled starvation check to fire (it
+        # only runs at most once per second in _tick). Plus a bit of
+        # margin for the controller to actually reach that check.
+        time.sleep(1.3)
+        # The warning should have fired exactly once.
+        starvation_msgs = [r for r in caplog.records if "no intent samples received" in r.getMessage()]
+        assert len(starvation_msgs) == 1, f"expected 1 starvation warning, got {len(starvation_msgs)}"
+
+    def test_no_warning_when_period_not_declared(self, follower, caplog):
+        """Period-less callers (the historical default) get no starvation
+        spam — the controller has no expectation to violate."""
+        import logging
+
+        robot, _bus = follower
+        robot.send_action(
+            {f"{m}.pos": 0.0 for m in _MOTOR_NAMES},
+            # period_s NOT declared
+        )
+        caplog.set_level(logging.WARNING)
+        time.sleep(1.3)
+        starvation_msgs = [r for r in caplog.records if "no intent samples received" in r.getMessage()]
+        assert starvation_msgs == []
+
+    def test_warning_resets_on_fresh_sample(self, follower, caplog):
+        """If a fresh sample arrives after a starvation warning fired,
+        the latch resets so a future starvation re-warns."""
+        import logging
+
+        robot, _bus = follower
+        # Sample 1, with declared period → wait to starve → wait for warn.
+        robot.send_action(
+            {f"{m}.pos": 0.0 for m in _MOTOR_NAMES},
+            period_s=1.0 / 30.0,
+        )
+        caplog.set_level(logging.WARNING)
+        time.sleep(1.3)
+        assert robot._controller._warned_starvation is True
+        # Fresh sample resets the latch.
+        robot.send_action(
+            {f"{m}.pos": 1.0 for m in _MOTOR_NAMES},
+            period_s=1.0 / 30.0,
+        )
+        assert robot._controller._warned_starvation is False

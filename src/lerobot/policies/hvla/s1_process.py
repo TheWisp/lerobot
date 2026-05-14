@@ -17,6 +17,7 @@ import torchvision.transforms.functional as TF
 
 from lerobot.policies.hvla.ipc import SharedImageBuffer, SharedLatentCache
 from lerobot.policies.hvla.rlt.episode import EpisodeLifecycle, TerminalKind
+from lerobot.types import ActionChunk
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,66 @@ def _compute_chunk_index(t_now: float, t_origin: float, fps: int, chunk_len: int
     elapsed = t_now - t_origin
     idx = round(elapsed * fps)
     return max(0, min(idx, chunk_len - 1))
+
+
+def _remaining_chunk_as_actionchunk(
+    chunk_np: np.ndarray,
+    start_idx: int,
+    joint_names: list[str],
+    fps: float,
+    *,
+    current_frame_override: np.ndarray | None = None,
+) -> ActionChunk:
+    """Pack ``chunk_np[start_idx:]`` as an ``ActionChunk`` whose frame 0 is
+    the value the controller should aim at *now*.
+
+    Why this exists: HVLA emits a numpy chunk per inference and indexes
+    into it frame-by-frame. Sending one frame at a time as a dict via
+    ``robot.send_action(dict)`` forces the predictive controller to
+    extrapolate velocity from stair-stepped 30 Hz input — which works
+    correctly only after the rate-agnostic intent-ring fix, and is
+    still strictly less accurate than the chunk-exact-lookup path
+    (``_lookup_in_chunk``). Sending the *remaining* chunk activates
+    the exact-lookup path: the controller reads the value at the time
+    ``now + L`` directly from the chunk's frames, with zero
+    estimation error.
+
+    Args:
+        chunk_np: shape ``(N_frames, n_motors)`` — the policy's chunk.
+        start_idx: index of the frame being executed at "now". Frames
+            before this have already been consumed.
+        joint_names: column order for the output frame dicts.
+        fps: the chunk's frame rate (used for the controller's index
+            math via ``elapsed * fps``).
+        current_frame_override: if set, replaces ``chunk_np[start_idx]``
+            as the chunk's frame 0. Callers use this to inject a clamped
+            value (e.g. POLICY JUMP CLAMP rewrite) without disturbing
+            the rest of the chunk's content. Defaults to using the raw
+            chunk value at start_idx.
+
+    Returns:
+        ActionChunk with ``fps=fps`` and frames covering ``[start_idx, N)``
+        — i.e. the policy's prediction from "now" out to the chunk tail.
+        For non-predictive robots, ``send_action(ActionChunk)`` consumes
+        only ``frames[0]`` and ignores the rest, so this is backward-
+        compatible with any robot type.
+    """
+    remaining = chunk_np[start_idx:]
+    n_frames = len(remaining)
+    if current_frame_override is not None:
+        # Build frames[0] from the override, frames[1:] from the rest.
+        frames = (
+            {name: float(current_frame_override[j]) for j, name in enumerate(joint_names)},
+            *(
+                {name: float(remaining[i, j]) for j, name in enumerate(joint_names)}
+                for i in range(1, n_frames)
+            ),
+        )
+    else:
+        frames = tuple(
+            {name: float(remaining[i, j]) for j, name in enumerate(joint_names)} for i in range(n_frames)
+        )
+    return ActionChunk(fps=float(fps), frames=frames)
 
 
 def _osc_skip(chunk: np.ndarray, idx: int, step_count: int) -> int:
@@ -1870,11 +1931,19 @@ def run_s1(
                             )
                             action_np = prev_action_np + np.clip(delta, -30.0, 30.0)
 
-                    action_dict = {
-                        name: float(action_np[i]) for i, name in enumerate(joint_names) if i < len(action_np)
-                    }
+                    # Forward the remaining chunk (frame `idx` onward) to the
+                    # robot as an ActionChunk. This activates the predictive
+                    # controller's exact-lookup path (_lookup_in_chunk) for
+                    # zero-estimation-error compensation at L. Non-predictive
+                    # robots use frames[0] only, so this is backward-compatible
+                    # — the recorded "action" is still action_np (a single
+                    # frame). See _remaining_chunk_as_actionchunk and the
+                    # rationale in s1_process.py's module-level comment.
+                    action_chunk_obj = _remaining_chunk_as_actionchunk(
+                        chunk, idx, joint_names, fps, current_frame_override=action_np
+                    )
                     with main_session.span("action_send"):
-                        robot.send_action(action_dict)
+                        robot.send_action(action_chunk_obj)
                     t_after_send = time.perf_counter()
 
                     # Inverse follow: send follower position to leader so it mirrors

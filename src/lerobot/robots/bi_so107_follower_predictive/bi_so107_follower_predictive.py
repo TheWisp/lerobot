@@ -173,7 +173,12 @@ class BiSO107FollowerPredictive(BiSO107Follower):
         self.left_arm.attach_teleop(teleop.left_arm)
         self.right_arm.attach_teleop(teleop.right_arm)
 
-    def send_action(self, action: dict[str, Any] | ActionChunk) -> dict[str, Any]:
+    def send_action(
+        self,
+        action: dict[str, Any] | ActionChunk,
+        *,
+        period_s: float | None = None,
+    ) -> dict[str, Any]:
         """Route bimanual intent to each predictive arm.
 
         For an ``ActionChunk``: split each frame's prefixed keys into two
@@ -185,8 +190,17 @@ class BiSO107FollowerPredictive(BiSO107Follower):
 
         For a plain dict: delegate to ``BiSO107Follower.send_action``,
         which handles dry-run + per-arm prefix translation.
+
+        ``period_s`` is forwarded to each arm's predictive controller
+        (see :meth:`SO107FollowerPredictive.send_action`). For chunks it
+        defaults to ``1/action.fps`` per arm.
         """
         if not isinstance(action, ActionChunk):
+            # The plain-dict path goes through BiSO107Follower.send_action,
+            # which doesn't accept period_s. The current dict-mode callers
+            # (intervention reset, idle hold) don't need starvation
+            # detection. If a future caller needs it, they can wire it
+            # explicitly through left_arm / right_arm send_action calls.
             return super().send_action(action)
 
         if self.config.dry_run:
@@ -227,8 +241,8 @@ class BiSO107FollowerPredictive(BiSO107Follower):
         left_chunk = ActionChunk(fps=action.fps, frames=left_frames)
         right_chunk = ActionChunk(fps=action.fps, frames=right_frames)
 
-        left_sent = self.left_arm.send_action(left_chunk)
-        right_sent = self.right_arm.send_action(right_chunk)
+        left_sent = self.left_arm.send_action(left_chunk, period_s=period_s)
+        right_sent = self.right_arm.send_action(right_chunk, period_s=period_s)
 
         # Re-prefix and return — the dataset writer records this as the
         # action for the current tick.

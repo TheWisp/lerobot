@@ -197,7 +197,12 @@ class SO107FollowerPredictive(SO107Follower):
             )
 
     @check_if_not_connected
-    def send_action(self, action: RobotAction | ActionChunk) -> RobotAction:
+    def send_action(
+        self,
+        action: RobotAction | ActionChunk,
+        *,
+        period_s: float | None = None,
+    ) -> RobotAction:
         """Publish intent to the controller (non-blocking).
 
         Two payload shapes:
@@ -211,6 +216,15 @@ class SO107FollowerPredictive(SO107Follower):
             last frame. Used by trajectory replay + chunked policy
             inference.
 
+        Args:
+            action: dict or ActionChunk as above.
+            period_s: Optional caller-declared publish period (e.g.
+                ``1/30`` for a 30 Hz policy). When provided, enables
+                starvation detection inside the controller (warn once if
+                no sample arrives within several periods). For ActionChunk
+                inputs, ``period_s`` defaults to ``1/action.fps``; pass
+                explicitly only to override.
+
         The recorded ``action`` is the operator's raw intent — ``frames[0]``
         when a chunk was passed, the dict itself otherwise. State
         observed via ``get_observation`` will track that intent with
@@ -219,7 +233,7 @@ class SO107FollowerPredictive(SO107Follower):
         controller's 200 Hz thread and never visible to the caller.
         """
         t = time.perf_counter()
-        self._controller.set_intent(t, action)
+        self._controller.set_intent(t, action, period_s=period_s)
         return dict(action.frames[0]) if isinstance(action, ActionChunk) else action
 
     @check_if_not_connected
@@ -350,7 +364,8 @@ class _PredictiveLookaheadController:
         self._intent_log: deque[tuple[float, np.ndarray]] = deque(maxlen=2000)
 
         # Cross-thread variables for the latest intent (control thread reads
-        # this each tick to know where to aim).
+        # this each tick to know where to aim). The same lock protects
+        # _intent_ring on the push path — see set_intent + _tick.
         self._target_lock = threading.Lock()
         self._latest_intent: np.ndarray | None = None
         # Chunk record (one per send_action call that passed an ActionChunk).
@@ -361,6 +376,23 @@ class _PredictiveLookaheadController:
         # a single-dict send replaces with None. Tracked under _target_lock
         # alongside _latest_intent so a tick sees a consistent snapshot.
         self._latest_chunk: tuple[float, float, np.ndarray] | None = None
+
+        # Caller-declared cadence (optional). When the caller passes
+        # ``period_s`` to set_intent, the controller uses it for:
+        #   * starvation detection (warn if no sample arrives within
+        #     several declared periods)
+        #   * future replay / observability (the declared cadence is
+        #     ground truth for reconstructing the sample schedule).
+        # When a chunk is passed, ``_declared_period_s`` is auto-inferred
+        # as 1/chunk.fps. ``None`` means the source didn't declare a
+        # cadence — velocity estimator still works from observed dts in
+        # _intent_ring, but starvation detection is disabled.
+        self._last_publish_t: float | None = None
+        self._declared_period_s: float | None = None
+        # Starvation-warning latch (fires at most once per session per
+        # connection — re-issued only after disconnect/reconnect).
+        self._warned_starvation: bool = False
+        self._last_starvation_check_t: float = 0.0
 
         # Optional direct teleop binding. When set, ``_tick`` polls
         # ``teleop.get_action()`` each iteration instead of reading
@@ -399,8 +431,27 @@ class _PredictiveLookaheadController:
 
     # ── Caller-facing hooks (invoked from main thread) ────────────────────
 
-    def set_intent(self, t: float, action: RobotAction | ActionChunk) -> None:
+    def set_intent(
+        self,
+        t: float,
+        action: RobotAction | ActionChunk,
+        *,
+        period_s: float | None = None,
+    ) -> None:
         """Receive the latest intent from the caller. Non-blocking.
+
+        Args:
+            t: Caller-side ``time.perf_counter()`` at the moment of publish.
+                Drives velocity estimation in the dict path — by stamping
+                with the caller's timestamp (not the controller's tick
+                time), the velocity estimator's observed dts reflect the
+                source's actual sample period, making it rate-agnostic.
+            action: Single-frame ``RobotAction`` dict OR an ``ActionChunk``.
+                Dict → velocity-extrapolation path. Chunk → exact-lookup
+                path (``_lookup_in_chunk``); velocity estimator bypassed.
+            period_s: Optional caller-declared publish period (e.g. 1/30
+                for a 30 Hz policy). Enables starvation detection. When
+                omitted on the chunk path, auto-inferred as ``1/action.fps``.
 
         For an ``ActionChunk``, ``frames[0]`` is the "current intent" used
         as the fallback when the chunk is consumed. The rest of the chunk
@@ -408,7 +459,13 @@ class _PredictiveLookaheadController:
         exact-lookup path.
 
         For a single ``RobotAction`` dict, ``_latest_chunk`` is cleared so
-        subsequent ticks fall back to velocity extrapolation.
+        subsequent ticks fall back to velocity extrapolation. The push
+        path also appends ``(t, current_intent)`` to ``_intent_ring`` —
+        this is the source's publish event timestamped at the source's
+        clock, so the velocity estimator sees dts that reflect the
+        caller's actual sample rate. Identical-value samples are NOT
+        deduped: a steady-state hold from the caller IS information
+        ("velocity is zero now"), not redundant data.
 
         NB: ``_intent_log`` is NOT populated here. It's populated from
         ``_tick`` instead, at the control rate, so the adaptive xcorr can
@@ -422,14 +479,31 @@ class _PredictiveLookaheadController:
         if isinstance(action, ActionChunk):
             frames_arr = self._frames_to_array(action.frames)
             current_intent = frames_arr[0]
+            # Chunk path: cadence is implicit in chunk.fps. Caller can
+            # still override with an explicit period_s if e.g. they
+            # publish chunks at a different cadence than chunk.fps.
+            declared = period_s if period_s is not None else (1.0 / action.fps)
             with self._target_lock:
                 self._latest_intent = current_intent
                 self._latest_chunk = (t, action.fps, frames_arr)
+                self._last_publish_t = t
+                self._declared_period_s = declared
+                self._warned_starvation = False  # fresh sample resets latch
         else:
             current_intent = self._action_to_array(action)
             with self._target_lock:
                 self._latest_intent = current_intent
                 self._latest_chunk = None
+                self._last_publish_t = t
+                self._declared_period_s = period_s
+                self._warned_starvation = False
+                # Push path: this call IS the source's publish event.
+                # Stamp with the caller's t — NOT the controller's tick
+                # time — so velocity estimator sees source-rate dts.
+                # Skip when a teleop is bound: that path fills the ring
+                # in _tick from polled samples instead.
+                if self._teleop is None:
+                    self._intent_ring.append((t, current_intent.copy()))
 
     def observe_state(self, t: float, obs: RobotObservation) -> None:
         """Receive a state sample from get_observation(). Non-blocking."""
@@ -482,7 +556,8 @@ class _PredictiveLookaheadController:
         # for the leader case — chunks come through send_action from
         # sources that have a real future like trajectory_replay).
         teleop = self._teleop
-        if teleop is not None:
+        is_pull_path = teleop is not None
+        if is_pull_path:
             try:
                 action = teleop.get_action()
             except Exception:
@@ -500,6 +575,20 @@ class _PredictiveLookaheadController:
                 return  # no intent received yet; nothing to send
 
         now = time.perf_counter()
+
+        # Pull path: every tick is a fresh poll of the teleop's cache
+        # (SO107LeaderHighRate's 200 Hz background reader). Append per
+        # tick — the controller-tick rate IS the source's rate.
+        # Push path: the intent ring is already populated by set_intent
+        # at the source's actual rate. DO NOT append here — that would
+        # re-introduce the stair-step bug where 200 Hz timestamps with
+        # values that update at the caller's rate fool the velocity
+        # estimator into seeing 5 ms-spaced "samples" that mostly contain
+        # repeats of the latest pushed value, collapsing the velocity
+        # estimate.
+        if is_pull_path:
+            with self._target_lock:
+                self._intent_ring.append((now, intent.copy()))
 
         # Log "intent at now" (no lookahead) for the adaptive xcorr.
         # Done from the control thread so the sample cadence matches
@@ -529,9 +618,13 @@ class _PredictiveLookaheadController:
         if chunk is not None:
             raw_shifted = self._lookup_in_chunk(chunk, now)
         else:
-            self._intent_ring.append((now, intent.copy()))
+            # Snapshot the ring under the lock — set_intent may be
+            # appending from the caller thread concurrently. list(deque)
+            # is fast (O(maxlen=64)) and gives a stable view.
+            with self._target_lock:
+                ring_snapshot = list(self._intent_ring)
             cutoff = now - self._velocity_window_s
-            win = [(t, p) for t, p in self._intent_ring if t >= cutoff]
+            win = [(t, p) for t, p in ring_snapshot if t >= cutoff]
             if len(win) < 2:
                 raw_shifted = intent.copy()
             else:
@@ -574,6 +667,39 @@ class _PredictiveLookaheadController:
         if self._adaptive and (now - self._last_adaptive_t) >= self._UPDATE_PERIOD_S:
             self._last_adaptive_t = now
             self._maybe_update_lookahead(now)
+
+        # 6. Starvation check (cheap; throttled to once per second).
+        if (now - self._last_starvation_check_t) > 1.0:
+            self._last_starvation_check_t = now
+            self._check_starvation(now)
+
+    def _check_starvation(self, now: float) -> None:
+        """Warn once if the source declared a publish period but is silent.
+
+        Fires at most once per session per (re)connection. Reset when a
+        fresh sample arrives (see set_intent — clears ``_warned_starvation``).
+        Only meaningful for the push path: the pull path's ``get_action``
+        always returns the leader's latest cached pose, so "starvation" is
+        a missing cache (separate failure mode, logged elsewhere).
+        """
+        if self._teleop is not None or self._warned_starvation:
+            return
+        with self._target_lock:
+            declared = self._declared_period_s
+            last_t = self._last_publish_t
+        if declared is None or last_t is None:
+            return
+        elapsed = now - last_t
+        if elapsed > 3.0 * declared:
+            logger.warning(
+                "%s: no intent samples received for %.0f ms (caller declared "
+                "period %.0f ms). Controller is operating on stale velocity "
+                "estimate — motor will drift toward extrapolation tail.",
+                self._robot,
+                elapsed * 1000,
+                declared * 1000,
+            )
+            self._warned_starvation = True
 
     # ── Adaptive update ──────────────────────────────────────────────────
 
