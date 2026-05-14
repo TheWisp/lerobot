@@ -565,6 +565,13 @@ def run_s1(
     # so the GUI dashboard can render HVLA inference timings alongside teleop/record.
     latency_monitor: bool = False,
     latency_output_dir: str | None = None,
+    # Send shape on the policy path. "chunk" (default) packs the
+    # remaining chunk frames into an ActionChunk so the predictive
+    # robot uses its exact-lookup path. "dict" sends only the single
+    # frame at idx — primarily for A/B comparison against the pre-fix
+    # behaviour. Non-predictive robots get frames[0] either way, so
+    # this toggle is a no-op on them.
+    send_action_shape: str = "chunk",
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -1932,18 +1939,32 @@ def run_s1(
                             action_np = prev_action_np + np.clip(delta, -30.0, 30.0)
 
                     # Forward the remaining chunk (frame `idx` onward) to the
-                    # robot as an ActionChunk. This activates the predictive
-                    # controller's exact-lookup path (_lookup_in_chunk) for
-                    # zero-estimation-error compensation at L. Non-predictive
-                    # robots use frames[0] only, so this is backward-compatible
-                    # — the recorded "action" is still action_np (a single
-                    # frame). See _remaining_chunk_as_actionchunk and the
-                    # rationale in s1_process.py's module-level comment.
-                    action_chunk_obj = _remaining_chunk_as_actionchunk(
-                        chunk, idx, joint_names, fps, current_frame_override=action_np
-                    )
+                    # robot. Two payload shapes selected by send_action_shape:
+                    #   * "chunk" (default): pack chunk[idx:] as an ActionChunk
+                    #     so a predictive robot activates the exact-lookup path
+                    #     (_lookup_in_chunk) for zero-estimation-error
+                    #     compensation at L. Non-predictive robots use
+                    #     frames[0] only — same as the dict path effectively.
+                    #   * "dict": send only the single frame at idx. Used to
+                    #     A/B-compare against the pre-fix behaviour or as a
+                    #     rollback. Predictive robots fall back to the
+                    #     velocity-LSQ extrapolation path (which is now
+                    #     rate-agnostic post-fix #1).
+                    # The recorded "action" column in the dataset is
+                    # action_np (a single frame) regardless of which shape
+                    # is sent — see _add_frame_to_dataset below.
+                    if send_action_shape == "chunk":
+                        payload: dict | ActionChunk = _remaining_chunk_as_actionchunk(
+                            chunk, idx, joint_names, fps, current_frame_override=action_np
+                        )
+                    else:
+                        payload = {
+                            name: float(action_np[i])
+                            for i, name in enumerate(joint_names)
+                            if i < len(action_np)
+                        }
                     with main_session.span("action_send"):
-                        robot.send_action(action_chunk_obj)
+                        robot.send_action(payload)
                     t_after_send = time.perf_counter()
 
                     # Inverse follow: send follower position to leader so it mirrors
