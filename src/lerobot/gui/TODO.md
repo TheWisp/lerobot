@@ -178,6 +178,24 @@ Live overlay during teleop/record showing how the current state compares to the 
 ## Architecture
 
 - [**Critical**] **Reactive UI state management**: the current imperative DOM manipulation (innerHTML + manual toggle/refresh calls scattered across functions) is fundamentally broken. Field state (disabled, visible, selected) must be called at every possible code path that reveals the element, leading to endless monkey-patching. Migrate to a reactive pattern where UI state is derived from data (React, Preact, or even a minimal reactive store + render loop). This blocks every new UI feature.
+- [High] **Coherent GUI-wide persistence policy.** Persistence is currently ad-hoc, per-feature: opened datasets live in `opened.json`; model sources in `model_sources.json`; robot/teleop profiles under `~/.config/lerobot/`; per-feature view state in scattered LocalStorage keys; **launch settings (Run tab, Model Debugger, RLT mode, episode counts, robot/teleop profile choice, etc.) aren't persisted at all and reset to defaults every session**. The result is two distinct failure modes for users:
+  1. **Silent default surprise.** A toggle that controls destructive behaviour (e.g. RLT `--rlt-deploy` vs train mode) reverts to its default between sessions. The user reasonably assumes their last choice is still in effect, launches, and only realises mid-run (or later, reading logs) that the wrong mode ran. Real example: 2026-05-14, an HVLA + RLT rollout intended to be DEPLOY mode launched in TRAIN mode because `--rlt-deploy` wasn't toggled in the GUI — gradient updates ran for an entire evaluation session, contaminating the checkpoint.
+  2. **Stale-choice surprise.** A persistent dropdown (robot profile, model checkpoint path) retains a previous selection from a different workflow; user launches without noticing. Reported once at least.
+
+  These are symptoms of a missing GUI-wide policy. Worth thinking through, not just patching per tab.
+
+  Concrete questions to answer in a short design doc before implementation:
+  - **What to persist?** Per-tab session state (current selections, expanded/collapsed view), per-workflow last-used parameters (last train args, last record args, last debug-model checkpoint), or both? Different lifetimes — session state is per-browser; workflow state is per-user.
+  - **Where to persist?** Server-side JSON in `~/.config/lerobot/gui/` (survives browser changes, can be backed up, single source of truth) vs LocalStorage (zero round-trip, per-browser). Probably server for workflow state, LocalStorage only for UI affordances (which panel was expanded, scroll position).
+  - **Reset semantics.** Some launches must NOT inherit prior state (training run on dataset A → next launch shouldn't auto-pick A; user might be deliberately switching tasks). Need an explicit "use last config" vs "fresh defaults" affordance, and the default should be the safer of the two.
+  - **Visibility / freshness.** When the GUI restores 2-week-old launch flags, the user should be told. Show a freshness banner ("Last used 14 days ago — review settings before launching") or surface a diff against a documented default.
+  - **Audit trail.** Currently the only record of what was launched is the GUI server log. Make the resolved CLI / config visible in the UI before submission — both as a confirmation step and as a record. The Launch button modal could show the constructed command in a copyable block.
+  - **Safe defaults for destructive toggles.** Things like RLT train mode, dataset deletion, push-to-Hub: defaults should fail closed (require explicit opt-in each session), regardless of persistence.
+
+  Likely deliverable: a `GuiPersistenceStore` server-side abstraction (single JSON file per concern, atomic write, schema-versioned for migrations) + a frontend wrapper that hydrates form fields on tab mount + a "Launch summary" modal that surfaces resolved settings before submission. Touches every tab — but the consolidation is the win.
+
+  Scaling concern: as platform features grow (HVLA, RLT, intervention, eval suites, dataset tools), the surface of "settings that could surprise the user if not persisted (or persisted incorrectly)" grows linearly. Doing this once at the policy level is cheaper than retrofitting per-tab.
+
 - [Mid] Cross-tab data synchronization — replace point-to-point refresh calls with pub/sub event bus
 - [High] Extract frontend to separate files (then optionally migrate to React/Vite)
 - [Mid] FastAPI dependency injection for AppState — replace global `_app_state` with `Depends(get_app_state)`
