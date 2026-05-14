@@ -45,7 +45,9 @@ cross-correlation patch from commit 7a1e92c61.
 
 from __future__ import annotations
 
+import csv
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -394,6 +396,18 @@ class _PredictiveLookaheadController:
         self._warned_starvation: bool = False
         self._last_starvation_check_t: float = 0.0
 
+        # Stateful per-publish lowpass velocity (rate-invariant by design).
+        # Updated in ``set_intent`` on each new publish via a 1st-order EMA
+        # with α keyed on the actual publish-to-publish dt — the filter's
+        # cutoff is ``velocity_lowpass_hz`` regardless of publish rate or
+        # controller tick rate. Read each tick in ``_tick`` as constant
+        # state (no per-tick recomputation, no window-membership sensitivity).
+        # Used only when ``velocity_estimator == "stateful_lp"``.
+        # All three fields are guarded by ``_target_lock``.
+        self._v_lp_state: np.ndarray | None = None
+        self._prev_publish_intent: np.ndarray | None = None
+        self._prev_publish_t: float | None = None
+
         # Optional direct teleop binding. When set, ``_tick`` polls
         # ``teleop.get_action()`` each iteration instead of reading
         # ``_latest_intent`` (which is updated at the caller's
@@ -407,6 +421,24 @@ class _PredictiveLookaheadController:
         # Thread control
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+
+        # ── Debug instrumentation ────────────────────────────────────────
+        # Set LEROBOT_PREDICTIVE_TRACE=<path.csv> to capture per-tick raw
+        # data (now, n_win, intent, v_smooth, gate, motor_cmd, ...). Dumped
+        # to disk at controller stop. Off by default — zero overhead when
+        # the env var is unset because the append is the only work and is
+        # guarded by ``self._trace_rows is not None``.
+        # The robot ``id`` is inserted before the extension so bi-arm
+        # setups (two controllers) produce distinct files.
+        trace_env = os.environ.get("LEROBOT_PREDICTIVE_TRACE")
+        if trace_env:
+            base, ext = os.path.splitext(trace_env)
+            self._trace_path: str | None = f"{base}_{robot.id}{ext or '.csv'}"
+            self._trace_rows: list[dict] | None = []
+            logger.info("%s predictive trace ENABLED → %s", self._robot, self._trace_path)
+        else:
+            self._trace_path = None
+            self._trace_rows = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -428,6 +460,59 @@ class _PredictiveLookaheadController:
             if self._thread.is_alive():
                 logger.warning("%s controller thread did not stop within 2s", self._robot)
         self._thread = None
+        self._flush_trace()
+
+    def _flush_trace(self) -> None:
+        """Write the per-tick trace buffer to ``self._trace_path`` as CSV.
+
+        Called from ``stop()``. One row per tick. Each motor's per-joint
+        scalar gets its own column (``intent_j0`` ... ``intent_jN``) so
+        the CSV is grep-able without unpacking arrays.
+        """
+        if not self._trace_rows or not self._trace_path:
+            return
+        n_motors = len(self._motor_keys)
+        scalar_keys = [
+            "t",
+            "path",
+            "n_win",
+            "ring_size",
+            "t_oldest_in_win",
+            "t_newest_in_win",
+            "n_samples",
+            "dt_typ",
+            "ema_alpha",
+            "fallback",
+        ]
+        per_joint_keys = ["intent", "v_smooth", "v_leader", "amplitude", "gate", "raw_shifted", "motor_cmd"]
+        fieldnames = list(scalar_keys)
+        for k in per_joint_keys:
+            for j in range(n_motors):
+                fieldnames.append(f"{k}_j{j}")
+        try:
+            with open(self._trace_path, "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=fieldnames)
+                w.writeheader()
+                for row in self._trace_rows:
+                    flat = {k: row.get(k, "") for k in scalar_keys}
+                    for k in per_joint_keys:
+                        v = row.get(k)
+                        if v is None:
+                            for j in range(n_motors):
+                                flat[f"{k}_j{j}"] = ""
+                        else:
+                            arr = np.asarray(v)
+                            for j in range(n_motors):
+                                flat[f"{k}_j{j}"] = float(arr[j]) if j < arr.size else ""
+                    w.writerow(flat)
+            logger.info(
+                "%s predictive trace flushed: %d rows → %s",
+                self._robot,
+                len(self._trace_rows),
+                self._trace_path,
+            )
+        except OSError:
+            logger.exception("%s failed to write predictive trace", self._robot)
 
     # ── Caller-facing hooks (invoked from main thread) ────────────────────
 
@@ -504,6 +589,7 @@ class _PredictiveLookaheadController:
                 # in _tick from polled samples instead.
                 if self._teleop is None:
                     self._intent_ring.append((t, current_intent.copy()))
+                    self._update_v_lp_locked(t, current_intent)
 
     def observe_state(self, t: float, obs: RobotObservation) -> None:
         """Receive a state sample from get_observation(). Non-blocking."""
@@ -589,6 +675,12 @@ class _PredictiveLookaheadController:
         if is_pull_path:
             with self._target_lock:
                 self._intent_ring.append((now, intent.copy()))
+                # Pull-path publish event: feed the stateful EMA so the
+                # stateful_lp estimator works regardless of intent source.
+                # Also update _latest_intent + _prev_publish_t so the
+                # stateful_lp helper reads consistent state.
+                self._latest_intent = intent
+                self._update_v_lp_locked(now, intent)
 
         # Log "intent at now" (no lookahead) for the adaptive xcorr.
         # Done from the control thread so the sample cadence matches
@@ -615,23 +707,53 @@ class _PredictiveLookaheadController:
         #     what a real chunked policy faces at boundaries).
         #   * No chunk → velocity LSQ over the recent intent stream,
         #     same as the leader-arm teleop case.
+        # Trace dict — populated only when LEROBOT_PREDICTIVE_TRACE is set.
+        # Captures the dict-path velocity-LSQ internals so the per-tick
+        # cause of any motor_cmd wobble can be inspected post-hoc.
+        trace_on = self._trace_rows is not None
+        trace: dict = {"t": now, "path": "chunk" if chunk is not None else "dict"} if trace_on else None
+
         if chunk is not None:
             raw_shifted = self._lookup_in_chunk(chunk, now)
+            if trace_on:
+                trace["n_win"] = 0
+                trace["v_leader"] = np.zeros_like(intent)
+        elif self._velocity_estimator == "stateful_lp":
+            # Rate-invariant path. Everything happens in one helper that
+            # reads ``_latest_intent`` and ``_prev_publish_t`` atomically
+            # (single lock) so a publish arriving mid-tick can't desync
+            # the intent value from the elapsed-since-publish term.
+            raw_shifted, lp_trace = self._stateful_lp_raw_shifted(now)
+            if trace_on:
+                trace["v_smooth"] = lp_trace["v_lp_state"]
+                trace["fallback"] = lp_trace["fallback"]
+                trace["elapsed_since_publish"] = lp_trace["elapsed_since_publish"]
+                trace["v_leader"] = lp_trace["v_lp_state"]  # gate=1 always
         else:
-            # Snapshot the ring under the lock — set_intent may be
-            # appending from the caller thread concurrently. list(deque)
-            # is fast (O(maxlen=64)) and gives a stable view.
+            # Window-based estimators (quad/linear/forward_diff/
+            # amp_gated_lp). Snapshot the ring under the lock — set_intent
+            # may be appending from the caller thread concurrently.
             with self._target_lock:
                 ring_snapshot = list(self._intent_ring)
             cutoff = now - self._velocity_window_s
             win = [(t, p) for t, p in ring_snapshot if t >= cutoff]
-            if len(win) < 2:
+            n_win = len(win)
+            if trace_on:
+                trace["n_win"] = n_win
+                trace["ring_size"] = len(ring_snapshot)
+                trace["t_oldest_in_win"] = float(win[0][0]) if win else 0.0
+                trace["t_newest_in_win"] = float(win[-1][0]) if win else 0.0
+            if n_win < 2:
                 raw_shifted = intent.copy()
+                if trace_on:
+                    trace["v_leader"] = np.zeros_like(intent)
             else:
                 ts = np.array([t for t, _ in win], dtype=np.float64)
                 ps = np.stack([p for _, p in win])
-                v_leader = self._estimate_velocity(ts, ps)
+                v_leader = self._estimate_velocity(ts, ps, trace=trace)
                 raw_shifted = intent + v_leader * self._lookahead_s if v_leader is not None else intent.copy()
+                if trace_on:
+                    trace["v_leader"] = v_leader.copy() if v_leader is not None else np.zeros_like(intent)
 
         # 2. Predictor-corrector smoothing
         alpha = self._corrector_alpha
@@ -662,6 +784,15 @@ class _PredictiveLookaheadController:
         self._bus.sync_write("Goal_Position", goal_dict)
         self._last_action = shifted
         self._action_ring.append((now, shifted.copy()))
+
+        # Finalise the trace row (after the bus write so motor_cmd is
+        # the actual value sent). Append last to avoid partial rows on
+        # mid-tick exceptions.
+        if trace_on:
+            trace["intent"] = intent.copy()
+            trace["raw_shifted"] = raw_shifted.copy()
+            trace["motor_cmd"] = shifted.copy()
+            self._trace_rows.append(trace)
 
         # 5. Periodic adaptive update
         if self._adaptive and (now - self._last_adaptive_t) >= self._UPDATE_PERIOD_S:
@@ -808,8 +939,11 @@ class _PredictiveLookaheadController:
     # degenerate (single sample, all-same timestamps).
     # Backtest comparison: scripts/backtest_velocity_estimators.py.
 
-    def _estimate_velocity(self, ts: np.ndarray, ps: np.ndarray) -> np.ndarray | None:
-        """Dispatch to the configured estimator."""
+    def _estimate_velocity(
+        self, ts: np.ndarray, ps: np.ndarray, trace: dict | None = None
+    ) -> np.ndarray | None:
+        """Dispatch to the configured estimator. ``trace`` forwarded only to
+        amp_gated_lp (others have no internal state worth capturing)."""
         if self._velocity_estimator == "quad":
             return self._velocity_lsq_quad_end(ts, ps)
         if self._velocity_estimator == "linear":
@@ -818,7 +952,7 @@ class _PredictiveLookaheadController:
             return self._velocity_forward_diff(ts, ps)
         if self._velocity_estimator == "amp_gated_lp":
             return self._velocity_amp_gated_lowpass(
-                ts, ps, self._velocity_lowpass_hz, self._amp_gate_lo, self._amp_gate_hi
+                ts, ps, self._velocity_lowpass_hz, self._amp_gate_lo, self._amp_gate_hi, trace=trace
             )
         # Unknown — fall back to linear with a one-time warning. Should not
         # be reachable because the field is Literal-typed at construction,
@@ -881,6 +1015,7 @@ class _PredictiveLookaheadController:
         fc_hz: float,
         amp_lo: float,
         amp_hi: float,
+        trace: dict | None = None,
     ) -> np.ndarray | None:
         """Amplitude-gated lowpass forward-difference, per joint.
 
@@ -909,7 +1044,18 @@ class _PredictiveLookaheadController:
         """
         n_samples, n_motors = ps.shape
         if n_samples < 3:
-            return _PredictiveLookaheadController._velocity_forward_diff(ts, ps)
+            v = _PredictiveLookaheadController._velocity_forward_diff(ts, ps)
+            if trace is not None:
+                trace["fallback"] = "forward_diff"
+                trace["n_samples"] = n_samples
+                trace["dt_typ"] = float(ts[-1] - ts[-2]) if n_samples >= 2 else 0.0
+                trace["ema_alpha"] = 0.0
+                trace["v_smooth"] = v.copy() if v is not None else np.zeros(n_motors)
+                trace["amplitude"] = (
+                    (ps.max(axis=0) - ps.min(axis=0)) if n_samples >= 1 else np.zeros(n_motors)
+                )
+                trace["gate"] = np.ones(n_motors)  # forward_diff has no gate
+            return v
         # Per-sample forward differences (n_samples-1, n_motors).
         dts = np.diff(ts)
         dts_safe = np.where(np.abs(dts) > 1e-9, dts, 1.0)
@@ -931,7 +1077,115 @@ class _PredictiveLookaheadController:
         # amp_lo == amp_hi (configurable edge case).
         denom = max(amp_hi - amp_lo, 1e-9)
         gate = np.clip((amplitude - amp_lo) / denom, 0.0, 1.0)
+        if trace is not None:
+            trace["fallback"] = ""
+            trace["n_samples"] = n_samples
+            trace["dt_typ"] = dt_typ
+            trace["ema_alpha"] = ema_alpha
+            trace["v_smooth"] = v_smooth.copy()
+            trace["amplitude"] = amplitude.copy()
+            trace["gate"] = gate.copy()
         return gate * v_smooth
+
+    # ── Stateful lowpass velocity ────────────────────────────────────────
+
+    def _update_v_lp_locked(self, t: float, current_intent: np.ndarray) -> None:
+        """Update the stateful per-publish EMA velocity on a new publish.
+
+        MUST be called with ``self._target_lock`` already held.
+
+        α is keyed on the actual publish-to-publish dt so the effective
+        filter cutoff is ``velocity_lowpass_hz`` regardless of how often
+        publishes arrive. Window-based estimators (quad / linear /
+        forward_diff / amp_gated_lp) all degrade at low publish rates
+        because they only see 2-3 ring entries inside the velocity_window_s;
+        this stateful update is rate-invariant by construction.
+
+        Both intent-ingress paths feed this:
+          * Push path (caller's ``send_action`` → ``set_intent`` dict
+            branch): the new publish is the caller's event.
+          * Pull path (controller polls ``teleop.get_action()`` in
+            ``_tick``): each tick is treated as a publish event from the
+            teleop source.
+        """
+        if self._prev_publish_intent is not None and self._prev_publish_t is not None:
+            dt_pub = t - self._prev_publish_t
+            if dt_pub > 1e-9:
+                diff = (current_intent - self._prev_publish_intent) / dt_pub
+                rc = 1.0 / (2 * np.pi * self._velocity_lowpass_hz)
+                ema_a = dt_pub / (rc + dt_pub)
+                if self._v_lp_state is None:
+                    self._v_lp_state = diff.copy()
+                else:
+                    self._v_lp_state = ema_a * diff + (1.0 - ema_a) * self._v_lp_state
+        self._prev_publish_intent = current_intent.copy()
+        self._prev_publish_t = t
+
+    def _stateful_lp_raw_shifted(self, now: float) -> tuple[np.ndarray, dict]:
+        """Return ``raw_shifted`` for the stateful_lp path.
+
+        Computes ``intent + v_lp * (L + elapsed_since_publish)`` atomically
+        — single ``_target_lock`` acquisition so the intent value and the
+        publish timestamp that the elapsed term is derived from come from
+        the same publish event. Without that atomicity, a publish that
+        arrives between the tick's prelude (which captures
+        ``_latest_intent``) and the elapsed-term computation makes
+        ``elapsed`` momentarily near-zero while ``intent`` is still the
+        previous value — net effect: motor_cmd lags by one publish period.
+        ~50 ms at 30 Hz.
+
+        Rate-invariant: the EMA α (set in ``set_intent``) is keyed on the
+        publish-to-publish dt so the filter cutoff is ``velocity_lowpass_hz``
+        whether publishes arrive at 30 Hz or 200 Hz. The control tick rate
+        only affects how often this method is sampled; the value it
+        produces depends only on time and the publish stream.
+
+        NO amplitude gate. The original ``amp_gated_lp`` estimator added a
+        window-based amplitude gate to suppress lookahead amplification of
+        residual estimator noise. In the stateful path:
+          * Tremor is already attenuated by the EMA's velocity_lowpass_hz
+            cutoff (default 4 Hz → 10 Hz tremor band reduced ~3×).
+          * Stationary intent → v_lp converges to 0 → no lookahead by
+            construction.
+          * The per-step clamp (max_step_deg) caps any residual jitter.
+        Adding a window-p2p gate here would re-introduce the same
+        sample-count flicker that the stateful design eliminates — at
+        30 Hz publishes the window holds 2-3 entries and the gate value
+        oscillates between rate-dependent values every publish period.
+
+        Stale-publish safety: if no publish has arrived within
+        ``velocity_window_s`` of ``now``, return the latest intent
+        unchanged (no lookahead) and clear the stored state so the next
+        publish starts the EMA fresh rather than blending against an old
+        velocity estimate.
+        """
+        n_motors = len(self._motor_keys)
+        trace = {
+            "v_lp_state": np.zeros(n_motors),
+            "elapsed_since_publish": 0.0,
+            "fallback": "",
+        }
+        with self._target_lock:
+            intent = self._latest_intent
+            v_lp = self._v_lp_state
+            last_pub_t = self._prev_publish_t
+        if intent is None:
+            trace["fallback"] = "no_intent"
+            return np.zeros(n_motors), trace
+        if v_lp is None or last_pub_t is None:
+            trace["fallback"] = "no_state"
+            return intent.copy(), trace
+        elapsed = now - last_pub_t
+        if elapsed > self._velocity_window_s:
+            with self._target_lock:
+                self._v_lp_state = None
+                self._prev_publish_intent = None
+                self._prev_publish_t = None
+            trace["fallback"] = "stale"
+            return intent.copy(), trace
+        trace["v_lp_state"] = v_lp.copy()
+        trace["elapsed_since_publish"] = elapsed
+        return intent + v_lp * (self._lookahead_s + elapsed), trace
 
     # ── Chunk lookup ─────────────────────────────────────────────────────
 

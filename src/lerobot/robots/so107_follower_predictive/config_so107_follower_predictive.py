@@ -75,18 +75,31 @@ class SO107FollowerPredictiveRobotConfig(RobotConfig, SOFollowerConfig):
     #                          smooth high-rate sources, marginal at
     #                          30 Hz dict-push sources.
     #   * ``"amp_gated_lp"`` — EMA-lowpass V_est with per-joint amplitude
-    #                          gating. When recent leader-motion amplitude
-    #                          drops below ``amp_gate_lo``, lookahead is
-    #                          turned OFF (motor_cmd = leader_pos) so the
-    #                          hand-tremor derivative isn't amplified into
-    #                          motor noise. Above ``amp_gate_hi``, full
-    #                          lookahead via lowpassed forward-diff. Linear
-    #                          ramp between. Best estimator for the
-    #                          "small motion = wiggle" failure mode
-    #                          (experiments/chunk_cadence/online_estimator_
-    #                          gripper.py: state_p2p tracks intent_p2p to
-    #                          rounding, vs quad's +4.5 excess).
-    velocity_estimator: Literal["quad", "linear", "forward_diff", "amp_gated_lp"] = "quad"
+    #                          gating, rebuilt per tick over the velocity
+    #                          window. WARNING: degrades to ungated raw
+    #                          forward_diff when the window holds <3
+    #                          samples (e.g. 30 Hz dict publish × 70 ms
+    #                          window → 90% of ticks fall into the
+    #                          fallback). Designed for the teleop pull
+    #                          path where ~14 samples are available;
+    #                          use ``stateful_lp`` for low-rate dict
+    #                          publishes instead.
+    #   * ``"stateful_lp"``  — Per-publish 1st-order EMA velocity held as
+    #                          controller state, with α keyed on the
+    #                          actual publish dt so the cutoff is
+    #                          ``velocity_lowpass_hz`` regardless of
+    #                          publish rate. Rate-INVARIANT by design:
+    #                          the tick just reads the stored velocity,
+    #                          there's no per-tick window recomputation,
+    #                          so HF amplification in motor_cmd doesn't
+    #                          balloon at low publish rates. Recommended
+    #                          for any policy/teleop pushing dicts; the
+    #                          chunk path bypasses velocity estimation
+    #                          entirely so it doesn't care which option
+    #                          is selected here.
+    velocity_estimator: Literal["quad", "linear", "forward_diff", "amp_gated_lp", "stateful_lp"] = (
+        "stateful_lp"
+    )
 
     # Knobs for ``amp_gated_lp``. Only consulted when that estimator is
     # selected — ignored by quad / linear / forward_diff.
