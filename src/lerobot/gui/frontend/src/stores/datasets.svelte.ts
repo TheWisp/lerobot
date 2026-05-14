@@ -11,15 +11,6 @@
 import { getJson } from "../lib/api";
 import type { DatasetSummary } from "../lib/types";
 
-interface OpenedDataset {
-  id: string;
-  repo_id: string;
-}
-
-interface OpenedDatasetsResponse {
-  datasets: OpenedDataset[];
-}
-
 const s: { value: DatasetSummary[]; loaded: boolean; error: string | null } =
   $state({ value: [], loaded: false, error: null });
 let inflight: Promise<DatasetSummary[]> | null = null;
@@ -31,11 +22,14 @@ export async function ensureDatasetsLoaded(): Promise<DatasetSummary[]> {
   if (inflight) return inflight;
   inflight = (async () => {
     try {
-      const data = await getJson<OpenedDatasetsResponse>("/api/datasets/opened");
-      s.value = data.datasets;
+      // The "list opened datasets" endpoint is the root GET /api/datasets;
+      // an /opened subpath looked obvious but is a 404. Response shape is
+      // a flat array of DatasetSummary, not wrapped in {datasets: [...]}.
+      const data = await getJson<DatasetSummary[]>("/api/datasets");
+      s.value = data;
       s.loaded = true;
       s.error = null;
-      return data.datasets;
+      return data;
     } catch (e) {
       s.error = e instanceof Error ? e.message : String(e);
       throw e;

@@ -4,15 +4,6 @@ import { signal } from "@preact/signals";
 import { getJson } from "../lib/api";
 import type { DatasetSummary } from "../lib/types";
 
-interface OpenedDataset {
-  id: string;
-  repo_id: string;
-}
-
-interface OpenedDatasetsResponse {
-  datasets: OpenedDataset[];
-}
-
 interface DatasetsState {
   value: DatasetSummary[];
   loaded: boolean;
@@ -32,9 +23,11 @@ export async function ensureDatasetsLoaded(): Promise<DatasetSummary[]> {
   if (inflight) return inflight;
   inflight = (async () => {
     try {
-      const data = await getJson<OpenedDatasetsResponse>("/api/datasets/opened");
-      datasets.value = { value: data.datasets, loaded: true, error: null };
-      return data.datasets;
+      // GET /api/datasets returns a flat array of opened datasets — the
+      // root endpoint is the list, not /api/datasets/opened (404).
+      const data = await getJson<DatasetSummary[]>("/api/datasets");
+      datasets.value = { value: data, loaded: true, error: null };
+      return data;
     } catch (e) {
       datasets.value = {
         ...datasets.value,

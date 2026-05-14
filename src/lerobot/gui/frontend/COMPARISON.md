@@ -219,10 +219,18 @@ shipping it.
 
 `/tmp/ab-shots/`, uploaded to catbox.moe:
 
-| State                    | Svelte                              | Preact                                                                                                                                          |
-| ------------------------ | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Teleop empty             | https://files.catbox.moe/iqrf77.png | https://files.catbox.moe/xjei47.png (post-endpoint-fix; the original https://files.catbox.moe/57sg6j.png showed the empty-options Preact quirk) |
-| Replay                   | https://files.catbox.moe/seov1r.png | https://files.catbox.moe/0a5jm3.png                                                                                                             |
-| Teleop + record revealed | https://files.catbox.moe/z4r7zn.png | https://files.catbox.moe/vuq7yx.png                                                                                                             |
+| State                    | Svelte                              | Preact                              |
+| ------------------------ | ----------------------------------- | ----------------------------------- |
+| Teleop empty             | https://files.catbox.moe/iqrf77.png | https://files.catbox.moe/xjei47.png |
+| Replay                   | https://files.catbox.moe/073a39.png | https://files.catbox.moe/s0bxqo.png |
+| Teleop + record revealed | https://files.catbox.moe/z4r7zn.png | https://files.catbox.moe/7x43tr.png |
 
 Visual output is intentionally identical apart from the badge.
+
+(Earlier captures `57sg6j`, `0a5jm3`, `vuq7yx` predated two endpoint
+fixes — `/api/robot/teleop-profiles` and root `/api/datasets` instead
+of a 404 `/api/datasets/opened` — and visibly showed the Preact
+empty-options `<select>` quirk in the Teleop and Episode dropdowns.
+With profile/dataset data flowing, both frameworks render identically.
+See the "A Preact gotcha discovered in this experiment" section above
+for why empty options surface a real framework difference.)
