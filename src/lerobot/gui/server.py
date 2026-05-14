@@ -177,8 +177,10 @@ async def shutdown_event():
         shutdown_prefetch_executor()
     except Exception:
         logger.exception("shutdown: shutdown_prefetch_executor failed")
-    with contextlib.suppress(Exception):
+    try:
         shutdown_decode_executor()
+    except Exception:
+        logger.exception("shutdown: shutdown_decode_executor failed")
     # Send mDNS goodbye packet so clients don't keep a stale
     # lerobot.local entry cached after we stop.
     mdns_handle = getattr(app.state, "mdns_handle", None)
