@@ -28,6 +28,7 @@
 </script>
 
 <div class="run-sidebar-reactive">
+  <div class="framework-badge">rendered by: Svelte 5 + runes</div>
   <div class="workflow-selector">
     <button
       class="workflow-btn"

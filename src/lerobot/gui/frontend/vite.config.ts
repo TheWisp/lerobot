@@ -1,13 +1,22 @@
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import preact from "@preact/preset-vite";
 import { resolve } from "node:path";
 
 // Build outputs into ../static/dist/ so FastAPI's existing
 // StaticFiles mount at /static picks them up automatically.
 // We emit one bundle per island so each can be loaded
 // independently from the legacy index.html.
+//
+// This config builds both the Svelte islands and a parallel Preact
+// version of the Run sidebar so the two can be A/B'd in the same
+// running GUI via ?framework=svelte | preact. See README.md for the
+// comparison protocol.
 export default defineConfig({
-  plugins: [svelte()],
+  // The Preact plugin transforms .tsx with Babel + aliases react -> preact.
+  // It only touches .tsx files; Svelte's plugin owns .svelte files. No
+  // overlap, no global JSX runtime change.
+  plugins: [svelte(), preact({ include: /\.tsx$/ })],
   build: {
     outDir: resolve(__dirname, "../static/dist"),
     emptyOutDir: true,
@@ -18,6 +27,7 @@ export default defineConfig({
       input: {
         "bug-report": resolve(__dirname, "src/islands/bug-report.ts"),
         "run-sidebar": resolve(__dirname, "src/islands/run-sidebar.ts"),
+        "run-sidebar-preact": resolve(__dirname, "src/islands/run-sidebar-preact.tsx"),
       },
       output: {
         // Stable names so legacy index.html can <script src="/static/dist/...">

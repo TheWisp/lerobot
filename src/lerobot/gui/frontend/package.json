@@ -3,15 +3,18 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Svelte 5 + Vite islands for the lerobot GUI. Each island mounts into a specific DOM element in the legacy index.html so we can migrate the UI piece by piece.",
+  "description": "Svelte 5 + Vite islands for the lerobot GUI. Each island mounts into a specific DOM element in the legacy index.html so we can migrate the UI piece by piece. The proto/preact-comparison branch also builds a Preact version of the Run sidebar so the two can be evaluated side-by-side.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "devDependencies": {
+    "@preact/preset-vite": "^2.10.0",
+    "@preact/signals": "^2.0.1",
     "@sveltejs/vite-plugin-svelte": "^4.0.0",
     "@tsconfig/svelte": "^5.0.4",
+    "preact": "^10.24.0",
     "svelte": "^5.1.0",
     "svelte-check": "^4.0.5",
     "tslib": "^2.8.0",

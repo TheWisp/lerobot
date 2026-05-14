@@ -1,7 +1,11 @@
 {
-  "_api-CznuXlF9.js": {
-    "file": "chunks/api-CznuXlF9.js",
+  "_api-B7HCLwqr.js": {
+    "file": "chunks/api-B7HCLwqr.js",
     "name": "api"
+  },
+  "_disclose-version-CiCXhXJR.js": {
+    "file": "chunks/disclose-version-CiCXhXJR.js",
+    "name": "disclose-version"
   },
   "src/islands/bug-report.ts": {
     "file": "bug-report.js",
@@ -9,10 +13,23 @@
     "src": "src/islands/bug-report.ts",
     "isEntry": true,
     "imports": [
-      "_api-CznuXlF9.js"
+      "_disclose-version-CiCXhXJR.js",
+      "_api-B7HCLwqr.js"
     ],
     "css": [
       "bug-report.css"
+    ]
+  },
+  "src/islands/run-sidebar-preact.tsx": {
+    "file": "run-sidebar-preact.js",
+    "name": "run-sidebar-preact",
+    "src": "src/islands/run-sidebar-preact.tsx",
+    "isEntry": true,
+    "imports": [
+      "_api-B7HCLwqr.js"
+    ],
+    "css": [
+      "run-sidebar-preact.css"
     ]
   },
   "src/islands/run-sidebar.ts": {
@@ -21,7 +38,8 @@
     "src": "src/islands/run-sidebar.ts",
     "isEntry": true,
     "imports": [
-      "_api-CznuXlF9.js"
+      "_disclose-version-CiCXhXJR.js",
+      "_api-B7HCLwqr.js"
     ],
     "css": [
       "run-sidebar.css"

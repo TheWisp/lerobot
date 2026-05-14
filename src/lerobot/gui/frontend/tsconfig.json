@@ -14,7 +14,9 @@
     "noUnusedParameters": true,
     "noImplicitAny": true,
     "verbatimModuleSyntax": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact"
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.svelte"]
 }

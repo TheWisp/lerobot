@@ -10,6 +10,7 @@
          with their styles even before the JS finishes parsing. -->
     <link rel="stylesheet" href="/static/dist/bug-report.css">
     <link rel="stylesheet" href="/static/dist/run-sidebar.css">
+    <link rel="stylesheet" href="/static/dist/run-sidebar-preact.css">
 </head>
 <body>
     <div class="tab-bar">
@@ -432,5 +433,9 @@
          by the bug-report island) cleanly overrides any legacy stub. -->
     <script type="module" src="/static/dist/bug-report.js"></script>
     <script type="module" src="/static/dist/run-sidebar.js"></script>
+    <!-- Preact comparison island. Loads alongside the Svelte one; only the
+         entry whose framework matches ?framework= actually mounts. The other
+         init() returns immediately. -->
+    <script type="module" src="/static/dist/run-sidebar-preact.js"></script>
 </body>
 </html>

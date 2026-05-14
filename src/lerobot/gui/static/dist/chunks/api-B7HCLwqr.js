@@ -1,0 +1,2 @@
+async function n(a){const t=await fetch(a);if(!t.ok)throw new Error(`${t.status} ${t.statusText}: ${await t.text()}`);return await t.json()}async function o(a,t){const s=await fetch(a,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(t)});if(!s.ok)throw new Error(`${s.status} ${s.statusText}: ${await s.text()}`);return await s.json()}export{n as g,o as p};
+//# sourceMappingURL=api-B7HCLwqr.js.map

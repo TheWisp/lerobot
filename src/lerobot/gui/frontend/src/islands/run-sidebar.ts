@@ -23,8 +23,13 @@ declare global {
 function init() {
   const params = new URLSearchParams(window.location.search);
   const enabled = params.get("reactive") === "1";
+  // ?framework=preact hands control to the Preact island instead. Default
+  // (or "svelte") keeps this Svelte sidebar. Designed for the A/B
+  // comparison prototype; once a framework is picked, the loser's entry
+  // is deleted and this branch goes away.
+  const framework = params.get("framework") || "svelte";
   window.lerobotReactiveRun = enabled;
-  if (!enabled) return;
+  if (!enabled || framework !== "svelte") return;
 
   const target = document.getElementById("run-form");
   if (!target) {
