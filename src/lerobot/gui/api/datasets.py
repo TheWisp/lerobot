@@ -63,6 +63,44 @@ _prefetch_lock = threading.Lock()
 _PREFETCH_SEEK_THRESHOLD = 5
 
 
+# Dedicated single-worker executor for on-demand frame decode.
+#
+# Why a dedicated 1-worker pool rather than asyncio's default executor:
+# the frame-fetch endpoint receives N parallel HTTP requests per frame
+# change (the frontend's <img src=...> grid fires one per camera; for a
+# 4-cam dataset that's 4 simultaneous requests targeting the same
+# global_idx). Those would all land on different threads in the default
+# multi-worker pool, and all of them would call dataset[global_idx]
+# concurrently — which goes through the module-level
+# ``video_utils._default_decoder_cache``. That cache returns the SAME
+# torchcodec VideoDecoder instance to every caller, and libdav1d
+# crashes (SIGSEGV at libdav1d.so.7.0.0+0x52c0d) on simultaneous use of
+# one decoder. Confirmed in the wild on 2026-05-14 + reproduced
+# locally with faulthandler.
+#
+# Two parts to the fix:
+#   1. Use this single-worker executor so only one thread is ever
+#      inside the decode work-fn at a time. Eliminates the libdav1d
+#      thread-safety problem by construction.
+#   2. Re-check the frame_cache inside the work-fn: by the time the
+#      2nd, 3rd, ... requests reach the worker, the first one has
+#      already decoded ALL cameras for that frame and populated the
+#      JPEG cache. The N−1 followers find their cam in cache and skip
+#      the redundant decode. Measured: 4 parallel same-frame requests
+#      cost ~14 ms total (= 1 decode) instead of ~58 ms (= 4 decodes).
+#
+# Why not multi-worker with per-thread decoder caches? Benchmarked: the
+# per-thread approach actually *loses* across the board because (a)
+# libdav1d already uses internal multi-threading and saturates the
+# physical cores, so user-level parallelism barely helps (~9 %), and
+# (b) without singleflight it duplicates work (4 simultaneous same-frame
+# requests do 4 decodes instead of 1). The single-worker + cache
+# re-check pattern matches the access profile exactly: dedupe within
+# a frame, queue across frames. Throughput ceiling is the same either
+# way (limited by libdav1d's own per-decoder rate).
+_decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-decode")
+
+
 def shutdown_prefetch_executor() -> None:
     """Drop pending prefetch tasks and release the thread on server shutdown.
 
@@ -74,6 +112,11 @@ def shutdown_prefetch_executor() -> None:
     producing the "I/O operation on closed file" stack traces.
     """
     _prefetch_executor.shutdown(wait=False, cancel_futures=True)
+
+
+def shutdown_decode_executor() -> None:
+    """Mirror of :func:`shutdown_prefetch_executor` for the decode pool."""
+    _decode_executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _check_local_dataset_complete(local_path: Path) -> tuple[bool, list[str]]:
@@ -2088,6 +2131,16 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
         from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
         def _decode_and_cache() -> bytes:
+            # Re-check the JPEG cache inside the worker. Multiple browser
+            # requests for the same frame (one per camera) all hit cache-
+            # miss outside, all submit to this single-worker executor, and
+            # the first one to run decodes ALL cameras and caches them.
+            # The 2nd .. Nth submissions wake up, find the cache populated,
+            # and return immediately without redundant decode work.
+            cached = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key)
+            if cached is not None:
+                return cached
+
             if frame_idx < ep_length:
                 # Normal frame — decode via dataset[global_idx] (all cameras at once)
                 episode_start = _get_episode_start_index(dataset_id, episode_idx)
@@ -2138,7 +2191,7 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
             )
             return primary
 
-        jpeg_bytes = await asyncio.get_event_loop().run_in_executor(None, _decode_and_cache)
+        jpeg_bytes = await asyncio.get_event_loop().run_in_executor(_decode_executor, _decode_and_cache)
     else:
         logger.debug(f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache hit")
 
@@ -2406,10 +2459,19 @@ async def get_frames_batch(
         """Decode + encode one frame on cache miss. Caches every camera in
         the decoded item to amortise the multi-camera read cost.
 
-        Runs inside `run_in_executor`. The frame_cache is internally
-        thread-safe (lock-guarded), so concurrent executor calls for
-        different frames are safe.
+        Runs on the dedicated ``_decode_executor`` (single worker), so
+        only one thread is ever inside the underlying torchcodec /
+        libdav1d decoder at a time — see the module-level comment on
+        ``_decode_executor`` for the libdav1d thread-safety background.
         """
+        # Re-check the JPEG cache: a sibling request for the same frame
+        # (different camera) may have already populated all cameras via
+        # the side-effect cache writes below. If it did, skip the redundant
+        # decode entirely.
+        cached = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key)
+        if cached is not None:
+            return cached
+
         global_idx = episode_start + i
         item = dataset[global_idx]
         primary: bytes | None = None
@@ -2431,7 +2493,7 @@ async def get_frames_batch(
         jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key)
         if jpeg_bytes is None:
             # Decode-encode work is multi-ms per miss; push off the event loop.
-            jpeg_bytes = await loop.run_in_executor(None, _decode_one_frame, i)
+            jpeg_bytes = await loop.run_in_executor(_decode_executor, _decode_one_frame, i)
         frames.append(
             {
                 "frame_idx": i,

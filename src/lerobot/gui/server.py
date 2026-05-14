@@ -137,7 +137,7 @@ async def shutdown_event():
     """
     import asyncio
 
-    from lerobot.gui.api.datasets import shutdown_prefetch_executor
+    from lerobot.gui.api.datasets import shutdown_decode_executor, shutdown_prefetch_executor
     from lerobot.gui.api.robot import cleanup_in_process_resources
     from lerobot.gui.api.run import _stop_debug_process
     from lerobot.robots.obs_stream import cleanup_stale_streams
@@ -176,6 +176,10 @@ async def shutdown_event():
         shutdown_prefetch_executor()
     except Exception:
         logger.exception("shutdown: shutdown_prefetch_executor failed")
+    try:
+        shutdown_decode_executor()
+    except Exception:
+        logger.exception("shutdown: shutdown_decode_executor failed")
 
 
 # Include API routers
