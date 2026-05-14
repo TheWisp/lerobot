@@ -110,16 +110,74 @@ plugin owns `*.svelte`, the Preact plugin owns `*.tsx`.
 - Visual output is pixel-equivalent (by design, see screenshots).
 - Performance for this app's scale — both unmeasurably fast.
 
+## Testing
+
+Tests of pure logic / stores (the bulk of "did this state transition
+right?" coverage):
+
+|                                               | Svelte                                                           | Preact                                     |
+| --------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------ |
+| Import the store from a vanilla `vitest` test | Needs `vitePreprocess` + Svelte plugin in test config            | Just works (plain `.ts`)                   |
+| Read a derived value                          | Needs reactive evaluation context                                | `computed.value` is plain JS               |
+| Setup lines per test file                     | ~6 (Vitest + Svelte compiler config)                             | ~2 (Vitest defaults)                       |
+| Trigger an effect in a test                   | Requires the `$effect` runtime — easiest via a mounted component | `effect(() => { ... })` is a function call |
+
+Component tests (both need a DOM, both use `@testing-library/*`):
+
+|                      | Svelte                                                                                             | Preact                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Library              | `@testing-library/svelte`                                                                          | `@testing-library/preact`                                   |
+| Vitest plugin        | yes                                                                                                | not strictly needed                                         |
+| Assertion style      | DOM queries against rendered markup                                                                | Same — JSX makes the spec read like the component           |
+| SSR / snapshot tests | `svelte/server` exists but Svelte 5 SSR support is ~6 months old; some rune patterns don't compose | `preact-render-to-string` — one call, mature, no DOM needed |
+
+End-to-end testing (the CDP + headless Chrome harness in `/tmp/ab_compare.py`)
+is framework-agnostic. Both versions pass it.
+
+**Net:** testing nudges further toward Preact, especially for the
+business-logic layer where signals are usable without any build step
+at all.
+
+## A Preact gotcha discovered in this experiment
+
+A `<select>` with **only** a `disabled` placeholder option behaves
+differently between the two frameworks:
+
+- Svelte: renders the disabled option's text (Chrome shows it as a
+  shadow placeholder; Svelte's `bind:value=""` leaves selectedIndex
+  alone).
+- Preact: renders blank. Preact's controlled `value=""` actively sets
+  `selectedIndex = -1` because no _enabled_ option matches.
+
+In this prototype the symptom surfaced because the Teleop store
+pointed at the wrong endpoint (`/api/robot/teleops` is 404; correct is
+`/api/robot/teleop-profiles`) — same bug in both stores, but only
+Preact rendered visibly differently. The endpoint fix masks the
+quirk because once a single enabled option exists, both render the
+disabled placeholder correctly.
+
+Mitigations for Preact when an options list is empty:
+
+1. Don't render the select until data has loaded (show a "Loading..."
+   spinner instead).
+2. Add a fallback "Loading..." enabled option that shares the
+   placeholder's empty value.
+3. Use `defaultValue` and a `ref` instead of `value` (uncontrolled);
+   loses two-way binding, gains forgiving rendering.
+
+Option 1 is the right default. Worth knowing about, not disqualifying.
+
 ## Honest verdict against the user's three values
 
 > _"Simplicity when landing correct code (scalability + maintenance),
 > flexibility for corner cases, separation of concern."_
 
-1. **Simplicity / maintenance** — close tie. Svelte has the tighter
-   template syntax (less to type per feature). Preact has the bigger
-   ecosystem and dense AI/SO help, which matters more for a solo project.
-   **Preact wins on long-term maintenance**; Svelte wins on per-keystroke
-   ergonomics.
+1. **Simplicity / maintenance** — **Preact wins.** Initially I called it
+   a tie on template ergonomics, but the testing axis tilts it:
+   business-logic tests run as plain `vitest` against Preact stores with
+   ~2 lines of config; Svelte stores need a compiler in the test harness.
+   That cost compounds with every store added. Svelte still wins on
+   per-keystroke template terseness, but maintenance ≠ keystrokes.
 
 2. **Flexibility for corner cases** — **Preact wins clearly.** Signals
    are plain JS objects. Components are plain functions. Dynamic
@@ -140,8 +198,9 @@ plugin owns `*.svelte`, the Preact plugin owns `*.tsx`.
 
 The Svelte version is _defensible_ — bundle is smaller for one island,
 templates are tighter — but on the values the user prioritized, Preact
-wins on two of three and ties on the third. The flexibility and
-separation-of-concern wins compound as the migration grows.
+wins on all three (with the testing axis added, the prior "tie" on
+simplicity tipped to Preact). The flexibility and separation-of-concern
+wins compound as the migration grows.
 
 **Switching cost from this branch:**
 
@@ -160,10 +219,10 @@ shipping it.
 
 `/tmp/ab-shots/`, uploaded to catbox.moe:
 
-| State                    | Svelte                              | Preact                              |
-| ------------------------ | ----------------------------------- | ----------------------------------- |
-| Teleop empty             | https://files.catbox.moe/iqrf77.png | https://files.catbox.moe/57sg6j.png |
-| Replay                   | https://files.catbox.moe/seov1r.png | https://files.catbox.moe/0a5jm3.png |
-| Teleop + record revealed | https://files.catbox.moe/z4r7zn.png | https://files.catbox.moe/vuq7yx.png |
+| State                    | Svelte                              | Preact                                                                                                                                          |
+| ------------------------ | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Teleop empty             | https://files.catbox.moe/iqrf77.png | https://files.catbox.moe/xjei47.png (post-endpoint-fix; the original https://files.catbox.moe/57sg6j.png showed the empty-options Preact quirk) |
+| Replay                   | https://files.catbox.moe/seov1r.png | https://files.catbox.moe/0a5jm3.png                                                                                                             |
+| Teleop + record revealed | https://files.catbox.moe/z4r7zn.png | https://files.catbox.moe/vuq7yx.png                                                                                                             |
 
 Visual output is intentionally identical apart from the badge.

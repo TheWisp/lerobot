@@ -61,7 +61,7 @@ function makeStore<T>(endpoint: string) {
 }
 
 const robotStore = makeStore<RobotProfile>("/api/robot/profiles");
-const teleopStore = makeStore<TeleopProfile>("/api/robot/teleops");
+const teleopStore = makeStore<TeleopProfile>("/api/robot/teleop-profiles");
 
 export const robotProfiles = robotStore.state;
 export const teleopProfiles = teleopStore.state;
