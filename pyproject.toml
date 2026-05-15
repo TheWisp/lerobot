@@ -212,7 +212,16 @@ peft = ["lerobot[transformers-dep]", "lerobot[peft-dep]"]
 # GUI (fork-only). pydantic is already pulled in transitively by fastapi
 # but is imported directly under src/lerobot/gui/api/, so declare it
 # explicitly — keeps the install resilient if fastapi ever swaps backend.
-gui = ["fastapi>=0.115.0,<1.0.0", "uvicorn>=0.30.0,<1.0.0", "pydantic>=2.0.0,<3.0.0"]
+gui = [
+    "fastapi>=0.115.0,<1.0.0",
+    "uvicorn>=0.30.0,<1.0.0",
+    "pydantic>=2.0.0,<3.0.0",
+    # mDNS so the GUI is reachable as http://lerobot.local:<port>/ from any
+    # device on the LAN without having to know the host's IP. Optional at
+    # runtime — gui/mdns.py is import-guarded — but listing it here makes
+    # `pip install lerobot[gui]` produce a working "open from phone" setup.
+    "zeroconf>=0.130,<1.0",
+]
 
 # Development
 dev = ["pre-commit>=3.7.0,<5.0.0", "debugpy>=1.8.1,<1.9.0", "lerobot[grpcio-dep]", "grpcio-tools==1.73.1", "mypy>=1.19.1", "ruff>=0.14.1,<0.15", "lerobot[notebook]"]
