@@ -107,9 +107,16 @@ def advertise(*, host: str, port: int, base_name: str = "lerobot") -> _MdnsHandl
 
     Returns:
         An ``_MdnsHandle`` (call ``.unregister()`` on shutdown), or
-        ``None`` if advertising is impossible — either ``zeroconf`` isn't
-        installed, or the bind interface is loopback-only, or
-        registration failed (often because multicast is blocked).
+        ``None`` if the bind interface is loopback-only (so advertising
+        would point at an unreachable address).
+
+    Raises:
+        RuntimeError: when the caller binds to a non-loopback interface
+            but ``zeroconf`` isn't installed. Silently skipping in that
+            case is a footgun — the user explicitly opted into LAN
+            access and would only discover the missing dependency when
+            ``lerobot.local`` fails to resolve from another device.
+            Better to fail loudly at startup with an actionable message.
     """
     # Loopback-only bind → don't advertise. The advertised A-record
     # would point to our LAN IP, but the server wouldn't accept
@@ -120,9 +127,21 @@ def advertise(*, host: str, port: int, base_name: str = "lerobot") -> _MdnsHandl
 
     try:
         from zeroconf import IPVersion, ServiceInfo, Zeroconf
-    except ImportError:
-        logger.info("mDNS advertise skipped: install `zeroconf` for lerobot.local URL")
-        return None
+    except ImportError as e:
+        raise RuntimeError(
+            "Cannot advertise lerobot.local: the `zeroconf` package is not "
+            "installed in this Python environment.\n\n"
+            "You bound the server to a non-loopback interface "
+            f"(--host {host}), which means mDNS advertising is needed so "
+            "the GUI is reachable as http://lerobot.local:<port>/ from "
+            "other devices on the LAN.\n\n"
+            "Install with one of:\n"
+            "    pip install zeroconf\n"
+            "    uv pip install zeroconf\n"
+            "    pip install -e '.[gui]'   # also picks up zeroconf via the gui extra\n\n"
+            "Or, if you don't need LAN access right now, bind to loopback "
+            "instead: --host 127.0.0.1"
+        ) from e
 
     lan_ip = detect_lan_ip()
     if lan_ip is None:
