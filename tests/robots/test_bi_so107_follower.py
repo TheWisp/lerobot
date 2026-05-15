@@ -106,6 +106,64 @@ class TestConfigField:
             assert cfg.camera_read_strategy == value
 
 
+class TestDryRun:
+    """``dry_run`` makes ``send_action`` a no-op so automated tooling can
+    exercise the full control-loop stack (including get_observation timing
+    and any policy under test) without physically driving the motors. Off
+    by default — production callers see no change."""
+
+    def test_config_default_is_false(self):
+        cfg = BiSO107FollowerConfig(left_arm_port="/dev/null", right_arm_port="/dev/null")
+        assert cfg.dry_run is False
+
+    def test_send_action_normal_path_calls_arm_send(self):
+        """With dry_run=False, send_action must dispatch to both arms."""
+        fake_self = SimpleNamespace(
+            config=SimpleNamespace(dry_run=False),
+            left_arm=MagicMock(),
+            right_arm=MagicMock(),
+        )
+        fake_self.left_arm.send_action.return_value = {"shoulder.pos": 1.0}
+        fake_self.right_arm.send_action.return_value = {"shoulder.pos": 2.0}
+        action = {"left_shoulder.pos": 1.0, "right_shoulder.pos": 2.0}
+        result = BiSO107Follower.send_action(fake_self, action)
+        fake_self.left_arm.send_action.assert_called_once()
+        fake_self.right_arm.send_action.assert_called_once()
+        assert "left_shoulder.pos" in result and "right_shoulder.pos" in result
+
+    def test_send_action_dry_run_short_circuits(self):
+        """With dry_run=True, neither arm's send_action is called and the
+        requested action is returned unchanged."""
+        fake_self = SimpleNamespace(
+            config=SimpleNamespace(dry_run=True),
+            left_arm=MagicMock(),
+            right_arm=MagicMock(),
+        )
+        action = {"left_shoulder.pos": 1.0, "right_shoulder.pos": 2.0}
+        result = BiSO107Follower.send_action(fake_self, action)
+        fake_self.left_arm.send_action.assert_not_called()
+        fake_self.right_arm.send_action.assert_not_called()
+        assert result == action
+
+    def test_dry_run_warns_only_once(self, caplog):
+        """Logging a WARNING on every iteration would spam at 30 Hz. The
+        first call logs; subsequent calls stay quiet."""
+        fake_self = SimpleNamespace(
+            config=SimpleNamespace(dry_run=True),
+            left_arm=MagicMock(),
+            right_arm=MagicMock(),
+        )
+        with caplog.at_level("WARNING", logger="lerobot.robots.bi_so107_follower.bi_so107_follower"):
+            for _ in range(10):
+                BiSO107Follower.send_action(fake_self, {"left_shoulder.pos": 0.0})
+        n_warns = sum(1 for r in caplog.records if "dry_run" in r.message)
+        assert n_warns == 1, f"Expected one warning, got {n_warns}"
+
+    def test_dry_run_can_be_toggled_via_config(self):
+        cfg = BiSO107FollowerConfig(left_arm_port="/dev/null", right_arm_port="/dev/null", dry_run=True)
+        assert cfg.dry_run is True
+
+
 @pytest.mark.skip(
     reason="Constructing BiSO107Follower without hardware needs a substantial mock "
     "setup (motor bus + camera factory). The strategy logic is covered by "

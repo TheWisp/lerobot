@@ -135,6 +135,19 @@ class RealSenseCamera(Camera):
         self.enable_temporal = config.enable_temporal
         self.enable_hole_filling = config.enable_hole_filling
 
+        # Optional post-grab processor: when set, the grab thread runs it on
+        # (color_rgb_uint8, depth_uint16) and caches ONLY the resulting color.
+        # Depth is consumed in the grab thread and never exposed to the
+        # consumer. Used to push depth-based image processing (e.g. depth-edge
+        # overlay) off the control loop without an extra cross-thread copy of
+        # the depth frame. Callers install it via direct attribute assignment
+        # after construction (typically the robot's ``__init__``) — keeping it
+        # off the config so different robots can install different processors
+        # on the same camera type without changing the camera config schema.
+        # Required protocol: ``processor.process_frame_with_depth(color, depth)``
+        # returning the processed color frame.
+        self.post_grab_processor = None
+
         self.rs_pipeline: rs.pipeline | None = None
         self.rs_profile: rs.pipeline_profile | None = None
         self.align_to_color: Any | None = None  # rs.align object for depth-to-color alignment
@@ -243,7 +256,11 @@ class RealSenseCamera(Camera):
             self.async_read(timeout_ms=self.warmup_s * 1000)
             time.sleep(0.1)
         with self.frame_lock:
-            if self.latest_color_frame is None or self.use_depth and self.latest_depth_frame is None:
+            # A post_grab_processor consumes depth in the grab thread and
+            # caches only the processed color — by design ``latest_depth_frame``
+            # stays None for those cameras, so don't require depth here.
+            needs_depth = self.use_depth and self.post_grab_processor is None
+            if self.latest_color_frame is None or (needs_depth and self.latest_depth_frame is None):
                 raise ConnectionError(f"{self} failed to capture frames during warmup.")
 
         logger.info(f"{self} connected.")
@@ -489,6 +506,13 @@ class RealSenseCamera(Camera):
             raise DeviceNotConnectedError(f"{self} is not connected.")
         if not self.use_depth:
             raise RuntimeError(f"Depth stream is not enabled for {self}.")
+        if self.post_grab_processor is not None:
+            raise RuntimeError(
+                f"{self}: depth has been consumed by post_grab_processor "
+                f"({type(self.post_grab_processor).__name__}); the processed color is in "
+                f"``read_latest()`` / ``async_read()``. Detach the processor first if you "
+                f"need raw depth."
+            )
 
         if self.thread is None or not self.thread.is_alive():
             raise RuntimeError(f"{self} read thread is not running.")
@@ -640,6 +664,24 @@ class RealSenseCamera(Camera):
                     color_frame_raw = frameset.get_color_frame()
                     color_frame = np.asanyarray(color_frame_raw.get_data())
                     processed_color_frame = self._postprocess_image(color_frame)
+                    processed_depth_frame = None
+
+                # Run the optional in-camera post-processor on (color, depth)
+                # BEFORE we cache. Pushes depth-aware image processing (e.g.
+                # depth-edge overlay) off the control loop into this thread,
+                # which has slack between camera frames. On any exception the
+                # processor logs and we fall back to the raw color frame so a
+                # one-off processor bug never bricks the camera stream.
+                if self.post_grab_processor is not None and processed_depth_frame is not None:
+                    try:
+                        processed_color_frame = self.post_grab_processor.process_frame_with_depth(
+                            processed_color_frame, processed_depth_frame
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "%s: post_grab_processor failed (%s); caching raw color frame.", self, e
+                        )
+                    # Depth has been consumed; don't cache it for consumers.
                     processed_depth_frame = None
 
                 capture_time = time.perf_counter()

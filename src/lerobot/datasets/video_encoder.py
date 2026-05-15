@@ -88,9 +88,20 @@ class StreamingVideoEncoder:
         self._error: Exception | None = None
 
         # Reservoir sample for stats (stores downsampled frames for quantile estimation)
+        # All reservoir + running-stats state is read/written ONLY by the
+        # encoder thread (post-refactor 2026-05-11), so no locking is needed.
+        # ``_frame_count`` is producer-side (push_frame) for the finish-log
+        # backlog message; ``_encoded_count`` is consumer-side, used as the
+        # reservoir's ``n`` so picks are reproducible across runs given the
+        # same encode order.
         self._sampled_frames: list[np.ndarray] = []
-        self._frame_count: int = 0
-        self._stats_downsample: int = 1  # computed on first frame
+        self._frame_count: int = 0  # producer-side: how many frames pushed
+        self._stats_downsample: int = 1  # computed on first encoded frame
+
+        # Per-encoder RNG so concurrent per-camera encoder threads don't race
+        # on the global random state. Seeded fresh per episode in
+        # ``start_episode`` so reservoir picks are reproducible run-to-run.
+        self._rng: random.Random = random.Random()
 
         # Online running stats for exact mean/std/min/max (per-channel)
         self._running_sum: np.ndarray | None = None  # shape (C,), float64
@@ -118,6 +129,10 @@ class StreamingVideoEncoder:
         self._running_max = None
         self._running_n_pixels = 0
         self._error = None
+        # Seed deterministically per episode so reservoir picks are
+        # reproducible across runs (the encoder consumes frames in the
+        # order the producer pushed them).
+        self._rng = random.Random(0)
 
         # Drain any leftover items in the queue (shouldn't happen, but be safe)
         while not self._frame_queue.empty():
@@ -136,6 +151,12 @@ class StreamingVideoEncoder:
 
     def push_frame(self, image: np.ndarray | PIL.Image.Image) -> None:
         """Push a frame for encoding. Never blocks the caller.
+
+        Format-normalizes the input and hands it to the encoder thread.
+        The reservoir sampling + running-stats accumulation runs in the
+        encoder thread (since 2026-05-11), so this method does only the
+        bare minimum on the caller — typically well under 100 µs even
+        on a 1280×720 uint8 frame.
 
         Args:
             image: Frame data as numpy array (HWC uint8, CHW uint8, or CHW/HWC float [0,1])
@@ -157,7 +178,6 @@ class StreamingVideoEncoder:
         else:
             raise TypeError(f"Unsupported image type: {type(image)}")
 
-        self._reservoir_sample(image)
         self._frame_queue.put(image)
         self._frame_count += 1
 
@@ -238,12 +258,20 @@ class StreamingVideoEncoder:
             self.discard()
 
     def _encoding_loop(self, video_path: Path) -> None:
-        """Background thread: dequeue frames and encode via PyAV."""
+        """Background thread: dequeue frames, run reservoir/stats, encode via PyAV.
+
+        The reservoir sampling and running-stats accumulation live here
+        (rather than in ``push_frame``) so the control thread isn't
+        paying the ~1 ms/frame CPU cost of those operations. Frames are
+        consumed in producer order, so the reservoir sees the same ``n``
+        sequence the caller would have seen.
+        """
         if self.log_level is not None:
             logging.getLogger("libav").setLevel(self.log_level)
 
         container = None
         stream = None
+        encoded_count = 0
         try:
             container = av.open(str(video_path), "w")
             first_frame = True
@@ -261,6 +289,11 @@ class StreamingVideoEncoder:
                 if frame is _DISCARD:
                     # Abort without flushing
                     break
+
+                # Reservoir sample + running stats BEFORE encoding so the
+                # uncompressed pixel data is what gets summarized.
+                self._reservoir_sample(frame, encoded_count)
+                encoded_count += 1
 
                 # frame is HWC uint8 numpy array
                 if first_frame:
@@ -284,15 +317,19 @@ class StreamingVideoEncoder:
             if self.log_level is not None:
                 av.logging.restore_default_callback()
 
-    def _reservoir_sample(self, image: np.ndarray) -> None:
+    def _reservoir_sample(self, image: np.ndarray, n: int) -> None:
         """Reservoir sampling (Algorithm R) + online running stats for every frame.
 
         Reservoir stores downsampled copies for quantile estimation.
         Running stats accumulate exact mean/std/min/max across all frames.
         A 1280x720 frame downsampled 8x becomes 160x90 (~43KB vs ~2.7MB).
-        """
-        n = self._frame_count  # 0-indexed count of frames seen so far
 
+        Args:
+            image: The frame to sample. HWC uint8 numpy array.
+            n: 0-indexed count of frames seen so far by this encoder.
+               Owned by ``_encoding_loop`` since the refactor — the caller's
+               ``_frame_count`` is producer-side and would drift ahead.
+        """
         # Compute downsample factor on first frame (target ~150px max dimension,
         # matching auto_downsample_height_width in compute_stats.py)
         if n == 0:
@@ -306,7 +343,7 @@ class StreamingVideoEncoder:
         if n < self.max_sample_size:
             self._sampled_frames.append(ds_frame)
         else:
-            j = random.randint(0, n)
+            j = self._rng.randint(0, n)
             if j < self.max_sample_size:
                 self._sampled_frames[j] = ds_frame
 

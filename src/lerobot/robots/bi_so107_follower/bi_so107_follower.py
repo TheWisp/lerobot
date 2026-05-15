@@ -65,6 +65,28 @@ class BiSO107Follower(Robot):
         self.right_arm = SO107Follower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
 
+        # Install the depth-edge overlay as an in-camera post-grab processor
+        # on every RealSense camera that has depth enabled. The grab thread
+        # consumes the depth frame and caches the overlay-RGB directly, so
+        # the control loop never sees the depth frame or pays the overlay
+        # cost. Pre-refactor this ran as a downstream ``ObservationProcessor``
+        # on the control thread (~9.8 ms p50 per iteration); pushing it to
+        # the grab thread is the same idea as the streaming-encoder offload.
+        from lerobot.cameras.realsense import RealSenseCamera
+        from lerobot.processor import DepthEdgeOverlayProcessorStep
+
+        for cam_key, cam in self.cameras.items():
+            if isinstance(cam, RealSenseCamera) and cam.use_depth:
+                cam.post_grab_processor = DepthEdgeOverlayProcessorStep(
+                    camera_key=cam_key,
+                    threshold_percentile=90,  # Edge sensitivity (85-95, higher = fewer edges)
+                    blur_kernel=3,  # Noise reduction (1, 3, 5, 7)
+                    dilation_kernel=2,  # Edge thickness (0-5)
+                    alpha=0.7,  # Edge opacity (0.0-1.0)
+                    min_depth=0.2,  # Min depth in meters (20cm)
+                    max_depth=0.6,  # Max depth in meters (60cm)
+                )
+
     @property
     def _motors_ft(self) -> dict[str, type]:
         return {f"left_{motor}.pos": float for motor in self.left_arm.bus.motors} | {
@@ -137,43 +159,70 @@ class BiSO107Follower(Robot):
         return cam.async_read()
 
     def get_observation(self) -> dict[str, Any]:
+        from lerobot.utils.latency import current_span
+
         obs_dict = {}
 
-        # Add "left_" prefix
-        left_obs = self.left_arm.get_observation()
+        # Per-arm motor reads. Each arm's get_observation runs sync_read on
+        # its bus; ``motor_read_left`` / ``motor_read_right`` let the
+        # dashboard show whether one arm is dominating (e.g. when one bus
+        # is over-cabled or has retries) rather than just a combined number.
+        with current_span("motor_read_left"):
+            left_obs = self.left_arm.get_observation()
         obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
 
-        # Add "right_" prefix
-        right_obs = self.right_arm.get_observation()
+        with current_span("motor_read_right"):
+            right_obs = self.right_arm.get_observation()
         obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
 
         # Per-camera frame reads. Strategy is ``latest`` by default — see
         # ``BiSO107FollowerConfig.camera_read_strategy`` for the trade-off.
+        # Per-camera spans isolate which one (if any) is the hot stage when
+        # using ``wait_for_new``.
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
 
             # For RealSense cameras with depth enabled, read aligned color+depth together
             from lerobot.cameras.realsense import RealSenseCamera
 
-            if isinstance(cam, RealSenseCamera) and cam.use_depth:
-                try:
-                    color_frame, depth_frame = cam.read_color_and_aligned_depth()
-                    obs_dict[cam_key] = color_frame
-                    obs_dict[f"{cam_key}_depth"] = depth_frame
-                    dt_ms = (time.perf_counter() - start) * 1e3
-                    logger.debug(f"{self} read {cam_key} + aligned depth: {dt_ms:.1f}ms")
-                except Exception as e:
-                    logger.warning(f"{self} failed to read aligned frames for {cam_key}: {e}")
-                    # Fallback: try reading color only via the configured strategy.
+            with current_span(f"camera_read_{cam_key}"):
+                # If the camera has a post-grab processor installed, depth has
+                # already been consumed in the grab thread and the cached frame
+                # is the final processed RGB. Skip the aligned-depth path so we
+                # don't drag depth back across the thread boundary.
+                if isinstance(cam, RealSenseCamera) and cam.use_depth and cam.post_grab_processor is None:
+                    try:
+                        color_frame, depth_frame = cam.read_color_and_aligned_depth()
+                        obs_dict[cam_key] = color_frame
+                        obs_dict[f"{cam_key}_depth"] = depth_frame
+                        dt_ms = (time.perf_counter() - start) * 1e3
+                        logger.debug(f"{self} read {cam_key} + aligned depth: {dt_ms:.1f}ms")
+                    except Exception as e:
+                        logger.warning(f"{self} failed to read aligned frames for {cam_key}: {e}")
+                        # Fallback: try reading color only via the configured strategy.
+                        obs_dict[cam_key] = self._read_camera_frame(cam)
+                else:
                     obs_dict[cam_key] = self._read_camera_frame(cam)
-            else:
-                obs_dict[cam_key] = self._read_camera_frame(cam)
-                dt_ms = (time.perf_counter() - start) * 1e3
-                logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+                    dt_ms = (time.perf_counter() - start) * 1e3
+                    logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
         return obs_dict
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        # Dry-run mode: drop the command but return the requested action
+        # unchanged so callers expecting the "sent" dict back keep working.
+        # First-call logging makes the mode obvious in the run log so
+        # nobody mistakes a quiet motor bus for normal behaviour.
+        if self.config.dry_run:
+            if not getattr(self, "_dry_run_logged", False):
+                logger.warning(
+                    "%s: dry_run=True — send_action is a no-op. Motors will NOT move. "
+                    "Disable dry_run in the robot config to drive the arms.",
+                    self,
+                )
+                self._dry_run_logged = True
+            return action
+
         # Remove "left_" prefix
         left_action = {
             key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")
@@ -200,25 +249,12 @@ class BiSO107Follower(Robot):
             cam.disconnect()
 
     def get_observation_processor_steps(self) -> list:
-        """Return custom observation processor steps for this robot."""
-        from lerobot.cameras.realsense import RealSenseCamera
-        from lerobot.processor import DepthEdgeOverlayProcessorStep
+        """Return custom observation processor steps for this robot.
 
-        steps = []
-
-        # Add depth edge detection for RealSense cameras with depth enabled
-        for cam_key, cam in self.cameras.items():
-            if isinstance(cam, RealSenseCamera) and cam.use_depth:
-                steps.append(
-                    DepthEdgeOverlayProcessorStep(
-                        camera_key=cam_key,
-                        threshold_percentile=90,  # Edge sensitivity (85-95, higher = fewer edges)
-                        blur_kernel=3,  # Noise reduction (1, 3, 5, 7)
-                        dilation_kernel=2,  # Edge thickness (0-5)
-                        alpha=0.7,  # Edge opacity (0.0-1.0)
-                        min_depth=0.2,  # Min depth in meters (20cm)
-                        max_depth=0.6,  # Max depth in meters (60cm)
-                    )
-                )
-
-        return steps
+        Empty by default: ``DepthEdgeOverlayProcessorStep`` used to live here
+        as a downstream step on the control thread, but is now installed
+        directly on the RealSense cameras as a ``post_grab_processor`` (see
+        ``__init__``). The grab thread consumes depth and caches the overlay-
+        RGB, so the control thread doesn't pay the ~9.8 ms per-iteration cost.
+        """
+        return []

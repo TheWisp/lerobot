@@ -70,6 +70,7 @@ lerobot-record \
 """
 
 import copy
+import json
 import logging
 import subprocess
 import time
@@ -156,6 +157,7 @@ from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.feature_utils import build_dataset_frame, combine_feature_dicts
 from lerobot.utils.import_utils import register_third_party_plugins
+from lerobot.utils.latency import LatencySession
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import (
     init_logging,
@@ -251,6 +253,15 @@ class RecordConfig:
     # Action interpolation multiplier for smoother policy control (1=off, 2=2x, 3=3x)
     # Only applies when using a policy (not teleop)
     interpolation_multiplier: int = 1
+    # Latency monitoring: capture per-stage timing into an in-memory aggregator
+    # and publish a JSON snapshot for the GUI to read. Mirrors the teleop flag.
+    # See src/lerobot/gui/docs/latency_monitoring.md.
+    latency_monitor: bool = False
+    # Where to write latency_snapshot.json (when --latency_monitor=true).
+    # Same default as teleop so the GUI's polling endpoint reads from one
+    # known location regardless of which workflow is active. The GUI's
+    # _ensure_no_active_process() ensures only one writer at a time.
+    latency_output_dir: str = "outputs/teleop"
 
     def __post_init__(self):
         # HACK: We parse again the cli args here to get the pretrained path if there was one.
@@ -301,6 +312,97 @@ class RecordConfig:
 """
 
 
+def _write_episode_health(
+    latency_session: LatencySession,
+    dataset: LeRobotDataset,
+    episode_index: int,
+    fps: int,
+) -> None:
+    """Compute and persist quality stats for a just-saved episode.
+
+    Filters the aggregator's records to the ones tagged ``ep=episode_index``,
+    builds a summary + verdict, appends a JSON line to
+    ``<dataset.root>/meta/episodes_health.jsonl``, and logs a verdict
+    line at INFO (healthy) or WARNING (issues). Intentionally cheap —
+    no expensive recomputation, no extra I/O on the loop path.
+    """
+    from lerobot.utils.latency.recording_health import (
+        filter_by_episode,
+        summarize,
+        verdict,
+    )
+
+    target_period_ms = 1000.0 / float(fps)
+    ep_records = filter_by_episode(list(latency_session.aggregator._records), episode_index)
+    if not ep_records:
+        return
+    summary = summarize(ep_records, target_period_ms=target_period_ms)
+    summary["episode_index"] = episode_index
+    health = verdict(summary)
+    summary["healthy"] = health["healthy"]
+    summary["issues"] = health["issues"]
+
+    meta_dir = dataset.root / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    out_path = meta_dir / "episodes_health.jsonl"
+    with open(out_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(summary, separators=(",", ":")) + "\n")
+
+    if health["healthy"]:
+        logging.info(
+            "Episode %d health: OK (%.1f%% overrun, loop_dt p95=%.1fms)",
+            episode_index,
+            summary["overrun_ratio"] * 100,
+            summary["loop_dt_ms"]["p95"],
+        )
+    else:
+        issue_str = "; ".join(f"{i['rule']}: {i['message']}" for i in health["issues"])
+        logging.warning(
+            "Episode %d health: UNHEALTHY — %s. See meta/episodes_health.jsonl.",
+            episode_index,
+            issue_str,
+        )
+
+
+def _write_recording_health(
+    latency_session: LatencySession,
+    dataset: LeRobotDataset,
+    fps: int,
+) -> None:
+    """Persist the aggregate quality summary for the whole recording session.
+
+    Distinct from ``_write_episode_health`` in two ways: (1) it covers
+    every iteration in the aggregator, not one episode's slice; (2) it
+    writes a single JSON file rather than appending a line, so the data
+    panel can read it as the "did this session record cleanly?" verdict
+    without scanning every episode line.
+    """
+    from lerobot.utils.latency.recording_health import summarize, verdict
+
+    target_period_ms = 1000.0 / float(fps)
+    all_records = list(latency_session.aggregator._records)
+    if not all_records:
+        return
+    summary = summarize(all_records, target_period_ms=target_period_ms)
+    health = verdict(summary)
+    summary["healthy"] = health["healthy"]
+    summary["issues"] = health["issues"]
+    summary["loop_kind"] = latency_session.loop_kind
+
+    meta_dir = dataset.root / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    # Atomic write so a crash during the final dump doesn't leave a
+    # half-written `recording_health.json` that confuses the GUI's
+    # dataset-health banner on next open.
+    import os
+
+    out_path = meta_dir / "recording_health.json"
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, separators=(",", ":"))
+    os.replace(tmp_path, out_path)
+
+
 @safe_stop_image_writer
 def record_loop(
     robot: Robot,
@@ -327,6 +429,8 @@ def record_loop(
     interpolator: ActionInterpolator | None = None,
     display_compressed_images: bool = False,
     play_sounds: bool = True,
+    latency_session: LatencySession | None = None,
+    episode_index: int | None = None,
 ) -> list[dict]:
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -391,25 +495,54 @@ def record_loop(
     # Collect intervention episode buffers for deferred saving (avoids mid-episode lag)
     pending_intervention_episodes: list[dict] = []
 
+    if latency_session is None:
+        latency_session = LatencySession.disabled()
+
     timestamp = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
+        latency_session.start_iter()
+        # Tag every record with the episode index so the post-episode
+        # quality summary can filter records by ``ep`` and the data panel
+        # can render per-episode badges from meta/episodes_health.jsonl.
+        # ``None`` for reset / non-episode phases — those records are
+        # excluded from any episode's verdict.
+        if episode_index is not None:
+            latency_session.set_field("ep", episode_index)
 
         if events["exit_early"]:
             events["exit_early"] = False
             break
 
-        # Get robot observation
-        obs = robot.get_observation()
+        # Get robot observation. The span includes follower sync_read +
+        # cached cam.read_latest() per camera (cameras are microseconds-fast
+        # because grab threads cache them; the time is dominated by the
+        # motor sync_read).
+        with latency_session.span("get_observation"):
+            obs = robot.get_observation()
+
+        # Per-camera staleness/period — read latest_timestamp from each
+        # camera right after get_observation. No-op when session is disabled.
+        latency_session.cam_consume_all(getattr(robot, "cameras", None))
 
         # Applies a pipeline to the raw robot observation, default is IdentityProcessor
-        obs_processed = robot_observation_processor(obs)
+        with latency_session.span("process_obs"):
+            obs_processed = robot_observation_processor(obs)
 
         if policy is not None or dataset is not None or intervention_dataset is not None:
             # Use main dataset features (intervention_dataset has the same features)
             features = dataset.features if dataset is not None else intervention_dataset.features
             observation_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
+
+        # The action-selection block below has many branches (policy with /
+        # without interpolation, intervention, teleop-only, dual teleop, no-op).
+        # We time the whole thing as a single ``process_action`` span via
+        # add_span so we don't have to wrap each branch in its own ``with``.
+        # ``continue``s inside the branches simply skip the rest of this
+        # iteration (which means they skip end_iter() too — that's fine,
+        # the next start_iter() resets the tracer state cleanly).
+        process_action_t0 = time.perf_counter()
 
         # Check for intervention if teleop supports it (only during main recording with policy)
         # Skip during reset phase (intervention_dataset is None) to avoid confusing behavior
@@ -465,16 +598,17 @@ def record_loop(
                 ran_inference = False
 
                 if interpolator.needs_new_action():
-                    action_values = predict_action(
-                        observation=observation_frame,
-                        policy=policy,
-                        device=get_safe_torch_device(policy.config.device),
-                        preprocessor=preprocessor,
-                        postprocessor=postprocessor,
-                        use_amp=policy.config.use_amp,
-                        task=single_task,
-                        robot_type=robot.robot_type,
-                    )
+                    with latency_session.span("inference"):
+                        action_values = predict_action(
+                            observation=observation_frame,
+                            policy=policy,
+                            device=get_safe_torch_device(policy.config.device),
+                            preprocessor=preprocessor,
+                            postprocessor=postprocessor,
+                            use_amp=policy.config.use_amp,
+                            task=single_task,
+                            robot_type=robot.robot_type,
+                        )
                     act_processed_policy = make_robot_action(action_values, dataset.features)
                     robot_action_to_send = robot_action_processor((act_processed_policy, obs))
 
@@ -491,16 +625,17 @@ def record_loop(
 
                 is_record_frame = ran_inference
             else:
-                action_values = predict_action(
-                    observation=observation_frame,
-                    policy=policy,
-                    device=get_safe_torch_device(policy.config.device),
-                    preprocessor=preprocessor,
-                    postprocessor=postprocessor,
-                    use_amp=policy.config.use_amp,
-                    task=single_task,
-                    robot_type=robot.robot_type,
-                )
+                with latency_session.span("inference"):
+                    action_values = predict_action(
+                        observation=observation_frame,
+                        policy=policy,
+                        device=get_safe_torch_device(policy.config.device),
+                        preprocessor=preprocessor,
+                        postprocessor=postprocessor,
+                        use_amp=policy.config.use_amp,
+                        task=single_task,
+                        robot_type=robot.robot_type,
+                    )
                 act_processed_policy: RobotAction = make_robot_action(action_values, dataset.features)
                 # Applies a pipeline to the action, default is IdentityProcessor
                 robot_action_to_send = robot_action_processor((act_processed_policy, obs))
@@ -652,22 +787,35 @@ def record_loop(
                 )
             continue
 
+        # Close the process_action span here — by this point an action
+        # was selected from one of the branches above. Iterations that
+        # `continue`d above never reach end_iter() and are silently
+        # dropped (next start_iter() resets), which is the right behavior.
+        latency_session.add_span("process_action", process_action_t0)
+
         # Send action to robot
         # Action can eventually be clipped using `max_relative_target`,
         # so action actually sent is saved in the dataset. action = postprocessor.process(action)
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
-        _sent_action = robot.send_action(robot_action_to_send)
+        with latency_session.span("action_send"):
+            _sent_action = robot.send_action(robot_action_to_send)
 
         # Write to dataset (only on real policy frames, not interpolated-only iterations)
         if dataset is not None and is_record_frame:
-            action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
-            frame = {**observation_frame, **action_frame, "task": single_task}
-            dataset.add_frame(frame)
+            with latency_session.span("dataset_write"):
+                action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
+                frame = {**observation_frame, **action_frame, "task": single_task}
+                dataset.add_frame(frame)
 
         if display_data:
             log_rerun_data(
                 observation=obs_processed, action=action_values, compress_images=display_compressed_images
             )
+
+        # Commit BEFORE precise_sleep so loop_dt_ms reflects iteration *work*
+        # time, not work + sleep — same rationale as teleop_loop.
+        # end_iter() also throttle-publishes the snapshot + 1 Hz log line.
+        latency_session.end_iter()
 
         dt_s = time.perf_counter() - start_loop_t
 
@@ -756,6 +904,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     dataset = None
     intervention_dataset = None
     listener = None
+    # Initialise latency_session up-front so the ``finally`` block can
+    # reference it even if a setup step (robot.connect / make_policy /
+    # ...) raises before the real session is constructed below.
+    latency_session: LatencySession = LatencySession.disabled()
 
     try:
         if cfg.resume:
@@ -863,6 +1015,21 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
         listener, events = init_keyboard_listener()
 
+        latency_session = LatencySession.from_config(
+            enabled=cfg.latency_monitor,
+            loop_kind="record",
+            target_fps=float(cfg.dataset.fps),
+            output_dir=cfg.latency_output_dir if cfg.latency_monitor else None,
+        )
+        if latency_session.enabled and latency_session.writer is not None:
+            logging.info("Latency monitoring enabled; snapshots → %s", latency_session.writer.path)
+            # Attribute the umbrella ``process_obs`` cost back to per-step
+            # spans so the snapshot shows which processor (depth-edge,
+            # obs-stream writer, normalize, …) eats the budget.
+            from lerobot.utils.latency import attach_pipeline_step_spans
+
+            attach_pipeline_step_spans(robot_observation_processor, latency_session, prefix="obs")
+
         if not cfg.dataset.streaming_encoding:
             logging.info(
                 "Streaming encoding is disabled. If you have capable hardware, consider enabling it for way faster episode saving. --dataset.streaming_encoding=true --dataset.encoder_threads=2 # --dataset.vcodec=auto. More info in the documentation: https://huggingface.co/docs/lerobot/streaming_video_encoding"
@@ -890,6 +1057,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 control_time_s=cfg.dataset.reset_time_s,
                 single_task=cfg.dataset.single_task,
                 display_data=cfg.display_data,
+                latency_session=latency_session,
             )
 
         dataset_ctx = VideoEncodingManager(dataset) if cfg.dataset.record_images else nullcontext()
@@ -905,7 +1073,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     run_reset_phase()
 
                 while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
-                    log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
+                    current_episode_index = dataset.num_episodes
+                    log_say(f"Recording episode {current_episode_index}", cfg.play_sounds)
                     pending_intervention_episodes = record_loop(
                         robot=robot,
                         events=events,
@@ -925,6 +1094,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         interpolator=interpolator,
                         display_compressed_images=display_compressed_images,
                         play_sounds=cfg.play_sounds,
+                        latency_session=latency_session,
+                        episode_index=current_episode_index,
                     )
 
                     import time as _time
@@ -949,6 +1120,20 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         continue
 
                     dataset.save_episode()
+
+                    # Per-episode quality summary — append to
+                    # meta/episodes_health.jsonl so the data panel can
+                    # render badges next to bad episodes, and log a one-
+                    # line verdict so headless operators see it in stderr.
+                    # Live warnings already fired during recording via
+                    # LoopHealthDetector; this is the persistent record.
+                    if latency_session.enabled and latency_session.aggregator is not None:
+                        _write_episode_health(
+                            latency_session,
+                            dataset,
+                            current_episode_index,
+                            cfg.dataset.fps,
+                        )
 
                     # Save intervention episodes AFTER main episode (ensures matching)
                     if intervention_dataset is not None and pending_intervention_episodes:
@@ -975,6 +1160,16 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     recorded_episodes += 1
     finally:
         log_say("Stop recording", cfg.play_sounds, blocking=True)
+
+        # Aggregate quality summary for the whole recording session.
+        # Written before dataset.finalize() so the file lands alongside
+        # episodes_health.jsonl in meta/. Best-effort: swallow any
+        # filesystem hiccup so it can't mask the actual recording result.
+        if dataset is not None and latency_session.enabled and latency_session.aggregator is not None:
+            try:
+                _write_recording_health(latency_session, dataset, cfg.dataset.fps)
+            except Exception as e:  # noqa: BLE001
+                logging.warning("Could not write recording_health.json: %s", e)
 
         if dataset:
             dataset.finalize()

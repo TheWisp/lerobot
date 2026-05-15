@@ -191,6 +191,7 @@
                     <div class="run-bottom-tabs" id="run-bottom-tabs">
                         <button class="run-bottom-tab active" data-tab="output" onclick="_switchBottomTab('output')">Output</button>
                         <button class="run-bottom-tab" data-tab="rl" onclick="_switchBottomTab('rl')" id="run-bottom-tab-rl" style="display:none">RL Training</button>
+                        <button class="run-bottom-tab" data-tab="latency" onclick="_switchBottomTab('latency')" id="run-bottom-tab-latency" style="display:none">Latency</button>
                     </div>
                     <!-- Output tab -->
                     <div class="run-bottom-panel" id="run-bottom-panel-output">
@@ -280,6 +281,16 @@
                                     <canvas id="rlt-chart-update-rate" width="400" height="80"></canvas>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                    <!-- Latency tab.
+                         The body is built by run.js: one .latency-track block per
+                         fresh source returned by /api/run/latency-sources. Multi-
+                         thread loops (HVLA) render two stacked tracks (main +
+                         inference); single-thread loops render one. -->
+                    <div class="run-bottom-panel" id="run-bottom-panel-latency" style="display:none">
+                        <div class="latency-dashboard" id="latency-tracks">
+                            <div class="latency-empty" id="latency-no-sources">No latency data yet — waiting for first snapshot…</div>
                         </div>
                     </div>
                 </div>

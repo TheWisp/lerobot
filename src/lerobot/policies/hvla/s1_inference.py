@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 from lerobot.policies.hvla.rlt.episode import TerminalKind
+from lerobot.utils.latency import LatencySession
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,11 @@ class InferenceThread:
         rlt_agent=None,
         rlt_state: dict | None = None,
         rlt_replay=None,
+        # Latency monitoring — pass a LatencySession to surface per-stage
+        # GPU timings (enc_obs, rl_tok, s1_denoise, actor) into the same
+        # aggregator/snapshot infrastructure used by teleop/record. The
+        # default disabled session is a no-op (~50 ns per iteration).
+        latency_session: LatencySession | None = None,
     ):
         self._policy = policy
         self._preprocessor = preprocessor
@@ -226,6 +232,8 @@ class InferenceThread:
         # Timing
         self.infer_times: list[float] = []
         self.inference_delays: list[float] = []
+
+        self._latency_session = latency_session if latency_session is not None else LatencySession.disabled()
 
         self._thread: threading.Thread | None = None
 
@@ -797,16 +805,25 @@ class InferenceThread:
             if obs is None:
                 continue
 
+            # Latency monitoring: start iteration after we have a valid obs.
+            # On the happy path, end_iter() runs after chunk publish below.
+            # If anything raises in between, the next start_iter() resets the
+            # tracer cleanly — failed iterations simply don't appear in the
+            # aggregator (which is the right behaviour for latency stats).
+            self._latency_session.start_iter()
+            self._latency_session.set_field("obs_stale_ms", (time.perf_counter() - t_obs) * 1000.0)
+
             # Prepare batch (CPU resize + GPU transfer)
-            batch = obs_to_s1_batch(
-                obs,
-                self._s1_image_keys,
-                self._shared_cache,
-                self._s2_latent_key,
-                self._device,
-                resize_to=self._resize_to,
-            )
-            batch = self._preprocessor(batch)
+            with self._latency_session.span("batch_prep"):
+                batch = obs_to_s1_batch(
+                    obs,
+                    self._s1_image_keys,
+                    self._shared_cache,
+                    self._s2_latent_key,
+                    self._device,
+                    resize_to=self._resize_to,
+                )
+                batch = self._preprocessor(batch)
 
             # RTC prefix
             current_prefix_len = 0
@@ -953,6 +970,25 @@ class InferenceThread:
             self.inference_delays.append(total_delay)
             self._rlt_enc_ms_hist.append(rlt_enc_ms)
             self._rlt_post_ms_hist.append(rlt_post_ms)
+
+            # Stamp the GPU stages onto the latency tracer. Stages serialize
+            # on the CUDA stream, so laying them out sequentially from
+            # t_infer_start gives a Gantt that matches their execution order;
+            # the cumulative durations match (t_infer_end - t_infer_start)
+            # modulo dispatch overhead.
+            _t = t_infer_start
+            for _name, _dur_ms in (
+                ("enc_obs", enc_obs_ms),
+                ("rl_tok", rl_tok_ms),
+                ("s1_denoise", s1_denoise_ms),
+                ("actor", rlt_actor_ms),
+            ):
+                if _dur_ms > 0.0:
+                    _end = _t + _dur_ms / 1000.0
+                    self._latency_session.add_span(_name, _t, _end)
+                    _t = _end
+            self._latency_session.set_field("inference_ms", infer_ms)
+            self._latency_session.set_field("total_delay_ms", total_delay * 1000.0)
             if len(self._rlt_enc_ms_hist) > 200:
                 self._rlt_enc_ms_hist = self._rlt_enc_ms_hist[-200:]
                 self._rlt_post_ms_hist = self._rlt_post_ms_hist[-200:]
@@ -1056,6 +1092,11 @@ class InferenceThread:
                     self._chunk_t_origin = t_obs
                 self._chunk_prefix_len = current_prefix_len
                 self._chunk_ready.set()
+
+            # Commit the iteration to the latency aggregator now — gradient
+            # updates and the query-interval sleep below are post-publish
+            # housekeeping that shouldn't inflate loop_dt_ms.
+            self._latency_session.end_iter()
 
             # Query interval: use idle time for RLT gradient updates
             if self._query_interval_s > 0 and self._running.is_set():

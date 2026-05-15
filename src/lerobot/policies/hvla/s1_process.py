@@ -6,6 +6,7 @@ Adapted from dual_system_infer.py.
 
 import contextlib
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -104,7 +105,6 @@ def _atomic_torch_save(obj, path) -> None:
     On most filesystems ``os.replace`` is atomic for files in the same
     directory, which is the case here (tmp lives in same dir).
     """
-    import os
 
     target = str(path)
     tmp = target + ".tmp"
@@ -185,7 +185,6 @@ def _save_infer_drop(
     worst_joint = int(np.argmax(per_joint_max))
     names = joint_names or JOINT_NAMES
     joint_label = names[worst_joint] if worst_joint < len(names) else f"joint_{worst_joint}"
-    import os
 
     drop_dir = os.path.join(save_dir, f"infer_drop_{infer_count}")
     os.makedirs(drop_dir, exist_ok=True)
@@ -248,8 +247,6 @@ def _log_joint_jump(
     )
     # Save observation snapshot for offline analysis
     if save_dir and obs_images:
-        import os
-
         import cv2
 
         drop_dir = os.path.join(save_dir, f"joint_jump_{step_count}")
@@ -444,6 +441,30 @@ def _add_frame_to_dataset(dataset, obs: dict, action_np: np.ndarray, joint_names
     dataset.add_frame(frame)
 
 
+def inference_target_fps_for(fps: int | float, query_interval_steps: int) -> float | None:
+    """Effective inference-thread FPS, given the control loop's fps and
+    the query interval.
+
+    The inference thread runs once per ``query_interval_steps`` control
+    frames (the main loop executes that many actions per inferred chunk
+    before re-querying). So its rate is the control rate divided by the
+    query interval:
+
+        inference_fps = fps / query_interval_steps
+
+    When ``query_interval_steps == 0`` the thread runs as fast as it can
+    — there's no meaningful FPS target, so return ``None`` and let the
+    latency-monitoring stack skip the overrun / budget rules.
+
+    Sharing this helper with the test suite (rather than inlining the
+    formula at the call site) makes the relationship explicit and
+    catchable if a future refactor changes the cadence.
+    """
+    if query_interval_steps <= 0:
+        return None
+    return float(fps) / query_interval_steps
+
+
 def run_s1(
     s1_checkpoint: str,
     shared_cache: SharedLatentCache,
@@ -478,6 +499,11 @@ def run_s1(
     rlt_output_dir: str = "outputs/rlt_online",
     rlt_start_engaged: bool = True,
     rlt_shared_noise_per_chunk: bool = False,
+    # Latency monitoring (mirrors --latency_monitor / --latency_output_dir
+    # from teleop/record). Snapshot is published to <output_dir>/latency_snapshot.json
+    # so the GUI dashboard can render HVLA inference timings alongside teleop/record.
+    latency_monitor: bool = False,
+    latency_output_dir: str | None = None,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -920,7 +946,6 @@ def run_s1(
             # flat-series format (saved before the 3-group refactor),
             # convert it here so episode-level history isn't lost.
             import json
-            import os
 
             metrics_path = str(rlt_state["output_dir"] / "metrics.json")
             if os.path.exists(metrics_path):
@@ -978,6 +1003,40 @@ def run_s1(
 
     # --- Pipelined inference thread ---
     from lerobot.policies.hvla.s1_inference import InferenceThread
+    from lerobot.utils.latency import LatencySession
+
+    # HVLA writes one snapshot per thread under a shared parent dir so the
+    # GUI dashboard can render them as stacked tracks of the same process.
+    # Subdirs (not different filenames) keep the snapshot writer simple
+    # and match LATENCY_SOURCES["hvla_main"] / ["hvla_infer"] in run.py.
+    if latency_monitor and latency_output_dir is not None:
+        main_dir: str | None = os.path.join(latency_output_dir, "main")
+        inference_dir: str | None = os.path.join(latency_output_dir, "inference")
+    else:
+        main_dir = inference_dir = None
+
+    main_session = LatencySession.from_config(
+        enabled=latency_monitor,
+        loop_kind="hvla_main",
+        process="hvla",
+        track="main",
+        target_fps=float(fps),
+        output_dir=main_dir,
+    )
+    # The inference thread runs at its OWN cadence — once per
+    # ``query_interval_steps`` control frames, NOT once per control frame.
+    # See ``inference_target_fps_for`` for the derivation. Using the
+    # control loop's 1/fps as the inference budget would falsely flag the
+    # thread as "overrunning" whenever a single inference takes longer
+    # than one control period, even though that's the expected design.
+    inference_session = LatencySession.from_config(
+        enabled=latency_monitor,
+        loop_kind="hvla_infer",
+        process="hvla",
+        track="inference",
+        target_fps=inference_target_fps_for(fps, query_interval_steps),
+        output_dir=inference_dir,
+    )
 
     infer_thread = InferenceThread(
         policy=policy,
@@ -998,6 +1057,7 @@ def run_s1(
         rlt_agent=rlt_agent,
         rlt_state=rlt_state,
         rlt_replay=rlt_replay,
+        latency_session=inference_session,
     )
 
     # Instantiate the intervention recorder once per process. It owns the
@@ -1402,6 +1462,11 @@ def run_s1(
             _first_iter = True
             while stop_event is None or not stop_event.is_set():
                 loop_start = time.perf_counter()
+                # Latency: open the iteration record. Branchy loop body
+                # below uses ``continue`` and ``break`` freely; the next
+                # ``start_iter()`` resets cleanly so partial iterations
+                # are simply discarded (record_loop has the same shape).
+                main_session.start_iter()
 
                 if _first_iter:
                     _first_iter = False
@@ -1438,10 +1503,12 @@ def run_s1(
                     break
 
                 # 1. Capture observation (main loop owns robot)
-                obs = robot.get_observation()
-                for step in obs_processor_steps:
-                    obs = step.observation(obs)
+                with main_session.span("get_observation"):
+                    obs = robot.get_observation()
+                    for step in obs_processor_steps:
+                        obs = step.observation(obs)
                 t_now = time.perf_counter()
+                main_session.cam_consume_all(getattr(robot, "cameras", None))
 
                 # Runtime check: inference thread must be alive
                 if not infer_thread._thread.is_alive():
@@ -1464,9 +1531,10 @@ def run_s1(
 
                 # Publish to inference thread + S2 (keep publishing even during
                 # intervention so S2 latent stays current for policy resume)
-                infer_thread.publish_obs(obs_copy, t_now)
-                if shared_images is not None:
-                    shared_images.write_images(obs, S2_CAM_KEY_MAP, joint_names)
+                with main_session.span("publish_obs"):
+                    infer_thread.publish_obs(obs_copy, t_now)
+                    if shared_images is not None:
+                        shared_images.write_images(obs, S2_CAM_KEY_MAP, joint_names)
 
                 # Check intervention state
                 is_intervention = False
@@ -1475,6 +1543,10 @@ def run_s1(
 
                     teleop_events = teleop.get_teleop_events()
                     is_intervention = teleop_events.get(TeleopEvents.IS_INTERVENTION, False)
+                # Tag the iteration so the dashboard can color-code
+                # intervention vs policy without inferring it from
+                # action-source span presence.
+                main_session.set_field("intervention", bool(is_intervention))
 
                 if is_intervention and teleop is not None:
                     # --- INTERVENTION MODE: human controls via leader arm ---
@@ -1629,7 +1701,8 @@ def run_s1(
                     action_dict = {
                         name: float(action_np[i]) for i, name in enumerate(joint_names) if i < len(action_np)
                     }
-                    robot.send_action(action_dict)
+                    with main_session.span("action_send"):
+                        robot.send_action(action_dict)
                     t_after_send = time.perf_counter()
 
                     # Record to intervention dataset
@@ -1727,7 +1800,8 @@ def run_s1(
                             teleop.set_intervention_transition_lock(False)
 
                     # 3. Read latest chunk
-                    chunk, t_origin, t_obs = infer_thread.get_chunk()
+                    with main_session.span("get_chunk"):
+                        chunk, t_origin, t_obs = infer_thread.get_chunk()
 
                     if chunk is None:
                         time.sleep(1.0 / fps)
@@ -1784,7 +1858,8 @@ def run_s1(
                     action_dict = {
                         name: float(action_np[i]) for i, name in enumerate(joint_names) if i < len(action_np)
                     }
-                    robot.send_action(action_dict)
+                    with main_session.span("action_send"):
+                        robot.send_action(action_dict)
                     t_after_send = time.perf_counter()
 
                     # Inverse follow: send follower position to leader so it mirrors
@@ -1865,6 +1940,11 @@ def run_s1(
                             mode_str,
                             smooth_str,
                         )
+
+                # Latency: commit BEFORE sleeping so loop_dt_ms captures
+                # work-only time (matches teleop / record convention; the
+                # overrun check fires when work alone exceeds 1000/fps).
+                main_session.end_iter()
 
                 # Fixed-rate sleep
                 dt = time.perf_counter() - loop_start

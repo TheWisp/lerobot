@@ -15,6 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from lerobot.cameras import CameraConfig
 
@@ -66,4 +67,15 @@ class BiSO107FollowerConfig(RobotConfig):
     # behaviour because it has no non-blocking variant; in practice that
     # method only blocks when the consumer is faster than the camera,
     # which the loop-rate fix above already addresses.
-    camera_read_strategy: str = "latest"
+    camera_read_strategy: Literal["latest", "wait_for_new"] = "latest"
+
+    # When True, ``send_action`` is a no-op: the motors never receive a
+    # command, but every other side effect (connect, calibrate, motor
+    # reads, camera reads, latency profiling) still runs. Lets automated
+    # tooling exercise the full control-loop stack — including this
+    # robot's get_observation timing and any policy under test — without
+    # physically driving the arms.
+    #
+    # Note: torque is still enabled on connect (the motors hold position
+    # so they don't drop under gravity), but no goal positions are sent.
+    dry_run: bool = False

@@ -759,3 +759,167 @@ class TestRLTChunkDump:
             "dump_chunks alone is not enough — _rlt_system_active must be "
             "True to gate out reset-phase records (where ep is stale -1)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Latency session integration — end-to-end check that one inference cycle
+# produces one record with the expected stage scalars.
+# ---------------------------------------------------------------------------
+
+
+class TestLatencySession:
+    """Verify the inference loop emits a per-cycle record with the right
+    stage breakdown when a LatencySession is provided. Tests use the same
+    CPU mock policy as the rest of the file — _TimedBlock falls back to
+    perf_counter on CPU, so all four stage durations should be > 0."""
+
+    def _wait_for_records(self, session, n: int, timeout: float = 5.0) -> None:
+        """Poll until the aggregator has at least n records, or fail."""
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline:
+            if len(session.aggregator) >= n:
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"Expected {n} records within {timeout}s, got {len(session.aggregator)}")
+
+    def test_disabled_default_is_no_op(self):
+        """Without an explicit session, the thread runs as before — no
+        attribute errors, chunks still produced."""
+        thread = _make_thread()  # latency_session not provided
+        thread.start()
+        try:
+            thread.publish_obs(_make_obs(), time.perf_counter())
+            assert thread.wait_for_first_chunk(timeout=5.0)
+        finally:
+            thread.stop()
+
+    def test_one_obs_produces_one_record(self):
+        """Publishing one obs produces at least one committed record. We
+        accept >=1 because ``stop()`` re-sets ``_obs_ready`` to unblock any
+        waiting thread, which can let the loop run one extra iteration on
+        the still-cached obs before noticing ``_running`` is cleared."""
+        from lerobot.utils.latency import LatencySession
+
+        session = LatencySession.from_config(enabled=True, loop_kind="hvla_infer", target_fps=30)
+        thread = _make_thread(latency_session=session)
+        thread.start()
+        try:
+            thread.publish_obs(_make_obs(), time.perf_counter())
+            assert thread.wait_for_first_chunk(timeout=5.0)
+            self._wait_for_records(session, 1)
+        finally:
+            thread.stop()
+        assert len(session.aggregator) >= 1
+
+    def test_record_has_expected_fields(self):
+        """The committed record carries the stage scalars and the obs/loop
+        meta-fields that the dashboard expects."""
+        from lerobot.utils.latency import LatencySession
+
+        session = LatencySession.from_config(enabled=True, loop_kind="hvla_infer", target_fps=30)
+        thread = _make_thread(latency_session=session)
+        thread.start()
+        try:
+            thread.publish_obs(_make_obs(), time.perf_counter())
+            assert thread.wait_for_first_chunk(timeout=5.0)
+            self._wait_for_records(session, 1)
+        finally:
+            thread.stop()
+        rec = list(session.aggregator._records)[0]
+        # Per-stage durations from CUDA events (or perf_counter on CPU)
+        assert "enc_obs_ms" not in rec, "no rl_token_encoder → enc_obs_ms should be absent"
+        # s1_denoise always runs (predict_action_chunk happens for every cycle)
+        assert "s1_denoise_ms" in rec
+        assert rec["s1_denoise_ms"] >= 0.0
+        # CPU-side spans / fields
+        assert "batch_prep_ms" in rec
+        assert "obs_stale_ms" in rec
+        assert rec["obs_stale_ms"] >= 0.0
+        assert "inference_ms" in rec
+        assert "total_delay_ms" in rec
+        # Loop-level
+        assert "loop_dt_ms" in rec
+        assert rec["loop_kind"] == "hvla_infer"
+
+    def test_multiple_obs_produce_multiple_records(self):
+        from lerobot.utils.latency import LatencySession
+
+        session = LatencySession.from_config(enabled=True, loop_kind="hvla_infer", target_fps=30)
+        thread = _make_thread(latency_session=session)
+        thread.start()
+        try:
+            for _ in range(3):
+                thread.publish_obs(_make_obs(), time.perf_counter())
+                time.sleep(0.3)
+            self._wait_for_records(session, 2)
+        finally:
+            thread.stop()
+        assert len(session.aggregator) >= 2
+
+    def test_snapshot_published_to_disk(self, tmp_path):
+        """Wiring through to s1_process: enabling latency monitoring with an
+        output_dir must produce latency_snapshot.json on disk."""
+        from lerobot.utils.latency import LatencySession
+
+        session = LatencySession.from_config(
+            enabled=True,
+            loop_kind="hvla_infer",
+            target_fps=30,
+            output_dir=tmp_path,
+        )
+        # Force the writer's interval to 0 so the very first commit publishes.
+        session.writer._interval_s = 0.0
+        thread = _make_thread(latency_session=session)
+        thread.start()
+        try:
+            thread.publish_obs(_make_obs(), time.perf_counter())
+            assert thread.wait_for_first_chunk(timeout=5.0)
+            self._wait_for_records(session, 1)
+        finally:
+            thread.stop()
+        session.writer.flush()  # writer runs on a background thread
+        snap_path = tmp_path / "latency_snapshot.json"
+        assert snap_path.exists()
+        data = json.loads(snap_path.read_text())
+        assert data["loop_kind"] == "hvla_infer"
+
+
+class TestInferenceTargetFps:
+    """The inference thread's budget is NOT the control loop's 1/fps —
+    it's 1/(fps / query_interval_steps), because the main loop executes
+    ``query_interval_steps`` actions per inferred chunk before re-querying.
+    Getting this wrong falsely flags the inference thread as overrunning
+    every time a single inference takes longer than one control frame,
+    which is the expected case for a non-trivial policy."""
+
+    def test_query_interval_2_at_30fps_gives_15hz_inference(self):
+        from lerobot.policies.hvla.s1_process import inference_target_fps_for
+
+        assert inference_target_fps_for(fps=30, query_interval_steps=2) == 15.0
+
+    def test_query_interval_1_matches_control_rate(self):
+        """When the policy re-queries every control frame, inference must
+        keep up at the full control rate."""
+        from lerobot.policies.hvla.s1_process import inference_target_fps_for
+
+        assert inference_target_fps_for(fps=30, query_interval_steps=1) == 30.0
+
+    def test_query_interval_0_returns_none(self):
+        """``query_interval_steps=0`` means "run as fast as possible" —
+        no meaningful fps target. Return None so the overrun / budget
+        rules silently skip."""
+        from lerobot.policies.hvla.s1_process import inference_target_fps_for
+
+        assert inference_target_fps_for(fps=30, query_interval_steps=0) is None
+
+    def test_negative_treated_as_zero(self):
+        """Defensive: a malformed config shouldn't crash the formula."""
+        from lerobot.policies.hvla.s1_process import inference_target_fps_for
+
+        assert inference_target_fps_for(fps=30, query_interval_steps=-1) is None
+
+    def test_higher_fps_scales_proportionally(self):
+        from lerobot.policies.hvla.s1_process import inference_target_fps_for
+
+        assert inference_target_fps_for(fps=60, query_interval_steps=4) == 15.0
+        assert inference_target_fps_for(fps=120, query_interval_steps=2) == 60.0
