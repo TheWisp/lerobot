@@ -371,3 +371,75 @@ def test_recover_robot_with_no_buses_returns_placeholder():
     # to surface "Recovery not supported" instead of a misleading success toast.
     # If you change this wording, also update the frontend detector.
     assert any("no MotorsBus" in n for n in reports[0].notes)
+
+
+def test_recover_robot_unwraps_locked_bus():
+    """Robot.bus wrapped in ``LockedBus`` (predictive controllers do this
+    for thread-safety) should still be discoverable by recovery.
+
+    Regression: the walker used to skip ``LockedBus`` because
+    ``isinstance(LockedBus, SerialMotorsBus)`` is False — predictive
+    robots would falsely report "Recovery not supported" even though
+    they have a real Feetech bus underneath.
+    """
+    from lerobot.motors.locked_bus import LockedBus
+    from lerobot.robots.robot import Robot
+
+    inner_bus = _build_bus()
+    inner_bus.port_handler = MagicMock()
+    wrapped = LockedBus(inner_bus)
+
+    class _PredictiveStubRobot(Robot):
+        config_class = type("C", (), {})
+        name = "predictive_stub"
+
+        def __init__(self):
+            self.bus = wrapped  # the LockedBus proxy, as predictive robots do
+
+        @property
+        def observation_features(self):
+            return {}
+
+        @property
+        def action_features(self):
+            return {}
+
+        @property
+        def is_connected(self):
+            return False
+
+        def connect(self, calibrate=True):
+            pass
+
+        @property
+        def is_calibrated(self):
+            return True
+
+        def calibrate(self):
+            pass
+
+        def configure(self):
+            pass
+
+        def get_observation(self):
+            return {}
+
+        def send_action(self, action):
+            return action
+
+        def disconnect(self):
+            pass
+
+    fake_report = RecoveryReport(port="/dev/null-test", responsive_ids=[1, 2, 3])
+    with patch("lerobot.motors.recovery.recover_bus", return_value=fake_report) as mock_rb:
+        reports = recover_robot(_PredictiveStubRobot())
+
+    # The walker MUST unwrap LockedBus and invoke recover_bus on the inner
+    # SerialMotorsBus — not bail with a "no MotorsBus" placeholder.
+    assert mock_rb.call_count == 1
+    # The bus passed to recover_bus must be the unwrapped inner bus.
+    passed_bus = mock_rb.call_args[0][0]
+    assert passed_bus is inner_bus
+    assert len(reports) == 1
+    assert reports[0] is fake_report
+    assert not any("no MotorsBus" in n for n in reports[0].notes)
