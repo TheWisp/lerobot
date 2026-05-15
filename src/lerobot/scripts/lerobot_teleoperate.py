@@ -363,6 +363,17 @@ def teleoperate(cfg: TeleoperateConfig):
             motion_logger.close()
         if cfg.display_data:
             shutdown_rerun()
+        # Detach the teleop from the robot BEFORE disconnecting it. On a
+        # chunk-aware / predictive robot, ``attach_teleop`` wires the
+        # 200 Hz controller thread to ``teleop.get_action()``. If we
+        # disconnect the teleop without detaching first, the controller
+        # keeps polling for the ~40 ms it takes the subsequent
+        # ``robot.disconnect()`` to stop the thread — every poll hits a
+        # ``DeviceNotConnectedError`` from the closed teleop bus, logged
+        # as a noisy ERROR per tick. Detaching first makes shutdown
+        # silent. No-op for non-predictive robots (base ``attach_teleop``
+        # is empty).
+        robot.attach_teleop(None)
         teleop.disconnect()
         robot.disconnect()
 
