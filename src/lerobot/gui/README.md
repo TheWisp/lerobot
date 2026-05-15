@@ -31,6 +31,46 @@ python -m lerobot.gui [--host HOST] [--port PORT] [--cache-size SIZE]
 | `--port`       | `8000`      | TCP port.                                            |
 | `--cache-size` | `1GB`       | In-memory frame cache budget (`500MB`, `1GB`, etc.). |
 
+## Connect from another device on the LAN
+
+Useful when the robot host is a beefy desktop and you want to control it from
+a laptop, phone, or tablet — common when the robot moves around and the
+operator can't be tethered to the robot host's keyboard.
+
+```bash
+python -m lerobot.gui --host 0.0.0.0
+```
+
+`--host 0.0.0.0` makes the server listen on every network interface, and
+also enables mDNS (multicast DNS) advertising of `lerobot.local`. On
+startup the banner spells out every URL the host is reachable at:
+
+```
+LeRobot host service ready:
+  mDNS (no IP needed): http://lerobot.local:8000/
+  LAN:                 http://192.168.1.61:8000/
+  Local:               http://localhost:8000/
+```
+
+From any device on the same LAN (macOS, Windows 10+, Linux with avahi,
+iOS, Android — all modern browsers resolve `.local` natively) open
+`http://lerobot.local:8000/` — no IP-typing needed.
+
+If a second robot host appears on the same LAN, mDNS auto-suffixes the
+name (`lerobot-2.local`, `lerobot-3.local`, …); the chosen name is
+printed in the banner.
+
+**Caveats:**
+
+- Bind-to-network has no authentication. Anyone on the same LAN with the
+  URL can drive your robot. Lab / home WiFi: fine. Untrusted networks
+  (conference WiFi, public hotspots): don't.
+- Some corporate networks block multicast. If `lerobot.local` doesn't
+  resolve, fall back to the raw LAN URL (`http://<ip>:8000/`) from the
+  banner. The raw URL always works.
+- mDNS requires the optional `zeroconf` package, included in
+  `pip install lerobot[gui]`. Without it, only the raw LAN URL works.
+
 ## Dataset Playback
 
 - Enter a HuggingFace repo ID or absolute local path to open a dataset.

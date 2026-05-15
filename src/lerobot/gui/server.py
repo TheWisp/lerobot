@@ -158,6 +158,12 @@ async def shutdown_event():
         shutdown_prefetch_executor()
     with contextlib.suppress(Exception):
         shutdown_decode_executor()
+    # Send mDNS goodbye packet so clients don't keep a stale
+    # lerobot.local entry cached after we stop.
+    mdns_handle = getattr(app.state, "mdns_handle", None)
+    if mdns_handle is not None:
+        with contextlib.suppress(Exception):
+            mdns_handle.unregister()
 
 
 # Include API routers
@@ -184,8 +190,34 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_00
     """Run the GUI server."""
     import uvicorn
 
+    from lerobot.gui.mdns import advertise, detect_lan_ip
+
     app.state.cache_size = cache_size
-    logger.info(f"Starting LeRobot Dataset GUI at http://{host}:{port}")
+
+    # Advertise on mDNS so phones / laptops on the same LAN can hit us
+    # at http://lerobot.local:<port>/ without knowing the IP. The
+    # advertise call returns None if we're loopback-only or zeroconf
+    # isn't installed; in either case we still print the always-available
+    # raw URL below.
+    app.state.mdns_handle = advertise(host=host, port=port)
+
+    # Startup banner: spell out every URL the user can reach us at, in
+    # order of "nicest to type". Pre-uvicorn so it's not buried under
+    # the uvicorn boot logs.
+    lines = ["LeRobot host service ready:"]
+    if app.state.mdns_handle is not None:
+        lines.append(f"  mDNS (no IP needed): http://{app.state.mdns_handle.hostname}:{port}/")
+    lan_ip = detect_lan_ip()
+    if lan_ip is not None and host not in ("127.0.0.1", "::1", "localhost"):
+        lines.append(f"  LAN:                 http://{lan_ip}:{port}/")
+    # The "0.0.0.0" literal is for display-name comparison only (we
+    # echo "localhost" instead in the banner); not a bind() argument.
+    all_ifaces = "0.0.0.0"  # nosec B104 - label comparison, not a network bind
+    local_label = "localhost" if host in (all_ifaces, "127.0.0.1") else host
+    lines.append(f"  Local:               http://{local_label}:{port}/")
+    for line in lines:
+        logger.info(line)
+
     # log_config=None: keep the uvicorn handlers we attached in setup_logging.
     # Without this, uvicorn calls dictConfig at startup and replaces them.
     uvicorn.run(app, host=host, port=port, access_log=False, log_config=None)
