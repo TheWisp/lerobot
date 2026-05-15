@@ -1815,9 +1815,35 @@ function copyTerminal(terminalId) {
     if (!terminal) return;
     const lines = Array.from(terminal.querySelectorAll('.terminal-line'))
         .map(el => el.textContent).join('\n');
-    navigator.clipboard.writeText(lines).then(() => {
-        showToast('Terminal', 'Copied to clipboard', 'info');
-    }).catch(() => {});
+    _copyTextToClipboard(lines).then(ok => {
+        if (ok) showToast('Terminal', 'Copied to clipboard', 'info');
+        else showToast('Terminal', 'Copy failed', 'error');
+    });
+}
+
+// Clipboard helper with fallback for non-secure contexts (HTTP over LAN IP).
+// navigator.clipboard is only defined on HTTPS or localhost; otherwise fall
+// back to a hidden textarea + document.execCommand('copy').
+function _copyTextToClipboard(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text).then(() => true).catch(() => false);
+    }
+    return new Promise(resolve => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '0';
+        ta.style.left = '0';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        document.body.removeChild(ta);
+        resolve(ok);
+    });
 }
 
 function clearTerminal(terminalId) {
