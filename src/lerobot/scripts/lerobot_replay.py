@@ -70,6 +70,7 @@ from lerobot.robots import (  # noqa: F401
     RobotConfig,
     bi_openarm_follower,
     bi_so107_follower,
+    bi_so107_follower_predictive,
     bi_so_follower,
     earthrover_mini_plus,
     hope_jr,
@@ -78,7 +79,9 @@ from lerobot.robots import (  # noqa: F401
     omx_follower,
     openarm_follower,
     reachy2,
+    so107_follower_predictive,
     so_follower,
+    so_follower_predictive,
     unitree_g1,
 )
 from lerobot.utils.constants import ACTION

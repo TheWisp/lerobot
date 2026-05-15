@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ctypes
 import json
 import logging
 import os
 import signal
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -221,6 +223,15 @@ class HVLARunRequest(BaseModel):
     rlt_output_dir: str = "outputs/rlt_online"
     rlt_start_engaged: bool = True
     rlt_shared_noise_per_chunk: bool = True  # default after v2_widened A/B
+    # Action send shape on the policy path. "chunk" (default) routes the
+    # remaining chunk frames as an ActionChunk → predictive robots use
+    # the chunk-exact-lookup path (zero estimation residual). "dict"
+    # sends only the single frame at idx → predictive robots fall back
+    # to the velocity-LSQ extrapolation path. Non-predictive robots are
+    # unaffected (they use frames[0] either way). Primarily for A/B
+    # testing the chunk-vs-dict latency improvement; default matches
+    # the recommended best-perf path.
+    send_action_shape: str = "chunk"
 
 
 # ============================================================================
@@ -310,6 +321,48 @@ async def _wait_for_exit() -> None:
     _output_event.set()
 
 
+# ── Parent-death detector ────────────────────────────────────────────────
+#
+# Why: a SIGKILL on the GUI server (e.g. VS Code closing the terminal,
+# OOM kill, segfault) leaves any in-flight teleop/record subprocess
+# running indefinitely — observed in the wild as a `lerobot-teleoperate`
+# subprocess alive almost 2 hours after the GUI exited, holding ttyACM
+# ports and cameras and blocking the next launch.
+#
+# Phase 1 fix: use Linux's PR_SET_PDEATHSIG so the kernel sends SIGTERM
+# to the child the moment its parent dies, independent of FastAPI's
+# lifespan hooks. Set via preexec_fn (runs in the forked child before
+# exec, async-signal-safe — only a single libc.prctl call). Linux-only;
+# no-op elsewhere.
+#
+# Phase 2 (still TODO in gui/TODO.md): file-based heartbeat for the
+# corner case where SIGTERM races a stuck child.
+
+# PR_SET_PDEATHSIG value from <sys/prctl.h>. Kept as a module constant so
+# the preexec function doesn't reach into ctypes at signal-handler time.
+_PR_SET_PDEATHSIG = 1
+
+
+def _set_pdeathsig_preexec() -> None:
+    """preexec_fn for subprocess: ask the kernel to SIGTERM us if our parent dies.
+
+    Runs in the forked child between fork and exec. Stays minimal: a
+    single libc.prctl call. Failure is silent (we can't log from
+    preexec_fn — the parent would never see it). Worst case we just
+    don't get the auto-cleanup behaviour, which is the current state
+    anyway.
+    """
+    if sys.platform != "linux":
+        return
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        # prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0). The signal is
+        # cleared on exec of a setuid binary; not a concern here.
+        libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+    except (OSError, AttributeError):
+        pass
+
+
 async def _launch_subprocess(
     args: list[str], command: str, config: dict, extra_env: dict[str, str] | None = None
 ) -> None:
@@ -337,6 +390,7 @@ async def _launch_subprocess(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        preexec_fn=_set_pdeathsig_preexec,
     )
 
     _stream_tasks = [
@@ -384,6 +438,7 @@ async def _launch_debug_s2(config: DebugModelConfig) -> None:
         stdout=debug_log_fd,
         stderr=debug_log_fd,
         env=env,
+        preexec_fn=_set_pdeathsig_preexec,
     )
     os.close(debug_log_fd)  # subprocess inherited the fd, we can close our copy
 
@@ -448,6 +503,16 @@ async def _stop_debug_process() -> None:
 # ============================================================================
 
 _debug_lock = asyncio.Lock()  # prevent concurrent load/unload
+
+# Serializes the check-then-launch sequence in start_teleoperate / start_record /
+# start_replay / start_hvla. Without it, two requests arriving close together
+# can both see `_active_process is None` (the synchronous check passes),
+# both call `await asyncio.create_subprocess_exec(...)`, and the second
+# overwrites `_active_process` before the first launch finishes — orphaning
+# the first subprocess holding cameras and serial ports. Acquired around the
+# whole `_ensure_no_active_process() + _launch_subprocess(...)` block so the
+# check and the assign-to-`_active_process` happen atomically.
+_launch_lock = asyncio.Lock()
 
 
 def _is_debug_loaded() -> bool:
@@ -552,90 +617,98 @@ async def debug_subtask() -> dict:
 
 @router.post("/teleoperate")
 async def start_teleoperate(req: TeleoperateRequest) -> dict:
-    _ensure_no_active_process()
+    async with _launch_lock:
+        _ensure_no_active_process()
 
-    args = ["lerobot-teleoperate"]
-    args.extend(_profile_to_cli_args(req.robot, "robot"))
-    args.extend(_profile_to_cli_args(req.teleop, "teleop"))
-    args.append(f"--fps={req.fps}")
-    # Always-on latency monitoring for GUI sessions; the GUI polls
-    # outputs/teleop/latency_snapshot.json for the live overlay.
-    args.append("--latency_monitor=true")
-    args.append(f"--latency_output_dir={LATENCY_OUTPUT_DIR}")
+        args = ["lerobot-teleoperate"]
+        args.extend(_profile_to_cli_args(req.robot, "robot"))
+        args.extend(_profile_to_cli_args(req.teleop, "teleop"))
+        args.append(f"--fps={req.fps}")
+        # Always-on latency monitoring for GUI sessions; the GUI polls
+        # outputs/teleop/latency_snapshot.json for the live overlay.
+        args.append("--latency_monitor=true")
+        args.append(f"--latency_output_dir={LATENCY_OUTPUT_DIR}")
 
-    # Ensure debug model is loaded if selected (lazy load, stays warm after teleop)
-    extra_env = None
-    if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
-        if _debug_process is None or _debug_process.returncode is not None:
-            await _launch_debug_s2(req.debug_model)
-        extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
+        # Ensure debug model is loaded if selected (lazy load, stays warm after teleop).
+        # _debug_lock is nested under _launch_lock: this lock-ordering is safe
+        # because _debug_lock holders (load_debug_model / unload_debug_model)
+        # never reach for _launch_lock — no cycle is possible.
+        extra_env = None
+        if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
+            async with _debug_lock:
+                if _debug_process is None or _debug_process.returncode is not None:
+                    await _launch_debug_s2(req.debug_model)
+            extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
 
-    await _launch_subprocess(args, command="teleoperate", config=req.model_dump(), extra_env=extra_env)
-    return {"status": "started", "command": "teleoperate", "pid": _active_process.pid}
+        await _launch_subprocess(args, command="teleoperate", config=req.model_dump(), extra_env=extra_env)
+        return {"status": "started", "command": "teleoperate", "pid": _active_process.pid}
 
 
 @router.post("/record")
 async def start_record(req: RecordRequest) -> dict:
-    _ensure_no_active_process()
+    async with _launch_lock:
+        _ensure_no_active_process()
 
-    if req.teleop is None and req.policy_path is None:
-        raise HTTPException(400, "Either teleop or policy_path must be provided")
+        if req.teleop is None and req.policy_path is None:
+            raise HTTPException(400, "Either teleop or policy_path must be provided")
 
-    args = ["lerobot-record"]
-    args.extend(_profile_to_cli_args(req.robot, "robot"))
-    if req.teleop is not None:
-        args.extend(_profile_to_cli_args(req.teleop, "teleop"))
-    if req.policy_path:
-        args.append(f"--policy.path={req.policy_path}")
-    args.append(f"--dataset.repo_id={req.repo_id}")
-    if req.root:
-        args.append(f"--dataset.root={req.root}")
-    args.append(f"--dataset.single_task={req.single_task}")
-    args.append(f"--dataset.fps={req.fps}")
-    args.append(f"--dataset.episode_time_s={req.episode_time_s}")
-    args.append(f"--dataset.reset_time_s={req.reset_time_s}")
-    args.append(f"--dataset.num_episodes={req.num_episodes}")
-    args.append(f"--dataset.video={'true' if req.video else 'false'}")
-    args.append("--dataset.push_to_hub=false")
-    args.append(f"--dataset.vcodec={req.vcodec}")
-    args.append(f"--play_sounds={'true' if req.play_sounds else 'false'}")
-    if req.resume:
-        args.append("--resume=true")
-    if req.intervention_repo_id:
-        args.append(f"--intervention_repo_id={req.intervention_repo_id}")
-    # Always-on latency monitoring for GUI sessions. Record writes to its
-    # own directory so the dashboard doesn't double-render when both
-    # teleop and record source keys exist in LATENCY_SOURCES.
-    # _ensure_no_active_process guarantees only one writer at a time.
-    args.append("--latency_monitor=true")
-    args.append(f"--latency_output_dir={LATENCY_OUTPUT_DIR_RECORD}")
+        args = ["lerobot-record"]
+        args.extend(_profile_to_cli_args(req.robot, "robot"))
+        if req.teleop is not None:
+            args.extend(_profile_to_cli_args(req.teleop, "teleop"))
+        if req.policy_path:
+            args.append(f"--policy.path={req.policy_path}")
+        args.append(f"--dataset.repo_id={req.repo_id}")
+        if req.root:
+            args.append(f"--dataset.root={req.root}")
+        args.append(f"--dataset.single_task={req.single_task}")
+        args.append(f"--dataset.fps={req.fps}")
+        args.append(f"--dataset.episode_time_s={req.episode_time_s}")
+        args.append(f"--dataset.reset_time_s={req.reset_time_s}")
+        args.append(f"--dataset.num_episodes={req.num_episodes}")
+        args.append(f"--dataset.video={'true' if req.video else 'false'}")
+        args.append("--dataset.push_to_hub=false")
+        args.append(f"--dataset.vcodec={req.vcodec}")
+        args.append(f"--play_sounds={'true' if req.play_sounds else 'false'}")
+        if req.resume:
+            args.append("--resume=true")
+        if req.intervention_repo_id:
+            args.append(f"--intervention_repo_id={req.intervention_repo_id}")
+        # Always-on latency monitoring for GUI sessions. Record writes to its
+        # own directory so the dashboard doesn't double-render when both
+        # teleop and record source keys exist in LATENCY_SOURCES.
+        # _ensure_no_active_process guarantees only one writer at a time.
+        args.append("--latency_monitor=true")
+        args.append(f"--latency_output_dir={LATENCY_OUTPUT_DIR_RECORD}")
 
-    extra_env = None
-    if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
-        if _debug_process is None or _debug_process.returncode is not None:
-            await _launch_debug_s2(req.debug_model)
-        extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
+        extra_env = None
+        if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
+            async with _debug_lock:
+                if _debug_process is None or _debug_process.returncode is not None:
+                    await _launch_debug_s2(req.debug_model)
+            extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
 
-    await _launch_subprocess(args, command="record", config=req.model_dump(), extra_env=extra_env)
-    return {"status": "started", "command": "record", "pid": _active_process.pid}
+        await _launch_subprocess(args, command="record", config=req.model_dump(), extra_env=extra_env)
+        return {"status": "started", "command": "record", "pid": _active_process.pid}
 
 
 @router.post("/replay")
 async def start_replay(req: ReplayRequest) -> dict:
-    _ensure_no_active_process()
+    async with _launch_lock:
+        _ensure_no_active_process()
 
-    # Note: --dataset.fps is intentionally omitted — `lerobot-replay` declares
-    # it as config but ignores it (the loop paces by `dataset.fps` directly),
-    # so passing it from the GUI was dead wiring.
-    args = ["lerobot-replay"]
-    args.extend(_profile_to_cli_args(req.robot, "robot"))
-    args.append(f"--dataset.repo_id={req.repo_id}")
-    if req.root:
-        args.append(f"--dataset.root={req.root}")
-    args.append(f"--dataset.episode={req.episode}")
+        # Note: --dataset.fps is intentionally omitted — `lerobot-replay` declares
+        # it as config but ignores it (the loop paces by `dataset.fps` directly),
+        # so passing it from the GUI was dead wiring.
+        args = ["lerobot-replay"]
+        args.extend(_profile_to_cli_args(req.robot, "robot"))
+        args.append(f"--dataset.repo_id={req.repo_id}")
+        if req.root:
+            args.append(f"--dataset.root={req.root}")
+        args.append(f"--dataset.episode={req.episode}")
 
-    await _launch_subprocess(args, command="replay", config=req.model_dump())
-    return {"status": "started", "command": "replay", "pid": _active_process.pid}
+        await _launch_subprocess(args, command="replay", config=req.model_dump())
+        return {"status": "started", "command": "replay", "pid": _active_process.pid}
 
 
 @router.post("/hvla")
@@ -643,99 +716,106 @@ async def start_hvla(req: HVLARunRequest) -> dict:
     """Launch HVLA dual-system inference (S1 + S2)."""
     import tempfile
 
-    _ensure_no_active_process()
+    async with _launch_lock:
+        _ensure_no_active_process()
 
-    # Write robot profile to temp file (HVLA launch reads robot config from file)
-    robot_config = dict(req.robot)
-    if "fields" in robot_config:
-        flat = {"type": robot_config["type"]}
-        flat.update(robot_config["fields"])
-        if "cameras" in robot_config:
-            flat["cameras"] = robot_config["cameras"]
-        robot_config = flat
+        # Write robot profile to temp file (HVLA launch reads robot config from file)
+        robot_config = dict(req.robot)
+        if "fields" in robot_config:
+            flat = {"type": robot_config["type"]}
+            flat.update(robot_config["fields"])
+            if "cameras" in robot_config:
+                flat["cameras"] = robot_config["cameras"]
+            robot_config = flat
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, prefix="hvla_robot_") as tmp:
-        tmp.write(json.dumps(robot_config, indent=2))
-        tmp_name = tmp.name
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, prefix="hvla_robot_") as tmp:
+            tmp.write(json.dumps(robot_config, indent=2))
+            tmp_name = tmp.name
 
-    args = [
-        "python",
-        "-m",
-        "lerobot.policies.hvla.launch",
-        f"--s1-checkpoint={req.s1_checkpoint}",
-        f"--task={req.task}",
-        f"--robot-config={tmp_name}",
-        f"--fps={req.fps}",
-        f"--s1-type={req.s1_type}",
-    ]
-    if req.s1_query_interval is not None:
-        args.append(f"--s1-query-interval={req.s1_query_interval}")
-    if req.denoise_steps is not None:
-        args.append(f"--denoise-steps={req.denoise_steps}")
-    if req.s2_checkpoint:
-        args.append(f"--s2-checkpoint={Path(req.s2_checkpoint).expanduser()}")
-    else:
-        args.append("--zero-s2")
-    if req.decode_subtask:
-        args.append("--decode-subtask")
-    if req.record_dataset:
-        args.append(f"--record-dataset={req.record_dataset}")
-        args.append(f"--num-episodes={req.num_episodes}")
-        args.append(f"--episode-time-s={req.episode_time_s}")
-        args.append(f"--reset-time-s={req.reset_time_s}")
-
-    # Teleop for intervention / inverse follow
-    if req.teleop:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, prefix="hvla_teleop_"
-        ) as teleop_tmp:
-            teleop_tmp.write(json.dumps(req.teleop, indent=2))
-            teleop_tmp_name = teleop_tmp.name
-        args.append(f"--teleop-config={teleop_tmp_name}")
-    if req.intervention_dataset:
-        args.append(f"--intervention-dataset={req.intervention_dataset}")
-
-    # RLT
-    if req.rlt_mode:
-        # Refuse to launch without an explicit RL Token Encoder. Every other
-        # path tried — silent warning + actor.pt load → state_dict size
-        # mismatch crash deep inside model construction. Fail fast at the
-        # request boundary instead.
-        if not req.rlt_token_checkpoint or not str(req.rlt_token_checkpoint).strip():
-            raise HTTPException(
-                400,
-                "rlt_token_checkpoint is required when rlt_mode is True. "
-                "Set the 'RL Token Encoder' field to a trained Phase-1 "
-                "encoder dir (e.g. outputs/rlt_token_v4_4layer_d2048/"
-                "checkpoint-10000). The actor's input dim depends on it.",
-            )
-        args.append("--rlt-mode")
-        args.append(f"--rl-token-checkpoint={Path(req.rlt_token_checkpoint).expanduser()}")
-        if req.rlt_checkpoint:
-            args.append(f"--rlt-checkpoint={Path(req.rlt_checkpoint).expanduser()}")
-        if req.rlt_deploy:
-            args.append("--rlt-deploy")
-        args.append(f"--rl-chunk-length={req.rlt_chunk_length}")
-        args.append(f"--rlt-output-dir={req.rlt_output_dir}")
-        if not req.rlt_start_engaged:
-            args.append("--rlt-start-disengaged")
-        if req.rlt_shared_noise_per_chunk:
-            args.append("--rlt-shared-noise-per-chunk")
-        # RLT needs multi-episode mode
-        if not req.record_dataset:
+        args = [
+            "python",
+            "-m",
+            "lerobot.policies.hvla.launch",
+            f"--s1-checkpoint={req.s1_checkpoint}",
+            f"--task={req.task}",
+            f"--robot-config={tmp_name}",
+            f"--fps={req.fps}",
+            f"--s1-type={req.s1_type}",
+        ]
+        if req.s1_query_interval is not None:
+            args.append(f"--s1-query-interval={req.s1_query_interval}")
+        if req.denoise_steps is not None:
+            args.append(f"--denoise-steps={req.denoise_steps}")
+        if req.s2_checkpoint:
+            args.append(f"--s2-checkpoint={Path(req.s2_checkpoint).expanduser()}")
+        else:
+            args.append("--zero-s2")
+        if req.decode_subtask:
+            args.append("--decode-subtask")
+        if req.record_dataset:
+            args.append(f"--record-dataset={req.record_dataset}")
             args.append(f"--num-episodes={req.num_episodes}")
             args.append(f"--episode-time-s={req.episode_time_s}")
             args.append(f"--reset-time-s={req.reset_time_s}")
 
-    # Always enable latency monitoring when launched from the GUI so the
-    # dashboard's hvla tracks have data without requiring an extra
-    # checkbox. s1_process appends /main and /inference to this parent
-    # path; the resulting subdirs match LATENCY_SOURCES.
-    args.append("--latency-monitor")
-    args.append("--latency-output-dir=outputs/hvla_runs")
+        # Teleop for intervention / inverse follow
+        if req.teleop:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False, prefix="hvla_teleop_"
+            ) as teleop_tmp:
+                teleop_tmp.write(json.dumps(req.teleop, indent=2))
+                teleop_tmp_name = teleop_tmp.name
+            args.append(f"--teleop-config={teleop_tmp_name}")
+        if req.intervention_dataset:
+            args.append(f"--intervention-dataset={req.intervention_dataset}")
 
-    await _launch_subprocess(args, command="hvla", config=req.model_dump())
-    return {"status": "started", "command": "hvla", "pid": _active_process.pid}
+        # RLT
+        if req.rlt_mode:
+            # Refuse to launch without an explicit RL Token Encoder. Every other
+            # path tried — silent warning + actor.pt load → state_dict size
+            # mismatch crash deep inside model construction. Fail fast at the
+            # request boundary instead.
+            if not req.rlt_token_checkpoint or not str(req.rlt_token_checkpoint).strip():
+                raise HTTPException(
+                    400,
+                    "rlt_token_checkpoint is required when rlt_mode is True. "
+                    "Set the 'RL Token Encoder' field to a trained Phase-1 "
+                    "encoder dir (e.g. outputs/rlt_token_v4_4layer_d2048/"
+                    "checkpoint-10000). The actor's input dim depends on it.",
+                )
+            args.append("--rlt-mode")
+            args.append(f"--rl-token-checkpoint={Path(req.rlt_token_checkpoint).expanduser()}")
+            if req.rlt_checkpoint:
+                args.append(f"--rlt-checkpoint={Path(req.rlt_checkpoint).expanduser()}")
+            if req.rlt_deploy:
+                args.append("--rlt-deploy")
+            args.append(f"--rl-chunk-length={req.rlt_chunk_length}")
+            args.append(f"--rlt-output-dir={req.rlt_output_dir}")
+            if not req.rlt_start_engaged:
+                args.append("--rlt-start-disengaged")
+            if req.rlt_shared_noise_per_chunk:
+                args.append("--rlt-shared-noise-per-chunk")
+            # RLT needs multi-episode mode
+            if not req.record_dataset:
+                args.append(f"--num-episodes={req.num_episodes}")
+                args.append(f"--episode-time-s={req.episode_time_s}")
+                args.append(f"--reset-time-s={req.reset_time_s}")
+
+        # Always enable latency monitoring when launched from the GUI so the
+        # dashboard's hvla tracks have data without requiring an extra
+        # checkbox. s1_process appends /main and /inference to this parent
+        # path; the resulting subdirs match LATENCY_SOURCES.
+        args.append("--latency-monitor")
+        args.append("--latency-output-dir=outputs/hvla_runs")
+
+        # Action send shape (default "chunk"). Only emit the flag when the
+        # value differs from the default to keep the CLI tidy in the GUI's
+        # subprocess log.
+        if req.send_action_shape != "chunk":
+            args.append(f"--send-action-shape={req.send_action_shape}")
+
+        await _launch_subprocess(args, command="hvla", config=req.model_dump())
+        return {"status": "started", "command": "hvla", "pid": _active_process.pid}
 
 
 @router.get("/rlt-metrics")

@@ -116,12 +116,32 @@ async function selectProfile(kind, name) {
         const data = await res.json();
         currentProfile = { kind, name, data };
         savedProfileData = JSON.parse(JSON.stringify(data));
+        // Side-load safe-trajectory metadata so the renderer can show
+        // frame_count / duration without an extra async round-trip.
+        if (kind === 'robot') {
+            currentProfile._trajectoryMeta = null;
+            _refreshTrajectoryMeta();
+        }
         renderEditor();
         renderRobotProfileList();
         renderTeleopProfileList();
     } catch (e) {
         showToast('Error', `Failed to load profile: ${e.message}`, 'error');
     }
+}
+
+async function _refreshTrajectoryMeta() {
+    if (!currentProfile || currentProfile.kind !== 'robot') return;
+    const name = currentProfile.name;
+    try {
+        const res = await fetch(`/api/robot/trajectory-meta/${encodeURIComponent(name)}`);
+        const meta = res.ok ? await res.json() : { exists: false };
+        // Only apply if we're still on the same profile (user may have switched).
+        if (currentProfile && currentProfile.name === name) {
+            currentProfile._trajectoryMeta = meta;
+            _rerender();
+        }
+    } catch (e) { /* leave meta null; UI shows empty state */ }
 }
 
 function renderEditor() {
@@ -182,6 +202,7 @@ function renderEditor() {
     // Rest position section (robot profiles only)
     if (currentProfile.kind === 'robot') {
         html += renderRestPositionSection();
+        html += renderSafeTrajectorySection();
     }
 
     // Save/discard bar (hidden until dirty)
@@ -202,27 +223,41 @@ function renderEditor() {
 
 function renderFormField(field, value) {
     const id = `field-${field.name}`;
-    const label = `<label for="${id}">${esc(field.name)}${field.required ? ' *' : ''}</label>`;
+    // ``description`` is the dataclass field's metadata.description from
+    // the backend schema. Render it as a ``title`` tooltip on both the
+    // label and the form control so the user can hover either to read
+    // it. Empty when the config doesn't supply metadata.
+    const desc = typeof field.description === 'string' ? field.description : '';
+    const labelTitle = desc ? ` title="${esc(desc)}"` : '';
+    const controlTitle = desc ? ` title="${esc(desc)}"` : '';
+    const label = `<label for="${id}"${labelTitle}>${esc(field.name)}${field.required ? ' *' : ''}</label>`;
     const typeStr = field.type_str.toLowerCase();
 
     // Literal["a", "b", ...] fields render as a dropdown of the allowed
     // values. Backend exposes `choices` whenever it detects a Literal
     // annotation, so any new enum-ish field auto-renders without a JS edit.
+    // Per-choice tooltips come from ``field.choice_descriptions`` (also
+    // schema-supplied via dataclass metadata) — useful for opaque
+    // algorithm names where the choice value alone doesn't explain itself.
     if (Array.isArray(field.choices) && field.choices.length > 0) {
+        const choiceDescs = (field.choice_descriptions && typeof field.choice_descriptions === 'object')
+            ? field.choice_descriptions : {};
         const opts = field.choices
             .map(c => {
                 const sel = String(value) === String(c) ? 'selected' : '';
-                return `<option value="${esc(String(c))}" ${sel}>${esc(String(c))}</option>`;
+                const cd = choiceDescs[c];
+                const optTitle = cd ? ` title="${esc(cd)}"` : '';
+                return `<option value="${esc(String(c))}" ${sel}${optTitle}>${esc(String(c))}</option>`;
             })
             .join('');
-        return label + `<select id="${id}">${opts}</select>`;
+        return label + `<select id="${id}"${controlTitle}>${opts}</select>`;
     }
 
     if (typeStr === 'bool' || typeStr === 'bool | none') {
         const trueSelected = value === true ? 'selected' : '';
         const falseSelected = value === false ? 'selected' : '';
         const noneSelected = (value === null || value === '' || value === undefined) ? 'selected' : '';
-        return label + `<select id="${id}">
+        return label + `<select id="${id}"${controlTitle}>
             ${!field.required ? `<option value="null" ${noneSelected}>--</option>` : ''}
             <option value="true" ${trueSelected}>true</option>
             <option value="false" ${falseSelected}>false</option>
@@ -230,17 +265,17 @@ function renderFormField(field, value) {
     }
 
     if (typeStr.includes('int') && !typeStr.includes('dict') && !typeStr.includes('|')) {
-        return label + `<input type="number" id="${id}" value="${value ?? ''}" step="1">`;
+        return label + `<input type="number" id="${id}" value="${value ?? ''}" step="1"${controlTitle}>`;
     }
 
     if (typeStr.includes('float') && !typeStr.includes('dict') && !typeStr.includes('|')) {
-        return label + `<input type="number" id="${id}" value="${value ?? ''}" step="any">`;
+        return label + `<input type="number" id="${id}" value="${value ?? ''}" step="any"${controlTitle}>`;
     }
 
     // Default: text input
     const displayValue = (value === null || value === undefined) ? '' : String(value);
     return label + `<input type="text" id="${id}" value="${esc(displayValue)}"
-        ${!field.required ? 'placeholder="(optional)"' : ''}>`;
+        ${!field.required ? 'placeholder="(optional)"' : ''}${controlTitle}>`;
 }
 
 function changeProfileType(newType) {
@@ -270,7 +305,12 @@ function _serializeProfile(data) {
 function _collectFormFields() {
     const schemas = currentProfile.kind === 'robot' ? robotSchemas : teleopSchemas;
     const schema = schemas?.find(s => s.type_name === currentProfile.data.type);
-    const fields = {};
+    // Start from the loaded fields so any non-schema fields are preserved
+    // — the backend's _SKIP_FIELDS (e.g. `calibration_dir`) hides certain
+    // fields from the editing UI but they still need to round-trip through
+    // save / launch. Starting from `{}` here would silently drop them and
+    // any subsequent save would erase the JSON's calibration_dir.
+    const fields = { ...(currentProfile?.data?.fields || {}) };
     if (schema) {
         for (const field of schema.fields) {
             const input = document.getElementById(`field-${field.name}`);
@@ -1016,6 +1056,166 @@ function clearRestPosition() {
     currentProfile.data.rest_position = {};
     _rerender();
     _updateDirtyState();
+}
+
+// ============================================================================
+// Safe trajectory (hand-recorded joint-space motion for open-loop replay)
+// ============================================================================
+
+let _trajectoryRecordingActive = false;
+
+function renderSafeTrajectorySection() {
+    const restPos = currentProfile?.data?.rest_position || {};
+    const hasRest = Object.keys(restPos).length > 0;
+    const meta = currentProfile?._trajectoryMeta || { exists: false };
+
+    let html = '<div class="rest-position-section"><h3>Safe Trajectory</h3>';
+
+    if (meta.exists) {
+        const dur = (meta.duration_s || 0).toFixed(1);
+        const frames = meta.frame_count || 0;
+        const fps = meta.fps || '?';
+        html += `<div class="rest-position-values"><span class="rest-pos-entry"><span class="rest-pos-label">${frames} frames</span><span class="rest-pos-value">${dur}s @ ${fps} fps</span></span></div>`;
+    } else {
+        html += '<div class="rest-position-empty">No safe trajectory recorded. Records a hand-guided motion the robot can replay open-loop on its own.</div>';
+    }
+
+    html += '<div class="rest-position-actions">';
+    if (_trajectoryRecordingActive) {
+        html += '<button class="btn-small" id="stop-traj-btn" onclick="stopTrajectoryRecording()">Done</button>';
+        html += '<button class="btn-small secondary" id="cancel-traj-btn" onclick="cancelTrajectoryRecording()">Cancel</button>';
+    } else {
+        const recordDisabled = hasRest ? '' : 'disabled';
+        const recordTitle = hasRest
+            ? 'title="Connect, move to rest, then disable torque. You hand-guide the arm; click Done to save."'
+            : 'title="Record a rest position first — the trajectory must start from a known pose."';
+        html += `<button class="btn-small" id="record-traj-btn" onclick="startTrajectoryRecording()" ${recordDisabled} ${recordTitle}>Record Trajectory</button>`;
+        const replayDisabled = (meta.exists && hasRest) ? '' : 'disabled';
+        const replayTitle = !hasRest
+            ? 'title="Record a rest position first."'
+            : !meta.exists ? 'title="Record a trajectory first."'
+            : 'title="Move to rest, then replay the saved trajectory open-loop."';
+        html += `<button class="btn-small secondary" id="replay-traj-btn" onclick="replayTrajectory()" ${replayDisabled} ${replayTitle}>Replay</button>`;
+        const clearDisabled = meta.exists ? '' : 'disabled';
+        html += `<button class="btn-small danger" id="clear-traj-btn" onclick="clearTrajectory()" ${clearDisabled}>Clear</button>`;
+    }
+    html += '</div>';
+    html += '<div id="trajectory-status" class="rest-position-status"></div>';
+    html += '</div>';
+    return html;
+}
+
+async function startTrajectoryRecording() {
+    if (!currentProfile) return;
+    const restPos = currentProfile.data.rest_position;
+    if (!restPos || Object.keys(restPos).length === 0) {
+        showToast('Error', 'Record a rest position first', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('record-traj-btn');
+    const statusEl = document.getElementById('trajectory-status');
+    if (btn) { btn.textContent = 'Connecting...'; btn.disabled = true; }
+    if (statusEl) statusEl.textContent = 'Connecting, moving to rest, then disabling torque...';
+
+    try {
+        const res = await fetch('/api/robot/start-trajectory-recording', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ robot: currentProfile.data, rest_position: restPos, fps: 30 }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || 'Failed to start recording');
+        }
+        _trajectoryRecordingActive = true;
+        _rerender();
+        const s = document.getElementById('trajectory-status');
+        if (s) s.textContent = 'Torque disabled — hand-guide the arm through the safe motion, then click Done.';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '';
+        showToast('Error', e.message, 'error');
+        if (btn) { btn.textContent = 'Record Trajectory'; btn.disabled = false; }
+    }
+}
+
+async function stopTrajectoryRecording() {
+    if (!currentProfile) return;
+    const btn = document.getElementById('stop-traj-btn');
+    const statusEl = document.getElementById('trajectory-status');
+    if (btn) { btn.textContent = 'Saving...'; btn.disabled = true; }
+    if (statusEl) statusEl.textContent = 'Stopping sampler and saving trajectory...';
+
+    try {
+        const res = await fetch('/api/robot/stop-trajectory-recording', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ profile_name: currentProfile.name }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || 'Failed to save trajectory');
+        }
+        const result = await res.json();
+        _trajectoryRecordingActive = false;
+        await _refreshTrajectoryMeta();
+        showToast('Recorded', `${result.frame_count} frames over ${(result.duration_s || 0).toFixed(1)}s`, 'success');
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Error saving trajectory. You can retry or cancel.';
+        showToast('Error', e.message, 'error');
+        if (btn) { btn.textContent = 'Done'; btn.disabled = false; }
+    }
+}
+
+async function cancelTrajectoryRecording() {
+    try {
+        await fetch('/api/robot/cancel-trajectory-recording', { method: 'POST' });
+    } catch (e) { /* ignore */ }
+    _trajectoryRecordingActive = false;
+    _rerender();
+}
+
+async function replayTrajectory() {
+    if (!currentProfile) return;
+    const restPos = currentProfile.data.rest_position;
+    if (!restPos || Object.keys(restPos).length === 0) {
+        showToast('Error', 'Record a rest position first', 'error');
+        return;
+    }
+    if (!confirm('Replay the saved trajectory? The robot will move to rest, then execute the recorded motion open-loop. Make sure no teleop session is using the port.')) return;
+
+    const btn = document.getElementById('replay-traj-btn');
+    const statusEl = document.getElementById('trajectory-status');
+    if (btn) { btn.textContent = 'Replaying...'; btn.disabled = true; }
+    if (statusEl) statusEl.textContent = 'Connecting, moving to rest, then replaying...';
+
+    try {
+        const res = await fetch('/api/robot/replay-trajectory', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ robot: currentProfile.data, rest_position: restPos, profile_name: currentProfile.name }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || 'Replay failed');
+        }
+        if (statusEl) statusEl.textContent = '';
+        showToast('Done', 'Replay complete', 'success');
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '';
+        showToast('Error', e.message, 'error');
+    } finally {
+        if (btn) { btn.textContent = 'Replay'; btn.disabled = false; }
+    }
+}
+
+async function clearTrajectory() {
+    if (!currentProfile) return;
+    if (!confirm('Delete the saved safe trajectory?')) return;
+    try {
+        await fetch(`/api/robot/trajectory/${encodeURIComponent(currentProfile.name)}`, { method: 'DELETE' });
+    } catch (e) { /* ignore */ }
+    await _refreshTrajectoryMeta();
 }
 
 async function recoverRobot() {
