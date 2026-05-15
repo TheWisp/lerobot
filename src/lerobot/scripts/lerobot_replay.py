@@ -81,6 +81,7 @@ from lerobot.robots import (  # noqa: F401
     reachy2,
     so107_follower_predictive,
     so_follower,
+    so_follower_predictive,
     unitree_g1,
 )
 from lerobot.utils.constants import ACTION

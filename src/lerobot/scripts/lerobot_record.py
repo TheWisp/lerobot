@@ -136,6 +136,7 @@ from lerobot.robots import (  # noqa: F401
     reachy2,
     so107_follower_predictive,
     so_follower,
+    so_follower_predictive,
     unitree_g1 as unitree_g1_robot,
 )
 from lerobot.teleoperators import (  # noqa: F401
@@ -155,6 +156,7 @@ from lerobot.teleoperators import (  # noqa: F401
     reachy2_teleoperator,
     so107_leader_highrate,
     so_leader,
+    so_leader_highrate,
     trajectory_replay,
     unitree_g1,
 )
