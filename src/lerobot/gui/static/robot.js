@@ -223,27 +223,41 @@ function renderEditor() {
 
 function renderFormField(field, value) {
     const id = `field-${field.name}`;
-    const label = `<label for="${id}">${esc(field.name)}${field.required ? ' *' : ''}</label>`;
+    // ``description`` is the dataclass field's metadata.description from
+    // the backend schema. Render it as a ``title`` tooltip on both the
+    // label and the form control so the user can hover either to read
+    // it. Empty when the config doesn't supply metadata.
+    const desc = typeof field.description === 'string' ? field.description : '';
+    const labelTitle = desc ? ` title="${esc(desc)}"` : '';
+    const controlTitle = desc ? ` title="${esc(desc)}"` : '';
+    const label = `<label for="${id}"${labelTitle}>${esc(field.name)}${field.required ? ' *' : ''}</label>`;
     const typeStr = field.type_str.toLowerCase();
 
     // Literal["a", "b", ...] fields render as a dropdown of the allowed
     // values. Backend exposes `choices` whenever it detects a Literal
     // annotation, so any new enum-ish field auto-renders without a JS edit.
+    // Per-choice tooltips come from ``field.choice_descriptions`` (also
+    // schema-supplied via dataclass metadata) — useful for opaque
+    // algorithm names where the choice value alone doesn't explain itself.
     if (Array.isArray(field.choices) && field.choices.length > 0) {
+        const choiceDescs = (field.choice_descriptions && typeof field.choice_descriptions === 'object')
+            ? field.choice_descriptions : {};
         const opts = field.choices
             .map(c => {
                 const sel = String(value) === String(c) ? 'selected' : '';
-                return `<option value="${esc(String(c))}" ${sel}>${esc(String(c))}</option>`;
+                const cd = choiceDescs[c];
+                const optTitle = cd ? ` title="${esc(cd)}"` : '';
+                return `<option value="${esc(String(c))}" ${sel}${optTitle}>${esc(String(c))}</option>`;
             })
             .join('');
-        return label + `<select id="${id}">${opts}</select>`;
+        return label + `<select id="${id}"${controlTitle}>${opts}</select>`;
     }
 
     if (typeStr === 'bool' || typeStr === 'bool | none') {
         const trueSelected = value === true ? 'selected' : '';
         const falseSelected = value === false ? 'selected' : '';
         const noneSelected = (value === null || value === '' || value === undefined) ? 'selected' : '';
-        return label + `<select id="${id}">
+        return label + `<select id="${id}"${controlTitle}>
             ${!field.required ? `<option value="null" ${noneSelected}>--</option>` : ''}
             <option value="true" ${trueSelected}>true</option>
             <option value="false" ${falseSelected}>false</option>
@@ -251,17 +265,17 @@ function renderFormField(field, value) {
     }
 
     if (typeStr.includes('int') && !typeStr.includes('dict') && !typeStr.includes('|')) {
-        return label + `<input type="number" id="${id}" value="${value ?? ''}" step="1">`;
+        return label + `<input type="number" id="${id}" value="${value ?? ''}" step="1"${controlTitle}>`;
     }
 
     if (typeStr.includes('float') && !typeStr.includes('dict') && !typeStr.includes('|')) {
-        return label + `<input type="number" id="${id}" value="${value ?? ''}" step="any">`;
+        return label + `<input type="number" id="${id}" value="${value ?? ''}" step="any"${controlTitle}>`;
     }
 
     // Default: text input
     const displayValue = (value === null || value === undefined) ? '' : String(value);
     return label + `<input type="text" id="${id}" value="${esc(displayValue)}"
-        ${!field.required ? 'placeholder="(optional)"' : ''}>`;
+        ${!field.required ? 'placeholder="(optional)"' : ''}${controlTitle}>`;
 }
 
 function changeProfileType(newType) {

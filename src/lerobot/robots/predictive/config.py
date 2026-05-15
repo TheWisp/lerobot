@@ -25,16 +25,20 @@ class, e.g.::
     class SO107FollowerPredictiveRobotConfig(PredictiveControllerConfig, SOFollowerConfig):
         pass
 
-All fields here carry validated defaults; subclasses can override
-individual fields without touching the rest. Single source of truth for
-predictive controller tunables — bi-arm configs inherit from the same
-class instead of redeclaring fields (which previously meant new fields
-added to one config silently went missing from the other).
+All fields here carry validated defaults plus a ``metadata.description``
+that the GUI surfaces as a hover tooltip on the profile editor — so the
+user can hover over "velocity_estimator" or "max_lookahead_ms" and see
+what each knob actually does without reading source.
+
+Single source of truth for predictive controller tunables — bi-arm
+configs inherit from the same class instead of redeclaring fields
+(which previously meant new fields added to one config silently went
+missing from the other).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 
@@ -42,97 +46,176 @@ from typing import Literal
 class PredictiveControllerConfig:
     """Controller tunables. Inherit alongside the base robot config."""
 
-    # Initial lookahead in ms. The controller refines this online via
-    # amplitude-gated cross-correlation when ``adaptive=True``. For
-    # bi_so107 white profile at P=16 the converged value is ~80-110 ms.
-    lookahead_ms: float = 80.0
-
-    # Cap on adaptive lookahead. Past this, extrapolation overshoot
-    # dominates the residual and operator feel degrades. Empirical motor
-    # τ on bi_so107 + Feetech STS3215 is ~147 ms — set cap above this so
-    # the adaptive loop can fully compensate. Below this and the loop
-    # saturates with residual state-vs-intent lag.
-    max_lookahead_ms: float = 150.0
-
-    # Predictor-corrector blend factor. 1.0 = pure leader-based prediction
-    # (raw_shifted only). < 1.0 blends in a velocity-extrapolated predictor
-    # from the action history → smoother motor stream. Validated value
-    # on bi_so107 is 0.3 (70 % predictor + 30 % fresh leader-based shift).
-    corrector_alpha: float = 1.0
-
-    # Window over which leader velocity is estimated. Too short →
-    # noise amplified; too long → phase lag (for centered estimators).
-    velocity_window_ms: float = 70.0
-
-    # How the controller computes v_leader from the window / publish stream:
-    #
-    #   * ``"quad"``    — LSQ quadratic fit, slope evaluated at the
-    #                     most-recent sample's time. Unbiased estimate of
-    #                     v(now) under acceleration.
-    #   * ``"linear"``  — LSQ linear slope (original prototype behaviour).
-    #                     Centered velocity estimator → biased under
-    #                     acceleration. Kept selectable for parity with
-    #                     prior measurements / regression-debugging.
-    #   * ``"forward_diff"`` — Two-sample causal difference at the window
-    #                          tail. Lowest bias but highest noise
-    #                          sensitivity.
-    #   * ``"amp_gated_lp"`` — EMA-lowpass V_est with per-joint amplitude
-    #                          gating, rebuilt per tick over the velocity
-    #                          window. WARNING: degrades to ungated raw
-    #                          forward_diff when the window holds <3
-    #                          samples (e.g. 30 Hz publish × 70 ms
-    #                          window → 90% of ticks fall into the
-    #                          fallback). Designed for the teleop pull
-    #                          path where ~14 samples are available;
-    #                          use ``stateful_lp`` for low-rate dict
-    #                          publishes instead.
-    #   * ``"stateful_lp"``  — Per-publish 1st-order EMA velocity held as
-    #                          controller state, with α keyed on the
-    #                          actual publish dt so the cutoff is
-    #                          ``velocity_lowpass_hz`` regardless of
-    #                          publish rate. Rate-INVARIANT by design:
-    #                          the tick just reads the stored velocity,
-    #                          there's no per-tick window recomputation,
-    #                          so HF amplification in motor_cmd doesn't
-    #                          balloon at low publish rates. Recommended
-    #                          for any policy/teleop pushing dicts; the
-    #                          chunk path bypasses velocity estimation
-    #                          entirely so it doesn't care which option
-    #                          is selected here.
-    velocity_estimator: Literal["quad", "linear", "forward_diff", "amp_gated_lp", "stateful_lp"] = (
-        "stateful_lp"
+    lookahead_ms: float = field(
+        default=80.0,
+        metadata={
+            "description": (
+                "Initial lookahead horizon in milliseconds — how far ahead of "
+                '"now" the controller targets when writing Goal_Position. With '
+                "adaptive=True the controller refines this online from the "
+                "observed action→state lag. With adaptive=False, this value is "
+                "the final lookahead. 80 ms is a good starting point for "
+                "Feetech STS3215."
+            ),
+        },
     )
 
-    # Knobs for ``amp_gated_lp`` / ``stateful_lp``. Only consulted when
-    # the corresponding estimator is selected.
-    #
-    # ``velocity_lowpass_hz`` — cutoff of the 1st-order EMA applied to
-    #     the velocity estimate before extrapolation. Default 4 Hz
-    #     attenuates the human 8-12 Hz tremor band while passing real
-    #     motion (≤2 Hz dominant). Lower → more smoothing → more phase
-    #     lag in V_est → less effective lookahead.
-    # ``amp_gate_lo`` / ``amp_gate_hi`` — peak-to-peak motion amplitude
-    #     (in joint units — degrees for arm joints, RANGE_0_100 for
-    #     gripper) over the velocity window below which the controller
-    #     becomes pure pass-through (no lookahead). Linear ramp between
-    #     lo and hi. Defaults validated on bi_so107 gripper sweep at
-    #     ±3-unit deliberate motion with 0.5-unit tremor. ONLY consulted
-    #     by ``amp_gated_lp``; ``stateful_lp`` has no amplitude gate.
-    velocity_lowpass_hz: float = 4.0
-    amp_gate_lo: float = 1.0
-    amp_gate_hi: float = 3.0
+    max_lookahead_ms: float = field(
+        default=150.0,
+        metadata={
+            "description": (
+                "Hard cap on the adaptive lookahead. Set ABOVE your physical "
+                "motor τ (~147 ms on bi_so107 P=16) so the adaptive loop can "
+                "fully compensate; if set below motor τ the loop saturates "
+                "with residual state-vs-intent lag. Going too far past motor τ "
+                "introduces overshoot at direction reversals."
+            ),
+        },
+    )
 
-    # Control-thread rate. The bus comfortably sustains 170+ Hz at P=48
-    # under sync_write-only load. 200 Hz is the prototype default.
-    control_rate_hz: float = 200.0
+    corrector_alpha: float = field(
+        default=1.0,
+        metadata={
+            "description": (
+                "Predictor-corrector blend factor. 1.0 = pure leader-based "
+                "prediction (raw_shifted only). <1.0 mixes in a velocity-"
+                "extrapolated predictor from the action history → smoother "
+                "motor stream at the cost of slightly more lag. 0.3 is the "
+                "validated value on bi_so107."
+            ),
+        },
+    )
 
-    # Whether to adapt ``lookahead_ms`` online from cross-correlation of
-    # observed (intent, state). Set False to use the fixed lookahead.
-    adaptive: bool = True
+    velocity_window_ms: float = field(
+        default=70.0,
+        metadata={
+            "description": (
+                "Time window (ms) over which leader velocity is estimated. Too "
+                "short → noise amplified. Too long → phase lag for centered "
+                "estimators. Window-based estimators (quad/linear/forward_diff/"
+                "amp_gated_lp) read samples that fall inside this window each "
+                "tick; stateful_lp uses it only as a stale-publish timeout."
+            ),
+        },
+    )
 
-    # Safety clamp on the controller's per-step Δ-position vs the last
-    # sent action. Extrapolation can spike during sharp leader reversals;
-    # this caps the worst-case motor jolt. Normalized units (or degrees
-    # when ``use_degrees=True``) per control tick. Conservative default:
-    # 3 units/tick at 200 Hz ≈ 600 units/s.
-    max_step_deg: float = 3.0
+    velocity_estimator: Literal["quad", "linear", "forward_diff", "amp_gated_lp", "stateful_lp"] = field(
+        default="stateful_lp",
+        metadata={
+            "description": (
+                "How the controller computes intent velocity for lookahead "
+                "extrapolation. stateful_lp (default) is rate-invariant and "
+                "recommended for any low-rate (≤60 Hz) dict-publish source "
+                "such as a chunked policy. The window-based estimators "
+                "(quad / linear / forward_diff / amp_gated_lp) work fine for "
+                "high-rate teleop pull-paths but degrade at low publish rates "
+                "where the window holds <3 samples — see per-option tooltips."
+            ),
+            "choice_descriptions": {
+                "quad": (
+                    "LSQ quadratic fit, slope evaluated at the most-recent "
+                    "sample. Unbiased v(now) under acceleration. Window-based "
+                    "→ noisy at <3 samples in window."
+                ),
+                "linear": (
+                    "LSQ linear slope (original prototype behaviour). Centered "
+                    "velocity estimate, biased under acceleration by ~a·w/2. "
+                    "Kept for regression-debugging only."
+                ),
+                "forward_diff": (
+                    "Two-sample causal difference at window tail "
+                    "(v ≈ (p[-1] − p[-2])/dt). Unbiased but high noise — fine "
+                    "for smooth high-rate sources, marginal at ≤30 Hz publish."
+                ),
+                "amp_gated_lp": (
+                    "EMA-lowpass V_est with per-joint amplitude gating, "
+                    "rebuilt per tick. WARNING: degrades to ungated raw "
+                    "forward_diff when the window holds <3 samples (e.g. 90% "
+                    "of ticks at 30 Hz × 70 ms window). Use stateful_lp at "
+                    "low publish rates instead."
+                ),
+                "stateful_lp": (
+                    "Per-publish 1st-order EMA velocity held as controller "
+                    "state, α keyed on actual publish dt → filter cutoff is "
+                    "velocity_lowpass_hz regardless of publish rate. "
+                    "Rate-INVARIANT. Recommended for dict-publish policies / "
+                    "teleops."
+                ),
+            },
+        },
+    )
+
+    velocity_lowpass_hz: float = field(
+        default=4.0,
+        metadata={
+            "description": (
+                "Cutoff frequency (Hz) of the 1st-order EMA applied to the "
+                "velocity estimate before extrapolation. Only consulted by "
+                "amp_gated_lp and stateful_lp. Default 4 Hz attenuates the "
+                "human 8-12 Hz tremor band while passing real motion "
+                "(≤2 Hz dominant). Lower → more smoothing, more phase lag → "
+                "less effective lookahead."
+            ),
+        },
+    )
+
+    amp_gate_lo: float = field(
+        default=1.0,
+        metadata={
+            "description": (
+                "Lower amplitude gate threshold (deg p2p, in joint units). "
+                "ONLY consulted by amp_gated_lp. Below this peak-to-peak "
+                "motion over the velocity window, lookahead is fully "
+                "suppressed (motor_cmd = intent). stateful_lp has no gate."
+            ),
+        },
+    )
+
+    amp_gate_hi: float = field(
+        default=3.0,
+        metadata={
+            "description": (
+                "Upper amplitude gate threshold (deg p2p). Above this "
+                "peak-to-peak motion, full lookahead is applied. Linear "
+                "ramp between amp_gate_lo and amp_gate_hi. ONLY consulted "
+                "by amp_gated_lp."
+            ),
+        },
+    )
+
+    control_rate_hz: float = field(
+        default=200.0,
+        metadata={
+            "description": (
+                "Background controller thread tick rate. Feetech bus "
+                "comfortably sustains 170+ Hz at P=48 under sync_write load. "
+                "200 Hz is the validated default. Going higher risks serial "
+                "timeouts."
+            ),
+        },
+    )
+
+    adaptive: bool = field(
+        default=True,
+        metadata={
+            "description": (
+                "Adapt lookahead_ms online via cross-correlation of observed "
+                "(intent, state) every 2 s. Recommended. Set False for a "
+                "fixed lookahead (e.g. when you've calibrated the value for "
+                "your hardware and want it pinned)."
+            ),
+        },
+    )
+
+    max_step_deg: float = field(
+        default=3.0,
+        metadata={
+            "description": (
+                "Safety clamp on the controller's per-step Δ-position vs the "
+                "last sent action. Extrapolation can spike during sharp "
+                "leader reversals; this caps the worst-case motor jolt. "
+                "Normalized units (or degrees when use_degrees=True) per "
+                "control tick. 3 units/tick at 200 Hz ≈ 600 units/s."
+            ),
+        },
+    )

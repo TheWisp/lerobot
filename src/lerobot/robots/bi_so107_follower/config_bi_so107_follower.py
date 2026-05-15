@@ -67,7 +67,33 @@ class BiSO107FollowerConfig(RobotConfig):
     # behaviour because it has no non-blocking variant; in practice that
     # method only blocks when the consumer is faster than the camera,
     # which the loop-rate fix above already addresses.
-    camera_read_strategy: Literal["latest", "wait_for_new"] = "latest"
+    camera_read_strategy: Literal["latest", "wait_for_new"] = field(
+        default="latest",
+        metadata={
+            "description": (
+                "How get_observation() reads each camera frame. 'latest' "
+                "(default) returns whatever's in the grab thread's buffer — "
+                "never blocks, may duplicate frames when the loop is faster "
+                "than the camera. 'wait_for_new' blocks for a fresh frame — "
+                "never duplicates, but the loop period stretches to the "
+                "slowest camera. Use 'latest' for max throughput, "
+                "'wait_for_new' only if the policy was trained on a strict-"
+                "no-duplicate dataset."
+            ),
+            "choice_descriptions": {
+                "latest": (
+                    "Return the camera grab thread's current buffer — never "
+                    "blocks. May duplicate frames when consumer > camera. "
+                    "Recommended for multi-camera setups (no cross-camera "
+                    "stagger from per-cam waits)."
+                ),
+                "wait_for_new": (
+                    "Block until a fresh frame arrives. Never duplicates. "
+                    "Loop period stretches to slowest camera's FPS."
+                ),
+            },
+        },
+    )
 
     # When True, ``send_action`` is a no-op: the motors never receive a
     # command, but every other side effect (connect, calibrate, motor

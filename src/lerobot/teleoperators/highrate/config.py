@@ -24,23 +24,28 @@ inherits both its base teleop config AND this class, e.g.::
     class SO107LeaderHighRateConfig(HighRateLeaderConfig, SO107LeaderConfig):
         pass
 
-Subclasses can override individual fields without redeclaring the
-others.
+Field metadata is surfaced to the GUI as hover tooltips.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class HighRateLeaderConfig:
     """Background-poller tunables. Inherit alongside the base leader config."""
 
-    # Background poll rate (Hz). Default 200 matches the predictive
-    # follower's control_rate_hz so the consumer's velocity estimator
-    # sees one fresh sample per tick. Don't go higher than the Feetech
-    # bus can actually sustain — empirically ~170-200 Hz with P=48
-    # sync_read of 6-7 motors per arm. Going higher just produces serial
-    # timeouts and a thread that wastes CPU retrying.
-    read_rate_hz: float = 200.0
+    read_rate_hz: float = field(
+        default=200.0,
+        metadata={
+            "description": (
+                "Background poll rate (Hz) for reading leader Present_Position. "
+                "200 Hz matches the predictive follower's control_rate_hz so "
+                "the consumer's velocity estimator sees one fresh sample per "
+                "tick. Don't go higher than the Feetech bus can sustain "
+                "(~170-200 Hz with P=48 sync_read of 6-7 motors per arm) — "
+                "going higher just produces serial timeouts."
+            ),
+        },
+    )

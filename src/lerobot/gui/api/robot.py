@@ -162,6 +162,19 @@ def _introspect_fields(cls: type) -> list[dict]:
         choices = _literal_choices(resolved_type)
         if choices is not None:
             entry["choices"] = choices
+        # Field-level documentation surfaced via ``dataclasses.field(
+        # metadata={"description": "..."})``. Frontend renders this as a
+        # tooltip on the label + control so users hover-discover what the
+        # knob means without reading the source. Per-Literal-choice
+        # documentation is forwarded as ``choice_descriptions`` so dropdown
+        # options can each carry their own tooltip — useful for opaque
+        # algorithm names like "stateful_lp" vs "amp_gated_lp".
+        description = f.metadata.get("description")
+        if description:
+            entry["description"] = description
+        choice_descs = f.metadata.get("choice_descriptions")
+        if choice_descs:
+            entry["choice_descriptions"] = dict(choice_descs)
         result.append(entry)
     return result
 
