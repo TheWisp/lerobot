@@ -47,27 +47,16 @@ LEFT_INDICES = list(range(0, 7))
 RIGHT_INDICES = list(range(7, 14))
 
 
-def extract(
-    dataset_repo_id: str,
-    out_path: Path,
-    max_episodes: int | None = None,
-    fps_subsample: int = 1,
-    include_arms: tuple[str, ...] = ("left", "right"),
-    longest_n: int | None = None,
-    skip_longest_n: int = 0,
-) -> None:
-    """Load dataset; iterate frames; emit (motor7_t, ee3_t, motor7_t+1, ee3_t+1) pairs."""
+def extract(dataset_repo_id: str, out_path: Path) -> None:
+    """Load dataset; iterate frames; emit (motor7_t, ee3_t, motor7_t+1, ee3_t+1) pairs
+    for both arms. Source column is `action` (commanded joints) — `observation.state`
+    lags by motor tracking error and is the wrong supervision signal for IK."""
     print(f"Loading {dataset_repo_id} ...")
     ds = LeRobotDataset(dataset_repo_id)
-    n_total_ep = ds.num_episodes
-    print(f"  fps={ds.fps}, episodes={n_total_ep}, total frames={ds.num_frames}")
+    print(f"  fps={ds.fps}, episodes={ds.num_episodes}, total frames={ds.num_frames}")
 
-    # Use the underlying HF dataset with no image columns — image decoding is
-    # extremely slow and we only need motor state for IK training.
-    hf = ds.hf_dataset.select_columns(["observation.state", "episode_index"])
-    # Group rows by episode using a single pass.
-    print("  scanning parquet for episode boundaries...")
-    all_states = np.array(hf["observation.state"], dtype=np.float32)  # (N, 14)
+    hf = ds.hf_dataset.select_columns(["action", "episode_index"])
+    all_states = np.array(hf["action"], dtype=np.float32)  # (N, 14)
     all_episodes = np.array(hf["episode_index"], dtype=np.int64)  # (N,)
     print(f"  loaded {len(all_states)} frames in memory")
 
@@ -79,70 +68,54 @@ def extract(
     out_joints: list[np.ndarray] = []
     in_ee: list[np.ndarray] = []
     out_ee: list[np.ndarray] = []
+    in_rot: list[np.ndarray] = []
+    out_rot: list[np.ndarray] = []
     arms_label: list[int] = []
 
     t0 = time.monotonic()
 
-    # Precompute episode boundaries: indices where episode_index changes.
     boundaries = np.where(np.diff(all_episodes) != 0)[0] + 1
     starts = np.concatenate([[0], boundaries])
     ends = np.concatenate([boundaries, [len(all_episodes)]])
-    lengths = ends - starts
 
-    # Select which episodes to process based on longest_n / skip_longest_n.
-    # Sort episode indices by length, descending.
-    order_by_len_desc = np.argsort(-lengths)
-    if longest_n is not None:
-        selected = sorted(order_by_len_desc[:longest_n].tolist())
-        print(
-            f"  selecting {len(selected)} longest episodes "
-            f"(lengths: {sorted(lengths[selected].tolist(), reverse=True)[:10]}{'...' if len(selected) > 10 else ''})"
-        )
-    elif skip_longest_n > 0:
-        skipped = set(order_by_len_desc[:skip_longest_n].tolist())
-        selected = [i for i in range(n_total_ep) if i not in skipped]
-        print(f"  skipping {len(skipped)} longest episodes; using {len(selected)} others")
-    else:
-        selected = list(range(n_total_ep))
-    if max_episodes is not None:
-        selected = selected[:max_episodes]
-
-    for ep_idx in selected:
+    for ep_idx in range(ds.num_episodes):
         f_start = int(starts[ep_idx])
         f_end = int(ends[ep_idx])
-        frame_obs = all_states[f_start:f_end:fps_subsample].astype(np.float64)
+        frame_obs = all_states[f_start:f_end].astype(np.float64)
         if len(frame_obs) < 2:
             continue
 
-        # Compute FK per arm per frame.
-        for arm in include_arms:
+        for arm in ("left", "right"):
             idx = LEFT_INDICES if arm == "left" else RIGHT_INDICES
-            arm_joints = frame_obs[:, idx]  # (T, 7) in degrees
+            arm_joints = frame_obs[:, idx]
             ee_xyz = np.zeros((len(frame_obs), 3))
+            ee_rot = np.zeros((len(frame_obs), 9))
             for ti, q in enumerate(arm_joints):
                 motor_dict = {n: float(q[i]) for i, n in enumerate(motor_names_no_grip)}
                 T = kin.fk_from_motors(motor_dict)
                 ee_xyz[ti] = T[:3, 3]
+                ee_rot[ti] = T[:3, :3].flatten()
 
-            # Build (t, t+1) pairs.
             in_joints.append(arm_joints[:-1])
             out_joints.append(arm_joints[1:])
             in_ee.append(ee_xyz[:-1])
             out_ee.append(ee_xyz[1:])
+            in_rot.append(ee_rot[:-1])
+            out_rot.append(ee_rot[1:])
             arms_label.extend([0 if arm == "left" else 1] * (len(arm_joints) - 1))
 
-        if len(in_joints) % 20 == 0 or ep_idx == selected[-1]:
-            elapsed = time.monotonic() - t0
+        if ep_idx % 50 == 0 or ep_idx == ds.num_episodes - 1:
             n_pairs_so_far = sum(a.shape[0] for a in in_joints)
             print(
-                f"  processed {len(in_joints) // (2 if len(include_arms) == 2 else 1)}/{len(selected)}  "
-                f"pairs={n_pairs_so_far}  elapsed={elapsed:.1f}s"
+                f"  ep {ep_idx + 1}/{ds.num_episodes}  pairs={n_pairs_so_far}  elapsed={time.monotonic() - t0:.1f}s"
             )
 
     in_joints_arr = np.concatenate(in_joints, axis=0).astype(np.float32)
     out_joints_arr = np.concatenate(out_joints, axis=0).astype(np.float32)
     in_ee_arr = np.concatenate(in_ee, axis=0).astype(np.float32)
     out_ee_arr = np.concatenate(out_ee, axis=0).astype(np.float32)
+    in_rot_arr = np.concatenate(in_rot, axis=0).astype(np.float32)
+    out_rot_arr = np.concatenate(out_rot, axis=0).astype(np.float32)
     arms_arr = np.array(arms_label, dtype=np.int8)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +125,9 @@ def extract(
         out_joints=out_joints_arr,  # (N, 7) motor degrees at t+1
         in_ee=in_ee_arr,  # (N, 3) FK xyz (meters) at t
         out_ee=out_ee_arr,  # (N, 3) FK xyz at t+1
-        arm=arms_arr,  # 0=left, 1=right
+        in_rot=in_rot_arr,  # (N, 9) flattened 3x3 rotation matrix at t
+        out_rot=out_rot_arr,  # (N, 9) at t+1
+        arm=arms_arr,
         motor_names=np.array(motor_names_no_grip),
     )
     print(f"\nSaved {in_joints_arr.shape[0]} training pairs to {out_path}")
@@ -175,50 +150,10 @@ def extract(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--dataset",
-        default="thewisp/cylinder_ring_assembly_merged_raw",
-        help="LeRobotDataset repo_id (must be cached locally OR will be downloaded)",
-    )
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=Path(tempfile.gettempdir()) / "so107_ik_train.npz",
-    )
-    parser.add_argument(
-        "--max-episodes", type=int, default=None, help="cap episode count for quick iterations"
-    )
-    parser.add_argument(
-        "--longest-n",
-        type=int,
-        default=None,
-        help="extract only the N longest episodes (useful for eval — typical complete trajectories)",
-    )
-    parser.add_argument(
-        "--skip-longest-n",
-        type=int,
-        default=0,
-        help="exclude the N longest episodes (use for train data when those are reserved for eval)",
-    )
-    parser.add_argument(
-        "--fps-subsample", type=int, default=1, help="take every Nth frame within episodes (1 = all)"
-    )
-    parser.add_argument(
-        "--arms",
-        default="left,right",
-        help="comma-separated: which arms to extract (left,right or just right)",
-    )
+    parser.add_argument("--dataset", default="thewisp/cylinder_ring_assembly_merged_raw")
+    parser.add_argument("--out", type=Path, default=Path(tempfile.gettempdir()) / "so107_ik_train.npz")
     args = parser.parse_args()
-    arms = tuple(a.strip() for a in args.arms.split(","))
-    extract(
-        args.dataset,
-        args.out,
-        args.max_episodes,
-        args.fps_subsample,
-        arms,
-        longest_n=args.longest_n,
-        skip_longest_n=args.skip_longest_n,
-    )
+    extract(args.dataset, args.out)
     return 0
 
 

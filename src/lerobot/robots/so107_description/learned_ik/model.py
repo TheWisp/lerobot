@@ -29,10 +29,12 @@ import torch.nn as nn
 
 @dataclass
 class IKModelConfig:
-    in_dim: int = 10  # 7 joints + 3 ee_delta
-    out_dim: int = 7  # 7 joint outputs
-    hidden_dims: tuple[int, ...] = (128, 128)
-    activation: str = "silu"  # silu is smoother than relu, better for regression
+    # in_dim default 22: current_joints(7) + current_ee_rot(9) + ee_delta(3) + target_ee_rot(3, axis-angle)
+    # Older "position-only" models used in_dim=10; loaders dispatch on this field.
+    in_dim: int = 22
+    out_dim: int = 7  # joint deltas
+    hidden_dims: tuple[int, ...] = (256, 256, 256)
+    activation: str = "silu"
 
 
 class IKMLP(nn.Module):
@@ -77,5 +79,46 @@ class IKMLP(nn.Module):
 
 
 def build_input(joints_deg: torch.Tensor, ee_delta_m: torch.Tensor) -> torch.Tensor:
-    """Concat current joints and desired EE delta into the (B, 10) input tensor."""
+    """Position-only input (legacy 10-D). Use build_input_full_pose for new training."""
     return torch.cat([joints_deg, ee_delta_m], dim=-1)
+
+
+def rot_to_axis_angle(R: torch.Tensor) -> torch.Tensor:  # noqa: N803  (R is the rotation matrix)
+    """Rotation matrices (B, 3, 3) -> axis-angle (B, 3). Continuous and small for small rotations."""
+    # Use the standard log-of-rotation formula. Clamp to avoid asin domain issues.
+    trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
+    cos = ((trace - 1) / 2).clamp(-1.0 + 1e-7, 1.0 - 1e-7)
+    theta = torch.acos(cos)
+    # Avoid division by zero near identity.
+    safe_sin = torch.where(theta.abs() < 1e-6, torch.ones_like(theta), torch.sin(theta))
+    axis = torch.stack(
+        [
+            R[..., 2, 1] - R[..., 1, 2],
+            R[..., 0, 2] - R[..., 2, 0],
+            R[..., 1, 0] - R[..., 0, 1],
+        ],
+        dim=-1,
+    ) / (2 * safe_sin.unsqueeze(-1))
+    return axis * theta.unsqueeze(-1)
+
+
+def build_input_full_pose(
+    joints_deg: torch.Tensor,  # (B, 7)
+    current_rot_9: torch.Tensor,  # (B, 9) flattened 3x3
+    ee_delta_m: torch.Tensor,  # (B, 3)
+    target_rot_9: torch.Tensor,  # (B, 9)
+) -> torch.Tensor:
+    """Build the (B, 22) input tensor for the full-pose model.
+
+    Encoding choice:
+        - current rot: keep as flattened 9-D (full geometric info, smooth)
+        - target rot: pass DELTA in axis-angle (3-D) so absolute orientation
+          frame is local to current pose, model doesn't need to learn the
+          absolute frame from scratch.
+    """
+    B = joints_deg.shape[0]
+    R_curr = current_rot_9.reshape(B, 3, 3)
+    R_tgt = target_rot_9.reshape(B, 3, 3)
+    R_delta = R_tgt @ R_curr.transpose(-1, -2)  # delta in world frame
+    rot_delta_aa = rot_to_axis_angle(R_delta)  # (B, 3)
+    return torch.cat([joints_deg, current_rot_9, ee_delta_m, rot_delta_aa], dim=-1)

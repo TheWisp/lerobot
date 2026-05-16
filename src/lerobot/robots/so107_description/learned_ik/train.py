@@ -30,25 +30,66 @@ from .model import IKMLP, IKModelConfig
 
 
 def load_pairs(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Load (X, Y) where X = [joints_t, ee_delta] and Y = delta_joints."""
+    """Load (X, Y) where X is the full-pose input (22-D) and Y is joint delta (7-D)."""
     z = np.load(path)
-    in_joints = z["in_joints"].astype(np.float32)  # (N, 7) deg
-    out_joints = z["out_joints"].astype(np.float32)  # (N, 7) deg
-    in_ee = z["in_ee"].astype(np.float32)  # (N, 3) m
-    out_ee = z["out_ee"].astype(np.float32)  # (N, 3) m
+    in_joints = z["in_joints"].astype(np.float32)
+    out_joints = z["out_joints"].astype(np.float32)
+    in_ee = z["in_ee"].astype(np.float32)
+    out_ee = z["out_ee"].astype(np.float32)
+    has_rot = "in_rot" in z.files
+    if has_rot:
+        in_rot = z["in_rot"].astype(np.float32)
+        out_rot = z["out_rot"].astype(np.float32)
+    else:
+        # Backwards compat: position-only dataset. Synthesize identity rotation.
+        in_rot = np.tile(np.eye(3, dtype=np.float32).flatten(), (len(in_joints), 1))
+        out_rot = in_rot.copy()
+        print("WARNING: dataset is position-only; rotations set to identity (will train as 22-D anyway)")
 
     ee_delta = out_ee - in_ee  # (N, 3)
     delta_joints = out_joints - in_joints  # (N, 7)
 
-    # Sanity: drop pairs where the EE delta is essentially zero AND the joints
-    # didn't move (no useful signal) OR where joints jumped by > 30° (likely
-    # episode reset or motor glitch).
-    motion = np.linalg.norm(ee_delta, axis=1)
-    djmax = np.abs(delta_joints).max(axis=1)
-    mask = (motion > 1e-5) & (djmax < 30.0)
-    print(f"Filtering: kept {mask.sum()}/{len(mask)} pairs after dropping no-motion / large-jump samples")
+    # Rotation delta in axis-angle form (computed once in numpy to keep training simple).
+    in_R = in_rot.reshape(-1, 3, 3)
+    out_R = out_rot.reshape(-1, 3, 3)
+    R_delta = np.einsum("nij,nkj->nik", out_R, in_R)  # out * in.T
 
-    X = np.concatenate([in_joints[mask], ee_delta[mask]], axis=1)  # (N, 10)
+    def rotmat_to_axis_angle(R):  # noqa: N803  (R is the rotation matrix)
+        tr = R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]
+        cos = np.clip((tr - 1) / 2, -1 + 1e-7, 1 - 1e-7)
+        theta = np.arccos(cos)
+        sin = np.where(np.abs(theta) < 1e-6, 1.0, np.sin(theta))
+        axis = np.stack(
+            [R[:, 2, 1] - R[:, 1, 2], R[:, 0, 2] - R[:, 2, 0], R[:, 1, 0] - R[:, 0, 1]], axis=-1
+        ) / (2 * sin[:, None])
+        return axis * theta[:, None]
+
+    rot_delta_aa = rotmat_to_axis_angle(R_delta)  # (N, 3) radians axis-angle
+
+    # Filter: keep motion AND not huge joint jumps. Also keep some no-motion
+    # pairs as "hold" examples (1-in-10 sampled) so model learns to predict
+    # near-zero deltas when commanded zero motion. Otherwise it might never
+    # see "stay still" in training.
+    motion = np.linalg.norm(ee_delta, axis=1)
+    rot_motion = np.linalg.norm(rot_delta_aa, axis=1)
+    djmax = np.abs(delta_joints).max(axis=1)
+    moving = ((motion > 1e-5) | (rot_motion > 1e-3)) & (djmax < 30.0)
+    rng = np.random.RandomState(0)
+    keep_idle = (~moving) & (rng.rand(len(moving)) < 0.1) & (djmax < 5.0)
+    mask = moving | keep_idle
+    print(
+        f"Filtering: kept {mask.sum()}/{len(mask)} pairs ({moving.sum()} moving + {keep_idle.sum()} idle samples)"
+    )
+
+    X = np.concatenate(
+        [
+            in_joints[mask],  # 7
+            in_rot[mask],  # 9
+            ee_delta[mask],  # 3
+            rot_delta_aa[mask],  # 3
+        ],
+        axis=1,
+    )  # (N, 22)
     Y = delta_joints[mask]  # (N, 7)
     return X.astype(np.float32), Y.astype(np.float32)
 
@@ -89,7 +130,7 @@ def main() -> int:
     out_std = torch.tensor(Ytr.std(0))
 
     hidden = tuple(int(h) for h in args.hidden.split(","))
-    cfg = IKModelConfig(in_dim=10, out_dim=7, hidden_dims=hidden)
+    cfg = IKModelConfig(in_dim=X.shape[1], out_dim=Y.shape[1], hidden_dims=hidden)
     model = IKMLP(cfg).to(args.device)
     model.set_normalization(
         in_mean.to(args.device),

@@ -67,12 +67,43 @@ class So107NNKinematics:
     def fk_from_motors(self, motor_pos: dict[str, float]) -> np.ndarray:
         return self.fk.fk_from_motors(motor_pos)
 
-    def _nn_predict(self, current_motors: dict[str, float], target_ee: np.ndarray) -> dict[str, float]:
-        """Run a single forward pass: predict next motors from current + ee delta."""
-        current_ee = self.fk.fk_from_motors(current_motors)[:3, 3]
-        ee_delta = target_ee - current_ee  # 3-vec in meters
+    def _nn_predict(self, current_motors: dict[str, float], target_pose: np.ndarray) -> dict[str, float]:
+        """Run a single forward pass. target_pose is a 4x4 SE(3); both position
+        and orientation are used as IK target context."""
+        T_curr = self.fk.fk_from_motors(current_motors)
+        current_ee = T_curr[:3, 3]
+        current_rot_9 = T_curr[:3, :3].flatten().astype(np.float32)
+
+        target_ee = target_pose[:3, 3]
+        target_rot = target_pose[:3, :3]
+        ee_delta = (target_ee - current_ee).astype(np.float32)
+
+        # Rotation delta in axis-angle form.
+        R_delta = target_rot @ T_curr[:3, :3].T
+        tr = R_delta[0, 0] + R_delta[1, 1] + R_delta[2, 2]
+        cos = float(np.clip((tr - 1) / 2, -1 + 1e-7, 1 - 1e-7))
+        theta = float(np.arccos(cos))
+        sin_t = np.sin(theta) if abs(theta) > 1e-6 else 1.0
+        axis = np.array(
+            [
+                R_delta[2, 1] - R_delta[1, 2],
+                R_delta[0, 2] - R_delta[2, 0],
+                R_delta[1, 0] - R_delta[0, 1],
+            ]
+        ) / (2 * sin_t)
+        rot_delta_aa = (axis * theta).astype(np.float32)
+
         joints_vec = np.array([current_motors[n] for n in MOTOR_NAMES], dtype=np.float32)
-        x = np.concatenate([joints_vec, ee_delta.astype(np.float32)])
+
+        in_dim = self.model.config.in_dim
+        if in_dim == 22:
+            x = np.concatenate([joints_vec, current_rot_9, ee_delta, rot_delta_aa])
+        elif in_dim == 10:
+            # legacy position-only model
+            x = np.concatenate([joints_vec, ee_delta])
+        else:
+            raise ValueError(f"unexpected model in_dim={in_dim}")
+
         with torch.no_grad():
             x_t = torch.from_numpy(x).unsqueeze(0).to(self.device)
             delta_joints = self.model(x_t).squeeze(0).cpu().numpy()
@@ -104,7 +135,8 @@ class So107NNKinematics:
     ) -> tuple[dict[str, float], float]:
         """NN IK (optionally refined). Returns (motor_pos_deg, position_error_mm)."""
         target_ee = target_pose[:3, 3]
-        nn_motors = self._nn_predict(current_motor_pos, target_ee)
+        # NN predict takes the full pose (uses orientation context for full-pose models).
+        nn_motors = self._nn_predict(current_motor_pos, target_pose)
         final = self._dls_refine(nn_motors, target_ee) if self.refine_with_dls else nn_motors
 
         # Position error after solve, for monitoring.
