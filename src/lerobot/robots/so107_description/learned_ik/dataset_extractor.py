@@ -53,6 +53,8 @@ def extract(
     max_episodes: int | None = None,
     fps_subsample: int = 1,
     include_arms: tuple[str, ...] = ("left", "right"),
+    longest_n: int | None = None,
+    skip_longest_n: int = 0,
 ) -> None:
     """Load dataset; iterate frames; emit (motor7_t, ee3_t, motor7_t+1, ee3_t+1) pairs."""
     print(f"Loading {dataset_repo_id} ...")
@@ -79,15 +81,33 @@ def extract(
     out_ee: list[np.ndarray] = []
     arms_label: list[int] = []
 
-    ep_limit = n_total_ep if max_episodes is None else min(max_episodes, n_total_ep)
     t0 = time.monotonic()
 
     # Precompute episode boundaries: indices where episode_index changes.
     boundaries = np.where(np.diff(all_episodes) != 0)[0] + 1
     starts = np.concatenate([[0], boundaries])
     ends = np.concatenate([boundaries, [len(all_episodes)]])
+    lengths = ends - starts
 
-    for ep_idx in range(ep_limit):
+    # Select which episodes to process based on longest_n / skip_longest_n.
+    # Sort episode indices by length, descending.
+    order_by_len_desc = np.argsort(-lengths)
+    if longest_n is not None:
+        selected = sorted(order_by_len_desc[:longest_n].tolist())
+        print(
+            f"  selecting {len(selected)} longest episodes "
+            f"(lengths: {sorted(lengths[selected].tolist(), reverse=True)[:10]}{'...' if len(selected) > 10 else ''})"
+        )
+    elif skip_longest_n > 0:
+        skipped = set(order_by_len_desc[:skip_longest_n].tolist())
+        selected = [i for i in range(n_total_ep) if i not in skipped]
+        print(f"  skipping {len(skipped)} longest episodes; using {len(selected)} others")
+    else:
+        selected = list(range(n_total_ep))
+    if max_episodes is not None:
+        selected = selected[:max_episodes]
+
+    for ep_idx in selected:
         f_start = int(starts[ep_idx])
         f_end = int(ends[ep_idx])
         frame_obs = all_states[f_start:f_end:fps_subsample].astype(np.float64)
@@ -111,10 +131,13 @@ def extract(
             out_ee.append(ee_xyz[1:])
             arms_label.extend([0 if arm == "left" else 1] * (len(arm_joints) - 1))
 
-        if (ep_idx + 1) % 10 == 0 or ep_idx == ep_limit - 1:
+        if len(in_joints) % 20 == 0 or ep_idx == selected[-1]:
             elapsed = time.monotonic() - t0
             n_pairs_so_far = sum(a.shape[0] for a in in_joints)
-            print(f"  episode {ep_idx + 1}/{ep_limit}  pairs={n_pairs_so_far}  elapsed={elapsed:.1f}s")
+            print(
+                f"  processed {len(in_joints) // (2 if len(include_arms) == 2 else 1)}/{len(selected)}  "
+                f"pairs={n_pairs_so_far}  elapsed={elapsed:.1f}s"
+            )
 
     in_joints_arr = np.concatenate(in_joints, axis=0).astype(np.float32)
     out_joints_arr = np.concatenate(out_joints, axis=0).astype(np.float32)
@@ -166,6 +189,18 @@ def main() -> int:
         "--max-episodes", type=int, default=None, help="cap episode count for quick iterations"
     )
     parser.add_argument(
+        "--longest-n",
+        type=int,
+        default=None,
+        help="extract only the N longest episodes (useful for eval — typical complete trajectories)",
+    )
+    parser.add_argument(
+        "--skip-longest-n",
+        type=int,
+        default=0,
+        help="exclude the N longest episodes (use for train data when those are reserved for eval)",
+    )
+    parser.add_argument(
         "--fps-subsample", type=int, default=1, help="take every Nth frame within episodes (1 = all)"
     )
     parser.add_argument(
@@ -175,7 +210,15 @@ def main() -> int:
     )
     args = parser.parse_args()
     arms = tuple(a.strip() for a in args.arms.split(","))
-    extract(args.dataset, args.out, args.max_episodes, args.fps_subsample, arms)
+    extract(
+        args.dataset,
+        args.out,
+        args.max_episodes,
+        args.fps_subsample,
+        arms,
+        longest_n=args.longest_n,
+        skip_longest_n=args.skip_longest_n,
+    )
     return 0
 
 
