@@ -338,14 +338,24 @@ def main() -> int:
     parser.add_argument("--model", type=Path, default=None, help="required for nn / nn_dls")
     parser.add_argument("--dry-run", action="store_true", help="offline analysis only, no physical replay")
     parser.add_argument("--port", default="/dev/ttyACM2")
+    parser.add_argument(
+        "--episode-idx",
+        type=int,
+        default=None,
+        help="dataset episode to use. Default = longest episode.",
+    )
     args = parser.parse_args()
 
     if args.ik_method in ("nn", "nn_dls") and args.model is None:
         parser.error("--model required when ik_method is nn or nn_dls")
 
-    # Locked-in defaults: longest episode of right arm, action source, 30 Hz, mrt=30, id=white_right.
+    # Locked-in defaults: right arm, action source, 30 Hz, mrt=30, id=white_right.
     human_joints = load_episode(
-        args.dataset, episode_idx=None, longest=True, arm="right", source_column="action"
+        args.dataset,
+        episode_idx=args.episode_idx,
+        longest=(args.episode_idx is None),
+        arm="right",
+        source_column="action",
     )
     print(f"  trajectory: {len(human_joints)} frames @ 30 fps -> {len(human_joints) / 30:.1f}s")
 
