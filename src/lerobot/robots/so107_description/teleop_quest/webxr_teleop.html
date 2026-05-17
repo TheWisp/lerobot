@@ -39,15 +39,33 @@ function updateStats() {
     `last RTT: ${isNaN(lastRTT) ? '—' : lastRTT.toFixed(1) + ' ms'}`;
 }
 
+let wantConnected = false;
+let reconnectTimer = null;
+
 function connect() {
+  wantConnected = true;
+  _openWS();
+}
+
+function _openWS() {
+  if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;  // already opening/open
   ws = new WebSocket(WS_URL);
   ws.onopen = () => { log("ws open"); updateStats(); };
   ws.onerror = e => log("ws error");
-  ws.onclose = () => { log("ws closed"); updateStats(); };
+  ws.onclose = () => {
+    log("ws closed");
+    updateStats();
+    if (wantConnected && !reconnectTimer) {
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        log("ws reconnecting...");
+        _openWS();
+      }, 1000);
+    }
+  };
   ws.onmessage = ev => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "ping") {
-      // Server pinged us — echo with our quest-clock time
       ws.send(JSON.stringify({
         type: "pong",
         seq: msg.seq,

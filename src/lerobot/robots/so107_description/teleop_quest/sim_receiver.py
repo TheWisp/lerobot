@@ -84,36 +84,40 @@ def quest_rot_to_robot(quest_quat_xyzw: list[float]) -> Rot:
     return Rot.from_matrix(QUEST_TO_ROBOT_M @ r_quest @ QUEST_TO_ROBOT_M.T)
 
 
-def clamp_rotation_step(target_rot: Rot, current_rot: Rot, max_angle_rad: float) -> Rot:
-    """Cap rotation step from current_rot to target_rot at max_angle_rad."""
-    delta = target_rot * current_rot.inv()
-    angle = delta.magnitude()
-    if angle <= max_angle_rad:
-        return target_rot
-    scale = max_angle_rad / angle
-    delta_step = Rot.from_rotvec(delta.as_rotvec() * scale)
-    return delta_step * current_rot
+# ============================================================================
+# Quest 3 right controller button mapping (confirmed via debug log).
+# ============================================================================
+CLUTCH_BUTTON_INDEX = 1  # analog grip/squeeze (side button) -> clutch
+GRIPPER_BUTTON_INDEX = 0  # analog index trigger -> gripper open/close
+CLUTCH_THRESHOLD = 0.5  # squeeze value above this engages tracking
 
+# Trigger value -> gripper position (linear). 0 (released) = open, 1 (squeezed) = closed.
+GRIPPER_OPEN_VALUE = 60.0
+GRIPPER_CLOSED_VALUE = 5.0
 
-# Right-hand controller analog trigger is at buttons[0] on Quest 3 (confirmed via debug log).
-TRIGGER_BUTTON_INDEX = 0
-TRIGGER_THRESHOLD = 0.5
-# Max distance per IK tick (m) to clamp wild targets to reachable region.
-MAX_TARGET_STEP_M = 0.02
-# If IK can't reach within this many mm AND the gap isn't closing, treat as out-of-workspace.
-IK_REACHABLE_THRESHOLD_MM = 10.0
-# Max rotation step per IK tick (radians, ~5°). Keeps the rotation delta the model sees in-distribution.
-MAX_ROT_STEP_RAD = np.radians(5.0)
-# Watchdog: warn if no frame received for this long (wall-clock seconds).
-FRAME_STALL_THRESHOLD_S = 0.25
-# Controller stale: warn if controller position moves less than this (m) for this many engaged frames.
-STATIONARY_POS_EPSILON_M = 0.0005
-STATIONARY_FRAME_THRESHOLD = 60  # ~0.67s at 90Hz
-# Latency probe ping interval (seconds).
-PING_INTERVAL = 0.1
-# Reachable workspace box (from training data extraction stats). Targets clamped to this.
+# ============================================================================
+# Safety caps. Applied in layers; each is intentional. Logged at startup.
+# ============================================================================
+# Workspace box (m, robot base frame). Pink's target position is clamped to
+# this. Limits derived from training-data EE extents.
 WORKSPACE_MIN = np.array([-0.20, -0.35, +0.03])
 WORKSPACE_MAX = np.array([+0.25, +0.05, +0.36])
+
+# Pink convergence threshold. If pink's final ik_err exceeds this in a single
+# solve, treat as truly stuck. 20-50mm residual is NORMAL during fast hand
+# motion (motor lag); only catch genuinely-stuck cases here.
+IK_REACHABLE_THRESHOLD_MM = 100.0
+
+# Software per-tick joint motion cap (deg). Wraps pink's output so any one
+# tick can't command a wild joint jump. The bus's max_relative_target
+# (--max-relative-target, default 30°) is the redundant hardware-side limit.
+SOFTWARE_JOINT_CAP_DEG = 25.0
+
+# Watchdogs
+FRAME_STALL_THRESHOLD_S = 0.25  # warn if WebXR pose stream pauses
+STATIONARY_POS_EPSILON_M = 0.0005  # controller-stale: < this much motion = stationary
+STATIONARY_FRAME_THRESHOLD = 60  # ... for this many frames -> warn (≈0.67s @ 90Hz)
+PING_INTERVAL = 0.1  # PC -> Quest ping cadence for RTT measurement
 # Physical motor limits in degrees (from so107_follower/white_right.json calibration).
 # These are degrees-from-midpoint after the bus's DEGREES-mode conversion.
 JOINT_LIMITS = {
@@ -130,12 +134,55 @@ JOINT_LIMITS = {
 class Sim:
     """Sim arm state + clutch-mode teleop. Trigger held = follow controller delta."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        ik_backend: str = "nn_dls",
+        execute: bool = False,
+        port: str = "/dev/ttyACM2",
+        robot_id: str = "white_right",
+        max_relative_target: float = 5.0,
+    ) -> None:
         self.motors: dict[str, float] = dict(SIM_HOME)
-        self.kin_nn = So107NNKinematics(
-            model_path=Path(tempfile.gettempdir()) / "so107_ik_model_action.pt",
-            refine_with_dls=True,
-        )
+        nn_model_path = Path(tempfile.gettempdir()) / "so107_ik_model_action.pt"
+        if ik_backend == "nn_dls":
+            self.kin_nn = So107NNKinematics(model_path=nn_model_path, refine_with_dls=True)
+        elif ik_backend == "pink":
+            from ..learned_ik.kinematics_pink import So107PinkKinematics
+
+            self.kin_nn = So107PinkKinematics()
+        elif ik_backend == "pink_nn":
+            from ..learned_ik.kinematics_pink import So107PinkKinematics
+
+            self.kin_nn = So107PinkKinematics(nn_posture_model=nn_model_path)
+        else:
+            raise ValueError(f"unknown ik_backend: {ik_backend}")
+        print(f"  IK backend: {ik_backend}")
+
+        self.robot = None
+        if execute:
+            from lerobot.robots.so_follower import SO107Follower, SO107FollowerConfig
+
+            print(
+                f"  *** EXECUTE MODE: connecting to robot on {port} (id={robot_id}, mrt={max_relative_target}°)"
+            )
+            config = SO107FollowerConfig(
+                port=port,
+                id=robot_id,
+                use_degrees=True,
+                cameras={},
+                max_relative_target=max_relative_target,
+            )
+            self.robot = SO107Follower(config)
+            self.robot.connect(calibrate=False)
+            # Sync sim state to whatever pose the robot is currently in,
+            # so the first engage-snapshot reflects physical reality.
+            obs = self.robot.bus.sync_read("Present_Position")
+            for nm in MOTOR_NAMES:
+                self.motors[nm] = float(obs[nm])
+            print(
+                "  connected. starting motors: "
+                + " ".join(f"{nm.split('_')[0][:3]}={self.motors[nm]:+5.1f}" for nm in MOTOR_NAMES)
+            )
         urdf_path = str(get_urdf_path())
         mesh_dir = str(Path(urdf_path).parent)
         self.pin_model = pin.buildModelFromUrdf(urdf_path)
@@ -144,6 +191,21 @@ class Sim:
         self.gmodel = pin.buildGeomFromUrdf(self.pin_model, urdf_path, pin.GeometryType.VISUAL, [mesh_dir])
         self.gdata = self.gmodel.createData()
         self.ee_frame_id = self.pin_model.getFrameId("L7_1")
+        # Collision geometries: same meshes, separate model, used to log self-collisions.
+        self.cmodel = pin.buildGeomFromUrdf(self.pin_model, urdf_path, pin.GeometryType.COLLISION, [mesh_dir])
+        self.cmodel.addAllCollisionPairs()
+        self.cdata = self.cmodel.createData()
+        # Identify baseline collision pairs that already touch at the home pose (adjacent links).
+        # We exclude these from per-tick collision warnings.
+        zero_q = motor_pos_to_urdf_q(SIM_HOME, RIGHT_ARM_MAP)
+        pin.computeCollisions(self.pin_model, self.pin_data, self.cmodel, self.cdata, zero_q, False)
+        self.baseline_collisions: set[int] = {
+            k for k in range(len(self.cmodel.collisionPairs)) if self.cdata.collisionResults[k].isCollision()
+        }
+        print(
+            f"  collision check: {len(self.cmodel.collisionPairs)} pairs, "
+            f"{len(self.baseline_collisions)} adjacent-pair baseline collisions (ignored)"
+        )
 
         # Log each visual mesh once (static); per frame we update Transform3D on its entity.
         # URDF visual scale (mm -> m) is stored in geom.meshScale and applied via the per-frame Transform3D.
@@ -164,6 +226,22 @@ class Sim:
         self.last_quest_pos: np.ndarray | None = None
         self.stationary_frames: int = 0
         self.stale_warned: bool = False
+        # Reset button rising-edge tracking
+        self.last_buttons: list[float] | None = None
+        self._render()
+
+    def reset_to_home(self, frame_no: int) -> None:
+        """Snap motors back to SIM_HOME. On real robot the bus's max_relative_target
+        smooths the motion automatically across many ticks."""
+        print(f"  [f={frame_no}] >>> RESET to home pose")
+        self.motors = dict(SIM_HOME)
+        self.engaged = False
+        self.quest_pos_at_engage = None
+        self.ee_pos_at_engage = None
+        self.quest_rot_at_engage = None
+        self.ee_rot_at_engage = None
+        if self.robot is not None:
+            self.robot.send_action({f"{nm}.pos": SIM_HOME[nm] for nm in MOTOR_NAMES})
         self._render()
 
     def _current_ee_pos_and_rot(self) -> tuple[np.ndarray, np.ndarray]:
@@ -194,11 +272,51 @@ class Sim:
             rr.log("world/target", rr.Points3D([target_xyz], radii=0.02, colors=[100, 150, 255]))
 
     def handle_controller(
-        self, quest_pos: np.ndarray, quest_quat: list[float], trigger: float, frame_no: int
+        self,
+        quest_pos: np.ndarray,
+        quest_quat: list[float],
+        clutch: float,
+        gripper_trigger: float,
+        all_buttons: list[float],
+        frame_no: int,
     ) -> None:
-        """Called once per WebXR frame for the right controller."""
+        """Called once per WebXR frame for the right controller.
+
+        clutch: side-button squeeze value [0..1]. Above CLUTCH_THRESHOLD -> tracking on.
+        gripper_trigger: index-trigger value [0..1]. Continuously mapped to gripper position.
+        all_buttons: full button array, scanned for rising-edge reset-button detection.
+        """
         was_engaged = self.engaged
-        self.engaged = trigger > TRIGGER_THRESHOLD
+        self.engaged = clutch > CLUTCH_THRESHOLD
+
+        # If hardware: refresh self.motors from physical state. This keeps the IK
+        # seed honest (matches what the motors are actually doing, including any
+        # tracking lag) and makes the engage snapshot reflect physical reality.
+        if self.robot is not None:
+            obs = self.robot.bus.sync_read("Present_Position")
+            for nm in MOTOR_NAMES:
+                self.motors[nm] = float(obs[nm])
+
+        # Gripper is driven by trigger value at all times (not gated by clutch — you can
+        # open/close the gripper without commanding EE motion).
+        self.motors["gripper"] = GRIPPER_OPEN_VALUE + gripper_trigger * (
+            GRIPPER_CLOSED_VALUE - GRIPPER_OPEN_VALUE
+        )
+
+        # Reset detection: while DISENGAGED, a non-clutch / non-trigger button transitioning
+        # clearly from off (<0.1) to on (>0.8) fires a reset. The strict thresholds filter
+        # out analog touch/proximity sensors (e.g., Quest 3 buttons[7]/[8]) that float near 0.5
+        # just from holding the controller.
+        if not self.engaged and self.last_buttons is not None and len(all_buttons) == len(self.last_buttons):
+            for i, (prev, cur) in enumerate(zip(self.last_buttons, all_buttons, strict=False)):
+                if i in (CLUTCH_BUTTON_INDEX, GRIPPER_BUTTON_INDEX):
+                    continue
+                if prev < 0.1 and cur > 0.8:
+                    print(f"  [f={frame_no}] reset triggered by button[{i}] ({prev:.2f}->{cur:.2f})")
+                    self.reset_to_home(frame_no)
+                    self.last_buttons = list(all_buttons)
+                    return
+        self.last_buttons = list(all_buttons)
 
         if self.engaged and not was_engaged:
             cur_ee_pos, cur_ee_rot = self._current_ee_pos_and_rot()
@@ -257,24 +375,25 @@ class Sim:
         target_xyz_raw = self.ee_pos_at_engage + delta_robot
         target_xyz = np.clip(target_xyz_raw, WORKSPACE_MIN, WORKSPACE_MAX)
 
-        cur_ee, cur_rot = self._current_ee_pos_and_rot()
-        step = target_xyz - cur_ee
-        step_mag = float(np.linalg.norm(step))
-        if step_mag > MAX_TARGET_STEP_M:
-            step = step * (MAX_TARGET_STEP_M / step_mag)
-        clamped_target = cur_ee + step
+        # Send IK the FULL target (after workspace clamp). Do NOT pre-clamp the
+        # target to a small step from current_ee — that defeats the motor's
+        # ability to fight gravity. Instead the joint-level software cap (15°/tick)
+        # and the bus's max_relative_target (30°/tick) ramp the motor commands.
+        cur_ee, _ = self._current_ee_pos_and_rot()
+        clamped_target = target_xyz
 
         # --- ROTATION ---
         # Controller rotation in robot frame, then delta since engage, then composed with engaged EE rotation.
         quest_rot_now = quest_rot_to_robot(quest_quat)
         delta_rot = quest_rot_now * self.quest_rot_at_engage.inv()
         target_rot_full = delta_rot * self.ee_rot_at_engage
-        # Cap the rotation step per tick so the model sees in-distribution rotation deltas.
-        cur_rot_R = Rot.from_matrix(cur_rot)
-        target_rot_stepped = clamp_rotation_step(target_rot_full, cur_rot_R, MAX_ROT_STEP_RAD)
+        # Send IK the FULL rotation target. Same reasoning as the position case: pre-clamping
+        # to "current_rot + 5°/tick" was causing pink to output near-current joints, which
+        # when commanded to the motor barely moved it. The joint-level software cap and
+        # bus mrt are the rate-limiters.
 
         target_T = np.eye(4)
-        target_T[:3, :3] = target_rot_stepped.as_matrix()
+        target_T[:3, :3] = target_rot_full.as_matrix()
         target_T[:3, 3] = clamped_target
 
         motors_before = dict(self.motors)
@@ -287,15 +406,42 @@ class Sim:
             self._render(target_xyz=target_xyz_raw)
             return
 
-        # Update motors EXCEPT gripper (gripper isn't EE-tracked; would drift on bias).
+        # Update motors EXCEPT gripper (gripper isn't EE-tracked; driven by trigger).
+        # Software per-tick cap (SOFTWARE_JOINT_CAP_DEG) ramps commanded motor motion. The
+        # bus's max_relative_target (--max-relative-target, default 30°) is the redundant
+        # hardware layer.
         for n in MOTOR_NAMES:
             if n == "gripper":
                 continue
             delta = new_motors[n] - self.motors[n]
-            delta = max(-3.0, min(3.0, delta))
+            delta = max(-SOFTWARE_JOINT_CAP_DEG, min(SOFTWARE_JOINT_CAP_DEG, delta))
             new_val = self.motors[n] + delta
             lo, hi = JOINT_LIMITS[n]
             self.motors[n] = max(lo, min(hi, new_val))
+
+        # Send to physical robot (after software clamping + joint limits, before collision logging).
+        # The bus's max_relative_target provides an additional hardware-side rate limit.
+        if self.robot is not None:
+            self.robot.send_action({f"{nm}.pos": self.motors[nm] for nm in MOTOR_NAMES})
+
+        # Check + LOG self-collisions (not freezing — see Ke's principle: training-data bias should mostly prevent this).
+        q_new = motor_pos_to_urdf_q(self.motors, RIGHT_ARM_MAP)
+        pin.computeCollisions(self.pin_model, self.pin_data, self.cmodel, self.cdata, q_new, False)
+        new_collisions = []
+        for k in range(len(self.cmodel.collisionPairs)):
+            if k in self.baseline_collisions:
+                continue
+            cr = self.cdata.collisionResults[k]
+            if cr.isCollision():
+                pair = self.cmodel.collisionPairs[k]
+                first = self.cmodel.geometryObjects[pair.first].name
+                second = self.cmodel.geometryObjects[pair.second].name
+                # Penetration depth (negative distance = overlapping)
+                depth_mm = -cr.distance_lower_bound * 1000 if cr.distance_lower_bound < 0 else 0.0
+                new_collisions.append((first, second, depth_mm))
+        if new_collisions:
+            details = "  ".join(f"{a}↔{b}({d:.1f}mm)" for a, b, d in new_collisions)
+            print(f"  [f={frame_no}] COLLISION  {details}")
 
         if frame_no % 30 == 0:
             max_joint_change = max(
@@ -392,8 +538,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 quest_pos = np.array(right["pos"])
                 quest_quat = right.get("rot", [0.0, 0.0, 0.0, 1.0])
                 buttons = right.get("buttons", [])
-                trigger = buttons[TRIGGER_BUTTON_INDEX] if len(buttons) > TRIGGER_BUTTON_INDEX else 0.0
-                sim.handle_controller(quest_pos, quest_quat, trigger, frame_count)
+                clutch = buttons[CLUTCH_BUTTON_INDEX] if len(buttons) > CLUTCH_BUTTON_INDEX else 0.0
+                grip = buttons[GRIPPER_BUTTON_INDEX] if len(buttons) > GRIPPER_BUTTON_INDEX else 0.0
+                sim.handle_controller(quest_pos, quest_quat, clutch, grip, buttons, frame_count)
                 frame_count += 1
             if t_now - last_print > 1.0:
                 engaged = "ENGAGED" if sim.engaged else "free   "
@@ -436,12 +583,76 @@ class TeeStdout:
 
 
 def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--ik",
+        choices=["nn_dls", "pink", "pink_nn"],
+        default="nn_dls",
+        help="IK backend. nn_dls = learned NN + DLS refine (default); pink = QP-based 6-DOF; "
+        "pink_nn = pink with NN-predicted joints as posture target (best of both).",
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Drive the physical robot via SO107Follower. WITHOUT this flag, sim_receiver "
+        "is sim-only (renders in rerun, no hardware).",
+    )
+    parser.add_argument("--port", default="/dev/ttyACM2", help="serial port for the robot")
+    parser.add_argument("--id", default="white_right", help="robot id (selects calibration file)")
+    parser.add_argument(
+        "--max-relative-target",
+        type=float,
+        default=30.0,
+        help="hardware-side per-tick joint motion cap (deg). The bus clamps each "
+        "commanded joint to be within this many degrees of the current motor "
+        "position. Lower = safer but the motor will struggle to fight gravity "
+        "(small command-gap = small PID torque). The validated value from "
+        "trajectory_replay is 30°. The software cap inside sim_receiver "
+        "(SOFTWARE_JOINT_CAP_DEG) is 25°/tick.",
+    )
+    args = parser.parse_args()
+
     log_path = Path(tempfile.gettempdir()) / f"quest_sim_{datetime.now():%H%M%S}.log"
     sys.stdout = TeeStdout(log_path)
     print(f"  log: {log_path}")
+    print()
+    print("  === Configured safety caps ===")
+    print(f"  ik backend                = {args.ik}")
+    print(f"  workspace box (m)         = x{tuple(WORKSPACE_MIN)} -> x{tuple(WORKSPACE_MAX)}")
+    print(
+        f"  ik reachable threshold    = {IK_REACHABLE_THRESHOLD_MM:.0f} mm (freeze if pink can't reach this)"
+    )
+    print(f"  software joint cap        = {SOFTWARE_JOINT_CAP_DEG:.0f} °/tick  (per-joint motion ramp)")
+    print(f"  hardware mrt (bus)        = {args.max_relative_target:.0f} °/tick  (--max-relative-target)")
+    print(
+        "  joint limits (deg)        = "
+        + ", ".join(f"{n}=[{lo:+.0f},{hi:+.0f}]" for n, (lo, hi) in JOINT_LIMITS.items())
+    )
+    print(f"  clutch threshold          = {CLUTCH_THRESHOLD:.2f}  (right grip squeeze)")
+    print(
+        f"  gripper open/closed       = {GRIPPER_OPEN_VALUE:.0f} / {GRIPPER_CLOSED_VALUE:.0f}  (linear from trigger)"
+    )
+    print()
+
+    if args.execute:
+        print()
+        print("  *** PHYSICAL ROBOT MODE ***")
+        print(f"  port={args.port}  id={args.id}  mrt={args.max_relative_target}°/tick")
+        print("  The arm will follow your controller when you squeeze the side grip.")
+        print("  Make sure the arm has clearance to move from its current pose.")
+        input("  Press Enter to confirm and connect (Ctrl-C to abort)...")
+
     ensure_cert()
     rr.init("so107_quest_sim", spawn=True)
-    sim = Sim()
+    sim = Sim(
+        ik_backend=args.ik,
+        execute=args.execute,
+        port=args.port,
+        robot_id=args.id,
+        max_relative_target=args.max_relative_target,
+    )
 
     app = web.Application()
     app["sim"] = sim
@@ -457,7 +668,15 @@ def main() -> int:
     print("  Connect → Enter VR. Wave your RIGHT controller — sim arm should follow.")
     print()
 
-    web.run_app(app, host="0.0.0.0", port=PORT, ssl_context=ssl_ctx, print=None)  # nosec B104 (LAN-only dev tool, intentional)
+    try:
+        web.run_app(app, host="0.0.0.0", port=PORT, ssl_context=ssl_ctx, print=None)  # nosec B104 (LAN-only dev tool, intentional)
+    finally:
+        if sim.robot is not None:
+            try:
+                sim.robot.disconnect()
+                print("  robot disconnected cleanly.")
+            except Exception as ex:
+                print(f"  robot disconnect failed: {ex}")
     return 0
 
 
