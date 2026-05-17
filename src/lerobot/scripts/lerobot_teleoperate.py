@@ -295,6 +295,32 @@ def teleoperate(cfg: TeleoperateConfig):
     robot = make_robot_from_config(cfg.robot)
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
+    # Auto-compose the Cartesian-IK pipeline when the teleop emits EE-delta
+    # actions (quest_vr, keyboard_ee, phone, ...) and the robot has a
+    # registered Cartesian config. Robots register their config at import
+    # time via lerobot.processor.cartesian_ik_pipeline.register_cartesian_ik_robot.
+    # Falls back to identity (with a clear log) when no config is available
+    # — useful for joint-mode teleops, which don't need the IK chain.
+    from lerobot.processor.cartesian_ik_pipeline import (
+        is_cartesian_teleop,
+        make_cartesian_ik_pipeline,
+    )
+
+    if is_cartesian_teleop(teleop):
+        cartesian_pipeline = make_cartesian_ik_pipeline(robot)
+        if cartesian_pipeline is not None:
+            robot_action_processor = cartesian_pipeline
+            logging.info(
+                f"Auto-composed Cartesian IK pipeline for teleop={cfg.teleop.type} -> robot={cfg.robot.type}"
+            )
+        else:
+            logging.warning(
+                f"teleop {cfg.teleop.type!r} emits Cartesian actions but "
+                f"robot {cfg.robot.type!r} has no registered Cartesian IK config "
+                f"(see lerobot.processor.cartesian_ik_pipeline.register_cartesian_ik_robot). "
+                f"Falling back to identity pipeline; the robot will likely fail to apply the action."
+            )
+
     # Add custom observation processor steps from the robot
     custom_steps = robot.get_observation_processor_steps()
     if custom_steps:
