@@ -350,6 +350,8 @@ ignore = [
 # so107 kinematics / teleop research code uses ML/robotics-convention matrix
 # names (T, J, R, A, etc.) which Ruff's N806 flags. Same justification as hvla.
 "src/lerobot/robots/so107_description/**" = ["N806"]
+"src/lerobot/model/pink_kinematics.py" = ["N806"]
+"tests/model/test_pink_kinematics.py" = ["N806", "N817"]
 "tests/hvla/**" = ["N802", "N803", "N806", "N812", "E402", "E741", "B017"]
 # Tests routinely use nested `with patch(...)` blocks (one mock per line is more readable than one combined `with (a, b, c, d):`), and try/except/pass for "raising is fine" assertions. Mute these rules in tests broadly.
 "tests/**" = ["SIM117", "SIM105", "SIM113"]
