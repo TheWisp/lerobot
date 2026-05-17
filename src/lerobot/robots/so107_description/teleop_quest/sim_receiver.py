@@ -60,15 +60,31 @@ SIM_HOME = {
 }
 
 
-# Axis-mapping matrix M such that  v_robot = M @ v_quest.
-# Quest local stage frame:  +x = right (user), +y = up, +z = toward user (out of headset).
-# Robot base frame:         +x = forward (away from user), +y = left (robot's own), +z = up.
-# So:  robot_x = -quest_z,  robot_y = -quest_x,  robot_z =  quest_y
-QUEST_TO_ROBOT_M = np.array(
+# ============================================================================
+# Quest <-> Robot frame mapping. Assumes user stands BEHIND the robot, facing
+# the same direction the arm naturally reaches. This is the simplest mental
+# model: "controller left = robot's left in its own POV". Same orientation you
+# get if you watch the workspace through the robot's top-down camera.
+#
+# SO-107 URDF axis convention (verified empirically via FK at zero joints —
+# EE sits at (0.018, -0.276, +0.288), shoulder_pan=+30 swings arm to URDF -X):
+#   robot forward (arm reach direction) = URDF -Y
+#   robot left                          = URDF +X
+#   robot up                            = URDF +Z
+#
+# Quest local frame: +x=user right, +y=up, +z=toward user (-z = user forward).
+# Mapping derives directly: send user_forward to robot_forward, etc.
+# ============================================================================
+ROBOT_FORWARD_IN_URDF = np.array([0.0, -1.0, 0.0])
+ROBOT_UP_IN_URDF = np.array([0.0, 0.0, 1.0])
+ROBOT_LEFT_IN_URDF = np.cross(ROBOT_UP_IN_URDF, ROBOT_FORWARD_IN_URDF)  # = (+1, 0, 0)
+
+# Columns of M map (quest_x, quest_y, quest_z) unit vectors to URDF frame.
+QUEST_TO_ROBOT_M = np.column_stack(
     [
-        [0.0, 0.0, -1.0],
-        [-1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
+        -ROBOT_LEFT_IN_URDF,  # quest_x = user_right  -> robot_right (= -robot_left)
+        +ROBOT_UP_IN_URDF,  # quest_y = user_up     -> robot_up
+        -ROBOT_FORWARD_IN_URDF,  # quest_z = user_back   -> robot_back (= -robot_forward)
     ]
 )
 
