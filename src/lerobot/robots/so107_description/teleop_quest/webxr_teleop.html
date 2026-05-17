@@ -15,6 +15,7 @@
 <div>
   <button id="connect">1. Connect WebSocket</button>
   <button id="enterVR">2. Enter VR</button>
+  <button id="enterAR">2. Enter AR (passthrough)</button>
 </div>
 <div id="stats">disconnected</div>
 <div id="log"></div>
@@ -79,17 +80,17 @@ function _openWS() {
   };
 }
 
-async function enterVR() {
+async function enterSession(mode) {
+  // mode is 'immersive-vr' (opaque black) or 'immersive-ar' (passthrough background).
   if (!navigator.xr) { log("navigator.xr unavailable"); return; }
-  const ok = await navigator.xr.isSessionSupported("immersive-vr");
-  if (!ok) { log("immersive-vr not supported"); return; }
+  const ok = await navigator.xr.isSessionSupported(mode);
+  if (!ok) { log(mode + " not supported"); return; }
   try {
-    // WebXR requires a WebGL context with xrCompatible:true even if we don't render anything.
     xrCanvas = document.createElement("canvas");
     document.body.appendChild(xrCanvas);
     gl = xrCanvas.getContext("webgl", { xrCompatible: true });
     if (!gl) throw new Error("no webgl");
-    xrSession = await navigator.xr.requestSession("immersive-vr");
+    xrSession = await navigator.xr.requestSession(mode);
     await xrSession.updateRenderState({ baseLayer: new XRWebGLLayer(xrSession, gl) });
     refSpace = await xrSession.requestReferenceSpace("local");
     xrSession.requestAnimationFrame(onXRFrame);
@@ -98,21 +99,25 @@ async function enterVR() {
       if (xrCanvas) { xrCanvas.remove(); xrCanvas = null; gl = null; }
       updateStats();
     });
-    log("VR session started");
+    log(mode + " session started");
     updateStats();
   } catch (e) {
-    log("VR failed: " + e.message);
+    log(mode + " failed: " + e.message);
   }
 }
+const enterVR = () => enterSession("immersive-vr");
+const enterAR = () => enterSession("immersive-ar");
 
 function onXRFrame(time, frame) {
   if (!xrSession) return;
   xrSession.requestAnimationFrame(onXRFrame);
-  // Required: bind the XR framebuffer and clear it so the compositor has content to display.
+  // Required: bind the XR framebuffer and clear so the compositor has content.
+  // In immersive-ar mode, clearing with alpha=0 lets passthrough show through.
+  const isAR = xrSession.environmentBlendMode !== "opaque";
   const layer = xrSession.renderState.baseLayer;
   if (gl && layer) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
-    gl.clearColor(0, 0, 0, 1);
+    gl.clearColor(0, 0, 0, isAR ? 0 : 1);  // transparent for AR (passthrough), opaque for VR
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   }
   if (!ws || ws.readyState !== 1) return;
@@ -142,6 +147,7 @@ function onXRFrame(time, frame) {
 
 $("connect").onclick = connect;
 $("enterVR").onclick = enterVR;
+$("enterAR").onclick = enterAR;
 updateStats();
 </script>
 </body>
