@@ -57,7 +57,10 @@ def _register_cartesian_ik() -> None:
         max_ee_step_m=0.10,
         gripper_speed_factor=20.0,
     )
+    # Same hardware + URDF + motor layout for the predictive variant; the
+    # predictive controller wraps send_action with the same <motor>.pos contract.
     register_cartesian_ik_robot("so107_follower", cfg)
+    register_cartesian_ik_robot("so107_follower_predictive", cfg)
 
 
 _register_cartesian_ik()

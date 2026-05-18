@@ -82,6 +82,20 @@ def test_so107_follower_is_registered():
     assert cfg.joint_names == ["S1", "S2", "S3", "S4", "S5", "S6", "S7"]
 
 
+def test_so107_follower_predictive_shares_config():
+    """200Hz predictive variant uses the same hardware/URDF; should also be registered."""
+    import lerobot.robots.so107_description  # noqa: F401
+
+    cfg_plain = get_cartesian_ik_robot_config("so107_follower")
+    cfg_predictive = get_cartesian_ik_robot_config("so107_follower_predictive")
+    assert cfg_predictive is not None
+    # Same hardware: same URDF, EE frame, motor names, joint names.
+    assert cfg_predictive.urdf_path == cfg_plain.urdf_path
+    assert cfg_predictive.ee_frame_name == cfg_plain.ee_frame_name
+    assert cfg_predictive.motor_names == cfg_plain.motor_names
+    assert cfg_predictive.joint_names == cfg_plain.joint_names
+
+
 def test_unknown_robot_returns_none():
     """Robots without a registered config should yield None (callers fall back)."""
     fake = SimpleNamespace(name="some_robot_that_does_not_exist")
