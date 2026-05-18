@@ -147,8 +147,13 @@ class QuestServer:
         if self._loop is not None:
             try:
                 asyncio.run_coroutine_threadsafe(self._shutdown(), self._loop).result(timeout=3.0)
+            except asyncio.CancelledError:
+                # Expected — the loop cancelling its own pending tasks at
+                # shutdown propagates here as the scheduled coro racing the
+                # loop close. Not an error.
+                pass
             except Exception as e:
-                logger.warning(f"QuestServer shutdown coro raised: {e}")
+                logger.warning(f"QuestServer shutdown coro raised: {type(e).__name__}: {e}")
         self._thread.join(timeout=3.0)
         if self._thread.is_alive():
             logger.warning("QuestServer thread did not exit within 3s")
@@ -166,6 +171,22 @@ class QuestServer:
         except Exception:
             logger.exception("QuestServer asyncio loop crashed")
         finally:
+            # Cancel + gather any tasks still around (websocket handlers, ping
+            # loops, request handlers mid-request) so closing the loop doesn't
+            # log "Task was destroyed but it is pending!" or "Event loop is
+            # closed" from aiohttp's late-running cleanup callbacks.
+            try:
+                pending = [t for t in asyncio.all_tasks(self._loop) if not t.done()]
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                # One more pass through the loop to let aiohttp's transport
+                # close callbacks settle on the same (still-open) loop rather
+                # than firing post-close.
+                self._loop.run_until_complete(asyncio.sleep(0))
+            except Exception:
+                logger.debug("QuestServer task drain raised", exc_info=True)
             self._loop.close()
 
     async def _serve_forever(self) -> None:
@@ -191,8 +212,12 @@ class QuestServer:
             await asyncio.sleep(0.1)
 
     async def _shutdown(self) -> None:
+        # Cleanup tears down the listening socket and waits for in-flight
+        # requests / WS sessions to drain. Wrapped in suppress because
+        # aiohttp can raise during cleanup if the Quest disconnects rudely.
         if self._runner is not None:
-            await self._runner.cleanup()
+            with contextlib.suppress(Exception):
+                await self._runner.cleanup()
 
     # ── Handlers ──────────────────────────────────────────────────────────
 

@@ -2003,21 +2003,31 @@ async function startObsStreamViewer() {
     const container = document.getElementById('rerun-viewer');
     if (!container) return;
 
-    // Poll until the stream becomes available (robot needs time to connect)
+    // Poll until obs-stream OR urdf-viz is available (robot needs time to
+    // connect). Either signal is enough to start building the tile grid —
+    // the user wants to see whichever feeds are up rather than nothing.
+    // Re-probe urdf-viz on each tick so we catch it coming up mid-poll.
     let attempts = 0;
     const maxAttempts = 30; // 30 × 500ms = 15s
     while (attempts < maxAttempts) {
         try {
             const res = await fetch('/api/run/obs-stream/meta');
             obsStreamMeta = await res.json();
-            if (obsStreamMeta?.available) break;
         } catch (e) { /* not ready yet */ }
+        if (!_urdfVizActive) {
+            try {
+                const r = await fetch('/api/run/urdf-viz');
+                const j = await r.json();
+                _urdfVizActive = !!j.available;
+            } catch (e) { /* leave as-is */ }
+        }
+        if (obsStreamMeta?.available || _urdfVizActive) break;
         await new Promise(r => setTimeout(r, 500));
         attempts++;
     }
 
-    if (!obsStreamMeta?.available) {
-        console.warn('Observation stream not available after timeout');
+    if (!obsStreamMeta?.available && !_urdfVizActive) {
+        console.warn('Neither obs-stream nor urdf-viz available after timeout');
         return;
     }
 
@@ -2031,8 +2041,10 @@ async function startObsStreamViewer() {
     if (grid) grid.remove();
 
     // Build camera grid. The URDF iframe (if active) counts as one extra tile
-    // so the grid math accounts for it.
-    const camKeys = Object.keys(obsStreamMeta.image_keys);
+    // so the grid math accounts for it. obsStreamMeta may be null if only
+    // URDF came up (e.g. a run without cameras / cameras failed) — handle
+    // that as zero camera keys.
+    const camKeys = obsStreamMeta?.available ? Object.keys(obsStreamMeta.image_keys) : [];
     if (camKeys.length === 0 && !_urdfVizActive) return;
 
     const tileCount = camKeys.length + (_urdfVizActive ? 1 : 0);
@@ -2082,10 +2094,10 @@ async function startObsStreamViewer() {
         imgElements[key] = img;
     }
 
-    // URDF visualization tile: iframes MeshCat. The teleop process opens the
-    // MeshCat server when --display_urdf=true is passed; the obs-stream
-    // already being available means the teleop's init phase has finished,
-    // so MeshCat should be listening by now.
+    // URDF visualization tile: iframes MeshCat. The teleop / replay / record
+    // / policy process opens the MeshCat server when --display_urdf=true is
+    // passed; we detected it via /api/run/urdf-viz. Renders even when no
+    // cameras are configured.
     if (_urdfVizActive) {
         const urdfCell = document.createElement('div');
         urdfCell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
