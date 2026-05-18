@@ -21,10 +21,20 @@ a three.js viewer at ``http://127.0.0.1:7000/static/``. For bimanual, two
 copies of the SO-107 URDF are loaded under separate root nodes and
 offset along world +X / -X so they don't overlap.
 
-Use as a safe-testing backstop: set ``dry_run=True`` on the robot config
-to disable motor writes, then add ``--display-urdf=true`` to
-``lerobot-teleoperate`` to see the commanded joint trajectories in 3D
-without touching hardware.
+State-based: the viz reflects the OBSERVED joint angles each tick, not
+the commanded ones. This makes it useful for any workflow — teleop
+(any kind), policy rollout, replay, even a robot just streaming
+observations — and surfaces motor lag / collisions / unreachable IK
+targets as a divergence between what you commanded and what the URDF
+shows.
+
+Use as a safe-testing backstop for teleop: set ``dry_run=True`` on the
+robot config to lock out motor writes, then add ``--display-urdf=true``
+to ``lerobot-teleoperate``. The motors don't move, but the observation
+stream still reports the current static joint positions, which the viz
+renders. (For dry-run teleop, what you see is whatever pose the arm
+was already in — useful for verifying the URDF base orientation / world
+yaw mapping without any motion risk.)
 
 This module avoids importing pinocchio / meshcat at module load — both
 are heavy and only needed when ``--display-urdf`` is actually on.
@@ -33,6 +43,7 @@ are heavy and only needed when ``--display-urdf`` is actually on.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,9 +51,11 @@ import numpy as np
 
 from lerobot.configs import PipelineFeatureType, PolicyFeature
 from lerobot.processor import (
+    ObservationProcessorStep,
     ProcessorStepRegistry,
     RobotAction,
     RobotActionProcessorStep,
+    RobotObservation,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,28 +148,34 @@ class BimanualUrdfViz:
         viz.display(q_rad[: viz.model.nq])
 
 
-# ── ProcessorStep that taps the post-IK action and pushes to the viz ────
+# ── ProcessorStep that taps the observation stream and pushes to the viz ──
 
 
 @ProcessorStepRegistry.register("urdf_viz_mirror")
 @dataclass
-class UrdfVizMirrorStep(RobotActionProcessorStep):
-    """Side-effect step: render the commanded joint angles in the MeshCat scene.
+class UrdfVizMirrorStep(ObservationProcessorStep):
+    """Side-effect step: render the robot's CURRENT joint state in the MeshCat scene.
 
-    Goes at the TAIL of the Cartesian IK pipeline (after IK has written
-    ``<motor>.pos``). Reads the post-IK joint commands and forwards them
-    to a shared :class:`BimanualUrdfViz` instance. The action is returned
-    unchanged so downstream consumers (the robot's send_action) still
-    see the same commands.
+    Sits in the observation pipeline so it works regardless of teleop type —
+    leader arms, Cartesian VR teleop, joint-space replay, policy rollout, even
+    a robot just streaming observations with no controller attached. The
+    observation is returned unchanged so it never perturbs downstream steps.
 
-    For bimanual, both arms are updated each tick. For unimanual, only
-    the configured arm (default ``"right"``) is updated; the other arm
-    stays at its initial zero pose.
+    For bimanual, both arms are updated each tick using ``left_<motor>.pos``
+    and ``right_<motor>.pos`` observation keys. For unimanual, only the
+    configured arm is rendered; the other arm stays at its initial zero pose.
+
+    State (observation) vs commanded (action): we deliberately render OBSERVED
+    joints because that's the universal signal — every robot's
+    ``get_observation()`` returns ``<motor>.pos``. The commanded action is
+    only available downstream of any IK step, and not all workflows have one.
+    Showing the actual robot pose is also what the user usually wants to see
+    when debugging motor lag, collisions, or unreachable IK targets.
 
     Attributes:
         viz: Shared BimanualUrdfViz instance (built outside the step).
-        bimanual: True if the action carries ``left_*`` / ``right_*``
-            prefixed keys; False for unprefixed unimanual actions.
+        bimanual: True if the observation carries ``left_*`` / ``right_*``
+            prefixed keys; False for unprefixed unimanual observations.
         unimanual_arm: Which arm to render when ``bimanual=False``.
     """
 
@@ -165,28 +184,91 @@ class UrdfVizMirrorStep(RobotActionProcessorStep):
     unimanual_arm: str = "right"
     _arm_motor_names: tuple[str, ...] = field(default=_SO107_ARM_MOTOR_NAMES, init=False, repr=False)
 
-    def action(self, action: RobotAction) -> RobotAction:
+    def observation(self, observation: RobotObservation) -> RobotObservation:
         if self.bimanual:
-            self._update_arm("left", "left_", action)
-            self._update_arm("right", "right_", action)
+            self._update_arm("left", "left_", observation)
+            self._update_arm("right", "right_", observation)
         else:
-            self._update_arm(self.unimanual_arm, "", action)
-        return action
+            self._update_arm(self.unimanual_arm, "", observation)
+        return observation
 
-    def _update_arm(self, arm: str, prefix: str, action: RobotAction) -> None:
+    def _update_arm(self, arm: str, prefix: str, observation: RobotObservation) -> None:
         joints_deg = []
         for name in self._arm_motor_names:
             key = f"{prefix}{name}.pos"
-            v = action.get(key)
+            v = observation.get(key)
             if v is None:
-                # Action doesn't have this arm's commands yet (early tick).
+                # Observation doesn't have this arm's joints yet (early tick).
                 return
             joints_deg.append(float(v))
         try:
             self.viz.set_arm_joints_deg(arm, np.asarray(joints_deg, dtype=float))
         except Exception as e:
-            # Viz errors must never break the teleop loop.
+            # Viz errors must never break the run loop.
             logger.debug(f"UrdfVizMirrorStep: viz update failed for {arm}: {e}")
+
+    def transform_features(
+        self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
+    ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+        # Pass-through: doesn't add or remove any observation keys.
+        return features
+
+
+# ── Periodic commanded-joints logger (debug companion to the URDF viz) ────
+
+
+@ProcessorStepRegistry.register("commanded_joints_log")
+@dataclass
+class CommandedJointsLogStep(RobotActionProcessorStep):
+    """Periodically log the post-IK commanded ``<motor>.pos`` values per arm.
+
+    Sits on the ACTION pipeline (after IK) and prints one INFO line per
+    ``log_interval_s`` seconds with the commanded joints. Complements
+    :class:`UrdfVizMirrorStep` for dry-run testing: the URDF reflects the
+    OBSERVED state (motors held still under dry_run), while this log
+    shows what the IK *would* have commanded — together they tell you
+    whether the teleop -> IK math is doing the right thing without
+    requiring motors to move.
+
+    Throttled by wall clock so the log is sane across teleop rates
+    (60 Hz unimanual, 200 Hz predictive). Action is returned unchanged.
+
+    Attributes:
+        log_interval_s: Minimum seconds between log lines.
+        bimanual: When True, log left_ and right_ separately.
+    """
+
+    log_interval_s: float = 1.0
+    bimanual: bool = False
+    _last_log_t: float = field(default=0.0, init=False, repr=False)
+    _arm_motor_names: tuple[str, ...] = field(default=_SO107_ARM_MOTOR_NAMES, init=False, repr=False)
+
+    def action(self, action: RobotAction) -> RobotAction:
+        now = time.monotonic()
+        if now - self._last_log_t < self.log_interval_s:
+            return action
+        self._last_log_t = now
+        if self.bimanual:
+            for prefix in ("left_", "right_"):
+                line = self._format_arm(action, prefix)
+                if line:
+                    logger.info("commanded[%s] %s", prefix.rstrip("_"), line)
+        else:
+            line = self._format_arm(action, "")
+            if line:
+                logger.info("commanded %s", line)
+        return action
+
+    def _format_arm(self, action: RobotAction, prefix: str) -> str:
+        parts = []
+        for name in self._arm_motor_names:
+            v = action.get(f"{prefix}{name}.pos")
+            if v is not None:
+                parts.append(f"{name}={float(v):+.1f}")
+        gripper = action.get(f"{prefix}gripper.pos")
+        if gripper is not None:
+            parts.append(f"gripper={float(gripper):+.1f}")
+        return " ".join(parts)
 
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]

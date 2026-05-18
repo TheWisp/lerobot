@@ -240,12 +240,16 @@ def teleop_loop(
                 _ = robot.send_action(action_to_send)
 
             # Per-tick motion logging (intent + state). No-op when disabled.
-            # `raw_action` is the leader pose dict; `obs` is the follower's
-            # state read at the top of the iteration. MotionLogger filters
-            # to .pos keys so non-position obs (cameras) are silently
-            # skipped.
+            # Use the POST-pipeline dict (``robot_action_to_send``) as intent
+            # so the trace works for any teleop type — leader arms (raw
+            # action == joint commands, pipeline is identity), Cartesian
+            # teleops (raw action == target_x/y/z, pipeline runs IK to
+            # produce <motor>.pos), and bimanual variants (post-pipeline
+            # carries left_<motor>.pos + right_<motor>.pos, matching the
+            # bimanual observation's key prefix). MotionLogger filters to
+            # .pos keys so non-position obs (cameras) are silently skipped.
             if motion_logger is not None:
-                motion_logger.tick(raw_action, obs)
+                motion_logger.tick(robot_action_to_send, obs)
 
             if display_data:
                 log_rerun_data(
@@ -285,13 +289,35 @@ def teleop_loop(
             return
 
 
-def _attach_urdf_viz(pipeline, teleop, robot) -> None:
-    """Append a UrdfVizMirrorStep to the Cartesian IK pipeline.
+def _attach_commanded_joints_log(action_pipeline, robot) -> None:
+    """Append a CommandedJointsLogStep to the action pipeline.
 
-    Detects bimanual via the teleop's action_features (left_target_x +
-    right_target_x both present). Logs the MeshCat URL the user opens
-    in a browser. Failures are caught and downgraded to a warning —
-    the visualization is a debug aid, never load-bearing.
+    Throttled INFO logs of post-IK joint commands so users can grep the
+    file log to see what the teleop -> IK chain is producing. No-op on
+    the action stream itself.
+    """
+    try:
+        from lerobot.robots.so107_description.urdf_viz import CommandedJointsLogStep
+    except ImportError:
+        return
+    try:
+        obs_features = robot.observation_features
+        bimanual = any(k.startswith("left_") and k.endswith(".pos") for k in obs_features)
+    except Exception:
+        bimanual = False
+    action_pipeline.steps.append(CommandedJointsLogStep(bimanual=bimanual))
+
+
+def _attach_urdf_viz(obs_pipeline, robot) -> None:
+    """Append a UrdfVizMirrorStep to the OBSERVATION pipeline.
+
+    State-based: the viz reflects the robot's observed joints each tick,
+    so it works for any teleop type (Cartesian VR, leader arm, joint-space
+    replay) and even when no teleop is attached. Detects bimanual via the
+    robot's observation_features (``left_<motor>.pos`` keys present).
+    Logs the MeshCat URL the user opens in a browser. Failures are caught
+    and downgraded to a warning — the visualization is a debug aid, never
+    load-bearing.
     """
     try:
         from lerobot.robots.so107_description.urdf_viz import BimanualUrdfViz, UrdfVizMirrorStep
@@ -303,10 +329,10 @@ def _attach_urdf_viz(pipeline, teleop, robot) -> None:
         return
 
     try:
-        names = teleop.action_features.get("names", {})
-    except (AttributeError, KeyError):
-        names = {}
-    bimanual = "left_target_x" in names and "right_target_x" in names
+        obs_features = robot.observation_features
+        bimanual = any(k.startswith("left_") and k.endswith(".pos") for k in obs_features)
+    except Exception:
+        bimanual = False
 
     try:
         viz = BimanualUrdfViz()
@@ -314,11 +340,13 @@ def _attach_urdf_viz(pipeline, teleop, robot) -> None:
         logging.warning(f"display_urdf=True but viz construction failed: {type(e).__name__}: {e}")
         return
 
-    pipeline.steps.append(UrdfVizMirrorStep(viz=viz, bimanual=bimanual))
+    obs_pipeline.steps.append(UrdfVizMirrorStep(viz=viz, bimanual=bimanual))
     logging.info(
         f"display_urdf: live MeshCat scene at {viz.url} "
         f"({'bimanual' if bimanual else 'unimanual'} mode). "
-        f"Pair with the robot's dry_run=True for motor-free testing."
+        f"Rendering the OBSERVED joint state — pair with the robot's "
+        f"dry_run=True only if you want to verify the URDF is wired correctly "
+        f"without motor traffic (no motion will appear under dry-run)."
     )
 
 
@@ -357,10 +385,6 @@ def teleoperate(cfg: TeleoperateConfig):
             logging.info(
                 f"Auto-composed Cartesian IK pipeline for teleop={cfg.teleop.type} -> robot={cfg.robot.type}"
             )
-            # Optional: append a side-effect step that mirrors the IK output
-            # into a MeshCat URDF scene. No-op on the action stream.
-            if cfg.display_urdf:
-                _attach_urdf_viz(robot_action_processor, teleop, robot)
         else:
             logging.warning(
                 f"teleop {cfg.teleop.type!r} emits Cartesian actions but "
@@ -368,11 +392,17 @@ def teleoperate(cfg: TeleoperateConfig):
                 f"(see lerobot.processor.cartesian_ik_pipeline.register_cartesian_ik_robot). "
                 f"Falling back to identity pipeline; the robot will likely fail to apply the action."
             )
-    elif cfg.display_urdf:
-        logging.warning(
-            "display_urdf=True but teleop is not Cartesian-style; URDF viz is "
-            "only wired for Cartesian -> IK pipelines today. Ignoring."
-        )
+
+    # URDF viz (state-based) is a side-effect step on the OBSERVATION
+    # pipeline, independent of teleop type. Works for any teleop / no
+    # teleop, since it reads <motor>.pos from the observation stream.
+    # The commanded-joints log step sits on the ACTION pipeline and
+    # periodically prints the post-IK joint targets — together they let
+    # you see both "what the IK is asking for" and "where the robot
+    # actually is" under one flag (useful for dry-run testing).
+    if cfg.display_urdf:
+        _attach_urdf_viz(robot_observation_processor, robot)
+        _attach_commanded_joints_log(robot_action_processor, robot)
 
     # Add custom observation processor steps from the robot
     custom_steps = robot.get_observation_processor_steps()
