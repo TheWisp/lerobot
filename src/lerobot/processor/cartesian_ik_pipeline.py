@@ -78,6 +78,16 @@ class CartesianIKArmConfig:
     motor_names: list[str]
     joint_names: list[str] | None = None
     key_prefix: str = ""
+    # Mounting orientation of this physical arm relative to the teleop's user-
+    # reference frame, expressed as a yaw (rotation around URDF +Z) in degrees.
+    # 0.0 = arm faces the same direction as the teleop's reference (the unimanual
+    # default and the parallel-bimanual case). 180.0 = mirrored mounting (two
+    # arms facing each other across the workspace). Other angles work for
+    # arbitrary mountings (e.g. arms at 90 deg on adjacent table edges). The
+    # pipeline rotates the incoming target_x/y/z/wx/wy/wz by this yaw before
+    # composing with the reference pose, so the user's "push controller forward"
+    # consistently means "push EE in this arm's URDF -Y" regardless of mounting.
+    world_yaw_deg: float = 0.0
     # Workspace box for EEBoundsAndSafety (in robot base frame, meters).
     workspace_min: tuple[float, float, float] = (-0.30, -0.40, +0.02)
     workspace_max: tuple[float, float, float] = (+0.30, +0.10, +0.40)
@@ -228,6 +238,7 @@ def _build_arm_steps(arm: CartesianIKArmConfig) -> list[Any]:
             motor_names=arm.motor_names,
             use_latched_reference=True,
             key_prefix=arm.key_prefix,
+            world_yaw_deg=arm.world_yaw_deg,
         ),
         EEBoundsAndSafety(
             end_effector_bounds={

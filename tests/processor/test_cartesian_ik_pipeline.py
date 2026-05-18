@@ -209,3 +209,72 @@ def test_pipeline_builds_for_bi_so107_follower():
         assert s.key_prefix == "left_", f"{type(s).__name__} has prefix {s.key_prefix!r}"
     for s in right_steps:
         assert s.key_prefix == "right_", f"{type(s).__name__} has prefix {s.key_prefix!r}"
+
+
+def test_so107_bimanual_defaults_to_parallel_mounting():
+    """SO-107 bimanual config ships with world_yaw_deg=0.0 on both arms (parallel)."""
+    import lerobot.robots.so107_description  # noqa: F401
+
+    cfg = get_cartesian_ik_robot_config("bi_so107_follower")
+    assert cfg is not None
+    for arm in cfg.arms:
+        assert arm.world_yaw_deg == 0.0, (
+            f"arm {arm.key_prefix!r} has world_yaw_deg={arm.world_yaw_deg}, "
+            f"expected 0.0 (parallel mounting default)"
+        )
+
+
+@pytest.mark.skipif(not _pin_pink_available, reason="pin-pink (optional) not installed")
+def test_world_yaw_180_rotates_delta_into_arm_frame():
+    """world_yaw_deg=180 should send a +X teleop delta to -X in this arm's URDF frame."""
+    import numpy as np
+
+    import lerobot.robots.so107_description  # noqa: F401
+    from lerobot.model import RobotKinematics
+    from lerobot.processor import TransitionKey
+    from lerobot.robots.so107_description import get_urdf_path
+    from lerobot.robots.so_follower.robot_kinematic_processor import EEReferenceAndDelta
+
+    kin = RobotKinematics(urdf_path=str(get_urdf_path()), target_frame_name="L7_1")
+    motors = [
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "forearm_roll",
+        "wrist_flex",
+        "wrist_roll",
+        "gripper",
+    ]
+    obs = {f"{m}.pos": float(v) for m, v in zip(motors, [0, -90, 60, 0, -40, 0, 20], strict=False)}
+
+    def make_action(world_yaw_deg: float) -> dict:
+        step = EEReferenceAndDelta(
+            kinematics=kin,
+            end_effector_step_sizes={"x": 1.0, "y": 1.0, "z": 1.0},
+            motor_names=motors,
+            world_yaw_deg=world_yaw_deg,
+        )
+        action = {
+            "enabled": 1.0,
+            "target_x": 0.05,  # push +X in teleop frame
+            "target_y": 0.0,
+            "target_z": 0.0,
+            "target_wx": 0.0,
+            "target_wy": 0.0,
+            "target_wz": 0.0,
+            "gripper_vel": 0.0,
+        }
+        transition = {TransitionKey.OBSERVATION: obs, TransitionKey.ACTION: action}
+        return step(transition)[TransitionKey.ACTION]
+
+    fk_at_seed = kin.forward_kinematics(np.array([float(obs[f"{m}.pos"]) for m in motors]))
+    base_x = float(fk_at_seed[0, 3])
+
+    out_0 = make_action(0.0)
+    out_180 = make_action(180.0)
+
+    # yaw=0: ee.x = FK_x + 0.05; yaw=180: ee.x = FK_x - 0.05 (delta rotated 180 around Z).
+    assert out_0["ee.x"] == pytest.approx(base_x + 0.05, abs=1e-9)
+    assert out_180["ee.x"] == pytest.approx(base_x - 0.05, abs=1e-9)
+    # Y unchanged in both cases since the input delta has no Y component.
+    assert out_0["ee.y"] == pytest.approx(out_180["ee.y"], abs=1e-9)

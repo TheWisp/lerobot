@@ -60,6 +60,18 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
             written by this step (e.g., ``"left_"``). Used for bimanual setups so two
             chains can share a single transition without key collisions. Empty string
             (default) preserves the unimanual key set (target_x, ee.x, <motor>.pos).
+        world_yaw_deg: Rotation around the URDF +Z axis applied to the incoming
+            target_x/y/z (translation) and target_wx/wy/wz (rotvec) BEFORE they
+            are composed with the reference pose. Use this to express the
+            per-arm mounting orientation when the teleop emits deltas in a
+            single user-reference frame but the arms are mounted at different
+            yaw angles relative to that frame. Common values:
+              * ``0.0``  — arm faces the same direction as the teleop's reference
+                (parallel mounting for bimanual setups).
+              * ``180.0`` — arm rotated 180 deg around Z (mirrored mounting:
+                two arms facing each other across the workspace).
+              * Any other angle in degrees for arbitrary mountings.
+            Identity for unimanual.
         reference_ee_pose: Internal state storing the latched reference pose.
         _prev_enabled: Internal state to detect the rising edge of the enable signal.
         _command_when_disabled: Internal state to hold the last command while disabled.
@@ -73,6 +85,7 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
     )
     use_ik_solution: bool = False
     key_prefix: str = ""
+    world_yaw_deg: float = 0.0
 
     reference_ee_pose: np.ndarray | None = field(default=None, init=False, repr=False)
     _prev_enabled: bool = field(default=False, init=False, repr=False)
@@ -134,9 +147,19 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
                 ],
                 dtype=float,
             )
-            r_abs = Rotation.from_rotvec([wx, wy, wz]).as_matrix()
+            r_delta = Rotation.from_rotvec([wx, wy, wz]).as_matrix()
+            # Per-arm yaw: rotate both the translation delta and the orientation
+            # delta around URDF +Z so the teleop's user-reference frame maps to
+            # THIS arm's URDF frame. Identity (0 deg) for unimanual / parallel
+            # bimanual; 180 deg for mirrored mounting.
+            if self.world_yaw_deg != 0.0:
+                yaw_rad = np.deg2rad(self.world_yaw_deg)
+                c, s = np.cos(yaw_rad), np.sin(yaw_rad)
+                r_yaw = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=float)
+                delta_p = r_yaw @ delta_p
+                r_delta = r_yaw @ r_delta @ r_yaw.T
             desired = np.eye(4, dtype=float)
-            desired[:3, :3] = ref[:3, :3] @ r_abs
+            desired[:3, :3] = ref[:3, :3] @ r_delta
             desired[:3, 3] = ref[:3, 3] + delta_p
 
             self._command_when_disabled = desired.copy()
