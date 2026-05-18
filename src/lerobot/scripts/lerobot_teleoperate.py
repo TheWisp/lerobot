@@ -141,6 +141,12 @@ class TeleoperateConfig:
     # Pair with the robot config's dry_run=True for safe testing without
     # any motor traffic. Only the SO-107 description is wired today.
     display_urdf: bool = False
+    # Verbose per-tick log of the Cartesian IK pipeline internals (EE
+    # targets, bounds clipping, IK seed / output / position error).
+    # Written to ``<latency_output_dir>/ik_debug_<ts>.npz`` alongside the
+    # motion log. Use when chasing IK instability symptoms; off by default
+    # because the per-tick allocations add a small overhead at 200 Hz.
+    debug_teleop_log: bool = False
     # Latency monitoring: capture per-stage timing into an in-memory aggregator
     # and publish a JSON snapshot for the GUI to read.
     # See src/lerobot/gui/docs/latency_monitoring.md.
@@ -250,6 +256,14 @@ def teleop_loop(
             # .pos keys so non-position obs (cameras) are silently skipped.
             if motion_logger is not None:
                 motion_logger.tick(robot_action_to_send, obs)
+
+            # End-of-tick marker for the verbose IK debug log. No-op when
+            # the recorder isn't installed.
+            from lerobot.utils.latency.ik_debug import get_recorder as _get_ik_rec
+
+            _ik_rec = _get_ik_rec()
+            if _ik_rec is not None:
+                _ik_rec.tick_done()
 
             if display_data:
                 log_rerun_data(
@@ -415,6 +429,16 @@ def teleoperate(cfg: TeleoperateConfig):
         motion_logger = MotionLogger(cfg.latency_output_dir)
         logging.info("Motion logging enabled; trace → %s", motion_logger.path)
 
+    # Verbose per-tick IK pipeline log. Installed as a module-level singleton
+    # so the individual ProcessorSteps don't need explicit plumbing.
+    ik_debug_recorder = None
+    if cfg.debug_teleop_log:
+        from lerobot.utils.latency.ik_debug import IKDebugRecorder, set_recorder
+
+        ik_debug_recorder = IKDebugRecorder(cfg.latency_output_dir)
+        set_recorder(ik_debug_recorder)
+        logging.info("IK debug log enabled; trace → %s", ik_debug_recorder.path)
+
     teleop.connect()
     robot.connect()
 
@@ -448,6 +472,11 @@ def teleoperate(cfg: TeleoperateConfig):
     finally:
         if motion_logger is not None:
             motion_logger.close()
+        if ik_debug_recorder is not None:
+            from lerobot.utils.latency.ik_debug import set_recorder
+
+            ik_debug_recorder.close()
+            set_recorder(None)
         if cfg.display_data:
             shutdown_rerun()
         # Detach the teleop from the robot BEFORE disconnecting it. On a

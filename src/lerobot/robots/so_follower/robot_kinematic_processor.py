@@ -170,6 +170,17 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         # Current pose from FK on measured joints
         t_curr = self.kinematics.forward_kinematics(q_for_fk)
 
+        # Optional verbose IK debug log — records the per-tick inputs so we
+        # can later inspect what the chain saw. No-op when the recorder
+        # isn't installed.
+        from lerobot.utils.latency.ik_debug import get_recorder
+
+        _rec = get_recorder()
+        if _rec is not None:
+            _rec.record(self.key_prefix, "q_motor", q_raw.copy())
+            _rec.record(self.key_prefix, "q_urdf", q_for_fk.copy())
+            _rec.record(self.key_prefix, "fk_pos", t_curr[:3, 3].copy())
+
         p = self.key_prefix
         enabled = bool(action.pop(f"{p}enabled"))
         tx = float(action.pop(f"{p}target_x"))
@@ -231,6 +242,13 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         action[f"{p}ee.wy"] = float(tw[1])
         action[f"{p}ee.wz"] = float(tw[2])
         action[f"{p}ee.gripper_vel"] = gripper_vel
+
+        if _rec is not None:
+            _rec.record(self.key_prefix, "engaged", float(enabled))
+            _rec.record(self.key_prefix, "target_xyz", np.array([tx, ty, tz]))
+            _rec.record(self.key_prefix, "target_rotvec", np.array([wx, wy, wz]))
+            _rec.record(self.key_prefix, "ee_target_pos", pos.copy())
+            _rec.record(self.key_prefix, "ee_target_rotvec", tw.copy())
 
         self._prev_enabled = enabled
         return action
@@ -303,9 +321,11 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
 
         pos = np.array([x, y, z], dtype=float)
         twist = np.array([wx, wy, wz], dtype=float)
+        pos_in = pos.copy()  # before clipping, for debug recording
 
         # Clip position
         pos = np.clip(pos, self.end_effector_bounds["min"], self.end_effector_bounds["max"])
+        pos_clipped = float(np.linalg.norm(pos - pos_in))
 
         # Check for jumps in position
         if self._last_pos is not None:
@@ -323,6 +343,13 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
         action[f"{p}ee.wx"] = float(twist[0])
         action[f"{p}ee.wy"] = float(twist[1])
         action[f"{p}ee.wz"] = float(twist[2])
+
+        from lerobot.utils.latency.ik_debug import get_recorder
+
+        _rec = get_recorder()
+        if _rec is not None:
+            _rec.record(self.key_prefix, "bounds_clip_dist", pos_clipped)
+            _rec.record(self.key_prefix, "ee_post_bounds_pos", pos.copy())
         return action
 
     def reset(self):

@@ -128,6 +128,22 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
         # Convert IK output (URDF) back to motor space for the action stream.
         q_target_motor = _urdf_to_motor_deg(q_target_urdf, self.motor_names, self.joint_map)
 
+        from lerobot.utils.latency.ik_debug import get_recorder
+
+        _rec = get_recorder()
+        if _rec is not None:
+            _rec.record(self.key_prefix, "ik_seed_urdf", q_raw.copy())
+            _rec.record(self.key_prefix, "ik_q_urdf", q_target_urdf.copy())
+            _rec.record(self.key_prefix, "ik_q_motor", q_target_motor.copy())
+            # Position-error proxy: target vs FK(q_target_urdf).
+            try:
+                fk_after = self.kinematics.forward_kinematics(q_target_urdf)
+                _rec.record(
+                    self.key_prefix, "ik_pos_err_m", float(np.linalg.norm(fk_after[:3, 3] - t_des[:3, 3]))
+                )
+            except Exception:
+                pass
+
         # Map IK output to motor names. q_target_motor[gripper] is overridden
         # by ee.gripper_pos which is already in motor space (GripperVelocityToJoint
         # integrates in motor units; gripper isn't EE-tracked).
