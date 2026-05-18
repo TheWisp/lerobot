@@ -2100,7 +2100,14 @@ async function startObsStreamViewer() {
         const urdfCell = document.createElement('div');
         urdfCell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
         const iframe = document.createElement('iframe');
-        iframe.src = 'http://127.0.0.1:7000/static/';
+        // Use the same host the GUI was loaded from, not a hardcoded
+        // 127.0.0.1. When the user opens the GUI via the LAN hostname
+        // (e.g. lerobot.local:8000), the iframe must hit MeshCat on the
+        // SAME machine (lerobot.local:7000), not the viewer's machine.
+        // MeshCat binds to 0.0.0.0 by default so it's reachable from
+        // the LAN. Fall back to localhost only for the file:// edge case.
+        const meshcatHost = window.location.hostname || '127.0.0.1';
+        iframe.src = `http://${meshcatHost}:7000/static/`;
         iframe.style.cssText = 'width: 100%; height: 100%; border: none; background: #1a1a1a;';
         iframe.title = 'URDF visualization (MeshCat)';
         urdfCell.appendChild(iframe);
