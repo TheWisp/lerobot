@@ -53,7 +53,7 @@ _PER_ARM_KEYS = (
     "target_wx",
     "target_wy",
     "target_wz",
-    "gripper_vel",
+    "gripper_pos",
 )
 ACTION_KEYS = tuple(f"{p}{k}" for p in ("left_", "right_") for k in _PER_ARM_KEYS)
 
@@ -86,6 +86,9 @@ class BimanualQuestVRTeleop(Teleoperator):
             gripper_button_index=config.gripper_button_index,
             position_scale=config.position_scale,
             max_rot_step_rad_per_tick=config.max_rot_step_rad_per_tick,
+            max_pos_step_m_per_tick=config.max_pos_step_m_per_tick,
+            gripper_open_motor=config.left_gripper_open_motor,
+            gripper_closed_motor=config.left_gripper_closed_motor,
             key_prefix="left_",
         )
         self._right = QuestArmController(
@@ -93,6 +96,9 @@ class BimanualQuestVRTeleop(Teleoperator):
             gripper_button_index=config.gripper_button_index,
             position_scale=config.position_scale,
             max_rot_step_rad_per_tick=config.max_rot_step_rad_per_tick,
+            max_pos_step_m_per_tick=config.max_pos_step_m_per_tick,
+            gripper_open_motor=config.right_gripper_open_motor,
+            gripper_closed_motor=config.right_gripper_closed_motor,
             key_prefix="right_",
         )
         self._server: QuestServer | None = None

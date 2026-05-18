@@ -122,6 +122,10 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
         t_des[:3, :3] = Rotation.from_rotvec([wx, wy, wz]).as_matrix()
         t_des[:3, 3] = [x, y, z]
 
+        # Capture the seed BEFORE the IK call. With initial_guess_current_joints=True
+        # this equals q_raw (the observation); with =False it diverges and that's
+        # exactly what we want to see in the trace.
+        q_seed_used_urdf = self.q_curr.copy()
         q_target_urdf = self.kinematics.inverse_kinematics(self.q_curr, t_des)
         self.q_curr = q_target_urdf
 
@@ -132,15 +136,23 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
 
         _rec = get_recorder()
         if _rec is not None:
-            _rec.record(self.key_prefix, "ik_seed_urdf", q_raw.copy())
+            _rec.record(self.key_prefix, "ik_seed_urdf", q_seed_used_urdf)
+            _rec.record(self.key_prefix, "ik_q_obs_urdf", q_raw.copy())
             _rec.record(self.key_prefix, "ik_q_urdf", q_target_urdf.copy())
             _rec.record(self.key_prefix, "ik_q_motor", q_target_motor.copy())
-            # Position-error proxy: target vs FK(q_target_urdf).
+            _rec.record(self.key_prefix, "ik_n_iters", float(getattr(self.kinematics, "last_n_iters", -1)))
+            _rec.record(self.key_prefix, "ik_gripper_cmd_motor", float(gripper_pos))
+            # Position + orientation error vs target (FK round-trip).
             try:
                 fk_after = self.kinematics.forward_kinematics(q_target_urdf)
                 _rec.record(
                     self.key_prefix, "ik_pos_err_m", float(np.linalg.norm(fk_after[:3, 3] - t_des[:3, 3]))
                 )
+                # Orientation error: angle of the rotation R_err = R_des @ R_fk.T
+                r_err = t_des[:3, :3] @ fk_after[:3, :3].T
+                # trace-of-rotation -> angle (clamped for numerical safety).
+                cos_a = max(-1.0, min(1.0, (np.trace(r_err) - 1.0) * 0.5))
+                _rec.record(self.key_prefix, "ik_rot_err_rad", float(np.arccos(cos_a)))
             except Exception:
                 pass
 

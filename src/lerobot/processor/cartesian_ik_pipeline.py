@@ -19,11 +19,15 @@ common case of a Cartesian teleop (Quest VR, keyboard_ee, phone, ...)
 driving a follower that expects joint commands.
 
 The default ``lerobot-teleoperate`` pipeline is identity; Cartesian teleops
-emit ``target_x/y/z/wx/wy/wz/gripper_vel`` and the robot expects ``<motor>.pos``
-keys, so we need to inject:
+emit ``target_x/y/z/wx/wy/wz/gripper_pos`` and the robot expects
+``<motor>.pos`` keys, so we need to inject:
 
-    EEReferenceAndDelta  ->  EEBoundsAndSafety  ->  GripperVelocityToJoint
+    EEReferenceAndDelta  ->  EEBoundsAndSafety
     ->  PinkInverseKinematicsEEToJoints
+
+The gripper short-circuits the IK: the teleop emits an absolute motor-space
+target (``gripper_pos``), EEReferenceAndDelta forwards it as
+``ee.gripper_pos``, and the IK step writes it straight to ``gripper.pos``.
 
 This module detects whether the teleop is Cartesian-style and, when the
 robot has a registered config, returns a fully-composed pipeline. The
@@ -107,8 +111,6 @@ class CartesianIKArmConfig:
     end_effector_step_sizes: dict[str, float] | None = None
     # Max EE jump per tick (m) for EEBoundsAndSafety.
     max_ee_step_m: float = 0.10
-    # Gripper velocity -> position integration speed.
-    gripper_speed_factor: float = 20.0
 
 
 @dataclass(kw_only=True)
@@ -133,7 +135,6 @@ class CartesianIKRobotConfig:
     workspace_max: tuple[float, float, float] = (+0.30, +0.10, +0.40)
     end_effector_step_sizes: dict[str, float] | None = None
     max_ee_step_m: float = 0.10
-    gripper_speed_factor: float = 20.0
     joint_map: Any | None = None
 
     def __post_init__(self) -> None:
@@ -154,7 +155,6 @@ class CartesianIKRobotConfig:
                     workspace_max=self.workspace_max,
                     end_effector_step_sizes=self.end_effector_step_sizes,
                     max_ee_step_m=self.max_ee_step_m,
-                    gripper_speed_factor=self.gripper_speed_factor,
                     joint_map=self.joint_map,
                 )
             ]
@@ -201,7 +201,6 @@ def _build_arm_steps(arm: CartesianIKArmConfig) -> list[Any]:
     from lerobot.robots.so_follower.robot_kinematic_processor import (
         EEBoundsAndSafety,
         EEReferenceAndDelta,
-        GripperVelocityToJoint,
     )
 
     # FK for EEReferenceAndDelta (uses placo; FK is unaffected by the
@@ -229,6 +228,17 @@ def _build_arm_steps(arm: CartesianIKArmConfig) -> list[Any]:
             motor_names=arm.motor_names,
             key_prefix=arm.key_prefix,
             joint_map=arm.joint_map,
+            # Seed pink from the previous IK output, not the observed
+            # motor state. Posture target follows the seed, so this
+            # anchors the null-space regularizer to the previous COMMAND
+            # rather than the laggy motor reading. With seed=observation
+            # the posture target drifts with motor lag, and pink picks
+            # a slightly different null-space configuration each tick —
+            # joints walk through redundant DOFs even when the EE target
+            # is stationary (observed: 14° wrist_flex std over 0.4s in
+            # a quiet-target window). Previous-output seeding pins the
+            # trajectory.
+            initial_guess_current_joints=False,
         )
     except ImportError:
         from lerobot.robots.so_follower.robot_kinematic_processor import (
@@ -265,10 +275,13 @@ def _build_arm_steps(arm: CartesianIKArmConfig) -> list[Any]:
             max_ee_step_m=arm.max_ee_step_m,
             key_prefix=arm.key_prefix,
         ),
-        GripperVelocityToJoint(
-            speed_factor=arm.gripper_speed_factor,
-            key_prefix=arm.key_prefix,
-        ),
+        # GripperVelocityToJoint removed: the teleop now emits an absolute
+        # gripper_pos (motor space) via EEReferenceAndDelta -> ee.gripper_pos,
+        # which the IK step forwards directly to <motor>.gripper.pos. The
+        # prior vel-integration step ran `cmd = q_raw[-1] + vel*k`, which is
+        # not an integrator at all (no persistent state) — each tick of zero
+        # vel snapped the command back to the observed motor position, so
+        # the gripper barely moved across a full trigger cycle.
         ik_step,
     ]
 

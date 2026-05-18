@@ -189,7 +189,9 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         wx = float(action.pop(f"{p}target_wx"))
         wy = float(action.pop(f"{p}target_wy"))
         wz = float(action.pop(f"{p}target_wz"))
-        gripper_vel = float(action.pop(f"{p}gripper_vel"))
+        # Absolute gripper command in motor space (from QuestArmController's
+        # trigger->motor mapping). Forwarded as-is — no integration step.
+        gripper_pos = float(action.pop(f"{p}gripper_pos"))
 
         desired = None
 
@@ -221,7 +223,13 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
                 delta_p = r_yaw @ delta_p
                 r_delta = r_yaw @ r_delta @ r_yaw.T
             desired = np.eye(4, dtype=float)
-            desired[:3, :3] = ref[:3, :3] @ r_delta
+            # World-frame (pre-multiply): a user wrist rotation around world Z
+            # produces an EE rotation around world Z regardless of the EE's
+            # current orientation. Local-frame post-multiply (ref @ r_delta)
+            # would apply the rotation in the EE's own frame, which makes the
+            # mapping depend on current pose — what the experimental
+            # sim_receiver got right: target_rot_full = delta_rot * ee_at_engage.
+            desired[:3, :3] = r_delta @ ref[:3, :3]
             desired[:3, 3] = ref[:3, 3] + delta_p
 
             self._command_when_disabled = desired.copy()
@@ -241,7 +249,7 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         action[f"{p}ee.wx"] = float(tw[0])
         action[f"{p}ee.wy"] = float(tw[1])
         action[f"{p}ee.wz"] = float(tw[2])
-        action[f"{p}ee.gripper_vel"] = gripper_vel
+        action[f"{p}ee.gripper_pos"] = gripper_pos
 
         if _rec is not None:
             _rec.record(self.key_prefix, "engaged", float(enabled))
@@ -249,6 +257,13 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
             _rec.record(self.key_prefix, "target_rotvec", np.array([wx, wy, wz]))
             _rec.record(self.key_prefix, "ee_target_pos", pos.copy())
             _rec.record(self.key_prefix, "ee_target_rotvec", tw.copy())
+            _rec.record(self.key_prefix, "gripper_pos_in", float(gripper_pos))
+            # Latched engage reference (NaN before first enable).
+            if self.reference_ee_pose is not None:
+                ref_pos = self.reference_ee_pose[:3, 3]
+                ref_tw = Rotation.from_matrix(self.reference_ee_pose[:3, :3]).as_rotvec()
+                _rec.record(self.key_prefix, "ref_ee_pos", ref_pos.copy())
+                _rec.record(self.key_prefix, "ref_ee_rotvec", ref_tw.copy())
 
         self._prev_enabled = enabled
         return action
@@ -271,11 +286,11 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
             "target_wx",
             "target_wy",
             "target_wz",
-            "gripper_vel",
+            "gripper_pos",
         ]:
             features[PipelineFeatureType.ACTION].pop(f"{p}{feat}", None)
 
-        for feat in ["x", "y", "z", "wx", "wy", "wz", "gripper_vel"]:
+        for feat in ["x", "y", "z", "wx", "wy", "wz", "gripper_pos"]:
             features[PipelineFeatureType.ACTION][f"{p}ee.{feat}"] = PolicyFeature(
                 type=FeatureType.ACTION, shape=(1,)
             )
@@ -327,13 +342,17 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
         pos = np.clip(pos, self.end_effector_bounds["min"], self.end_effector_bounds["max"])
         pos_clipped = float(np.linalg.norm(pos - pos_in))
 
-        # Check for jumps in position
+        # Check for jumps in position. The intended behavior is to clip,
+        # not crash — a jump is expected on clutch re-engage when the
+        # operator has physically moved the arm while disengaged: the
+        # target snaps from "last commanded" to "FK of current pose".
+        pos_jump_m = 0.0
         if self._last_pos is not None:
             dpos = pos - self._last_pos
             n = float(np.linalg.norm(dpos))
             if n > self.max_ee_step_m and n > 0:
                 pos = self._last_pos + dpos * (self.max_ee_step_m / n)
-                raise ValueError(f"EE jump {n:.3f}m > {self.max_ee_step_m}m")
+                pos_jump_m = n
 
         self._last_pos = pos
 
@@ -350,6 +369,7 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
         if _rec is not None:
             _rec.record(self.key_prefix, "bounds_clip_dist", pos_clipped)
             _rec.record(self.key_prefix, "ee_post_bounds_pos", pos.copy())
+            _rec.record(self.key_prefix, "ee_jump_clipped_m", pos_jump_m)
         return action
 
     def reset(self):

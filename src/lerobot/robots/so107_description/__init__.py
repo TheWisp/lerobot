@@ -75,7 +75,6 @@ def _register_cartesian_ik() -> None:
         workspace_max=workspace_max,
         end_effector_step_sizes={"x": 1.0, "y": 1.0, "z": 1.0},
         max_ee_step_m=0.10,
-        gripper_speed_factor=20.0,
         joint_map=RIGHT_ARM_MAP,
     )
     register_cartesian_ik_robot("so107_follower", uni_cfg)
@@ -100,7 +99,6 @@ def _register_cartesian_ik() -> None:
             workspace_max=workspace_max,
             end_effector_step_sizes={"x": 1.0, "y": 1.0, "z": 1.0},
             max_ee_step_m=0.10,
-            gripper_speed_factor=20.0,
         )
 
     bi_cfg = CartesianIKRobotConfig(

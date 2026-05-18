@@ -124,7 +124,10 @@ def test_pipeline_builds_for_so107_follower():
     step_names = [type(s).__name__ for s in pipeline.steps]
     assert "EEReferenceAndDelta" in step_names
     assert "EEBoundsAndSafety" in step_names
-    assert "GripperVelocityToJoint" in step_names
+    # GripperVelocityToJoint was removed: the teleop now emits absolute
+    # gripper_pos directly. EEReferenceAndDelta passes it through to
+    # ee.gripper_pos for the IK step.
+    assert "GripperVelocityToJoint" not in step_names
     assert "PinkInverseKinematicsEEToJoints" in step_names
 
 
@@ -144,7 +147,7 @@ def test_is_cartesian_teleop_true_for_bimanual():
                 "target_wx",
                 "target_wy",
                 "target_wz",
-                "gripper_vel",
+                "gripper_pos",
             )
         ):
             names[f"{prefix}{k}"] = len(names) * 1 + i  # values don't matter
@@ -200,11 +203,12 @@ def test_pipeline_builds_for_bi_so107_follower():
     fake_robot = SimpleNamespace(name="bi_so107_follower")
     pipeline = make_cartesian_ik_pipeline(fake_robot)
     assert pipeline is not None
-    assert len(pipeline.steps) == 8
+    # 3 steps per arm (Ref/Delta + Bounds + Pink IK) × 2 arms = 6.
+    assert len(pipeline.steps) == 6
 
-    # Inspect prefixes: first 4 steps are "left_", next 4 are "right_".
-    left_steps = pipeline.steps[:4]
-    right_steps = pipeline.steps[4:]
+    # Inspect prefixes: first 3 steps are "left_", next 3 are "right_".
+    left_steps = pipeline.steps[:3]
+    right_steps = pipeline.steps[3:]
     for s in left_steps:
         assert s.key_prefix == "left_", f"{type(s).__name__} has prefix {s.key_prefix!r}"
     for s in right_steps:
@@ -262,7 +266,7 @@ def test_world_yaw_180_rotates_delta_into_arm_frame():
             "target_wx": 0.0,
             "target_wy": 0.0,
             "target_wz": 0.0,
-            "gripper_vel": 0.0,
+            "gripper_pos": 0.0,
         }
         transition = {TransitionKey.OBSERVATION: obs, TransitionKey.ACTION: action}
         return step(transition)[TransitionKey.ACTION]

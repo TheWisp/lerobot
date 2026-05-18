@@ -83,7 +83,7 @@ def test_action_features_shape(teleop):
         "target_wx",
         "target_wy",
         "target_wz",
-        "gripper_vel",
+        "gripper_pos",
     }
 
 
@@ -115,17 +115,13 @@ def test_engaged_delta_maps_quest_to_robot_frame(teleop):
     """Push controller forward in Quest (-Z direction) -> robot moves forward (URDF -Y)."""
     # Engage at origin.
     teleop._on_frame(_frame(quest_pos=(0.0, 1.0, 0.0), clutch=1.0))
-    # Now push hand 5cm in -Z (forward, away from user's face).
-    teleop._on_frame(_frame(quest_pos=(0.0, 1.0, -0.05), clutch=1.0))
+    # Push hand 3cm in -Z (forward, away from user's face). Stays under
+    # the default 4cm/frame glitch cap so the step isn't clipped.
+    teleop._on_frame(_frame(quest_pos=(0.0, 1.0, -0.03), clutch=1.0))
     a = teleop._cached_action
     # SO-107 default mapping: ROBOT_FORWARD_IN_URDF = (0, -1, 0).
-    # Quest delta z = -0.05 (forward); QUEST_TO_ROBOT_M column 2 = (0, 1, 0).
-    # So delta_robot = (0, 1*(-0.05), 0) = (0, -0.05, 0). Hmm let me re-check.
-    # The actual quest_delta_to_robot for delta_quest=(0,0,-0.05) yields:
-    #   QUEST_TO_ROBOT_M @ (0,0,-0.05) = col2 * -0.05 = -ROBOT_FORWARD * -0.05
-    #     = -(0,-1,0) * -0.05 = (0,-1,0)*0.05 = (0,-0.05,0)
-    # i.e. URDF y = -0.05 (forward in our convention). Correct.
-    np.testing.assert_allclose([a["target_x"], a["target_y"], a["target_z"]], [0.0, -0.05, 0.0], atol=1e-9)
+    # quest_delta_to_robot for delta_quest=(0,0,-0.03) yields (0,-0.03,0).
+    np.testing.assert_allclose([a["target_x"], a["target_y"], a["target_z"]], [0.0, -0.03, 0.0], atol=1e-9)
 
 
 def test_release_clears_engage_state(teleop):
@@ -133,19 +129,61 @@ def test_release_clears_engage_state(teleop):
     teleop._on_frame(_frame(quest_pos=(0.0, 1.0, 0.0), clutch=1.0))
     teleop._on_frame(_frame(quest_pos=(0.0, 1.0, 0.0), clutch=0.0))  # release
     assert teleop._arm._engaged is False
-    # Re-engage at a different position.
-    teleop._on_frame(_frame(quest_pos=(0.2, 1.0, 0.0), clutch=1.0))
-    np.testing.assert_allclose(teleop._arm._quest_pos_at_engage, [0.2, 1.0, 0.0])
+    # Re-engage at a different position. Step <= max_pos_step_m_per_tick
+    # (0.04 m default) so the glitch suppression doesn't kick in here.
+    teleop._on_frame(_frame(quest_pos=(0.03, 1.0, 0.0), clutch=1.0))
+    np.testing.assert_allclose(teleop._arm._quest_pos_at_engage, [0.03, 1.0, 0.0])
 
 
-def test_gripper_vel_derived_from_trigger_change(teleop):
-    """Trigger value delta should appear in gripper_vel."""
-    teleop._on_frame(_frame(trigger=0.0))  # baseline
-    teleop._on_frame(_frame(trigger=0.3))  # trigger pulled
-    # gripper_vel = current - previous = 0.3 - 0.0 = +0.3 (trigger pulled =
-    # close in this convention: positive gripper_vel -> downstream
-    # GripperVelocityToJoint INCREASES motor.pos).
-    assert teleop._cached_action["gripper_vel"] == pytest.approx(0.3)
+def test_position_glitch_is_suppressed(teleop):
+    """A bogus huge jump in Quest position between frames should be clamped."""
+    teleop._on_frame(_frame(quest_pos=(0.0, 1.0, 0.0), clutch=1.0))
+    # Now simulate a tracking glitch: controller teleports 380mm in one frame.
+    teleop._on_frame(_frame(quest_pos=(0.0, 1.0, -0.38), clutch=1.0))
+    # The arm_controller should have clamped the jump to its 0.04 m cap.
+    # _quest_pos_prev now holds the clamped pose.
+    np.testing.assert_allclose(teleop._arm._quest_pos_prev, [0.0, 1.0, -0.04], atol=1e-6)
+    # target_xyz (Quest delta from engage, mapped to robot frame) should
+    # reflect only the clamped step, not the full glitched delta.
+    a = teleop._cached_action
+    assert abs(a["target_z"]) < 0.001
+    # Quest Z = robot Y per QUEST_TO_ROBOT_M; -0.04 quest_z -> robot Y = +0.04
+    assert a["target_y"] == pytest.approx(-0.04, abs=1e-6)
+
+
+def test_gripper_pos_mapped_absolutely_from_trigger(teleop):
+    """When clutch is engaged, trigger value maps directly to motor-space gripper position.
+
+    Defaults: gripper_open_motor=50, gripper_closed_motor=90 (rest half-open,
+    pull-to-close on the soft-limit side). Gating on clutch is intentional:
+    a resting controller with a stray trigger touch shouldn't move the
+    gripper.
+    """
+    teleop._on_frame(_frame(clutch=1.0, trigger=0.0))
+    assert teleop._cached_action["gripper_pos"] == pytest.approx(50.0)
+    teleop._on_frame(_frame(clutch=1.0, trigger=0.5))
+    assert teleop._cached_action["gripper_pos"] == pytest.approx(70.0)
+    teleop._on_frame(_frame(clutch=1.0, trigger=1.0))
+    assert teleop._cached_action["gripper_pos"] == pytest.approx(90.0)
+
+
+def test_gripper_pos_holds_last_value_when_disengaged(teleop):
+    """Releasing the clutch latches the gripper at its last commanded value.
+
+    Trigger movement while disengaged is IGNORED — prevents a controller
+    sitting on a table with an accidental trigger touch from squeezing the
+    gripper.
+    """
+    teleop._on_frame(_frame(clutch=1.0, trigger=0.5))
+    assert teleop._cached_action["gripper_pos"] == pytest.approx(70.0)
+    # Release clutch; trigger goes wild but gripper holds.
+    teleop._on_frame(_frame(clutch=0.0, trigger=1.0))
+    assert teleop._cached_action["gripper_pos"] == pytest.approx(70.0)
+    teleop._on_frame(_frame(clutch=0.0, trigger=0.0))
+    assert teleop._cached_action["gripper_pos"] == pytest.approx(70.0)
+    # Re-engage with a new trigger value — gripper resumes tracking.
+    teleop._on_frame(_frame(clutch=1.0, trigger=0.25))
+    assert teleop._cached_action["gripper_pos"] == pytest.approx(60.0)
 
 
 def test_get_action_returns_idle_when_no_frame_yet(teleop):
@@ -154,7 +192,14 @@ def test_get_action_returns_idle_when_no_frame_yet(teleop):
     """
     a = teleop._idle_action()
     assert a["enabled"] == 0.0
-    assert all(a[k] == 0.0 for k in a)
+    # All target_* zero on idle. gripper_pos defaults to the open-motor
+    # value (50 by default = half-open) so a freshly-connected teleop sits
+    # at a sensible neutral position rather than slamming open or closed.
+    for k, v in a.items():
+        if k == "gripper_pos":
+            assert v == 50.0  # gripper_open_motor default
+        else:
+            assert v == 0.0
 
 
 def test_unknown_hand_frame_is_ignored(teleop):
@@ -234,16 +279,21 @@ def test_bimanual_action_features_has_both_arms(bimanual_teleop):
         "target_wx",
         "target_wy",
         "target_wz",
-        "gripper_vel",
+        "gripper_pos",
     }
     assert names == {f"{p}{k}" for p in ("left_", "right_") for k in per_arm}
 
 
-def test_bimanual_idle_action_is_all_zero(bimanual_teleop):
+def test_bimanual_idle_action_is_at_neutral(bimanual_teleop):
+    """All EE-delta keys are zero; gripper_pos sits at each arm's open value."""
     a = bimanual_teleop._idle_action()
     assert len(a) == 16
-    for v in a.values():
-        assert v == 0.0
+    for k, v in a.items():
+        if k.endswith("gripper_pos"):
+            # Defaults: left_gripper_open_motor=50, right_gripper_open_motor=50.
+            assert v == 50.0
+        else:
+            assert v == 0.0
 
 
 def test_bimanual_independent_engagement(bimanual_teleop):
@@ -265,11 +315,19 @@ def test_bimanual_both_engaged(bimanual_teleop):
 
 def test_bimanual_per_arm_delta_independent(bimanual_teleop):
     """Move only the right hand; left target deltas stay zero."""
-    bimanual_teleop._on_frame(_bimanual_frame(left_clutch=1.0, right_clutch=1.0))  # engage both at origin
     bimanual_teleop._on_frame(
         _bimanual_frame(
             left_pos=(0.0, 1.0, -0.3),
-            right_pos=(0.0, 1.0, -0.35),  # push right hand 5cm forward
+            right_pos=(0.0, 1.0, -0.3),
+            left_clutch=1.0,
+            right_clutch=1.0,
+        )
+    )  # engage both at origin
+    # Push right hand 3cm forward (under the 0.04m/frame glitch cap default).
+    bimanual_teleop._on_frame(
+        _bimanual_frame(
+            left_pos=(0.0, 1.0, -0.3),
+            right_pos=(0.0, 1.0, -0.33),
             left_clutch=1.0,
             right_clutch=1.0,
         )
@@ -280,4 +338,4 @@ def test_bimanual_per_arm_delta_independent(bimanual_teleop):
     assert abs(a["left_target_z"]) < 1e-9
     # Right hand should have a non-zero delta (axis mapping verified by single-arm tests).
     right_norm = (a["right_target_x"] ** 2 + a["right_target_y"] ** 2 + a["right_target_z"] ** 2) ** 0.5
-    assert right_norm > 0.04  # ~5cm in some axis
+    assert right_norm > 0.02

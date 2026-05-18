@@ -94,6 +94,9 @@ class PinkKinematics:
         self.converge_threshold = converge_threshold
         self.dt = dt
         self.solver = solver
+        # Last solve's iteration count (0 = converged immediately, max_iters = budget hit).
+        # Inspected by callers for verbose debug logging.
+        self.last_n_iters: int = 0
 
         import os
 
@@ -158,14 +161,17 @@ class PinkKinematics:
         posture_task.set_target(seed_q)
         tasks = [frame_task, posture_task]
 
-        for _ in range(self.max_iters):
+        n_iters_used = 0
+        for it in range(self.max_iters):
             v = self._solve_ik(config, tasks, self.dt, solver=self.solver)
+            n_iters_used = it + 1
             if float(np.linalg.norm(v)) * self.dt < self.converge_threshold:
                 break
             config.integrate_inplace(v, self.dt)
             # integrate may overshoot URDF limits by float error; next solve_ik
             # would raise NotWithinConfigurationLimits. Re-clamp by rebuilding.
             config = pink.Configuration(self.robot.model, self.robot.data, self._clamp_q(config.q))
+        self.last_n_iters = n_iters_used
 
         result_deg = seed_deg.copy()
         result_deg[:n] = np.rad2deg(config.q)

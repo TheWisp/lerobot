@@ -23,10 +23,12 @@ controller poses at 90 Hz. Each frame is converted to an EE-delta action
 in the format consumed upstream by ``EEReferenceAndDelta``:
 
     enabled, target_x, target_y, target_z, target_wx, target_wy, target_wz,
-    gripper_vel
+    gripper_pos
 
-This output is what ``EEReferenceAndDelta`` -> ``GripperVelocityToJoint``
--> ``PinkInverseKinematicsEEToJoints`` consume to produce joint commands.
+This output is what ``EEReferenceAndDelta`` ->
+``PinkInverseKinematicsEEToJoints`` consume to produce joint commands.
+``gripper_pos`` is an absolute motor-space target (trigger fully released
+maps to the configured "open" value; fully pulled maps to "closed").
 
 ``get_action()`` is lock-free and returns whatever the server thread last
 cached. Caller can poll at any rate; the Quest streams independently at
@@ -63,7 +65,7 @@ ACTION_KEYS = (
     "target_wx",
     "target_wy",
     "target_wz",
-    "gripper_vel",
+    "gripper_pos",
 )
 
 
@@ -97,6 +99,9 @@ class QuestVRTeleop(Teleoperator):
             gripper_button_index=config.gripper_button_index,
             position_scale=config.position_scale,
             max_rot_step_rad_per_tick=config.max_rot_step_rad_per_tick,
+            max_pos_step_m_per_tick=config.max_pos_step_m_per_tick,
+            gripper_open_motor=config.gripper_open_motor,
+            gripper_closed_motor=config.gripper_closed_motor,
             key_prefix="",
         )
         self._server: QuestServer | None = None
