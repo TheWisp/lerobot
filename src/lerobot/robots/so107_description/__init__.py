@@ -48,15 +48,16 @@ def _register_cartesian_ik() -> None:
         return
     urdf = str(get_urdf_path())
     joint_names = [f"S{i}" for i in range(1, 8)]
-    # Workspace derived from the training data extent for the right arm.
-    right_workspace_min = (-0.20, -0.35, +0.03)
-    right_workspace_max = (+0.25, +0.05, +0.36)
-    # The left arm mirrors the right across the robot's sagittal plane (the
-    # URDF X axis): swap and negate Y bounds, keep X and Z. The bimanual
-    # follower uses the same URDF for both arms so the kinematics are correct
-    # without modification; only the reachable workspace differs.
-    left_workspace_min = (right_workspace_min[0], -right_workspace_max[1], right_workspace_min[2])
-    left_workspace_max = (right_workspace_max[0], -right_workspace_min[1], right_workspace_max[2])
+    # Workspace derived from the training data extent.
+    # Both arms are mounted PARALLEL (same forward direction) and share one
+    # URDF, so in each arm's own URDF frame the reachable box is identical.
+    # Don't mirror — mirroring forces the EE-bounds clipper to slam the
+    # commanded pose into the opposite hemisphere on engage, which is the
+    # most likely cause of the "90 deg off" symptom we hit on first hardware
+    # test. If you ever physically rotate one arm 180 deg, supply a flipped
+    # URDF for that arm instead of trying to mirror the workspace here.
+    workspace_min = (-0.20, -0.35, +0.03)
+    workspace_max = (+0.25, +0.05, +0.36)
 
     # Unimanual (single-arm) variants share one config (URDF, motor layout,
     # workspace are all identical; the predictive controller only changes the
@@ -66,8 +67,8 @@ def _register_cartesian_ik() -> None:
         ee_frame_name="L7_1",
         motor_names=_SO107_MOTOR_NAMES,
         joint_names=joint_names,
-        workspace_min=right_workspace_min,
-        workspace_max=right_workspace_max,
+        workspace_min=workspace_min,
+        workspace_max=workspace_max,
         end_effector_step_sizes={"x": 1.0, "y": 1.0, "z": 1.0},
         max_ee_step_m=0.10,
         gripper_speed_factor=20.0,
@@ -75,28 +76,23 @@ def _register_cartesian_ik() -> None:
     register_cartesian_ik_robot("so107_follower", uni_cfg)
     register_cartesian_ik_robot("so107_follower_predictive", uni_cfg)
 
-    # Bimanual variants: same per-arm config, but two arms with left_/right_
-    # prefixes and mirrored workspace boxes.
-    def _arm(prefix: str, wmin: tuple, wmax: tuple) -> CartesianIKArmConfig:
+    # Bimanual variants: parallel mounting + shared URDF -> identical per-arm
+    # workspaces. Only the key_prefix differs between the two arms.
+    def _arm(prefix: str) -> CartesianIKArmConfig:
         return CartesianIKArmConfig(
             urdf_path=urdf,
             ee_frame_name="L7_1",
             motor_names=_SO107_MOTOR_NAMES,
             joint_names=joint_names,
             key_prefix=prefix,
-            workspace_min=wmin,
-            workspace_max=wmax,
+            workspace_min=workspace_min,
+            workspace_max=workspace_max,
             end_effector_step_sizes={"x": 1.0, "y": 1.0, "z": 1.0},
             max_ee_step_m=0.10,
             gripper_speed_factor=20.0,
         )
 
-    bi_cfg = CartesianIKRobotConfig(
-        arms=[
-            _arm("left_", left_workspace_min, left_workspace_max),
-            _arm("right_", right_workspace_min, right_workspace_max),
-        ]
-    )
+    bi_cfg = CartesianIKRobotConfig(arms=[_arm("left_"), _arm("right_")])
     register_cartesian_ik_robot("bi_so107_follower", bi_cfg)
     register_cartesian_ik_robot("bi_so107_follower_predictive", bi_cfg)
 

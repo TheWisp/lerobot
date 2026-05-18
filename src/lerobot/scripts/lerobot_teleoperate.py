@@ -135,6 +135,12 @@ class TeleoperateConfig:
     display_port: int | None = None
     # Whether to  display compressed images in Rerun
     display_compressed_images: bool = False
+    # Live URDF visualization of the IK-output joint commands. Opens a
+    # MeshCat scene at http://127.0.0.1:7000/static/ rendering one (unimanual)
+    # or two (bimanual) SO-107 arms driven by the post-IK <motor>.pos stream.
+    # Pair with the robot config's dry_run=True for safe testing without
+    # any motor traffic. Only the SO-107 description is wired today.
+    display_urdf: bool = False
     # Latency monitoring: capture per-stage timing into an in-memory aggregator
     # and publish a JSON snapshot for the GUI to read.
     # See src/lerobot/gui/docs/latency_monitoring.md.
@@ -279,6 +285,43 @@ def teleop_loop(
             return
 
 
+def _attach_urdf_viz(pipeline, teleop, robot) -> None:
+    """Append a UrdfVizMirrorStep to the Cartesian IK pipeline.
+
+    Detects bimanual via the teleop's action_features (left_target_x +
+    right_target_x both present). Logs the MeshCat URL the user opens
+    in a browser. Failures are caught and downgraded to a warning —
+    the visualization is a debug aid, never load-bearing.
+    """
+    try:
+        from lerobot.robots.so107_description.urdf_viz import BimanualUrdfViz, UrdfVizMirrorStep
+    except ImportError as e:
+        logging.warning(
+            f"display_urdf=True but URDF viz module failed to import "
+            f"({type(e).__name__}: {e}). Skipping; check pinocchio + meshcat are installed."
+        )
+        return
+
+    try:
+        names = teleop.action_features.get("names", {})
+    except (AttributeError, KeyError):
+        names = {}
+    bimanual = "left_target_x" in names and "right_target_x" in names
+
+    try:
+        viz = BimanualUrdfViz()
+    except Exception as e:
+        logging.warning(f"display_urdf=True but viz construction failed: {type(e).__name__}: {e}")
+        return
+
+    pipeline.steps.append(UrdfVizMirrorStep(viz=viz, bimanual=bimanual))
+    logging.info(
+        f"display_urdf: live MeshCat scene at {viz.url} "
+        f"({'bimanual' if bimanual else 'unimanual'} mode). "
+        f"Pair with the robot's dry_run=True for motor-free testing."
+    )
+
+
 @parser.wrap()
 def teleoperate(cfg: TeleoperateConfig):
     setup_run_logging(cfg.latency_output_dir, "teleop")
@@ -314,6 +357,10 @@ def teleoperate(cfg: TeleoperateConfig):
             logging.info(
                 f"Auto-composed Cartesian IK pipeline for teleop={cfg.teleop.type} -> robot={cfg.robot.type}"
             )
+            # Optional: append a side-effect step that mirrors the IK output
+            # into a MeshCat URDF scene. No-op on the action stream.
+            if cfg.display_urdf:
+                _attach_urdf_viz(robot_action_processor, teleop, robot)
         else:
             logging.warning(
                 f"teleop {cfg.teleop.type!r} emits Cartesian actions but "
@@ -321,6 +368,11 @@ def teleoperate(cfg: TeleoperateConfig):
                 f"(see lerobot.processor.cartesian_ik_pipeline.register_cartesian_ik_robot). "
                 f"Falling back to identity pipeline; the robot will likely fail to apply the action."
             )
+    elif cfg.display_urdf:
+        logging.warning(
+            "display_urdf=True but teleop is not Cartesian-style; URDF viz is "
+            "only wired for Cartesian -> IK pipelines today. Ignoring."
+        )
 
     # Add custom observation processor steps from the robot
     custom_steps = robot.get_observation_processor_steps()

@@ -1,0 +1,195 @@
+#!/usr/bin/env python
+
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Live URDF visualization for SO-107 (unimanual or bimanual).
+
+The viewer is :class:`pinocchio.visualize.MeshcatVisualizer`, which serves
+a three.js viewer at ``http://127.0.0.1:7000/static/``. For bimanual, two
+copies of the SO-107 URDF are loaded under separate root nodes and
+offset along world +X / -X so they don't overlap.
+
+Use as a safe-testing backstop: set ``dry_run=True`` on the robot config
+to disable motor writes, then add ``--display-urdf=true`` to
+``lerobot-teleoperate`` to see the commanded joint trajectories in 3D
+without touching hardware.
+
+This module avoids importing pinocchio / meshcat at module load — both
+are heavy and only needed when ``--display-urdf`` is actually on.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any
+
+import numpy as np
+
+from lerobot.configs import PipelineFeatureType, PolicyFeature
+from lerobot.processor import (
+    ProcessorStepRegistry,
+    RobotAction,
+    RobotActionProcessorStep,
+)
+
+logger = logging.getLogger(__name__)
+
+# Per-arm world-frame X offset so the two URDF copies don't collide visually.
+_BIMANUAL_X_OFFSET_M = 0.35
+
+# Motor names whose .pos values are URDF joint angles in degrees (excluding the
+# gripper, which has its own joint that isn't part of the 7-DOF chain the IK
+# solves over). Order matches the URDF joints S1..S7.
+_SO107_ARM_MOTOR_NAMES = (
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "forearm_roll",
+    "wrist_flex",
+    "wrist_roll",
+)
+
+
+class BimanualUrdfViz:
+    """Shared MeshCat scene with two SO-107 URDF copies (left + right).
+
+    Preconditions:
+        * pinocchio and meshcat are importable (declared via the
+          ``viz`` extras group in pyproject).
+        * Port 7000 is free (or override via ``viewer_url``).
+
+    Postconditions on :meth:`set_arm_joints_deg`:
+        * The MeshCat scene's named arm (``"left"`` or ``"right"``) renders
+          at the supplied joint angles. No motor traffic occurs.
+    """
+
+    def __init__(self, viewer_url: str | None = None, open_browser: bool = True) -> None:
+        import pinocchio as pin
+        from pinocchio.visualize import MeshcatVisualizer
+
+        from . import get_meshes_dir, get_urdf_path
+
+        urdf = str(get_urdf_path())
+        package_dirs = [str(get_meshes_dir()), str(get_meshes_dir().parent)]
+
+        # Shared underlying MeshCat server; both arms get their own viz root.
+        master_model, master_coll, master_visual = pin.buildModelsFromUrdf(urdf, package_dirs)
+        master = MeshcatVisualizer(master_model, master_coll, master_visual)
+        if viewer_url is not None:
+            import meshcat
+
+            master.initViewer(viewer=meshcat.Visualizer(zmq_url=viewer_url), open=open_browser)
+        else:
+            master.initViewer(open=open_browser)
+
+        # Right arm at +X, left arm at -X. Both use the SAME URDF; the offset
+        # is applied as a world-frame translation of each viz root so the two
+        # scenes share one view but don't overlap.
+        self._right_viz, self._right_model = self._add_arm(
+            master, urdf, package_dirs, root="right", base_xyz=(+_BIMANUAL_X_OFFSET_M, 0.0, 0.0)
+        )
+        self._left_viz, self._left_model = self._add_arm(
+            master, urdf, package_dirs, root="left", base_xyz=(-_BIMANUAL_X_OFFSET_M, 0.0, 0.0)
+        )
+        self._master_viewer = master.viewer
+
+        self.url: str = (
+            master.viewer.url() if hasattr(master.viewer, "url") else "http://127.0.0.1:7000/static/"
+        )
+        logger.info(f"BimanualUrdfViz live at {self.url}")
+
+    @staticmethod
+    def _add_arm(master, urdf: str, package_dirs: list[str], root: str, base_xyz: tuple[float, float, float]):
+        import pinocchio as pin
+        from pinocchio.visualize import MeshcatVisualizer
+
+        model, coll, visual = pin.buildModelsFromUrdf(urdf, package_dirs)
+        viz = MeshcatVisualizer(model, coll, visual)
+        viz.initViewer(viewer=master.viewer)
+        viz.loadViewerModel(rootNodeName=root)
+        # Translate this arm's root node to its base position.
+        T = np.eye(4)
+        T[:3, 3] = base_xyz
+        master.viewer[root].set_transform(T)
+        return viz, model
+
+    def set_arm_joints_deg(self, arm: str, joint_deg_7: np.ndarray) -> None:
+        """Update the ``"left"`` or ``"right"`` arm to the given joint angles (degrees, 7 values)."""
+        assert arm in ("left", "right"), f"arm must be 'left' or 'right', got {arm!r}"
+        viz = self._left_viz if arm == "left" else self._right_viz
+        q_rad = np.deg2rad(np.asarray(joint_deg_7, dtype=float))
+        # Pinocchio model.nq should be 7 (revolute joints S1..S7).
+        viz.display(q_rad[: viz.model.nq])
+
+
+# ── ProcessorStep that taps the post-IK action and pushes to the viz ────
+
+
+@ProcessorStepRegistry.register("urdf_viz_mirror")
+@dataclass
+class UrdfVizMirrorStep(RobotActionProcessorStep):
+    """Side-effect step: render the commanded joint angles in the MeshCat scene.
+
+    Goes at the TAIL of the Cartesian IK pipeline (after IK has written
+    ``<motor>.pos``). Reads the post-IK joint commands and forwards them
+    to a shared :class:`BimanualUrdfViz` instance. The action is returned
+    unchanged so downstream consumers (the robot's send_action) still
+    see the same commands.
+
+    For bimanual, both arms are updated each tick. For unimanual, only
+    the configured arm (default ``"right"``) is updated; the other arm
+    stays at its initial zero pose.
+
+    Attributes:
+        viz: Shared BimanualUrdfViz instance (built outside the step).
+        bimanual: True if the action carries ``left_*`` / ``right_*``
+            prefixed keys; False for unprefixed unimanual actions.
+        unimanual_arm: Which arm to render when ``bimanual=False``.
+    """
+
+    viz: Any  # BimanualUrdfViz; Any because viz import is deferred.
+    bimanual: bool = False
+    unimanual_arm: str = "right"
+    _arm_motor_names: tuple[str, ...] = field(default=_SO107_ARM_MOTOR_NAMES, init=False, repr=False)
+
+    def action(self, action: RobotAction) -> RobotAction:
+        if self.bimanual:
+            self._update_arm("left", "left_", action)
+            self._update_arm("right", "right_", action)
+        else:
+            self._update_arm(self.unimanual_arm, "", action)
+        return action
+
+    def _update_arm(self, arm: str, prefix: str, action: RobotAction) -> None:
+        joints_deg = []
+        for name in self._arm_motor_names:
+            key = f"{prefix}{name}.pos"
+            v = action.get(key)
+            if v is None:
+                # Action doesn't have this arm's commands yet (early tick).
+                return
+            joints_deg.append(float(v))
+        try:
+            self.viz.set_arm_joints_deg(arm, np.asarray(joints_deg, dtype=float))
+        except Exception as e:
+            # Viz errors must never break the teleop loop.
+            logger.debug(f"UrdfVizMirrorStep: viz update failed for {arm}: {e}")
+
+    def transform_features(
+        self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
+    ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+        # Pass-through: doesn't add or remove any action keys.
+        return features
