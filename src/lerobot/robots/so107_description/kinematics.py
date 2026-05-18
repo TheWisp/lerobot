@@ -86,7 +86,7 @@ def urdf_q_to_motor_pos(q_rad: np.ndarray, joint_map: dict[str, JointMap]) -> di
 class So107Kinematics:
     """Thin wrapper around the placo-based RobotKinematics for SO-107."""
 
-    def __init__(self, joint_map: dict[str, JointMap] = RIGHT_ARM_MAP, tip_frame: str = URDF_TIP_FRAME):
+    def __init__(self, joint_map: dict[str, JointMap], tip_frame: str = URDF_TIP_FRAME):
         self.joint_map = joint_map
         self.kin = RobotKinematics(
             urdf_path=str(get_urdf_path()),

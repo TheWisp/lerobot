@@ -34,6 +34,50 @@ from lerobot.processor import (
 from lerobot.utils.rotation import Rotation
 
 
+def _motor_to_urdf_deg(motor_deg: np.ndarray, motor_names: list[str], joint_map: Any | None) -> np.ndarray:
+    """Per-joint motor->URDF: urdf_deg = sign * motor_deg + offset_deg.
+
+    ``joint_map`` is a dict mapping motor name to an object with ``.sign``
+    and ``.offset_deg`` attributes (e.g.,
+    :class:`lerobot.robots.so107_description.kinematics.JointMap`, which is
+    a dataclass with those fields). Pass ``None`` to apply identity.
+
+    The robot's calibration (homing_offset) zeroes the motor at a specific
+    encoder position, but that physical zero often doesn't coincide with
+    the URDF's "joint angle 0" (e.g., the SO-107 right arm's elbow has
+    an ~+79 deg offset between motor zero and URDF zero). FK/IK both run
+    in URDF space, so feeding motor values directly to Pinocchio produces
+    geometrically wrong poses for any joint whose offset isn't zero.
+    """
+    if joint_map is None:
+        return motor_deg
+    out = np.empty_like(motor_deg)
+    for i, name in enumerate(motor_names):
+        jm = joint_map.get(name)
+        if jm is None:
+            out[i] = motor_deg[i]
+        else:
+            out[i] = jm.sign * motor_deg[i] + jm.offset_deg
+    return out
+
+
+def _urdf_to_motor_deg(urdf_deg: np.ndarray, motor_names: list[str], joint_map: Any | None) -> np.ndarray:
+    """Inverse of :func:`_motor_to_urdf_deg`.
+
+    motor_deg = (urdf_deg - offset_deg) / sign
+    """
+    if joint_map is None:
+        return urdf_deg
+    out = np.empty_like(urdf_deg)
+    for i, name in enumerate(motor_names):
+        jm = joint_map.get(name)
+        if jm is None:
+            out[i] = urdf_deg[i]
+        else:
+            out[i] = (urdf_deg[i] - jm.offset_deg) / jm.sign
+    return out
+
+
 @ProcessorStepRegistry.register("ee_reference_and_delta")
 @dataclass
 class EEReferenceAndDelta(RobotActionProcessorStep):
@@ -86,6 +130,11 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
     use_ik_solution: bool = False
     key_prefix: str = ""
     world_yaw_deg: float = 0.0
+    # Per-motor map for converting calibrated motor degrees to URDF joint
+    # degrees before FK. See _motor_to_urdf_deg. None = identity (motor
+    # space == URDF space, fine for arms where calibration zero matches
+    # URDF zero).
+    joint_map: Any | None = None
 
     reference_ee_pose: np.ndarray | None = field(default=None, init=False, repr=False)
     _prev_enabled: bool = field(default=False, init=False, repr=False)
@@ -101,23 +150,25 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
             q_raw = self.transition.get(TransitionKey.COMPLEMENTARY_DATA)["IK_solution"]
         else:
             pref = self.key_prefix
+            # Read motor positions in motor_names order, NOT observation
+            # insertion order. The earlier filter-by-dict-iteration was
+            # fragile: if the observation ever exposes keys out of the
+            # expected motor order, the FK input gets scrambled silently.
             q_raw = np.array(
-                [
-                    float(v)
-                    for k, v in observation.items()
-                    if isinstance(k, str)
-                    and k.startswith(pref)
-                    and k.endswith(".pos")
-                    and k[len(pref) :].removesuffix(".pos") in self.motor_names
-                ],
+                [float(observation[f"{pref}{name}.pos"]) for name in self.motor_names],
                 dtype=float,
             )
 
         if q_raw is None:
             raise ValueError("Joints observation is require for computing robot kinematics")
 
+        # Apply per-motor URDF mapping (sign + offset_deg) so q_for_fk is in
+        # URDF space. Without this, FK on the right SO-107 arm comes back
+        # in a misaligned frame and the EE-delta math is wrong.
+        q_for_fk = _motor_to_urdf_deg(q_raw, self.motor_names, self.joint_map)
+
         # Current pose from FK on measured joints
-        t_curr = self.kinematics.forward_kinematics(q_raw)
+        t_curr = self.kinematics.forward_kinematics(q_for_fk)
 
         p = self.key_prefix
         enabled = bool(action.pop(f"{p}enabled"))
@@ -308,6 +359,8 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
     q_curr: np.ndarray | None = field(default=None, init=False, repr=False)
     initial_guess_current_joints: bool = True
     key_prefix: str = ""
+    # See EEReferenceAndDelta.joint_map.
+    joint_map: Any | None = None
 
     def action(self, action: RobotAction) -> RobotAction:
         p = self.key_prefix
@@ -328,16 +381,13 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
         if observation is None:
             raise ValueError("Joints observation is require for computing robot kinematics")
 
-        q_raw = np.array(
-            [
-                float(v)
-                for k, v in observation.items()
-                if isinstance(k, str) and k.startswith(p) and k.endswith(".pos")
-            ],
+        # Read in motor_names order (see EEReferenceAndDelta for rationale).
+        q_raw_motor = np.array(
+            [float(observation[f"{p}{name}.pos"]) for name in self.motor_names],
             dtype=float,
         )
-        if q_raw is None:
-            raise ValueError("Joints observation is require for computing robot kinematics")
+        # Convert to URDF space before seeding the IK.
+        q_raw = _motor_to_urdf_deg(q_raw_motor, self.motor_names, self.joint_map)
 
         if self.initial_guess_current_joints:  # Use current joints as initial guess
             self.q_curr = q_raw
@@ -351,14 +401,21 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
         t_des[:3, 3] = [x, y, z]
 
         # Compute inverse kinematics
-        q_target = self.kinematics.inverse_kinematics(self.q_curr, t_des)
-        self.q_curr = q_target
+        q_target_urdf = self.kinematics.inverse_kinematics(self.q_curr, t_des)
+        self.q_curr = q_target_urdf
+
+        # Convert IK output (URDF space) back to motor space for the robot.
+        q_target_motor = _urdf_to_motor_deg(q_target_urdf, self.motor_names, self.joint_map)
 
         # TODO: This is sentitive to order of motor_names = q_target mapping
         for i, name in enumerate(self.motor_names):
             if name != "gripper":
-                action[f"{p}{name}.pos"] = float(q_target[i])
+                action[f"{p}{name}.pos"] = float(q_target_motor[i])
             else:
+                # gripper.pos passes through from ee.gripper_pos (already in
+                # motor space — GripperVelocityToJoint integrates in motor
+                # units). IK's q_target[gripper] is discarded by design;
+                # the gripper isn't an EE-tracked DOF.
                 action[f"{p}gripper.pos"] = float(gripper_pos)
 
         return action

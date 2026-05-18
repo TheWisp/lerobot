@@ -231,6 +231,75 @@ def test_prefixed_step_reads_and_writes_prefixed_keys(left_step):
         assert f"{name}.pos" not in out
 
 
+def test_motor_to_urdf_round_trip_with_so107_right_arm_map():
+    """For any motor vector, urdf_to_motor(motor_to_urdf(v)) == v under RIGHT_ARM_MAP."""
+    from lerobot.robots.so107_description.kinematics import RIGHT_ARM_MAP
+    from lerobot.robots.so_follower.robot_kinematic_processor import (
+        _motor_to_urdf_deg,
+        _urdf_to_motor_deg,
+    )
+
+    rng = np.random.default_rng(42)
+    motor_in = rng.uniform(-90.0, 90.0, size=7)
+    urdf = _motor_to_urdf_deg(motor_in, list(SO107_MOTOR_NAMES), RIGHT_ARM_MAP)
+    motor_out = _urdf_to_motor_deg(urdf, list(SO107_MOTOR_NAMES), RIGHT_ARM_MAP)
+    np.testing.assert_allclose(motor_out, motor_in, atol=1e-9)
+
+
+def test_motor_to_urdf_identity_when_map_is_none():
+    """With joint_map=None, motor degrees pass through unchanged."""
+    from lerobot.robots.so_follower.robot_kinematic_processor import (
+        _motor_to_urdf_deg,
+        _urdf_to_motor_deg,
+    )
+
+    motor_in = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
+    np.testing.assert_array_equal(_motor_to_urdf_deg(motor_in, list(SO107_MOTOR_NAMES), None), motor_in)
+    np.testing.assert_array_equal(_urdf_to_motor_deg(motor_in, list(SO107_MOTOR_NAMES), None), motor_in)
+
+
+def test_pink_step_applies_joint_map_to_seed_and_output():
+    """With joint_map=RIGHT_ARM_MAP, the pink IK step should:
+    - Convert motor observation -> URDF before seeding pink.
+    - Convert pink's URDF output back to motor space in action.
+
+    Sanity check: at FK(seed), the IK should return motor values that round-trip
+    back through the map to the same seed (no spurious sign flips / offsets).
+    """
+    from lerobot.model.pink_kinematics import PinkKinematics
+    from lerobot.robots.so107_description import get_urdf_path
+    from lerobot.robots.so107_description.kinematics import RIGHT_ARM_MAP
+    from lerobot.robots.so_follower.pink_kinematic_processor import (
+        PinkInverseKinematicsEEToJoints,
+    )
+    from lerobot.robots.so_follower.robot_kinematic_processor import _motor_to_urdf_deg
+
+    pk = PinkKinematics(urdf_path=str(get_urdf_path()), target_frame_name="L7_1")
+    step = PinkInverseKinematicsEEToJoints(
+        kinematics=pk, motor_names=list(SO107_MOTOR_NAMES), joint_map=RIGHT_ARM_MAP
+    )
+
+    motor_obs = {
+        f"{name}.pos": float(v)
+        for name, v in zip(SO107_MOTOR_NAMES, [0.0, -90.0, 60.0, 0.0, -40.0, 0.0, 20.0], strict=False)
+    }
+    # Compute target = FK(seed-in-urdf-space). IK should return motor values
+    # close to motor_obs.
+    motor_vec = np.array([motor_obs[f"{n}.pos"] for n in SO107_MOTOR_NAMES])
+    urdf_seed_deg = _motor_to_urdf_deg(motor_vec, list(SO107_MOTOR_NAMES), RIGHT_ARM_MAP)
+    target = pk.forward_kinematics(urdf_seed_deg)
+
+    out = _run_step(step, motor_obs, _ee_action_for_target(target))
+
+    # All arm motors in output should round-trip near the input observation.
+    for i, name in enumerate(SO107_MOTOR_NAMES):
+        if name == "gripper":
+            continue
+        assert abs(out[f"{name}.pos"] - motor_vec[i]) < 1e-2, (
+            f"{name}: in={motor_vec[i]} out={out[f'{name}.pos']}"
+        )
+
+
 def test_prefixed_step_ignores_other_arms_observation_keys(left_step):
     """left_step should only read left_<motor>.pos; right_<motor>.pos must be skipped."""
     obs = {**_prefixed_obs("left_"), **_prefixed_obs("right_")}

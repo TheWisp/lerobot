@@ -89,6 +89,27 @@ post-IK joint targets at INFO (~1 Hz) so you can grep the file log.
   a task, the gripper renders below the grid floor — that's a viz
   framing choice, not a kinematics error.
 
+## Calibrating the motor → URDF map per arm
+
+The SO-107's motor calibration (homing_offset) zeroes each motor at a
+specific encoder position, but that physical zero often doesn't coincide
+with the URDF's "joint angle 0". Both FK and IK run in URDF space, so we
+apply a per-motor `urdf_deg = sign * motor_deg + offset_deg` map at the
+pipeline boundaries.
+
+- `RIGHT_ARM_MAP` in
+  [kinematics.py](kinematics.py) was discovered for the right arm via
+  `experiments/motor_to_viewer.py` (slider-based visual alignment).
+- `LEFT_ARM_MAP` is currently identity. **The left arm is rendered with
+  whatever offsets its physical mounting needs, NOT corrected.** Run the
+  same discovery process for the left arm to fill in its sign/offset
+  table.
+
+The same map is applied throughout the production Cartesian IK pipeline
+(`EEReferenceAndDelta` for FK, `PinkInverseKinematicsEEToJoints` for IK)
+— this is what `So107PinkKinematics` from the experimental learned-IK
+work did, just plumbed through the modern `lerobot.processor` pipeline.
+
 ## Limitations
 
 - SO-107 only. The viz module hardcodes the SO-107 URDF. Extending to

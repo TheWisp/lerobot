@@ -44,6 +44,8 @@ def _register_cartesian_ik() -> None:
             CartesianIKRobotConfig,
             register_cartesian_ik_robot,
         )
+
+        from .kinematics import LEFT_ARM_MAP, RIGHT_ARM_MAP
     except ImportError:
         return
     urdf = str(get_urdf_path())
@@ -62,6 +64,8 @@ def _register_cartesian_ik() -> None:
     # Unimanual (single-arm) variants share one config (URDF, motor layout,
     # workspace are all identical; the predictive controller only changes the
     # control rate, not the kinematic / action-key contract).
+    # joint_map=RIGHT_ARM_MAP: the existing unimanual SO-107 setup is "the right
+    # arm" (its calibration is what RIGHT_ARM_MAP was originally discovered for).
     uni_cfg = CartesianIKRobotConfig(
         urdf_path=urdf,
         ee_frame_name="L7_1",
@@ -72,6 +76,7 @@ def _register_cartesian_ik() -> None:
         end_effector_step_sizes={"x": 1.0, "y": 1.0, "z": 1.0},
         max_ee_step_m=0.10,
         gripper_speed_factor=20.0,
+        joint_map=RIGHT_ARM_MAP,
     )
     register_cartesian_ik_robot("so107_follower", uni_cfg)
     register_cartesian_ik_robot("so107_follower_predictive", uni_cfg)
@@ -80,7 +85,9 @@ def _register_cartesian_ik() -> None:
     # as the user's teleop reference) -> identical per-arm workspaces and yaw=0
     # for both. If you ever mount the arms mirrored (180 deg around Z), bump
     # the left arm's world_yaw_deg to 180.0 (or build a different bi_cfg).
-    def _arm(prefix: str, world_yaw_deg: float = 0.0) -> CartesianIKArmConfig:
+    # Each arm has its own joint_map (motor->URDF sign+offset) because
+    # the physical mounting / calibration zero differs between sides.
+    def _arm(prefix: str, joint_map, world_yaw_deg: float = 0.0) -> CartesianIKArmConfig:
         return CartesianIKArmConfig(
             urdf_path=urdf,
             ee_frame_name="L7_1",
@@ -88,6 +95,7 @@ def _register_cartesian_ik() -> None:
             joint_names=joint_names,
             key_prefix=prefix,
             world_yaw_deg=world_yaw_deg,
+            joint_map=joint_map,
             workspace_min=workspace_min,
             workspace_max=workspace_max,
             end_effector_step_sizes={"x": 1.0, "y": 1.0, "z": 1.0},
@@ -96,7 +104,10 @@ def _register_cartesian_ik() -> None:
         )
 
     bi_cfg = CartesianIKRobotConfig(
-        arms=[_arm("left_", world_yaw_deg=0.0), _arm("right_", world_yaw_deg=0.0)],
+        arms=[
+            _arm("left_", LEFT_ARM_MAP, world_yaw_deg=0.0),
+            _arm("right_", RIGHT_ARM_MAP, world_yaw_deg=0.0),
+        ],
     )
     register_cartesian_ik_robot("bi_so107_follower", bi_cfg)
     register_cartesian_ik_robot("bi_so107_follower_predictive", bi_cfg)

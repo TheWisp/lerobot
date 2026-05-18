@@ -78,6 +78,12 @@ class CartesianIKArmConfig:
     motor_names: list[str]
     joint_names: list[str] | None = None
     key_prefix: str = ""
+    # Per-motor calibration→URDF mapping (dict[str, object_with_sign_and_offset_deg])
+    # applied at FK/IK boundaries. None = identity (motor space == URDF
+    # space). For SO-107 the right arm needs the non-identity RIGHT_ARM_MAP
+    # from lerobot.robots.so107_description.kinematics; the left arm needs
+    # its own discovered map.
+    joint_map: Any | None = None
     world_yaw_deg: float = field(
         default=0.0,
         metadata={
@@ -128,6 +134,7 @@ class CartesianIKRobotConfig:
     end_effector_step_sizes: dict[str, float] | None = None
     max_ee_step_m: float = 0.10
     gripper_speed_factor: float = 20.0
+    joint_map: Any | None = None
 
     def __post_init__(self) -> None:
         if not self.arms:
@@ -148,6 +155,7 @@ class CartesianIKRobotConfig:
                     end_effector_step_sizes=self.end_effector_step_sizes,
                     max_ee_step_m=self.max_ee_step_m,
                     gripper_speed_factor=self.gripper_speed_factor,
+                    joint_map=self.joint_map,
                 )
             ]
         assert 1 <= len(self.arms) <= 2, f"CartesianIKRobotConfig: expected 1 or 2 arms, got {len(self.arms)}"
@@ -220,6 +228,7 @@ def _build_arm_steps(arm: CartesianIKArmConfig) -> list[Any]:
             kinematics=pink_kin,
             motor_names=arm.motor_names,
             key_prefix=arm.key_prefix,
+            joint_map=arm.joint_map,
         )
     except ImportError:
         from lerobot.robots.so_follower.robot_kinematic_processor import (
@@ -234,6 +243,7 @@ def _build_arm_steps(arm: CartesianIKArmConfig) -> list[Any]:
             kinematics=fk_kin,
             motor_names=arm.motor_names,
             key_prefix=arm.key_prefix,
+            joint_map=arm.joint_map,
         )
 
     step_sizes = arm.end_effector_step_sizes or {"x": 1.0, "y": 1.0, "z": 1.0}
@@ -245,6 +255,7 @@ def _build_arm_steps(arm: CartesianIKArmConfig) -> list[Any]:
             use_latched_reference=True,
             key_prefix=arm.key_prefix,
             world_yaw_deg=arm.world_yaw_deg,
+            joint_map=arm.joint_map,
         ),
         EEBoundsAndSafety(
             end_effector_bounds={

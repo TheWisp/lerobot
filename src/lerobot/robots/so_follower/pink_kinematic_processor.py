@@ -34,6 +34,7 @@ seed, so joints stay smooth.
 """
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -44,6 +45,10 @@ from lerobot.processor import (
     RobotAction,
     RobotActionProcessorStep,
     TransitionKey,
+)
+from lerobot.robots.so_follower.robot_kinematic_processor import (
+    _motor_to_urdf_deg,
+    _urdf_to_motor_deg,
 )
 from lerobot.utils.rotation import Rotation
 
@@ -77,6 +82,8 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
     q_curr: np.ndarray | None = field(default=None, init=False, repr=False)
     initial_guess_current_joints: bool = True
     key_prefix: str = ""
+    # See EEReferenceAndDelta.joint_map.
+    joint_map: Any | None = None
 
     def action(self, action: RobotAction) -> RobotAction:
         p = self.key_prefix
@@ -99,21 +106,13 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
             raise ValueError("Joints observation is required for computing robot kinematics")
         observation = observation.copy()
 
-        # Joint values from observation, ordered by motor_names (gripper inclusive — IK
-        # ignores trailing entries past joint_names length, just passes them through).
-        # In bimanual setups, observation keys are prefixed (e.g., "left_shoulder_pan.pos"),
-        # so we strip the prefix before matching against motor_names.
-        q_raw = np.array(
-            [
-                float(v)
-                for k, v in observation.items()
-                if isinstance(k, str)
-                and k.startswith(p)
-                and k.endswith(".pos")
-                and k[len(p) :].removesuffix(".pos") in self.motor_names
-            ],
+        # Read in motor_names order; do NOT rely on dict iteration order.
+        q_raw_motor = np.array(
+            [float(observation[f"{p}{name}.pos"]) for name in self.motor_names],
             dtype=float,
         )
+        # Pink's IK runs in URDF space, so convert the seed.
+        q_raw = _motor_to_urdf_deg(q_raw_motor, self.motor_names, self.joint_map)
 
         if self.initial_guess_current_joints or self.q_curr is None:
             self.q_curr = q_raw
@@ -123,15 +122,18 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
         t_des[:3, :3] = Rotation.from_rotvec([wx, wy, wz]).as_matrix()
         t_des[:3, 3] = [x, y, z]
 
-        q_target = self.kinematics.inverse_kinematics(self.q_curr, t_des)
-        self.q_curr = q_target
+        q_target_urdf = self.kinematics.inverse_kinematics(self.q_curr, t_des)
+        self.q_curr = q_target_urdf
 
-        # Map IK output to motor names. The IK preserves trailing entries (e.g.,
-        # gripper) untouched, but we explicitly overwrite gripper.pos from the
-        # incoming ee.gripper_pos for clarity — gripper isn't EE-tracked.
+        # Convert IK output (URDF) back to motor space for the action stream.
+        q_target_motor = _urdf_to_motor_deg(q_target_urdf, self.motor_names, self.joint_map)
+
+        # Map IK output to motor names. q_target_motor[gripper] is overridden
+        # by ee.gripper_pos which is already in motor space (GripperVelocityToJoint
+        # integrates in motor units; gripper isn't EE-tracked).
         for i, name in enumerate(self.motor_names):
             if name != "gripper":
-                action[f"{p}{name}.pos"] = float(q_target[i])
+                action[f"{p}{name}.pos"] = float(q_target_motor[i])
             else:
                 action[f"{p}gripper.pos"] = float(gripper_pos)
 
