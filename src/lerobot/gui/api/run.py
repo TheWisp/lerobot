@@ -643,6 +643,10 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
         # outputs/teleop/latency_snapshot.json for the live overlay.
         args.append("--latency_monitor=true")
         args.append(f"--latency_output_dir={LATENCY_OUTPUT_DIR}")
+        # Always-on verbose IK debug log for now (active debugging of
+        # Cartesian-IK stability on bi_so107). Low overhead, helpful trace;
+        # demote to opt-in once the IK is stable.
+        args.append("--debug_teleop_log=true")
 
         # Ensure debug model is loaded if selected (lazy load, stays warm after teleop).
         # _debug_lock is nested under _launch_lock: this lock-ordering is safe
