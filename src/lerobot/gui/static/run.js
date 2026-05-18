@@ -977,6 +977,8 @@ function renderRunForm() {
     html += `<select id="run-teleop-teleop">${_teleopProfileOptions()}</select>`;
     html += `<label>FPS</label>`;
     html += `<input type="number" id="run-teleop-fps" value="60" min="1" max="200">`;
+    html += `<label title="Open a live URDF visualization (MeshCat) alongside the camera grid showing what the IK pipeline is commanding. Use with the robot's dry_run=true for fully motor-free testing — IK runs, joints update in the browser, motors stay still. Only wired for SO-107 today.">URDF viz</label>`;
+    html += `<input type="checkbox" id="run-teleop-display-urdf" title="Open a live URDF visualization (MeshCat) alongside the camera grid. Pair with the robot's dry_run=true for motor-free testing.">`;
     html += '</div>';
     // Dataset selector (optional recording)
     html += '<div class="form-section">';
@@ -1284,6 +1286,7 @@ async function launchRun() {
                 teleop: teleopData,
                 fps: parseInt(document.getElementById('run-teleop-fps')?.value) || 60,
                 debug_model: debugModel,
+                display_urdf: document.getElementById('run-teleop-display-urdf')?.checked || false,
             };
         } else {
             // Record mode — existing or new dataset
@@ -1972,8 +1975,14 @@ function initSplitHandle() {
 // Live camera viewer (obs-stream via shared memory)
 // ============================================================================
 
+// Whether the most recent teleop launch requested the URDF visualization.
+// Set in startObsStreamViewer / cleared in stopObsStreamViewer.
+let _urdfVizActive = false;
+
 async function startObsStreamViewer() {
     stopObsStreamViewer();
+
+    _urdfVizActive = !!document.getElementById('run-teleop-display-urdf')?.checked;
 
     const container = document.getElementById('rerun-viewer');
     if (!container) return;
@@ -2005,13 +2014,15 @@ async function startObsStreamViewer() {
     let grid = container.querySelector('.obs-cam-grid');
     if (grid) grid.remove();
 
-    // Build camera grid
+    // Build camera grid. The URDF iframe (if active) counts as one extra tile
+    // so the grid math accounts for it.
     const camKeys = Object.keys(obsStreamMeta.image_keys);
-    if (camKeys.length === 0) return;
+    if (camKeys.length === 0 && !_urdfVizActive) return;
 
+    const tileCount = camKeys.length + (_urdfVizActive ? 1 : 0);
     grid = document.createElement('div');
     grid.className = 'obs-cam-grid';
-    const cols = camKeys.length <= 2 ? camKeys.length : Math.min(camKeys.length, 3);
+    const cols = tileCount <= 2 ? tileCount : Math.min(tileCount, 3);
     grid.style.cssText = `
         display: grid;
         grid-template-columns: repeat(${cols}, 1fr);
@@ -2054,6 +2065,31 @@ async function startObsStreamViewer() {
         grid.appendChild(cell);
         imgElements[key] = img;
     }
+
+    // URDF visualization tile: iframes MeshCat. The teleop process opens the
+    // MeshCat server when --display_urdf=true is passed; the obs-stream
+    // already being available means the teleop's init phase has finished,
+    // so MeshCat should be listening by now.
+    if (_urdfVizActive) {
+        const urdfCell = document.createElement('div');
+        urdfCell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
+        const iframe = document.createElement('iframe');
+        iframe.src = 'http://127.0.0.1:7000/static/';
+        iframe.style.cssText = 'width: 100%; height: 100%; border: none; background: #1a1a1a;';
+        iframe.title = 'URDF visualization (MeshCat)';
+        urdfCell.appendChild(iframe);
+        const label = document.createElement('div');
+        label.textContent = 'urdf (commanded joints)';
+        label.style.cssText = `
+            position: absolute; top: 4px; left: 6px;
+            color: #ccc; font-size: 11px; font-family: monospace;
+            background: rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 3px;
+            pointer-events: none;
+        `;
+        urdfCell.appendChild(label);
+        grid.appendChild(urdfCell);
+    }
+
     container.appendChild(grid);
 
     // Poll camera frames at ~10fps
@@ -2076,6 +2112,7 @@ function stopObsStreamViewer() {
         obsStreamTimer = null;
     }
     obsStreamMeta = null;
+    _urdfVizActive = false;
     _hideSubtaskOverlay();
 
     const container = document.getElementById('rerun-viewer');

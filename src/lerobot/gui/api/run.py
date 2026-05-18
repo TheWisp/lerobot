@@ -167,6 +167,11 @@ class TeleoperateRequest(BaseModel):
     teleop: dict[str, Any]
     fps: int = 60
     debug_model: DebugModelConfig | None = None
+    # When True, append --display_urdf=true so the teleop process opens a
+    # MeshCat scene at http://127.0.0.1:7000/static/. The frontend then
+    # iframes it alongside the camera grid. Pairs well with the robot
+    # config's dry_run=True for motor-free testing.
+    display_urdf: bool = False
 
 
 class RecordRequest(BaseModel):
@@ -624,6 +629,8 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
         args.extend(_profile_to_cli_args(req.robot, "robot"))
         args.extend(_profile_to_cli_args(req.teleop, "teleop"))
         args.append(f"--fps={req.fps}")
+        if req.display_urdf:
+            args.append("--display_urdf=true")
         # Always-on latency monitoring for GUI sessions; the GUI polls
         # outputs/teleop/latency_snapshot.json for the live overlay.
         args.append("--latency_monitor=true")
