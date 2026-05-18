@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 # Per-arm world-frame X offset so the two URDF copies don't collide visually.
 # Roughly matches the physical center-to-center distance of a side-by-side
 # SO-107 setup so the scene looks proportional to reality.
-_BIMANUAL_X_OFFSET_M = 0.30
+_BIMANUAL_X_OFFSET_M = 0.165
 
 # Motor names in URDF joint order. The SO-107 URDF has 7 revolute joints
 # (S1..S7) mapping 1:1 to these motors; the gripper IS a URDF joint, not a

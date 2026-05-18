@@ -142,8 +142,10 @@ def test_gripper_vel_derived_from_trigger_change(teleop):
     """Trigger value delta should appear in gripper_vel."""
     teleop._on_frame(_frame(trigger=0.0))  # baseline
     teleop._on_frame(_frame(trigger=0.3))  # trigger pulled
-    # gripper_vel = previous - current = 0.0 - 0.3 = -0.3 (close).
-    assert teleop._cached_action["gripper_vel"] == pytest.approx(-0.3)
+    # gripper_vel = current - previous = 0.3 - 0.0 = +0.3 (trigger pulled =
+    # close in this convention: positive gripper_vel -> downstream
+    # GripperVelocityToJoint INCREASES motor.pos).
+    assert teleop._cached_action["gripper_vel"] == pytest.approx(0.3)
 
 
 def test_get_action_returns_idle_when_no_frame_yet(teleop):

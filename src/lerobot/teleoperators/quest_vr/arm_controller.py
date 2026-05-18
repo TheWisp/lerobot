@@ -109,10 +109,14 @@ class QuestArmController:
         grip = float(buttons[self.gripper_button_index]) if len(buttons) > self.gripper_button_index else 0.0
         engaged = clutch > 0.5
 
-        # Gripper is a velocity command derived from trigger delta (open=positive,
-        # close=negative). Always tracked so the gripper can be operated even when
-        # the arm is disengaged.
-        gripper_vel = self._gripper_last_value - grip
+        # Gripper as a velocity command derived from trigger delta.
+        # CONVENTION: trigger pulled (grip increasing) = CLOSE = gripper_vel
+        # POSITIVE = downstream GripperVelocityToJoint INCREASES motor.pos.
+        # This matches the user's bi_so107 calibration where motor.pos LOW
+        # = open and motor.pos HIGH = closed. If a future SO-107 arm is
+        # calibrated with the opposite gripper direction, expose a sign
+        # flip here (or per-arm via the joint_map's gripper.sign).
+        gripper_vel = grip - self._gripper_last_value
         self._gripper_last_value = grip
 
         if engaged and not self._engaged:
