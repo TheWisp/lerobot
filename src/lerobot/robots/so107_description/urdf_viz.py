@@ -113,17 +113,18 @@ class BimanualUrdfViz:
             master.initViewer(open=open_browser)
 
         # Place each arm so its position in the URDF scene matches what
-        # the user sees in the physical setup. "Left arm" in the user-
-        # operator's frame = on the user's left side of the scene; the
-        # scene's left side from the default camera position (looking
-        # from +X,-Y,+Z toward origin) is at world -X. Right symmetric.
-        # This was reversed in an earlier revision and showed up as the
-        # arms appearing swapped on first hardware testing.
+        # the user sees in the physical setup. With the default camera
+        # at (+0.7, -0.5, +0.5) looking at origin, +X world projects
+        # toward the LEFT of the rendered image, so the "right" arm has
+        # to live at -X and "left" at +X to feel natural. (An earlier
+        # revision only reordered these two function calls without
+        # changing the base_xyz coordinates — looked symmetric on read,
+        # was still wrong on screen.)
         self._left_viz, self._left_model = self._add_arm(
-            master, urdf, package_dirs, root="left", base_xyz=(-_BIMANUAL_X_OFFSET_M, 0.0, 0.0)
+            master, urdf, package_dirs, root="left", base_xyz=(+_BIMANUAL_X_OFFSET_M, 0.0, 0.0)
         )
         self._right_viz, self._right_model = self._add_arm(
-            master, urdf, package_dirs, root="right", base_xyz=(+_BIMANUAL_X_OFFSET_M, 0.0, 0.0)
+            master, urdf, package_dirs, root="right", base_xyz=(-_BIMANUAL_X_OFFSET_M, 0.0, 0.0)
         )
         self._master_viewer = master.viewer
 
@@ -161,10 +162,29 @@ class BimanualUrdfViz:
         return viz, model
 
     def set_arm_joints_deg(self, arm: str, joint_deg_7: np.ndarray) -> None:
-        """Update the ``"left"`` or ``"right"`` arm to the given joint angles (degrees, 7 values)."""
+        """Update the ``"left"`` or ``"right"`` arm to the given joint angles (motor degrees, 7 values).
+
+        Input is in MOTOR space (what the robot's observation reports). We
+        apply the per-arm motor->URDF map (sign + offset_deg, defined in
+        :mod:`lerobot.robots.so107_description.kinematics`) before handing
+        the vector to pinocchio. Without this, the URDF renders the right
+        arm with shoulder_pan/forearm_roll inverted and shoulder_lift /
+        elbow_flex / wrist_roll offset by ~90 deg from the actual robot —
+        because the SO-107 right-arm mounting is asymmetric relative to
+        the URDF's zero pose.
+        """
+        from .kinematics import LEFT_ARM_MAP, MOTOR_NAMES, RIGHT_ARM_MAP
+
         assert arm in ("left", "right"), f"arm must be 'left' or 'right', got {arm!r}"
         viz = self._left_viz if arm == "left" else self._right_viz
-        q_rad = np.deg2rad(np.asarray(joint_deg_7, dtype=float))
+        joint_map = LEFT_ARM_MAP if arm == "left" else RIGHT_ARM_MAP
+        motor_deg = np.asarray(joint_deg_7, dtype=float)
+        # urdf_deg = sign * motor_deg + offset_deg
+        urdf_deg = np.empty_like(motor_deg)
+        for i, name in enumerate(MOTOR_NAMES):
+            jm = joint_map[name]
+            urdf_deg[i] = jm.sign * motor_deg[i] + jm.offset_deg
+        q_rad = np.deg2rad(urdf_deg)
         # Pinocchio model.nq should be 7 (revolute joints S1..S7).
         viz.display(q_rad[: viz.model.nq])
 
