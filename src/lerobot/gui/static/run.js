@@ -1989,42 +1989,34 @@ let _urdfVizActive = false;
 async function startObsStreamViewer() {
     stopObsStreamViewer();
 
-    // Probe the backend for whether MeshCat is reachable (run script was
-    // launched with --display_urdf). Decoupled from form state so it works
-    // for any workflow (teleop / replay / record / policy) and survives
-    // page reloads mid-run.
-    _urdfVizActive = false;
-    try {
-        const r = await fetch('/api/run/urdf-viz');
-        const j = await r.json();
-        _urdfVizActive = !!j.available;
-    } catch (e) { /* probe failed; leave inactive */ }
-
     const container = document.getElementById('rerun-viewer');
     if (!container) return;
 
-    // Poll until obs-stream OR urdf-viz is available (robot needs time to
-    // connect). Either signal is enough to start building the tile grid —
-    // the user wants to see whichever feeds are up rather than nothing.
-    // Re-probe urdf-viz on each tick so we catch it coming up mid-poll.
+    // Wait specifically for obs-stream/meta to become available. URDF/MeshCat
+    // typically boots in <1s; obs-stream needs the robot to connect first
+    // (multiple seconds at 30Hz, more for cameras). An earlier version
+    // broke this loop as soon as EITHER probe returned available, which
+    // meant when URDF came up first the iframe got built with 0 cameras
+    // and dominated the grid. Wait for obs-stream as the "primary" signal,
+    // and probe urdf-viz once at the END so its state is fresh.
     let attempts = 0;
     const maxAttempts = 30; // 30 × 500ms = 15s
     while (attempts < maxAttempts) {
         try {
             const res = await fetch('/api/run/obs-stream/meta');
             obsStreamMeta = await res.json();
+            if (obsStreamMeta?.available) break;
         } catch (e) { /* not ready yet */ }
-        if (!_urdfVizActive) {
-            try {
-                const r = await fetch('/api/run/urdf-viz');
-                const j = await r.json();
-                _urdfVizActive = !!j.available;
-            } catch (e) { /* leave as-is */ }
-        }
-        if (obsStreamMeta?.available || _urdfVizActive) break;
         await new Promise(r => setTimeout(r, 500));
         attempts++;
     }
+
+    _urdfVizActive = false;
+    try {
+        const r = await fetch('/api/run/urdf-viz');
+        const j = await r.json();
+        _urdfVizActive = !!j.available;
+    } catch (e) { /* probe failed; leave inactive */ }
 
     if (!obsStreamMeta?.available && !_urdfVizActive) {
         console.warn('Neither obs-stream nor urdf-viz available after timeout');
