@@ -309,45 +309,16 @@ def _attach_commanded_joints_log(action_pipeline, robot) -> None:
 
 
 def _attach_urdf_viz(obs_pipeline, robot) -> None:
-    """Append a UrdfVizMirrorStep to the OBSERVATION pipeline.
-
-    State-based: the viz reflects the robot's observed joints each tick,
-    so it works for any teleop type (Cartesian VR, leader arm, joint-space
-    replay) and even when no teleop is attached. Detects bimanual via the
-    robot's observation_features (``left_<motor>.pos`` keys present).
-    Logs the MeshCat URL the user opens in a browser. Failures are caught
-    and downgraded to a warning — the visualization is a debug aid, never
-    load-bearing.
-    """
+    """Thin wrapper around the shared helper, scoped to the obs pipeline."""
     try:
-        from lerobot.robots.so107_description.urdf_viz import BimanualUrdfViz, UrdfVizMirrorStep
+        from lerobot.robots.so107_description.urdf_viz import maybe_attach_urdf_viz
     except ImportError as e:
         logging.warning(
             f"display_urdf=True but URDF viz module failed to import "
             f"({type(e).__name__}: {e}). Skipping; check pinocchio + meshcat are installed."
         )
         return
-
-    try:
-        obs_features = robot.observation_features
-        bimanual = any(k.startswith("left_") and k.endswith(".pos") for k in obs_features)
-    except Exception:
-        bimanual = False
-
-    try:
-        viz = BimanualUrdfViz()
-    except Exception as e:
-        logging.warning(f"display_urdf=True but viz construction failed: {type(e).__name__}: {e}")
-        return
-
-    obs_pipeline.steps.append(UrdfVizMirrorStep(viz=viz, bimanual=bimanual))
-    logging.info(
-        f"display_urdf: live MeshCat scene at {viz.url} "
-        f"({'bimanual' if bimanual else 'unimanual'} mode). "
-        f"Rendering the OBSERVED joint state — pair with the robot's "
-        f"dry_run=True only if you want to verify the URDF is wired correctly "
-        f"without motor traffic (no motion will appear under dry-run)."
-    )
+    maybe_attach_urdf_viz(obs_pipeline.steps, robot, logging.getLogger())
 
 
 @parser.wrap()

@@ -143,25 +143,11 @@ def replay(cfg: ReplayConfig):
     if obs_stream_writer is not None:
         obs_stream_steps.append(obs_stream_writer)
 
-    # Optional URDF viz (state-based, observation-driven). When enabled the
-    # observation stream is teed through a MeshCat-backed step that renders
-    # the actual robot pose in 3D. Works for replay because the robot still
-    # reports current joint positions even when it's tracking a dataset.
+    # Optional URDF viz (state-based, observation-driven). Shared helper.
     if cfg.display_urdf:
-        try:
-            from lerobot.robots.so107_description.urdf_viz import BimanualUrdfViz, UrdfVizMirrorStep
+        from lerobot.robots.so107_description.urdf_viz import maybe_attach_urdf_viz
 
-            obs_features = getattr(robot, "observation_features", {})
-            bimanual = any(k.startswith("left_") and k.endswith(".pos") for k in obs_features)
-            viz = BimanualUrdfViz()
-            obs_stream_steps.append(UrdfVizMirrorStep(viz=viz, bimanual=bimanual))
-            logging.info(
-                f"display_urdf: live MeshCat scene at {viz.url} "
-                f"({'bimanual' if bimanual else 'unimanual'} mode). "
-                f"Rendering the OBSERVED joint state during replay."
-            )
-        except Exception as e:
-            logging.warning(f"display_urdf=True but viz attach failed: {type(e).__name__}: {e}")
+        maybe_attach_urdf_viz(obs_stream_steps, robot, logging.getLogger())
 
     robot.connect()
 

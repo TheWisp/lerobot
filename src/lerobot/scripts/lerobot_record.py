@@ -249,6 +249,8 @@ class RecordConfig:
     display_port: int | None = None
     # Whether to  display compressed images in Rerun
     display_compressed_images: bool = False
+    # Live URDF visualization of observed robot pose. See TeleoperateConfig.
+    display_urdf: bool = False
     # Use vocal synthesis to read events.
     play_sounds: bool = True
     # Resume recording on an existing dataset.
@@ -920,6 +922,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     obs_stream_step = make_obs_stream_writer_step()
     if obs_stream_step is not None:
         robot_observation_processor.steps.append(obs_stream_step)
+
+    # Optional URDF viz (state-based, observation-driven). Shared helper.
+    if cfg.display_urdf:
+        from lerobot.robots.so107_description.urdf_viz import maybe_attach_urdf_viz
+
+        maybe_attach_urdf_viz(robot_observation_processor.steps, robot, logging.getLogger())
 
     dataset_features = combine_feature_dicts(
         aggregate_pipeline_dataset_features(

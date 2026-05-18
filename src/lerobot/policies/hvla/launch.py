@@ -40,6 +40,13 @@ def main():
     parser.add_argument("--temporal-ensemble-coeff", type=float, default=None)
     parser.add_argument("--n-action-steps", type=int, default=None)
     parser.add_argument("--decode-subtask", action="store_true")
+    parser.add_argument(
+        "--display-urdf",
+        action="store_true",
+        help="Open a live MeshCat URDF viz of the robot's observed joints "
+        "alongside the camera stream (SO-107 only). Mirrors the flag on "
+        "lerobot-teleoperate / lerobot-replay / lerobot-record.",
+    )
     parser.add_argument("--norm-stats", default=None)
     parser.add_argument(
         "--s2-image-keys",
@@ -338,6 +345,7 @@ def main():
             latency_monitor=args.latency_monitor,
             latency_output_dir=args.latency_output_dir,
             send_action_shape=args.send_action_shape,
+            display_urdf=args.display_urdf,
         )
     finally:
         stop_event.set()

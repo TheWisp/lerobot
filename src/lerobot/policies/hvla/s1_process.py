@@ -572,6 +572,7 @@ def run_s1(
     # behaviour. Non-predictive robots get frames[0] either way, so
     # this toggle is a no-op on them.
     send_action_shape: str = "chunk",
+    display_urdf: bool = False,
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -741,6 +742,11 @@ def run_s1(
     obs_stream_step = make_obs_stream_writer_step()
     if obs_stream_step is not None:
         obs_processor_steps.append(obs_stream_step)
+
+    if display_urdf:
+        from lerobot.robots.so107_description.urdf_viz import maybe_attach_urdf_viz
+
+        maybe_attach_urdf_viz(obs_processor_steps, robot, logger)
 
     if obs_processor_steps:
         logger.info("S1: Observation processors: %s", [type(s).__name__ for s in obs_processor_steps])

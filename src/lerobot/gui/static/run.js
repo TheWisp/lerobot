@@ -1053,6 +1053,8 @@ function renderRunForm() {
     html += `<select id="run-replay-robot">${_robotProfileOptions()}</select>`;
     html += `<label>Episode${_REQ}</label>`;
     html += `<select id="run-replay-episode" onchange="_onReplayEpisodeChange()">${_episodeOptions()}</select>`;
+    html += `<label title="Open a live URDF visualization (MeshCat) alongside the camera grid showing the robot's observed joints during replay.">URDF viz</label>`;
+    html += `<input type="checkbox" id="run-replay-display-urdf" title="Open a live URDF visualization (MeshCat) alongside the camera grid showing the robot's observed joints during replay.">`;
     html += '</div>';
     html += '</div>'; // end replay section
 
@@ -1072,6 +1074,8 @@ function renderRunForm() {
     html += `<div class="form-hint">For leader inverse following and manual resets between episodes</div></div>`;
     html += `<label>FPS</label>`;
     html += `<input type="number" id="run-policy-fps" value="30" min="1" max="200">`;
+    html += `<label title="Open a live URDF visualization (MeshCat) alongside the camera grid showing the robot's observed joints during policy rollout.">URDF viz</label>`;
+    html += `<input type="checkbox" id="run-policy-display-urdf" title="Open a live URDF visualization (MeshCat) alongside the camera grid showing the robot's observed joints during policy rollout.">`;
     html += '</div>';
     // ---- HVLA-specific fields (shown when HVLA checkpoint selected) ----
     html += `<div id="run-policy-hvla-fields" style="display:none">`;
@@ -1356,6 +1360,7 @@ async function launchRun() {
                 num_episodes: parseInt(document.getElementById('run-teleop-num-episodes')?.value) || 50,
                 resume: resume,
                 debug_model: _getDebugModelConfig(),
+                display_urdf: document.getElementById('run-teleop-display-urdf')?.checked || false,
             };
         }
     } else if (selectedWorkflow === 'replay') {
@@ -1385,6 +1390,7 @@ async function launchRun() {
             repo_id: _resolveDatasetRepoId(d),
             root: d.root,
             episode: parseInt(epIdx),
+            display_urdf: document.getElementById('run-replay-display-urdf')?.checked || false,
         };
     } else if (selectedWorkflow === 'policy') {
         const checkpointSel = document.getElementById('run-policy-checkpoint');
@@ -1446,6 +1452,7 @@ async function launchRun() {
                 denoise_steps: parseInt(document.getElementById('run-hvla-denoise-steps')?.value) || null,
                 decode_subtask: document.getElementById('run-hvla-decode-subtask')?.checked || false,
                 send_action_shape: document.getElementById('run-hvla-send-action-shape')?.value || 'chunk',
+                display_urdf: document.getElementById('run-policy-display-urdf')?.checked || false,
                 record_dataset: recordDs,
                 num_episodes: parseInt(document.getElementById('run-hvla-episodes')?.value) || 1,
                 episode_time_s: parseFloat(document.getElementById('run-hvla-episode-time')?.value) || 60,
@@ -1982,7 +1989,16 @@ let _urdfVizActive = false;
 async function startObsStreamViewer() {
     stopObsStreamViewer();
 
-    _urdfVizActive = !!document.getElementById('run-teleop-display-urdf')?.checked;
+    // Probe the backend for whether MeshCat is reachable (run script was
+    // launched with --display_urdf). Decoupled from form state so it works
+    // for any workflow (teleop / replay / record / policy) and survives
+    // page reloads mid-run.
+    _urdfVizActive = false;
+    try {
+        const r = await fetch('/api/run/urdf-viz');
+        const j = await r.json();
+        _urdfVizActive = !!j.available;
+    } catch (e) { /* probe failed; leave inactive */ }
 
     const container = document.getElementById('rerun-viewer');
     if (!container) return;

@@ -305,3 +305,44 @@ class CommandedJointsLogStep(RobotActionProcessorStep):
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         # Pass-through: doesn't add or remove any action keys.
         return features
+
+
+# ── Convenience: one-call viz attachment for any run script ──────────────
+
+
+def maybe_attach_urdf_viz(
+    obs_processor_steps: list[Any],
+    robot: Any,
+    logger_: logging.Logger | None = None,
+) -> Any:
+    """Build a BimanualUrdfViz and append a UrdfVizMirrorStep to the steps list.
+
+    Shared helper used by lerobot-teleoperate / lerobot-replay /
+    lerobot-record / HVLA launch so the wiring lives in one place. Detects
+    bimanual via the robot's observation_features (any ``left_<motor>.pos``
+    key). Failures are caught and downgraded to a warning — the
+    visualization is a debug aid, never load-bearing.
+
+    Returns the BimanualUrdfViz instance (so the caller can log the URL),
+    or ``None`` if construction failed.
+    """
+    log = logger_ or logger
+    try:
+        obs_features = getattr(robot, "observation_features", {})
+        bimanual = any(
+            isinstance(k, str) and k.startswith("left_") and k.endswith(".pos") for k in obs_features
+        )
+    except Exception:
+        bimanual = False
+
+    try:
+        viz = BimanualUrdfViz()
+    except Exception as e:
+        log.warning(f"display_urdf=True but viz construction failed: {type(e).__name__}: {e}")
+        return None
+
+    obs_processor_steps.append(UrdfVizMirrorStep(viz=viz, bimanual=bimanual))
+    log.info(
+        f"display_urdf: live MeshCat scene at {viz.url} ({'bimanual' if bimanual else 'unimanual'} mode)."
+    )
+    return viz

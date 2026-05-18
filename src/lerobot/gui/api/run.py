@@ -191,6 +191,8 @@ class RecordRequest(BaseModel):
     resume: bool = False
     debug_model: DebugModelConfig | None = None
     intervention_repo_id: str | None = None
+    # Mirrors TeleoperateRequest.display_urdf.
+    display_urdf: bool = False
 
 
 class ReplayRequest(BaseModel):
@@ -201,6 +203,10 @@ class ReplayRequest(BaseModel):
     # No fps: replay must always pace at the dataset's recording fps. Upstream
     # `lerobot-replay` declares `cfg.dataset.fps` but its loop paces by
     # `dataset.fps` directly, so the field is dead config.
+    # Mirrors TeleoperateRequest.display_urdf — when True the spawned
+    # replay process opens a MeshCat scene and the GUI iframes it next
+    # to the cameras.
+    display_urdf: bool = False
 
 
 class HVLARunRequest(BaseModel):
@@ -237,6 +243,8 @@ class HVLARunRequest(BaseModel):
     # testing the chunk-vs-dict latency improvement; default matches
     # the recommended best-perf path.
     send_action_shape: str = "chunk"
+    # Mirrors TeleoperateRequest.display_urdf.
+    display_urdf: bool = False
 
 
 # ============================================================================
@@ -681,6 +689,8 @@ async def start_record(req: RecordRequest) -> dict:
             args.append("--resume=true")
         if req.intervention_repo_id:
             args.append(f"--intervention_repo_id={req.intervention_repo_id}")
+        if req.display_urdf:
+            args.append("--display_urdf=true")
         # Always-on latency monitoring for GUI sessions. Record writes to its
         # own directory so the dashboard doesn't double-render when both
         # teleop and record source keys exist in LATENCY_SOURCES.
@@ -713,6 +723,8 @@ async def start_replay(req: ReplayRequest) -> dict:
         if req.root:
             args.append(f"--dataset.root={req.root}")
         args.append(f"--dataset.episode={req.episode}")
+        if req.display_urdf:
+            args.append("--display_urdf=true")
 
         await _launch_subprocess(args, command="replay", config=req.model_dump())
         return {"status": "started", "command": "replay", "pid": _active_process.pid}
@@ -820,6 +832,8 @@ async def start_hvla(req: HVLARunRequest) -> dict:
         # subprocess log.
         if req.send_action_shape != "chunk":
             args.append(f"--send-action-shape={req.send_action_shape}")
+        if req.display_urdf:
+            args.append("--display-urdf")
 
         await _launch_subprocess(args, command="hvla", config=req.model_dump())
         return {"status": "started", "command": "hvla", "pid": _active_process.pid}
@@ -1205,6 +1219,25 @@ def _close_obs_reader():
         _obs_reader = None
     _obs_reader_meta_ino = None
     _jpeg_cache.clear()
+
+
+@router.get("/urdf-viz")
+async def urdf_viz_meta() -> dict:
+    """Probe whether the MeshCat URDF viz is reachable in this run.
+
+    A run script (lerobot-teleoperate / -replay / -record / HVLA) launched
+    with ``--display_urdf=true`` spawns a MeshCat server on 127.0.0.1:7000.
+    This endpoint just probes that local port so the frontend can decide
+    whether to inject the URDF iframe next to the camera grid, without
+    needing to know which workflow launched the run.
+    """
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", 7000), timeout=0.2):
+            return {"available": True, "url": "http://127.0.0.1:7000/static/"}
+    except OSError:
+        return {"available": False}
 
 
 @router.get("/obs-stream/meta")
