@@ -37,6 +37,11 @@ def main() -> int:
     parser.add_argument("--port", default="/dev/ttyACM2")
     parser.add_argument("--id", default="right_white")
     parser.add_argument("--poll-hz", type=float, default=15.0)
+    parser.add_argument(
+        "--name",
+        default="RIGHT_ARM_MAP",
+        help="variable name used in the printed paste-back ('LEFT_ARM_MAP' when calibrating the left arm)",
+    )
     args = parser.parse_args()
 
     package_dirs = [str(get_meshes_dir()), str(get_meshes_dir().parent)]
@@ -66,18 +71,30 @@ def main() -> int:
     style.configure("Big.TButton", font=("TkDefaultFont", FONT_SIZE), padding=(10, 6))
     style.configure("Big.TLabel", font=("TkDefaultFont", FONT_SIZE))
 
-    # Mutable map; signs preserved from existing RIGHT_ARM_MAP, offsets tunable here.
+    # Mutable map; starting values come from RIGHT_ARM_MAP. Both signs (via
+    # the per-row toggle button) and offsets (via the per-row slider) are
+    # editable here — originally only offsets were, signs had to be set by
+    # editing kinematics.py after running motor_to_viewer.py. The toggle
+    # below lets you discover signs in the same session.
     current_map: dict[str, JointMap] = dict(RIGHT_ARM_MAP)
     offset_vars = [tk.DoubleVar(value=current_map[n].offset_deg) for n in MOTOR_NAMES]
     motor_strs = [tk.StringVar(value="--") for _ in range(7)]
     urdf_strs = [tk.StringVar(value="--") for _ in range(7)]
     offset_strs = [tk.StringVar(value="") for _ in range(7)]
+    sign_strs = [tk.StringVar(value=f"sign: {current_map[n].sign:+.0f}") for n in MOTOR_NAMES]
 
     def commit_offset(i: int) -> None:
         name = MOTOR_NAMES[i]
         jm = current_map[name]
         current_map[name] = JointMap(sign=jm.sign, offset_deg=offset_vars[i].get())
         offset_strs[i].set(f"{offset_vars[i].get():+8.2f}°")
+
+    def toggle_sign(i: int) -> None:
+        name = MOTOR_NAMES[i]
+        jm = current_map[name]
+        current_map[name] = JointMap(sign=-jm.sign, offset_deg=jm.offset_deg)
+        sign_strs[i].set(f"sign: {current_map[name].sign:+.0f}")
+        push_urdf()
 
     for i in range(7):
         commit_offset(i)  # initialize
@@ -117,6 +134,7 @@ def main() -> int:
         ("motor", 15),
         ("real (deg)", 11),
         ("URDF (deg)", 11),
+        ("sign", 10),
         ("offset slider (deg)", 22),
         ("offset", 12),
     ):
@@ -132,6 +150,13 @@ def main() -> int:
         ttk.Label(row, textvariable=urdf_strs[i], width=10, font=mono, anchor="e").pack(
             side=tk.LEFT, padx=(0, 12)
         )
+        ttk.Button(
+            row,
+            textvariable=sign_strs[i],
+            width=8,
+            style="Big.TButton",
+            command=lambda i=i: toggle_sign(i),
+        ).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Scale(
             row,
             from_=-180,
@@ -147,9 +172,9 @@ def main() -> int:
 
     def print_and_exit() -> None:
         print("\n" + "=" * 72)
-        print("RIGHT_ARM_MAP — paste into kinematics.py:")
+        print(f"{args.name} — paste into kinematics.py:")
         print("=" * 72)
-        print("RIGHT_ARM_MAP: dict[str, JointMap] = {")
+        print(f"{args.name}: dict[str, JointMap] = {{")
         for n in MOTOR_NAMES:
             jm = current_map[n]
             pad = " " * (14 - len(n))

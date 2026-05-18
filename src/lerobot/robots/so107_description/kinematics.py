@@ -58,7 +58,15 @@ RIGHT_ARM_MAP: dict[str, JointMap] = {
     "wrist_roll": JointMap(sign=-1.0, offset_deg=+90.00),
     "gripper": JointMap(sign=-1.0, offset_deg=+0.00),
 }
-LEFT_ARM_MAP: dict[str, JointMap] = {name: JointMap(sign=+1.0, offset_deg=0.0) for name in MOTOR_NAMES}
+LEFT_ARM_MAP: dict[str, JointMap] = {
+    "shoulder_pan": JointMap(sign=-1.0, offset_deg=+0.00),
+    "shoulder_lift": JointMap(sign=+1.0, offset_deg=-90.00),
+    "elbow_flex": JointMap(sign=+1.0, offset_deg=+91.86),
+    "forearm_roll": JointMap(sign=-1.0, offset_deg=+0.00),
+    "wrist_flex": JointMap(sign=+1.0, offset_deg=+0.00),
+    "wrist_roll": JointMap(sign=-1.0, offset_deg=+90.00),
+    "gripper": JointMap(sign=+1.0, offset_deg=-90.00),
+}
 
 
 # --- Conversions --------------------------------------------------------------
