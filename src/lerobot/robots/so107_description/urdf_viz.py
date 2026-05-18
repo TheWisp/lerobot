@@ -61,7 +61,9 @@ from lerobot.processor import (
 logger = logging.getLogger(__name__)
 
 # Per-arm world-frame X offset so the two URDF copies don't collide visually.
-_BIMANUAL_X_OFFSET_M = 0.35
+# Roughly matches the physical center-to-center distance of a side-by-side
+# SO-107 setup so the scene looks proportional to reality.
+_BIMANUAL_X_OFFSET_M = 0.30
 
 # Motor names whose .pos values are URDF joint angles in degrees (excluding the
 # gripper, which has its own joint that isn't part of the 7-DOF chain the IK
@@ -118,6 +120,19 @@ class BimanualUrdfViz:
             master, urdf, package_dirs, root="left", base_xyz=(-_BIMANUAL_X_OFFSET_M, 0.0, 0.0)
         )
         self._master_viewer = master.viewer
+
+        # Position the camera at a sensible default so the two arms fill the
+        # view on first load. MeshCat's stock camera is wide and far; for a
+        # ~30 cm-baseline pair of 50 cm arms a closer position makes the
+        # scene immediately readable. The user can still orbit / zoom freely.
+        try:
+            import meshcat.transformations as tf
+
+            cam_xyz = (0.7, -0.5, 0.5)  # diagonal-front, slightly elevated
+            master.viewer["/Cameras/default"].set_transform(tf.translation_matrix([0.0, 0.0, 0.2]))
+            master.viewer["/Cameras/default/rotated/<object>"].set_property("position", list(cam_xyz))
+        except Exception:
+            pass  # Camera defaults are aesthetic; failure here is harmless.
 
         self.url: str = (
             master.viewer.url() if hasattr(master.viewer, "url") else "http://127.0.0.1:7000/static/"
