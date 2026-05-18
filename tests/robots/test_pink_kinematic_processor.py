@@ -172,3 +172,77 @@ def test_reset_clears_q_curr(step):
     assert step.q_curr is not None
     step.reset()
     assert step.q_curr is None
+
+
+# ── Prefix-aware behavior (bimanual support) ─────────────────────────────
+
+
+def _prefixed_obs(prefix: str) -> dict:
+    """Seed observation with a per-arm prefix on every motor name."""
+    return {
+        f"{prefix}{name}.pos": float(v)
+        for name, v in zip(SO107_MOTOR_NAMES, [0.0, -90.0, 60.0, 0.0, -40.0, 0.0, 20.0], strict=False)
+    }
+
+
+def _prefixed_ee_action(target_ee_4x4, prefix: str, gripper_pos: float = 42.0) -> dict:
+    from lerobot.utils.rotation import Rotation
+
+    pos = target_ee_4x4[:3, 3]
+    rotvec = Rotation.from_matrix(target_ee_4x4[:3, :3]).as_rotvec()
+    return {
+        f"{prefix}ee.x": float(pos[0]),
+        f"{prefix}ee.y": float(pos[1]),
+        f"{prefix}ee.z": float(pos[2]),
+        f"{prefix}ee.wx": float(rotvec[0]),
+        f"{prefix}ee.wy": float(rotvec[1]),
+        f"{prefix}ee.wz": float(rotvec[2]),
+        f"{prefix}ee.gripper_pos": gripper_pos,
+    }
+
+
+@pytest.fixture
+def left_step():
+    from lerobot.model.pink_kinematics import PinkKinematics
+    from lerobot.robots.so107_description import get_urdf_path
+    from lerobot.robots.so_follower.pink_kinematic_processor import (
+        PinkInverseKinematicsEEToJoints,
+    )
+
+    pk = PinkKinematics(urdf_path=str(get_urdf_path()), target_frame_name="L7_1")
+    return PinkInverseKinematicsEEToJoints(kinematics=pk, motor_names=SO107_MOTOR_NAMES, key_prefix="left_")
+
+
+def test_prefixed_step_reads_and_writes_prefixed_keys(left_step):
+    """With key_prefix='left_', input ee.* and output <motor>.pos are all prefixed."""
+    obs = _prefixed_obs("left_")
+    q_seed = np.array([float(obs[f"left_{n}.pos"]) for n in SO107_MOTOR_NAMES])
+    target = left_step.kinematics.forward_kinematics(q_seed)
+    out = _run_step(left_step, obs, _prefixed_ee_action(target, "left_"))
+
+    # All input keys consumed (under the prefix).
+    for k in ("ee.x", "ee.y", "ee.z", "ee.wx", "ee.wy", "ee.wz", "ee.gripper_pos"):
+        assert f"left_{k}" not in out
+    # Outputs prefixed.
+    for name in SO107_MOTOR_NAMES:
+        assert f"left_{name}.pos" in out
+    # Unprefixed motor.pos keys must NOT appear.
+    for name in SO107_MOTOR_NAMES:
+        assert f"{name}.pos" not in out
+
+
+def test_prefixed_step_ignores_other_arms_observation_keys(left_step):
+    """left_step should only read left_<motor>.pos; right_<motor>.pos must be skipped."""
+    obs = {**_prefixed_obs("left_"), **_prefixed_obs("right_")}
+    # Make right arm wildly different so it would corrupt the IK seed if accidentally read.
+    for name in SO107_MOTOR_NAMES:
+        obs[f"right_{name}.pos"] = 999.0
+    q_seed = np.array([float(obs[f"left_{n}.pos"]) for n in SO107_MOTOR_NAMES])
+    target = left_step.kinematics.forward_kinematics(q_seed)
+    out = _run_step(left_step, obs, _prefixed_ee_action(target, "left_"))
+
+    # IK should still return ~seed (target = FK(seed)); confirms right_* was ignored.
+    for i, name in enumerate(SO107_MOTOR_NAMES):
+        if name == "gripper":
+            continue
+        np.testing.assert_allclose(out[f"left_{name}.pos"], q_seed[i], atol=1e-2)

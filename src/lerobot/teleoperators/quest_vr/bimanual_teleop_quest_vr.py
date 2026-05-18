@@ -14,23 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Quest 3 WebXR teleoperator.
+"""Bimanual Quest 3 WebXR teleoperator.
 
-Conforms to LeRobot's Teleoperator interface. Internally runs an HTTPS +
-WebSocket server in a daemon thread (see ``server.py``); the Quest 3's
-browser opens the served page, enters an immersive XR session, and streams
-controller poses at 90 Hz. Each frame is converted to an EE-delta action
-in the format consumed upstream by ``EEReferenceAndDelta``:
-
-    enabled, target_x, target_y, target_z, target_wx, target_wy, target_wz,
-    gripper_vel
-
-This output is what ``EEReferenceAndDelta`` -> ``GripperVelocityToJoint``
--> ``PinkInverseKinematicsEEToJoints`` consume to produce joint commands.
-
-``get_action()`` is lock-free and returns whatever the server thread last
-cached. Caller can poll at any rate; the Quest streams independently at
-its native frame rate.
+One Quest session, two controllers, two robot arms. Emits the same
+EE-delta keys as the single-arm variant but prefixed with ``left_`` /
+``right_``, matching the bimanual Cartesian IK pipeline composed by
+:func:`lerobot.processor.cartesian_ik_pipeline.make_cartesian_ik_pipeline`
+when the registered robot config has two arms.
 """
 
 from __future__ import annotations
@@ -45,17 +35,17 @@ from lerobot.utils.import_utils import _pin_pink_available
 
 from ..teleoperator import Teleoperator
 from .arm_controller import QuestArmController
-from .configuration_quest_vr import QuestVRTeleopConfig
+from .configuration_quest_vr import BimanualQuestVRTeleopConfig
 from .server import QuestServer
 
 logger = logging.getLogger(__name__)
 
 HERE = Path(__file__).parent
 HTML_PATH = HERE / "webxr_teleop.html"
-CERT_DIR = HERE / "_cert"  # gitignored; holds auto-generated self-signed cert
+CERT_DIR = HERE / "_cert"  # gitignored; reuses the cert from the unimanual variant.
 
-# Output action keys must match what EEReferenceAndDelta upstream consumes.
-ACTION_KEYS = (
+# Output action keys: every single-arm key, doubled with left_ / right_ prefixes.
+_PER_ARM_KEYS = (
     "enabled",
     "target_x",
     "target_y",
@@ -65,39 +55,45 @@ ACTION_KEYS = (
     "target_wz",
     "gripper_vel",
 )
+ACTION_KEYS = tuple(f"{p}{k}" for p in ("left_", "right_") for k in _PER_ARM_KEYS)
 
 
-class QuestVRTeleop(Teleoperator):
-    """LeRobot Teleoperator that streams 6-DOF EE deltas from a Quest 3.
+class BimanualQuestVRTeleop(Teleoperator):
+    """LeRobot Teleoperator that streams 6-DOF EE deltas for both arms.
 
-    Plumbing is identical to the HighRateLeaderMixin pattern: server thread
-    updates a single cached action under a lock; get_action() is lock-free.
+    Same plumbing as the unimanual :class:`QuestVRTeleop` — one server
+    daemon thread, one cached action under a lock, lock-free reads —
+    but each WebXR frame is dispatched to TWO :class:`QuestArmController`
+    instances (one per hand) and their action dicts are merged.
     """
 
-    config_class = QuestVRTeleopConfig
-    name = "quest_vr"
+    config_class = BimanualQuestVRTeleopConfig
+    name = "bimanual_quest_vr"
 
-    def __init__(self, config: QuestVRTeleopConfig):
+    def __init__(self, config: BimanualQuestVRTeleopConfig):
         if not _pin_pink_available:
-            # Hard requirement only if you use the pink IK ProcessorStep
-            # downstream; QuestVR itself doesn't import pink, but the
-            # typical pipeline that consumes its output does. Warning, not
-            # an error, so non-pink pipelines remain possible.
             logger.warning(
-                "pin-pink not installed; QuestVRTeleop output will need a non-pink "
+                "pin-pink not installed; BimanualQuestVRTeleop output needs a non-pink "
                 "IK ProcessorStep downstream. Install with `uv pip install pin-pink "
                 "qpsolvers[open_source_solvers]` for the recommended path."
             )
         super().__init__(config)
-        self.config: QuestVRTeleopConfig = config
+        self.config: BimanualQuestVRTeleopConfig = config
         self._cache_lock = threading.Lock()
         self._cached_action: dict[str, float] | None = None
-        self._arm = QuestArmController(
+        self._left = QuestArmController(
             clutch_button_index=config.clutch_button_index,
             gripper_button_index=config.gripper_button_index,
             position_scale=config.position_scale,
             max_rot_step_rad_per_tick=config.max_rot_step_rad_per_tick,
-            key_prefix="",
+            key_prefix="left_",
+        )
+        self._right = QuestArmController(
+            clutch_button_index=config.clutch_button_index,
+            gripper_button_index=config.gripper_button_index,
+            position_scale=config.position_scale,
+            max_rot_step_rad_per_tick=config.max_rot_step_rad_per_tick,
+            key_prefix="right_",
         )
         self._server: QuestServer | None = None
 
@@ -113,7 +109,7 @@ class QuestVRTeleop(Teleoperator):
 
     @property
     def feedback_features(self) -> dict:
-        return {}  # Quest 3 controllers support haptic, not wired here yet.
+        return {}
 
     @property
     def is_connected(self) -> bool:
@@ -123,7 +119,7 @@ class QuestVRTeleop(Teleoperator):
 
     @property
     def is_calibrated(self) -> bool:
-        return True  # No calibration step; clutch re-anchors per engagement.
+        return True
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -138,7 +134,7 @@ class QuestVRTeleop(Teleoperator):
         )
         self._server.start()
         logger.info(
-            f"QuestVRTeleop connected. Open {self._server.url} in the Quest 3 "
+            f"BimanualQuestVRTeleop connected. Open {self._server.url} in the Quest 3 "
             f"browser (accept the self-signed cert warning), then Connect + Enter VR."
         )
 
@@ -148,10 +144,11 @@ class QuestVRTeleop(Teleoperator):
             self._server = None
         with self._cache_lock:
             self._cached_action = None
-            self._arm.reset()
+            self._left.reset()
+            self._right.reset()
 
     def calibrate(self) -> None:
-        pass  # No calibration step.
+        pass
 
     def configure(self) -> None:
         pass
@@ -169,19 +166,28 @@ class QuestVRTeleop(Teleoperator):
     # ── Server-thread callback ────────────────────────────────────────────
 
     def _idle_action(self) -> dict[str, float]:
-        """Sent when no frame has arrived yet, or while disengaged."""
-        return self._arm.idle_action()
+        """Both arms idle (also the pre-first-frame default)."""
+        return {**self._left.idle_action(), **self._right.idle_action()}
 
     def _on_frame(self, frame: dict[str, Any]) -> None:
-        """Called from the server's asyncio thread per WebXR frame."""
+        """Called from the server's asyncio thread per WebXR frame.
+
+        Dispatches each hand's pose to the corresponding controller; merges
+        the two action dicts. If one hand is missing from the frame (Quest
+        sometimes drops a controller when it's out of tracking range), that
+        arm's last cached values are kept.
+        """
         poses = frame.get("poses") or []
-        hand = self.config.controller_hand
-        pose = next((p for p in poses if p.get("hand") == hand), None)
-        if pose is None:
-            return
-        action = self._arm.process_pose(pose)
+        left_pose = next((p for p in poses if p.get("hand") == "left"), None)
+        right_pose = next((p for p in poses if p.get("hand") == "right"), None)
+
         with self._cache_lock:
-            self._cached_action = action
+            base = dict(self._cached_action) if self._cached_action is not None else self._idle_action()
+            if left_pose is not None:
+                base.update(self._left.process_pose(left_pose))
+            if right_pose is not None:
+                base.update(self._right.process_pose(right_pose))
+            self._cached_action = base
 
     # ── Diagnostics ───────────────────────────────────────────────────────
 

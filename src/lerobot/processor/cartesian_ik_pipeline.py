@@ -37,7 +37,7 @@ their package; nothing in upstream needs to change.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -50,21 +50,34 @@ logger = logging.getLogger(__name__)
 
 
 # Action keys that mark a teleop as "Cartesian-style" (consumed by EEReferenceAndDelta).
-CARTESIAN_TELEOP_KEYS = ("target_x", "target_y", "target_z")
+# We detect either unimanual (target_x) or bimanual (left_target_x + right_target_x).
+UNIMANUAL_CARTESIAN_KEYS = ("target_x", "target_y", "target_z")
+BIMANUAL_CARTESIAN_KEYS = (
+    "left_target_x",
+    "left_target_y",
+    "left_target_z",
+    "right_target_x",
+    "right_target_y",
+    "right_target_z",
+)
 
 
 @dataclass(kw_only=True)
-class CartesianIKRobotConfig:
-    """Per-robot info needed to build a Cartesian IK pipeline.
+class CartesianIKArmConfig:
+    """One arm's parameters for a Cartesian-IK chain.
 
-    The robot package owns this. Default values match the common case
-    (single 7-DOF arm with the standard SO-family motor naming).
+    For unimanual robots, instantiate one of these with ``key_prefix=""`` (the
+    default). For bimanual, instantiate two with ``key_prefix="left_"`` and
+    ``key_prefix="right_"``; the prefix is prepended to every action /
+    observation key the chain reads or writes, so the two arms' chains stay
+    namespace-separated when they share a single transition.
     """
 
     urdf_path: str
     ee_frame_name: str
     motor_names: list[str]
     joint_names: list[str] | None = None
+    key_prefix: str = ""
     # Workspace box for EEBoundsAndSafety (in robot base frame, meters).
     workspace_min: tuple[float, float, float] = (-0.30, -0.40, +0.02)
     workspace_max: tuple[float, float, float] = (+0.30, +0.10, +0.40)
@@ -74,6 +87,58 @@ class CartesianIKRobotConfig:
     max_ee_step_m: float = 0.10
     # Gripper velocity -> position integration speed.
     gripper_speed_factor: float = 20.0
+
+
+@dataclass(kw_only=True)
+class CartesianIKRobotConfig:
+    """Per-robot info needed to build a Cartesian IK pipeline.
+
+    One arm = unimanual; two arms = bimanual. Either pass ``arms=[...]``
+    directly, or pass the flat single-arm fields (``urdf_path`` etc.) and a
+    single-arm config is built for you. The flat-field form is for the common
+    unimanual case; the explicit ``arms`` form is used for bimanual setups
+    that need per-arm key prefixes and workspace boxes.
+    """
+
+    arms: list[CartesianIKArmConfig] = field(default_factory=list)
+    # Single-arm shortcut: any subset of these promote into a one-arm `arms`
+    # list with key_prefix="". Mutually exclusive with passing `arms` directly.
+    urdf_path: str | None = None
+    ee_frame_name: str | None = None
+    motor_names: list[str] | None = None
+    joint_names: list[str] | None = None
+    workspace_min: tuple[float, float, float] = (-0.30, -0.40, +0.02)
+    workspace_max: tuple[float, float, float] = (+0.30, +0.10, +0.40)
+    end_effector_step_sizes: dict[str, float] | None = None
+    max_ee_step_m: float = 0.10
+    gripper_speed_factor: float = 20.0
+
+    def __post_init__(self) -> None:
+        if not self.arms:
+            assert self.urdf_path is not None, (
+                "CartesianIKRobotConfig: pass either `arms=[...]` or the flat single-arm fields"
+            )
+            assert self.ee_frame_name is not None
+            assert self.motor_names is not None
+            self.arms = [
+                CartesianIKArmConfig(
+                    urdf_path=self.urdf_path,
+                    ee_frame_name=self.ee_frame_name,
+                    motor_names=self.motor_names,
+                    joint_names=self.joint_names,
+                    key_prefix="",
+                    workspace_min=self.workspace_min,
+                    workspace_max=self.workspace_max,
+                    end_effector_step_sizes=self.end_effector_step_sizes,
+                    max_ee_step_m=self.max_ee_step_m,
+                    gripper_speed_factor=self.gripper_speed_factor,
+                )
+            ]
+        assert 1 <= len(self.arms) <= 2, f"CartesianIKRobotConfig: expected 1 or 2 arms, got {len(self.arms)}"
+
+    @property
+    def is_bimanual(self) -> bool:
+        return len(self.arms) == 2
 
 
 # Registry: robot.name -> CartesianIKRobotConfig.
@@ -96,30 +161,19 @@ def get_cartesian_ik_robot_config(name: str) -> CartesianIKRobotConfig | None:
 
 
 def is_cartesian_teleop(teleop: Teleoperator) -> bool:
-    """Return True if the teleop emits Cartesian EE-delta actions."""
+    """Return True if the teleop emits Cartesian EE-delta actions (unimanual or bimanual)."""
     try:
         names = teleop.action_features.get("names", {})
     except (AttributeError, KeyError):
         return False
-    return all(k in names for k in CARTESIAN_TELEOP_KEYS)
-
-
-def make_cartesian_ik_pipeline(robot: Robot) -> RobotProcessorPipeline | None:
-    """Build the Cartesian-IK pipeline for ``robot`` if a config is registered.
-
-    Returns None when the robot has no registered Cartesian config; the caller
-    should fall back to identity in that case (and log).
-    """
-    cfg = _REGISTRY.get(getattr(robot, "name", ""))
-    if cfg is None:
-        return None
-
-    from lerobot.model import RobotKinematics
-    from lerobot.processor.converters import (
-        robot_action_observation_to_transition,
-        transition_to_robot_action,
+    return all(k in names for k in UNIMANUAL_CARTESIAN_KEYS) or all(
+        k in names for k in BIMANUAL_CARTESIAN_KEYS
     )
-    from lerobot.processor.pipeline import RobotProcessorPipeline
+
+
+def _build_arm_steps(arm: CartesianIKArmConfig) -> list[Any]:
+    """Build the four-step Cartesian-IK chain for one arm (prefix-aware)."""
+    from lerobot.model import RobotKinematics
     from lerobot.robots.so_follower.robot_kinematic_processor import (
         EEBoundsAndSafety,
         EEReferenceAndDelta,
@@ -129,9 +183,9 @@ def make_cartesian_ik_pipeline(robot: Robot) -> RobotProcessorPipeline | None:
     # FK for EEReferenceAndDelta (uses placo; FK is unaffected by the
     # missing-PostureTask issue we hit with placo's IK).
     fk_kin = RobotKinematics(
-        urdf_path=cfg.urdf_path,
-        target_frame_name=cfg.ee_frame_name,
-        joint_names=cfg.joint_names,
+        urdf_path=arm.urdf_path,
+        target_frame_name=arm.ee_frame_name,
+        joint_names=arm.joint_names,
     )
 
     # IK uses pink (with posture regularization).
@@ -142,11 +196,15 @@ def make_cartesian_ik_pipeline(robot: Robot) -> RobotProcessorPipeline | None:
         )
 
         pink_kin = PinkKinematics(
-            urdf_path=cfg.urdf_path,
-            target_frame_name=cfg.ee_frame_name,
-            joint_names=cfg.joint_names,
+            urdf_path=arm.urdf_path,
+            target_frame_name=arm.ee_frame_name,
+            joint_names=arm.joint_names,
         )
-        ik_step: Any = PinkInverseKinematicsEEToJoints(kinematics=pink_kin, motor_names=cfg.motor_names)
+        ik_step: Any = PinkInverseKinematicsEEToJoints(
+            kinematics=pink_kin,
+            motor_names=arm.motor_names,
+            key_prefix=arm.key_prefix,
+        )
     except ImportError:
         from lerobot.robots.so_follower.robot_kinematic_processor import (
             InverseKinematicsEEToJoints,
@@ -156,26 +214,61 @@ def make_cartesian_ik_pipeline(robot: Robot) -> RobotProcessorPipeline | None:
             "pink-pink not installed; falling back to placo-based IK. Install "
             "pin-pink + qpsolvers[open_source_solvers] for posture-regularized IK."
         )
-        ik_step = InverseKinematicsEEToJoints(kinematics=fk_kin, motor_names=cfg.motor_names)
+        ik_step = InverseKinematicsEEToJoints(
+            kinematics=fk_kin,
+            motor_names=arm.motor_names,
+            key_prefix=arm.key_prefix,
+        )
 
-    step_sizes = cfg.end_effector_step_sizes or {"x": 1.0, "y": 1.0, "z": 1.0}
-    steps = [
+    step_sizes = arm.end_effector_step_sizes or {"x": 1.0, "y": 1.0, "z": 1.0}
+    return [
         EEReferenceAndDelta(
             kinematics=fk_kin,
             end_effector_step_sizes=step_sizes,
-            motor_names=cfg.motor_names,
+            motor_names=arm.motor_names,
             use_latched_reference=True,
+            key_prefix=arm.key_prefix,
         ),
         EEBoundsAndSafety(
             end_effector_bounds={
-                "min": list(cfg.workspace_min),
-                "max": list(cfg.workspace_max),
+                "min": list(arm.workspace_min),
+                "max": list(arm.workspace_max),
             },
-            max_ee_step_m=cfg.max_ee_step_m,
+            max_ee_step_m=arm.max_ee_step_m,
+            key_prefix=arm.key_prefix,
         ),
-        GripperVelocityToJoint(speed_factor=cfg.gripper_speed_factor),
+        GripperVelocityToJoint(
+            speed_factor=arm.gripper_speed_factor,
+            key_prefix=arm.key_prefix,
+        ),
         ik_step,
     ]
+
+
+def make_cartesian_ik_pipeline(robot: Robot) -> RobotProcessorPipeline | None:
+    """Build the Cartesian-IK pipeline for ``robot`` if a config is registered.
+
+    For unimanual robots, returns a single 4-step chain. For bimanual, returns
+    a chain that runs the per-arm steps back-to-back; each per-arm step is
+    prefixed (left_/right_) so they read disjoint keys from the same transition.
+
+    Returns None when the robot has no registered Cartesian config; the caller
+    should fall back to identity in that case (and log).
+    """
+    cfg = _REGISTRY.get(getattr(robot, "name", ""))
+    if cfg is None:
+        return None
+
+    from lerobot.processor.converters import (
+        robot_action_observation_to_transition,
+        transition_to_robot_action,
+    )
+    from lerobot.processor.pipeline import RobotProcessorPipeline
+
+    steps: list[Any] = []
+    for arm in cfg.arms:
+        steps.extend(_build_arm_steps(arm))
+
     return RobotProcessorPipeline(
         steps=steps,
         to_transition=robot_action_observation_to_transition,

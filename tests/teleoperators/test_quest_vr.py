@@ -100,9 +100,9 @@ def test_idle_action_when_disengaged_after_frame(teleop):
 def test_engage_snapshots_reference_pose(teleop):
     """Rising-edge on clutch should snapshot the pose used as the reference."""
     teleop._on_frame(_frame(quest_pos=(0.1, 1.2, -0.4), clutch=1.0))
-    assert teleop._engaged is True
-    assert teleop._quest_pos_at_engage is not None
-    np.testing.assert_allclose(teleop._quest_pos_at_engage, [0.1, 1.2, -0.4])
+    assert teleop._arm._engaged is True
+    assert teleop._arm._quest_pos_at_engage is not None
+    np.testing.assert_allclose(teleop._arm._quest_pos_at_engage, [0.1, 1.2, -0.4])
     # First engage frame's delta = 0 (against itself).
     a = teleop._cached_action
     assert a["enabled"] == 1.0
@@ -132,10 +132,10 @@ def test_release_clears_engage_state(teleop):
     """After release, the next clutch should produce a fresh snapshot."""
     teleop._on_frame(_frame(quest_pos=(0.0, 1.0, 0.0), clutch=1.0))
     teleop._on_frame(_frame(quest_pos=(0.0, 1.0, 0.0), clutch=0.0))  # release
-    assert teleop._engaged is False
+    assert teleop._arm._engaged is False
     # Re-engage at a different position.
     teleop._on_frame(_frame(quest_pos=(0.2, 1.0, 0.0), clutch=1.0))
-    np.testing.assert_allclose(teleop._quest_pos_at_engage, [0.2, 1.0, 0.0])
+    np.testing.assert_allclose(teleop._arm._quest_pos_at_engage, [0.2, 1.0, 0.0])
 
 
 def test_gripper_vel_derived_from_trigger_change(teleop):
@@ -160,3 +160,122 @@ def test_unknown_hand_frame_is_ignored(teleop):
     teleop._cached_action = None
     teleop._on_frame(_frame(hand="left", clutch=1.0))
     assert teleop._cached_action is None  # no update
+
+
+# ── Bimanual variant ──────────────────────────────────────────────────────
+
+
+from lerobot.teleoperators.quest_vr import (  # noqa: E402
+    BimanualQuestVRTeleop,
+    BimanualQuestVRTeleopConfig,
+)
+
+
+@pytest.fixture
+def bimanual_teleop():
+    return BimanualQuestVRTeleop(BimanualQuestVRTeleopConfig(id="test_bi", port=18444))
+
+
+def _bimanual_frame(
+    left_pos=(0.0, 1.0, -0.3),
+    right_pos=(0.0, 1.0, -0.3),
+    left_clutch=0.0,
+    right_clutch=0.0,
+    left_trigger=0.0,
+    right_trigger=0.0,
+) -> dict:
+    """Build a synthetic WebXR frame with both controllers' poses."""
+
+    def _pose(hand, pos, clutch, trigger):
+        buttons = [0.0] * 12
+        buttons[0] = float(trigger)
+        buttons[1] = float(clutch)
+        return {
+            "hand": hand,
+            "pos": list(pos),
+            "rot": [0.0, 0.0, 0.0, 1.0],
+            "buttons": buttons,
+        }
+
+    return {
+        "type": "frame",
+        "t_quest_send": 0.0,
+        "poses": [
+            _pose("left", left_pos, left_clutch, left_trigger),
+            _pose("right", right_pos, right_clutch, right_trigger),
+        ],
+    }
+
+
+def test_bimanual_config_type():
+    cfg = BimanualQuestVRTeleopConfig(id="t")
+    assert cfg.type == "bimanual_quest_vr"
+
+
+def test_bimanual_factory_dispatch():
+    from lerobot.teleoperators.utils import make_teleoperator_from_config
+
+    t = make_teleoperator_from_config(BimanualQuestVRTeleopConfig(id="t", port=18444))
+    assert isinstance(t, BimanualQuestVRTeleop)
+
+
+def test_bimanual_action_features_has_both_arms(bimanual_teleop):
+    """16 keys total — 8 per arm with left_/right_ prefixes."""
+    af = bimanual_teleop.action_features
+    assert af["shape"] == (16,)
+    names = set(af["names"].keys())
+    per_arm = {
+        "enabled",
+        "target_x",
+        "target_y",
+        "target_z",
+        "target_wx",
+        "target_wy",
+        "target_wz",
+        "gripper_vel",
+    }
+    assert names == {f"{p}{k}" for p in ("left_", "right_") for k in per_arm}
+
+
+def test_bimanual_idle_action_is_all_zero(bimanual_teleop):
+    a = bimanual_teleop._idle_action()
+    assert len(a) == 16
+    for v in a.values():
+        assert v == 0.0
+
+
+def test_bimanual_independent_engagement(bimanual_teleop):
+    """Engage only the right controller; left stays disengaged."""
+    bimanual_teleop._on_frame(_bimanual_frame(right_clutch=1.0))
+    a = bimanual_teleop._cached_action
+    assert a is not None
+    assert a["right_enabled"] == 1.0
+    assert a["left_enabled"] == 0.0
+
+
+def test_bimanual_both_engaged(bimanual_teleop):
+    """Engage both controllers simultaneously; both arms produce enabled=1."""
+    bimanual_teleop._on_frame(_bimanual_frame(left_clutch=1.0, right_clutch=1.0))
+    a = bimanual_teleop._cached_action
+    assert a["left_enabled"] == 1.0
+    assert a["right_enabled"] == 1.0
+
+
+def test_bimanual_per_arm_delta_independent(bimanual_teleop):
+    """Move only the right hand; left target deltas stay zero."""
+    bimanual_teleop._on_frame(_bimanual_frame(left_clutch=1.0, right_clutch=1.0))  # engage both at origin
+    bimanual_teleop._on_frame(
+        _bimanual_frame(
+            left_pos=(0.0, 1.0, -0.3),
+            right_pos=(0.0, 1.0, -0.35),  # push right hand 5cm forward
+            left_clutch=1.0,
+            right_clutch=1.0,
+        )
+    )
+    a = bimanual_teleop._cached_action
+    assert abs(a["left_target_x"]) < 1e-9
+    assert abs(a["left_target_y"]) < 1e-9
+    assert abs(a["left_target_z"]) < 1e-9
+    # Right hand should have a non-zero delta (axis mapping verified by single-arm tests).
+    right_norm = (a["right_target_x"] ** 2 + a["right_target_y"] ** 2 + a["right_target_z"] ** 2) ** 0.5
+    assert right_norm > 0.04  # ~5cm in some axis

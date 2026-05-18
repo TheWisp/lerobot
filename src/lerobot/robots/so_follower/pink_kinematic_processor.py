@@ -66,21 +66,27 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
             current observation each tick (matches the placo step). If False,
             the previous solution is used as the seed (slightly smoother under
             heavy motor lag, but can drift if observations are noisy).
+        key_prefix: Prefix prepended to every ``ee.*`` and ``<motor>.pos`` key
+            this step reads or writes (and the observation ``<motor>.pos`` keys
+            it filters). Empty for unimanual; ``"left_"``/``"right_"`` for the
+            two arms of a bimanual setup.
     """
 
     kinematics: PinkKinematics
     motor_names: list[str]
     q_curr: np.ndarray | None = field(default=None, init=False, repr=False)
     initial_guess_current_joints: bool = True
+    key_prefix: str = ""
 
     def action(self, action: RobotAction) -> RobotAction:
-        x = action.pop("ee.x")
-        y = action.pop("ee.y")
-        z = action.pop("ee.z")
-        wx = action.pop("ee.wx")
-        wy = action.pop("ee.wy")
-        wz = action.pop("ee.wz")
-        gripper_pos = action.pop("ee.gripper_pos")
+        p = self.key_prefix
+        x = action.pop(f"{p}ee.x")
+        y = action.pop(f"{p}ee.y")
+        z = action.pop(f"{p}ee.z")
+        wx = action.pop(f"{p}ee.wx")
+        wy = action.pop(f"{p}ee.wy")
+        wz = action.pop(f"{p}ee.wz")
+        gripper_pos = action.pop(f"{p}ee.gripper_pos")
 
         if None in (x, y, z, wx, wy, wz, gripper_pos):
             raise ValueError(
@@ -95,11 +101,16 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
 
         # Joint values from observation, ordered by motor_names (gripper inclusive — IK
         # ignores trailing entries past joint_names length, just passes them through).
+        # In bimanual setups, observation keys are prefixed (e.g., "left_shoulder_pan.pos"),
+        # so we strip the prefix before matching against motor_names.
         q_raw = np.array(
             [
                 float(v)
                 for k, v in observation.items()
-                if isinstance(k, str) and k.endswith(".pos") and k.removesuffix(".pos") in self.motor_names
+                if isinstance(k, str)
+                and k.startswith(p)
+                and k.endswith(".pos")
+                and k[len(p) :].removesuffix(".pos") in self.motor_names
             ],
             dtype=float,
         )
@@ -120,20 +131,21 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
         # incoming ee.gripper_pos for clarity — gripper isn't EE-tracked.
         for i, name in enumerate(self.motor_names):
             if name != "gripper":
-                action[f"{name}.pos"] = float(q_target[i])
+                action[f"{p}{name}.pos"] = float(q_target[i])
             else:
-                action["gripper.pos"] = float(gripper_pos)
+                action[f"{p}gripper.pos"] = float(gripper_pos)
 
         return action
 
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+        p = self.key_prefix
         for feat in ["x", "y", "z", "wx", "wy", "wz", "gripper_pos"]:
-            features[PipelineFeatureType.ACTION].pop(f"ee.{feat}", None)
+            features[PipelineFeatureType.ACTION].pop(f"{p}ee.{feat}", None)
 
         for name in self.motor_names:
-            features[PipelineFeatureType.ACTION][f"{name}.pos"] = PolicyFeature(
+            features[PipelineFeatureType.ACTION][f"{p}{name}.pos"] = PolicyFeature(
                 type=FeatureType.ACTION, shape=(1,)
             )
 

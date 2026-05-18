@@ -60,3 +60,34 @@ class QuestVRTeleopConfig(TeleoperatorConfig):
     position_scale: float = 1.0
     max_rot_step_rad_per_tick: float = 0.5  # 0.5 rad ~= 28 deg
     controller_hand: str = "right"
+
+
+@TeleoperatorConfig.register_subclass("bimanual_quest_vr")
+@dataclass
+class BimanualQuestVRTeleopConfig(TeleoperatorConfig):
+    """Bimanual Quest 3 WebXR teleop: both controllers drive both arms.
+
+    Same single Quest WebXR session as the unimanual variant — Quest streams
+    poses for both controllers in each frame, so one server callback dispatches
+    to two per-arm controllers. Action keys are prefixed: ``left_*`` for the
+    left controller, ``right_*`` for the right.
+
+    Output action keys (compatible with the bimanual Cartesian IK pipeline):
+        left_enabled, left_target_x/y/z, left_target_wx/wy/wz, left_gripper_vel,
+        right_enabled, right_target_x/y/z, right_target_wx/wy/wz, right_gripper_vel
+
+    Per-arm clutch and gripper buttons are independent; clutch one controller
+    to drive that arm without affecting the other.
+
+    Attributes:
+        port, clutch_button_index, gripper_button_index, position_scale,
+        max_rot_step_rad_per_tick: see :class:`QuestVRTeleopConfig`. The button
+        indices apply to BOTH controllers (Quest 3's left and right have the
+        same button mapping; ``1`` = grip, ``0`` = trigger).
+    """
+
+    port: int = 8443
+    clutch_button_index: int = 1
+    gripper_button_index: int = 0
+    position_scale: float = 1.0
+    max_rot_step_rad_per_tick: float = 0.5

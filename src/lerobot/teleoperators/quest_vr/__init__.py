@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .configuration_quest_vr import QuestVRTeleopConfig
+from .bimanual_teleop_quest_vr import BimanualQuestVRTeleop
+from .configuration_quest_vr import BimanualQuestVRTeleopConfig, QuestVRTeleopConfig
 from .teleop_quest_vr import QuestVRTeleop
 
-__all__ = ["QuestVRTeleop", "QuestVRTeleopConfig"]
+__all__ = [
+    "BimanualQuestVRTeleop",
+    "BimanualQuestVRTeleopConfig",
+    "QuestVRTeleop",
+    "QuestVRTeleopConfig",
+]

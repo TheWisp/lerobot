@@ -56,6 +56,10 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         motor_names: A list of motor names required for forward kinematics.
         use_latched_reference: If True, latch the reference pose on enable; otherwise, always use the
             current pose as the reference.
+        key_prefix: Optional prefix prepended to every action/observation key read or
+            written by this step (e.g., ``"left_"``). Used for bimanual setups so two
+            chains can share a single transition without key collisions. Empty string
+            (default) preserves the unimanual key set (target_x, ee.x, <motor>.pos).
         reference_ee_pose: Internal state storing the latched reference pose.
         _prev_enabled: Internal state to detect the rising edge of the enable signal.
         _command_when_disabled: Internal state to hold the last command while disabled.
@@ -68,6 +72,7 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         True  # If True, latch reference on enable; if False, always use current pose
     )
     use_ik_solution: bool = False
+    key_prefix: str = ""
 
     reference_ee_pose: np.ndarray | None = field(default=None, init=False, repr=False)
     _prev_enabled: bool = field(default=False, init=False, repr=False)
@@ -82,13 +87,15 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         if self.use_ik_solution and "IK_solution" in self.transition.get(TransitionKey.COMPLEMENTARY_DATA):
             q_raw = self.transition.get(TransitionKey.COMPLEMENTARY_DATA)["IK_solution"]
         else:
+            pref = self.key_prefix
             q_raw = np.array(
                 [
                     float(v)
                     for k, v in observation.items()
                     if isinstance(k, str)
+                    and k.startswith(pref)
                     and k.endswith(".pos")
-                    and k.removesuffix(".pos") in self.motor_names
+                    and k[len(pref) :].removesuffix(".pos") in self.motor_names
                 ],
                 dtype=float,
             )
@@ -99,14 +106,15 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         # Current pose from FK on measured joints
         t_curr = self.kinematics.forward_kinematics(q_raw)
 
-        enabled = bool(action.pop("enabled"))
-        tx = float(action.pop("target_x"))
-        ty = float(action.pop("target_y"))
-        tz = float(action.pop("target_z"))
-        wx = float(action.pop("target_wx"))
-        wy = float(action.pop("target_wy"))
-        wz = float(action.pop("target_wz"))
-        gripper_vel = float(action.pop("gripper_vel"))
+        p = self.key_prefix
+        enabled = bool(action.pop(f"{p}enabled"))
+        tx = float(action.pop(f"{p}target_x"))
+        ty = float(action.pop(f"{p}target_y"))
+        tz = float(action.pop(f"{p}target_z"))
+        wx = float(action.pop(f"{p}target_wx"))
+        wy = float(action.pop(f"{p}target_wy"))
+        wz = float(action.pop(f"{p}target_wz"))
+        gripper_vel = float(action.pop(f"{p}gripper_vel"))
 
         desired = None
 
@@ -142,13 +150,13 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         # Write action fields
         pos = desired[:3, 3]
         tw = Rotation.from_matrix(desired[:3, :3]).as_rotvec()
-        action["ee.x"] = float(pos[0])
-        action["ee.y"] = float(pos[1])
-        action["ee.z"] = float(pos[2])
-        action["ee.wx"] = float(tw[0])
-        action["ee.wy"] = float(tw[1])
-        action["ee.wz"] = float(tw[2])
-        action["ee.gripper_vel"] = gripper_vel
+        action[f"{p}ee.x"] = float(pos[0])
+        action[f"{p}ee.y"] = float(pos[1])
+        action[f"{p}ee.z"] = float(pos[2])
+        action[f"{p}ee.wx"] = float(tw[0])
+        action[f"{p}ee.wy"] = float(tw[1])
+        action[f"{p}ee.wz"] = float(tw[2])
+        action[f"{p}ee.gripper_vel"] = gripper_vel
 
         self._prev_enabled = enabled
         return action
@@ -162,6 +170,7 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+        p = self.key_prefix
         for feat in [
             "enabled",
             "target_x",
@@ -172,10 +181,10 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
             "target_wz",
             "gripper_vel",
         ]:
-            features[PipelineFeatureType.ACTION].pop(f"{feat}", None)
+            features[PipelineFeatureType.ACTION].pop(f"{p}{feat}", None)
 
         for feat in ["x", "y", "z", "wx", "wy", "wz", "gripper_vel"]:
-            features[PipelineFeatureType.ACTION][f"ee.{feat}"] = PolicyFeature(
+            features[PipelineFeatureType.ACTION][f"{p}ee.{feat}"] = PolicyFeature(
                 type=FeatureType.ACTION, shape=(1,)
             )
 
@@ -194,20 +203,23 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
     Attributes:
         end_effector_bounds: A dictionary with "min" and "max" keys for position clipping.
         max_ee_step_m: The maximum allowed change in position (in meters) between steps.
+        key_prefix: Prefix prepended to every ``ee.*`` key (see EEReferenceAndDelta).
         _last_pos: Internal state storing the last commanded position.
     """
 
     end_effector_bounds: dict
     max_ee_step_m: float = 0.2
+    key_prefix: str = ""
     _last_pos: np.ndarray | None = field(default=None, init=False, repr=False)
 
     def action(self, action: RobotAction) -> RobotAction:
-        x = action["ee.x"]
-        y = action["ee.y"]
-        z = action["ee.z"]
-        wx = action["ee.wx"]
-        wy = action["ee.wy"]
-        wz = action["ee.wz"]
+        p = self.key_prefix
+        x = action[f"{p}ee.x"]
+        y = action[f"{p}ee.y"]
+        z = action[f"{p}ee.z"]
+        wx = action[f"{p}ee.wx"]
+        wy = action[f"{p}ee.wy"]
+        wz = action[f"{p}ee.wz"]
         # TODO(Steven): ee.gripper_vel does not need to be bounded
 
         if None in (x, y, z, wx, wy, wz):
@@ -231,12 +243,12 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
 
         self._last_pos = pos
 
-        action["ee.x"] = float(pos[0])
-        action["ee.y"] = float(pos[1])
-        action["ee.z"] = float(pos[2])
-        action["ee.wx"] = float(twist[0])
-        action["ee.wy"] = float(twist[1])
-        action["ee.wz"] = float(twist[2])
+        action[f"{p}ee.x"] = float(pos[0])
+        action[f"{p}ee.y"] = float(pos[1])
+        action[f"{p}ee.z"] = float(pos[2])
+        action[f"{p}ee.wx"] = float(twist[0])
+        action[f"{p}ee.wy"] = float(twist[1])
+        action[f"{p}ee.wz"] = float(twist[2])
         return action
 
     def reset(self):
@@ -264,21 +276,25 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
         q_curr: Internal state storing the last joint positions, used as an initial guess for the IK solver.
         initial_guess_current_joints: If True, use the robot's current joint state as the IK guess.
             If False, use the solution from the previous step.
+        key_prefix: Prefix prepended to ``ee.*`` and ``<motor>.pos`` keys
+            (see EEReferenceAndDelta).
     """
 
     kinematics: RobotKinematics
     motor_names: list[str]
     q_curr: np.ndarray | None = field(default=None, init=False, repr=False)
     initial_guess_current_joints: bool = True
+    key_prefix: str = ""
 
     def action(self, action: RobotAction) -> RobotAction:
-        x = action.pop("ee.x")
-        y = action.pop("ee.y")
-        z = action.pop("ee.z")
-        wx = action.pop("ee.wx")
-        wy = action.pop("ee.wy")
-        wz = action.pop("ee.wz")
-        gripper_pos = action.pop("ee.gripper_pos")
+        p = self.key_prefix
+        x = action.pop(f"{p}ee.x")
+        y = action.pop(f"{p}ee.y")
+        z = action.pop(f"{p}ee.z")
+        wx = action.pop(f"{p}ee.wx")
+        wy = action.pop(f"{p}ee.wy")
+        wz = action.pop(f"{p}ee.wz")
+        gripper_pos = action.pop(f"{p}ee.gripper_pos")
 
         if None in (x, y, z, wx, wy, wz, gripper_pos):
             raise ValueError(
@@ -290,7 +306,11 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
             raise ValueError("Joints observation is require for computing robot kinematics")
 
         q_raw = np.array(
-            [float(v) for k, v in observation.items() if isinstance(k, str) and k.endswith(".pos")],
+            [
+                float(v)
+                for k, v in observation.items()
+                if isinstance(k, str) and k.startswith(p) and k.endswith(".pos")
+            ],
             dtype=float,
         )
         if q_raw is None:
@@ -314,20 +334,21 @@ class InverseKinematicsEEToJoints(RobotActionProcessorStep):
         # TODO: This is sentitive to order of motor_names = q_target mapping
         for i, name in enumerate(self.motor_names):
             if name != "gripper":
-                action[f"{name}.pos"] = float(q_target[i])
+                action[f"{p}{name}.pos"] = float(q_target[i])
             else:
-                action["gripper.pos"] = float(gripper_pos)
+                action[f"{p}gripper.pos"] = float(gripper_pos)
 
         return action
 
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+        p = self.key_prefix
         for feat in ["x", "y", "z", "wx", "wy", "wz", "gripper_pos"]:
-            features[PipelineFeatureType.ACTION].pop(f"ee.{feat}", None)
+            features[PipelineFeatureType.ACTION].pop(f"{p}ee.{feat}", None)
 
         for name in self.motor_names:
-            features[PipelineFeatureType.ACTION][f"{name}.pos"] = PolicyFeature(
+            features[PipelineFeatureType.ACTION][f"{p}{name}.pos"] = PolicyFeature(
                 type=FeatureType.ACTION, shape=(1,)
             )
 
@@ -354,23 +375,31 @@ class GripperVelocityToJoint(RobotActionProcessorStep):
         clip_min: The minimum allowed gripper joint position.
         clip_max: The maximum allowed gripper joint position.
         discrete_gripper: If True, treat the input action as discrete (0: open, 1: close, 2: stay).
+        key_prefix: Prefix prepended to ``ee.gripper_vel`` / ``ee.gripper_pos`` and to
+            observation ``<motor>.pos`` keys read (see EEReferenceAndDelta).
     """
 
     speed_factor: float = 20.0
     clip_min: float = 0.0
     clip_max: float = 100.0
     discrete_gripper: bool = False
+    key_prefix: str = ""
 
     def action(self, action: RobotAction) -> RobotAction:
         observation = self.transition.get(TransitionKey.OBSERVATION).copy()
 
-        gripper_vel = action.pop("ee.gripper_vel")
+        p = self.key_prefix
+        gripper_vel = action.pop(f"{p}ee.gripper_vel")
 
         if observation is None:
             raise ValueError("Joints observation is require for computing robot kinematics")
 
         q_raw = np.array(
-            [float(v) for k, v in observation.items() if isinstance(k, str) and k.endswith(".pos")],
+            [
+                float(v)
+                for k, v in observation.items()
+                if isinstance(k, str) and k.startswith(p) and k.endswith(".pos")
+            ],
             dtype=float,
         )
         if q_raw is None:
@@ -386,15 +415,16 @@ class GripperVelocityToJoint(RobotActionProcessorStep):
         delta = gripper_vel * float(self.speed_factor)
         # TODO: This assumes gripper is the last specified joint in the robot
         gripper_pos = float(np.clip(q_raw[-1] + delta, self.clip_min, self.clip_max))
-        action["ee.gripper_pos"] = gripper_pos
+        action[f"{p}ee.gripper_pos"] = gripper_pos
 
         return action
 
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
-        features[PipelineFeatureType.ACTION].pop("ee.gripper_vel", None)
-        features[PipelineFeatureType.ACTION]["ee.gripper_pos"] = PolicyFeature(
+        p = self.key_prefix
+        features[PipelineFeatureType.ACTION].pop(f"{p}ee.gripper_vel", None)
+        features[PipelineFeatureType.ACTION][f"{p}ee.gripper_pos"] = PolicyFeature(
             type=FeatureType.ACTION, shape=(1,)
         )
 

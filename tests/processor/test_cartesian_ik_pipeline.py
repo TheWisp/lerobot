@@ -23,6 +23,7 @@ from types import SimpleNamespace
 import pytest
 
 from lerobot.processor.cartesian_ik_pipeline import (
+    CartesianIKArmConfig,
     CartesianIKRobotConfig,
     get_cartesian_ik_robot_config,
     is_cartesian_teleop,
@@ -125,3 +126,86 @@ def test_pipeline_builds_for_so107_follower():
     assert "EEBoundsAndSafety" in step_names
     assert "GripperVelocityToJoint" in step_names
     assert "PinkInverseKinematicsEEToJoints" in step_names
+
+
+# ── Bimanual detection / config / composition ─────────────────────────────
+
+
+def test_is_cartesian_teleop_true_for_bimanual():
+    """Teleops emitting both left_target_xyz and right_target_xyz should be detected."""
+    names = {}
+    for prefix in ("left_", "right_"):
+        for i, k in enumerate(
+            (
+                "enabled",
+                "target_x",
+                "target_y",
+                "target_z",
+                "target_wx",
+                "target_wy",
+                "target_wz",
+                "gripper_vel",
+            )
+        ):
+            names[f"{prefix}{k}"] = len(names) * 1 + i  # values don't matter
+    teleop = SimpleNamespace(action_features={"shape": (16,), "names": names})
+    assert is_cartesian_teleop(teleop)
+
+
+def test_is_cartesian_teleop_false_for_left_only():
+    """Only left_ prefixed keys (missing right_) shouldn't match bimanual."""
+    names = {f"left_target_{c}": i for i, c in enumerate("xyz")}
+    teleop = SimpleNamespace(action_features={"shape": (3,), "names": names})
+    assert not is_cartesian_teleop(teleop)
+
+
+def test_bimanual_config_marks_is_bimanual():
+    """CartesianIKRobotConfig with two arms reports is_bimanual=True."""
+    left = CartesianIKArmConfig(
+        urdf_path="/tmp/a.urdf", ee_frame_name="ee", motor_names=["m"], key_prefix="left_"
+    )
+    right = CartesianIKArmConfig(
+        urdf_path="/tmp/a.urdf", ee_frame_name="ee", motor_names=["m"], key_prefix="right_"
+    )
+    cfg = CartesianIKRobotConfig(arms=[left, right])
+    assert cfg.is_bimanual
+    assert len(cfg.arms) == 2
+
+
+def test_unimanual_shortcut_builds_one_arm():
+    """The flat-field shortcut produces a single arm with empty prefix."""
+    cfg = CartesianIKRobotConfig(urdf_path="/tmp/a.urdf", ee_frame_name="ee", motor_names=["m"])
+    assert not cfg.is_bimanual
+    assert len(cfg.arms) == 1
+    assert cfg.arms[0].key_prefix == ""
+
+
+def test_bi_so107_follower_is_registered():
+    """SO-107 bimanual variants should be auto-registered with two arms."""
+    import lerobot.robots.so107_description  # noqa: F401
+
+    for name in ("bi_so107_follower", "bi_so107_follower_predictive"):
+        cfg = get_cartesian_ik_robot_config(name)
+        assert cfg is not None, f"{name} not registered"
+        assert cfg.is_bimanual
+        prefixes = sorted(a.key_prefix for a in cfg.arms)
+        assert prefixes == ["left_", "right_"]
+
+
+@pytest.mark.skipif(not _pin_pink_available, reason="pin-pink (optional) not installed")
+def test_pipeline_builds_for_bi_so107_follower():
+    """Bimanual pipeline has 8 steps (4 per arm) with prefixed key_prefix fields."""
+    import lerobot.robots.so107_description  # noqa: F401
+
+    fake_robot = SimpleNamespace(name="bi_so107_follower")
+    pipeline = make_cartesian_ik_pipeline(fake_robot)
+    assert pipeline is not None
+    assert len(pipeline.steps) == 8
+
+    # Inspect prefixes: first 4 steps are "left_", next 4 are "right_".
+    left_steps = pipeline.steps[:4]
+    right_steps = pipeline.steps[4:]
+    for s in left_steps:
+        assert s.key_prefix == "left_", f"{type(s).__name__} has prefix {s.key_prefix!r}"
+    for s in right_steps:
+        assert s.key_prefix == "right_", f"{type(s).__name__} has prefix {s.key_prefix!r}"
