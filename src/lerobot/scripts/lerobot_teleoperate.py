@@ -308,8 +308,13 @@ def _attach_commanded_joints_log(action_pipeline, robot) -> None:
     action_pipeline.steps.append(CommandedJointsLogStep(bimanual=bimanual))
 
 
-def _attach_urdf_viz(obs_pipeline, robot) -> None:
-    """Thin wrapper around the shared helper, scoped to the obs pipeline."""
+def _attach_urdf_viz_obs_stream(obs_stream_steps, robot) -> None:
+    """Wrapper that attaches the URDF viz step to the obs stream step list.
+
+    The teleop loop iterates obs_stream_steps explicitly every tick (line
+    ~210 in this file), independent of the display_data flag. Attaching
+    here is what makes the viz reflect the live robot state.
+    """
     try:
         from lerobot.robots.so107_description.urdf_viz import maybe_attach_urdf_viz
     except ImportError as e:
@@ -318,7 +323,7 @@ def _attach_urdf_viz(obs_pipeline, robot) -> None:
             f"({type(e).__name__}: {e}). Skipping; check pinocchio + meshcat are installed."
         )
         return
-    maybe_attach_urdf_viz(obs_pipeline.steps, robot, logging.getLogger())
+    maybe_attach_urdf_viz(obs_stream_steps, robot, logging.getLogger())
 
 
 @parser.wrap()
@@ -364,15 +369,8 @@ def teleoperate(cfg: TeleoperateConfig):
                 f"Falling back to identity pipeline; the robot will likely fail to apply the action."
             )
 
-    # URDF viz (state-based) is a side-effect step on the OBSERVATION
-    # pipeline, independent of teleop type. Works for any teleop / no
-    # teleop, since it reads <motor>.pos from the observation stream.
-    # The commanded-joints log step sits on the ACTION pipeline and
-    # periodically prints the post-IK joint targets — together they let
-    # you see both "what the IK is asking for" and "where the robot
-    # actually is" under one flag (useful for dry-run testing).
+    # Commanded-joints log on the action pipeline (post-IK targets at INFO).
     if cfg.display_urdf:
-        _attach_urdf_viz(robot_observation_processor, robot)
         _attach_commanded_joints_log(robot_action_processor, robot)
 
     # Add custom observation processor steps from the robot
@@ -391,6 +389,14 @@ def teleoperate(cfg: TeleoperateConfig):
     obs_stream_writer = make_obs_stream_writer_step()
     if obs_stream_writer is not None:
         obs_stream_steps.append(obs_stream_writer)
+
+    # URDF viz: state-based observation step that taps obs_stream_steps
+    # (which the teleop loop iterates every tick). Attaching to
+    # robot_observation_processor instead would only fire when
+    # --display_data=true, which GUI launches don't set — that's why
+    # an earlier wiring left the URDF stuck at zero pose.
+    if cfg.display_urdf:
+        _attach_urdf_viz_obs_stream(obs_stream_steps, robot)
 
     latency_session = LatencySession.from_config(
         enabled=cfg.latency_monitor,

@@ -336,7 +336,10 @@ def maybe_attach_urdf_viz(
         bimanual = False
 
     try:
-        viz = BimanualUrdfViz()
+        # open_browser=False: the GUI's iframe is the intended viewer.
+        # When run from the CLI without the GUI, the user can still open
+        # the URL manually from the log line below.
+        viz = BimanualUrdfViz(open_browser=False)
     except Exception as e:
         log.warning(f"display_urdf=True but viz construction failed: {type(e).__name__}: {e}")
         return None
