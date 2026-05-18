@@ -65,9 +65,10 @@ logger = logging.getLogger(__name__)
 # SO-107 setup so the scene looks proportional to reality.
 _BIMANUAL_X_OFFSET_M = 0.30
 
-# Motor names whose .pos values are URDF joint angles in degrees (excluding the
-# gripper, which has its own joint that isn't part of the 7-DOF chain the IK
-# solves over). Order matches the URDF joints S1..S7.
+# Motor names in URDF joint order. The SO-107 URDF has 7 revolute joints
+# (S1..S7) mapping 1:1 to these motors; the gripper IS a URDF joint, not a
+# trailing controller-only DOF, so it has to be included for pinocchio's
+# nq=7 configuration vector to validate.
 _SO107_ARM_MOTOR_NAMES = (
     "shoulder_pan",
     "shoulder_lift",
@@ -75,6 +76,7 @@ _SO107_ARM_MOTOR_NAMES = (
     "forearm_roll",
     "wrist_flex",
     "wrist_roll",
+    "gripper",
 )
 
 
@@ -198,6 +200,7 @@ class UrdfVizMirrorStep(ObservationProcessorStep):
     bimanual: bool = False
     unimanual_arm: str = "right"
     _arm_motor_names: tuple[str, ...] = field(default=_SO107_ARM_MOTOR_NAMES, init=False, repr=False)
+    _warned_arms: set[str] = field(default_factory=set, init=False, repr=False)
 
     def observation(self, observation: RobotObservation) -> RobotObservation:
         if self.bimanual:
@@ -219,8 +222,23 @@ class UrdfVizMirrorStep(ObservationProcessorStep):
         try:
             self.viz.set_arm_joints_deg(arm, np.asarray(joints_deg, dtype=float))
         except Exception as e:
-            # Viz errors must never break the run loop.
-            logger.debug(f"UrdfVizMirrorStep: viz update failed for {arm}: {e}")
+            # Viz errors must never break the run loop, but they shouldn't be
+            # totally silent either — DEBUG-only swallowing previously masked
+            # a complete render failure (wrong joint vector size) during a
+            # real-hardware replay. Warn ONCE per arm so the user knows the
+            # scene isn't tracking, then drop to DEBUG to avoid log spam at
+            # 30-200 Hz.
+            if arm not in self._warned_arms:
+                self._warned_arms.add(arm)
+                logger.warning(
+                    "UrdfVizMirrorStep: viz update failed for %s (%s). "
+                    "The MeshCat scene won't track this arm. Further errors "
+                    "for this arm logged at DEBUG.",
+                    arm,
+                    e,
+                )
+            else:
+                logger.debug("UrdfVizMirrorStep: viz update failed for %s: %s", arm, e)
 
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
@@ -280,9 +298,6 @@ class CommandedJointsLogStep(RobotActionProcessorStep):
             v = action.get(f"{prefix}{name}.pos")
             if v is not None:
                 parts.append(f"{name}={float(v):+.1f}")
-        gripper = action.get(f"{prefix}gripper.pos")
-        if gripper is not None:
-            parts.append(f"gripper={float(gripper):+.1f}")
         return " ".join(parts)
 
     def transform_features(
