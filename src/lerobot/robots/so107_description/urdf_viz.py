@@ -112,14 +112,18 @@ class BimanualUrdfViz:
         else:
             master.initViewer(open=open_browser)
 
-        # Right arm at +X, left arm at -X. Both use the SAME URDF; the offset
-        # is applied as a world-frame translation of each viz root so the two
-        # scenes share one view but don't overlap.
-        self._right_viz, self._right_model = self._add_arm(
-            master, urdf, package_dirs, root="right", base_xyz=(+_BIMANUAL_X_OFFSET_M, 0.0, 0.0)
-        )
+        # Place each arm so its position in the URDF scene matches what
+        # the user sees in the physical setup. "Left arm" in the user-
+        # operator's frame = on the user's left side of the scene; the
+        # scene's left side from the default camera position (looking
+        # from +X,-Y,+Z toward origin) is at world -X. Right symmetric.
+        # This was reversed in an earlier revision and showed up as the
+        # arms appearing swapped on first hardware testing.
         self._left_viz, self._left_model = self._add_arm(
             master, urdf, package_dirs, root="left", base_xyz=(-_BIMANUAL_X_OFFSET_M, 0.0, 0.0)
+        )
+        self._right_viz, self._right_model = self._add_arm(
+            master, urdf, package_dirs, root="right", base_xyz=(+_BIMANUAL_X_OFFSET_M, 0.0, 0.0)
         )
         self._master_viewer = master.viewer
 
