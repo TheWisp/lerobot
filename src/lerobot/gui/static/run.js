@@ -2051,9 +2051,15 @@ async function startObsStreamViewer() {
     grid = document.createElement('div');
     grid.className = 'obs-cam-grid';
     const cols = tileCount <= 2 ? tileCount : Math.min(tileCount, 3);
+    const rows = Math.max(1, Math.ceil(tileCount / cols));
+    // Explicit grid-template-rows is necessary so every cell gets the same
+    // height; without it grid-auto-rows: auto picks per-row content height,
+    // and the URDF iframe (browser default 300x150) ends up dominating its
+    // row while camera <img> cells collapse oddly.
     grid.style.cssText = `
         display: grid;
         grid-template-columns: repeat(${cols}, 1fr);
+        grid-template-rows: repeat(${rows}, 1fr);
         gap: 4px;
         width: 100%; height: 100%;
         padding: 4px;
