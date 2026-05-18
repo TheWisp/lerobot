@@ -15,14 +15,14 @@ IK methods:
     nn_dls - NN + DLS refinement (recommended default)
 
 Usage (offline / dry-run):
-    .venv/bin/python -m lerobot.robots.so107_description.trajectory_replay \\
+    .venv/bin/python -m lerobot.robots.so107_description.experimental.trajectory_replay \\
         --dataset thewisp/cylinder_ring_assembly_merged_raw \\
         --longest --arm right \\
         --ik-method nn_dls --model /tmp/so107_ik_model_big.pt \\
         --dry-run
 
 Usage (physical replay):
-    .venv/bin/python -m lerobot.robots.so107_description.trajectory_replay \\
+    .venv/bin/python -m lerobot.robots.so107_description.experimental.trajectory_replay \\
         --dataset thewisp/cylinder_ring_assembly_merged_raw \\
         --longest --arm right \\
         --ik-method nn_dls --model /tmp/so107_ik_model_big.pt \\

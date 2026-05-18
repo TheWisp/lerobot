@@ -48,19 +48,19 @@ Real-arm Cartesian teleop
 ```bash
 # 1a. Reserve the longest N episodes for eval (typical complete trajectories;
 #     better OOD signal than random sampling).
-.venv/bin/python -m lerobot.robots.so107_description.learned_ik.dataset_extractor \
+.venv/bin/python -m lerobot.robots.so107_description.experimental.learned_ik.dataset_extractor \
     --longest-n 3 --out /tmp/so107_ik_eval.npz
 
 # 1b. Extract everything else for training.
-.venv/bin/python -m lerobot.robots.so107_description.learned_ik.dataset_extractor \
+.venv/bin/python -m lerobot.robots.so107_description.experimental.learned_ik.dataset_extractor \
     --skip-longest-n 3 --out /tmp/so107_ik_train.npz
 
 # 2. Train (a few minutes on CPU, seconds on GPU).
-.venv/bin/python -m lerobot.robots.so107_description.learned_ik.train \
+.venv/bin/python -m lerobot.robots.so107_description.experimental.learned_ik.train \
     --data /tmp/so107_ik_train.npz --out /tmp/so107_ik_model.pt
 
 # 3. Eval on the longest-N reserved episodes (true held-out).
-.venv/bin/python -m lerobot.robots.so107_description.learned_ik.eval \
+.venv/bin/python -m lerobot.robots.so107_description.experimental.learned_ik.eval \
     --model /tmp/so107_ik_model.pt \
     --eval-data /tmp/so107_ik_eval.npz \
     --train-data /tmp/so107_ik_train.npz

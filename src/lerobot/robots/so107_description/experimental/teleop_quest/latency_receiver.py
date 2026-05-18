@@ -7,7 +7,7 @@ each XR frame's pose + timestamps. PC sends periodic pings; Quest echoes
 them; receiver computes RTT.
 
 Run:
-    .venv/bin/python -m lerobot.robots.so107_description.teleop_quest.latency_receiver
+    .venv/bin/python -m lerobot.robots.so107_description.experimental.teleop_quest.latency_receiver
 
 First-run will auto-generate a self-signed cert (./cert.pem, ./key.pem).
 Then on the Quest: open  https://<PC-IP>:8000/  in the headset browser,

@@ -8,7 +8,7 @@ Both quantities are normalized using their own mean/std computed on the
 training split.
 
 Usage:
-    .venv/bin/python -m lerobot.robots.so107_description.learned_ik.train \\
+    .venv/bin/python -m lerobot.robots.so107_description.experimental.learned_ik.train \\
         --data /tmp/so107_ik_train.npz \\
         --out /tmp/so107_ik_model.pt
 """

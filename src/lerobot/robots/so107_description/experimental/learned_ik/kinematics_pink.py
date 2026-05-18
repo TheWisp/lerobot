@@ -26,8 +26,8 @@ from pink import solve_ik
 from pink.tasks import FrameTask, PostureTask
 from pinocchio.robot_wrapper import RobotWrapper
 
-from .. import get_urdf_path
-from ..kinematics import (
+from ... import get_urdf_path
+from ...kinematics import (
     RIGHT_ARM_MAP,
     JointMap,
     So107Kinematics,

@@ -11,7 +11,7 @@ Reports four metrics:
        nearest training-set example? Out-of-distribution proxy.
 
 Usage:
-    .venv/bin/python -m lerobot.robots.so107_description.learned_ik.eval \\
+    .venv/bin/python -m lerobot.robots.so107_description.experimental.learned_ik.eval \\
         --model /tmp/so107_ik_model.pt \\
         --train-data /tmp/so107_ik_train.npz \\
         --eval-data /tmp/so107_ik_eval.npz   # different dataset for OOD test
@@ -29,7 +29,7 @@ import torch
 
 warnings.filterwarnings("ignore")
 
-from ..kinematics import MOTOR_NAMES, RIGHT_ARM_MAP, So107Kinematics  # noqa: E402
+from ...kinematics import MOTOR_NAMES, RIGHT_ARM_MAP, So107Kinematics  # noqa: E402
 from .kinematics_nn import So107NNKinematics  # noqa: E402
 from .model import IKMLP, IKModelConfig  # noqa: E402
 

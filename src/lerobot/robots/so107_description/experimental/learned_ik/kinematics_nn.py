@@ -19,8 +19,8 @@ import numpy as np
 import pinocchio as pin
 import torch
 
-from .. import get_urdf_path
-from ..kinematics import (
+from ... import get_urdf_path
+from ...kinematics import (
     MOTOR_NAMES,
     RIGHT_ARM_MAP,
     JointMap,

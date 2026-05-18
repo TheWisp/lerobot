@@ -23,8 +23,8 @@ hookup is a separate step).
    `sudo ufw allow 8443/tcp`.
 4. Train the IK model (or copy a pre-trained one to `/tmp/so107_ik_model_action.pt`):
    ```bash
-   .venv/bin/python -m lerobot.robots.so107_description.learned_ik.dataset_extractor
-   .venv/bin/python -m lerobot.robots.so107_description.learned_ik.train \
+   .venv/bin/python -m lerobot.robots.so107_description.experimental.learned_ik.dataset_extractor
+   .venv/bin/python -m lerobot.robots.so107_description.experimental.learned_ik.train \
        --data /tmp/so107_ik_train.npz --out /tmp/so107_ik_model_action.pt --hidden 256,256,256
    ```
 5. Quest 3 setup:
@@ -47,7 +47,7 @@ if deleted; never commit them.
 ### Latency probe (network sanity check, no robot, no sim)
 
 ```bash
-.venv/bin/python -m lerobot.robots.so107_description.teleop_quest.latency_receiver
+.venv/bin/python -m lerobot.robots.so107_description.experimental.teleop_quest.latency_receiver
 ```
 
 - Prints URL like `https://192.168.x.x:8443/`.
@@ -60,7 +60,7 @@ if deleted; never commit them.
 ### Sim teleop (rendered arm in rerun, no physical robot)
 
 ```bash
-.venv/bin/python -m lerobot.robots.so107_description.teleop_quest.sim_receiver
+.venv/bin/python -m lerobot.robots.so107_description.experimental.teleop_quest.sim_receiver
 ```
 
 - Same Quest flow (URL → Connect → Enter VR).

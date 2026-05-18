@@ -14,7 +14,7 @@ Naive scaling: 1cm controller motion = 1cm robot motion. Axes:
     robot_z =  quest_y   (Quest up      = robot up)
 
 Run:
-    .venv/bin/python -m lerobot.robots.so107_description.teleop_quest.sim_receiver
+    .venv/bin/python -m lerobot.robots.so107_description.experimental.teleop_quest.sim_receiver
 On Quest, open https://<PC-IP>:8443/, Connect → Enter VR.
 The rerun viewer opens on the PC.
 """
@@ -36,8 +36,8 @@ import rerun as rr
 from aiohttp import WSMsgType, web
 from scipy.spatial.transform import Rotation as Rot
 
-from .. import get_urdf_path
-from ..kinematics import (
+from ... import get_urdf_path
+from ...kinematics import (
     MOTOR_NAMES,
     RIGHT_ARM_MAP,
     motor_pos_to_urdf_q,

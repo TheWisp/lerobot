@@ -16,7 +16,7 @@ Training-pair construction:
     so a single network can learn both.
 
 Usage:
-    .venv/bin/python -m lerobot.robots.so107_description.learned_ik.dataset_extractor \\
+    .venv/bin/python -m lerobot.robots.so107_description.experimental.learned_ik.dataset_extractor \\
         --dataset thewisp/cylinder_ring_assembly_merged_raw \\
         --out /tmp/so107_ik_train.npz \\
         --max-episodes 100  # optional cap
@@ -34,7 +34,7 @@ import numpy as np
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-from ..kinematics import (
+from ...kinematics import (
     MOTOR_NAMES,
     RIGHT_ARM_MAP,
     So107Kinematics,
