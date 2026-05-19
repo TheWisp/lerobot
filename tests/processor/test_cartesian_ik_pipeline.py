@@ -282,3 +282,68 @@ def test_world_yaw_180_rotates_delta_into_arm_frame():
     assert out_180["ee.x"] == pytest.approx(base_x - 0.05, abs=1e-9)
     # Y unchanged in both cases since the input delta has no Y component.
     assert out_0["ee.y"] == pytest.approx(out_180["ee.y"], abs=1e-9)
+
+
+@pytest.mark.skipif(not _pin_pink_available, reason="pin-pink (optional) not installed")
+def test_bimanual_cartesian_ik_adapter_produces_joint_actions():
+    """End-to-end: bimanual cartesian teleop -> adapter -> per-arm joint dicts.
+
+    Regression guard for the adapter's pipeline-call contract. The pipeline
+    expects ``((action, obs))`` (tuple), not a TransitionKey-keyed dict.
+    A wrong call shape silently spins exceptions and produces no output.
+    """
+    import time
+
+    import lerobot.robots.so107_description  # noqa: F401
+    from lerobot.robots.predictive.cartesian_adapter import BimanualCartesianIKAdapter
+
+    fake_robot = SimpleNamespace(name="bi_so107_follower")
+    pipeline = make_cartesian_ik_pipeline(fake_robot)
+    assert pipeline is not None
+
+    motors = (
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "forearm_roll",
+        "wrist_flex",
+        "wrist_roll",
+        "gripper",
+    )
+    obs = {f"{p}{m}.pos": 0.0 for p in ("left_", "right_") for m in motors}
+
+    cart_keys = (
+        "enabled",
+        "target_x",
+        "target_y",
+        "target_z",
+        "target_wx",
+        "target_wy",
+        "target_wz",
+        "gripper_pos",
+    )
+    cart = {f"{p}{k}": 0.0 for p in ("left_", "right_") for k in cart_keys}
+    for p in ("left_", "right_"):
+        cart[f"{p}gripper_pos"] = 50.0
+
+    class _ObsSource:
+        @property
+        def last_observation_for_ik(self) -> dict:
+            return obs
+
+    class _Teleop:
+        def get_action(self) -> dict:
+            return cart
+
+    adapter = BimanualCartesianIKAdapter(_Teleop(), pipeline, _ObsSource(), rate_hz=60.0)
+    adapter.start()
+    # 100 ms is plenty at 60 Hz to land several ticks even on a slow CI host.
+    time.sleep(0.1)
+    left = adapter.left_arm.get_action()
+    right = adapter.right_arm.get_action()
+    adapter.stop()
+
+    assert adapter._n_ticks > 0, "adapter never produced an output — pipeline call probably wrong shape"
+    expected = {f"{m}.pos" for m in motors}
+    assert set(left.keys()) == expected
+    assert set(right.keys()) == expected

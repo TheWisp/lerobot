@@ -427,10 +427,11 @@ def record_loop(
     ],  # runs after teleop
     robot_action_processor: RobotProcessorPipeline[
         tuple[RobotAction, RobotObservation], RobotAction
-    ],  # runs before robot
+    ],  # runs before robot — used for the POLICY path only (legacy; will be migrated)
     robot_observation_processor: RobotProcessorPipeline[
         RobotObservation, RobotObservation
     ],  # runs after robot
+    motor_binding=None,  # MotorActionBinding | None — present when teleop is bound
     dataset: LeRobotDataset | None = None,
     intervention_dataset: LeRobotDataset | None = None,
     teleop: Teleoperator | list[Teleoperator] | None = None,
@@ -773,7 +774,14 @@ def record_loop(
             act = teleop.get_action()
             act_processed_teleop = teleop_action_processor((act, obs))
             action_values = act_processed_teleop
-            robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
+            # Robot's motor-space conversion comes from the binding when
+            # available (handles Cartesian IK adapter, joint passthrough,
+            # etc.); fall back to the legacy script-side processor only
+            # if no binding was set up (older robots).
+            if motor_binding is not None:
+                robot_action_to_send = motor_binding.get_action(obs)
+            else:
+                robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
 
             # Record to intervention dataset (correction data)
             if intervention_dataset is not None:
@@ -791,7 +799,10 @@ def record_loop(
             # Applies a pipeline to the raw teleop action, default is IdentityProcessor
             act_processed_teleop = teleop_action_processor((act, obs))
             action_values = act_processed_teleop
-            robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
+            if motor_binding is not None:
+                robot_action_to_send = motor_binding.get_action(obs)
+            else:
+                robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
 
         elif policy is None and isinstance(teleop, list):
             arm_action = teleop_arm.get_action()
@@ -801,6 +812,10 @@ def record_loop(
             act = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
             act_processed_teleop = teleop_action_processor((act, obs))
             action_values = act_processed_teleop
+            # Composite teleop (arm + keyboard) doesn't have a single
+            # Teleoperator to bind, so it stays on the legacy script-side
+            # processor path. Migrating composite teleop to bind_teleop
+            # is a separate task — it'd need a CompositeTeleop wrapper.
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
         else:
             no_action_count += 1
@@ -818,24 +833,32 @@ def record_loop(
         # dropped (next start_iter() resets), which is the right behavior.
         latency_session.add_span("process_action", process_action_t0)
 
-        # Send action to robot
+        # Send action to robot. Two independent paths can publish:
+        #   1. Action chunks (chunk-aware teleops like TrajectoryReplayTeleop,
+        #      or policies emitting horizon). The predictive controller's
+        #      exact-lookup uses chunks even under pull-path, so they're
+        #      always sent.
+        #   2. Per-tick dict. Skipped when the robot's controller is in
+        #      pull-path mode (binding.pull_path_active=True) because the
+        #      controller polls its bound teleop directly at control rate
+        #      and writes motors itself; calling send_action with the dict
+        #      would just set an intent the controller would ignore.
         # Action can eventually be clipped using `max_relative_target`,
-        # so action actually sent is saved in the dataset. action = postprocessor.process(action)
+        # so action actually sent is saved in the dataset.
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
-        # Chunk-aware path: if the teleop publishes a future horizon, the
-        # chunk goes to the robot verbatim so chunk-aware robots can do
-        # exact-lookup motor-τ compensation. The dict-shaped
-        # robot_action_to_send is the back-compat fallback (and the
-        # already-recorded action_values matches its frames[0] by contract).
-        # Only applies when teleop is a single Teleoperator (the policy /
-        # composite-teleop branches don't have a teleop instance to query).
         action_to_send = robot_action_to_send
+        chunk = None
         if isinstance(teleop, Teleoperator):
-            horizon = teleop.get_action_with_horizon()
-            if horizon is not None:
-                action_to_send = horizon
+            chunk = teleop.get_action_with_horizon()
+            if chunk is not None:
+                action_to_send = chunk
         with latency_session.span("action_send"):
-            _sent_action = robot.send_action(action_to_send)
+            if chunk is not None:
+                _sent_action = robot.send_action(chunk)
+            elif motor_binding is not None and motor_binding.pull_path_active:
+                _sent_action = action_to_send  # controller drives motors itself
+            else:
+                _sent_action = robot.send_action(action_to_send)
 
         # Write to dataset (only on real policy frames, not interpolated-only iterations)
         if dataset is not None and is_record_frame:
@@ -1057,12 +1080,24 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 logging.info(f"Action interpolation enabled: {cfg.interpolation_multiplier}x control rate")
 
         robot.connect()
+        motor_binding = None
         if teleop is not None:
             teleop.connect()
-            # Predictive / chunk-aware robots can poll teleop.get_action()
-            # at their own control rate. Default no-op for plain robots.
-            # See SO107FollowerPredictive.attach_teleop for details.
-            robot.attach_teleop(teleop)
+            # Bind teleop to robot. The returned MotorActionBinding tells
+            # the loop (a) how to get the motor-space action each tick
+            # and (b) whether the robot's controller is in pull-path mode
+            # (so we should skip the redundant dict send_action). Default
+            # implementation is just a passthrough+attach_teleop wrapper;
+            # robots with IK adapters override to wrap the Cartesian
+            # teleop transparently. Bimanual composite teleops (list)
+            # aren't bound here — they stay on the legacy path inside
+            # record_loop.
+            if isinstance(teleop, Teleoperator):
+                motor_binding = robot.bind_teleop(teleop)
+            else:
+                # list teleop (composite arm + keyboard). Legacy: wire
+                # via attach_teleop directly; no binding.
+                robot.attach_teleop(teleop)
 
         listener, events = init_keyboard_listener()
 
@@ -1126,6 +1161,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 teleop_action_processor=teleop_action_processor,
                 robot_action_processor=robot_action_processor,
                 robot_observation_processor=robot_observation_processor,
+                motor_binding=motor_binding,
                 teleop=teleop,
                 control_time_s=cfg.dataset.reset_time_s,
                 single_task=cfg.dataset.single_task,
@@ -1160,6 +1196,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         teleop_action_processor=teleop_action_processor,
                         robot_action_processor=robot_action_processor,
                         robot_observation_processor=robot_observation_processor,
+                        motor_binding=motor_binding,
                         teleop=teleop,
                         policy=policy,
                         preprocessor=preprocessor,
@@ -1261,6 +1298,14 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             intervention_dataset.finalize()
             logging.info(f"Intervention dataset contains {intervention_dataset.num_episodes} episodes")
 
+        # Detach the teleop BEFORE disconnecting it. On predictive robots,
+        # the 200Hz controller thread is polling teleop.get_action(); a
+        # bare disconnect would race with the next poll and log a noisy
+        # DeviceNotConnectedError. Also stops any internal adapter the
+        # robot may have built (Cartesian IK adapter on bi_so107
+        # follower predictive).
+        if teleop is not None:
+            robot.attach_teleop(None)
         if robot.is_connected:
             robot.disconnect()
         if teleop and teleop.is_connected:

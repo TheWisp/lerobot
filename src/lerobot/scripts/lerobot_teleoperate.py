@@ -57,13 +57,13 @@ import logging
 import time
 from dataclasses import asdict, dataclass
 from pprint import pformat
+from typing import Any
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
 from lerobot.cameras.zmq import ZMQCameraConfig  # noqa: F401
 from lerobot.configs import parser
 from lerobot.processor import (
-    RobotAction,
     RobotObservation,
     RobotProcessorPipeline,
     make_default_processors,
@@ -160,8 +160,7 @@ def teleop_loop(
     teleop: Teleoperator,
     robot: Robot,
     fps: int,
-    teleop_action_processor: RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction],
-    robot_action_processor: RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction],
+    motor_binding,  # MotorActionBinding; forward-ref to avoid a top-level import cycle
     robot_observation_processor: RobotProcessorPipeline[RobotObservation, RobotObservation],
     display_data: bool = False,
     duration: float | None = None,
@@ -169,6 +168,7 @@ def teleop_loop(
     obs_stream_steps: list | None = None,
     latency_session: LatencySession | None = None,
     motion_logger: MotionLogger | None = None,
+    commanded_joints_log: Any | None = None,
 ):
     """
     This function continuously reads actions from a teleoperation device, processes them through optional
@@ -221,41 +221,36 @@ def teleop_loop(
                 teleop.send_feedback(obs)
 
             with latency_session.span("process_action"):
-                # Get teleop action
-                raw_action = teleop.get_action()
-                # Process teleop action through pipeline
-                teleop_action = teleop_action_processor((raw_action, obs))
-                # Process action for robot through pipeline
-                robot_action_to_send = robot_action_processor((teleop_action, obs))
-                # Chunk-aware path: if the teleop publishes an upcoming
-                # horizon, route the chunk to the robot so chunk-aware
-                # robots (SO107FollowerPredictive et al.) can perform
-                # exact-lookup lookahead at now + L instead of velocity
-                # extrapolation. The processor pipeline is dict-only by
-                # design (its converters validate isinstance(action, dict)),
-                # so chunks bypass it — frames[0] is what the dict path
-                # would have produced for "now" and the controller treats
-                # the chunk's later frames as the authoritative future.
-                # robot_action_to_send (the post-pipeline dict) is still
-                # used for the display block below so per-tick UX is
-                # unaffected.
-                action_to_send = teleop.get_action_with_horizon() or robot_action_to_send
+                # Ask the robot for the motor-space action this tick. The
+                # binding hides the conversion mechanism: it might be a
+                # passthrough from a joint-space leader, the output of a
+                # script-side IK pipeline (push path), or a read from the
+                # robot's internal adapter cache (pull path). Either way,
+                # ``joints`` is what we record / log / optionally send.
+                joints = motor_binding.get_action(obs)
 
-            # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
+            # Send to motors. Two independent paths can publish:
+            #   1. Action chunks (e.g. TrajectoryReplayTeleop, policy with
+            #      horizon output). Chunks are honored even under pull-path
+            #      because the predictive controller's exact-lookup uses
+            #      them.
+            #   2. Per-tick dict. Skipped when ``pull_path_active`` is True
+            #      because the robot's own controller polls its teleop
+            #      directly at control-rate and writes to motors itself;
+            #      a redundant ``send_action`` would just set an intent
+            #      the controller would ignore.
             with latency_session.span("action_send"):
-                _ = robot.send_action(action_to_send)
+                chunk = teleop.get_action_with_horizon()
+                if chunk is not None:
+                    _ = robot.send_action(chunk)
+                elif not motor_binding.pull_path_active:
+                    _ = robot.send_action(joints)
 
-            # Per-tick motion logging (intent + state). No-op when disabled.
-            # Use the POST-pipeline dict (``robot_action_to_send``) as intent
-            # so the trace works for any teleop type — leader arms (raw
-            # action == joint commands, pipeline is identity), Cartesian
-            # teleops (raw action == target_x/y/z, pipeline runs IK to
-            # produce <motor>.pos), and bimanual variants (post-pipeline
-            # carries left_<motor>.pos + right_<motor>.pos, matching the
-            # bimanual observation's key prefix). MotionLogger filters to
-            # .pos keys so non-position obs (cameras) are silently skipped.
+            # Per-tick motion logging (intent + state). MotionLogger
+            # filters to .pos keys so non-position obs (cameras) are
+            # silently skipped.
             if motion_logger is not None:
-                motion_logger.tick(robot_action_to_send, obs)
+                motion_logger.tick(joints, obs)
 
             # End-of-tick marker for the verbose IK debug log. No-op when
             # the recorder isn't installed.
@@ -265,19 +260,25 @@ def teleop_loop(
             if _ik_rec is not None:
                 _ik_rec.tick_done()
 
+            # Periodic commanded-joints log line. Debug-only; called here
+            # so it runs regardless of which conversion path produced
+            # ``joints``.
+            if commanded_joints_log is not None and joints:
+                commanded_joints_log.action(dict(joints))
+
             if display_data:
                 log_rerun_data(
                     observation=robot_observation_processor(obs),
-                    action=teleop_action,
+                    action=joints,
                     compress_images=display_compressed_images,
                 )
 
                 print("\n" + "-" * (display_len + 10))
                 print(f"{'NAME':<{display_len}} | {'NORM':>7}")
                 # Display the final robot action that was sent
-                for motor, value in robot_action_to_send.items():
+                for motor, value in joints.items():
                     print(f"{motor:<{display_len}} | {value:>7.2f}")
-                move_cursor_up(len(robot_action_to_send) + 3)
+                move_cursor_up(len(joints) + 3)
             # iteration() commits BEFORE precise_sleep so loop_dt_ms reflects
             # iteration *work* time, not work + sleep. Otherwise overrun
             # fires every iteration — precise_sleep slightly overshoots
@@ -303,23 +304,25 @@ def teleop_loop(
             return
 
 
-def _attach_commanded_joints_log(action_pipeline, robot) -> None:
-    """Append a CommandedJointsLogStep to the action pipeline.
+def _make_commanded_joints_log(robot) -> Any | None:
+    """Return a :class:`CommandedJointsLogStep` configured for ``robot``, or None.
 
     Throttled INFO logs of post-IK joint commands so users can grep the
-    file log to see what the teleop -> IK chain is producing. No-op on
-    the action stream itself.
+    file log to see what the teleop -> IK chain is producing. The teleop
+    loop calls this step's ``action()`` directly on the per-tick joints
+    — no longer attached to a pipeline since the pipeline-in-script
+    construct is gone. None if the SO107 viz module isn't available.
     """
     try:
         from lerobot.robots.so107_description.urdf_viz import CommandedJointsLogStep
     except ImportError:
-        return
+        return None
     try:
         obs_features = robot.observation_features
         bimanual = any(k.startswith("left_") and k.endswith(".pos") for k in obs_features)
     except Exception:
         bimanual = False
-    action_pipeline.steps.append(CommandedJointsLogStep(bimanual=bimanual))
+    return CommandedJointsLogStep(bimanual=bimanual)
 
 
 def _attach_urdf_viz_obs_stream(obs_stream_steps, robot) -> None:
@@ -355,37 +358,14 @@ def teleoperate(cfg: TeleoperateConfig):
 
     teleop = make_teleoperator_from_config(cfg.teleop)
     robot = make_robot_from_config(cfg.robot)
-    teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
+    _, _, robot_observation_processor = make_default_processors()
 
-    # Auto-compose the Cartesian-IK pipeline when the teleop emits EE-delta
-    # actions (quest_vr, keyboard_ee, phone, ...) and the robot has a
-    # registered Cartesian config. Robots register their config at import
-    # time via lerobot.processor.cartesian_ik_pipeline.register_cartesian_ik_robot.
-    # Falls back to identity (with a clear log) when no config is available
-    # — useful for joint-mode teleops, which don't need the IK chain.
-    from lerobot.processor.cartesian_ik_pipeline import (
-        is_cartesian_teleop,
-        make_cartesian_ik_pipeline,
-    )
-
-    if is_cartesian_teleop(teleop):
-        cartesian_pipeline = make_cartesian_ik_pipeline(robot)
-        if cartesian_pipeline is not None:
-            robot_action_processor = cartesian_pipeline
-            logging.info(
-                f"Auto-composed Cartesian IK pipeline for teleop={cfg.teleop.type} -> robot={cfg.robot.type}"
-            )
-        else:
-            logging.warning(
-                f"teleop {cfg.teleop.type!r} emits Cartesian actions but "
-                f"robot {cfg.robot.type!r} has no registered Cartesian IK config "
-                f"(see lerobot.processor.cartesian_ik_pipeline.register_cartesian_ik_robot). "
-                f"Falling back to identity pipeline; the robot will likely fail to apply the action."
-            )
-
-    # Commanded-joints log on the action pipeline (post-IK targets at INFO).
-    if cfg.display_urdf:
-        _attach_commanded_joints_log(robot_action_processor, robot)
+    # Periodic commanded-joints log line (post-IK joints, INFO every ~1s).
+    # Called explicitly in the teleop_loop on the per-tick joint dict so
+    # it works the same regardless of whether the joints came from a
+    # passthrough leader, a script-side pipeline, or a robot-owned
+    # adapter cache. None when display_urdf is off.
+    commanded_joints_log = _make_commanded_joints_log(robot) if cfg.display_urdf else None
 
     # Add custom observation processor steps from the robot
     custom_steps = robot.get_observation_processor_steps()
@@ -442,15 +422,12 @@ def teleoperate(cfg: TeleoperateConfig):
     teleop.connect()
     robot.connect()
 
-    # Chunk-aware / predictive robots can poll the teleop directly at
-    # their own control rate (e.g. 200 Hz) instead of waiting for
-    # send_action pushes from the 30 Hz loop. Default Robot.attach_teleop
-    # is a no-op for non-predictive robots, so this is unconditionally
-    # safe to call. The loop's send_action path still runs for dataset
-    # recording — when the teleop is bound, send_action's intent is
-    # ignored by the controller, but the dict return value is still
-    # what the dataset writer records.
-    robot.attach_teleop(teleop)
+    # Bind teleop to robot. The robot returns a MotorActionBinding that
+    # the loop uses to (a) get the motor-space action per tick and (b)
+    # decide whether to call send_action(joints) — see the binding's
+    # docstring. ``bind_teleop`` also handles any controller-side wiring
+    # (calls attach_teleop internally) so the script doesn't need to.
+    motor_binding = robot.bind_teleop(teleop)
 
     try:
         teleop_loop(
@@ -459,13 +436,13 @@ def teleoperate(cfg: TeleoperateConfig):
             fps=cfg.fps,
             display_data=cfg.display_data,
             duration=cfg.teleop_time_s,
-            teleop_action_processor=teleop_action_processor,
-            robot_action_processor=robot_action_processor,
+            motor_binding=motor_binding,
             robot_observation_processor=robot_observation_processor,
             display_compressed_images=display_compressed_images,
             obs_stream_steps=obs_stream_steps,
             latency_session=latency_session,
             motion_logger=motion_logger,
+            commanded_joints_log=commanded_joints_log,
         )
     except KeyboardInterrupt:
         pass

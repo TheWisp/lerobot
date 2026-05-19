@@ -120,6 +120,22 @@ class BiSO107FollowerPredictive(BiSO107Follower):
         self.left_arm = SO107FollowerPredictive(left_arm_config)
         self.right_arm = SO107FollowerPredictive(right_arm_config)
 
+        # Cartesian → joint-space adapter (lazy). Created on attach_teleop
+        # when a Cartesian teleop (Quest VR) is bound. The adapter owns a
+        # background thread that runs THIS robot's registered IK pipeline
+        # at WebXR-frame rate and exposes joint-space sub-teleops to each
+        # per-arm controller's pull path — same contract as a high-rate
+        # leader. Embodiment (URDF, joint_map) lives in the registry, not
+        # in the teleop.
+        self._cart_adapter = None
+        # Last motor observation, cached for the IK adapter to read.
+        # Updated by ``get_observation``; the adapter polls this from its
+        # own thread.
+        self._last_observation_for_ik: dict[str, float] | None = None
+        # ``self._cartesian_ik_pipeline`` is set by BiSO107Follower.__init__
+        # (parent) — pre-built so URDF+mesh parse doesn't race with the
+        # RealSense warmup window.
+
         # Cameras + RealSense depth-edge post-grab processor installation —
         # identical to BiSO107Follower.__init__. Kept inline rather than
         # extracted into a helper because changing it would require also
@@ -142,31 +158,174 @@ class BiSO107FollowerPredictive(BiSO107Follower):
                     max_depth=0.6,
                 )
 
+    def get_observation(self) -> dict[str, Any]:
+        """Read observation and cache motor positions for the IK adapter.
+
+        The IK adapter (if active) reads this cache from its own thread —
+        no separate bus reads, no contention with the main loop. The
+        adapter sees observations at the main loop's cadence (~30 Hz),
+        which is plenty fresh for engage-time FK.
+
+        Also: if a Cartesian IK adapter was constructed in attach_teleop
+        but not yet started (lazy-start to avoid starving RealSense's
+        background read thread during camera warm-up), kick it off here.
+        By the time the main loop is calling get_observation, all cameras
+        have had a chance to start producing frames steadily.
+        """
+        obs = super().get_observation()
+        self._last_observation_for_ik = {
+            k: float(v) for k, v in obs.items() if isinstance(k, str) and k.endswith(".pos")
+        }
+        if self._cart_adapter is not None and not self._cart_adapter.is_running:
+            self._cart_adapter.start()
+        return obs
+
+    @property
+    def last_observation_for_ik(self) -> dict[str, float] | None:
+        """For :class:`BimanualCartesianIKAdapter` to consume."""
+        return self._last_observation_for_ik
+
+    def bind_teleop(self, teleop):
+        """Bind ``teleop`` and return the right :class:`MotorActionBinding`.
+
+        Three cases:
+
+        1. **Cartesian bimanual teleop** (Quest VR, etc.): :meth:`attach_teleop`
+           builds the Cartesian→joint adapter and wires it to the
+           per-arm controllers' pull paths. The binding reads joint
+           output from the adapter cache and reports ``pull_path_active=True``.
+
+        2. **Joint-space bimanual leader** (BiSO107Leader / BiSO107LeaderHighRate):
+           per-arm controllers poll the leader directly. The binding
+           polls the leader and returns the merged prefixed joint dict;
+           ``pull_path_active=True``.
+
+        3. **Anything else** (chunk-aware sources without ``.left_arm``/
+           ``.right_arm`` sub-teleops, falls back to the legacy push
+           path via ``send_action``): binding polls teleop and returns
+           output as-is; ``pull_path_active=False``.
+        """
+        from lerobot.processor.cartesian_ik_pipeline import is_cartesian_teleop
+        from lerobot.robots.motor_action_binding import (
+            MotorActionBinding,
+            make_adapter_binding,
+            make_direct_binding,
+        )
+
+        self.attach_teleop(teleop)  # creates self._cart_adapter when Cartesian
+
+        if self._cart_adapter is not None:
+            return make_adapter_binding(self._cart_adapter)
+
+        if is_cartesian_teleop(teleop):
+            # Cartesian teleop but no adapter was created (e.g., no IK
+            # pipeline registered). The loop has no good way to convert
+            # without it; fall through to push-path so the existing
+            # script-side machinery — if any — still runs.
+            return make_direct_binding(teleop, pull_path_active=False)
+
+        if hasattr(teleop, "left_arm") and hasattr(teleop, "right_arm"):
+            # Bimanual joint-space leader. Each per-arm controller is
+            # polling its own sub-teleop (set up by attach_teleop). For
+            # the loop driver's recording need we return the merged
+            # prefixed action dict from both sub-teleops.
+            return MotorActionBinding(
+                get_action=lambda _obs: {
+                    **{f"left_{k}": v for k, v in teleop.left_arm.get_action().items()},
+                    **{f"right_{k}": v for k, v in teleop.right_arm.get_action().items()},
+                },
+                pull_path_active=True,
+            )
+
+        # Non-bimanual / chunk-aware source: use the legacy push-path
+        # (send_action drives motors via the loop driver).
+        return make_direct_binding(teleop, pull_path_active=False)
+
     def attach_teleop(self, teleop) -> None:
         """Route per-arm teleop bindings to each predictive arm.
 
-        Expects a bimanual leader teleop with ``left_arm`` / ``right_arm``
-        sub-teleop attributes (BiSO107Leader / BiSO107LeaderHighRate both
-        expose this). Each predictive arm's controller polls its own
-        arm's teleop directly — no cross-arm coordination, no shared
-        cache. The two controllers operate independently at their own
-        rates against independent bus reads.
+        Two-mode operation:
 
-        ``None`` detaches both arms.
+        1. **Joint-space bimanual leader** (BiSO107Leader,
+           BiSO107LeaderHighRate): teleop exposes ``.left_arm`` /
+           ``.right_arm`` sub-teleops returning unprefixed joint dicts.
+           Each per-arm controller polls its own sub-teleop directly.
+
+        2. **Cartesian bimanual teleop** (BimanualQuestVRTeleop): teleop
+           returns a unified prefixed Cartesian dict. We wrap it in a
+           :class:`BimanualCartesianIKAdapter` which runs THIS robot's
+           registered IK pipeline at WebXR-frame rate (90 Hz) in a
+           background thread and exposes ``.left_arm`` / ``.right_arm``
+           sub-teleops returning unprefixed joint dicts — same contract
+           as case (1). The adapter caches; both per-arm controllers
+           poll the cache lock-free at 200 Hz. The teleop never learns
+           anything about embodiment.
+
+        ``None`` detaches both arms (and stops the adapter if running).
         """
+        # Always tear down any prior adapter first; covers both detach
+        # and the rare re-attach with a different teleop type.
+        if self._cart_adapter is not None:
+            self._cart_adapter.stop()
+            self._cart_adapter = None
+
         if teleop is None:
             self.left_arm.attach_teleop(None)
             self.right_arm.attach_teleop(None)
             return
-        if not hasattr(teleop, "left_arm") or not hasattr(teleop, "right_arm"):
-            # Not a bimanual leader — likely a chunk-aware source like
-            # TrajectoryReplayTeleop. The dict-pull path doesn't apply
-            # (we'd silently feed the same dict to both arms). Skip the
-            # attach and let the send_action chunk path handle routing.
-            # Logged at INFO so it's visible without being alarming.
+
+        # Cartesian teleop → wrap with IK adapter.
+        from lerobot.processor.cartesian_ik_pipeline import (
+            is_cartesian_teleop,
+            make_cartesian_ik_pipeline,
+        )
+
+        from ..predictive.cartesian_adapter import BimanualCartesianIKAdapter
+
+        if is_cartesian_teleop(teleop):
+            # Reuse the pipeline pre-built in __init__ to avoid the
+            # URDF+mesh parse racing with RealSense's warmup. Fall back
+            # to a fresh build only if the pre-build failed.
+            pipeline = self._cartesian_ik_pipeline or make_cartesian_ik_pipeline(self)
+            if pipeline is None:
+                logger.warning(
+                    "%s: Cartesian teleop %r attached but no IK pipeline registered "
+                    "for this robot — pull path inactive, send_action path will be used",
+                    self,
+                    type(teleop).__name__,
+                )
+                return
+            self._cart_adapter = BimanualCartesianIKAdapter(
+                teleop=teleop,
+                pipeline=pipeline,
+                observation_source=self,
+            )
+            # Don't start the IK thread yet — defer to the first
+            # ``get_observation()`` call. Starting it now races against
+            # RealSense's background read thread coming up after camera
+            # connect, and we've observed that race starving the camera
+            # below its 500 ms freshness window. By the time the main
+            # loop is polling observations, cameras are stable.
+            self.left_arm.attach_teleop(self._cart_adapter.left_arm)
+            self.right_arm.attach_teleop(self._cart_adapter.right_arm)
             logger.info(
-                "%s: teleop %r is not bimanual (no left_arm/right_arm) — "
-                "skipping pull-path attach; send_action chunk path will be used",
+                "%s: Cartesian teleop %r bound via IK adapter "
+                "(will start on first observation; 90 Hz IK -> 200 Hz controllers)",
+                self,
+                type(teleop).__name__,
+            )
+            return
+
+        if not hasattr(teleop, "left_arm") or not hasattr(teleop, "right_arm"):
+            # Not a bimanual leader and not Cartesian — likely a
+            # chunk-aware source like TrajectoryReplayTeleop. The
+            # dict-pull path doesn't apply (we'd silently feed the same
+            # dict to both arms). Skip the attach and let the
+            # send_action chunk path handle routing.
+            logger.info(
+                "%s: teleop %r is not bimanual (no left_arm/right_arm) and not "
+                "Cartesian — skipping pull-path attach; send_action chunk path "
+                "will be used",
                 self,
                 type(teleop).__name__,
             )

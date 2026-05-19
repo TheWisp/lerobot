@@ -15,7 +15,10 @@
 import abc
 import builtins
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from lerobot.robots.motor_action_binding import MotorActionBinding
 
 import draccus
 
@@ -246,6 +249,29 @@ class Robot(abc.ABC):
         # override this method. The runtime-attribute typing avoids a
         # circular import between Robot and Teleoperator.
         return
+
+    def bind_teleop(self, teleop: Any) -> "MotorActionBinding":
+        """Bind ``teleop`` to this robot and return a per-tick action source.
+
+        The loop driver uses the returned :class:`MotorActionBinding` to:
+          * call ``binding.get_action(obs)`` each tick for the motor-space
+            joint dict (for recording / display / send_action), and
+          * decide whether to call ``send_action(joints)`` to drive motors
+            (when ``pull_path_active`` is False) or skip it (when the
+            robot's own controller is driving motors via pull-path).
+
+        Default: assume ``teleop`` already emits motor-space joint dicts
+        and that this robot's ``send_action`` writes to motors directly
+        (push path). Robots that need conversion (Cartesian IK) or that
+        run an internal controller (predictive variants) override this.
+
+        Default also calls ``attach_teleop(teleop)`` for any
+        controller-side wiring (no-op in the base).
+        """
+        from lerobot.robots.motor_action_binding import make_direct_binding
+
+        self.attach_teleop(teleop)
+        return make_direct_binding(teleop, pull_path_active=False)
 
     def get_observation_processor_steps(self) -> list:
         """

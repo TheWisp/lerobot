@@ -66,6 +66,22 @@ class BiSO107Follower(Robot):
         self.right_arm = SO107Follower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
 
+        # Pre-build the Cartesian IK pipeline here in __init__ so the
+        # URDF+mesh parse (PinkKinematics builds a pinocchio
+        # RobotWrapper.BuildFromURDF per arm — ~1-2 s total) happens BEFORE
+        # cameras connect. Building it lazily inside ``bind_teleop`` races
+        # with the RealSense background read thread's warmup window and
+        # starves the camera into "no frames produced" state.
+        # ``None`` if no Cartesian-IK config is registered for this robot
+        # (then Cartesian teleops won't work but joint teleops will).
+        try:
+            from lerobot.processor.cartesian_ik_pipeline import make_cartesian_ik_pipeline
+
+            self._cartesian_ik_pipeline = make_cartesian_ik_pipeline(self)
+        except Exception:
+            logger.exception("%s: failed to pre-build Cartesian IK pipeline", self)
+            self._cartesian_ik_pipeline = None
+
         # Install the depth-edge overlay as an in-camera post-grab processor
         # on every RealSense camera that has depth enabled. The grab thread
         # consumes the depth frame and caches the overlay-RGB directly, so
@@ -208,6 +224,29 @@ class BiSO107Follower(Robot):
                     logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
         return obs_dict
+
+    def bind_teleop(self, teleop):
+        """Bind teleop and return a :class:`MotorActionBinding`.
+
+        Cartesian teleops (e.g. ``bimanual_quest_vr``) are routed through
+        the pre-built IK pipeline. Joint-space teleops (leaders) pass
+        through directly. Either way ``send_action`` drives the motors
+        (no controller pull-path on the non-predictive variant), so
+        ``pull_path_active`` is always False here.
+
+        ``BiSO107FollowerPredictive`` overrides this to handle the
+        adapter/pull-path cases.
+        """
+        from lerobot.processor.cartesian_ik_pipeline import is_cartesian_teleop
+        from lerobot.robots.motor_action_binding import (
+            make_direct_binding,
+            make_pipeline_binding,
+        )
+
+        self.attach_teleop(teleop)
+        if is_cartesian_teleop(teleop) and self._cartesian_ik_pipeline is not None:
+            return make_pipeline_binding(teleop, self._cartesian_ik_pipeline, pull_path_active=False)
+        return make_direct_binding(teleop, pull_path_active=False)
 
     def send_action(self, action: dict[str, Any] | ActionChunk) -> dict[str, Any]:
         # Plain bimanual doesn't consume the chunk horizon — falls back to
