@@ -50,6 +50,7 @@ from lerobot.robots.so_follower.robot_kinematic_processor import (
     _motor_to_urdf_deg,
     _urdf_to_motor_deg,
 )
+from lerobot.utils.latency.ik_debug import get_recorder
 from lerobot.utils.rotation import Rotation
 
 
@@ -86,6 +87,8 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
     joint_map: Any | None = None
 
     def action(self, action: RobotAction) -> RobotAction:
+        # ``dict.pop`` raises KeyError if the key is missing, so the prior
+        # ``if None in (...)`` defensive check never fired in practice.
         p = self.key_prefix
         x = action.pop(f"{p}ee.x")
         y = action.pop(f"{p}ee.y")
@@ -95,16 +98,9 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
         wz = action.pop(f"{p}ee.wz")
         gripper_pos = action.pop(f"{p}ee.gripper_pos")
 
-        if None in (x, y, z, wx, wy, wz, gripper_pos):
-            raise ValueError(
-                "Missing required end-effector pose components: ee.x, ee.y, ee.z, "
-                "ee.wx, ee.wy, ee.wz, ee.gripper_pos must all be present in action"
-            )
-
         observation = self.transition.get(TransitionKey.OBSERVATION)
         if observation is None:
             raise ValueError("Joints observation is required for computing robot kinematics")
-        observation = observation.copy()
 
         # Read in motor_names order; do NOT rely on dict iteration order.
         q_raw_motor = np.array(
@@ -132,8 +128,6 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
         # Convert IK output (URDF) back to motor space for the action stream.
         q_target_motor = _urdf_to_motor_deg(q_target_urdf, self.motor_names, self.joint_map)
 
-        from lerobot.utils.latency.ik_debug import get_recorder
-
         _rec = get_recorder()
         if _rec is not None:
             _rec.record(self.key_prefix, "ik_seed_urdf", q_seed_used_urdf)
@@ -156,9 +150,10 @@ class PinkInverseKinematicsEEToJoints(RobotActionProcessorStep):
             except Exception:
                 pass
 
-        # Map IK output to motor names. q_target_motor[gripper] is overridden
-        # by ee.gripper_pos which is already in motor space (GripperVelocityToJoint
-        # integrates in motor units; gripper isn't EE-tracked).
+        # Map IK output to motor names. The "gripper" slot of q_target_motor
+        # is overridden by ``ee.gripper_pos``, which is already in motor
+        # space — the teleop emits an absolute trigger->motor mapping
+        # directly and the gripper isn't EE-tracked through IK.
         for i, name in enumerate(self.motor_names):
             if name != "gripper":
                 action[f"{p}{name}.pos"] = float(q_target_motor[i])

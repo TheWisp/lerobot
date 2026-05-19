@@ -31,6 +31,7 @@ from lerobot.processor import (
     RobotObservation,
     TransitionKey,
 )
+from lerobot.utils.latency.ik_debug import get_recorder
 from lerobot.utils.rotation import Rotation
 
 
@@ -141,10 +142,10 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
     _command_when_disabled: np.ndarray | None = field(default=None, init=False, repr=False)
 
     def action(self, action: RobotAction) -> RobotAction:
-        observation = self.transition.get(TransitionKey.OBSERVATION).copy()
-
+        observation = self.transition.get(TransitionKey.OBSERVATION)
         if observation is None:
-            raise ValueError("Joints observation is require for computing robot kinematics")
+            raise ValueError("Joints observation is required for computing robot kinematics")
+        observation = observation.copy()
 
         if self.use_ik_solution and "IK_solution" in self.transition.get(TransitionKey.COMPLEMENTARY_DATA):
             q_raw = self.transition.get(TransitionKey.COMPLEMENTARY_DATA)["IK_solution"]
@@ -159,9 +160,6 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
                 dtype=float,
             )
 
-        if q_raw is None:
-            raise ValueError("Joints observation is require for computing robot kinematics")
-
         # Apply per-motor URDF mapping (sign + offset_deg) so q_for_fk is in
         # URDF space. Without this, FK on the right SO-107 arm comes back
         # in a misaligned frame and the EE-delta math is wrong.
@@ -173,8 +171,6 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
         # Optional verbose IK debug log — records the per-tick inputs so we
         # can later inspect what the chain saw. No-op when the recorder
         # isn't installed.
-        from lerobot.utils.latency.ik_debug import get_recorder
-
         _rec = get_recorder()
         if _rec is not None:
             _rec.record(self.key_prefix, "q_motor", q_raw.copy())
@@ -199,9 +195,10 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
             ref = t_curr
             if self.use_latched_reference:
                 # Latched reference mode: latch reference at the rising edge
+                # (or if it's somehow still None — first-ever enable path).
                 if not self._prev_enabled or self.reference_ee_pose is None:
                     self.reference_ee_pose = t_curr.copy()
-                ref = self.reference_ee_pose if self.reference_ee_pose is not None else t_curr
+                ref = self.reference_ee_pose
 
             delta_p = np.array(
                 [
@@ -320,6 +317,8 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
     _last_pos: np.ndarray | None = field(default=None, init=False, repr=False)
 
     def action(self, action: RobotAction) -> RobotAction:
+        # Dict-key access below raises KeyError on missing keys; no need
+        # for an explicit ``if None in (...)`` defensive check.
         p = self.key_prefix
         x = action[f"{p}ee.x"]
         y = action[f"{p}ee.y"]
@@ -327,15 +326,8 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
         wx = action[f"{p}ee.wx"]
         wy = action[f"{p}ee.wy"]
         wz = action[f"{p}ee.wz"]
-        # TODO(Steven): ee.gripper_vel does not need to be bounded
-
-        if None in (x, y, z, wx, wy, wz):
-            raise ValueError(
-                "Missing required end-effector pose components: x, y, z, wx, wy, wz must all be present in action"
-            )
 
         pos = np.array([x, y, z], dtype=float)
-        twist = np.array([wx, wy, wz], dtype=float)
         pos_in = pos.copy()  # before clipping, for debug recording
 
         # Clip position
@@ -359,11 +351,12 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
         action[f"{p}ee.x"] = float(pos[0])
         action[f"{p}ee.y"] = float(pos[1])
         action[f"{p}ee.z"] = float(pos[2])
-        action[f"{p}ee.wx"] = float(twist[0])
-        action[f"{p}ee.wy"] = float(twist[1])
-        action[f"{p}ee.wz"] = float(twist[2])
-
-        from lerobot.utils.latency.ik_debug import get_recorder
+        # ee.wx/wy/wz pass through unchanged — orientation isn't clipped
+        # here (the IK step further down enforces joint limits which
+        # bound the achievable orientation indirectly).
+        action[f"{p}ee.wx"] = float(wx)
+        action[f"{p}ee.wy"] = float(wy)
+        action[f"{p}ee.wz"] = float(wz)
 
         _rec = get_recorder()
         if _rec is not None:

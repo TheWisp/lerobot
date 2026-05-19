@@ -30,9 +30,9 @@ This output is what ``EEReferenceAndDelta`` ->
 ``gripper_pos`` is an absolute motor-space target (trigger fully released
 maps to the configured "open" value; fully pulled maps to "closed").
 
-``get_action()`` is lock-free and returns whatever the server thread last
-cached. Caller can poll at any rate; the Quest streams independently at
-its native frame rate.
+``get_action()`` takes the cache lock briefly and returns a copy of
+whatever the server thread last cached. The caller can poll at any
+rate; the Quest streams independently at its native frame rate.
 """
 
 from __future__ import annotations
@@ -122,9 +122,7 @@ class QuestVRTeleop(Teleoperator):
 
     @property
     def is_connected(self) -> bool:
-        return (
-            self._server is not None and self._server._thread is not None and self._server._thread.is_alive()
-        )
+        return self._server is not None and self._server.is_running
 
     @property
     def is_calibrated(self) -> bool:

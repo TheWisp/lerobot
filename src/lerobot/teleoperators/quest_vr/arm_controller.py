@@ -116,7 +116,7 @@ class QuestArmController:
         self._quest_pos_at_engage = None
         self._quest_rot_at_engage = None
         self._quest_pos_prev = None
-        self._last_gripper_pos: float = self.gripper_open_motor
+        self._last_gripper_pos = self.gripper_open_motor
 
     def process_pose(self, pose: dict[str, Any]) -> dict[str, float]:
         """Convert one controller's pose into a (possibly-prefixed) action dict.
@@ -137,7 +137,8 @@ class QuestArmController:
         # it's a controller-tracking dropout (occlusion, FOV edge, lost
         # then re-acquired). Clamp the step toward the previous pose so
         # the bogus delta doesn't propagate into target_xyz. A real hand
-        # moves at most ~3 m/s; at 30 Hz that's 0.1 m / tick.
+        # moves at most ~3 m/s; at 90 Hz WebXR rate the default cap
+        # (0.04 m / frame, see configuration_quest_vr) allows ~3.6 m/s.
         cap_m = self.max_pos_step_m_per_tick
         if self._quest_pos_prev is not None and cap_m > 0.0:
             step = quest_pos - self._quest_pos_prev
@@ -150,12 +151,12 @@ class QuestArmController:
         # resting on the table with a stray trigger touch should NOT slam
         # the gripper. While disengaged, the gripper holds its last
         # commanded value (or the open default before the user has touched
-        # the trigger).
+        # the trigger — ``__init__`` seeds ``_last_gripper_pos`` to that).
         if engaged:
             gripper_pos = self._gripper_pos_from_trigger(grip)
             self._last_gripper_pos = gripper_pos
         else:
-            gripper_pos = getattr(self, "_last_gripper_pos", self.gripper_open_motor)
+            gripper_pos = self._last_gripper_pos
 
         if engaged and not self._engaged:
             self._quest_pos_at_engage = quest_pos.copy()

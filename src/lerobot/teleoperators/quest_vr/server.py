@@ -129,6 +129,11 @@ class QuestServer:
     def url(self) -> str:
         return f"https://{_get_lan_ip()}:{self.port}/"
 
+    @property
+    def is_running(self) -> bool:
+        """True if the asyncio thread has been started and not yet exited."""
+        return self._thread is not None and self._thread.is_alive()
+
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return

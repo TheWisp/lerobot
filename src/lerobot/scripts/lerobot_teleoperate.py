@@ -113,6 +113,7 @@ from lerobot.teleoperators import (  # noqa: F401
 )
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.latency import LatencySession
+from lerobot.utils.latency.ik_debug import get_recorder as get_ik_recorder
 from lerobot.utils.latency.motion import MotionLogger
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import move_cursor_up, setup_run_logging
@@ -254,9 +255,7 @@ def teleop_loop(
 
             # End-of-tick marker for the verbose IK debug log. No-op when
             # the recorder isn't installed.
-            from lerobot.utils.latency.ik_debug import get_recorder as _get_ik_rec
-
-            _ik_rec = _get_ik_rec()
+            _ik_rec = get_ik_recorder()
             if _ik_rec is not None:
                 _ik_rec.tick_done()
 

@@ -119,9 +119,7 @@ class BimanualQuestVRTeleop(Teleoperator):
 
     @property
     def is_connected(self) -> bool:
-        return (
-            self._server is not None and self._server._thread is not None and self._server._thread.is_alive()
-        )
+        return self._server is not None and self._server.is_running
 
     @property
     def is_calibrated(self) -> bool:

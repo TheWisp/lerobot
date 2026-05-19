@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from ..config import TeleoperatorConfig
@@ -50,10 +51,13 @@ _GRIPPER_OPEN_DESC = (
 )
 _GRIPPER_CLOSED_DESC = (
     "Motor-space position commanded when the trigger is fully pulled "
-    "(grip=1). The motor convention can differ per arm — e.g., on the "
-    "user's bi_so107, motor.pos LOW = open and motor.pos HIGH = closed "
-    "for both arms, so closed > open. If a future SO-107 is calibrated "
-    "with the opposite direction, just swap the two values."
+    "(grip=1). Motor direction differs across calibrations — closing the "
+    "gripper might mean increasing OR decreasing motor.pos depending on "
+    "how zero was set during calibration. So this value can be either "
+    "larger or smaller than gripper_open_motor; pick whatever matches "
+    "the physically-closed pose. The bimanual SO-107 default has "
+    "closed=90 on the left arm (opens-as-decreasing) and closed=10 on "
+    "the right (opens-as-increasing)."
 )
 _POSITION_SCALE_DESC = (
     "Hand-motion to robot-EE motion ratio. 1.0 = 1:1 (push hand 5 cm -> EE "
@@ -90,9 +94,9 @@ class QuestVRTeleopConfig(TeleoperatorConfig):
     The teleop spins up an HTTPS server in a daemon thread. The Quest's
     built-in browser opens the served page, enters an immersive XR session,
     and streams controller poses over a WebSocket. Each frame's pose is
-    converted to an EE-delta action and cached; ``get_action()`` returns
-    the latest cached value (matches the HighRateLeaderMixin pattern —
-    fast lock-free reads, sample-rate fully decoupled from poll-rate).
+    converted to an EE-delta action and cached under a lock; ``get_action()``
+    takes the same lock briefly to copy it out. Sample-rate (Quest WebXR,
+    ~90 Hz) is fully decoupled from poll-rate (loop driver, 30 Hz).
 
     Output action keys (compatible with EEReferenceAndDelta upstream):
         enabled, target_x, target_y, target_z, target_wx, target_wy,
@@ -105,7 +109,7 @@ class QuestVRTeleopConfig(TeleoperatorConfig):
     clutch_button_index: int = field(default=1, metadata={"description": _CLUTCH_DESC})
     gripper_button_index: int = field(default=0, metadata={"description": _GRIPPER_DESC})
     position_scale: float = field(default=1.0, metadata={"description": _POSITION_SCALE_DESC})
-    max_rot_step_rad_per_tick: float = field(default=3.14159, metadata={"description": _MAX_ROT_DESC})
+    max_rot_step_rad_per_tick: float = field(default=math.pi, metadata={"description": _MAX_ROT_DESC})
     max_pos_step_m_per_tick: float = field(default=0.04, metadata={"description": _MAX_POS_VEL_DESC})
     # Default rest position is half-open (motor 50 in RANGE_0_100 norm
     # mode) so a freshly-connected teleop doesn't slam the gripper to a
@@ -163,7 +167,7 @@ class BimanualQuestVRTeleopConfig(TeleoperatorConfig):
         },
     )
     position_scale: float = field(default=1.0, metadata={"description": _POSITION_SCALE_DESC})
-    max_rot_step_rad_per_tick: float = field(default=3.14159, metadata={"description": _MAX_ROT_DESC})
+    max_rot_step_rad_per_tick: float = field(default=math.pi, metadata={"description": _MAX_ROT_DESC})
     max_pos_step_m_per_tick: float = field(default=0.04, metadata={"description": _MAX_POS_VEL_DESC})
     # Per-arm gripper motor mapping. The bimanual SO-107 has OPPOSITE
     # motor-direction conventions between left and right (verified

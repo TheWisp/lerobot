@@ -77,22 +77,24 @@ class IKDebugRecorder:
     def record(self, prefix: str, key: str, value: Any) -> None:
         """Stash one (prefixed) signal value for the current tick.
 
-        Safe to call from multiple ProcessorSteps within a single tick;
-        the names are namespaced by ``prefix`` (typically the per-arm
-        ``"left_"`` / ``"right_"`` key prefix).
+        Safe to call from multiple ProcessorSteps within a single tick
+        AND across threads (the Cartesian IK adapter runs steps on its
+        own thread; the main loop calls ``tick_done`` on its thread).
+        The lock guards against a tick boundary cutting through an
+        in-progress write and splitting a step's signals across two
+        records.
         """
-        try:
-            full_key = f"{prefix}{key}" if prefix else key
+        full_key = f"{prefix}{key}" if prefix else key
+        with self._lock:
             self._current[full_key] = value
-        except Exception:
-            logger.debug("IKDebugRecorder.record swallowed exception", exc_info=True)
 
     def tick_done(self) -> None:
         """Finalize the current tick's record and start a new one."""
-        if self._current:
-            self._current["__t"] = time.perf_counter() - self._t0
-            self._records.append(self._current)
-        self._current = {}
+        with self._lock:
+            if self._current:
+                self._current["__t"] = time.perf_counter() - self._t0
+                self._records.append(self._current)
+            self._current = {}
 
     def close(self) -> None:
         if not self._records:
