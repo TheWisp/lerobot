@@ -70,6 +70,7 @@ import logging
 from contextlib import suppress
 from dataclasses import dataclass, field
 
+from lerobot.motors.locked_bus import LockedBus
 from lerobot.motors.motors_bus import SerialMotorsBus, get_address
 from lerobot.robots.robot import Robot
 
@@ -269,6 +270,13 @@ def _walk(
     seen.add(id(obj))
 
     for attr in vars(obj).values():
+        # Unwrap LockedBus proxies — the predictive robots wrap their
+        # FeetechMotorsBus in LockedBus for thread-safety, but the
+        # recovery routine needs the underlying SerialMotorsBus directly
+        # (recover_bus opens/closes the port and bypasses the proxy's
+        # locking, since recovery runs while the bus is otherwise idle).
+        if isinstance(attr, LockedBus):
+            attr = attr._bus  # noqa: SLF001 — recovery is the LockedBus owner's peer
         if isinstance(attr, SerialMotorsBus):
             reports.append(recover_bus(attr, num_retry=num_retry))
         elif isinstance(attr, Robot):

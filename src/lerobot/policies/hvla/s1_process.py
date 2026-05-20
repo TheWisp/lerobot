@@ -17,6 +17,7 @@ import torchvision.transforms.functional as TF
 
 from lerobot.policies.hvla.ipc import SharedImageBuffer, SharedLatentCache
 from lerobot.policies.hvla.rlt.episode import EpisodeLifecycle, TerminalKind
+from lerobot.types import ActionChunk
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,66 @@ def _compute_chunk_index(t_now: float, t_origin: float, fps: int, chunk_len: int
     elapsed = t_now - t_origin
     idx = round(elapsed * fps)
     return max(0, min(idx, chunk_len - 1))
+
+
+def _remaining_chunk_as_actionchunk(
+    chunk_np: np.ndarray,
+    start_idx: int,
+    joint_names: list[str],
+    fps: float,
+    *,
+    current_frame_override: np.ndarray | None = None,
+) -> ActionChunk:
+    """Pack ``chunk_np[start_idx:]`` as an ``ActionChunk`` whose frame 0 is
+    the value the controller should aim at *now*.
+
+    Why this exists: HVLA emits a numpy chunk per inference and indexes
+    into it frame-by-frame. Sending one frame at a time as a dict via
+    ``robot.send_action(dict)`` forces the predictive controller to
+    extrapolate velocity from stair-stepped 30 Hz input — which works
+    correctly only after the rate-agnostic intent-ring fix, and is
+    still strictly less accurate than the chunk-exact-lookup path
+    (``_lookup_in_chunk``). Sending the *remaining* chunk activates
+    the exact-lookup path: the controller reads the value at the time
+    ``now + L`` directly from the chunk's frames, with zero
+    estimation error.
+
+    Args:
+        chunk_np: shape ``(N_frames, n_motors)`` — the policy's chunk.
+        start_idx: index of the frame being executed at "now". Frames
+            before this have already been consumed.
+        joint_names: column order for the output frame dicts.
+        fps: the chunk's frame rate (used for the controller's index
+            math via ``elapsed * fps``).
+        current_frame_override: if set, replaces ``chunk_np[start_idx]``
+            as the chunk's frame 0. Callers use this to inject a clamped
+            value (e.g. POLICY JUMP CLAMP rewrite) without disturbing
+            the rest of the chunk's content. Defaults to using the raw
+            chunk value at start_idx.
+
+    Returns:
+        ActionChunk with ``fps=fps`` and frames covering ``[start_idx, N)``
+        — i.e. the policy's prediction from "now" out to the chunk tail.
+        For non-predictive robots, ``send_action(ActionChunk)`` consumes
+        only ``frames[0]`` and ignores the rest, so this is backward-
+        compatible with any robot type.
+    """
+    remaining = chunk_np[start_idx:]
+    n_frames = len(remaining)
+    if current_frame_override is not None:
+        # Build frames[0] from the override, frames[1:] from the rest.
+        frames = (
+            {name: float(current_frame_override[j]) for j, name in enumerate(joint_names)},
+            *(
+                {name: float(remaining[i, j]) for j, name in enumerate(joint_names)}
+                for i in range(1, n_frames)
+            ),
+        )
+    else:
+        frames = tuple(
+            {name: float(remaining[i, j]) for j, name in enumerate(joint_names)} for i in range(n_frames)
+        )
+    return ActionChunk(fps=float(fps), frames=frames)
 
 
 def _osc_skip(chunk: np.ndarray, idx: int, step_count: int) -> int:
@@ -504,6 +565,13 @@ def run_s1(
     # so the GUI dashboard can render HVLA inference timings alongside teleop/record.
     latency_monitor: bool = False,
     latency_output_dir: str | None = None,
+    # Send shape on the policy path. "chunk" (default) packs the
+    # remaining chunk frames into an ActionChunk so the predictive
+    # robot uses its exact-lookup path. "dict" sends only the single
+    # frame at idx — primarily for A/B comparison against the pre-fix
+    # behaviour. Non-predictive robots get frames[0] either way, so
+    # this toggle is a no-op on them.
+    send_action_shape: str = "chunk",
 ):
     """S1 control loop with robot. Runs in main process."""
     # Main process logging should already be configured by launch.py,
@@ -528,22 +596,37 @@ def run_s1(
     logging.getLogger().addHandler(_run_fh)
     logger.info("S1: Run log → %s", run_log_file)
 
+    # keyboard listener removed — Ctrl+C via stop_event is sufficient
+    # Register robot/camera types for draccus. Auto-discover every
+    # submodule under lerobot.robots / lerobot.teleoperators so any new
+    # robot type (e.g. bi_so107_follower_predictive) is registered
+    # without an explicit import edit here. Each import is wrapped in
+    # contextlib.suppress(Exception) so packages whose optional SDK
+    # extras aren't installed stay silent. Same pattern as
+    # gui/api/robot.py::_ensure_configs_loaded.
+    import importlib
     import json
+    import pkgutil
 
     import draccus
 
+    # Side-effect import: registers the typing.Literal decoder against
+    # draccus. Without this, any config field annotated Literal[...]
+    # (e.g. camera_read_strategy on bi_so107) fails to decode here even
+    # though the GUI path works (which imports parser transitively).
+    import lerobot.configs.parser  # noqa: F401
+    import lerobot.robots as _lr_robots
+    import lerobot.teleoperators as _lr_teleops
     from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
     from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
     from lerobot.policies.hvla.s1.protocol import S2_LATENT_KEY
-
-    # keyboard listener removed — Ctrl+C via stop_event is sufficient
-    # Register robot/camera types for draccus
-    from lerobot.robots import (
-        bi_so107_follower,  # noqa: F401
-        make_robot_from_config,
-    )
+    from lerobot.robots import make_robot_from_config
     from lerobot.robots.config import RobotConfig
-    from lerobot.teleoperators import bi_so107_leader  # noqa: F401
+
+    for _pkg in (_lr_robots, _lr_teleops):
+        for _importer, _modname, _ispkg in pkgutil.walk_packages(_pkg.__path__, prefix=_pkg.__name__ + "."):
+            with contextlib.suppress(Exception):
+                importlib.import_module(_modname)
 
     device = torch.device(device)
 
@@ -1855,11 +1938,33 @@ def run_s1(
                             )
                             action_np = prev_action_np + np.clip(delta, -30.0, 30.0)
 
-                    action_dict = {
-                        name: float(action_np[i]) for i, name in enumerate(joint_names) if i < len(action_np)
-                    }
+                    # Forward the remaining chunk (frame `idx` onward) to the
+                    # robot. Two payload shapes selected by send_action_shape:
+                    #   * "chunk" (default): pack chunk[idx:] as an ActionChunk
+                    #     so a predictive robot activates the exact-lookup path
+                    #     (_lookup_in_chunk) for zero-estimation-error
+                    #     compensation at L. Non-predictive robots use
+                    #     frames[0] only — same as the dict path effectively.
+                    #   * "dict": send only the single frame at idx. Used to
+                    #     A/B-compare against the pre-fix behaviour or as a
+                    #     rollback. Predictive robots fall back to the
+                    #     velocity-LSQ extrapolation path (which is now
+                    #     rate-agnostic post-fix #1).
+                    # The recorded "action" column in the dataset is
+                    # action_np (a single frame) regardless of which shape
+                    # is sent — see _add_frame_to_dataset below.
+                    if send_action_shape == "chunk":
+                        payload: dict | ActionChunk = _remaining_chunk_as_actionchunk(
+                            chunk, idx, joint_names, fps, current_frame_override=action_np
+                        )
+                    else:
+                        payload = {
+                            name: float(action_np[i])
+                            for i, name in enumerate(joint_names)
+                            if i < len(action_np)
+                        }
                     with main_session.span("action_send"):
-                        robot.send_action(action_dict)
+                        robot.send_action(payload)
                     t_after_send = time.perf_counter()
 
                     # Inverse follow: send follower position to leader so it mirrors
@@ -2284,6 +2389,51 @@ def _get_motor_buses(robot) -> list:
     return buses
 
 
+def _stop_robot_controllers(robot) -> None:
+    """Stop any background bus-driving controllers on the robot.
+
+    The predictive lookahead controller runs a 200 Hz writer thread
+    that sync_writes Goal_Position. If we proceed straight to
+    soft-landing (which writes Torque_Limit per motor on the same bus),
+    the two threads race for the half-duplex serial port and the
+    writer logs "Port is in use!" for the duration of the landing
+    (~4 s of stack traces). Pre-empt by stopping any ``_controller``
+    objects we can find. No-op for robots without a controller (plain
+    so_follower etc.) — getattr returns None, the loop just skips.
+
+    Always pair with ``_start_robot_controllers`` on the resume path
+    (typically called from ``_enable_torque``). Otherwise the writer
+    thread stays dead for the rest of the session and ``send_action``
+    becomes a no-op (it updates ``_latest_intent`` / ``_latest_chunk``
+    but nothing writes to the bus → robot frozen).
+    """
+    for attr in ("left_arm", "right_arm", "arm"):
+        arm = getattr(robot, attr, None)
+        if arm is None:
+            continue
+        controller = getattr(arm, "_controller", None)
+        if controller is None or not hasattr(controller, "stop"):
+            continue
+        with contextlib.suppress(Exception):
+            controller.stop()
+
+
+def _start_robot_controllers(robot) -> None:
+    """Restart any background controllers that ``_stop_robot_controllers``
+    stopped. Idempotent — the predictive controller's ``start()`` returns
+    early when its thread is already alive.
+    """
+    for attr in ("left_arm", "right_arm", "arm"):
+        arm = getattr(robot, attr, None)
+        if arm is None:
+            continue
+        controller = getattr(arm, "_controller", None)
+        if controller is None or not hasattr(controller, "start"):
+            continue
+        with contextlib.suppress(Exception):
+            controller.start()
+
+
 def _disable_torque(robot):
     """Disable torque on all motors so the robot can be moved by hand."""
     for bus in _get_motor_buses(robot):
@@ -2297,6 +2447,12 @@ def _enable_torque(robot):
     for bus in _get_motor_buses(robot):
         with contextlib.suppress(Exception):
             bus.enable_torque()
+    # Symmetric with the soft-land path's stop: restart any background
+    # writer threads that were stopped to avoid the bus race. Without
+    # this restart, robots with a predictive lookahead controller stay
+    # frozen after the pre-record reset — send_action becomes a silent
+    # no-op because the writer thread is dead.
+    _start_robot_controllers(robot)
     logger.info("S1: Torque enabled")
 
 
@@ -2308,6 +2464,11 @@ def _soft_land(robot, duration_s=4.0, steps=20):
     """
     if not robot.is_connected:
         return
+
+    # Stop any background controllers before touching the bus directly —
+    # the predictive lookahead controller's 200 Hz writer would otherwise
+    # cascade "Port is in use!" errors for the duration of the landing.
+    _stop_robot_controllers(robot)
 
     buses = _get_motor_buses(robot)
     if not buses:

@@ -38,6 +38,12 @@ _preview_camera_info: list[dict] = []
 # Rest-position recording state (holds robot connection between start/finish)
 _rest_recording_robot = None
 
+# Safe-trajectory recording state. Same idea as the rest-position session
+# (one active connection held across HTTP calls) but with a background
+# sampler thread accumulating frames in between.
+_trajectory_recording_robot = None
+_trajectory_recorder = None  # lerobot.robots.safe_trajectory.TrajectoryRecorder
+
 
 def set_app_state(state: AppState) -> None:
     global _app_state
@@ -52,52 +58,37 @@ _configs_loaded = False
 
 
 def _ensure_configs_loaded():
-    """Import all config modules to trigger @register_subclass decorators.
+    """Import all robot/teleop config modules to trigger ``@register_subclass``.
 
-    Some modules have optional hardware dependencies (hebi, pyrealsense2, etc.)
-    that may not be installed, so each import is wrapped in try/except.
+    Auto-discovers every submodule under ``lerobot.robots`` and
+    ``lerobot.teleoperators`` via ``pkgutil.walk_packages``. Each import
+    is wrapped in ``contextlib.suppress(Exception)`` so packages whose
+    optional dependencies (hebi, pyrealsense2, reachy2_sdk, ...) aren't
+    installed stay silent. The walk is one level deep — we want the
+    per-package config modules (e.g. ``config_bi_so107_follower``), not
+    every transitive file (motors, kinematics, etc.).
+
+    Why auto-discovery: the previous hard-coded list silently dropped any
+    new robot/teleop package whose author forgot to add an entry — the
+    new type just didn't appear in the Robot tab dropdown with no error,
+    no log, no hint. Caught on bi_so107_follower_predictive (2026-05-12).
+    Mirrors the same pattern already used by ``_get_known_fields`` in
+    ``run.py``.
     """
     global _configs_loaded
     if _configs_loaded:
         return
 
-    _config_modules = [
-        # Robot configs
-        "lerobot.robots.bi_openarm_follower.config_bi_openarm_follower",
-        "lerobot.robots.bi_so107_follower.config_bi_so107_follower",
-        "lerobot.robots.bi_so_follower.config_bi_so_follower",
-        "lerobot.robots.earthrover_mini_plus.config_earthrover_mini_plus",
-        "lerobot.robots.hope_jr.config_hope_jr",
-        "lerobot.robots.koch_follower.config_koch_follower",
-        "lerobot.robots.lekiwi.config_lekiwi",
-        "lerobot.robots.omx_follower.config_omx_follower",
-        "lerobot.robots.openarm_follower.config_openarm_follower",
-        "lerobot.robots.reachy2.configuration_reachy2",
-        "lerobot.robots.so_follower.config_so_follower",
-        "lerobot.robots.unitree_g1.config_unitree_g1",
-        # Teleoperator configs
-        "lerobot.teleoperators.bi_openarm_leader.config_bi_openarm_leader",
-        "lerobot.teleoperators.bi_so107_leader.config_bi_so107_leader",
-        "lerobot.teleoperators.bi_so_leader.config_bi_so_leader",
-        "lerobot.teleoperators.gamepad.configuration_gamepad",
-        "lerobot.teleoperators.homunculus.config_homunculus",
-        "lerobot.teleoperators.keyboard.configuration_keyboard",
-        "lerobot.teleoperators.koch_leader.config_koch_leader",
-        "lerobot.teleoperators.omx_leader.config_omx_leader",
-        "lerobot.teleoperators.openarm_leader.config_openarm_leader",
-        "lerobot.teleoperators.phone.config_phone",
-        "lerobot.teleoperators.reachy2_teleoperator.config_reachy2_teleoperator",
-        "lerobot.teleoperators.so_leader.config_so_leader",
-        "lerobot.teleoperators.unitree_g1.config_unitree_g1",
-    ]
-
     import importlib
+    import pkgutil
 
-    for module_name in _config_modules:
-        try:
-            importlib.import_module(module_name)
-        except (ImportError, ModuleNotFoundError) as e:
-            logger.debug(f"Skipping {module_name}: {e}")
+    import lerobot.robots
+    import lerobot.teleoperators
+
+    for pkg in (lerobot.robots, lerobot.teleoperators):
+        for _importer, modname, _ispkg in pkgutil.walk_packages(pkg.__path__, prefix=pkg.__name__ + "."):
+            with contextlib.suppress(Exception):
+                importlib.import_module(modname)
 
     _configs_loaded = True
 
@@ -171,6 +162,19 @@ def _introspect_fields(cls: type) -> list[dict]:
         choices = _literal_choices(resolved_type)
         if choices is not None:
             entry["choices"] = choices
+        # Field-level documentation surfaced via ``dataclasses.field(
+        # metadata={"description": "..."})``. Frontend renders this as a
+        # tooltip on the label + control so users hover-discover what the
+        # knob means without reading the source. Per-Literal-choice
+        # documentation is forwarded as ``choice_descriptions`` so dropdown
+        # options can each carry their own tooltip — useful for opaque
+        # algorithm names like "stateful_lp" vs "amp_gated_lp".
+        description = f.metadata.get("description")
+        if description:
+            entry["description"] = description
+        choice_descs = f.metadata.get("choice_descriptions")
+        if choice_descs:
+            entry["choice_descriptions"] = dict(choice_descs)
         result.append(entry)
     return result
 
@@ -232,10 +236,23 @@ def _ensure_dir(d: Path) -> None:
     d.mkdir(parents=True, exist_ok=True)
 
 
+def _is_profile_file(f: Path) -> bool:
+    """True if *f* is a profile JSON, not a sibling artefact.
+
+    The profiles dir also holds ``<name>.trajectory.json`` files (safe
+    trajectories recorded against a profile). Those must not appear in
+    profile listings — they have no ``type`` field and the GUI would
+    fail to render them as robots.
+    """
+    return f.suffix == ".json" and not f.name.endswith(".trajectory.json")
+
+
 def _list_profiles(profiles_dir: Path) -> list[dict]:
     _ensure_dir(profiles_dir)
     profiles = []
     for f in sorted(profiles_dir.glob("*.json")):
+        if not _is_profile_file(f):
+            continue
         try:
             data = json.loads(f.read_text())
             profiles.append(
@@ -262,7 +279,13 @@ def _read_profile(profiles_dir: Path, name: str) -> dict:
 def _write_profile(profiles_dir: Path, data: ProfileData) -> None:
     _ensure_dir(profiles_dir)
     path = profiles_dir / f"{data.name}.json"
-    path.write_text(json.dumps(data.model_dump(), indent=2))
+    # Atomic write — same rationale as _write_trajectory: a half-written
+    # profile silently loses the user's saved port configuration.
+    import os
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data.model_dump(), indent=2))
+    os.replace(tmp, path)
     logger.info(f"Saved profile: {path}")
 
 
@@ -641,6 +664,8 @@ def _collect_all_port_assignments() -> list[dict]:
     ]:
         _ensure_dir(profiles_dir)
         for f in profiles_dir.glob("*.json"):
+            if not _is_profile_file(f):
+                continue
             try:
                 data = json.loads(f.read_text())
             except (json.JSONDecodeError, OSError):
@@ -885,6 +910,252 @@ async def move_to_rest_position_endpoint(req: RestPositionMoveRequest) -> dict:
     if result["status"] == "error":
         raise HTTPException(500, result["message"])
     return result
+
+
+# ============================================================================
+# Safe trajectory recording / replay
+# ============================================================================
+
+
+def _trajectory_path(name: str) -> Path:
+    """Sibling file next to the robot profile: ``<name>.trajectory.json``."""
+    return ROBOT_PROFILES_DIR / f"{name}.trajectory.json"
+
+
+def _read_trajectory(name: str) -> dict | None:
+    path = _trajectory_path(name)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Failed to read trajectory %s: %s", path, e)
+        return None
+
+
+def _write_trajectory(name: str, trajectory: dict) -> Path:
+    _ensure_dir(ROBOT_PROFILES_DIR)
+    path = _trajectory_path(name)
+    # Atomic write: a recorded safe-trajectory is often hundreds of KB
+    # to several MB; a kill or panic between the file truncate and the
+    # write completing would leave the user with an empty / half-written
+    # JSON on the next session, silently losing the captured trajectory.
+    import os
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(trajectory))
+    os.replace(tmp, path)
+    return path
+
+
+def _trajectory_meta(name: str) -> dict:
+    """Lightweight summary for the GUI: just enough to render the UI without
+    paying the full trajectory load."""
+    traj = _read_trajectory(name)
+    if traj is None:
+        return {"exists": False}
+    timestamps = traj.get("timestamps") or []
+    return {
+        "exists": True,
+        "fps": traj.get("fps"),
+        "frame_count": len(timestamps),
+        "duration_s": timestamps[-1] if timestamps else 0.0,
+    }
+
+
+def _do_start_trajectory_recording(profile: dict, rest_position: dict, fps: int) -> dict:
+    """Connect, move to rest, disable torque, start sampler thread.
+
+    The rest-position prerequisite is enforced by the caller — we receive
+    it as an arg so we can interpolate to a known starting pose before the
+    user begins hand-guiding the arm. Without that, replay's first frame
+    would be wherever the user happened to put the arm at Record time, and
+    we'd lose the "known starting point" guarantee.
+    """
+    global _trajectory_recording_robot, _trajectory_recorder
+    from lerobot.robots.rest_position import move_to_rest_position
+    from lerobot.robots.safe_trajectory import TrajectoryRecorder
+
+    _do_cancel_trajectory_recording()  # clean up any leftover session
+
+    robot = _make_robot_from_profile(profile)
+    try:
+        robot.connect()
+        move_to_rest_position(robot, rest_position, duration_s=3.0)
+        _disable_torque(robot)
+        recorder = TrajectoryRecorder(robot, fps=fps)
+        recorder.start()
+        _trajectory_recording_robot = robot
+        _trajectory_recorder = recorder
+        return {"status": "ok"}
+    except Exception as e:
+        logger.exception("Failed to start trajectory recording")
+        try:
+            if robot.is_connected:
+                robot.disconnect()
+        except Exception:
+            pass
+        return {"status": "error", "message": str(e)}
+
+
+def _do_stop_trajectory_recording(profile_name: str) -> dict:
+    """Stop the sampler, persist the trajectory, disconnect.
+
+    The profile name is needed so we know where to write the sibling
+    trajectory file. The FE passes the same profile it used to start the
+    session.
+    """
+    global _trajectory_recording_robot, _trajectory_recorder
+    robot = _trajectory_recording_robot
+    recorder = _trajectory_recorder
+    if recorder is None or robot is None:
+        return {"status": "error", "message": "No recording session active"}
+    try:
+        trajectory = recorder.stop()
+        # Backfill robot_id from the profile name so the file is
+        # self-describing even if the JSON is moved.
+        trajectory["robot_id"] = profile_name
+        path = _write_trajectory(profile_name, trajectory)
+        timestamps = trajectory["timestamps"]
+        return {
+            "status": "ok",
+            "path": str(path),
+            "frame_count": len(timestamps),
+            "duration_s": timestamps[-1] if timestamps else 0.0,
+        }
+    except Exception as e:
+        logger.exception("Failed to stop trajectory recording")
+        return {"status": "error", "message": str(e)}
+    finally:
+        _trajectory_recorder = None
+        _trajectory_recording_robot = None
+        try:
+            if robot.is_connected:
+                robot.disconnect()
+        except Exception:
+            pass
+
+
+def _do_cancel_trajectory_recording() -> dict:
+    """Stop the sampler and disconnect, discarding any captured frames."""
+    global _trajectory_recording_robot, _trajectory_recorder
+    recorder = _trajectory_recorder
+    robot = _trajectory_recording_robot
+    _trajectory_recorder = None
+    _trajectory_recording_robot = None
+    if recorder is not None:
+        with contextlib.suppress(Exception):
+            recorder.cancel()
+    if robot is not None:
+        with contextlib.suppress(Exception):
+            if robot.is_connected:
+                robot.disconnect()
+    return {"status": "ok"}
+
+
+def _do_replay_trajectory(profile: dict, rest_position: dict, profile_name: str) -> dict:
+    """Connect, move to rest, replay the saved trajectory, disconnect."""
+    from lerobot.robots.rest_position import move_to_rest_position
+    from lerobot.robots.safe_trajectory import replay_trajectory
+
+    trajectory = _read_trajectory(profile_name)
+    if trajectory is None:
+        return {"status": "error", "message": f"No safe trajectory recorded for profile {profile_name!r}"}
+
+    robot = _make_robot_from_profile(profile)
+    try:
+        robot.connect()
+        move_to_rest_position(robot, rest_position, duration_s=3.0)
+        # Short ramp at the start of replay handles any small drift
+        # between rest_position and trajectory[0] (typically <1°).
+        replay_trajectory(robot, trajectory, ramp_to_start_s=0.5)
+        # Park the arm back at rest before disconnecting: the recorded
+        # trajectory's endpoint isn't guaranteed to be a stable pose
+        # under gravity, and we don't want the arm to drift / sag when
+        # torque is released on disconnect.
+        move_to_rest_position(robot, rest_position, duration_s=2.0)
+        return {"status": "ok", "frame_count": len(trajectory["timestamps"])}
+    except Exception as e:
+        logger.exception("Trajectory replay failed")
+        return {"status": "error", "message": str(e)}
+    finally:
+        try:
+            if robot.is_connected:
+                robot.disconnect()
+        except Exception:
+            pass
+
+
+class TrajectoryRecordRequest(BaseModel):
+    robot: dict[str, Any]
+    rest_position: dict[str, float]
+    fps: int = 30
+
+
+class TrajectoryStopRequest(BaseModel):
+    profile_name: str
+
+
+class TrajectoryReplayRequest(BaseModel):
+    robot: dict[str, Any]
+    rest_position: dict[str, float]
+    profile_name: str
+
+
+@router.get("/trajectory-meta/{name}")
+async def trajectory_meta_endpoint(name: str) -> dict:
+    """Lightweight metadata about the saved trajectory for *name* (if any)."""
+    return _trajectory_meta(name)
+
+
+@router.post("/start-trajectory-recording")
+async def start_trajectory_recording_endpoint(req: TrajectoryRecordRequest) -> dict:
+    if not req.rest_position:
+        raise HTTPException(400, "rest_position is required — record a rest pose first")
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, _do_start_trajectory_recording, req.robot, req.rest_position, req.fps
+    )
+    if result["status"] == "error":
+        raise HTTPException(500, result["message"])
+    return result
+
+
+@router.post("/stop-trajectory-recording")
+async def stop_trajectory_recording_endpoint(req: TrajectoryStopRequest) -> dict:
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _do_stop_trajectory_recording, req.profile_name)
+    if result["status"] == "error":
+        raise HTTPException(500, result["message"])
+    return result
+
+
+@router.post("/cancel-trajectory-recording")
+async def cancel_trajectory_recording_endpoint() -> dict:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _do_cancel_trajectory_recording)
+
+
+@router.post("/replay-trajectory")
+async def replay_trajectory_endpoint(req: TrajectoryReplayRequest) -> dict:
+    if not req.rest_position:
+        raise HTTPException(400, "rest_position is required — set one before replay")
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, _do_replay_trajectory, req.robot, req.rest_position, req.profile_name
+    )
+    if result["status"] == "error":
+        raise HTTPException(500, result["message"])
+    return result
+
+
+@router.delete("/trajectory/{name}")
+async def delete_trajectory_endpoint(name: str) -> dict:
+    path = _trajectory_path(name)
+    if path.exists():
+        # safe-destruct: user clicked Clear in the Safe Trajectory panel
+        path.unlink()
+    return {"status": "ok"}
 
 
 def _do_recover(profile: dict) -> dict:

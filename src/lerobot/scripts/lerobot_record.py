@@ -94,6 +94,7 @@ from lerobot.common.control_utils import (
     predict_action,
     sanity_check_dataset_name,
     sanity_check_dataset_robot_compatibility,
+    warn_on_policy_robot_type_mismatch,
 )
 from lerobot.configs import PreTrainedConfig, parser
 from lerobot.datasets import (
@@ -124,6 +125,7 @@ from lerobot.robots import (  # noqa: F401
     RobotConfig,
     bi_openarm_follower,
     bi_so107_follower,
+    bi_so107_follower_predictive,
     bi_so_follower,
     earthrover_mini_plus,
     hope_jr,
@@ -132,7 +134,9 @@ from lerobot.robots import (  # noqa: F401
     omx_follower,
     openarm_follower,
     reachy2,
+    so107_follower_predictive,
     so_follower,
+    so_follower_predictive,
     unitree_g1 as unitree_g1_robot,
 )
 from lerobot.teleoperators import (  # noqa: F401
@@ -141,6 +145,7 @@ from lerobot.teleoperators import (  # noqa: F401
     TeleopEvents,
     bi_openarm_leader,
     bi_so107_leader,
+    bi_so107_leader_highrate,
     bi_so_leader,
     homunculus,
     koch_leader,
@@ -149,7 +154,10 @@ from lerobot.teleoperators import (  # noqa: F401
     openarm_leader,
     openarm_mini,
     reachy2_teleoperator,
+    so107_leader_highrate,
     so_leader,
+    so_leader_highrate,
+    trajectory_replay,
     unitree_g1,
 )
 from lerobot.teleoperators.keyboard import KeyboardTeleop
@@ -160,8 +168,8 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.latency import LatencySession
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import (
-    init_logging,
     log_say,
+    setup_run_logging,
 )
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
@@ -257,11 +265,15 @@ class RecordConfig:
     # and publish a JSON snapshot for the GUI to read. Mirrors the teleop flag.
     # See src/lerobot/gui/docs/latency_monitoring.md.
     latency_monitor: bool = False
-    # Where to write latency_snapshot.json (when --latency_monitor=true).
-    # Same default as teleop so the GUI's polling endpoint reads from one
-    # known location regardless of which workflow is active. The GUI's
-    # _ensure_no_active_process() ensures only one writer at a time.
-    latency_output_dir: str = "outputs/teleop"
+    # Where to write latency_snapshot.json (when --latency_monitor=true)
+    # AND the per-run log file. Distinct from teleop's "outputs/teleop"
+    # so the GUI latency dashboard treats record as its own source key
+    # (LATENCY_SOURCES["record"]) and doesn't double-render the panel.
+    latency_output_dir: str = "outputs/record"
+    # Duration (seconds) of the programmatic ramp-to-start for file-backed
+    # teleops (e.g. trajectory_replay) during the auto-reset phase between
+    # episodes. Short by default since this is robot-driven, not human-driven.
+    auto_reset_duration_s: float = 3.0
 
     def __post_init__(self):
         # HACK: We parse again the cli args here to get the pretrained path if there was one.
@@ -514,6 +526,12 @@ def record_loop(
         if events["exit_early"]:
             events["exit_early"] = False
             break
+        # File-backed teleops (trajectory_replay) flip ``is_exhausted``
+        # once the recorded trajectory has fully played out. Treat that as
+        # a clean end-of-episode signal — the calling driver will then
+        # enter the reset phase as usual.
+        if teleop is not None and getattr(teleop, "is_exhausted", False):
+            break
 
         # Get robot observation. The span includes follower sync_read +
         # cached cam.read_latest() per camera (cameras are microseconds-fast
@@ -674,68 +692,73 @@ def record_loop(
                     sync_timeout = 5.0  # seconds - avoid infinite beep loop if servo can't converge
                     sync_start = time.perf_counter()
                     beep_proc = None
-                    while True:
-                        pos = teleop.get_action()
-                        max_err = max(abs(pos.get(k, 0) - target[k]) for k in target)
-                        if max_err < settle_tolerance:
-                            if beep_proc is not None:
-                                beep_proc.terminate()
-                            break
+                    try:
+                        while True:
+                            pos = teleop.get_action()
+                            max_err = max(abs(pos.get(k, 0) - target[k]) for k in target)
+                            if max_err < settle_tolerance:
+                                break
 
-                        if time.perf_counter() - sync_start > sync_timeout:
-                            logging.warning(
-                                f"Servo sync timed out after {sync_timeout}s (max_err={max_err:.2f}), "
-                                "releasing torque anyway"
-                            )
-                            if beep_proc is not None:
-                                beep_proc.terminate()
-                            break
-
-                        # Adjust goal: for each joint, nudge goal by remaining error
-                        for k in target:
-                            error = pos.get(k, 0) - target[k]
-                            goal[k] = goal[k] - error
-                        teleop.send_feedback(goal)
-
-                        # Audio feedback: beeps when far, continuous tone when close
-                        almost_ready = max_err < settle_tolerance * 2
-                        if almost_ready:
-                            # Continuous high tone = "hold steady, almost there!"
-                            # Only start if not already playing
-                            if beep_proc is None or beep_proc.poll() is not None:
-                                sr = 8000
-                                dur = 1.0  # long tone, will be killed on convergence
-                                t = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
-                                tone = (np.sin(2 * np.pi * 1000 * t) * 16000).astype(np.int16)
-                                beep_proc = subprocess.Popen(
-                                    ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
-                                    stdin=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL,
+                            if time.perf_counter() - sync_start > sync_timeout:
+                                logging.warning(
+                                    f"Servo sync timed out after {sync_timeout}s (max_err={max_err:.2f}), "
+                                    "releasing torque anyway"
                                 )
-                                beep_proc.stdin.write(tone.tobytes())
-                                beep_proc.stdin.close()
-                            time.sleep(0.05)
-                        else:
-                            # Kill continuous tone if we regressed
-                            if beep_proc is not None and beep_proc.poll() is None:
-                                beep_proc.terminate()
-                                beep_proc = None
-                            # Intermittent beeps: large error → fast, small error → slow
-                            interval = min(0.5, max(0.05, 0.05 + 0.45 * (1 - max_err / 50)))
-                            if beep_proc is None or beep_proc.poll() is not None:
-                                sr = 8000
-                                dur = min(interval * 0.6, 0.08)
-                                t = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
-                                freq = 600 + min(max_err, 50) * 8  # 600-1000Hz
-                                tone = (np.sin(2 * np.pi * freq * t) * 16000).astype(np.int16)
-                                beep_proc = subprocess.Popen(
-                                    ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
-                                    stdin=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL,
-                                )
-                                beep_proc.stdin.write(tone.tobytes())
-                                beep_proc.stdin.close()
-                            time.sleep(interval)
+                                break
+
+                            # Adjust goal: for each joint, nudge goal by remaining error
+                            for k in target:
+                                error = pos.get(k, 0) - target[k]
+                                goal[k] = goal[k] - error
+                            teleop.send_feedback(goal)
+
+                            # Audio feedback: beeps when far, continuous tone when close
+                            almost_ready = max_err < settle_tolerance * 2
+                            if almost_ready:
+                                # Continuous high tone = "hold steady, almost there!"
+                                # Only start if not already playing
+                                if beep_proc is None or beep_proc.poll() is not None:
+                                    sr = 8000
+                                    dur = 1.0  # long tone, will be killed on convergence
+                                    t = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
+                                    tone = (np.sin(2 * np.pi * 1000 * t) * 16000).astype(np.int16)
+                                    beep_proc = subprocess.Popen(
+                                        ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+                                        stdin=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL,
+                                    )
+                                    beep_proc.stdin.write(tone.tobytes())
+                                    beep_proc.stdin.close()
+                                time.sleep(0.05)
+                            else:
+                                # Kill continuous tone if we regressed
+                                if beep_proc is not None and beep_proc.poll() is None:
+                                    beep_proc.terminate()
+                                    beep_proc = None
+                                # Intermittent beeps: large error → fast, small error → slow
+                                interval = min(0.5, max(0.05, 0.05 + 0.45 * (1 - max_err / 50)))
+                                if beep_proc is None or beep_proc.poll() is not None:
+                                    sr = 8000
+                                    dur = min(interval * 0.6, 0.08)
+                                    t = np.linspace(0, dur, int(sr * dur), dtype=np.float32)
+                                    freq = 600 + min(max_err, 50) * 8  # 600-1000Hz
+                                    tone = (np.sin(2 * np.pi * freq * t) * 16000).astype(np.int16)
+                                    beep_proc = subprocess.Popen(
+                                        ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+                                        stdin=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL,
+                                    )
+                                    beep_proc.stdin.write(tone.tobytes())
+                                    beep_proc.stdin.close()
+                                time.sleep(interval)
+                    finally:
+                        # Always terminate any outstanding beep — both the
+                        # normal break paths above AND any exception from
+                        # teleop.get_action / send_feedback inside the loop
+                        # would otherwise leave `aplay` running until the
+                        # parent process exits.
+                        if beep_proc is not None and beep_proc.poll() is None:
+                            beep_proc.terminate()
 
                     settle_ms = (time.perf_counter() - start_loop_t) * 1e3
                     logging.info(f"Servo compensation converged in {settle_ms:.0f}ms (max_err={max_err:.2f})")
@@ -797,8 +820,20 @@ def record_loop(
         # Action can eventually be clipped using `max_relative_target`,
         # so action actually sent is saved in the dataset. action = postprocessor.process(action)
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
+        # Chunk-aware path: if the teleop publishes a future horizon, the
+        # chunk goes to the robot verbatim so chunk-aware robots can do
+        # exact-lookup motor-τ compensation. The dict-shaped
+        # robot_action_to_send is the back-compat fallback (and the
+        # already-recorded action_values matches its frames[0] by contract).
+        # Only applies when teleop is a single Teleoperator (the policy /
+        # composite-teleop branches don't have a teleop instance to query).
+        action_to_send = robot_action_to_send
+        if isinstance(teleop, Teleoperator):
+            horizon = teleop.get_action_with_horizon()
+            if horizon is not None:
+                action_to_send = horizon
         with latency_session.span("action_send"):
-            _sent_action = robot.send_action(robot_action_to_send)
+            _sent_action = robot.send_action(action_to_send)
 
         # Write to dataset (only on real policy frames, not interpolated-only iterations)
         if dataset is not None and is_record_frame:
@@ -856,7 +891,7 @@ def record_loop(
 
 @parser.wrap()
 def record(cfg: RecordConfig) -> LeRobotDataset:
-    init_logging()
+    setup_run_logging(cfg.latency_output_dir, "record")
     logging.info(pformat(asdict(cfg)))
     if cfg.display_data:
         init_rerun(session_name="recording", ip=cfg.display_ip, port=cfg.display_port)
@@ -995,6 +1030,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         postprocessor = None
         interpolator = None
         if cfg.policy is not None:
+            # Advisory: surface embodiment mismatch (e.g. policy trained on
+            # bi_so107_follower running on bi_so107_follower_predictive).
+            # Doesn't block; prompts interactively if the TTY allows.
+            warn_on_policy_robot_type_mismatch(cfg.policy.pretrained_path, robot)
             preprocessor, postprocessor = make_pre_post_processors(
                 policy_cfg=cfg.policy,
                 pretrained_path=cfg.policy.pretrained_path,
@@ -1012,6 +1051,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         robot.connect()
         if teleop is not None:
             teleop.connect()
+            # Predictive / chunk-aware robots can poll teleop.get_action()
+            # at their own control rate. Default no-op for plain robots.
+            # See SO107FollowerPredictive.attach_teleop for details.
+            robot.attach_teleop(teleop)
 
         listener, events = init_keyboard_listener()
 
@@ -1036,7 +1079,29 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             )
 
         def run_reset_phase():
-            """Run a reset phase to allow setting up / resetting the environment."""
+            """Run a reset phase to allow setting up / resetting the environment.
+
+            For human-driven teleops this is "free teleop for reset_time_s
+            seconds while the operator rearranges objects". For file-backed
+            teleops (e.g. ``trajectory_replay``), it instead programmatically
+            drives the robot back to the trajectory's start pose and re-arms
+            the teleop so the next episode can begin.
+            """
+            # File-backed (episodic) teleop: skip the manual record_loop
+            # reset — that path would just spin against an exhausted
+            # teleop. Drive the arm back to the trajectory's start pose
+            # and re-arm. Duck-typed via ``start_pose`` so any future
+            # episodic teleop only needs to expose that property.
+            if teleop is not None and hasattr(teleop, "start_pose"):
+                from lerobot.robots.rest_position import move_to_rest_position
+
+                log_say("Auto-reset: moving to trajectory start", cfg.play_sounds)
+                if getattr(teleop, "is_exhausted", False):
+                    teleop.disconnect()
+                    teleop.connect()
+                move_to_rest_position(robot, teleop.start_pose, duration_s=cfg.auto_reset_duration_s)
+                return
+
             # Always disable torque on leader for reset phase so operator can teleop freely
             # (regardless of whether the previous episode ended with intervention or policy)
             if teleop is not None and hasattr(teleop, "disable_torque"):
@@ -1069,7 +1134,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             with intervention_ctx:
                 recorded_episodes = 0
 
-                if cfg.start_with_reset and not events["stop_recording"]:
+                # For file-backed teleops, ALWAYS do an initial move-to-start
+                # so episode 1's first emitted frame doesn't teleport the
+                # robot from wherever it happens to be at launch time. The
+                # ``start_with_reset`` flag is honoured for the human flow.
+                _is_episodic_teleop = teleop is not None and hasattr(teleop, "start_pose")
+                if not events["stop_recording"] and (cfg.start_with_reset or _is_episodic_teleop):
                     run_reset_phase()
 
                 while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
@@ -1103,9 +1173,14 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     _t_between = _time.monotonic()
 
                     # Execute a few seconds without recording to give time to manually reset the environment
-                    # Skip reset for the last episode to be recorded
+                    # Skip reset for the last episode to be recorded.
+                    # Exception: episodic teleops (trajectory_replay) always
+                    # park the arm at trajectory-start so the recorded
+                    # endpoint can't sag under gravity at disconnect.
                     if not events["stop_recording"] and (
-                        (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
+                        (recorded_episodes < cfg.dataset.num_episodes - 1)
+                        or events["rerecord_episode"]
+                        or _is_episodic_teleop
                     ):
                         run_reset_phase()
 

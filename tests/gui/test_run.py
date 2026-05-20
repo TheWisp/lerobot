@@ -130,6 +130,36 @@ class TestProfileToCliArgs:
         assert "--robot.port=/dev/ttyACM0" in args
         assert not any("cameras" in a for a in args)
 
+    def test_calibration_dir_round_trips_through_cli(self):
+        """Regression for commit 1b49664ba.
+
+        ``calibration_dir`` lives in ``_SKIP_FIELDS`` on the backend schema
+        (it's not rendered as a normal form input in the GUI), but the
+        profile JSON on disk still carries it and the launcher MUST pass
+        it through as a CLI arg when present in the profile data —
+        otherwise ``Robot.__init__`` falls back to the wrong default path
+        and the calibration JSON isn't found, triggering a recalibration
+        prompt that stalls the GUI subprocess silently.
+
+        The dropping bug was on the frontend (``_collectFormFields``
+        rebuilt the fields dict from the schema only, erasing any
+        non-schema keys before sending to ``/api/run/teleoperate``).
+        Fixed by having the frontend preserve loaded-data fields. This
+        test pins the backend's contract: given a profile that contains
+        ``calibration_dir``, the launcher emits it.
+        """
+        profile = {
+            "type": "bi_so107_follower_predictive",
+            "fields": {
+                "id": "white",
+                "left_arm_port": "/dev/ttyACM0",
+                "right_arm_port": "/dev/ttyACM2",
+                "calibration_dir": "/home/test/cal/so107_follower",
+            },
+        }
+        args = _profile_to_cli_args(profile, "robot")
+        assert "--robot.calibration_dir=/home/test/cal/so107_follower" in args
+
 
 # ============================================================================
 # _ensure_no_active_process
@@ -526,8 +556,16 @@ class TestObsReaderCleanupOnLaunch:
             ):
                 mock_proc = AsyncMock()
                 mock_proc.pid = 9999
+                # readline() must return EOF (empty bytes) so the
+                # _read_stream tasks exit cleanly. Without this, the
+                # tasks loop indefinitely on AsyncMock return values
+                # and leak `Task exception was never retrieved` warnings
+                # at event-loop teardown (rstrip on a coroutine).
                 mock_proc.stdout = AsyncMock()
+                mock_proc.stdout.readline = AsyncMock(return_value=b"")
                 mock_proc.stderr = AsyncMock()
+                mock_proc.stderr.readline = AsyncMock(return_value=b"")
+                mock_proc.wait = AsyncMock(return_value=0)
                 mock_exec.return_value = mock_proc
                 await start_teleoperate(req)
 
@@ -959,3 +997,199 @@ class TestLatencySourcesListing:
         teleop = result["sources"][0]
         assert teleop["fresh"] is False
         assert teleop["age_s"] >= 60.0
+
+
+# ============================================================================
+# Parent-death detector (PR_SET_PDEATHSIG)
+# ============================================================================
+
+
+class TestParentDeathDetector:
+    """The GUI launches subprocesses with preexec_fn=_set_pdeathsig_preexec
+    so a SIGKILL on the GUI server doesn't leave teleop/record processes
+    running indefinitely. Regression for the orphan-subprocess scenario
+    documented in gui/TODO.md."""
+
+    def test_launch_subprocess_passes_preexec(self):
+        """The teleop launch path must pass our pdeathsig preexec_fn."""
+        import lerobot.gui.api.run as run_module
+
+        async def run():
+            req = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP, fps=30)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("asyncio.create_subprocess_exec") as mock_exec,
+            ):
+                mock_proc = AsyncMock()
+                mock_proc.pid = 9999
+                mock_proc.stdout = AsyncMock()
+                mock_proc.stdout.readline = AsyncMock(return_value=b"")
+                mock_proc.stderr = AsyncMock()
+                mock_proc.stderr.readline = AsyncMock(return_value=b"")
+                mock_proc.wait = AsyncMock(return_value=0)
+                mock_exec.return_value = mock_proc
+                await start_teleoperate(req)
+                return mock_exec
+
+        mock_exec = asyncio.run(run())
+        assert mock_exec.called
+        kwargs = mock_exec.call_args.kwargs
+        assert "preexec_fn" in kwargs, (
+            "create_subprocess_exec must receive preexec_fn for the parent-death detector"
+        )
+        assert kwargs["preexec_fn"] is run_module._set_pdeathsig_preexec
+
+    def test_set_pdeathsig_preexec_is_callable_on_linux(self):
+        """The preexec function itself must run without raising on Linux.
+
+        It's called in the forked child between fork and exec; any
+        exception there would prevent the subprocess from starting at all.
+        """
+        import sys
+
+        from lerobot.gui.api.run import _set_pdeathsig_preexec
+
+        # On Linux this hits libc.prctl; on other platforms it's a no-op.
+        # Either way it must not raise.
+        _set_pdeathsig_preexec()
+        if sys.platform != "linux":
+            pytest.skip("PR_SET_PDEATHSIG integration test only runs on Linux")
+
+    @pytest.mark.skipif(
+        __import__("sys").platform != "linux",
+        reason="PR_SET_PDEATHSIG is Linux-only",
+    )
+    def test_child_dies_when_grandparent_killed(self, tmp_path):
+        """End-to-end: spawn a 'fake GUI' subprocess that itself spawns a
+        sleeping child with our preexec; kill the fake GUI; confirm the
+        child died. Proves the kernel-level mechanism actually fires."""
+        import os
+        import signal
+        import subprocess
+        import sys
+        import textwrap
+        import time
+
+        pidfile = tmp_path / "child.pid"
+
+        # The fake-GUI script: spawn a sleep-60 subprocess with our
+        # preexec_fn, write its PID to a file, then sleep forever.
+        fake_gui_src = textwrap.dedent(f"""
+            import subprocess, time, signal, ctypes
+
+            def preexec():
+                libc = ctypes.CDLL("libc.so.6", use_errno=True)
+                libc.prctl(1, signal.SIGTERM, 0, 0, 0)
+
+            child = subprocess.Popen(
+                ["sleep", "60"],
+                preexec_fn=preexec,
+            )
+            with open({str(pidfile)!r}, "w") as f:
+                f.write(str(child.pid))
+            time.sleep(60)
+        """)
+
+        fake_gui = subprocess.Popen([sys.executable, "-c", fake_gui_src])
+        try:
+            # Wait for the child to be spawned and pid recorded.
+            for _ in range(50):
+                if pidfile.exists():
+                    break
+                time.sleep(0.05)
+            assert pidfile.exists(), "fake GUI never reported child pid"
+            child_pid = int(pidfile.read_text().strip())
+
+            # Sanity check: child is alive.
+            os.kill(child_pid, 0)  # no-op, just probes existence
+
+            # Now kill the fake GUI with SIGKILL — no chance for clean shutdown.
+            fake_gui.kill()
+            fake_gui.wait(timeout=5.0)
+
+            # PR_SET_PDEATHSIG should have sent SIGTERM to the child the
+            # moment its parent (the fake GUI) died. Within a short window
+            # the child must no longer exist.
+            for _ in range(50):
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    return  # Child is gone — test passes
+                time.sleep(0.05)
+            # Reaching here means the child outlived its parent.
+            try:
+                os.kill(child_pid, signal.SIGKILL)  # cleanup
+            except ProcessLookupError:
+                pass
+            pytest.fail(
+                f"Child pid {child_pid} survived after grandparent died — PR_SET_PDEATHSIG did not fire."
+            )
+        finally:
+            if fake_gui.poll() is None:
+                fake_gui.kill()
+                fake_gui.wait(timeout=2.0)
+
+
+# ============================================================================
+# Launch-lock serialization (TOCTOU on _active_process)
+# ============================================================================
+
+
+class TestLaunchLockSerializes:
+    """Regression for the TOCTOU race documented in gui/TODO.md:
+    `_ensure_no_active_process()` is synchronous, then `await _launch_subprocess(...)`
+    is the first await — without a lock, a second request arriving during the
+    fork sees `_active_process is None`, passes the check, and overwrites the
+    in-flight launch — orphaning the first subprocess holding cameras /
+    serial. `_launch_lock` makes the check+launch atomic."""
+
+    def test_concurrent_launches_serialize(self):
+        """Second concurrent /teleoperate must wait on _launch_lock until the
+        first finishes, then observe _active_process and get 409."""
+        import asyncio as _asyncio
+
+        import lerobot.gui.api.run as run_module
+
+        first_started = _asyncio.Event()
+        release_first = _asyncio.Event()
+
+        async def slow_launch(args, command, config, extra_env=None):
+            # Mimic _launch_subprocess: set _active_process, then yield to the
+            # event loop and hold until the test releases. Without _launch_lock,
+            # the second start_teleoperate could observe _active_process is
+            # still None (or already set) inconsistently. With the lock, the
+            # second call blocks until this returns.
+            mock_proc = AsyncMock()
+            mock_proc.pid = 9999
+            mock_proc.returncode = None
+            run_module._active_process = mock_proc
+            run_module._active_command = command
+            first_started.set()
+            await release_first.wait()
+
+        async def run():
+            req1 = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP, fps=30)
+            req2 = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP, fps=30)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._active_command", None),
+                patch("lerobot.gui.api.run._launch_subprocess", slow_launch),
+            ):
+                t1 = _asyncio.create_task(start_teleoperate(req1))
+                await first_started.wait()
+
+                t2 = _asyncio.create_task(start_teleoperate(req2))
+                # Give t2 a slice of time to attempt the lock.
+                await _asyncio.sleep(0.05)
+                assert not t2.done(), "Second launch ran without waiting for the first — _launch_lock missing"
+
+                release_first.set()
+                await t1
+                with pytest.raises(HTTPException) as exc_info:
+                    await t2
+                assert exc_info.value.status_code == 409
+            # Restore module state for other tests.
+            run_module._active_process = None
+            run_module._active_command = None
+
+        asyncio.run(run())

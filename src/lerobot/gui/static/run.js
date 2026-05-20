@@ -39,6 +39,16 @@ async function runTabInit() {
     _initSelectTitleSync();
     await _ensureModelDataLoaded();
     await pollRunStatus();
+
+    // Backstop reconciliation: SSE events are the primary trigger for
+    // re-polling, but if the stream drops at the wrong moment (server-side
+    // close racing with the `done` event, browser tab backgrounded, etc.)
+    // the frontend can be left thinking a long-dead subprocess is still
+    // running. A low-frequency poll closes that gap without user
+    // intervention; cost is one tiny GET every 5 s.
+    if (!window._runStatusPollTimer) {
+        window._runStatusPollTimer = setInterval(pollRunStatus, 5000);
+    }
 }
 
 /** Sync select title attribute to selected option text (for ellipsis tooltip). */
@@ -1070,12 +1080,20 @@ function renderRunForm() {
     html += `<input type="text" id="run-hvla-s2-checkpoint" placeholder="/path/to/s2/model.safetensors" value="">`;
     html += `<label>Task Prompt${_REQ}</label>`;
     html += `<input type="text" id="run-hvla-task" placeholder="assemble cylinder into ring" value="">`;
-    html += `<label>Decode Subtask</label>`;
-    html += `<input type="checkbox" id="run-hvla-decode-subtask">`;
-    html += `<label>Query Interval (steps between S1 inference, default 2)</label>`;
-    html += `<input type="number" id="run-hvla-query-interval" placeholder="2" min="0">`;
-    html += `<label>Denoise Steps (default 10)</label>`;
-    html += `<input type="number" id="run-hvla-denoise-steps" placeholder="10" min="1">`;
+    const _hvlaDecodeSubtaskDesc = "Have S2 also emit a natural-language subtask label alongside its latent → action chunk. Useful for VLA debugging / interpretability; off by default to keep S2 inference latency minimal.";
+    html += `<label title="${_hvlaDecodeSubtaskDesc}">Decode Subtask</label>`;
+    html += `<input type="checkbox" id="run-hvla-decode-subtask" title="${_hvlaDecodeSubtaskDesc}">`;
+    const _hvlaQueryIntervalDesc = "How often S1 (chunk policy) runs new inference, measured in policy steps. Default 2 = inference every 2 steps (15 Hz at fps=30) — small enough that motion stays responsive but big enough that S1 latency doesn't bottleneck the loop. Set to 1 for max responsiveness at higher compute cost.";
+    html += `<label title="${_hvlaQueryIntervalDesc}">Query Interval (steps between S1 inference, default 2)</label>`;
+    html += `<input type="number" id="run-hvla-query-interval" placeholder="2" min="0" title="${_hvlaQueryIntervalDesc}">`;
+    const _hvlaDenoiseStepsDesc = "Number of flow-matching ODE solver steps per S1 inference. Higher → more accurate chunks but slower (each step is one full S1 forward pass). Default 10 is the trained-time setting; lowering to 5 cuts latency by ~50% at small accuracy cost.";
+    html += `<label title="${_hvlaDenoiseStepsDesc}">Denoise Steps (default 10)</label>`;
+    html += `<input type="number" id="run-hvla-denoise-steps" placeholder="10" min="1" title="${_hvlaDenoiseStepsDesc}">`;
+    html += `<label title="How the policy frame is sent to the robot each tick. 'chunk' (default) packs the remaining chunk frames as an ActionChunk → predictive robots use the exact-lookup path for zero-estimation-error lookahead. 'dict' sends only the current frame → predictive robots fall back to velocity-LSQ extrapolation (rate-agnostic post-fix but still has EMA residual). Use 'dict' for A/B comparison or as rollback. Non-predictive robots are unaffected.">Action Send Shape</label>`;
+    html += `<select id="run-hvla-send-action-shape" title="Default 'chunk' is the recommended best-perf path. Switch to 'dict' for A/B comparison against pre-fix behaviour.">`;
+    html += `<option value="chunk">chunk (default — predictive exact-lookup)</option>`;
+    html += `<option value="dict">dict (single frame — A/B / rollback)</option>`;
+    html += `</select>`;
     html += `<label>Record Dataset</label>`;
     html += `<input type="text" id="run-hvla-record-dataset" placeholder="eval/hvla_eval (optional)" value="" oninput="_toggleHvlaRecordFields()">`;
     html += `<label>Episodes</label>`;
@@ -1093,10 +1111,11 @@ function renderRunForm() {
     html += '<div class="form-section">';
     html += '<div class="form-section-title">RLT Online RL</div>';
     html += '<div class="form-grid">';
-    html += `<label>RL Checkpoint</label>`;
-    html += `<select id="run-hvla-rlt-select" onchange="_onRltSelectChange()">`;
-    html += `<option value="">None (no RL)</option>`;
-    html += `<option value="__new__">+ New training...</option>`;
+    const _rltSelectDesc = "Online RL fine-tuning of the frozen S1 chunk policy via a 1×768 'RL token' bottleneck. None = pure HVLA inference. + New training = start a fresh actor/critic against the loaded S1. Existing checkpoint = resume / deploy a previously-trained actor. See project_rlt_design memory note for the broader architecture.";
+    html += `<label title="${_rltSelectDesc}">RL Checkpoint</label>`;
+    html += `<select id="run-hvla-rlt-select" onchange="_onRltSelectChange()" title="${_rltSelectDesc}">`;
+    html += `<option value="" title="Pure HVLA inference — no RL actor in the loop.">None (no RL)</option>`;
+    html += `<option value="__new__" title="Start a fresh RLT training run. Requires a Phase-1 RL-token encoder checkpoint.">+ New training...</option>`;
     html += `</select>`;
     // Fields shown when New is selected
     html += `<label id="run-hvla-rlt-token-label" style="display:none">RL Token Encoder${_REQ}</label>`;
@@ -1108,10 +1127,11 @@ function renderRunForm() {
     html += `<label id="run-hvla-rlt-shared-noise-label" style="display:none" title="Sample exploration noise once per chunk and broadcast across C frames. Smoother joint commands than per-frame iid noise. Default ON after v2_widened ep101→120 A/B (autonomous +10pp). Uncheck to A/B back to per-frame iid noise — flipping mid-training mixes noise distributions in the replay buffer for ~10 episodes.">Shared noise per chunk</label>`;
     html += `<input type="checkbox" id="run-hvla-rlt-shared-noise" checked style="display:none" title="Sample exploration noise once per chunk and broadcast across C frames. Smoother joint commands than per-frame iid noise. Default ON after v2_widened ep101→120 A/B (autonomous +10pp). Uncheck to A/B back to per-frame iid noise — flipping mid-training mixes noise distributions in the replay buffer for ~10 episodes.">`;
     // Fields shown when existing checkpoint selected
-    html += `<label id="run-hvla-rlt-mode-label" style="display:none">Mode</label>`;
-    html += `<select id="run-hvla-rlt-run-mode" style="display:none" onchange="_onRltSelectChange()">`;
-    html += `<option value="train">Train (continue learning)</option>`;
-    html += `<option value="deploy">Deploy (inference only)</option>`;
+    const _rltModeDesc = "Train continues the RL gradient updates on the loaded checkpoint — actor/critic keep learning during the run. Deploy runs the actor in pure inference (no optimizer, no replay buffer writes) — use to evaluate a trained policy without polluting it with new transitions.";
+    html += `<label id="run-hvla-rlt-mode-label" style="display:none" title="${_rltModeDesc}">Mode</label>`;
+    html += `<select id="run-hvla-rlt-run-mode" style="display:none" onchange="_onRltSelectChange()" title="${_rltModeDesc}">`;
+    html += `<option value="train" title="Continue RL training: actor + critic + replay buffer all active.">Train (continue learning)</option>`;
+    html += `<option value="deploy" title="Inference only: actor weights frozen, no gradient updates, no replay buffer writes. Safe way to evaluate a trained policy.">Deploy (inference only)</option>`;
     html += `</select>`;
     // Common fields
     html += `<label id="run-hvla-rlt-chunk-label" style="display:none">Chunk Length</label>`;
@@ -1422,6 +1442,7 @@ async function launchRun() {
                 s1_query_interval: parseInt(document.getElementById('run-hvla-query-interval')?.value) || null,
                 denoise_steps: parseInt(document.getElementById('run-hvla-denoise-steps')?.value) || null,
                 decode_subtask: document.getElementById('run-hvla-decode-subtask')?.checked || false,
+                send_action_shape: document.getElementById('run-hvla-send-action-shape')?.value || 'chunk',
                 record_dataset: recordDs,
                 num_episodes: parseInt(document.getElementById('run-hvla-episodes')?.value) || 1,
                 episode_time_s: parseFloat(document.getElementById('run-hvla-episode-time')?.value) || 60,
@@ -1679,7 +1700,14 @@ function connectOutputSSE() {
     };
 
     runEventSource.onerror = () => {
+        // SSE can drop for many reasons: server-side close after a `done`
+        // event raced with the connection teardown, network blip, browser
+        // backgrounding the tab, etc. If we don't reconcile here the
+        // frontend can stay locked at _isRunning=true forever even though
+        // the subprocess already exited — Stop AND Launch both end up
+        // greyed out and the user has to refresh the page to unstick.
         disconnectOutputSSE();
+        pollRunStatus();
     };
 }
 

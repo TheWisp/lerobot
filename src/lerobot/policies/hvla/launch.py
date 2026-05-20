@@ -95,6 +95,20 @@ def main():
         help="Max degrees any joint can change per frame (e.g. 10). Prevents sudden jumps.",
     )
     parser.add_argument(
+        "--send-action-shape",
+        choices=["chunk", "dict"],
+        default="chunk",
+        help=(
+            "Shape of the payload sent to robot.send_action on the policy path: "
+            "'chunk' (default) packs the remaining chunk frames as an ActionChunk — "
+            "predictive robots use the chunk-exact-lookup path for zero-estimation-error "
+            "lookahead; non-predictive robots use frames[0] only. "
+            "'dict' sends only the single frame at idx — for A/B comparison against the "
+            "pre-fix behaviour, or as a rollback if the chunk path causes issues. "
+            "Same recorded dataset either way (action column is one frame per row)."
+        ),
+    )
+    parser.add_argument(
         "--save-grip-drops",
         type=str,
         default=None,
@@ -323,6 +337,7 @@ def main():
             rlt_shared_noise_per_chunk=args.rlt_shared_noise_per_chunk,
             latency_monitor=args.latency_monitor,
             latency_output_dir=args.latency_output_dir,
+            send_action_shape=args.send_action_shape,
         )
     finally:
         stop_event.set()
