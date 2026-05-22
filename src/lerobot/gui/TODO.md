@@ -276,8 +276,30 @@ Live overlay during teleop/record showing how the current state compares to the 
 
 - [Low] UX consistency pass: ensure consistent button coloring/hierarchy across views
 - [Low] ~1s latency when first opening the Robot tab while loading profiles
-- [ ] Guided calibration wizard (adapt `robot.calibrate()` for GUI-driven step-by-step flow)
 - [ ] **Surface `/api/robot/recover` from runtime error states (deeper integration).** A dedicated "Recover" button is shipped next to the rest-position buttons (`renderRestPositionSection` in `robot.js`), and `recoverRobot()` chains into `/move-to-rest-position` when the report is clean and a rest position is on file (with doubled `duration_s` if anything was recovered). What's missing: rendering an inline "Try recovery" link next to the error toast when teleop / record / replay / move-to-rest fails because of a wedged motor chain (e.g. `FeetechMotorsBus motor check failed ... Missing motor IDs`). Today these errors are printed-only (`logger.exception` + raw string in the response body), so users have to read the server log to know what's wrong, and there's no path from "I see an error" to "click to attempt recovery". Prereq: consolidate error handling — promote the relevant `RuntimeError` / `ConnectionError` from the bus and robot layers into a small set of typed exceptions (e.g. `MotorChainWedged`, `PortBusy`, `MissingMotor`) that the FastAPI layer maps to structured error bodies (`{"error_code": "...", "detail": "...", "remediation_hint": "recover"}`). The frontend can then render the appropriate hint generically instead of string-matching error messages.
+
+### Guided Calibration Wizard
+
+LeRobot's stock calibration is rudimentary — `robot.calibrate()` is blocking
+`input()` / `print()` prompts, no visual reference for the "middle of range"
+homing pose, no verification. Replace it with a GUI-driven, visually-guided
+wizard. Designed as three phases; ship phase 1 first as its own PR.
+
+- [ ] **Phase 1 — motor calibration, any robot, no URDF.** (1) Homing: show a
+      mid-range reference pose, the user matches the physical arm to it, capture.
+      (2) Ranges: GUI-driven range-of-motion recording. Reuse the motor-bus
+      primitives directly (`set_half_turn_homings`, `record_ranges_of_motion`,
+      `MotorCalibration`, `write_calibration`) — NOT the `calibrate()` wrapper,
+      which is CLI-`input()`-bound. Emit the same calibration files so the tool
+      complements `lerobot-calibrate`. No camera pane — the human is at the robot.
+- [ ] **Phase 2 — URDF verification + live layer-2 tuning.** For robots with a
+      vendored `*_description` URDF: verify the URDF against the live observed
+      pose, and let the user tune the per-joint `(sign, offset_deg)` layer-2
+      alignment interactively instead of hand-editing `joint_alignment.py`. Only
+      CAD-exported URDFs (e.g. SO-107) need this; a calibration-aligned URDF
+      (SO-101) is identity. Depends on the URDF state visualization.
+- [ ] **Phase 3 — kinematic calibration (research).** Beyond joint zero/range:
+      link-length / mounting-offset estimation. Scope TBD.
 
 ## Architecture
 
