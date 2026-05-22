@@ -128,6 +128,7 @@ dataset_viz = ["lerobot[dataset]", "lerobot[viz]"]
 av-dep = ["av>=15.0.0,<16.0.0"]
 pygame-dep = ["pygame>=2.5.1,<2.7.0"]
 placo-dep = ["placo>=0.9.6,<0.9.17"]
+pink-dep = ["pin-pink>=4.2,<5", "qpsolvers[proxqp]>=4.12,<5"]
 transformers-dep = ["transformers==5.3.0"] # TODO(Steven): https://github.com/huggingface/lerobot/pull/3249
 grpcio-dep = ["grpcio==1.73.1", "protobuf>=6.31.1,<6.32.0"]
 can-dep = ["python-can>=4.2.0,<5.0.0"]
@@ -163,7 +164,7 @@ unitree_g1 = [
     "lerobot[pygame-dep]",
 ]
 reachy2 = ["reachy2_sdk>=1.0.15,<1.1.0"]
-kinematics = ["lerobot[placo-dep]"]
+kinematics = ["lerobot[placo-dep]", "lerobot[pink-dep]"]
 intelrealsense = [
     "pyrealsense2>=2.55.1.6486,<2.57.0 ; sys_platform != 'darwin'",
     "pyrealsense2-macosx>=2.54,<2.57.0 ; sys_platform == 'darwin'",
@@ -349,6 +350,9 @@ ignore = [
 # HVLA / RLT / our research code uses ML-convention names: matrix vars X/Q/K/V/B/C, `import torch.nn.functional as F`, etc. Ruff's pep8-naming rules flag these as violations; consistent with how upstream handles wall_x, scope the same naming-rule allowlist to fork-only ML code. Also allow E702/E741 in research scripts which routinely chain plot setup statements (`ax.set_xlabel(...); ax.set_ylabel(...)`) and use `l` for list-comp temporaries. SIM102/SIM108 disabled because nested-if and if-else carry expository comments that ternary forms can't.
 "src/lerobot/policies/hvla/**" = ["N801", "N802", "N803", "N806", "N812", "E702", "E741", "SIM102", "SIM108"]
 "tests/hvla/**" = ["N802", "N803", "N806", "N812", "E402", "E741", "B017"]
+# Kinematics code uses math-convention matrix names (SE(3) `T`, rotation `R`).
+"src/lerobot/model/pink_kinematics.py" = ["N806"]
+"tests/model/test_pink_kinematics.py" = ["N806", "N817"]
 # Tests routinely use nested `with patch(...)` blocks (one mock per line is more readable than one combined `with (a, b, c, d):`), and try/except/pass for "raising is fine" assertions. Mute these rules in tests broadly.
 "tests/**" = ["SIM117", "SIM105", "SIM113"]
 # Top-level research / inference scripts also use `F = torch.nn.functional` aliasing.
