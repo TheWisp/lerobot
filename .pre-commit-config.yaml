@@ -30,6 +30,9 @@ repos:
     hooks:
       - id: check-added-large-files
         args: ['--maxkb=1024']
+        # Vendored third-party browser libs (three.js, urdf-loader) ship as
+        # single large bundles — see static/vendor/PROVENANCE.md.
+        exclude: ^src/lerobot/gui/static/vendor/
       - id: debug-statements
       - id: check-merge-conflict
       - id: check-case-conflict
@@ -50,6 +53,8 @@ repos:
     hooks:
       - id: typos
         args: [--force-exclude]
+        # Vendored third-party browser libs — not our source to spell-check.
+        exclude: ^src/lerobot/gui/static/vendor/
 
   - repo: https://github.com/asottile/pyupgrade
     rev: v3.21.0

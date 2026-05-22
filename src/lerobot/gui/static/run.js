@@ -2017,8 +2017,16 @@ async function startObsStreamViewer() {
         attempts++;
     }
 
-    if (!obsStreamMeta?.available) {
-        console.warn('Observation stream not available after timeout');
+    // Probe the URDF visualization — it's on by default, appearing as one
+    // grid tile whenever the robot has a vendored URDF (see /api/run/urdf-viz).
+    let urdfVizActive = false;
+    try {
+        const res = await fetch('/api/run/urdf-viz');
+        urdfVizActive = !!(await res.json()).available;
+    } catch (e) { /* probe failed; leave inactive */ }
+
+    if (!obsStreamMeta?.available && !urdfVizActive) {
+        console.warn('Neither obs-stream nor urdf-viz available after timeout');
         return;
     }
 
@@ -2031,16 +2039,19 @@ async function startObsStreamViewer() {
     let grid = container.querySelector('.obs-cam-grid');
     if (grid) grid.remove();
 
-    // Build camera grid
-    const camKeys = Object.keys(obsStreamMeta.image_keys);
-    if (camKeys.length === 0) return;
+    // Build the tile grid: cameras + (optionally) the URDF viz tile.
+    const camKeys = obsStreamMeta?.available ? Object.keys(obsStreamMeta.image_keys) : [];
+    if (camKeys.length === 0 && !urdfVizActive) return;
 
+    const tileCount = camKeys.length + (urdfVizActive ? 1 : 0);
     grid = document.createElement('div');
     grid.className = 'obs-cam-grid';
-    const cols = camKeys.length <= 2 ? camKeys.length : Math.min(camKeys.length, 3);
+    const cols = tileCount <= 2 ? tileCount : Math.min(tileCount, 3);
+    const rows = Math.max(1, Math.ceil(tileCount / cols));
     grid.style.cssText = `
         display: grid;
         grid-template-columns: repeat(${cols}, 1fr);
+        grid-template-rows: repeat(${rows}, 1fr);
         gap: 4px;
         width: 100%; height: 100%;
         padding: 4px;
@@ -2080,6 +2091,29 @@ async function startObsStreamViewer() {
         grid.appendChild(cell);
         imgElements[key] = img;
     }
+
+    // URDF visualization tile — the in-browser three.js/urdf-loader viewer,
+    // served same-origin (no separate process or port).
+    if (urdfVizActive) {
+        const cell = document.createElement('div');
+        cell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
+        const iframe = document.createElement('iframe');
+        iframe.src = '/static/urdf_viz.html?v=3';
+        iframe.style.cssText = 'width: 100%; height: 100%; border: none; background: #1a1a1a;';
+        iframe.title = 'Robot visualizer';
+        cell.appendChild(iframe);
+        const label = document.createElement('div');
+        label.textContent = 'visualizer';
+        label.style.cssText = `
+            position: absolute; top: 4px; left: 6px;
+            color: #ccc; font-size: 11px; font-family: monospace;
+            background: rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 3px;
+            pointer-events: none;
+        `;
+        cell.appendChild(label);
+        grid.appendChild(cell);
+    }
+
     container.appendChild(grid);
 
     // Poll camera frames at ~10fps
