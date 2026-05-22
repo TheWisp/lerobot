@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>URDF state visualization</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1a1a1a; overflow: hidden; }
+  /* top-right — aligns with the per-camera performance overlay; the run.js
+     tile label sits top-left, so this clears it too */
+  #status { position: absolute; top: 4px; right: 6px; color: #9cf; font-size: 11px;
+            font-family: monospace; background: rgba(0,0,0,0.6); padding: 1px 5px;
+            border-radius: 3px; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="status">starting…</div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/static/vendor/three.module.js",
+    "three/examples/jsm/loaders/STLLoader.js": "/static/vendor/STLLoader.js",
+    "three/examples/jsm/loaders/ColladaLoader.js": "/static/vendor/ColladaLoader.js",
+    "urdf-loader": "/static/vendor/URDFLoader.js"
+  }
+}
+</script>
+<script type="module">
+// Thin renderer: it fetches /api/run/urdf-viz (which returns the URDF
+// reference and per-joint angles already in radians — the backend does the
+// motor->URDF conversion, see lerobot/gui/urdf_viz.py) and draws it. No
+// kinematics here, only rendering.
+import * as THREE from 'three';
+import { OrbitControls } from '/static/vendor/OrbitControls.js';
+import { STLLoader } from '/static/vendor/STLLoader.js';
+import URDFLoader from 'urdf-loader';
+
+const ENDPOINT = '/api/run/urdf-viz';
+const BIMANUAL_X = 0.165;  // half the physical center-to-center arm spacing
+const setStatus = (m) => { document.getElementById('status').textContent = m; };
+
+// ── three.js scene ────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a1a);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+camera.position.set(0.55, 0.4, 0.55);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+document.body.appendChild(renderer.domElement);
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+dl.position.set(1, 2, 1);
+scene.add(dl);
+scene.add(new THREE.GridHelper(1, 20, 0x444444, 0x2a2a2a));
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.15, 0);
+
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Continuous render loop (requestAnimationFrame). _polls counts how many
+// observation updates were applied in the last second — the status readout.
+let _polls = 0, _label = '';
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ── load one arm's URDF ───────────────────────────────────────────────────
+function loadArm(urdfUrl, baseX) {
+  return new Promise((resolve, reject) => {
+    const loader = new URDFLoader();
+    loader.loadMeshCb = (path, manager, done) => {
+      new STLLoader(manager).load(
+        path,
+        (geom) => {
+          geom.computeVertexNormals();
+          done(new THREE.Mesh(geom, new THREE.MeshPhongMaterial({ color: 0xe0b020 })));
+        },
+        undefined,
+        () => done(null),
+      );
+    };
+    loader.load(urdfUrl, (robot) => {
+      if (!robot) { reject(new Error('URDF failed to load: ' + urdfUrl)); return; }
+      // urdf-loader clamps setJointValue to the URDF <limit> by default; the
+      // calibration offsets legitimately exceed the CAD limits, so show the
+      // true (unclamped) pose.
+      for (const name in robot.joints) robot.joints[name].ignoreLimits = true;
+      robot.rotation.x = -Math.PI / 2;  // URDF Z-up -> three.js Y-up
+      robot.position.x = baseX;
+      scene.add(robot);
+      resolve(robot);
+    });
+  });
+}
+
+let _robots = [];  // index-aligned with the endpoint's `arms`
+
+async function poll() {
+  try {
+    const r = await fetch(ENDPOINT);
+    const data = await r.json();
+    if (data.available && _robots.length === data.arms.length) {
+      data.arms.forEach((arm, i) => {
+        const robot = _robots[i];
+        for (const [joint, rad] of Object.entries(arm.joints)) {
+          if (robot.joints[joint]) robot.joints[joint].setJointValue(rad);
+        }
+      });
+      _polls++;
+    }
+  } catch (e) { /* transient — keep the last pose */ }
+  setTimeout(poll, 33);  // ~30 Hz, matches the observation rate
+}
+
+async function init() {
+  setStatus('waiting for a run…');
+  let data = null;
+  for (let i = 0; i < 240; i++) {
+    try {
+      const r = await fetch(ENDPOINT);
+      const d = await r.json();
+      if (d.available) { data = d; break; }
+    } catch (e) { /* not ready */ }
+    await new Promise((res) => setTimeout(res, 500));
+  }
+  if (!data) { setStatus('no robot to visualize'); return; }
+
+  const baseXs = data.bimanual ? data.arms.map((a) => (a.prefix === 'left_' ? BIMANUAL_X : -BIMANUAL_X)) : [0];
+  for (let i = 0; i < data.arms.length; i++) {
+    _robots.push(await loadArm(data.urdf, baseXs[i]));
+  }
+  _label = (data.name || 'robot') + (data.bimanual ? ' (bimanual)' : '');
+  setStatus(_label);
+  setInterval(() => {
+    setStatus(`${_label} · ${_polls} Hz`);
+    _polls = 0;
+  }, 1000);
+  poll();
+}
+
+init();
+</script>
+</body>
+</html>

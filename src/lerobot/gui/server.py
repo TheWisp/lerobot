@@ -202,6 +202,18 @@ app.include_router(bug_reports.router)
 _static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
+# Serve vendored robot descriptions (URDF + meshes) so the in-browser URDF
+# viewer can fetch them same-origin. Every robots/*_description package is
+# mounted under /urdf-assets/<name>/ — no robot is named here.
+_robots_dir = Path(__file__).parent.parent / "robots"
+for _desc_dir in sorted(_robots_dir.glob("*_description")):
+    if _desc_dir.is_dir():
+        app.mount(
+            f"/urdf-assets/{_desc_dir.name}",
+            StaticFiles(directory=_desc_dir),
+            name=f"urdf-assets-{_desc_dir.name}",
+        )
+
 
 @app.get("/")
 async def root():
