@@ -305,6 +305,8 @@ lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
 [tool.setuptools.package-data]
 lerobot = ["envs/*.json"]
 "lerobot.gui" = ["static/*.html", "static/*.css", "static/*.js"]
+"lerobot.robots.so101_description" = ["urdf/*.urdf", "meshes/*.stl"]
+"lerobot.robots.so107_description" = ["urdf/*.urdf", "meshes/*.stl"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
