@@ -1232,6 +1232,38 @@ async def obs_stream_state() -> dict:
     }
 
 
+@router.get("/urdf-viz")
+async def urdf_viz_state() -> dict:
+    """URDF reference + per-joint angles for the in-browser URDF viewer.
+
+    Resolves the robot from the live observation stream and converts each
+    motor position to a URDF joint angle (see :mod:`lerobot.gui.urdf_viz`).
+    The frontend (``static/urdf_viz.html``) loads ``urdf`` once, then polls
+    this for ``arms[*].joints``. ``{"available": false}`` when no run is
+    streaming or the robot has no vendored URDF.
+    """
+    from lerobot.gui.urdf_viz import compute_joint_angles, resolve_robot
+
+    reader = _get_obs_reader()
+    if reader is None:
+        return {"available": False}
+    obs_result = reader.read_obs()
+    if not obs_result:
+        return {"available": False}
+    obs = obs_result[0]
+    spec = resolve_robot(obs.keys())
+    if spec is None:
+        return {"available": False}
+    angles = compute_joint_angles(spec, obs)
+    return {
+        "available": True,
+        "name": spec.name,
+        "urdf": f"/urdf-assets/{spec.urdf_url_path}",
+        "bimanual": len(spec.arms) == 2,
+        "arms": [{"prefix": a.obs_prefix, "joints": angles.get(a.obs_prefix, {})} for a in spec.arms],
+    }
+
+
 @router.get("/obs-stream/image/{cam_key}")
 async def obs_stream_image(cam_key: str) -> Response:
     """Return latest camera frame as JPEG (cached until new frame arrives)."""
