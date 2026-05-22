@@ -177,3 +177,8 @@ outputs/
 *.xml
 *.part
 .claude/
+
+# Vendored robot descriptions are the sanctioned home for URDF + meshes;
+# keep them tracked even though the extensions are ignored above.
+!src/lerobot/robots/*_description/urdf/*.urdf
+!src/lerobot/robots/*_description/meshes/*.stl
