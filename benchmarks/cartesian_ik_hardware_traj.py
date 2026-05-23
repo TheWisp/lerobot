@@ -454,54 +454,82 @@ def _save_npz(results: dict, path: Path) -> None:
 
 
 def _plot_results(results: dict, path: Path) -> None:
-    fig, axes = plt.subplots(2, len(results), figsize=(13, 7), height_ratios=(2, 1))
-    if len(results) == 1:
-        axes = axes.reshape(2, 1)
+    """Two rows per shape: (1) 3D commanded vs achieved trace, (2) Z over waypoint.
+
+    The earlier 2D-in-plane projection silently hid the gravity-induced
+    Z sag — the achieved trace looked like a slightly-smaller-than-
+    commanded shape, but the commanded shape and the achieved shape lived
+    on different planes. The 3D row shows both traces in (forward,
+    lateral, z) so the sag is geometrically visible; the Z row shows the
+    sag magnitude in mm over the trajectory so it's also numerically
+    readable.
+    """
+    n = len(results)
+    fig = plt.figure(figsize=(5 * n, 9))
+    gs = fig.add_gridspec(2, n, height_ratios=(2.2, 1.0))
 
     for col, (label, log) in enumerate(results.items()):
         ref = log["ref_l"]
         _, forward, lateral = _plane_basis(ref)
-        # Plot the shape portion only (skip the ramp-in / ramp-out ticks).
         s = int(log["shape_start"])
         e = int(log["shape_end"])
         d_cmd = log["cmd_ee_l"][s:e] - ref[:3, 3]
         d_ach = log["ach_ee_l"][s:e] - ref[:3, 3]
-        cmd_xy = np.stack([d_cmd @ forward, d_cmd @ lateral], axis=1) * 1000.0
-        ach_xy = np.stack([d_ach @ forward, d_ach @ lateral], axis=1) * 1000.0
-        err_mm = np.linalg.norm(cmd_xy - ach_xy, axis=1)
-        max_err = float(err_mm[WARMUP_TICKS:].max())
+        cmd_xyz = np.stack([d_cmd @ forward, d_cmd @ lateral, d_cmd[:, 2]], axis=1) * 1000.0
+        ach_xyz = np.stack([d_ach @ forward, d_ach @ lateral, d_ach[:, 2]], axis=1) * 1000.0
+        err_3d_mm = np.linalg.norm(cmd_xyz - ach_xyz, axis=1)
+        err_inplane_mm = np.linalg.norm(cmd_xyz[:, :2] - ach_xyz[:, :2], axis=1)
+        z_drift_mm = ach_xyz[:, 2] - cmd_xyz[:, 2]
+        warm = WARMUP_TICKS
 
-        ax = axes[0, col]
-        ax.plot(cmd_xy[:, 0], cmd_xy[:, 1], color="C0", linewidth=2.5, label="commanded")
-        ax.plot(
-            ach_xy[:, 0],
-            ach_xy[:, 1],
+        # Row 1: 3D commanded vs achieved EE trace.
+        ax3d = fig.add_subplot(gs[0, col], projection="3d")
+        ax3d.plot(
+            cmd_xyz[:, 0],
+            cmd_xyz[:, 1],
+            cmd_xyz[:, 2],
+            color="C0",
+            linewidth=2.0,
+            label="commanded",
+        )
+        ax3d.plot(
+            ach_xyz[:, 0],
+            ach_xyz[:, 1],
+            ach_xyz[:, 2],
             color="C3",
             linewidth=1.0,
             linestyle="--",
-            label="achieved (hardware FK)",
+            label="achieved (FK on motors)",
         )
-        ax.set_aspect("equal")
-        ax.grid(alpha=0.3)
-        ax.set_xlabel("forward (mm)")
-        if col == 0:
-            ax.set_ylabel("lateral (mm)")
-        ax.set_title(f"{label}\nmax left-arm drift: {max_err:.2f} mm")
-        ax.legend(loc="upper right", fontsize=9)
+        ax3d.set_xlabel("forward (mm)")
+        ax3d.set_ylabel("lateral (mm)")
+        ax3d.set_zlabel("z (mm)")
+        ax3d.set_title(
+            f"{label}\n"
+            f"max 3D drift {float(err_3d_mm[warm:].max()):.1f} mm "
+            f"(in-plane {float(err_inplane_mm[warm:].max()):.1f} mm, "
+            f"|z| {float(np.abs(z_drift_mm[warm:]).max()):.1f} mm)"
+        )
+        ax3d.legend(loc="upper right", fontsize=8)
+        # Slight view tilt so the z dip is visible rather than edge-on.
+        ax3d.view_init(elev=18, azim=-65)
 
-        eax = axes[1, col]
-        eax.plot(np.arange(len(err_mm)), err_mm, color="C2", linewidth=1.5)
-        eax.set_xlim(0, len(err_mm))
-        eax.set_ylim(0, max(1.0, max_err * 1.3))
-        eax.grid(alpha=0.3)
-        eax.set_xlabel("waypoint")
+        # Row 2: Z over waypoint — commanded (flat, at 0) vs achieved (dipping).
+        zax = fig.add_subplot(gs[1, col])
+        x = np.arange(len(cmd_xyz))
+        zax.axhline(0.0, color="C0", linewidth=2.0, label="commanded z (constant)")
+        zax.plot(x, z_drift_mm, color="C3", linewidth=1.5, label="achieved z − commanded z")
+        zax.set_xlim(0, len(cmd_xyz))
+        zax.grid(alpha=0.3)
+        zax.set_xlabel("waypoint")
         if col == 0:
-            eax.set_ylabel("drift (mm)")
+            zax.set_ylabel("Δz vs commanded (mm)")
+        zax.legend(loc="lower right", fontsize=8)
 
-    fig.suptitle("SO-107 bimanual stack — hardware trajectory traces (left arm)", fontsize=12)
-    plt.tight_layout()
+    fig.suptitle("SO-107 bimanual stack — hardware trajectory traces (left arm, 3D)", fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
     path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(path, dpi=120)
+    fig.savefig(path, dpi=120)
     plt.close(fig)
 
 
