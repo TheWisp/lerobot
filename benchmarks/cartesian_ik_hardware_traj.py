@@ -78,7 +78,10 @@ from lerobot.teleoperators.scripted_ee import (
     ScriptedBimanualEETeleopConfig,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s  %(message)s")
+# ``force=True`` overrides the WARNING-level handler that lerobot's
+# imports install on the root logger — without it, our INFO-level
+# checkpoints are silently dropped.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s  %(message)s", force=True)
 logger = logging.getLogger("cartesian_ik_hardware_traj")
 
 # --- User-editable ---------------------------------------------------------
@@ -577,14 +580,17 @@ def main() -> None:
         c = follower.config
         logger.info(
             "predictive cfg: control_rate_hz=%.0f  lookahead_ms=%.1f (max %.1f)  "
-            "velocity_estimator=%s  velocity_window_ms=%.1f  alpha=%.3f  adaptive=%s",
+            "velocity_estimator=%s  velocity_window_ms=%.1f  velocity_lowpass_hz=%.1f  "
+            "corrector_alpha=%.3f  adaptive=%s  max_step_deg=%.1f",
             c.control_rate_hz,
             c.lookahead_ms,
             c.max_lookahead_ms,
             c.velocity_estimator,
             c.velocity_window_ms,
-            c.alpha,
+            c.velocity_lowpass_hz,
+            c.corrector_alpha,
             c.adaptive,
+            c.max_step_deg,
         )
     logger.info(
         "follower fields: max_relative_target left=%s right=%s  use_degrees l=%s r=%s  dry_run=%s",
@@ -646,7 +652,7 @@ def main() -> None:
 
     if results:
         _save_npz(results, OUT_DIR / "run.npz")
-        _plot_results(results, OUT_DIR / "trajectory_traces.png")
+        _plot_results(results, OUT_DIR / "trajectory_traces.png", left_kin=left_kin)
         logger.info("npz  -> %s", OUT_DIR / "run.npz")
         logger.info("plot -> %s", OUT_DIR / "trajectory_traces.png")
         # URDF render is intentionally out of scope: use the GUI's three.js +
