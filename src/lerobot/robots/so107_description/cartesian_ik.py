@@ -45,7 +45,13 @@ import numpy as np
 
 from lerobot.utils.rotation import Rotation
 
-from .joint_alignment import MOTOR_NAMES, URDF_JOINT_NAMES, URDF_TIP_FRAME, JointAlignment
+from .joint_alignment import (
+    MOTOR_NAMES,
+    TIP_OFFSET,
+    URDF_ANCHOR_FRAME,
+    URDF_JOINT_NAMES,
+    JointAlignment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,35 @@ class _Kinematics(Protocol):
     def forward_kinematics(self, joint_pos_deg: np.ndarray) -> np.ndarray: ...
 
     def inverse_kinematics(self, seed_deg: np.ndarray, target: np.ndarray) -> np.ndarray: ...
+
+
+class TipOffsetKinematics:
+    """Wrap an anchor-frame kinematics with a fixed virtual-EE offset.
+
+    The inner kinematics targets a URDF link (the anchor — for SO-107,
+    ``L6_1``, upstream of the gripper joint ``S7``). This wrapper shifts
+    the view to a virtual EE frame ``anchor @ tip_offset``, so callers
+    work in the user's intuitive EE frame while the QP still optimizes
+    against the anchor link.
+
+    The point: when the anchor is upstream of ``S7``, the IK target is
+    independent of S7, so the controller's post-IK overwrite of S7 with
+    ``gripper_pos`` no longer fights the solver. Removes the 5-8 deg
+    rotation drift on 2D paths (gripper-DOF cost — see
+    ``teleoperators/quest_vr/TODO.md``).
+    """
+
+    def __init__(self, inner: _Kinematics, tip_offset: np.ndarray) -> None:
+        assert tip_offset.shape == (4, 4), "tip_offset must be a 4x4 SE(3) matrix"
+        self._inner = inner
+        self._tip_offset = tip_offset.astype(float).copy()
+        self._tip_offset_inv = np.linalg.inv(self._tip_offset)
+
+    def forward_kinematics(self, joint_pos_deg: np.ndarray) -> np.ndarray:
+        return self._inner.forward_kinematics(joint_pos_deg) @ self._tip_offset
+
+    def inverse_kinematics(self, seed_deg: np.ndarray, target: np.ndarray) -> np.ndarray:
+        return self._inner.inverse_kinematics(seed_deg, target @ self._tip_offset_inv)
 
 
 class JointMappedKinematics:
@@ -266,7 +301,7 @@ def make_so107_arm_kinematics(alignment: dict[str, JointAlignment]) -> JointMapp
 
     inner = PinkKinematics(
         urdf_path=str(get_urdf_path()),
-        target_frame_name=URDF_TIP_FRAME,
+        target_frame_name=URDF_ANCHOR_FRAME,
         joint_names=list(URDF_JOINT_NAMES),
         # Per-call convergence budget. PinkKinematics defaults to 10 inner
         # iterations — fine for static targets, but on a continuously-moving
@@ -277,7 +312,11 @@ def make_so107_arm_kinematics(alignment: dict[str, JointAlignment]) -> JointMapp
         # latency/CPU tradeoff.
         max_iters=50,
     )
-    return JointMappedKinematics(inner, list(MOTOR_NAMES), alignment)
+    # IK against the L6_1 anchor + a fixed offset to the virtual closed-
+    # gripper tip — the IK is then S7-independent and the controller's
+    # post-IK S7 overwrite no longer drives orientation drift.
+    with_tip = TipOffsetKinematics(inner, TIP_OFFSET)
+    return JointMappedKinematics(with_tip, list(MOTOR_NAMES), alignment)
 
 
 def make_so107_arm_ik_controller(
