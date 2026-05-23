@@ -104,9 +104,11 @@ frame. Two problems with that:
    the EE pose, so pinning S7 for teleop discards the IK's S7 choice.
 2. It's not actually at the physical gripping point. PR #9's "known
    issues" already flags this: there is a fixed offset to where the
-   _closed_-gripper tip would be (mid-point between the two fingertips
-   for a parallel gripper), and that offset is per-physical-arm
-   calibration data, not a property of the CAD URDF.
+   _closed_-gripper tip would be. For a parallel gripper that's the
+   midpoint between the two finger faces; for the SO-107 (soft fin-ray
+   fingers) it's where the two soft fingertips meet when squeezed. The
+   exact offset is per-physical-arm calibration, not a property of the
+   CAD URDF.
 
 The right model: the IK target should be the **hypothetical closed-
 gripper tip**, defined as a fixed SE(3) offset from an upstream-of-S7
@@ -137,6 +139,64 @@ Lives across two PRs to land cleanly: the `tip_offset` parameter belongs
 in `PinkKinematics` (PR #9's territory); the SO-107 anchor + per-arm
 defaults belong here. Worth folding both at the time we do the URDF /
 EE-point redesign.
+
+## Configurable IK + on-hardware benchmark + usage analytics
+
+Once the EE anchor frame and tip offset are per-arm calibration (above),
+the user needs tools to set them and verify they're right — and we need
+data on how the configured stack behaves on the real robot over time.
+Three related pieces:
+
+### Configurable IK (the calibration surface)
+
+- `URDF_TIP_FRAME` (anchor) and `TIP_OFFSET` (closed-gripper-tip offset)
+  become per-arm fields on the robot profile JSON — same shape as the
+  per-arm `JointAlignment` already is. Hardcoded defaults stay in
+  `so107_description/joint_alignment.py` as a sensible factory baseline;
+  the profile overrides per physical robot.
+- The guided-calibration GUI tool (`gui/TODO.md`) is the place to set
+  them: jog the arm to a known target, the user clicks "this is where
+  the tip is now", and the tool solves for `TIP_OFFSET` from the
+  touched position. Same UX as the planned joint-alignment calibration.
+
+### On-hardware benchmark (validate your calibration)
+
+The plot in `docs/cartesian_ik_tradeoff.png` characterises the IK +
+stack floor _in software_ — useful but blind to the hardware. The
+runtime analog is a benchmark routine the user can run with the
+configured robot:
+
+- Command a scripted sequence of EE waypoints — a small grid or a few
+  fiducials, plus the same shapes the software benchmark uses (circle,
+  square, line at known speeds).
+- Read the achieved motor positions, FK with the configured
+  `TIP_OFFSET`, and compare to the commanded EE poses. The residual
+  includes the IK floor _plus_ everything the math-only plot misses:
+  motor following error, backlash, compliance under load, URDF vs
+  measured geometry, calibration error. Surface in the GUI as a per-
+  axis residual + a pass / re-calibrate signal.
+- Differences between this and the software plot tell the user which
+  side needs attention — IK tuning vs hardware calibration.
+
+### Usage logging for analytics
+
+Per-tick capture during normal teleop / record / replay sessions:
+commanded EE (from the teleop), achieved EE (from FK on motor
+observations), commanded joints, motor positions, the active
+`TIP_OFFSET`, controller-tracking-lost events. Anonymised — no user
+identifiers, no scene contents, just numbers about the system's own
+behaviour. Aggregate into:
+
+- Drift histograms over time — a wearing gripper or a shifted mount
+  shows up as creeping residuals before the user notices in feel.
+- Dropouts per session, common workspace regions, per-task success
+  signals.
+- Data-driven cases for tightening the IK QP gains specifically where
+  it matters in practice, vs. blanket tuning.
+
+Privacy: opt-in, local-first, anonymised by default; upload only on
+explicit user action. Goes in the same place run logs already live
+(`outputs/teleop/`); the analytics layer reads from there.
 
 ## VR mode: default to AR, and add camera-feed telepresence later
 
