@@ -94,6 +94,50 @@ wrist tip frame upstream of the gripper joint in the URDF). Until then,
 the trade-off is "user controls gripper" vs "perfect orientation tracking
 during sustained 2D motion" — picked the former.
 
+## EE-point / tip-frame calibration
+
+The IK currently targets `L7_1` — the SO-107 URDF's CAD-exported tip
+frame. Two problems with that:
+
+1. It sits on the gripper body, _downstream_ of S7. That's the root cause
+   of the gripper-DOF rotation drift in the section above — S7 affects
+   the EE pose, so pinning S7 for teleop discards the IK's S7 choice.
+2. It's not actually at the physical gripping point. PR #9's "known
+   issues" already flags this: there is a fixed offset to where the
+   _closed_-gripper tip would be (mid-point between the two fingertips
+   for a parallel gripper), and that offset is per-physical-arm
+   calibration data, not a property of the CAD URDF.
+
+The right model: the IK target should be the **hypothetical closed-
+gripper tip**, defined as a fixed SE(3) offset from an upstream-of-S7
+anchor frame. Sketch:
+
+- `PinkKinematics` gains a `tip_offset` SE(3) parameter (default
+  identity = current behaviour). FK returns `FK(anchor) @ tip_offset`;
+  the IK target is pre-multiplied by `tip_offset.inv()` so the QP still
+  optimizes against the URDF anchor frame.
+- `URDF_TIP_FRAME` switches from `L7_1` to an upstream frame (`L6` or
+  the wrist link, before the gripper joint).
+- Per-arm `TIP_OFFSET` lives in `joint_alignment.py` alongside
+  `JointAlignment` — both are "this physical arm's calibration data".
+- The guided-calibration GUI tool (`gui/TODO.md`) is the natural place
+  for the user to measure / set this; until that lands, profile JSON
+  override + a measured default.
+
+Solves multiple things at once:
+
+- The rotation drift from the gripper-DOF cost goes away structurally
+  (S7 no longer affects the EE pose → the overwrite is genuinely free).
+- PR #9's "absolute EE position needs further calibration" issue is
+  resolved by the same mechanism.
+- Matches the intuitive user model — teleop targets the closed-gripper
+  tip, which is what you reach toward to pick something.
+
+Lives across two PRs to land cleanly: the `tip_offset` parameter belongs
+in `PinkKinematics` (PR #9's territory); the SO-107 anchor + per-arm
+defaults belong here. Worth folding both at the time we do the URDF /
+EE-point redesign.
+
 ## VR mode: default to AR, and add camera-feed telepresence later
 
 Immersive VR is intentionally pitch-dark today — we render nothing into the
