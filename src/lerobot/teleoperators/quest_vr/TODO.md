@@ -157,7 +157,34 @@ floor _in software_ — useful but blind to the hardware.
 `benchmarks/cartesian_ik_hardware_traj.py` is the runtime first cut: it
 drives the real arms through heart / circle / square at a single
 conservative speed (1024 waypoints over ~34 s/shape) and writes a
-commanded-vs-achieved EE-trace plot. What's still missing:
+commanded-vs-achieved EE-trace plot.
+
+**The bigger problem with the script as-is: it diverges from the GUI's
+infrastructure.** It bypasses `BiSO107FollowerPredictive` (200 Hz
+writer with 80 ms intent-lookahead — what Quest teleop actually uses),
+re-implements profile loading, hand-rolls the control loop, and writes
+NPZ instead of a `LeRobotDataset`. Numbers are real but the bench is
+already at risk of measuring "what the bench does" instead of "what
+the GUI does".
+
+The right next move is to fold it into the existing teleop / record
+path:
+
+- A scripted Cartesian-delta teleop class that emits the same action
+  keys Quest VR does (`left_target_x/y/z/...`, gripper_pos, per-arm),
+  walking a pre-computed shape at 30 Hz. Implements the same
+  `set_action_transform` surface so the follower's `attach_teleop`
+  installs the IK transform exactly like Quest's.
+- `lerobot-record` consumes it like any other teleop → writes
+  `LeRobotDataset` → URDF replay through the GUI URDF viz is then a
+  same-day side effect, not a new bench feature.
+- GUI gets a "trajectory benchmark" preset in the run dialog so the
+  whole run happens through the production path.
+
+The current standalone script is "OK first cut, eject when the
+integration lands."
+
+What's still missing on the bench itself:
 
 - **Velocity sweep.** Drop the single-speed run, sweep 6 speeds like
   the software benches (1024 → 32 waypoints) so the hardware plot has
