@@ -104,6 +104,7 @@ from lerobot.teleoperators import (  # noqa: F401
     openarm_mini,
     quest_vr,
     reachy2_teleoperator,
+    scripted_ee,
     so107_leader_highrate,
     so_leader,
     so_leader_highrate,
