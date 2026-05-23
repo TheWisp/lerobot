@@ -193,10 +193,11 @@ class BimanualQuestVRTeleop(Teleoperator):
     def _on_frame(self, frame: dict[str, Any]) -> None:
         """Called from the server's asyncio thread per WebXR frame.
 
-        Dispatches each hand's pose to the corresponding controller; merges
-        the two action dicts. If one hand is missing from the frame (Quest
-        sometimes drops a controller when it's out of tracking range), that
-        arm's last cached values are kept.
+        Dispatches each hand's pose to its controller and merges the two
+        action dicts. A hand missing from the frame (the Quest dropped that
+        controller's tracking) is routed to ``on_tracking_lost``, which
+        disengages that arm and re-anchors it on the next tracked frame —
+        so a dropout cannot leak a stale-snapshot delta.
         """
         poses = frame.get("poses") or []
         left_pose = next((p for p in poses if p.get("hand") == "left"), None)
@@ -204,10 +205,14 @@ class BimanualQuestVRTeleop(Teleoperator):
 
         with self._cache_lock:
             base = dict(self._cached_action) if self._cached_action is not None else self._idle_action()
-            if left_pose is not None:
-                base.update(self._left.process_pose(left_pose))
-            if right_pose is not None:
-                base.update(self._right.process_pose(right_pose))
+            base.update(
+                self._left.process_pose(left_pose) if left_pose is not None else self._left.on_tracking_lost()
+            )
+            base.update(
+                self._right.process_pose(right_pose)
+                if right_pose is not None
+                else self._right.on_tracking_lost()
+            )
             self._cached_action = base
 
     # ── Diagnostics ───────────────────────────────────────────────────────

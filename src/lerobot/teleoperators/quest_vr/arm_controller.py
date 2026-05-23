@@ -29,11 +29,14 @@ to one or two controllers) differs.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import numpy as np
 
 from .server import quest_delta_to_robot, quest_rot_to_robot
+
+logger = logging.getLogger(__name__)
 
 
 class QuestArmController:
@@ -86,6 +89,13 @@ class QuestArmController:
         # so a freshly-connected teleop with no clutch press doesn't move
         # the gripper at all.
         self._last_gripper_pos: float = float(gripper_open_motor)
+        # Human-readable arm label for log lines.
+        self._label: str = key_prefix.rstrip("_") or "controller"
+        # Whether this controller streamed a pose on the most recent frame.
+        # Starts True so a controller that is asleep at session start emits
+        # a "not tracked" log line on the first frame rather than being
+        # silently dead.
+        self._tracked: bool = True
 
     def _gripper_pos_from_trigger(self, grip: float) -> float:
         """Absolute trigger->motor mapping. Same shape as the experimental
@@ -117,6 +127,38 @@ class QuestArmController:
         self._quest_rot_at_engage = None
         self._quest_pos_prev = None
         self._last_gripper_pos = self.gripper_open_motor
+        self._tracked = True
+
+    def on_tracking_lost(self) -> dict[str, float]:
+        """Handle a frame that carried no pose for this controller.
+
+        A Quest controller drops out of tracking (asleep, occluded, past
+        the FOV edge) and can be *moved* while untracked. On the
+        tracked->untracked edge, drop the engage state: the next tracked
+        frame then re-anchors the engage snapshot from scratch, so motion
+        accumulated during the dropout can never be counted as a teleop
+        delta (which would slew the arm to a wrong pose).
+
+        Returns a disengaged action; the gripper holds its last command.
+        """
+        if self._tracked:
+            logger.warning("Quest %s controller not tracked — check it is awake and in view", self._label)
+            self._tracked = False
+            self._engaged = False
+            self._quest_pos_at_engage = None
+            self._quest_rot_at_engage = None
+            self._quest_pos_prev = None
+        p = self.key_prefix
+        return {
+            f"{p}enabled": 0.0,
+            f"{p}target_x": 0.0,
+            f"{p}target_y": 0.0,
+            f"{p}target_z": 0.0,
+            f"{p}target_wx": 0.0,
+            f"{p}target_wy": 0.0,
+            f"{p}target_wz": 0.0,
+            f"{p}gripper_pos": float(self._last_gripper_pos),
+        }
 
     def process_pose(self, pose: dict[str, Any]) -> dict[str, float]:
         """Convert one controller's pose into a (possibly-prefixed) action dict.
@@ -125,6 +167,13 @@ class QuestArmController:
         full action dict (never None) so the caller can merge it into a
         bimanual action without guarding on Nones.
         """
+        if not self._tracked:
+            # Re-acquired after a dropout. on_tracking_lost() already cleared
+            # the engage state, so a still-held clutch re-anchors below as a
+            # fresh rising edge — no stale-snapshot delta.
+            logger.info("Quest %s controller tracking re-acquired", self._label)
+            self._tracked = True
+
         quest_pos = np.asarray(pose["pos"], dtype=float)
         quest_quat = pose.get("rot", [0.0, 0.0, 0.0, 1.0])  # [x, y, z, w]
         buttons = pose.get("buttons") or []

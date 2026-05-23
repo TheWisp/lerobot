@@ -37,6 +37,7 @@ URDF space. The upstream kinematic ProcessorSteps are not used or modified.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -45,6 +46,8 @@ import numpy as np
 from lerobot.utils.rotation import Rotation
 
 from .joint_alignment import MOTOR_NAMES, URDF_JOINT_NAMES, URDF_TIP_FRAME, JointAlignment
+
+logger = logging.getLogger(__name__)
 
 # Reachable EE box for the SO-107, robot base frame, meters. Hand-tuned
 # estimates from teleop trials, NOT measured — IK targets are clipped here
@@ -57,6 +60,15 @@ SO107_WORKSPACE_MAX: tuple[float, float, float] = (+0.25, +0.05, +0.36)
 # Backstop cap on per-tick EE position change (m). The Quest teleop already
 # bounds and de-glitches its own deltas; this only catches anything past that.
 _MAX_EE_STEP_M: float = 0.10
+
+# Safety backstop: IK can swing a joint wildly near a singular config even
+# for a within-bounds EE target. A solve that moves any arm joint more than
+# this in one tick is treated as a glitch and held — and logged, so a
+# throttled arm shows up in the run log rather than being a silent mystery.
+# 20 deg/tick is 600 deg/s at a 30 Hz loop — far above smooth teleop.
+# TODO: provisional hardcoded limit; see teleoperators/quest_vr/TODO.md
+# ("make safety limits explicit and configurable").
+_MAX_JOINT_STEP_DEG: float = 20.0
 
 
 class _Kinematics(Protocol):
@@ -127,6 +139,8 @@ class CartesianIKController:
           to ``FK(last commanded joints)``; targets are composed onto it.
         * The commanded EE position is clipped to the workspace box and
           its per-tick change capped, so IK never sees a wild target.
+        * If IK still swings an arm joint implausibly far in one tick (e.g.
+          near a singularity), that tick is held rather than executed.
     """
 
     def __init__(
@@ -144,6 +158,7 @@ class CartesianIKController:
         self._kin = kinematics
         self._motor_names = list(motor_names)
         self._gripper_idx = self._motor_names.index("gripper")
+        self._arm_idx = [i for i in range(len(self._motor_names)) if i != self._gripper_idx]
         self._q_last = np.asarray(q_init, dtype=float).copy()
         self._ws_min = np.asarray(workspace_min, dtype=float)
         self._ws_max = np.asarray(workspace_max, dtype=float)
@@ -184,11 +199,21 @@ class CartesianIKController:
             if n > self._max_step > 0.0:
                 pos = self._last_pos + step * (self._max_step / n)
             desired[:3, 3] = pos
-            self._last_pos = pos.copy()
 
-            q_new = self._kin.inverse_kinematics(self._q_last, desired)
-            q_new[self._gripper_idx] = gripper_pos
-            self._q_last = np.asarray(q_new, dtype=float)
+            q_new = np.asarray(self._kin.inverse_kinematics(self._q_last, desired), dtype=float)
+            # Backstop: hold this tick if IK swings an arm joint implausibly
+            # far. _q_last / _ref / _last_pos are left untouched, so the next
+            # tick re-evaluates from the held state.
+            joint_step = float(np.max(np.abs(q_new[self._arm_idx] - self._q_last[self._arm_idx])))
+            if joint_step > _MAX_JOINT_STEP_DEG:
+                logger.warning(
+                    "CartesianIKController: implausible IK jump (%.0f deg) — holding this tick",
+                    joint_step,
+                )
+            else:
+                q_new[self._gripper_idx] = gripper_pos
+                self._q_last = q_new
+                self._last_pos = pos.copy()
 
         self._prev_enabled = enabled
         return {f"{name}.pos": float(self._q_last[i]) for i, name in enumerate(self._motor_names)}
@@ -218,23 +243,22 @@ def make_bimanual_ik_transform(
     return _transform
 
 
-def make_so107_arm_ik_controller(
-    alignment: dict[str, JointAlignment],
-    q_init: np.ndarray,
-) -> CartesianIKController:
-    """Build a Cartesian-IK controller for one SO-107 arm.
+def make_so107_arm_kinematics(alignment: dict[str, JointAlignment]) -> JointMappedKinematics:
+    """Build the motor-space kinematics for one SO-107 arm.
+
+    This is the slow half of the Cartesian-IK setup: ``PinkKinematics``
+    parses the SO-107 URDF + meshes into a pinocchio model (~1-2 s, CPU-
+    bound, holds the GIL). Call it once, eagerly — e.g. in a robot's
+    ``__init__``, before ``connect()`` starts any camera read thread.
+    Building it later, while a RealSense thread is warming up, starves
+    that thread and trips its frame-age watchdog.
 
     Args:
         alignment: This arm's motor->URDF alignment (``LEFT_ARM_ALIGNMENT``
             or ``RIGHT_ARM_ALIGNMENT`` from :mod:`joint_alignment`).
-        q_init: The arm's current joint configuration, motor-space degrees,
-            in :data:`joint_alignment.MOTOR_NAMES` order.
 
-    Returns:
-        A controller seeded at ``q_init``. Building it parses the SO-107
-        URDF into a pinocchio model (~1-2 s); do this once at teleop
-        attach time, not per tick. Requires the optional ``pin-pink``
-        dependency (raises ``ImportError`` otherwise).
+    Requires the optional ``pin-pink`` dependency (raises ``ImportError``
+    otherwise).
     """
     from lerobot.model.pink_kinematics import PinkKinematics
 
@@ -244,8 +268,33 @@ def make_so107_arm_ik_controller(
         urdf_path=str(get_urdf_path()),
         target_frame_name=URDF_TIP_FRAME,
         joint_names=list(URDF_JOINT_NAMES),
+        # Per-call convergence budget. PinkKinematics defaults to 10 inner
+        # iterations — fine for static targets, but on a continuously-moving
+        # teleop target the per-call closure caps and lag grows with target
+        # speed (cm-scale at realistic teleop speeds). 50 iters keeps the
+        # lag in the mm range with negligible CPU impact (well under the
+        # 30 Hz loop budget); revisit if hardware reveals a stricter
+        # latency/CPU tradeoff.
+        max_iters=50,
     )
-    kinematics = JointMappedKinematics(inner, list(MOTOR_NAMES), alignment)
+    return JointMappedKinematics(inner, list(MOTOR_NAMES), alignment)
+
+
+def make_so107_arm_ik_controller(
+    kinematics: JointMappedKinematics,
+    q_init: np.ndarray,
+) -> CartesianIKController:
+    """Build a Cartesian-IK controller for one SO-107 arm.
+
+    Fast: wires a pre-built kinematics, the seed configuration, and the
+    SO-107 workspace box into a controller. Build ``kinematics`` ahead of
+    time with :func:`make_so107_arm_kinematics`.
+
+    Args:
+        kinematics: This arm's kinematics from :func:`make_so107_arm_kinematics`.
+        q_init: The arm's current joint configuration, motor-space degrees,
+            in :data:`joint_alignment.MOTOR_NAMES` order.
+    """
     return CartesianIKController(
         kinematics=kinematics,
         motor_names=list(MOTOR_NAMES),
