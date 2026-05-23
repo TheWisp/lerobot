@@ -165,10 +165,21 @@ class BimanualQuestVRTeleop(Teleoperator):
     def send_feedback(self, feedback: dict[str, Any]) -> None:
         pass  # Haptic feedback not implemented.
 
+    def get_action_raw(self) -> dict[str, float]:
+        """Return the raw EE-delta action, bypassing any installed transform.
+
+        Lets a downstream consumer that runs its own IK (e.g. the
+        :class:`BimanualCartesianIKAdapter` polling at WebXR rate) access
+        the Cartesian-delta dict without going through whatever transform
+        ``set_action_transform`` installed on top — otherwise the adapter
+        would feed its own cached joint dict back into itself.
+        """
+        with self._cache_lock:
+            return self._idle_action() if self._cached_action is None else dict(self._cached_action)
+
     @check_if_not_connected
     def get_action(self):
-        with self._cache_lock:
-            action = self._idle_action() if self._cached_action is None else dict(self._cached_action)
+        action = self.get_action_raw()
         if self._action_transform is not None:
             action = self._action_transform(action)
         return action

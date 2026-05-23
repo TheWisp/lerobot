@@ -61,18 +61,18 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 from lerobot.robots.bi_so107_follower import BiSO107Follower, BiSO107FollowerConfig
-from lerobot.robots.so107_description.cartesian_ik import (
-    SO107_WORKSPACE_MAX,
-    SO107_WORKSPACE_MIN,
-    CartesianIKController,
-    make_bimanual_ik_transform,
+from lerobot.robots.bi_so107_follower_predictive import (
+    BiSO107FollowerPredictive,
+    BiSO107FollowerPredictiveConfig,
 )
 from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
@@ -179,45 +179,97 @@ def _shape_deltas(ref: np.ndarray, shape: str, size_m: float, n: int) -> list[np
 # --- Profile loading -------------------------------------------------------
 
 
-def _load_follower_config(profile_path: Path) -> BiSO107FollowerConfig:
-    """Load the bi_so107_follower profile JSON (the format the GUI writes).
+def _load_follower(profile_path: Path) -> BiSO107Follower:
+    """Build a BiSO107Follower (plain or predictive) from a GUI profile JSON.
 
     Skips cameras: this bench drives motors and renders the URDF post-hoc;
     it does not consume camera frames. Avoiding camera init keeps RealSense
     threads from starting and shaves a couple of seconds off the run.
+    Profile ``type`` selects the variant — ``bi_so107_follower`` for the
+    plain follower (30 Hz push), ``bi_so107_follower_predictive`` for the
+    200 Hz controller-thread follower with intent lookahead.
     """
     if not profile_path.exists():
         raise SystemExit(f"profile not found: {profile_path}")
     data = json.loads(profile_path.read_text())
-    if data.get("type") != "bi_so107_follower":
-        raise SystemExit(f"{profile_path} is not a bi_so107_follower profile (type={data.get('type')})")
     fields = dict(data.get("fields", {}))
     fields["cameras"] = {}
-    return BiSO107FollowerConfig(**fields)
+    type_ = data.get("type")
+    if type_ == "bi_so107_follower":
+        return BiSO107Follower(BiSO107FollowerConfig(**fields))
+    if type_ == "bi_so107_follower_predictive":
+        return BiSO107FollowerPredictive(BiSO107FollowerPredictiveConfig(**fields))
+    raise SystemExit(f"{profile_path} unsupported follower type: {type_!r}")
 
 
 # --- One-tick action -------------------------------------------------------
 
 
-def _make_action(dl: np.ndarray, dr: np.ndarray, grip_l: float, grip_r: float) -> dict:
-    return {
-        "left_enabled": 1.0,
-        "left_target_x": float(dl[0]),
-        "left_target_y": float(dl[1]),
-        "left_target_z": float(dl[2]),
-        "left_target_wx": 0.0,
-        "left_target_wy": 0.0,
-        "left_target_wz": 0.0,
-        "left_gripper_pos": grip_l,
-        "right_enabled": 1.0,
-        "right_target_x": float(dr[0]),
-        "right_target_y": float(dr[1]),
-        "right_target_z": float(dr[2]),
-        "right_target_wx": 0.0,
-        "right_target_wy": 0.0,
-        "right_target_wz": 0.0,
-        "right_gripper_pos": grip_r,
-    }
+_PER_ARM_KEYS = (
+    "enabled",
+    "target_x",
+    "target_y",
+    "target_z",
+    "target_wx",
+    "target_wy",
+    "target_wz",
+    "gripper_pos",
+)
+_CARTESIAN_ACTION_KEYS = tuple(f"{p}{k}" for p in ("left_", "right_") for k in _PER_ARM_KEYS)
+
+
+class _ScriptedCartesianTeleop:
+    """Bench-internal scripted Cartesian VR teleop.
+
+    Implements the surface a bimanual Cartesian VR teleop must expose for
+    a follower's ``attach_teleop`` to install the IK transform / build
+    the predictive adapter: ``action_features`` (with ``left_target_x``
+    in ``names``), ``set_action_transform``, ``get_action`` (post-
+    transform), and ``get_action_raw`` (pre-transform — the adapter
+    polls this to avoid feeding its own cached output back into itself).
+
+    The bench updates the current Cartesian deltas via ``set_targets``
+    each main-loop tick; the IK adapter (predictive follower) or the
+    installed transform (plain follower) consumes the raw output and
+    produces joint dicts.
+    """
+
+    name = "scripted_cart_bench"
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._action: dict[str, float] = dict.fromkeys(_CARTESIAN_ACTION_KEYS, 0.0)
+        self._transform: Callable[[dict], dict] | None = None
+
+    @property
+    def action_features(self) -> dict:
+        return {"names": {k: i for i, k in enumerate(_CARTESIAN_ACTION_KEYS)}}
+
+    def set_targets(self, dl: np.ndarray, dr: np.ndarray, grip_l: float, grip_r: float) -> None:
+        with self._lock:
+            self._action["left_enabled"] = 1.0
+            self._action["left_target_x"] = float(dl[0])
+            self._action["left_target_y"] = float(dl[1])
+            self._action["left_target_z"] = float(dl[2])
+            self._action["left_gripper_pos"] = float(grip_l)
+            self._action["right_enabled"] = 1.0
+            self._action["right_target_x"] = float(dr[0])
+            self._action["right_target_y"] = float(dr[1])
+            self._action["right_target_z"] = float(dr[2])
+            self._action["right_gripper_pos"] = float(grip_r)
+
+    def set_action_transform(self, transform: Callable[[dict], dict] | None) -> None:
+        self._transform = transform
+
+    def get_action_raw(self) -> dict[str, float]:
+        with self._lock:
+            return dict(self._action)
+
+    def get_action(self) -> dict:
+        action = self.get_action_raw()
+        if self._transform is not None:
+            action = self._transform(action)
+        return action
 
 
 def _joints_from_obs(obs: dict, prefix: str) -> np.ndarray:
@@ -240,30 +292,30 @@ def _hold_pose(follower: BiSO107Follower, q_l: np.ndarray, q_r: np.ndarray, tick
 
 def _run_shape(
     follower: BiSO107Follower,
-    transform,
+    scripted: _ScriptedCartesianTeleop,
     left_kin,
     right_kin,
-    left_ctrl,
-    right_ctrl,
     label: str,
     shape: str,
     size_m: float,
 ) -> dict:
-    """Drive one shape; return per-tick log dict."""
-    # Anchor the trajectory at whatever the arm has settled to *now* — the
-    # commanded "home" the controller was originally seeded with can have
-    # drifted by several degrees under gravity / soft hold, and re-seeding
-    # from a stale home means the controller's clutch-engage FK reference
-    # doesn't match the trajectory anchor → IK starts off-balance and the
-    # joint-step backstop fires for many ticks.
+    """Drive one shape through the scripted Cartesian teleop; return log.
+
+    The follower has already been attach_teleop'd to ``scripted``. For a
+    plain follower, that installed the per-arm IK controllers and the
+    bimanual transform on the teleop. For a predictive follower, that
+    additionally built a :class:`BimanualCartesianIKAdapter` that polls
+    the scripted teleop at 90 Hz and feeds each per-arm controller. The
+    bench's loop just sets the current Cartesian deltas and reads
+    observations — never calls IK directly.
+    """
+    # Anchor the trajectory at whatever the arm has settled to *now*. Note
+    # that for the predictive path, the per-arm CartesianIKControllers
+    # built inside attach_teleop already latched their seed at attach
+    # time; re-attaching is the way to re-seed.
     obs = follower.get_observation()
     q_l_start = _joints_from_obs(obs, "left_")
     q_r_start = _joints_from_obs(obs, "right_")
-    for ctrl, q in ((left_ctrl, q_l_start), (right_ctrl, q_r_start)):
-        ctrl._q_last = q.copy()
-        ctrl._prev_enabled = False
-        ctrl._ref = None
-        ctrl._last_pos = None
     ref_l = left_kin.forward_kinematics(q_l_start)
     ref_r = right_kin.forward_kinematics(q_r_start)
     grip_idx = MOTOR_NAMES.index("gripper")
@@ -280,10 +332,6 @@ def _run_shape(
     off_l = _offset(ref_l)
     off_r = _offset(ref_r)
 
-    # Build the full per-tick delta list:
-    #   [ramp_in (0 -> offset) | shape (offset + shape_delta) | ramp_out (offset -> 0)]
-    # The bench's drift metric only uses the shape portion (shape_start ..
-    # shape_end), so warmup is the ramp + the first WARMUP_TICKS of the shape.
     shape_l = [d + off_l for d in _shape_deltas(ref_l, shape, size_m, N_WAYPOINTS)]
     shape_r = [d + off_r for d in _shape_deltas(ref_r, shape, size_m, N_WAYPOINTS)]
     ramp_in_l = [off_l * (i + 1) / RAMP_TICKS for i in range(RAMP_TICKS)]
@@ -299,17 +347,37 @@ def _run_shape(
     cmd_ee_l, ach_ee_l, cmd_j_l, ach_j_l = [], [], [], []
     cmd_ee_r, ach_ee_r, cmd_j_r, ach_j_r = [], [], [], []
     misses = 0
+    empty_get_action = 0
 
     for dl, dr in zip(deltas_l, deltas_r, strict=True):
         t0 = time.time()
-        joint_action = transform(_make_action(dl, dr, grip_l, grip_r))
-        follower.send_action(joint_action)
+        scripted.set_targets(dl, dr, grip_l, grip_r)
+        # On the predictive path: get_action() returns the adapter's cached
+        # joint dict; send_action updates the controller's latest_intent
+        # (push path) — the 200 Hz controller's per-arm pull through the
+        # adapter sub-teleops also covers this, but the push-side intent
+        # keeps the controller's velocity-estimator hot at the loop rate.
+        # On the plain path: get_action() returns joints from the in-process
+        # IK transform; send_action writes motors.
+        joint_action = scripted.get_action()
+        if joint_action:
+            follower.send_action(joint_action)
+        else:
+            empty_get_action += 1
         obs = follower.get_observation()
 
         ach_l = _joints_from_obs(obs, "left_")
         ach_r = _joints_from_obs(obs, "right_")
-        cmd_l = np.array([joint_action[f"left_{m}.pos"] for m in MOTOR_NAMES])
-        cmd_r = np.array([joint_action[f"right_{m}.pos"] for m in MOTOR_NAMES])
+        cmd_l = (
+            np.array([joint_action[f"left_{m}.pos"] for m in MOTOR_NAMES])
+            if joint_action
+            else np.full(len(MOTOR_NAMES), np.nan)
+        )
+        cmd_r = (
+            np.array([joint_action[f"right_{m}.pos"] for m in MOTOR_NAMES])
+            if joint_action
+            else np.full(len(MOTOR_NAMES), np.nan)
+        )
 
         cmd_ee_l.append(ref_l[:3, 3] + dl)
         cmd_ee_r.append(ref_r[:3, 3] + dr)
@@ -324,6 +392,13 @@ def _run_shape(
         if elapsed > period * 1.2:
             misses += 1
         time.sleep(max(0.0, period - elapsed))
+
+    if empty_get_action:
+        logger.warning(
+            "%s: %d ticks got an empty get_action() (adapter cache not warm yet)",
+            label,
+            empty_get_action,
+        )
 
     if misses:
         logger.warning("%s: %d ticks ran long (>20%% over %.0f ms)", label, misses, period * 1000)
@@ -424,9 +499,8 @@ def _plot_results(results: dict, path: Path) -> None:
 
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    cfg = _load_follower_config(PROFILE_PATH)
-    follower = BiSO107Follower(cfg)
-    logger.info("connecting bi_so107_follower (id=%s)…", cfg.id)
+    follower = _load_follower(PROFILE_PATH)
+    logger.info("connecting %s (id=%s)…", type(follower).__name__, follower.config.id)
     follower.connect()
 
     results: dict = {}
@@ -442,34 +516,32 @@ def main() -> None:
         logger.info("staged at q_left=%s", np.round(home_l, 2))
         logger.info("staged at q_right=%s", np.round(home_r, 2))
 
-        left_ctrl = CartesianIKController(
-            kinematics=left_kin,
-            motor_names=list(MOTOR_NAMES),
-            q_init=home_l,
-            workspace_min=SO107_WORKSPACE_MIN,
-            workspace_max=SO107_WORKSPACE_MAX,
-        )
-        right_ctrl = CartesianIKController(
-            kinematics=right_kin,
-            motor_names=list(MOTOR_NAMES),
-            q_init=home_r,
-            workspace_min=SO107_WORKSPACE_MIN,
-            workspace_max=SO107_WORKSPACE_MAX,
-        )
-        transform = make_bimanual_ik_transform(left_ctrl, right_ctrl)
+        # Build the scripted Cartesian teleop and attach it. The follower
+        # picks the right path internally (plain: install IK transform on
+        # teleop; predictive: build the Cartesian adapter + route per-arm
+        # sub-teleops to each predictive arm's controller).
+        scripted = _ScriptedCartesianTeleop()
+        # Drive the scripted teleop with idle / zero deltas during settle
+        # so the controllers' first IK calls have a sane reference. Set
+        # before attach so the adapter's first poll has the zero target.
+        scripted.set_targets(np.zeros(3), np.zeros(3), float(home_l[-1]), float(home_r[-1]))
+        follower.attach_teleop(scripted)
 
         for label, shape, size_m in SHAPES:
             logger.info("=== %s ===", label)
             # Settle the arms at the staged pose between shapes. The
-            # controllers re-seed themselves from observed joints inside
-            # _run_shape, so the trajectory anchor and the IK reference
-            # always agree even if motors have drifted from the command.
+            # follower-side IK controllers were seeded at attach_teleop
+            # time. Re-seeding requires re-attaching; the small dance
+            # below detaches + re-attaches so each shape starts with the
+            # IK reference latched at the *actual current pose*.
             _hold_pose(follower, home_l, home_r, SETTLE_TICKS)
-            results[label] = _run_shape(
-                follower, transform, left_kin, right_kin, left_ctrl, right_ctrl, label, shape, size_m
-            )
+            follower.attach_teleop(None)  # detach + (predictive) stop adapter
+            scripted.set_targets(np.zeros(3), np.zeros(3), float(home_l[-1]), float(home_r[-1]))
+            follower.attach_teleop(scripted)  # re-seed at the now-current pose
+            results[label] = _run_shape(follower, scripted, left_kin, right_kin, label, shape, size_m)
         # Return to staged pose at the end.
         _hold_pose(follower, home_l, home_r, SETTLE_TICKS)
+        follower.attach_teleop(None)
     finally:
         follower.disconnect()
         logger.info("disconnected")
