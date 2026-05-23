@@ -59,7 +59,7 @@ N_WAYPOINTS = 256  # matches test_pink_ik_trajectory.py's _N_WAYPOINTS
 WARMUP_TICKS = 20
 
 SHAPES = [
-    ("circle 30 mm radius", "circle", 0.030),
+    ("heart 50 mm", "heart", 0.050),
     ("circle 60 mm radius", "circle", 0.060),
     ("square 50 mm side", "square", 0.050),
 ]
@@ -83,6 +83,27 @@ def _plane_basis(ref: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return p, inward, perp
 
 
+def _heart_unit(n: int) -> np.ndarray:
+    """Parametric heart, normalized to fit a unit bbox, starting at (0, 0).
+
+    The classic ``16 sin³t`` / ``13 cos t - 5 cos 2t - 2 cos 3t - cos 4t``
+    parametrization — bumps at the top of the (x, y) plane, point at the
+    bottom, cusp between the bumps at ``t=0``. Translated so the t=0
+    point sits at the origin (so the trace starts at the seed EE) and
+    scaled so the bounding-box max extent is 1.
+
+    The cusp is a stress point: ``dx/dt = dy/dt = 0`` there, so the curve
+    speeds up out of it and back into it at the end of the loop — a
+    sharper test of the IK's per-call closure than a smooth circle.
+    """
+    t = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    x = 16.0 * np.sin(t) ** 3
+    y = 13.0 * np.cos(t) - 5.0 * np.cos(2 * t) - 2.0 * np.cos(3 * t) - np.cos(4 * t)
+    pts = np.stack([x, y], axis=1)
+    pts -= pts[0]
+    return pts / float((pts.max(axis=0) - pts.min(axis=0)).max())
+
+
 def _shape_positions(ref: np.ndarray, shape: str, size_m: float, n: int) -> list[np.ndarray]:
     p, inward, perp = _plane_basis(ref)
     if shape == "circle":
@@ -92,6 +113,11 @@ def _shape_positions(ref: np.ndarray, shape: str, size_m: float, n: int) -> list
             center + r * (np.cos(2 * np.pi * i / n) * -inward + np.sin(2 * np.pi * i / n) * perp)
             for i in range(n)
         ]
+    if shape == "heart":
+        unit = _heart_unit(n)
+        # x_unit -> inward, y_unit -> perp so the heart plots upright (bumps
+        # up, point down) in the (inward, perp) canvas used by the viz.
+        return [p + size_m * (u[0] * inward + u[1] * perp) for u in unit]
     s = size_m
     corners = [p, p + s * inward, p + s * inward + s * perp, p + s * perp]
     per_edge = n // 4
