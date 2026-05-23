@@ -81,18 +81,31 @@ up as 1–8° rotation drift on circle/square (2D paths with held orientation,
 5 constraints, 1 redundant DOF lost), but only 0.3–0.6° on a line (1D
 path, 4 constraints, still has slack).
 
-Side-by-side at the same speeds (max drift, left arm, 30 Hz loop):
+Two paired sweeps in `benchmarks/cartesian_ik_tracking.py` make the
+contribution easy to read:
 
-|        | speed | bare-IK pos | stack pos | bare-IK rot | stack rot |
-| ------ | ----- | ----------- | --------- | ----------- | --------- |
-| circle | 4.4   | 0.8 mm      | 1.2 mm    | 0.00°       | 5.0°      |
-| square | 9.4   | 2.7 mm      | 2.6 mm    | 0.01°       | 8.0°      |
-| line   | 8.8   | 5.6 mm      | 5.7 mm    | 0.03°       | 0.6°      |
+**SO-101 stack** (5-DOF, position-only, identity alignment, single-arm
+controller). The numbers come out _bit-identical_ to PR #9's bare-IK
+sweep — same URDF, same shapes, same speeds. The controller wrapper
+adds no overhead here: no S7 to pin (gripper joint is on a branch off
+the EE chain), no per-arm alignment math, no bimanual transform. So
+SO-101 sets the bare-IK floor for the stack, free of the L7-frame
+caveat that complicates SO-107's read.
+
+**SO-107 bimanual stack** (6-DOF, full SE(3), per-arm calibration). At
+the same shapes / speeds the position drift is in the same band as
+SO-101 (~mm at typical teleop), but rotation drift shows the gripper-
+DOF cost cleanly:
+
+|        | speed | SO-101 pos | SO-107 pos | SO-107 rot |
+| ------ | ----- | ---------- | ---------- | ---------- |
+| circle | ~4.4  | 0.46 mm    | 1.22 mm    | 4.95°      |
+| square | ~9.4  | 1.65 mm    | 2.57 mm    | 8.04°      |
+| line   | ~8.8  | 4.61 mm    | 5.66 mm    | 0.62°      |
 
 The clean fix is to make the IK target frame independent of S7 (use a
-wrist tip frame upstream of the gripper joint in the URDF). Until then,
-the trade-off is "user controls gripper" vs "perfect orientation tracking
-during sustained 2D motion" — picked the former.
+frame upstream of the gripper joint, e.g. `L6_1`, plus a fixed SE(3)
+offset to the logical EE tip). Tracked in the next section.
 
 ## EE-point / tip-frame calibration
 
@@ -161,8 +174,9 @@ Three related pieces:
 
 ### On-hardware benchmark (validate your calibration)
 
-The plot in `docs/cartesian_ik_tradeoff.png` characterises the IK +
-stack floor _in software_ — useful but blind to the hardware. The
+The plots in `docs/cartesian_ik_tradeoff_so101.png` and
+`docs/cartesian_ik_tradeoff_so107.png` characterise the IK + stack
+floor _in software_ — useful but blind to the hardware. The
 runtime analog is a benchmark routine the user can run with the
 configured robot:
 
