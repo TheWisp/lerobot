@@ -15,44 +15,42 @@
 
 """On-hardware Cartesian-IK trajectory benchmark (bimanual SO-107).
 
-Two phases:
+Drives the actual robot through the same three trajectories the math viz
+uses — 50 mm heart, 60 mm circle, 50 mm square — and records what
+hardware does on top of the IK floor.
 
-1. **Drive** the actual robot through the same three trajectories the math
-   viz uses — 50 mm heart, 60 mm circle, 50 mm square. The bench uses the
-   production ``CartesianIKController`` + bimanual transform — the same
-   path the Quest VR teleop installs — so the workspace clip, EE-step cap,
-   and joint-step backstop are all engaged. Logs per-tick commanded EE,
-   commanded joints, and *observed* motor positions.
+Each shape is traced in the (forward, lateral) horizontal plane at the
+seed's height, anchored at ``seed + SHAPE_OFFSET_FORWARD * forward +
+SHAPE_OFFSET_UP * up`` so the closest-to-base point clears the desk and
+the singular zone. The arm ramps smoothly from seed to that anchor over
+``RAMP_TICKS``, traces the shape, and ramps back; only the shape portion
+is plotted / scored. ``N_WAYPOINTS = 1024`` keeps per-tick joint steps
+under ~0.5° so STS3215 motor following error doesn't dominate.
 
-2. **Render** the SO-107 URDF at each tick's *achieved* joints through
-   pinocchio + meshcat, capturing one frame per tick into an MP4. The
-   video is the achieved hardware motion shown as a URDF render — the
-   visual analog of the math viz's commanded-vs-achieved plot, but for
-   the robot's body.
+The bench uses the production ``CartesianIKController`` + bimanual
+transform — the same code path the Quest VR teleop installs — so the
+workspace clip, EE-step cap, and joint-step backstop are all engaged.
 
 Writes:
 
 - ``trajectory_traces.png`` — commanded EE trace vs achieved EE trace
-  (from FK on observed motor positions, left arm). Residual now contains
-  motor following error, backlash, compliance under load, URDF-vs-measured
-  geometry mismatch.
+  (from FK on observed motor positions, left arm). Residual contains
+  motor following error, backlash, compliance under load, URDF-vs-
+  measured geometry mismatch.
 - ``run.npz`` — per-tick raw log; the plot is generated from this.
-- ``run.mp4`` — left-arm URDF render of the achieved joints across all
-  three shapes back-to-back.
+
+URDF render of the achieved motion: out of scope here. Use the GUI's
+three.js + urdf-loader pipeline (PR #8, ``gui/static/urdf_viz.html``) to
+replay the achieved-joint stream from ``run.npz``, then screen-record
+the browser via ``ffmpeg x11grab``.
 
 Staging:
 - Position the arms at a comfortable mid-range pose, well inside the
   workspace box (``SO107_WORKSPACE_MIN/MAX`` in ``cartesian_ik.py``).
-- The script anchors each trajectory at whatever joint configuration it
-  reads at the start of the shape — there is no required "home pose."
-- Between shapes the arms hold the starting joints for ~0.5 s to settle.
+- The script anchors each trajectory at whatever joints it reads at the
+  start of the shape — there is no required "home pose."
 - Ctrl-C stops cleanly: the controller's last command holds until
   ``disconnect()`` releases torque per the follower's config.
-
-Phase 2 opens a meshcat browser tab. Keep that tab visible / focused
-while the render runs (meshcat pauses ``requestAnimationFrame`` on
-hidden tabs, which stalls ``captureImage``). The render is single-arm
-(left); the plot covers both arms.
 
 Run from the repo root::
 
@@ -66,11 +64,9 @@ import logging
 import time
 from pathlib import Path
 
-import draccus
 import matplotlib.pyplot as plt
 import numpy as np
 
-from lerobot.cameras.configs import CameraConfig
 from lerobot.robots.bi_so107_follower import BiSO107Follower, BiSO107FollowerConfig
 from lerobot.robots.so107_description.cartesian_ik import (
     SO107_WORKSPACE_MAX,
@@ -78,7 +74,7 @@ from lerobot.robots.so107_description.cartesian_ik import (
     CartesianIKController,
     make_bimanual_ik_transform,
 )
-from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT, MOTOR_NAMES
+from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s  %(message)s")
 logger = logging.getLogger("cartesian_ik_hardware_traj")
@@ -92,9 +88,23 @@ PROFILE_PATH = Path.home() / ".config" / "lerobot" / "robots" / "white.json"
 
 OUT_DIR = Path("src/lerobot/teleoperators/quest_vr/docs/hardware")
 LOOP_HZ = 30.0
-N_WAYPOINTS = 256
-WARMUP_TICKS = 20
+# 1024 waypoints over 256 (math-viz default) keeps the per-tick joint step
+# at <0.5 deg — well under what STS3215 servos track tightly under load.
+# At 256 wp the achieved trace lagged ~20 mm steady-state (4-5 ticks of
+# motor delay × the trajectory's tangential speed); going 4x slower drops
+# that proportionally toward the math IK floor.
+N_WAYPOINTS = 1024
+WARMUP_TICKS = 30
 SETTLE_TICKS = 15  # hold the starting pose between shapes
+RAMP_TICKS = 60  # ~2 s linear ramp into / out of the trajectory anchor
+
+# Push the trajectory anchor away from the staged seed so the closest-to-
+# base point of any shape sits comfortably inside the reachable workspace
+# and clears the desk. Each shape is traced *around* (seed + offset), with
+# the arm ramped smoothly from seed to the anchor before the trace begins
+# and back to seed after.
+SHAPE_OFFSET_FORWARD_M = 0.05  # +5 cm away from base
+SHAPE_OFFSET_UP_M = 0.05  # +5 cm above seed
 
 SHAPES = [
     ("heart 50 mm", "heart", 0.050),
@@ -116,29 +126,47 @@ def _heart_unit(n: int) -> np.ndarray:
 
 
 def _plane_basis(ref: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return (seed EE, forward, lateral) — the *horizontal* plane at seed height.
+
+    Same horizontal geometry as the math viz / PR #9's bench, but with
+    ``forward`` flipped to point *away* from the base (math viz uses
+    ``inward`` = toward base). Toward-base on hardware drives the arms
+    into singular / out-of-reach configurations near the staging pose;
+    forward stays in safely reachable air space and only asks
+    ``shoulder_pan`` + wrist joints to do most of the work (the
+    fast-tracking joints), leaving ``shoulder_lift`` quiet.
+    """
     p = ref[:3, 3]
     flat = np.array([p[0], p[1], 0.0])
     norm = float(np.linalg.norm(flat))
-    inward = -flat / norm if norm > 1e-6 else np.array([-1.0, 0.0, 0.0])
-    perp = np.cross(inward, np.array([0.0, 0.0, 1.0]))
-    perp /= np.linalg.norm(perp)
-    return p, inward, perp
+    forward = flat / norm if norm > 1e-6 else np.array([1.0, 0.0, 0.0])
+    lateral = np.cross(forward, np.array([0.0, 0.0, 1.0]))
+    lateral /= np.linalg.norm(lateral)
+    return p, forward, lateral
 
 
 def _shape_deltas(ref: np.ndarray, shape: str, size_m: float, n: int) -> list[np.ndarray]:
-    p, inward, perp = _plane_basis(ref)
+    """Per-tick EE deltas tracing ``shape`` in the (forward, lateral) plane.
+
+    All shapes start at the seed (t=0 delta = 0) so the first IK solve
+    has no position jump. Trajectory stays at constant z (the seed's
+    height) and extends forward / sideways — nothing back toward the
+    base, nothing up or down. Re-stage the arms higher to raise the
+    whole plane.
+    """
+    p, forward, lateral = _plane_basis(ref)
     if shape == "circle":
         r = size_m
-        center = p + r * inward
+        center = p + r * forward
         return [
-            (center + r * (np.cos(2 * np.pi * i / n) * -inward + np.sin(2 * np.pi * i / n) * perp)) - p
+            (center + r * (np.cos(2 * np.pi * i / n) * -forward + np.sin(2 * np.pi * i / n) * lateral)) - p
             for i in range(n)
         ]
     if shape == "heart":
         unit = _heart_unit(n)
-        return [size_m * (u[0] * inward + u[1] * perp) for u in unit]
+        return [size_m * (u[0] * forward + u[1] * lateral) for u in unit]
     s = size_m
-    corners = [p, p + s * inward, p + s * inward + s * perp, p + s * perp]
+    corners = [p, p + s * forward, p + s * forward + s * lateral, p + s * lateral]
     per_edge = n // 4
     out: list[np.ndarray] = []
     for e in range(4):
@@ -152,15 +180,19 @@ def _shape_deltas(ref: np.ndarray, shape: str, size_m: float, n: int) -> list[np
 
 
 def _load_follower_config(profile_path: Path) -> BiSO107FollowerConfig:
-    """Load the bi_so107_follower profile JSON (the format the GUI writes)."""
+    """Load the bi_so107_follower profile JSON (the format the GUI writes).
+
+    Skips cameras: this bench drives motors and renders the URDF post-hoc;
+    it does not consume camera frames. Avoiding camera init keeps RealSense
+    threads from starting and shaves a couple of seconds off the run.
+    """
     if not profile_path.exists():
         raise SystemExit(f"profile not found: {profile_path}")
     data = json.loads(profile_path.read_text())
     if data.get("type") != "bi_so107_follower":
         raise SystemExit(f"{profile_path} is not a bi_so107_follower profile (type={data.get('type')})")
     fields = dict(data.get("fields", {}))
-    cameras_raw = data.get("cameras", {})
-    fields["cameras"] = {name: draccus.decode(cfg, CameraConfig) for name, cfg in cameras_raw.items()}
+    fields["cameras"] = {}
     return BiSO107FollowerConfig(**fields)
 
 
@@ -211,25 +243,57 @@ def _run_shape(
     transform,
     left_kin,
     right_kin,
+    left_ctrl,
+    right_ctrl,
     label: str,
     shape: str,
     size_m: float,
 ) -> dict:
     """Drive one shape; return per-tick log dict."""
-    # Anchor the trajectory at the arms' current joints (whatever the user
-    # staged). The controller has just been re-seeded to these joints, so
-    # FK(q_last) == FK(starting joints) == ref.
+    # Anchor the trajectory at whatever the arm has settled to *now* — the
+    # commanded "home" the controller was originally seeded with can have
+    # drifted by several degrees under gravity / soft hold, and re-seeding
+    # from a stale home means the controller's clutch-engage FK reference
+    # doesn't match the trajectory anchor → IK starts off-balance and the
+    # joint-step backstop fires for many ticks.
     obs = follower.get_observation()
     q_l_start = _joints_from_obs(obs, "left_")
     q_r_start = _joints_from_obs(obs, "right_")
+    for ctrl, q in ((left_ctrl, q_l_start), (right_ctrl, q_r_start)):
+        ctrl._q_last = q.copy()
+        ctrl._prev_enabled = False
+        ctrl._ref = None
+        ctrl._last_pos = None
     ref_l = left_kin.forward_kinematics(q_l_start)
     ref_r = right_kin.forward_kinematics(q_r_start)
     grip_idx = MOTOR_NAMES.index("gripper")
     grip_l = float(q_l_start[grip_idx])
     grip_r = float(q_r_start[grip_idx])
 
-    deltas_l = _shape_deltas(ref_l, shape, size_m, N_WAYPOINTS)
-    deltas_r = _shape_deltas(ref_r, shape, size_m, N_WAYPOINTS)
+    # Per-arm shape offset = (forward, up) in the arm's natural frame. Shifts
+    # the trajectory anchor away from base + up, so the trajectory's closest
+    # point doesn't graze the desk or the singular region near full retract.
+    def _offset(ref: np.ndarray) -> np.ndarray:
+        _, forward, _ = _plane_basis(ref)
+        return SHAPE_OFFSET_FORWARD_M * forward + SHAPE_OFFSET_UP_M * np.array([0.0, 0.0, 1.0])
+
+    off_l = _offset(ref_l)
+    off_r = _offset(ref_r)
+
+    # Build the full per-tick delta list:
+    #   [ramp_in (0 -> offset) | shape (offset + shape_delta) | ramp_out (offset -> 0)]
+    # The bench's drift metric only uses the shape portion (shape_start ..
+    # shape_end), so warmup is the ramp + the first WARMUP_TICKS of the shape.
+    shape_l = [d + off_l for d in _shape_deltas(ref_l, shape, size_m, N_WAYPOINTS)]
+    shape_r = [d + off_r for d in _shape_deltas(ref_r, shape, size_m, N_WAYPOINTS)]
+    ramp_in_l = [off_l * (i + 1) / RAMP_TICKS for i in range(RAMP_TICKS)]
+    ramp_in_r = [off_r * (i + 1) / RAMP_TICKS for i in range(RAMP_TICKS)]
+    ramp_out_l = [off_l * (RAMP_TICKS - i - 1) / RAMP_TICKS for i in range(RAMP_TICKS)]
+    ramp_out_r = [off_r * (RAMP_TICKS - i - 1) / RAMP_TICKS for i in range(RAMP_TICKS)]
+    deltas_l = ramp_in_l + shape_l + ramp_out_l
+    deltas_r = ramp_in_r + shape_r + ramp_out_r
+    shape_start = RAMP_TICKS
+    shape_end = RAMP_TICKS + N_WAYPOINTS
 
     period = 1.0 / LOOP_HZ
     cmd_ee_l, ach_ee_l, cmd_j_l, ach_j_l = [], [], [], []
@@ -264,16 +328,22 @@ def _run_shape(
     if misses:
         logger.warning("%s: %d ticks ran long (>20%% over %.0f ms)", label, misses, period * 1000)
 
-    pos_err = np.linalg.norm(np.asarray(cmd_ee_l) - np.asarray(ach_ee_l), axis=1) * 1000.0
+    # Drift metric: only the shape portion (skip ramp ticks + first
+    # WARMUP_TICKS of the shape so the IK has converged to steady state).
+    cmd_arr = np.asarray(cmd_ee_l[shape_start + WARMUP_TICKS : shape_end])
+    ach_arr = np.asarray(ach_ee_l[shape_start + WARMUP_TICKS : shape_end])
+    pos_err = np.linalg.norm(cmd_arr - ach_arr, axis=1) * 1000.0
     logger.info(
-        "%s: max left-arm hardware pos drift = %.2f mm (after warmup)",
+        "%s: max left-arm hardware pos drift = %.2f mm (shape portion, post-warmup)",
         label,
-        float(pos_err[WARMUP_TICKS:].max()),
+        float(pos_err.max()),
     )
 
     return {
         "ref_l": ref_l,
         "ref_r": ref_r,
+        "shape_start": np.int32(shape_start),
+        "shape_end": np.int32(shape_end),
         "cmd_ee_l": np.asarray(cmd_ee_l),
         "ach_ee_l": np.asarray(ach_ee_l),
         "cmd_ee_r": np.asarray(cmd_ee_r),
@@ -297,85 +367,6 @@ def _save_npz(results: dict, path: Path) -> None:
     np.savez(path, **payload)
 
 
-def _render_urdf_video(results: dict, path: Path, fps: float = LOOP_HZ) -> None:
-    """Replay the left arm's achieved joints through pinocchio + meshcat, capture an MP4.
-
-    Loads the SO-107 URDF, opens a meshcat browser tab, displays the
-    achieved joint configuration from every tick of every shape (back-to-
-    back), grabs one image per tick via the meshcat WebSocket, and
-    assembles them into an MP4 with imageio.
-
-    Meshcat needs the browser tab to be open AND visible for the render
-    loop to make progress (browsers throttle ``requestAnimationFrame`` on
-    hidden tabs, which stalls the WebSocket image-request roundtrip). The
-    function prints the URL and prompts for confirmation before starting.
-    """
-    try:
-        import imageio.v2 as imageio
-        import pinocchio as pin
-        from pinocchio.visualize import MeshcatVisualizer
-
-        from lerobot.robots.so107_description import get_meshes_dir, get_urdf_path
-    except Exception:
-        logger.exception("URDF render skipped (imports failed)")
-        return
-
-    sign = np.array([LEFT_ARM_ALIGNMENT[m].sign for m in MOTOR_NAMES], dtype=float)
-    offset = np.array([LEFT_ARM_ALIGNMENT[m].offset_deg for m in MOTOR_NAMES], dtype=float)
-
-    def _motor_to_urdf_rad(q_motor_deg: np.ndarray) -> np.ndarray:
-        return np.deg2rad(sign * q_motor_deg + offset)
-
-    # Stitch all shapes' achieved-joint streams together — single render loop.
-    all_q_urdf: list[np.ndarray] = []
-    shape_starts: list[tuple[str, int]] = []
-    for label, log in results.items():
-        shape_starts.append((label, len(all_q_urdf)))
-        for q in log["ach_j_l"]:
-            all_q_urdf.append(_motor_to_urdf_rad(q))
-
-    try:
-        urdf_path = str(get_urdf_path())
-        mesh_dir = str(get_meshes_dir())
-        robot = pin.RobotWrapper.BuildFromURDF(urdf_path, [mesh_dir])
-        viz = MeshcatVisualizer(robot.model, robot.collision_model, robot.visual_model)
-        viz.initViewer(open=True)
-        viz.loadViewerModel()
-    except Exception:
-        logger.exception("URDF render skipped (pinocchio/meshcat setup failed)")
-        return
-
-    url = viz.viewer.url() if hasattr(viz.viewer, "url") else "http://127.0.0.1:7000/static/"
-    logger.info("meshcat viewer at %s", url)
-    logger.info("Open / focus the meshcat tab (a browser tab should have opened).")
-    try:
-        input("Press Enter to start the URDF render → MP4 (Ctrl-C aborts) ... ")
-    except (EOFError, KeyboardInterrupt):
-        logger.info("URDF render cancelled by user")
-        return
-
-    # Display the seed pose once so meshcat has something to render before
-    # we start measuring captureImage roundtrips.
-    viz.display(all_q_urdf[0])
-    time.sleep(0.5)
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    logger.info("rendering %d frames -> %s", len(all_q_urdf), path)
-    writer = imageio.get_writer(str(path), fps=int(fps), codec="libx264", quality=8)
-    try:
-        for idx, q in enumerate(all_q_urdf):
-            viz.display(q)
-            img = viz.captureImage()
-            writer.append_data(img)
-            if idx and idx % 64 == 0:
-                logger.info("  rendered %d / %d frames", idx, len(all_q_urdf))
-    except Exception:
-        logger.exception("URDF render aborted mid-loop")
-    finally:
-        writer.close()
-    logger.info("MP4 written: %s", path)
-
-
 def _plot_results(results: dict, path: Path) -> None:
     fig, axes = plt.subplots(2, len(results), figsize=(13, 7), height_ratios=(2, 1))
     if len(results) == 1:
@@ -383,12 +374,14 @@ def _plot_results(results: dict, path: Path) -> None:
 
     for col, (label, log) in enumerate(results.items()):
         ref = log["ref_l"]
-        _, inward, perp = _plane_basis(ref)
-        # Project commanded + achieved onto the arm's (inward, perp) plane (mm).
-        d_cmd = log["cmd_ee_l"] - ref[:3, 3]
-        d_ach = log["ach_ee_l"] - ref[:3, 3]
-        cmd_xy = np.stack([d_cmd @ inward, d_cmd @ perp], axis=1) * 1000.0
-        ach_xy = np.stack([d_ach @ inward, d_ach @ perp], axis=1) * 1000.0
+        _, forward, lateral = _plane_basis(ref)
+        # Plot the shape portion only (skip the ramp-in / ramp-out ticks).
+        s = int(log["shape_start"])
+        e = int(log["shape_end"])
+        d_cmd = log["cmd_ee_l"][s:e] - ref[:3, 3]
+        d_ach = log["ach_ee_l"][s:e] - ref[:3, 3]
+        cmd_xy = np.stack([d_cmd @ forward, d_cmd @ lateral], axis=1) * 1000.0
+        ach_xy = np.stack([d_ach @ forward, d_ach @ lateral], axis=1) * 1000.0
         err_mm = np.linalg.norm(cmd_xy - ach_xy, axis=1)
         max_err = float(err_mm[WARMUP_TICKS:].max())
 
@@ -404,9 +397,9 @@ def _plot_results(results: dict, path: Path) -> None:
         )
         ax.set_aspect("equal")
         ax.grid(alpha=0.3)
-        ax.set_xlabel("inward (mm)")
+        ax.set_xlabel("forward (mm)")
         if col == 0:
-            ax.set_ylabel("perp (mm)")
+            ax.set_ylabel("lateral (mm)")
         ax.set_title(f"{label}\nmax left-arm drift: {max_err:.2f} mm")
         ax.legend(loc="upper right", fontsize=9)
 
@@ -467,15 +460,14 @@ def main() -> None:
 
         for label, shape, size_m in SHAPES:
             logger.info("=== %s ===", label)
-            # Settle at the staged pose, then re-seed the controllers so each
-            # shape gets a fresh clutch-engage (FK ref latched, last_pos reset).
+            # Settle the arms at the staged pose between shapes. The
+            # controllers re-seed themselves from observed joints inside
+            # _run_shape, so the trajectory anchor and the IK reference
+            # always agree even if motors have drifted from the command.
             _hold_pose(follower, home_l, home_r, SETTLE_TICKS)
-            for ctrl, q in ((left_ctrl, home_l), (right_ctrl, home_r)):
-                ctrl._q_last = q.copy()
-                ctrl._prev_enabled = False
-                ctrl._ref = None
-                ctrl._last_pos = None
-            results[label] = _run_shape(follower, transform, left_kin, right_kin, label, shape, size_m)
+            results[label] = _run_shape(
+                follower, transform, left_kin, right_kin, left_ctrl, right_ctrl, label, shape, size_m
+            )
         # Return to staged pose at the end.
         _hold_pose(follower, home_l, home_r, SETTLE_TICKS)
     finally:
@@ -487,7 +479,10 @@ def main() -> None:
         _plot_results(results, OUT_DIR / "trajectory_traces.png")
         logger.info("npz  -> %s", OUT_DIR / "run.npz")
         logger.info("plot -> %s", OUT_DIR / "trajectory_traces.png")
-        _render_urdf_video(results, OUT_DIR / "run.mp4")
+        # URDF render is intentionally out of scope: use the GUI's three.js +
+        # urdf-loader pipeline (PR #8, `gui/static/urdf_viz.html`) to replay
+        # the achieved-joint stream from run.npz, then screen-record with
+        # ffmpeg x11grab per the existing recipe.
 
 
 if __name__ == "__main__":
