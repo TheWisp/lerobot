@@ -82,21 +82,25 @@ logger = logging.getLogger("cartesian_ik_hardware_traj")
 # --- User-editable ---------------------------------------------------------
 
 # Path to the bi_so107_follower profile JSON the GUI uses for this rig.
-PROFILE_PATH = Path.home() / ".config" / "lerobot" / "robots" / "white.json"
+# Picks plain ``bi_so107_follower`` or ``bi_so107_follower_predictive``
+# automatically based on the profile's ``type`` field.
+PROFILE_PATH = Path.home() / ".config" / "lerobot" / "robots" / "white_pred.json"
 
 # --- Bench constants -------------------------------------------------------
 
 OUT_DIR = Path("src/lerobot/teleoperators/quest_vr/docs/hardware")
 LOOP_HZ = 30.0
-# 1024 waypoints over 256 (math-viz default) keeps the per-tick joint step
-# at <0.5 deg — well under what STS3215 servos track tightly under load.
-# At 256 wp the achieved trace lagged ~20 mm steady-state (4-5 ticks of
-# motor delay × the trajectory's tangential speed); going 4x slower drops
-# that proportionally toward the math IK floor.
-N_WAYPOINTS = 1024
-WARMUP_TICKS = 30
+# 256 waypoints matches the math-viz / PR #9 trajectory test default and
+# gives peak EE speeds (~4-5 cm/s) representative of a hand-paced Quest
+# teleop. The plain follower needed 1024 wp to hide its motor following
+# lag, but the predictive controller compensates for motor τ via the
+# 80 ms intent lookahead — slowing the trajectory there just measures
+# the gravity floor, not the dynamic tracking the controller exists to
+# fix.
+N_WAYPOINTS = 256
+WARMUP_TICKS = 20
 SETTLE_TICKS = 15  # hold the starting pose between shapes
-RAMP_TICKS = 60  # ~2 s linear ramp into / out of the trajectory anchor
+RAMP_TICKS = 30  # ~1 s linear ramp into / out of the trajectory anchor
 
 # Push the trajectory anchor away from the staged seed so the closest-to-
 # base point of any shape sits comfortably inside the reachable workspace
@@ -194,6 +198,13 @@ def _load_follower(profile_path: Path) -> BiSO107Follower:
     data = json.loads(profile_path.read_text())
     fields = dict(data.get("fields", {}))
     fields["cameras"] = {}
+    # The profile JSON serialises ``calibration_dir`` as a string, but the
+    # config dataclass field is ``Path | None`` and bare dataclass
+    # construction does not auto-convert. The GUI's loader uses
+    # draccus.decode which handles this; this bench skips that for
+    # simplicity, so the conversion has to be explicit here.
+    if isinstance(fields.get("calibration_dir"), str):
+        fields["calibration_dir"] = Path(fields["calibration_dir"])
     type_ = data.get("type")
     if type_ == "bi_so107_follower":
         return BiSO107Follower(BiSO107FollowerConfig(**fields))
