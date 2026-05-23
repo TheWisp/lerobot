@@ -54,104 +54,81 @@ trusted LAN, but not for shipping:
 
 ## Tighter tracking on moving targets
 
-Two sources of drift on continuously-moving targets, characterized by
-`benchmarks/cartesian_ik_tracking.py` (this PR) and
-`benchmarks/pink_ik_tracking.py` (PR #9). For VR teleop this is **not a
-UX blocker** — drift is small in absolute terms during typical hand
-motion, and goes to 0 during pauses — but worth knowing for higher-speed
-use cases (trajectory replay, autonomous policy execution).
+What's left after the structural fix below is one source of drift,
+intrinsic to PinkKinematics: per call the QP returns a bounded joint
+velocity, so lag scales with target velocity. Position drift visible in
+PR #9's bare-IK numbers: 0.2 mm at 1 cm/s to 3 mm at 17 cm/s on a smooth
+circle. Same shape in this PR's stack tracks within ~mm at typical
+teleop speeds — fine for VR-hand motion (drift → 0 during pauses), worth
+knowing for higher-speed use cases like trajectory replay or autonomous
+policy execution.
 
-**Source 1 — iterative IK lag (intrinsic to PinkKinematics).** Per call
-the QP returns a bounded joint velocity, so lag scales with target
-velocity. Position drift visible in PR #9's bare-IK numbers: 0.2 mm at
-1 cm/s to 3 mm at 17 cm/s on a smooth circle. Lever for tightening: the
-`FrameTask` vs `PostureTask` cost ratio inside `PinkKinematics`, or a
-velocity feed-forward layer. Tighten only if hardware reveals a need —
-aggressive tuning can re-introduce the null-space chatter the
-`PostureTask` was added to fix.
-
-**Source 2 — gripper-DOF cost (introduced by this PR's stack).** Bare-IK
-has 7 DOFs and rotation drift is ≈0° everywhere. This PR's
-`CartesianIKController` pins the gripper joint (S7) to the teleop's
-`gripper_pos` after each IK solve — required so the user's open/close
-actuates the gripper — which removes one DOF from the IK. The IK now has
-exactly 6 DOFs for a 6-DOF SE(3) task, no redundancy, so the small
-S7 contribution to wrist orientation it used to lean on is gone. Shows
-up as 1–8° rotation drift on circle/square (2D paths with held orientation,
-5 constraints, 1 redundant DOF lost), but only 0.3–0.6° on a line (1D
-path, 4 constraints, still has slack).
+Lever for tightening: the `FrameTask` vs `PostureTask` cost ratio inside
+`PinkKinematics`, or a velocity feed-forward layer. Tighten only if
+hardware reveals a need — aggressive tuning can re-introduce the
+null-space chatter the `PostureTask` was added to fix.
 
 Two paired sweeps in `benchmarks/cartesian_ik_tracking.py` make the
-contribution easy to read:
+remaining floor easy to read:
 
 **SO-101 stack** (5-DOF, position-only, identity alignment, single-arm
 controller). The numbers come out _bit-identical_ to PR #9's bare-IK
 sweep — same URDF, same shapes, same speeds. The controller wrapper
 adds no overhead here: no S7 to pin (gripper joint is on a branch off
-the EE chain), no per-arm alignment math, no bimanual transform. So
-SO-101 sets the bare-IK floor for the stack, free of the L7-frame
-caveat that complicates SO-107's read.
+the EE chain), no per-arm alignment math, no bimanual transform.
 
-**SO-107 bimanual stack** (6-DOF, full SE(3), per-arm calibration). At
-the same shapes / speeds the position drift is in the same band as
-SO-101 (~mm at typical teleop), but rotation drift shows the gripper-
-DOF cost cleanly:
+**SO-107 bimanual stack** (6-DOF, full SE(3), per-arm calibration, with
+the L6 anchor + `TIP_OFFSET` structural fix below). Position drift in
+the same band as SO-101; rotation drift sits at the IK floor (≤ 0.05°)
+because the IK target is now S7-independent and the gripper-pos
+overwrite no longer fights the solver:
 
 |        | speed | SO-101 pos | SO-107 pos | SO-107 rot |
 | ------ | ----- | ---------- | ---------- | ---------- |
-| circle | ~4.4  | 0.46 mm    | 1.22 mm    | 4.95°      |
-| square | ~9.4  | 1.65 mm    | 2.57 mm    | 8.04°      |
-| line   | ~8.8  | 4.61 mm    | 5.66 mm    | 0.62°      |
+| circle | ~4.4  | 0.46 mm    | 1.63 mm    | 0.01°      |
+| square | ~9.4  | 1.65 mm    | 2.96 mm    | 0.03°      |
+| line   | ~8.8  | 4.61 mm    | 5.75 mm    | 0.02°      |
 
-The clean fix is to make the IK target frame independent of S7 (use a
-frame upstream of the gripper joint, e.g. `L6_1`, plus a fixed SE(3)
-offset to the logical EE tip). Tracked in the next section.
+Historical record — same shapes / speeds before the structural fix,
+when the IK targeted `L7_1` directly and the post-IK S7 overwrite
+removed one DOF from a 6-DOF task: circle 4.95°, square 8.04°, line
+0.62° at the same speeds. That drift is now gone.
 
 ## EE-point / tip-frame calibration
 
-The IK currently targets `L7_1` — the SO-107 URDF's CAD-exported tip
-frame. Two problems with that:
+**Status:** the structural half landed in this PR. `make_so107_arm_kinematics`
+now targets `URDF_ANCHOR_FRAME = "L6_1"` (upstream of `S7`) and applies
+a fixed `TIP_OFFSET` SE(3) to the virtual EE — implemented as a thin
+`TipOffsetKinematics` wrapper, so `PinkKinematics` stays generic. The
+gripper-DOF rotation drift is gone (see the table above).
 
-1. It sits on the gripper body, _downstream_ of S7. That's the root cause
-   of the gripper-DOF rotation drift in the section above — S7 affects
-   the EE pose, so pinning S7 for teleop discards the IK's S7 choice.
-2. It's not actually at the physical gripping point. PR #9's "known
-   issues" already flags this: there is a fixed offset to where the
-   _closed_-gripper tip would be. For a parallel gripper that's the
-   midpoint between the two finger faces; for the SO-107 (soft fin-ray
-   fingers) it's where the two soft fingertips meet when squeezed. The
-   exact offset is per-physical-arm calibration, not a property of the
-   CAD URDF.
+**What's still missing — the calibration half.** The `TIP_OFFSET`
+currently shipped is the S7 joint origin straight from the URDF: it
+defines "where `L7_1` sits when `S7=0`". That removes the structural
+problem but doesn't yet move the virtual EE to the **physical gripping
+point** — the place a user reaches toward to pick something. For the
+SO-107 (soft fin-ray fingers) that's where the two soft fingertips meet
+when squeezed; for a parallel gripper it would be the midpoint between
+the two finger faces. Either way the exact offset is per-physical-arm
+calibration, not a property of the CAD URDF — PR #9's "absolute EE
+position needs further calibration" issue.
 
-The right model: the IK target should be the **hypothetical closed-
-gripper tip**, defined as a fixed SE(3) offset from an upstream-of-S7
-anchor frame. Sketch:
+To finish the calibration story:
 
-- `PinkKinematics` gains a `tip_offset` SE(3) parameter (default
-  identity = current behaviour). FK returns `FK(anchor) @ tip_offset`;
-  the IK target is pre-multiplied by `tip_offset.inv()` so the QP still
-  optimizes against the URDF anchor frame.
-- `URDF_TIP_FRAME` switches from `L7_1` to an upstream frame (`L6` or
-  the wrist link, before the gripper joint).
-- Per-arm `TIP_OFFSET` lives in `joint_alignment.py` alongside
-  `JointAlignment` — both are "this physical arm's calibration data".
+- Make `TIP_OFFSET` per-arm calibration data — same shape as `JointAlignment`
+  already is. Hardcoded default stays in `joint_alignment.py`; the robot
+  profile JSON overrides per physical robot.
 - The guided-calibration GUI tool (`gui/TODO.md`) is the natural place
-  for the user to measure / set this; until that lands, profile JSON
-  override + a measured default.
+  for the user to measure / set it: jog the arm to a known fiducial,
+  click "this is where the tip is now", solve for the offset.
+- The next section (on-hardware benchmark) lets the user verify the
+  calibration is good before relying on it.
 
-Solves multiple things at once:
-
-- The rotation drift from the gripper-DOF cost goes away structurally
-  (S7 no longer affects the EE pose → the overwrite is genuinely free).
-- PR #9's "absolute EE position needs further calibration" issue is
-  resolved by the same mechanism.
-- Matches the intuitive user model — teleop targets the closed-gripper
-  tip, which is what you reach toward to pick something.
-
-Lives across two PRs to land cleanly: the `tip_offset` parameter belongs
-in `PinkKinematics` (PR #9's territory); the SO-107 anchor + per-arm
-defaults belong here. Worth folding both at the time we do the URDF /
-EE-point redesign.
+Once that lands, the structural and calibration halves of the EE-point
+model fit together: IK target = `L6_1 @ TIP_OFFSET` where the offset is
+the user's measured closed-gripper tip. Matches the intuitive user
+model, resolves PR #9's calibration caveat, keeps rotation tracking at
+the IK floor.
 
 ## Configurable IK + on-hardware benchmark + usage analytics
 
@@ -162,9 +139,9 @@ Three related pieces:
 
 ### Configurable IK (the calibration surface)
 
-- `URDF_TIP_FRAME` (anchor) and `TIP_OFFSET` (closed-gripper-tip offset)
-  become per-arm fields on the robot profile JSON — same shape as the
-  per-arm `JointAlignment` already is. Hardcoded defaults stay in
+- `URDF_ANCHOR_FRAME` and `TIP_OFFSET` (closed-gripper-tip offset) become
+  per-arm fields on the robot profile JSON — same shape as the per-arm
+  `JointAlignment` already is. Hardcoded defaults stay in
   `so107_description/joint_alignment.py` as a sensible factory baseline;
   the profile overrides per physical robot.
 - The guided-calibration GUI tool (`gui/TODO.md`) is the place to set

@@ -308,16 +308,9 @@ def test_real_ik_controller_traces_a_position_offset():
     controller is polled repeatedly with the (held) target and converges,
     rather than expected to land a 3 cm jump in a single call.
     """
-    from lerobot.model.pink_kinematics import PinkKinematics
-    from lerobot.robots.so107_description import get_urdf_path
-    from lerobot.robots.so107_description.joint_alignment import URDF_JOINT_NAMES, URDF_TIP_FRAME
+    from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
 
-    inner = PinkKinematics(
-        urdf_path=str(get_urdf_path()),
-        target_frame_name=URDF_TIP_FRAME,
-        joint_names=list(URDF_JOINT_NAMES),
-    )
-    kin = JointMappedKinematics(inner, list(MOTOR_NAMES), RIGHT_ARM_ALIGNMENT)
+    kin = make_so107_arm_kinematics(RIGHT_ARM_ALIGNMENT)
     q_init = np.array([0.0, -90.0, 60.0, 0.0, -40.0, 0.0, 0.0])
     # Wide bounds so neither the workspace clip nor the jump cap interferes.
     ctrl = CartesianIKController(
@@ -491,16 +484,9 @@ def test_joint_step_guard_does_not_false_trigger_on_smooth_motion(caplog):
     not log a single "implausible IK jump" — i.e. it never engages on
     motion that looks like normal teleop.
     """
-    from lerobot.model.pink_kinematics import PinkKinematics
-    from lerobot.robots.so107_description import get_urdf_path
-    from lerobot.robots.so107_description.joint_alignment import URDF_JOINT_NAMES, URDF_TIP_FRAME
+    from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
 
-    inner = PinkKinematics(
-        urdf_path=str(get_urdf_path()),
-        target_frame_name=URDF_TIP_FRAME,
-        joint_names=list(URDF_JOINT_NAMES),
-    )
-    kin = JointMappedKinematics(inner, list(MOTOR_NAMES), RIGHT_ARM_ALIGNMENT)
+    kin = make_so107_arm_kinematics(RIGHT_ARM_ALIGNMENT)
     q_init = np.array([0.0, -90.0, 60.0, 0.0, -40.0, 0.0, 0.0])
     ctrl = CartesianIKController(
         kinematics=kin,
@@ -566,13 +552,16 @@ def _shape_deltas(ref_pose: np.ndarray, shape: str, size_m: float, n: int) -> li
 @pytest.mark.parametrize(
     ("shape", "size_m", "pos_tol_mm", "rot_tol_deg"),
     [
-        # Tolerances reflect PinkKinematics's per-call QP convergence on a
-        # moving target (lag scales with target speed); the 60 mm circle
-        # moves 2x faster per tick than the 30 mm one, and the square's
-        # corners spike both metrics. See quest_vr/TODO.md (IK-tuning).
-        ("circle", 0.030, 5.0, 5.0),
-        ("circle", 0.060, 12.0, 15.0),
-        ("square", 0.050, 15.0, 30.0),
+        # Position tolerances reflect PinkKinematics's per-call QP convergence
+        # on a moving target — lag scales with target speed, so the 60 mm
+        # circle (2x faster per tick than the 30 mm one) needs more headroom.
+        # Rotation is tight: with the L6 anchor + TIP_OFFSET fix the IK is
+        # now S7-independent, so orientation tracks to the IK floor — a
+        # regression in the structural fix would re-introduce multi-degree
+        # rot drift on 2D paths. See quest_vr/TODO.md.
+        ("circle", 0.030, 2.0, 0.2),
+        ("circle", 0.060, 8.0, 0.2),
+        ("square", 0.050, 2.0, 0.2),
     ],
 )
 def test_bimanual_tracks_shape(shape, size_m, pos_tol_mm, rot_tol_deg):
