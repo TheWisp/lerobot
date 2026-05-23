@@ -113,6 +113,31 @@ def _joints_from_obs(obs: dict, prefix: str) -> np.ndarray:
     return np.array([float(obs[f"{prefix}{m}.pos"]) for m in MOTOR_NAMES])
 
 
+def _load_deg_per_unit(follower: BiSO107Follower) -> dict[str, np.ndarray]:
+    """Per-arm conversion: 1 motor-unit (RANGE_M100_100) → joint degrees.
+
+    The bus normalises ``range_max - range_min`` raw ticks into a [-100,
+    +100] motor-unit interval, so 1 unit = (range_max - range_min) / 200
+    ticks. With the STS3215's 4096 ticks per revolution that's
+    ``(range_max - range_min) / 200 * 360 / 4096`` degrees per unit.
+    Calibration files live under ``follower.calibration_dir`` named
+    ``{arm.id}.json``.
+    """
+    out: dict[str, np.ndarray] = {}
+    for arm_name, sub in (("left", follower.left_arm), ("right", follower.right_arm)):
+        cal_path = sub.calibration_fpath
+        if not cal_path.exists():
+            out[arm_name] = np.full(len(MOTOR_NAMES), 1.0)  # rough fallback
+            continue
+        cal = json.loads(cal_path.read_text())
+        deg_per_unit = np.array(
+            [((cal[m]["range_max"] - cal[m]["range_min"]) / 200.0) * 360.0 / 4096.0 for m in MOTOR_NAMES],
+            dtype=float,
+        )
+        out[arm_name] = deg_per_unit
+    return out
+
+
 def _hold_pose(follower: BiSO107Follower, q_l: np.ndarray, q_r: np.ndarray, ticks: int) -> None:
     cmd = {f"left_{m}.pos": float(q_l[i]) for i, m in enumerate(MOTOR_NAMES)}
     cmd |= {f"right_{m}.pos": float(q_r[i]) for i, m in enumerate(MOTOR_NAMES)}
@@ -155,9 +180,16 @@ def _drive_hold(
     }
 
 
-def _plot(log: dict[str, np.ndarray], path: Path) -> None:
-    """Per-motor action vs state over time, both arms side by side."""
-    fig, axes = plt.subplots(len(MOTOR_NAMES), 2, figsize=(13, 2.0 * len(MOTOR_NAMES)), sharex=True)
+def _plot(log: dict[str, np.ndarray], deg_per_unit_by_arm: dict[str, np.ndarray], path: Path) -> None:
+    """Per-motor action vs state over time, both arms side by side.
+
+    Each subplot title contextualises the steady-state Δ three ways:
+    raw motor units, degrees of joint rotation, and Δ as a fraction of
+    the motion the joint actually performed during this hold — so a
+    reader can tell at a glance whether the offset is small, medium, or
+    large relative to the commanded movement.
+    """
+    fig, axes = plt.subplots(len(MOTOR_NAMES), 2, figsize=(14, 2.0 * len(MOTOR_NAMES)), sharex=True)
     ramp_end = RAMP_TICKS
     hold_end = RAMP_TICKS + HOLD_TICKS
     n_steady = int(HOLD_TICKS * STEADY_FRACTION)
@@ -168,6 +200,7 @@ def _plot(log: dict[str, np.ndarray], path: Path) -> None:
     ):
         cmd = log[cmd_key]
         obs = log[obs_key]
+        dpu = deg_per_unit_by_arm[arm]
         for i, name in enumerate(MOTOR_NAMES):
             ax = axes[i, arm_idx]
             x = np.arange(len(cmd))
@@ -175,17 +208,32 @@ def _plot(log: dict[str, np.ndarray], path: Path) -> None:
             ax.plot(x, obs[:, i], color="C3", linewidth=1.0, linestyle="--", label="state")
             ax.axvspan(ramp_end, hold_end, alpha=0.08, color="gray", label="hold" if i == 0 else None)
             ax.axvspan(steady_start, hold_end, alpha=0.18, color="green", label="steady" if i == 0 else None)
-            steady_gap = float(np.nanmean(obs[steady_start:hold_end, i] - cmd[steady_start:hold_end, i]))
-            ax.set_title(f"{arm} {name}  steady Δ(state − action) = {steady_gap:+.2f}", fontsize=9)
+            steady_gap_u = float(np.nanmean(obs[steady_start:hold_end, i] - cmd[steady_start:hold_end, i]))
+            steady_gap_deg = steady_gap_u * dpu[i]
+            motion_u = float(abs(np.nanmean(cmd[steady_start:hold_end, i]) - cmd[0, i]))
+            # Only meaningful when the joint actually moved a non-trivial
+            # amount during this hold. Below 5 motor-units the ratio is a
+            # divide-by-near-zero artefact and only confuses the reader.
+            ratio_str = (
+                f"Δ/motion = {abs(steady_gap_u) / motion_u * 100.0:.0f}%"
+                if motion_u >= 5.0
+                else "Δ/motion = — (joint static)"
+            )
+            ax.set_title(
+                f"{arm} {name}   steady Δ={steady_gap_u:+.2f} u ({steady_gap_deg:+.2f}°)   "
+                f"motion this hold: {motion_u:.1f} u   →   {ratio_str}",
+                fontsize=9,
+            )
             ax.grid(alpha=0.3)
             if i == 0:
                 ax.legend(loc="upper right", fontsize=7)
             if i == len(MOTOR_NAMES) - 1:
-                ax.set_xlabel("tick")
+                ax.set_xlabel("tick (30 Hz; 1 tick ≈ 33 ms)")
 
     fig.suptitle(
         f"Static-hold @ +{HOLD_FORWARD_M * 1000:.0f} mm forward, +{SHAPE_OFFSET_UP_M * 1000:.0f} mm up "
-        f"(ramp {RAMP_TICKS}t → hold {HOLD_TICKS}t @ 30 Hz; green = last {int(STEADY_FRACTION * 100)}%)",
+        f"(ramp {RAMP_TICKS}t → hold {HOLD_TICKS}t @ 30 Hz; green = last {int(STEADY_FRACTION * 100)}%; "
+        f"1 motor unit ≈ 1° on STS3215 arm joints)",
         fontsize=11,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.98))
@@ -249,21 +297,54 @@ def main() -> None:
         logger.info("disconnected")
 
     # Steady-state summary: per-motor mean(state − action) over the last
-    # STEADY_FRACTION of the hold.
+    # STEADY_FRACTION of the hold. Reported in three views so the
+    # absolute magnitude is interpretable:
+    #   * motor units (raw, what the dataset stores) — 1 unit ≈ 1°
+    #   * degrees of joint rotation (using the per-arm calibration's
+    #     range_min/range_max to convert from RANGE_M100_100)
+    #   * fraction of the joint's commanded motion during this hold
+    #     (i.e. Δ ÷ |action_at_hold − action_at_seed|) — tells you what
+    #     fraction of the actual commanded movement is lost to sag
     hold_end = RAMP_TICKS + HOLD_TICKS
     n_steady = int(HOLD_TICKS * STEADY_FRACTION)
     steady_start = hold_end - n_steady
-    logger.info("=== steady-state Δ(state − action) per motor (last %d ticks) ===", n_steady)
+
+    # Per-arm motor-unit-to-degrees conversion: 200 motor units span the
+    # calibrated mechanical range (which for the STS3215 is encoded as
+    # ticks, 4096 ticks per full revolution).
+    deg_per_unit_by_arm = _load_deg_per_unit(follower)
+
+    logger.info("=== steady-state Δ(state − action), last %d ticks ===", n_steady)
     for arm, cmd_key, obs_key in (("left", "cmd_l", "obs_l"), ("right", "cmd_r", "obs_r")):
         cmd = log[cmd_key]
         obs = log[obs_key]
         deltas = np.nanmean(obs[steady_start:hold_end] - cmd[steady_start:hold_end], axis=0)
         stds = np.nanstd(obs[steady_start:hold_end] - cmd[steady_start:hold_end], axis=0)
+        # Commanded motion = |action at hold| − |action at seed|. Use
+        # the first commanded value (post-ramp-in) vs the last (steady).
+        cmd_motion = np.abs(np.nanmean(cmd[steady_start:hold_end], axis=0) - cmd[0])
+        deg_per_unit = deg_per_unit_by_arm[arm]
         for i, name in enumerate(MOTOR_NAMES):
-            logger.info("  %-5s  %-14s  Δ=%+6.2f  std %4.2f", arm, name, deltas[i], stds[i])
+            d_units = float(deltas[i])
+            d_deg = d_units * deg_per_unit[i]
+            motion = float(cmd_motion[i])
+            if motion >= 5.0:
+                ratio_str = f"Δ/motion = {abs(d_units) / motion * 100.0:>3.0f}%"
+            else:
+                ratio_str = "Δ/motion = —    "  # joint barely moved this hold
+            logger.info(
+                "  %-5s  %-14s  Δ=%+6.2f u (%+5.2f°)   |  motion %5.1f u   |  %s   |  std %4.2f",
+                arm,
+                name,
+                d_units,
+                d_deg,
+                motion,
+                ratio_str,
+                stds[i],
+            )
 
     np.savez(OUT_DIR / "static_hold.npz", **log)
-    _plot(log, OUT_DIR / "static_hold.png")
+    _plot(log, deg_per_unit_by_arm, OUT_DIR / "static_hold.png")
     logger.info("npz  -> %s", OUT_DIR / "static_hold.npz")
     logger.info("plot -> %s", OUT_DIR / "static_hold.png")
 
