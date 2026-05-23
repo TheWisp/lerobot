@@ -334,11 +334,39 @@ def _run_shape(
     cmd_arr = np.asarray(cmd_ee_l[shape_start + WARMUP_TICKS : shape_end_clamped])
     ach_arr = np.asarray(ach_ee_l[shape_start + WARMUP_TICKS : shape_end_clamped])
     pos_err = np.linalg.norm(cmd_arr - ach_arr, axis=1) * 1000.0
-    logger.info(
-        "%s: max left-arm hardware pos drift = %.2f mm (shape portion, post-warmup)",
-        label,
-        float(pos_err.max()) if len(pos_err) else float("nan"),
-    )
+    # Split total drift into IK floor vs hardware tracking — same split the
+    # plot draws. Lets the run log show the breakdown directly without
+    # needing to load the npz.
+    cmd_j_arr = np.asarray(cmd_j_l[shape_start + WARMUP_TICKS : shape_end_clamped])
+    ach_j_arr = np.asarray(ach_j_l[shape_start + WARMUP_TICKS : shape_end_clamped])
+    if len(cmd_j_arr) and not np.any(np.isnan(cmd_j_arr)):
+        fk_cmd_arr = np.array([left_kin.forward_kinematics(q)[:3, 3] for q in cmd_j_arr])
+        fk_ach_arr = np.array([left_kin.forward_kinematics(q)[:3, 3] for q in ach_j_arr])
+        ik_floor_mm = np.linalg.norm(fk_cmd_arr - cmd_arr, axis=1) * 1000.0
+        motor_residual_mm = np.linalg.norm(fk_ach_arr - fk_cmd_arr, axis=1) * 1000.0
+        z_state_mm = (fk_ach_arr[:, 2] - cmd_arr[:, 2]) * 1000.0
+        z_action_mm = (fk_cmd_arr[:, 2] - cmd_arr[:, 2]) * 1000.0
+        logger.info(
+            "%s: total max %.2f mm  =  IK floor max %.2f mm  +  motor max %.2f mm",
+            label,
+            float(pos_err.max()),
+            float(ik_floor_mm.max()),
+            float(motor_residual_mm.max()),
+        )
+        logger.info(
+            "%s: Δz  FK(action) mean %+5.2f / max |%4.2f|  |  FK(state) mean %+5.2f / max |%4.2f| mm",
+            label,
+            float(z_action_mm.mean()),
+            float(np.abs(z_action_mm).max()),
+            float(z_state_mm.mean()),
+            float(np.abs(z_state_mm).max()),
+        )
+    else:
+        logger.info(
+            "%s: total max %.2f mm (no IK split — bench loop produced empty actions)",
+            label,
+            float(pos_err.max()) if len(pos_err) else float("nan"),
+        )
 
     return {
         "ref_l": ref_l,
@@ -382,6 +410,45 @@ def _plot_results(results: dict, path: Path, left_kin=None) -> None:
     n = len(results)
     fig = plt.figure(figsize=(5 * n, 9))
     gs = fig.add_gridspec(2, n, height_ratios=(2.2, 1.0))
+
+    # Pre-pass: compute global axis ranges so all shape panels use the same
+    # scale — otherwise a shape with smaller Z sag visually misleads the
+    # eye into thinking it has less drift than a shape with larger Z range
+    # plotted on its own auto-scaled axis.
+    all_forward: list[float] = []
+    all_lateral: list[float] = []
+    all_z: list[float] = []
+    all_dz: list[float] = []
+    for log in results.values():
+        ref = log["ref_l"]
+        _, fwd, lat = _plane_basis(ref)
+        s = int(log["shape_start"])
+        e = int(log["shape_end"])
+        d_cmd = log["cmd_ee_l"][s:e] - ref[:3, 3]
+        d_ach = log["ach_ee_l"][s:e] - ref[:3, 3]
+        for d in (d_cmd, d_ach):
+            all_forward.extend((d @ fwd) * 1000.0)
+            all_lateral.extend((d @ lat) * 1000.0)
+            all_z.extend(d[:, 2] * 1000.0)
+        all_dz.extend(((d_ach - d_cmd)[:, 2]) * 1000.0)
+        if left_kin is not None and log.get("cmd_j_l") is not None:
+            fk = np.array([left_kin.forward_kinematics(q)[:3, 3] for q in log["cmd_j_l"][s:e]])
+            d_act = fk - ref[:3, 3]
+            all_forward.extend((d_act @ fwd) * 1000.0)
+            all_lateral.extend((d_act @ lat) * 1000.0)
+            all_z.extend(d_act[:, 2] * 1000.0)
+            all_dz.extend(((fk - log["cmd_ee_l"][s:e])[:, 2]) * 1000.0)
+
+    def _pad(lo: float, hi: float, frac: float = 0.05) -> tuple[float, float]:
+        if hi <= lo:
+            return lo - 1, hi + 1
+        span = hi - lo
+        return lo - span * frac, hi + span * frac
+
+    forward_lim = _pad(min(all_forward), max(all_forward))
+    lateral_lim = _pad(min(all_lateral), max(all_lateral))
+    z_lim = _pad(min(all_z), max(all_z))
+    dz_lim = _pad(min(all_dz), max(all_dz))
 
     for col, (label, log) in enumerate(results.items()):
         ref = log["ref_l"]
@@ -443,6 +510,9 @@ def _plot_results(results: dict, path: Path, left_kin=None) -> None:
         ax3d.set_xlabel("forward (mm)")
         ax3d.set_ylabel("lateral (mm)")
         ax3d.set_zlabel("z (mm)")
+        ax3d.set_xlim(*forward_lim)
+        ax3d.set_ylim(*lateral_lim)
+        ax3d.set_zlim(*z_lim)
         title_lines = [
             label,
             f"FK(state) − target: max 3D {float(err_3d_mm[warm:].max()):.1f} mm "
@@ -475,6 +545,7 @@ def _plot_results(results: dict, path: Path, left_kin=None) -> None:
             )
         zax.plot(x, z_drift_mm, color="C3", linewidth=1.5, label="FK(state) z − commanded z")
         zax.set_xlim(0, len(cmd_xyz))
+        zax.set_ylim(*dz_lim)
         zax.grid(alpha=0.3)
         zax.set_xlabel("waypoint")
         if col == 0:
@@ -494,8 +565,39 @@ def _plot_results(results: dict, path: Path, left_kin=None) -> None:
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     follower = _load_follower(PROFILE_PATH)
-    logger.info("connecting %s (id=%s)…", type(follower).__name__, follower.config.id)
+    logger.info(
+        "loaded profile %s -> follower %s (id=%s)",
+        PROFILE_PATH.name,
+        type(follower).__name__,
+        follower.config.id,
+    )
+    # Log the predictive controller's tuneable knobs so any deviation from
+    # the production GUI run is visible side-by-side.
+    if isinstance(follower, BiSO107FollowerPredictive):
+        c = follower.config
+        logger.info(
+            "predictive cfg: control_rate_hz=%.0f  lookahead_ms=%.1f (max %.1f)  "
+            "velocity_estimator=%s  velocity_window_ms=%.1f  alpha=%.3f  adaptive=%s",
+            c.control_rate_hz,
+            c.lookahead_ms,
+            c.max_lookahead_ms,
+            c.velocity_estimator,
+            c.velocity_window_ms,
+            c.alpha,
+            c.adaptive,
+        )
+    logger.info(
+        "follower fields: max_relative_target left=%s right=%s  use_degrees l=%s r=%s  dry_run=%s",
+        follower.config.left_arm_max_relative_target,
+        follower.config.right_arm_max_relative_target,
+        follower.config.left_arm_use_degrees,
+        follower.config.right_arm_use_degrees,
+        getattr(follower.config, "dry_run", False),
+    )
+
+    logger.info("connecting…")
     follower.connect()
+    logger.info("connected. is_connected=%s  is_calibrated=%s", follower.is_connected, follower.is_calibrated)
 
     results: dict = {}
     try:
