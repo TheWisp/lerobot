@@ -368,7 +368,7 @@ def _save_npz(results: dict, path: Path) -> None:
     np.savez(path, **payload)
 
 
-def _plot_results(results: dict, path: Path) -> None:
+def _plot_results(results: dict, path: Path, left_kin=None) -> None:
     """Two rows per shape: (1) 3D commanded vs achieved trace, (2) Z over waypoint.
 
     The earlier 2D-in-plane projection silently hid the gravity-induced
@@ -392,21 +392,45 @@ def _plot_results(results: dict, path: Path) -> None:
         d_ach = log["ach_ee_l"][s:e] - ref[:3, 3]
         cmd_xyz = np.stack([d_cmd @ forward, d_cmd @ lateral, d_cmd[:, 2]], axis=1) * 1000.0
         ach_xyz = np.stack([d_ach @ forward, d_ach @ lateral, d_ach[:, 2]], axis=1) * 1000.0
+
+        # FK of the commanded joints — what the IK *intended* the EE to be.
+        # Gap between this and ``cmd_xyz`` (the target the IK was asked to
+        # hit) is the IK QP convergence floor — typically ~0 since the IK
+        # is essentially perfect. Gap between this and ``ach_xyz`` (FK on
+        # motor encoders) is pure hardware tracking — motor following
+        # error + gravity sag — without any IK-math contribution.
+        fk_action_xyz: np.ndarray | None = None
+        if left_kin is not None and log.get("cmd_j_l") is not None:
+            cmd_j = log["cmd_j_l"][s:e]
+            fk_action = np.array([left_kin.forward_kinematics(q)[:3, 3] for q in cmd_j])
+            d_act = fk_action - ref[:3, 3]
+            fk_action_xyz = np.stack([d_act @ forward, d_act @ lateral, d_act[:, 2]], axis=1) * 1000.0
+
         err_3d_mm = np.linalg.norm(cmd_xyz - ach_xyz, axis=1)
         err_inplane_mm = np.linalg.norm(cmd_xyz[:, :2] - ach_xyz[:, :2], axis=1)
         z_drift_mm = ach_xyz[:, 2] - cmd_xyz[:, 2]
         warm = WARMUP_TICKS
 
-        # Row 1: 3D commanded vs achieved EE trace.
+        # Row 1: 3D — commanded target, FK(action) (= IK output), FK(state).
         ax3d = fig.add_subplot(gs[0, col], projection="3d")
         ax3d.plot(
             cmd_xyz[:, 0],
             cmd_xyz[:, 1],
             cmd_xyz[:, 2],
             color="C0",
-            linewidth=2.0,
-            label="commanded",
+            linewidth=2.2,
+            label="commanded EE target",
         )
+        if fk_action_xyz is not None:
+            ax3d.plot(
+                fk_action_xyz[:, 0],
+                fk_action_xyz[:, 1],
+                fk_action_xyz[:, 2],
+                color="C2",
+                linewidth=1.2,
+                linestyle=":",
+                label="FK(action) — what IK asked the motors to do",
+            )
         ax3d.plot(
             ach_xyz[:, 0],
             ach_xyz[:, 1],
@@ -414,32 +438,48 @@ def _plot_results(results: dict, path: Path) -> None:
             color="C3",
             linewidth=1.0,
             linestyle="--",
-            label="achieved (FK on motors)",
+            label="FK(state) — where the motors landed",
         )
         ax3d.set_xlabel("forward (mm)")
         ax3d.set_ylabel("lateral (mm)")
         ax3d.set_zlabel("z (mm)")
-        ax3d.set_title(
-            f"{label}\n"
-            f"max 3D drift {float(err_3d_mm[warm:].max()):.1f} mm "
-            f"(in-plane {float(err_inplane_mm[warm:].max()):.1f} mm, "
-            f"|z| {float(np.abs(z_drift_mm[warm:]).max()):.1f} mm)"
-        )
+        title_lines = [
+            label,
+            f"FK(state) − target: max 3D {float(err_3d_mm[warm:].max()):.1f} mm "
+            f"(in-plane {float(err_inplane_mm[warm:].max()):.1f}, "
+            f"|z| {float(np.abs(z_drift_mm[warm:]).max()):.1f})",
+        ]
+        if fk_action_xyz is not None:
+            ik_err = np.linalg.norm(fk_action_xyz - cmd_xyz, axis=1)
+            motor_err = np.linalg.norm(ach_xyz - fk_action_xyz, axis=1)
+            title_lines.append(
+                f"IK math floor: max {float(ik_err[warm:].max()):.2f} mm  |  "
+                f"motor tracking: max {float(motor_err[warm:].max()):.1f} mm"
+            )
+        ax3d.set_title("\n".join(title_lines), fontsize=9)
         ax3d.legend(loc="upper right", fontsize=8)
-        # Slight view tilt so the z dip is visible rather than edge-on.
         ax3d.view_init(elev=18, azim=-65)
 
-        # Row 2: Z over waypoint — commanded (flat, at 0) vs achieved (dipping).
+        # Row 2: Z over waypoint — commanded (flat 0), FK(action), FK(state).
         zax = fig.add_subplot(gs[1, col])
         x = np.arange(len(cmd_xyz))
-        zax.axhline(0.0, color="C0", linewidth=2.0, label="commanded z (constant)")
-        zax.plot(x, z_drift_mm, color="C3", linewidth=1.5, label="achieved z − commanded z")
+        zax.axhline(0.0, color="C0", linewidth=2.0, label="commanded z target (constant)")
+        if fk_action_xyz is not None:
+            zax.plot(
+                x,
+                fk_action_xyz[:, 2] - cmd_xyz[:, 2],
+                color="C2",
+                linewidth=1.5,
+                linestyle=":",
+                label="FK(action) z − commanded z (IK floor)",
+            )
+        zax.plot(x, z_drift_mm, color="C3", linewidth=1.5, label="FK(state) z − commanded z")
         zax.set_xlim(0, len(cmd_xyz))
         zax.grid(alpha=0.3)
         zax.set_xlabel("waypoint")
         if col == 0:
             zax.set_ylabel("Δz vs commanded (mm)")
-        zax.legend(loc="lower right", fontsize=8)
+        zax.legend(loc="lower right", fontsize=7)
 
     fig.suptitle("SO-107 bimanual stack — hardware trajectory traces (left arm, 3D)", fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
