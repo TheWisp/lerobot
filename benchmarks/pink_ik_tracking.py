@@ -17,11 +17,17 @@
 
 Sweeps three trajectory shapes — a 30 mm-radius circle, a 50 mm-side
 square, and a 60 mm linear back-and-forth — across a range of waypoint
-counts (≡ peak EE speeds at a 30 Hz loop), and plots max position and
-rotation drift against peak speed. Bare ``PinkKinematics`` — no
-per-arm joint-map, no Cartesian controller, no bimanual transform —
-so this is the IK's intrinsic operating envelope: the floor any
-downstream Cartesian-control layer inherits.
+counts (≡ peak EE speeds at a 30 Hz loop), and plots max position drift
+against peak speed. Bare ``PinkKinematics`` — no per-arm joint-map, no
+Cartesian controller, no bimanual transform — so this is the IK's
+intrinsic operating envelope: the floor any downstream Cartesian-control
+layer inherits.
+
+Run on **SO-101** (5-DOF arm, the most-used SO-ARM variant), with
+orientation weight = 0 because a 5-DOF arm cannot independently control
+all three orientation axes. ``test_pink_ik_trajectory.py`` exercises both
+SO-101 and SO-107; the bench picks SO-101 to characterise the IK on the
+arm users actually have.
 
 The shapes cover different stress regimes:
 - **Circle**: smooth, continuous tangent — what the IK is "good at".
@@ -48,19 +54,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from lerobot.model.pink_kinematics import PinkKinematics
-from lerobot.robots.so107_description import get_urdf_path
+from lerobot.robots.so101_description import get_urdf_path
 
-# Match test_pink_ik_trajectory.py's SO-107 seed and target frame.
-URDF_TIP_FRAME = "L7_1"
-URDF_JOINT_NAMES = ("S1", "S2", "S3", "S4", "S5", "S6", "S7")
-SEED_DEG = np.array([0.0, -90.0, 60.0, 0.0, -40.0, 0.0, 0.0])
+# Match test_pink_ik_trajectory.py's SO-101 seed and target frame. SO-101's
+# URDF has 6 joints but only 5 actuate the EE (the 6th is the gripper jaw
+# on a branch off gripper_link, not on the path to gripper_frame_link).
+URDF_TIP_FRAME = "gripper_frame_link"
+SEED_DEG = np.array([0.0, 45.0, -90.0, 45.0, 0.0, 0.0])
 
 LOOP_HZ = 30.0
 WAYPOINT_COUNTS = (1024, 512, 256, 128, 64, 32)
 WARMUP_TICKS = 20
 TYPICAL_TELEOP_CM_S = (1.0, 10.0)
 
-# Shape sizes — picked to be in-workspace at the SO-107 seed pose. The
+# Shape sizes — picked to be in-workspace at the SO-101 seed pose. The
 # "size" semantics differ per shape (radius for circle, side for square,
 # half-amplitude for line) but each produces a path of similar extent.
 CIRCLE_RADIUS_M = 0.030
@@ -125,74 +132,53 @@ SHAPES = {
 }
 
 
-def _run_trajectory(targets: list[np.ndarray]) -> tuple[float, float]:
-    """Drive the targets through bare PinkKinematics, return ``(pos mm, rot deg)``."""
-    kin = PinkKinematics(
-        urdf_path=str(get_urdf_path()),
-        target_frame_name=URDF_TIP_FRAME,
-        joint_names=list(URDF_JOINT_NAMES),
-    )
+def _run_trajectory(targets: list[np.ndarray]) -> float:
+    """Drive the targets through bare PinkKinematics; return max pos drift (mm).
+
+    Position-only IK (``orientation_weight=0``) because a 5-DOF arm cannot
+    independently control all three orientation axes.
+    """
+    kin = PinkKinematics(urdf_path=str(get_urdf_path()), target_frame_name=URDF_TIP_FRAME)
     q = SEED_DEG.copy()
     pos_err: list[float] = []
-    rot_err: list[float] = []
     for target in targets:
-        q = kin.inverse_kinematics(q, target, position_weight=1.0, orientation_weight=1.0)
+        q = kin.inverse_kinematics(q, target, position_weight=1.0, orientation_weight=0.0)
         fk = kin.forward_kinematics(q)
         pos_err.append(float(np.linalg.norm(fk[:3, 3] - target[:3, 3])))
-        r_err = target[:3, :3].T @ fk[:3, :3]
-        cos_a = max(-1.0, min(1.0, (float(np.trace(r_err)) - 1.0) * 0.5))
-        rot_err.append(float(np.degrees(np.arccos(cos_a))))
-    return max(pos_err[WARMUP_TICKS:]) * 1000.0, max(rot_err[WARMUP_TICKS:])
+    return max(pos_err[WARMUP_TICKS:]) * 1000.0
 
 
 def main() -> None:
-    # Build a single t0 for all shapes by FK'ing the seed once.
-    kin_for_t0 = PinkKinematics(
-        urdf_path=str(get_urdf_path()),
-        target_frame_name=URDF_TIP_FRAME,
-        joint_names=list(URDF_JOINT_NAMES),
-    )
+    kin_for_t0 = PinkKinematics(urdf_path=str(get_urdf_path()), target_frame_name=URDF_TIP_FRAME)
     t0 = kin_for_t0.forward_kinematics(SEED_DEG)
 
-    results: dict[str, dict[str, list[float]]] = {
-        name: {"speed": [], "pos": [], "rot": []} for name in SHAPES
-    }
+    results: dict[str, dict[str, list[float]]] = {name: {"speed": [], "pos": []} for name in SHAPES}
 
-    print(f"{'shape':>16}  {'n_wp':>5}  {'speed':>11}  {'pos_drift':>10}  {'rot_drift':>10}")
-    print(f"{'-' * 16}  {'-' * 5}  {'-' * 11}  {'-' * 10}  {'-' * 10}")
+    print(f"{'shape':>16}  {'n_wp':>5}  {'speed':>11}  {'pos_drift':>10}")
+    print(f"{'-' * 16}  {'-' * 5}  {'-' * 11}  {'-' * 10}")
     for name, (make_targets, speed_fn) in SHAPES.items():
         for n in WAYPOINT_COUNTS:
             targets = make_targets(t0, n)
             speed_cm_s = speed_fn(n) * 100.0
-            pos_mm, rot_deg = _run_trajectory(targets)
+            pos_mm = _run_trajectory(targets)
             results[name]["speed"].append(speed_cm_s)
             results[name]["pos"].append(pos_mm)
-            results[name]["rot"].append(rot_deg)
-            print(f"{name:>16}  {n:>5}  {speed_cm_s:>7.2f} cm/s  {pos_mm:>7.2f} mm  {rot_deg:>7.2f} deg")
+            print(f"{name:>16}  {n:>5}  {speed_cm_s:>7.2f} cm/s  {pos_mm:>7.2f} mm")
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
+    fig, ax = plt.subplots(1, 1, figsize=(7, 4.5))
     colors = {"circle 30 mm r": "C0", "square 50 mm s": "C1", "line 60 mm amp": "C2"}
     markers = {"circle 30 mm r": "o", "square 50 mm s": "s", "line 60 mm amp": "^"}
 
-    for ax in (ax1, ax2):
-        ax.axvspan(*TYPICAL_TELEOP_CM_S, alpha=0.12, color="green", label="typical teleop")
-        ax.grid(alpha=0.3)
-        ax.set_xscale("log")
-        ax.set_xlabel("Peak EE speed (cm/s, log)")
+    ax.axvspan(*TYPICAL_TELEOP_CM_S, alpha=0.12, color="green", label="typical teleop")
+    ax.grid(alpha=0.3)
+    ax.set_xscale("log")
+    ax.set_xlabel("Peak EE speed (cm/s, log)")
 
     for name, data in results.items():
-        ax1.plot(
-            data["speed"], data["pos"], marker=markers[name], color=colors[name], label=name, linewidth=2
-        )
-        ax2.plot(
-            data["speed"], data["rot"], marker=markers[name], color=colors[name], label=name, linewidth=2
-        )
-    ax1.set_ylabel("Max position drift (mm)")
-    ax1.set_title("Position tracking — bare PinkKinematics")
-    ax2.set_ylabel("Max rotation drift (deg)")
-    ax2.set_title("Orientation tracking — bare PinkKinematics")
-    ax1.legend(loc="upper left")
-    ax2.legend(loc="upper left")
+        ax.plot(data["speed"], data["pos"], marker=markers[name], color=colors[name], label=name, linewidth=2)
+    ax.set_ylabel("Max position drift (mm)")
+    ax.set_title("Position tracking — bare PinkKinematics, SO-101 (5-DOF, position-only)")
+    ax.legend(loc="upper left")
 
     plt.tight_layout()
     out_path = Path("src/lerobot/model/docs/pink_ik_tradeoff.png")
