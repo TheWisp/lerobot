@@ -59,7 +59,7 @@ N_WAYPOINTS = 256  # matches test_pink_ik_trajectory.py's _N_WAYPOINTS
 WARMUP_TICKS = 20
 
 SHAPES = [
-    ("heart 50 mm", "heart", 0.050),
+    ("heart 50 mm wide (45 mm tall)", "heart", 0.050),
     ("circle 60 mm radius", "circle", 0.060),
     ("square 50 mm side", "square", 0.050),
 ]

@@ -181,62 +181,95 @@ def _drive_hold(
 
 
 def _plot(log: dict[str, np.ndarray], deg_per_unit_by_arm: dict[str, np.ndarray], path: Path) -> None:
-    """Per-motor action vs state over time, both arms side by side.
+    """Δ(state − action) per motor over time, both arms on **shared** y-axis.
 
-    Each subplot title contextualises the steady-state Δ three ways:
-    raw motor units, degrees of joint rotation, and Δ as a fraction of
-    the motion the joint actually performed during this hold — so a
-    reader can tell at a glance whether the offset is small, medium, or
-    large relative to the commanded movement.
+    Previous "absolute action + state, one motor per subplot" view auto-
+    scaled each subplot's y-axis to the joint's commanded range — which
+    made a +2-unit Δ look huge on a near-static joint (e.g. shoulder_pan,
+    y span ~3 u) and microscopic on a wide-motion joint (e.g.
+    shoulder_lift, y span ~50 u). Shapes misled the eye.
+
+    This view plots Δ directly: zero = perfect tracking, every motor on
+    the same scale. Two panels (left arm, right arm). Each panel has 7
+    colour-coded lines (one per motor). Lines hugging zero converged;
+    lines sitting away from zero show the persistent gap. Shaded grey
+    = hold window, green = steady (last STEADY_FRACTION of the hold) —
+    that band is where the per-motor Δ in the legend is averaged from.
     """
-    fig, axes = plt.subplots(len(MOTOR_NAMES), 2, figsize=(14, 2.0 * len(MOTOR_NAMES)), sharex=True)
-    ramp_end = RAMP_TICKS
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6.5), sharex=True, sharey=True)
     hold_end = RAMP_TICKS + HOLD_TICKS
     n_steady = int(HOLD_TICKS * STEADY_FRACTION)
     steady_start = hold_end - n_steady
+    colors = plt.colormaps["tab10"]
+
+    # Compute y-limits from the *hold* portion across both arms so the
+    # plot focuses on the steady-state behaviour. The ramp's initial
+    # transients (e.g. gripper action=default vs state=staged-value at
+    # tick 0) would otherwise dominate the scale and bury the 1-2 unit
+    # offsets we care about.
+    hold_deltas = np.concatenate(
+        [
+            log["obs_l"][RAMP_TICKS:hold_end] - log["cmd_l"][RAMP_TICKS:hold_end],
+            log["obs_r"][RAMP_TICKS:hold_end] - log["cmd_r"][RAMP_TICKS:hold_end],
+        ],
+        axis=0,
+    )
+    y_max = float(np.nanmax(np.abs(hold_deltas)))
+    # Pad by 1 u or 30%, whichever is larger; clamp the floor at 3 u so a
+    # near-zero hold (all motors converged) still has visible structure.
+    y_lim = max(3.0, y_max * 1.3 + 1.0)
 
     for arm_idx, (arm, cmd_key, obs_key) in enumerate(
         (("left", "cmd_l", "obs_l"), ("right", "cmd_r", "obs_r"))
     ):
+        ax = axes[arm_idx]
         cmd = log[cmd_key]
         obs = log[obs_key]
+        delta = obs - cmd  # (T, n_motors), in motor units
         dpu = deg_per_unit_by_arm[arm]
+        x = np.arange(len(cmd))
+
+        ax.axhline(0.0, color="0.5", linewidth=1.0, zorder=0)
+        ax.axvspan(RAMP_TICKS, hold_end, alpha=0.08, color="gray", label="hold")
+        ax.axvspan(steady_start, hold_end, alpha=0.18, color="green", label="steady window")
+
         for i, name in enumerate(MOTOR_NAMES):
-            ax = axes[i, arm_idx]
-            x = np.arange(len(cmd))
-            ax.plot(x, cmd[:, i], color="C0", linewidth=1.8, label="action")
-            ax.plot(x, obs[:, i], color="C3", linewidth=1.0, linestyle="--", label="state")
-            ax.axvspan(ramp_end, hold_end, alpha=0.08, color="gray", label="hold" if i == 0 else None)
-            ax.axvspan(steady_start, hold_end, alpha=0.18, color="green", label="steady" if i == 0 else None)
-            steady_gap_u = float(np.nanmean(obs[steady_start:hold_end, i] - cmd[steady_start:hold_end, i]))
-            steady_gap_deg = steady_gap_u * dpu[i]
+            steady_u = float(np.nanmean(delta[steady_start:hold_end, i]))
+            steady_deg = steady_u * dpu[i]
             motion_u = float(abs(np.nanmean(cmd[steady_start:hold_end, i]) - cmd[0, i]))
-            # Only meaningful when the joint actually moved a non-trivial
-            # amount during this hold. Below 5 motor-units the ratio is a
-            # divide-by-near-zero artefact and only confuses the reader.
-            ratio_str = (
-                f"Δ/motion = {abs(steady_gap_u) / motion_u * 100.0:.0f}%"
-                if motion_u >= 5.0
-                else "Δ/motion = — (joint static)"
-            )
-            ax.set_title(
-                f"{arm} {name}   steady Δ={steady_gap_u:+.2f} u ({steady_gap_deg:+.2f}°)   "
-                f"motion this hold: {motion_u:.1f} u   →   {ratio_str}",
-                fontsize=9,
-            )
-            ax.grid(alpha=0.3)
-            if i == 0:
-                ax.legend(loc="upper right", fontsize=7)
-            if i == len(MOTOR_NAMES) - 1:
-                ax.set_xlabel("tick (30 Hz; 1 tick ≈ 33 ms)")
+            if motion_u >= 5.0:
+                tag = (
+                    f"{name:<13} Δ={steady_u:+5.2f} u ({steady_deg:+5.2f}°)  / motion "
+                    f"{motion_u:4.1f} = {abs(steady_u) / motion_u * 100:>3.0f}%"
+                )
+            else:
+                tag = (
+                    f"{name:<13} Δ={steady_u:+5.2f} u ({steady_deg:+5.2f}°)  / motion "
+                    f"{motion_u:4.1f} (static)"
+                )
+            ax.plot(x, delta[:, i], color=colors(i), linewidth=1.4, label=tag)
+
+        ax.grid(alpha=0.3)
+        ax.set_xlim(0, len(cmd))
+        ax.set_ylim(-y_lim, y_lim)
+        ax.set_xlabel("tick (30 Hz; 1 tick ≈ 33 ms)")
+        if arm_idx == 0:
+            ax.set_ylabel("Δ = state − action  (motor units; 1 u ≈ 1°)")
+        ax.set_title(f"{arm} arm", fontsize=11)
+        ax.legend(
+            loc="upper right",
+            fontsize=8,
+            framealpha=0.9,
+            prop={"family": "monospace"},
+        )
 
     fig.suptitle(
-        f"Static-hold @ +{HOLD_FORWARD_M * 1000:.0f} mm forward, +{SHAPE_OFFSET_UP_M * 1000:.0f} mm up "
-        f"(ramp {RAMP_TICKS}t → hold {HOLD_TICKS}t @ 30 Hz; green = last {int(STEADY_FRACTION * 100)}%; "
-        f"1 motor unit ≈ 1° on STS3215 arm joints)",
+        f"Static-hold Δ(state − action) per motor   "
+        f"@ +{HOLD_FORWARD_M * 1000:.0f} mm forward, +{SHAPE_OFFSET_UP_M * 1000:.0f} mm up   "
+        f"(ramp {RAMP_TICKS}t → hold {HOLD_TICKS}t @ 30 Hz; green = last {int(STEADY_FRACTION * 100)}%)",
         fontsize=11,
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.98))
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=120)
     plt.close(fig)

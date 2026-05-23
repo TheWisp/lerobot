@@ -116,7 +116,7 @@ SHAPE_OFFSET_FORWARD_M = 0.05  # +5 cm away from base
 SHAPE_OFFSET_UP_M = 0.05  # +5 cm above seed
 
 SHAPES = [
-    ("heart 50 mm", "heart", 0.050),
+    ("heart 50 mm wide (45 mm tall)", "heart", 0.050),
     ("circle 60 mm radius", "circle", 0.060),
     ("square 50 mm side", "square", 0.050),
 ]
@@ -550,7 +550,7 @@ def _plot_results(results: dict, path: Path, left_kin=None) -> None:
         zax.set_xlim(0, len(cmd_xyz))
         zax.set_ylim(*dz_lim)
         zax.grid(alpha=0.3)
-        zax.set_xlabel("waypoint")
+        zax.set_xlabel("waypoint (30 Hz tick; 1 waypoint ≈ 33 ms)")
         if col == 0:
             zax.set_ylabel("Δz vs commanded (mm)")
         zax.legend(loc="lower right", fontsize=7)
