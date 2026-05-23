@@ -194,13 +194,16 @@ class QuestVRTeleop(Teleoperator):
         return self._arm.idle_action()
 
     def _on_frame(self, frame: dict[str, Any]) -> None:
-        """Called from the server's asyncio thread per WebXR frame."""
+        """Called from the server's asyncio thread per WebXR frame.
+
+        A frame without this controller's pose (tracking dropout) is routed
+        to ``on_tracking_lost`` — the arm disengages and re-anchors on the
+        next tracked frame, instead of acting on a stale engage snapshot.
+        """
         poses = frame.get("poses") or []
         hand = self.config.controller_hand
         pose = next((p for p in poses if p.get("hand") == hand), None)
-        if pose is None:
-            return
-        action = self._arm.process_pose(pose)
+        action = self._arm.process_pose(pose) if pose is not None else self._arm.on_tracking_lost()
         with self._cache_lock:
             self._cached_action = action
 
