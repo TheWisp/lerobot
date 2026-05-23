@@ -61,9 +61,7 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import time
-from collections.abc import Callable
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -75,6 +73,10 @@ from lerobot.robots.bi_so107_follower_predictive import (
     BiSO107FollowerPredictiveConfig,
 )
 from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+from lerobot.teleoperators.scripted_ee import (
+    ScriptedBimanualEETeleop,
+    ScriptedBimanualEETeleopConfig,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s  %(message)s")
 logger = logging.getLogger("cartesian_ik_hardware_traj")
@@ -216,73 +218,6 @@ def _load_follower(profile_path: Path) -> BiSO107Follower:
 # --- One-tick action -------------------------------------------------------
 
 
-_PER_ARM_KEYS = (
-    "enabled",
-    "target_x",
-    "target_y",
-    "target_z",
-    "target_wx",
-    "target_wy",
-    "target_wz",
-    "gripper_pos",
-)
-_CARTESIAN_ACTION_KEYS = tuple(f"{p}{k}" for p in ("left_", "right_") for k in _PER_ARM_KEYS)
-
-
-class _ScriptedCartesianTeleop:
-    """Bench-internal scripted Cartesian VR teleop.
-
-    Implements the surface a bimanual Cartesian VR teleop must expose for
-    a follower's ``attach_teleop`` to install the IK transform / build
-    the predictive adapter: ``action_features`` (with ``left_target_x``
-    in ``names``), ``set_action_transform``, ``get_action`` (post-
-    transform), and ``get_action_raw`` (pre-transform — the adapter
-    polls this to avoid feeding its own cached output back into itself).
-
-    The bench updates the current Cartesian deltas via ``set_targets``
-    each main-loop tick; the IK adapter (predictive follower) or the
-    installed transform (plain follower) consumes the raw output and
-    produces joint dicts.
-    """
-
-    name = "scripted_cart_bench"
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._action: dict[str, float] = dict.fromkeys(_CARTESIAN_ACTION_KEYS, 0.0)
-        self._transform: Callable[[dict], dict] | None = None
-
-    @property
-    def action_features(self) -> dict:
-        return {"names": {k: i for i, k in enumerate(_CARTESIAN_ACTION_KEYS)}}
-
-    def set_targets(self, dl: np.ndarray, dr: np.ndarray, grip_l: float, grip_r: float) -> None:
-        with self._lock:
-            self._action["left_enabled"] = 1.0
-            self._action["left_target_x"] = float(dl[0])
-            self._action["left_target_y"] = float(dl[1])
-            self._action["left_target_z"] = float(dl[2])
-            self._action["left_gripper_pos"] = float(grip_l)
-            self._action["right_enabled"] = 1.0
-            self._action["right_target_x"] = float(dr[0])
-            self._action["right_target_y"] = float(dr[1])
-            self._action["right_target_z"] = float(dr[2])
-            self._action["right_gripper_pos"] = float(grip_r)
-
-    def set_action_transform(self, transform: Callable[[dict], dict] | None) -> None:
-        self._transform = transform
-
-    def get_action_raw(self) -> dict[str, float]:
-        with self._lock:
-            return dict(self._action)
-
-    def get_action(self) -> dict:
-        action = self.get_action_raw()
-        if self._transform is not None:
-            action = self._transform(action)
-        return action
-
-
 def _joints_from_obs(obs: dict, prefix: str) -> np.ndarray:
     return np.array([float(obs[f"{prefix}{m}.pos"]) for m in MOTOR_NAMES])
 
@@ -303,73 +238,50 @@ def _hold_pose(follower: BiSO107Follower, q_l: np.ndarray, q_r: np.ndarray, tick
 
 def _run_shape(
     follower: BiSO107Follower,
-    scripted: _ScriptedCartesianTeleop,
+    scripted: ScriptedBimanualEETeleop,
     left_kin,
     right_kin,
     label: str,
-    shape: str,
-    size_m: float,
 ) -> dict:
-    """Drive one shape through the scripted Cartesian teleop; return log.
+    """Loop until the scripted teleop reports ``is_exhausted``; log per-tick.
 
-    The follower has already been attach_teleop'd to ``scripted``. For a
-    plain follower, that installed the per-arm IK controllers and the
-    bimanual transform on the teleop. For a predictive follower, that
-    additionally built a :class:`BimanualCartesianIKAdapter` that polls
-    the scripted teleop at 90 Hz and feeds each per-arm controller. The
-    bench's loop just sets the current Cartesian deltas and reads
-    observations — never calls IK directly.
+    The teleop self-paces its trajectory by wall clock — the bench's loop
+    just polls ``get_action()`` / ``send_action()`` / ``get_observation()``
+    at ``LOOP_HZ`` and logs. The teleop's ``get_action_raw()`` returns
+    the current Cartesian EE delta in robot base frame; the follower's
+    ``attach_teleop`` has already installed the IK transform (plain
+    follower) or the Cartesian-adapter-cache transform (predictive
+    follower), so ``get_action()`` returns motor-joint dicts in both
+    paths.
     """
-    # Anchor the trajectory at whatever the arm has settled to *now*. Note
-    # that for the predictive path, the per-arm CartesianIKControllers
-    # built inside attach_teleop already latched their seed at attach
-    # time; re-attaching is the way to re-seed.
     obs = follower.get_observation()
     q_l_start = _joints_from_obs(obs, "left_")
     q_r_start = _joints_from_obs(obs, "right_")
     ref_l = left_kin.forward_kinematics(q_l_start)
     ref_r = right_kin.forward_kinematics(q_r_start)
-    grip_idx = MOTOR_NAMES.index("gripper")
-    grip_l = float(q_l_start[grip_idx])
-    grip_r = float(q_r_start[grip_idx])
-
-    # Per-arm shape offset = (forward, up) in the arm's natural frame. Shifts
-    # the trajectory anchor away from base + up, so the trajectory's closest
-    # point doesn't graze the desk or the singular region near full retract.
-    def _offset(ref: np.ndarray) -> np.ndarray:
-        _, forward, _ = _plane_basis(ref)
-        return SHAPE_OFFSET_FORWARD_M * forward + SHAPE_OFFSET_UP_M * np.array([0.0, 0.0, 1.0])
-
-    off_l = _offset(ref_l)
-    off_r = _offset(ref_r)
-
-    shape_l = [d + off_l for d in _shape_deltas(ref_l, shape, size_m, N_WAYPOINTS)]
-    shape_r = [d + off_r for d in _shape_deltas(ref_r, shape, size_m, N_WAYPOINTS)]
-    ramp_in_l = [off_l * (i + 1) / RAMP_TICKS for i in range(RAMP_TICKS)]
-    ramp_in_r = [off_r * (i + 1) / RAMP_TICKS for i in range(RAMP_TICKS)]
-    ramp_out_l = [off_l * (RAMP_TICKS - i - 1) / RAMP_TICKS for i in range(RAMP_TICKS)]
-    ramp_out_r = [off_r * (RAMP_TICKS - i - 1) / RAMP_TICKS for i in range(RAMP_TICKS)]
-    deltas_l = ramp_in_l + shape_l + ramp_out_l
-    deltas_r = ramp_in_r + shape_r + ramp_out_r
-    shape_start = RAMP_TICKS
-    shape_end = RAMP_TICKS + N_WAYPOINTS
 
     period = 1.0 / LOOP_HZ
     cmd_ee_l, ach_ee_l, cmd_j_l, ach_j_l = [], [], [], []
     cmd_ee_r, ach_ee_r, cmd_j_r, ach_j_r = [], [], [], []
+    cart_deltas_l: list[np.ndarray] = []
+    cart_deltas_r: list[np.ndarray] = []
     misses = 0
     empty_get_action = 0
 
-    for dl, dr in zip(deltas_l, deltas_r, strict=True):
+    # Note: the trajectory has ramp_in / shape / ramp_out structure (see
+    # ScriptedBimanualEETeleop.connect). We don't index into the teleop's
+    # internal phase markers — instead we log the *raw* per-tick Cartesian
+    # delta and figure out which ticks are the shape portion from the
+    # teleop's config.
+    cfg = scripted.config
+    shape_start = cfg.ramp_ticks
+    shape_end = cfg.ramp_ticks + cfg.n_waypoints
+
+    while not scripted.is_exhausted:
         t0 = time.time()
-        scripted.set_targets(dl, dr, grip_l, grip_r)
-        # On the predictive path: get_action() returns the adapter's cached
-        # joint dict; send_action updates the controller's latest_intent
-        # (push path) — the 200 Hz controller's per-arm pull through the
-        # adapter sub-teleops also covers this, but the push-side intent
-        # keeps the controller's velocity-estimator hot at the loop rate.
-        # On the plain path: get_action() returns joints from the in-process
-        # IK transform; send_action writes motors.
+        raw = scripted.get_action_raw()
+        cart_l = np.array([raw["left_target_x"], raw["left_target_y"], raw["left_target_z"]], dtype=float)
+        cart_r = np.array([raw["right_target_x"], raw["right_target_y"], raw["right_target_z"]], dtype=float)
         joint_action = scripted.get_action()
         if joint_action:
             follower.send_action(joint_action)
@@ -390,14 +302,16 @@ def _run_shape(
             else np.full(len(MOTOR_NAMES), np.nan)
         )
 
-        cmd_ee_l.append(ref_l[:3, 3] + dl)
-        cmd_ee_r.append(ref_r[:3, 3] + dr)
+        cmd_ee_l.append(ref_l[:3, 3] + cart_l)
+        cmd_ee_r.append(ref_r[:3, 3] + cart_r)
         ach_ee_l.append(left_kin.forward_kinematics(ach_l)[:3, 3])
         ach_ee_r.append(right_kin.forward_kinematics(ach_r)[:3, 3])
         cmd_j_l.append(cmd_l)
         cmd_j_r.append(cmd_r)
         ach_j_l.append(ach_l)
         ach_j_r.append(ach_r)
+        cart_deltas_l.append(cart_l)
+        cart_deltas_r.append(cart_r)
 
         elapsed = time.time() - t0
         if elapsed > period * 1.2:
@@ -410,26 +324,27 @@ def _run_shape(
             label,
             empty_get_action,
         )
-
     if misses:
         logger.warning("%s: %d ticks ran long (>20%% over %.0f ms)", label, misses, period * 1000)
 
-    # Drift metric: only the shape portion (skip ramp ticks + first
-    # WARMUP_TICKS of the shape so the IK has converged to steady state).
-    cmd_arr = np.asarray(cmd_ee_l[shape_start + WARMUP_TICKS : shape_end])
-    ach_arr = np.asarray(ach_ee_l[shape_start + WARMUP_TICKS : shape_end])
+    # Clamp the shape window to whatever the loop actually captured (the
+    # while-loop may stop one tick before the ramp-out completes).
+    n_captured = len(cmd_ee_l)
+    shape_end_clamped = min(shape_end, n_captured)
+    cmd_arr = np.asarray(cmd_ee_l[shape_start + WARMUP_TICKS : shape_end_clamped])
+    ach_arr = np.asarray(ach_ee_l[shape_start + WARMUP_TICKS : shape_end_clamped])
     pos_err = np.linalg.norm(cmd_arr - ach_arr, axis=1) * 1000.0
     logger.info(
         "%s: max left-arm hardware pos drift = %.2f mm (shape portion, post-warmup)",
         label,
-        float(pos_err.max()),
+        float(pos_err.max()) if len(pos_err) else float("nan"),
     )
 
     return {
         "ref_l": ref_l,
         "ref_r": ref_r,
         "shape_start": np.int32(shape_start),
-        "shape_end": np.int32(shape_end),
+        "shape_end": np.int32(shape_end_clamped),
         "cmd_ee_l": np.asarray(cmd_ee_l),
         "ach_ee_l": np.asarray(ach_ee_l),
         "cmd_ee_r": np.asarray(cmd_ee_r),
@@ -555,32 +470,34 @@ def main() -> None:
         logger.info("staged at q_left=%s", np.round(home_l, 2))
         logger.info("staged at q_right=%s", np.round(home_r, 2))
 
-        # Build the scripted Cartesian teleop and attach it. The follower
-        # picks the right path internally (plain: install IK transform on
-        # teleop; predictive: build the Cartesian adapter + route per-arm
-        # sub-teleops to each predictive arm's controller).
-        scripted = _ScriptedCartesianTeleop()
-        # Drive the scripted teleop with idle / zero deltas during settle
-        # so the controllers' first IK calls have a sane reference. Set
-        # before attach so the adapter's first poll has the zero target.
-        scripted.set_targets(np.zeros(3), np.zeros(3), float(home_l[-1]), float(home_r[-1]))
-        follower.attach_teleop(scripted)
-
         for label, shape, size_m in SHAPES:
             logger.info("=== %s ===", label)
-            # Settle the arms at the staged pose between shapes. The
-            # follower-side IK controllers were seeded at attach_teleop
-            # time. Re-seeding requires re-attaching; the small dance
-            # below detaches + re-attaches so each shape starts with the
-            # IK reference latched at the *actual current pose*.
+            # Settle the arms at the staged pose, then build a fresh
+            # ScriptedBimanualEETeleop for this shape and attach it. The
+            # follower's attach_teleop installs the IK path (plain ->
+            # in-process transform; predictive -> Cartesian adapter).
+            # The teleop self-paces the trajectory by wall clock and
+            # flips ``is_exhausted`` after ramp_in + shape + ramp_out.
             _hold_pose(follower, home_l, home_r, SETTLE_TICKS)
-            follower.attach_teleop(None)  # detach + (predictive) stop adapter
-            scripted.set_targets(np.zeros(3), np.zeros(3), float(home_l[-1]), float(home_r[-1]))
-            follower.attach_teleop(scripted)  # re-seed at the now-current pose
-            results[label] = _run_shape(follower, scripted, left_kin, right_kin, label, shape, size_m)
-        # Return to staged pose at the end.
+            scripted = ScriptedBimanualEETeleop(
+                ScriptedBimanualEETeleopConfig(
+                    shape=shape,
+                    size_m=size_m,
+                    n_waypoints=N_WAYPOINTS,
+                    ramp_ticks=RAMP_TICKS,
+                    loop_hz=LOOP_HZ,
+                    offset_forward_m=SHAPE_OFFSET_FORWARD_M,
+                    offset_up_m=SHAPE_OFFSET_UP_M,
+                )
+            )
+            scripted.connect()
+            follower.attach_teleop(scripted)
+            try:
+                results[label] = _run_shape(follower, scripted, left_kin, right_kin, label)
+            finally:
+                follower.attach_teleop(None)
+                scripted.disconnect()
         _hold_pose(follower, home_l, home_r, SETTLE_TICKS)
-        follower.attach_teleop(None)
     finally:
         follower.disconnect()
         logger.info("disconnected")
