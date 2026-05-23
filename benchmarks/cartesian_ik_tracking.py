@@ -13,17 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Cartesian-IK tracking quality vs trajectory speed (bimanual SO-107).
+"""Cartesian-IK tracking quality trade-off (bimanual SO-107 stack).
 
-Sweeps a 30 mm circle through the bimanual ``CartesianIKController`` +
-``make_bimanual_ik_transform`` + ``PinkKinematics`` stack at a range of
-waypoint counts (≡ trajectory speeds at the 30 Hz loop rate) and plots
-the max position + orientation tracking error against peak EE speed.
+Sweeps three trajectory shapes through the bimanual ``CartesianIKController``
++ ``make_bimanual_ik_transform`` + ``JointMappedKinematics`` + ``PinkKinematics``
+stack across a range of waypoint counts (≡ peak EE speeds at a 30 Hz loop),
+and plots max position + rotation drift against peak EE speed.
 
-Answers the question: how does the iterative IK lag scale with trajectory
-speed in the operating regime the user actually inhabits? The shaded
-"typical teleop" band on the plot is the rough speed range a Quest hand
-covers in normal use.
+The shapes mirror ``benchmarks/pink_ik_tracking.py`` on the dependency
+branch (PR #9) so the two plots are directly comparable: any drift not
+present in the bare-IK plot is contributed by *this* PR's stack —
+``CartesianIKController``, ``JointMappedKinematics``, the bimanual
+transform — on top of the IK floor.
+
+Both arms run their own copy of the shape per tick (each in its own
+arm-natural plane). The reported drift is the left arm — bimanual
+symmetry holds in tests, so reporting one keeps the plot directly
+comparable to the bare-IK single-arm benchmark.
 
 Run from the repo root::
 
@@ -52,11 +58,14 @@ from lerobot.robots.so107_description.joint_alignment import (
 )
 
 LOOP_HZ = 30.0
-RADIUS_M = 0.030  # 30 mm circle, same trajectory as PR #9's test_pink_ik
 URDF_SEED = np.array([0.0, -90.0, 60.0, 0.0, -40.0, 0.0, 0.0])
 WAYPOINT_COUNTS = (1024, 512, 256, 128, 64, 32)
 WARMUP_TICKS = 20
 TYPICAL_TELEOP_CM_S = (1.0, 10.0)
+
+CIRCLE_RADIUS_M = 0.030
+SQUARE_SIDE_M = 0.050
+LINE_AMP_M = 0.030  # ±A from the seed along inward; must stay inside reach
 
 
 def _motor_seed(alignment) -> np.ndarray:
@@ -65,14 +74,19 @@ def _motor_seed(alignment) -> np.ndarray:
     return (URDF_SEED - offset) / sign
 
 
-def _shape_deltas(ref_pose: np.ndarray, n: int) -> list[np.ndarray]:
+def _plane_basis(ref_pose: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     p = ref_pose[:3, 3]
     flat = np.array([p[0], p[1], 0.0])
     norm = float(np.linalg.norm(flat))
     inward = -flat / norm if norm > 1e-6 else np.array([-1.0, 0.0, 0.0])
     perp = np.cross(inward, np.array([0.0, 0.0, 1.0]))
     perp /= np.linalg.norm(perp)
-    r = RADIUS_M
+    return p, inward, perp
+
+
+def _circle_deltas(ref: np.ndarray, n: int) -> list[np.ndarray]:
+    p, inward, perp = _plane_basis(ref)
+    r = CIRCLE_RADIUS_M
     center = p + r * inward
     return [
         (center + r * (np.cos(2 * np.pi * i / n) * -inward + np.sin(2 * np.pi * i / n) * perp)) - p
@@ -80,13 +94,35 @@ def _shape_deltas(ref_pose: np.ndarray, n: int) -> list[np.ndarray]:
     ]
 
 
-def _run_trajectory(n_waypoints: int) -> tuple[float, float]:
-    """Drive both arms through ``n_waypoints`` of the 30 mm circle.
+def _square_deltas(ref: np.ndarray, n: int) -> list[np.ndarray]:
+    p, inward, perp = _plane_basis(ref)
+    s = SQUARE_SIDE_M
+    corners = [p, p + s * inward, p + s * inward + s * perp, p + s * perp]
+    per_edge = n // 4
+    out: list[np.ndarray] = []
+    for e in range(4):
+        a, b = corners[e], corners[(e + 1) % 4]
+        for k in range(per_edge):
+            out.append((a + (b - a) * (k / per_edge)) - p)
+    return out
 
-    Returns ``(max position drift [mm], max rotation drift [deg])`` over
-    the trajectory, excluding a warm-up window so the IK can converge from
-    its initial seed before we measure.
-    """
+
+def _line_deltas(ref: np.ndarray, n: int) -> list[np.ndarray]:
+    _p, inward, _perp = _plane_basis(ref)
+    return [LINE_AMP_M * np.sin(2 * np.pi * i / n) * inward for i in range(n)]
+
+
+SHAPES = {
+    "circle 30 mm r": (_circle_deltas, lambda n: 2 * np.pi * CIRCLE_RADIUS_M * LOOP_HZ / n),
+    "square 50 mm s": (_square_deltas, lambda n: 4 * SQUARE_SIDE_M * LOOP_HZ / n),
+    "line 60 mm amp": (_line_deltas, lambda n: 2 * np.pi * LINE_AMP_M * LOOP_HZ / n),
+}
+
+
+def _run_trajectory(shape_name: str, n_waypoints: int) -> tuple[float, float]:
+    """Drive both arms through ``shape_name``; return left arm's drift."""
+    make_deltas, _ = SHAPES[shape_name]
+
     q_left = _motor_seed(LEFT_ARM_ALIGNMENT)
     q_right = _motor_seed(RIGHT_ARM_ALIGNMENT)
     gripper_idx = MOTOR_NAMES.index("gripper")
@@ -109,8 +145,8 @@ def _run_trajectory(n_waypoints: int) -> tuple[float, float]:
         )
 
     transform = make_bimanual_ik_transform(_ctrl(left_kin, q_left), _ctrl(right_kin, q_right))
-    dl = _shape_deltas(ref_left, n_waypoints)
-    dr = _shape_deltas(ref_right, n_waypoints)
+    dl = make_deltas(ref_left, n_waypoints)
+    dr = make_deltas(ref_right, n_waypoints)
 
     pos_err: list[float] = []
     rot_err: list[float] = []
@@ -146,37 +182,44 @@ def _run_trajectory(n_waypoints: int) -> tuple[float, float]:
 
 
 def main() -> None:
-    speeds: list[float] = []
-    pos_errs: list[float] = []
-    rot_errs: list[float] = []
+    results: dict[str, dict[str, list[float]]] = {
+        name: {"speed": [], "pos": [], "rot": []} for name in SHAPES
+    }
 
-    print(f"{'n_wp':>5}  {'speed':>10}  {'pos_drift':>10}  {'rot_drift':>10}")
-    print(f"{'-' * 5}  {'-' * 10}  {'-' * 10}  {'-' * 10}")
-    for n in WAYPOINT_COUNTS:
-        # Peak EE speed on the circle: circumference / cycle_period
-        # = 2π r / (n / LOOP_HZ) cm/s -> ×100 for cm.
-        speed_cm_s = 2 * np.pi * RADIUS_M * LOOP_HZ / n * 100.0
-        pos_mm, rot_deg = _run_trajectory(n)
-        speeds.append(speed_cm_s)
-        pos_errs.append(pos_mm)
-        rot_errs.append(rot_deg)
-        print(f"{n:>5}  {speed_cm_s:>7.2f} cm/s  {pos_mm:>7.2f} mm  {rot_deg:>7.2f} deg")
+    print(f"{'shape':>16}  {'n_wp':>5}  {'speed':>11}  {'pos_drift':>10}  {'rot_drift':>10}")
+    print(f"{'-' * 16}  {'-' * 5}  {'-' * 11}  {'-' * 10}  {'-' * 10}")
+    for name, (_, speed_fn) in SHAPES.items():
+        for n in WAYPOINT_COUNTS:
+            speed_cm_s = speed_fn(n) * 100.0
+            pos_mm, rot_deg = _run_trajectory(name, n)
+            results[name]["speed"].append(speed_cm_s)
+            results[name]["pos"].append(pos_mm)
+            results[name]["rot"].append(rot_deg)
+            print(f"{name:>16}  {n:>5}  {speed_cm_s:>7.2f} cm/s  {pos_mm:>7.2f} mm  {rot_deg:>7.2f} deg")
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
+    colors = {"circle 30 mm r": "C0", "square 50 mm s": "C1", "line 60 mm amp": "C2"}
+    markers = {"circle 30 mm r": "o", "square 50 mm s": "s", "line 60 mm amp": "^"}
+
     for ax in (ax1, ax2):
-        ax.axvspan(*TYPICAL_TELEOP_CM_S, alpha=0.15, color="green", label="typical teleop")
+        ax.axvspan(*TYPICAL_TELEOP_CM_S, alpha=0.12, color="green", label="typical teleop")
         ax.grid(alpha=0.3)
         ax.set_xscale("log")
         ax.set_xlabel("Peak EE speed (cm/s, log)")
-        ax.legend(loc="upper left")
 
-    ax1.plot(speeds, pos_errs, "o-", linewidth=2)
+    for name, data in results.items():
+        ax1.plot(
+            data["speed"], data["pos"], marker=markers[name], color=colors[name], label=name, linewidth=2
+        )
+        ax2.plot(
+            data["speed"], data["rot"], marker=markers[name], color=colors[name], label=name, linewidth=2
+        )
     ax1.set_ylabel("Max position drift (mm)")
-    ax1.set_title("Position tracking — 30 mm circle, bimanual SO-107")
-
-    ax2.plot(speeds, rot_errs, "o-", linewidth=2, color="C1")
+    ax1.set_title("Position tracking — bimanual SO-107 stack (left arm)")
     ax2.set_ylabel("Max rotation drift (deg)")
-    ax2.set_title("Orientation tracking — 30 mm circle, bimanual SO-107")
+    ax2.set_title("Orientation tracking — bimanual SO-107 stack (left arm)")
+    ax1.legend(loc="upper left")
+    ax2.legend(loc="upper left")
 
     plt.tight_layout()
     out_path = Path("src/lerobot/teleoperators/quest_vr/docs/cartesian_ik_tradeoff.png")
