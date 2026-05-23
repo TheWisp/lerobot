@@ -52,32 +52,47 @@ trusted LAN, but not for shipping:
 - **Haptic feedback.** Use `gamepad.hapticActuators` to confirm clutch
   engage/release and to indicate workspace-clip / IK-hold events.
 
-## Tighter IK tracking on moving targets
+## Tighter tracking on moving targets
 
-`PinkKinematics` (from #9) is conservatively tuned: per call its QP returns
-a bounded joint velocity, so on a continuously-moving teleop target the
-lag scales with target velocity. Bumping `max_iters` doesn't help — the
-IK exits on the convergence threshold before consuming the budget. The
-actual lever is the `FrameTask` cost versus `PostureTask` cost inside
-`PinkKinematics`, or a velocity feed-forward layer.
+Two sources of drift on continuously-moving targets, characterized by
+`benchmarks/cartesian_ik_tracking.py` (this PR) and
+`benchmarks/pink_ik_tracking.py` (PR #9). For VR teleop this is **not a
+UX blocker** — drift is small in absolute terms during typical hand
+motion, and goes to 0 during pauses — but worth knowing for higher-speed
+use cases (trajectory replay, autonomous policy execution).
 
-For VR teleop this is **not a UX blocker**. Numbers from
-`benchmarks/cartesian_ik_tracking.py` (a 30 mm-radius circle through the
-bimanual stack at varying speeds — see `docs/cartesian_ik_tradeoff.png`):
+**Source 1 — iterative IK lag (intrinsic to PinkKinematics).** Per call
+the QP returns a bounded joint velocity, so lag scales with target
+velocity. Position drift visible in PR #9's bare-IK numbers: 0.2 mm at
+1 cm/s to 3 mm at 17 cm/s on a smooth circle. Lever for tightening: the
+`FrameTask` vs `PostureTask` cost ratio inside `PinkKinematics`, or a
+velocity feed-forward layer. Tighten only if hardware reveals a need —
+aggressive tuning can re-introduce the null-space chatter the
+`PostureTask` was added to fix.
 
-| Peak EE speed                  | Position drift | Rotation drift |
-| ------------------------------ | -------------- | -------------- |
-| 1.1 cm/s (slow precision)      | 0.4 mm         | 1.6°           |
-| 4.4 cm/s (moderate sustained)  | 1.2 mm         | 5.0°           |
-| 8.8 cm/s (fast reach)          | 1.8 mm         | 6.9°           |
-| 17 cm/s (very fast continuous) | 3.0 mm         | 8.0°           |
+**Source 2 — gripper-DOF cost (introduced by this PR's stack).** Bare-IK
+has 7 DOFs and rotation drift is ≈0° everywhere. This PR's
+`CartesianIKController` pins the gripper joint (S7) to the teleop's
+`gripper_pos` after each IK solve — required so the user's open/close
+actuates the gripper — which removes one DOF from the IK. The IK now has
+exactly 6 DOFs for a 6-DOF SE(3) task, no redundancy, so the small
+S7 contribution to wrist orientation it used to lean on is gone. Shows
+up as 1–8° rotation drift on circle/square (2D paths with held orientation,
+5 constraints, 1 redundant DOF lost), but only 0.3–0.6° on a line (1D
+path, 4 constraints, still has slack).
 
-The numbers are _worst-case during sustained continuous motion_; real
-teleop has pauses where the IK converges and the drift → 0. Tighten the
-QP gains only if hardware reveals a need (carefully — aggressive tuning
-can re-introduce the null-space chatter the PostureTask was added to fix
-in the first place), or for higher-speed use cases like trajectory replay
-or autonomous policy execution.
+Side-by-side at the same speeds (max drift, left arm, 30 Hz loop):
+
+|        | speed | bare-IK pos | stack pos | bare-IK rot | stack rot |
+| ------ | ----- | ----------- | --------- | ----------- | --------- |
+| circle | 4.4   | 0.8 mm      | 1.2 mm    | 0.00°       | 5.0°      |
+| square | 9.4   | 2.7 mm      | 2.6 mm    | 0.01°       | 8.0°      |
+| line   | 8.8   | 5.6 mm      | 5.7 mm    | 0.03°       | 0.6°      |
+
+The clean fix is to make the IK target frame independent of S7 (use a
+wrist tip frame upstream of the gripper joint in the URDF). Until then,
+the trade-off is "user controls gripper" vs "perfect orientation tracking
+during sustained 2D motion" — picked the former.
 
 ## VR mode: default to AR, and add camera-feed telepresence later
 
