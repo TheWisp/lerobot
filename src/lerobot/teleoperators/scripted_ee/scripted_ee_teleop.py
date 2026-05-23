@@ -237,16 +237,29 @@ class ScriptedBimanualEETeleop(Teleoperator):
         self._action_transform = transform
 
     def _current_delta(self) -> np.ndarray:
-        """Return the current 3D delta for both arms, or zeros if not yet running."""
+        """Return the current 3D delta for both arms, or zeros if not yet running.
+
+        Linearly interpolates between adjacent ``self._deltas`` waypoints
+        based on a *continuous* (float) tick index — so a consumer polling
+        at the predictive controller's 200 Hz rate gets a fresh
+        interpolated sample every poll, instead of the same 30 Hz-quantized
+        waypoint value repeated for 6-7 polls. The pull-path velocity
+        estimator's design assumes one new sample per controller tick;
+        feeding it staircase-quantized intent collapses the velocity
+        estimate (see comments in predictive/controller.py).
+        """
         if self._t0 is None or self._deltas is None:
             return np.zeros(3, dtype=float)
-        tick = int((time.monotonic() - self._t0) * self.config.loop_hz)
-        if tick < 0:
+        tick_f = (time.monotonic() - self._t0) * self.config.loop_hz
+        if tick_f < 0:
             return np.zeros(3, dtype=float)
-        if tick >= self._shape_end:
+        if tick_f >= self._shape_end - 1:
             # Trajectory done — hold at seed (zero delta). is_exhausted is True.
             return np.zeros(3, dtype=float)
-        return self._deltas[tick]
+        i = int(tick_f)
+        frac = tick_f - i
+        # Linear interpolation between waypoint i and i+1.
+        return (1.0 - frac) * self._deltas[i] + frac * self._deltas[i + 1]
 
     def get_action_raw(self) -> dict[str, float]:
         """Return the raw EE-delta action; same surface as Quest VR's raw."""
