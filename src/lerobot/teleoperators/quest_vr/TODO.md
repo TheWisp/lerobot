@@ -153,21 +153,29 @@ Three related pieces:
 
 The plots in `docs/cartesian_ik_tradeoff_so101.png` and
 `docs/cartesian_ik_tradeoff_so107.png` characterise the IK + stack
-floor _in software_ — useful but blind to the hardware. The
-runtime analog is a benchmark routine the user can run with the
-configured robot:
+floor _in software_ — useful but blind to the hardware.
+`benchmarks/cartesian_ik_hardware_traj.py` is the runtime first cut: it
+drives the real arms through heart / circle / square at a single
+conservative speed (1024 waypoints over ~34 s/shape) and writes a
+commanded-vs-achieved EE-trace plot. What's still missing:
 
-- Command a scripted sequence of EE waypoints — a small grid or a few
-  fiducials, plus the same shapes the software benchmark uses (circle,
-  square, line at known speeds).
-- Read the achieved motor positions, FK with the configured
-  `TIP_OFFSET`, and compare to the commanded EE poses. The residual
-  includes the IK floor _plus_ everything the math-only plot misses:
-  motor following error, backlash, compliance under load, URDF vs
-  measured geometry, calibration error. Surface in the GUI as a per-
-  axis residual + a pass / re-calibrate signal.
-- Differences between this and the software plot tell the user which
-  side needs attention — IK tuning vs hardware calibration.
+- **Velocity sweep.** Drop the single-speed run, sweep 6 speeds like
+  the software benches (1024 → 32 waypoints) so the hardware plot has
+  the same x-axis as `docs/cartesian_ik_tradeoff_so107.png`. The two
+  plots side-by-side then show exactly where the motor-following floor
+  diverges from the IK floor — and at what teleop speed the user
+  starts losing precision.
+- **EE fiducial waypoints.** Beyond the shapes, command a small grid
+  of known absolute EE poses, FK the achieved motors with the
+  configured `TIP_OFFSET`, and report per-axis residuals — that
+  separates IK floor from hardware calibration error.
+- **GUI surfacing.** Per-axis residual + a pass / re-calibrate signal.
+- **URDF render of achieved motion.** Use the GUI's three.js +
+  urdf-loader pipeline (`gui/static/urdf_viz.html`) to replay the
+  achieved-joint stream from `run.npz`, screen-record with the
+  ffmpeg x11grab recipe. Meshcat-based renderers don't reliably work
+  in a one-shot bench script (server dies on script exit, model load
+  not guaranteed) — use the pipeline we already own.
 
 ### Usage logging for analytics
 
