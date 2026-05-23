@@ -1564,6 +1564,14 @@ function closeHubModal() {
     _hubDatasetId = null;
     _hubAction = null;
     _hubOpenSyncCtx = null;
+    // Stop progress polling — the next _pollHubProgress fire is a no-op
+    // once _hubActiveJobId is cleared, but cancel the pending timeout too
+    // so the UI doesn't re-render after the modal is gone.
+    _hubActiveJobId = null;
+    if (_hubProgressTimer) {
+        clearTimeout(_hubProgressTimer);
+        _hubProgressTimer = null;
+    }
 }
 
 function fetchHubRepoInfo() {
@@ -1630,6 +1638,117 @@ async function fetchHubDiff() {
     }
 }
 
+// ── Hub progress rendering ──────────────────────────────────────────────────
+//
+// _renderHubProgress writes the live progress markup into #hub-status. The
+// polling loop calls it every tick — the markup is fully recomputed each
+// time, which keeps the rendering function side-effect-free and easy to
+// reason about. _hubProgressTimer holds the active timeout so we can cancel
+// it when the modal closes.
+
+let _hubProgressTimer = null;
+let _hubActiveJobId = null;
+
+function _fmtBytes(n) {
+    if (!n) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function _renderHubProgress(snapshot) {
+    const statusEl = document.getElementById('hub-status');
+    if (!statusEl) return;
+
+    const { status, direction, files_total, files_done, bytes_total, bytes_done, current_file, message } = snapshot;
+
+    if (status === 'failed') {
+        statusEl.innerHTML = `<span style="color:#e06c75">${direction === 'upload' ? 'Upload' : 'Download'} failed: ${message || 'unknown error'}</span>`;
+        return;
+    }
+    if (status === 'cancelled') {
+        statusEl.innerHTML = `<span style="color:#e5c07b">${direction === 'upload' ? 'Upload' : 'Download'} cancelled after ${files_done}/${files_total} files.</span>`;
+        return;
+    }
+
+    // pending / running / complete all share the same progress markup.
+    const verbing = direction === 'upload' ? 'Uploading' : 'Downloading';
+    const pct = files_total > 0 ? Math.min(100, Math.round(100 * files_done / files_total)) : 0;
+    const bytesLine = bytes_total > 0
+        ? ` — ${_fmtBytes(bytes_done)} / ${_fmtBytes(bytes_total)}`
+        : '';
+    const fileLine = current_file
+        ? `<div style="color:var(--text-tertiary,#666); font-size:11px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${current_file}</div>`
+        : '';
+    const verb = status === 'complete' ? `${direction === 'upload' ? 'Uploaded' : 'Downloaded'}` : verbing;
+    const color = status === 'complete' ? '#98c379' : '#e5c07b';
+    statusEl.innerHTML =
+        `<div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">` +
+            `<span style="color:${color}">${verb} ${files_done} / ${files_total} files${bytesLine}</span>` +
+            `<span style="color:var(--text-tertiary,#666); font-size:11px;">${pct}%</span>` +
+        `</div>` +
+        `<progress value="${files_done}" max="${Math.max(1, files_total)}" style="width:100%; height:6px; margin-top:4px;"></progress>` +
+        fileLine;
+}
+
+async function _pollHubProgress(jobId) {
+    // Stop if the user closed the modal or started a different job.
+    if (jobId !== _hubActiveJobId) return;
+    try {
+        const res = await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}`);
+        if (!res.ok) {
+            document.getElementById('hub-status').textContent = `Lost track of job ${jobId.slice(0, 8)}`;
+            return;
+        }
+        const snap = await res.json();
+        _renderHubProgress(snap);
+        if (snap.status === 'complete') {
+            await _onHubJobComplete(snap);
+            return;
+        }
+        if (snap.status === 'failed' || snap.status === 'cancelled') {
+            const btn = document.getElementById('hub-execute-btn');
+            if (btn) { btn.disabled = false; btn.textContent = snap.direction === 'upload' ? 'Upload' : 'Download'; }
+            return;
+        }
+        // Still running — poll again. 500 ms is responsive enough for human
+        // perception while keeping per-second request count bounded; the
+        // counters only tick after each file completes so polling faster
+        // would just return the same snapshot.
+        _hubProgressTimer = setTimeout(() => _pollHubProgress(jobId), 500);
+    } catch (e) {
+        // Network blip — try again after a short backoff rather than giving up.
+        _hubProgressTimer = setTimeout(() => _pollHubProgress(jobId), 1000);
+    }
+}
+
+async function _onHubJobComplete(snap) {
+    const dsId = _hubDatasetId;
+    const direction = snap.direction;
+    closeHubModal();
+    showToast(
+        direction === 'upload' ? 'Upload Complete' : 'Download Complete',
+        `${snap.repo_id} — ${snap.files_done} files, ${_fmtBytes(snap.bytes_done)}`,
+        'info',
+    );
+
+    // After a download, the backend has already reloaded the dataset in
+    // place; refresh the local episode list so the UI reflects the new
+    // frame/episode totals.
+    if (direction === 'download' && dsId && datasets[dsId]) {
+        try {
+            const epRes = await fetch(`/api/datasets/${encodeURIComponent(dsId)}/episodes`);
+            if (epRes.ok) {
+                episodes[dsId] = await epRes.json();
+                datasets[dsId].total_episodes = episodes[dsId].length;
+                datasets[dsId].total_frames = episodes[dsId].reduce((s, e) => s + e.length, 0);
+            }
+        } catch (e) { /* ignore — non-critical refresh */ }
+        renderTree();
+    }
+}
+
 async function executeHubAction() {
     // open-sync uses _hubOpenSyncCtx instead of _hubDatasetId
     if (!_hubAction) return;
@@ -1642,12 +1761,13 @@ async function executeHubAction() {
     const btn = document.getElementById('hub-execute-btn');
     const status = document.getElementById('hub-status');
     btn.disabled = true;
-    status.textContent =
-        _hubAction === 'upload' ? 'Uploading...' :
-        _hubAction === 'open-sync' ? 'Downloading & opening...' : 'Downloading...';
 
     // 'open-sync' branches off entirely — different endpoint, different post-success flow.
+    // Progress for open-sync still goes through the legacy blocking path
+    // because the response IS the opened dataset; refactoring it to the
+    // job_id pattern is a bigger change than the upload/download endpoints.
     if (_hubAction === 'open-sync') {
+        status.textContent = 'Downloading & opening...';
         try {
             const res = await fetch('/api/datasets', {
                 method: 'POST',
@@ -1679,6 +1799,8 @@ async function executeHubAction() {
         return;
     }
 
+    // Upload / download: kick off the job and poll for progress.
+    status.textContent = _hubAction === 'upload' ? 'Starting upload…' : 'Starting download…';
     const endpoint = `/api/datasets/${encodeURIComponent(_hubDatasetId)}/hub/${_hubAction}`;
     try {
         const res = await fetch(endpoint, {
@@ -1700,26 +1822,19 @@ async function executeHubAction() {
 
         const data = await res.json();
         if (!res.ok) {
-            status.textContent = data.detail || 'Operation failed';
+            // 409 means a job is already running for this dataset; attach to it.
+            if (res.status === 409 && data?.detail?.job_id) {
+                _hubActiveJobId = data.detail.job_id;
+                _pollHubProgress(_hubActiveJobId);
+                return;
+            }
+            status.textContent = (data.detail && data.detail.message) || data.detail || 'Operation failed';
             btn.disabled = false;
             return;
         }
 
-        closeHubModal();
-        showToast(_hubAction === 'upload' ? 'Upload Complete' : 'Download Complete', data.message, 'info');
-
-        // Refresh dataset after download (data changed)
-        if (_hubAction === 'download') {
-            try {
-                const epRes = await fetch(`/api/datasets/${encodeURIComponent(_hubDatasetId)}/episodes`);
-                if (epRes.ok) {
-                    episodes[_hubDatasetId] = await epRes.json();
-                    datasets[_hubDatasetId].total_episodes = episodes[_hubDatasetId].length;
-                    datasets[_hubDatasetId].total_frames = episodes[_hubDatasetId].reduce((s, e) => s + e.length, 0);
-                }
-            } catch (e) { /* ignore */ }
-            renderTree();
-        }
+        _hubActiveJobId = data.job_id;
+        _pollHubProgress(_hubActiveJobId);
     } catch (e) {
         status.textContent = 'Error: ' + e.message;
         btn.disabled = false;

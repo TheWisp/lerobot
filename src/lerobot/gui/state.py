@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.gui.frame_cache import FrameCache
+    from lerobot.gui.hub_jobs import HubJobState
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,10 @@ class AppState:
     datasets: dict[str, LeRobotDataset] = field(default_factory=dict)
     pending_edits: list[PendingEdit] = field(default_factory=list)
     _dataset_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+    # Active + recently-finished Hub transfers, keyed by job_id. The GUI
+    # polls /hub/progress/{job_id} for live updates; entries are kept after
+    # completion so a tab refresh can still surface the final status.
+    hub_jobs: dict[str, HubJobState] = field(default_factory=dict)
 
     def add_edit(self, edit: PendingEdit) -> None:
         """Add a pending edit."""
@@ -121,6 +126,20 @@ class AppState:
         """Check if a dataset is currently locked."""
         lock = self._dataset_locks.get(dataset_id)
         return lock is not None and lock.locked()
+
+    def active_hub_job_for(self, dataset_id: str) -> HubJobState | None:
+        """Return the in-flight Hub job for ``dataset_id``, if any.
+
+        "In-flight" = ``status in {"pending", "running"}``. Completed,
+        cancelled, and failed jobs are ignored — they're kept in
+        ``hub_jobs`` purely for last-poll-after-finish, not exclusion.
+        Used by the upload/download endpoints to refuse a second concurrent
+        transfer on the same dataset (returns 409 to the caller).
+        """
+        for job in self.hub_jobs.values():
+            if job.dataset_id == dataset_id and job.status in ("pending", "running"):
+                return job
+        return None
 
     def discard_lock(self, dataset_id: str) -> None:
         """Drop the asyncio.Lock for a dataset that's no longer open.

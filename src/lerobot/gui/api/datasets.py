@@ -2739,9 +2739,78 @@ class HubDownloadRequest(BaseModel):
     repo_id: str | None = None  # If None, uses dataset's repo_id
 
 
+def _verify_hub_auth() -> None:
+    """Raise HTTPException 401 if the user isn't logged in to the Hub.
+
+    Cheap (single GET to whoami); we check before starting the background
+    job so the frontend can surface "not logged in" synchronously rather
+    than via a delayed job-failed status.
+    """
+    try:
+        from huggingface_hub import HfApi
+
+        HfApi().whoami()
+    except Exception as e:
+        raise HTTPException(
+            status_code=401,
+            detail="Not logged in to HuggingFace Hub. Run `huggingface-cli login` in terminal.",
+        ) from e
+
+
+async def _spawn_hub_job(
+    dataset_id: str,
+    job,  # HubJobState
+    sync_fn,  # callable taking no args, runs in executor
+    *,
+    on_complete=None,  # awaitable hook for post-transfer reload, None for upload
+) -> None:
+    """Schedule the executor-bound transfer + lock dance on the event loop.
+
+    The asyncio task acquires the per-dataset lock for the duration of the
+    transfer (so concurrent edits / playback ops on the same dataset are
+    serialised), but the HTTP request returns immediately. The job is
+    visible in ``_app_state.hub_jobs`` from the moment this function
+    returns — the frontend can start polling without races.
+    """
+    import asyncio
+
+    state = _app_state
+
+    async def _run() -> None:
+        loop = asyncio.get_event_loop()
+        async with state.get_lock(dataset_id):
+            try:
+                await loop.run_in_executor(None, sync_fn)
+                if job.status == "running":
+                    job.status = "complete"
+            except Exception as e:  # noqa: BLE001 — any HF / IO failure
+                logger.exception("Hub %s failed for %s: %s", job.direction, dataset_id, e)
+                job.status = "failed"
+                job.message = str(e)
+            finally:
+                job.finished_at = __import__("time").time()
+            # The post-success hook (e.g. reload after download) runs
+            # inside the lock so a follow-up read can't race against the
+            # not-yet-reloaded dataset. Failures here flip status to
+            # "failed" so the user knows the transfer worked but the
+            # local state is stale.
+            if job.status == "complete" and on_complete is not None:
+                try:
+                    await on_complete()
+                except Exception as e:  # noqa: BLE001
+                    logger.exception("Post-transfer hook failed for %s: %s", dataset_id, e)
+                    job.status = "failed"
+                    job.message = f"Transfer succeeded but reload failed: {e}"
+
+    asyncio.create_task(_run())
+
+
 @router.post("/{dataset_id:path}/hub/upload")
 async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
-    """Push local dataset to HuggingFace Hub (overwrites remote)."""
+    """Start a Hub upload. Returns ``{job_id}`` immediately; poll
+    ``/api/datasets/hub/progress/{job_id}`` for status."""
+    from lerobot.gui.hub_jobs import make_job, run_upload_sync
+
     dataset_id = unquote(dataset_id)
     if dataset_id not in _app_state.datasets:
         # Auto-open if path exists on disk (handles GUI restart with stale frontend)
@@ -2754,118 +2823,117 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
         else:
             raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
 
-    lock = _app_state.get_lock(dataset_id)
-    if lock.locked():
+    # Check the Hub-job registry BEFORE the generic dataset lock: a running
+    # Hub transfer holds the lock for its full duration, so reading the lock
+    # first would hide the existing job_id behind a generic 423 and the
+    # frontend would lose the ability to attach to the in-flight transfer.
+    active = _app_state.active_hub_job_for(dataset_id)
+    if active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "A Hub transfer is already in progress", "job_id": active.job_id},
+        )
+    if _app_state.is_locked(dataset_id):
         raise HTTPException(status_code=423, detail="Dataset is busy")
+
+    _verify_hub_auth()
 
     dataset = _app_state.datasets[dataset_id]
     repo_id = (request.repo_id if request and request.repo_id else None) or dataset.repo_id
 
-    async with lock:
-        try:
-            from huggingface_hub import HfApi
+    job = make_job(dataset_id, "upload", repo_id)
+    _app_state.hub_jobs[job.job_id] = job
 
-            api = HfApi()
-            api.whoami()
-        except Exception as e:
-            raise HTTPException(
-                status_code=401,
-                detail="Not logged in to HuggingFace Hub. Run `huggingface-cli login` in terminal.",
-            ) from e
+    logger.info("Hub upload start: dataset=%s repo=%s job=%s", dataset_id, repo_id, job.job_id)
 
-        logger.info(f"Uploading dataset to {repo_id} from {dataset.root}")
-        # Same rationale as hub_download: `upload_folder` is sync and
-        # can take minutes for a multi-GB dataset. Push it into the
-        # default executor so the FastAPI event loop stays responsive
-        # to other requests during the upload.
-        try:
-            import asyncio
+    def _sync():
+        run_upload_sync(root=Path(dataset.root), repo_id=repo_id, job=job)
 
-            from huggingface_hub import upload_folder
-
-            api.create_repo(repo_id=repo_id, repo_type="dataset", exist_ok=True, private=True)
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: upload_folder(
-                    folder_path=str(dataset.root),
-                    repo_id=repo_id,
-                    repo_type="dataset",
-                    commit_message="Update from LeRobot GUI",
-                ),
-            )
-        except Exception as e:
-            logger.exception(f"Upload failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Upload failed: {e}") from e
-
-    logger.info(f"Upload complete: {repo_id}")
-    return {
-        "status": "ok",
-        "message": f"Uploaded to {repo_id}",
-        "url": f"https://huggingface.co/datasets/{repo_id}",
-    }
+    await _spawn_hub_job(dataset_id, job, _sync)
+    return {"job_id": job.job_id, "status": "started"}
 
 
 @router.post("/{dataset_id:path}/hub/download")
 async def hub_download(dataset_id: str, request: HubDownloadRequest | None = None):
-    """Pull dataset from HuggingFace Hub, overwriting local copy.
+    """Start a Hub download. Returns ``{job_id}`` immediately; poll
+    ``/api/datasets/hub/progress/{job_id}`` for status.
 
-    TODO: clean up stale HF download cache/lock files before downloading
-    to avoid deadlocks from interrupted previous downloads.
+    On completion the dataset is reloaded in-place so the GUI sees the
+    refreshed metadata without an explicit re-open.
     """
+    from lerobot.gui.hub_jobs import make_job, run_download_sync
+
     dataset_id = unquote(dataset_id)
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
 
-    lock = _app_state.get_lock(dataset_id)
-    if lock.locked():
+    # See the upload endpoint for why the hub-job check comes first.
+    active = _app_state.active_hub_job_for(dataset_id)
+    if active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "A Hub transfer is already in progress", "job_id": active.job_id},
+        )
+    if _app_state.is_locked(dataset_id):
         raise HTTPException(status_code=423, detail="Dataset is busy")
+
+    _verify_hub_auth()
 
     dataset = _app_state.datasets[dataset_id]
     repo_id = (request.repo_id if request and request.repo_id else None) or dataset.repo_id
     root = dataset.root
 
-    async with lock:
-        logger.info(f"Downloading dataset {repo_id} to {root}")
-        # `snapshot_download` is synchronous and runs for minutes on
-        # multi-GB datasets. Run it in the default executor so the
-        # FastAPI event loop can still serve SSE keepalives, WebSocket
-        # playback messages, and concurrent requests for OTHER datasets
-        # while the download is in progress.
-        try:
-            import asyncio
+    job = make_job(dataset_id, "download", repo_id)
+    _app_state.hub_jobs[job.job_id] = job
 
-            from huggingface_hub import snapshot_download
+    logger.info("Hub download start: dataset=%s repo=%s job=%s", dataset_id, repo_id, job.job_id)
 
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: snapshot_download(
-                    repo_id=repo_id,
-                    repo_type="dataset",
-                    local_dir=str(root),
-                ),
-            )
-        except Exception as e:
-            logger.exception(f"Download failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Download failed: {e}") from e
+    def _sync():
+        run_download_sync(root=Path(root), repo_id=repo_id, job=job)
 
-        # Reload dataset in-place (same pattern as merge_into / apply_edits)
-        try:
-            from lerobot.gui.dataset_reload import reload_dataset_from_disk
+    async def _post_download():
+        import asyncio
 
-            reload_dataset_from_disk(dataset, root=root)
+        from lerobot.gui.cache_invalidation import invalidate_caches
+        from lerobot.gui.dataset_reload import reload_dataset_from_disk
 
-            from lerobot.gui.cache_invalidation import invalidate_caches
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: reload_dataset_from_disk(dataset, root=root))
+        invalidate_caches(
+            _app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices
+        )
 
-            invalidate_caches(
-                _app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices
-            )
+    await _spawn_hub_job(dataset_id, job, _sync, on_complete=_post_download)
+    return {"job_id": job.job_id, "status": "started"}
 
-        except Exception as e:
-            logger.exception(f"Reload after download failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Download succeeded but reload failed: {e}") from e
 
-    logger.info(f"Download complete: {repo_id} ({dataset.meta.total_episodes} episodes)")
-    return {
-        "status": "ok",
-        "message": f"Downloaded {repo_id} ({dataset.meta.total_episodes} episodes, {dataset.meta.total_frames} frames)",
-    }
+@router.get("/hub/progress/{job_id}")
+async def hub_progress(job_id: str):
+    """Return the latest snapshot of a Hub transfer job.
+
+    404 if ``job_id`` is unknown. The frontend uses this to poll progress
+    after firing ``/hub/upload`` or ``/hub/download``; jobs stay in the
+    registry after completion so a tab refresh can still read the final
+    status.
+    """
+    job = _app_state.hub_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    return job.to_dict()
+
+
+@router.post("/hub/progress/{job_id}/cancel")
+async def hub_progress_cancel(job_id: str):
+    """Request cancellation of a running Hub transfer.
+
+    The flag is checked between files, so cancellation isn't instant —
+    the current file in flight finishes first (HF's upload_file /
+    hf_hub_download are not interruptible mid-call). The endpoint is
+    idempotent; cancelling a completed/failed job is a no-op.
+    """
+    job = _app_state.hub_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    if job.status in ("pending", "running"):
+        job.cancel_event.set()
+    return {"status": "cancel_requested", "job_id": job_id}
