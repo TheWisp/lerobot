@@ -322,6 +322,7 @@ wizard. Designed as three phases; ship phase 1 first as its own PR.
 
   Scaling concern: as platform features grow (HVLA, RLT, intervention, eval suites, dataset tools), the surface of "settings that could surprise the user if not persisted (or persisted incorrectly)" grows linearly. Doing this once at the policy level is cheaper than retrofitting per-tab.
 
+- [Mid] **Config grouping / categories** (to be designed): the number of configurable settings keeps growing (Run tab workflow params, Robot tab profile fields, RLT toggles, debug-model knobs, etc.) and they're currently rendered as one flat form per tab. Need a grouping/category abstraction so related fields cluster visually — collapsible sections, tabs-within-tab, "Advanced" reveal, or schema-driven groups declared alongside the Pydantic/Draccus config. Design open: where the grouping metadata lives (Python config decorators? frontend JSON?) and how collapsed state persists (ties to the [Persistence policy](#) item above).
 - [Mid] Cross-tab data synchronization — replace point-to-point refresh calls with pub/sub event bus
 - [High] Extract frontend to separate files (then optionally migrate to React/Vite)
 - [Mid] FastAPI dependency injection for AppState — replace global `_app_state` with `Depends(get_app_state)`
