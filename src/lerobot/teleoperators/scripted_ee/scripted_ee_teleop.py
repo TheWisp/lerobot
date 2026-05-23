@@ -89,6 +89,10 @@ def _shape_deltas_local(shape: str, size_m: float, n: int) -> np.ndarray:
             for k in range(per_edge):
                 out.append(a + (b - a) * (k / per_edge))
         return np.asarray(out)
+    if shape == "static_hold":
+        # All n waypoints sit at (forward = +size_m, lateral = 0). Diagnostic
+        # for "does state catch up to action when action is held constant?".
+        return np.tile(np.array([[size_m, 0.0]]), (n, 1))
     raise ValueError(f"unknown shape: {shape!r}")
 
 

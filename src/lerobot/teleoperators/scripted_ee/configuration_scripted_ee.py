@@ -44,8 +44,14 @@ class ScriptedBimanualEETeleopConfig(TeleoperatorConfig):
     shape: str = field(
         default="heart",
         metadata={
-            "description": "Shape to trace. One of: heart, circle, square.",
-            "enum": ["heart", "circle", "square"],
+            "description": (
+                "Shape to trace. heart / circle / square trace closed shapes. "
+                "static_hold drives to (forward = +size_m, lateral = 0) and holds "
+                "there for ``n_waypoints`` ticks — diagnostic for steady-state "
+                "action↔state behaviour (does state catch up to action when "
+                "action is held constant; how long does it take)."
+            ),
+            "enum": ["heart", "circle", "square", "static_hold"],
         },
     )
     size_m: float = field(
@@ -53,7 +59,8 @@ class ScriptedBimanualEETeleopConfig(TeleoperatorConfig):
         metadata={
             "description": (
                 "Shape size in meters. Heart = bounding-box max extent; "
-                "circle = radius; square = side length."
+                "circle = radius; square = side length; static_hold = "
+                "forward offset of the held pose."
             ),
         },
     )
