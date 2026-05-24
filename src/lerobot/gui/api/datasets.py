@@ -2878,7 +2878,7 @@ def _sweep_orphan_pid_files() -> int:
     return reaped
 
 
-def _find_existing_pr_for_retry(dataset_id: str, repo_id: str) -> int | None:
+def _find_existing_pr_for_retry(dataset_id: str, repo_id: str, repo_type: str = "dataset") -> int | None:
     """For an upload retry, find a draft PR we can reuse.
 
     Looks back through ``_app_state.hub_jobs`` for the most recent
@@ -2888,6 +2888,10 @@ def _find_existing_pr_for_retry(dataset_id: str, repo_id: str) -> int | None:
 
     Returns ``None`` if no resumable PR exists; the new worker will
     create a fresh one.
+
+    ``repo_type`` flows through so the lookup works for ``"model"`` repos
+    when the future Model Tab adds model-upload endpoints — the
+    underlying mechanism is the same, only the repo namespace differs.
     """
     candidates = sorted(
         (
@@ -2895,6 +2899,7 @@ def _find_existing_pr_for_retry(dataset_id: str, repo_id: str) -> int | None:
             for j in _app_state.hub_jobs.values()
             if j.dataset_id == dataset_id
             and j.repo_id == repo_id
+            and j.repo_type == repo_type
             and j.status in ("failed", "cancelled")
             and j.pr_num is not None
         ),
@@ -2909,16 +2914,17 @@ def _find_existing_pr_for_retry(dataset_id: str, repo_id: str) -> int | None:
 
         details = HfApi().get_discussion_details(
             repo_id=repo_id,
-            repo_type="dataset",
+            repo_type=repo_type,
             discussion_num=pr_num,
         )
         if details.status == "draft":
             return pr_num
     except Exception as e:  # noqa: BLE001
         logger.warning(
-            "Could not check PR #%d on %s for resume: %s. Will create a fresh PR.",
+            "Could not check PR #%d on %s (%s) for resume: %s. Will create a fresh PR.",
             pr_num,
             repo_id,
+            repo_type,
             e,
         )
     return None
