@@ -12,16 +12,27 @@
             border-radius: 3px; pointer-events: none; }
   /* bottom-right ghost toggle. Pointer-events on so it's clickable; everything
      else in the page is the orbit-controls canvas. */
-  #ghost-toggle { position: absolute; bottom: 6px; right: 6px; color: #ddd;
+  /* Solid button (not a translucent label like the camera-key overlays) so
+     it reads as an actionable control. Filled cyan when on, dark gray
+     when off; the round indicator on the right doubles the state signal. */
+  #ghost-toggle { position: absolute; bottom: 6px; right: 6px;
                   font-size: 11px; font-family: monospace;
-                  background: rgba(0,0,0,0.6); padding: 3px 8px; border-radius: 3px;
-                  border: 1px solid #444; cursor: pointer; user-select: none; }
-  #ghost-toggle.on { color: #4dd0ff; border-color: #4dd0ff; }
+                  color: #ccc; background: #2a2a3a;
+                  padding: 4px 9px; border-radius: 3px;
+                  border: 1px solid #555; cursor: pointer; user-select: none;
+                  display: inline-flex; align-items: center; gap: 6px; }
+  #ghost-toggle:hover { background: #3a3a4a; border-color: #777; }
+  #ghost-toggle.on { color: #0a1622; background: #4dd0ff; border-color: #4dd0ff;
+                     font-weight: 600; }
+  #ghost-toggle.on:hover { background: #7be0ff; border-color: #7be0ff; }
+  #ghost-toggle .dot { width: 8px; height: 8px; border-radius: 50%;
+                       border: 1px solid currentColor; }
+  #ghost-toggle.on .dot { background: currentColor; }
 </style>
 </head>
 <body>
 <div id="status">starting…</div>
-<button id="ghost-toggle" title="Overlay the commanded action as a translucent ghost robot">action ghost: off</button>
+<button id="ghost-toggle" title="Overlay the commanded action as a translucent ghost robot"><span class="label">action ghost</span><span class="dot"></span></button>
 <script type="importmap">
 {
   "imports": {
@@ -237,7 +248,9 @@ window.addEventListener('message', (e) => {
 // ── ghost toggle ──────────────────────────────────────────────────────────
 const ghostBtn = document.getElementById('ghost-toggle');
 function _updateGhostBtn() {
-  ghostBtn.textContent = `action ghost: ${_ghostOn ? 'on' : 'off'}`;
+  // State signal is the .on class — CSS swaps colors + fills the indicator
+  // dot. The label text stays static so the control reads as one button
+  // (not as a status badge whose text changes).
   ghostBtn.classList.toggle('on', _ghostOn);
 }
 _updateGhostBtn();
