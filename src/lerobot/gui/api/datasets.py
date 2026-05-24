@@ -2292,6 +2292,88 @@ async def get_frame_features(dataset_id: str, episode_idx: int, frame_idx: int) 
     return {"frame_index": frame_idx, "episode_index": episode_idx, "values": out}
 
 
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/urdf-viz")
+async def get_urdf_viz_frame(dataset_id: str, episode_idx: int, frame: int = 0) -> dict:
+    """URDF reference + per-joint angles for one dataset frame.
+
+    Same shape as the live ``/api/run/urdf-viz`` endpoint: the viewer is
+    one component, driven here by a frame index instead of an obs stream.
+    ``state`` is computed from ``observation.state``; ``action`` (when
+    present in the dataset schema) becomes the ghost overlay.
+    ``{"available": false}`` when no description matches the dataset's
+    motor set (no vendored URDF for this robot).
+    """
+    from lerobot.gui.urdf_viz import compute_joint_angles, resolve_robot
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+    ep = dataset.meta.episodes[episode_idx]
+    ep_length = int(ep["length"])
+    if frame < 0 or frame >= ep_length:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Frame {frame} out of range for episode {episode_idx} (length={ep_length})",
+        )
+
+    feature_dict = dataset.meta.features
+    state_feat = feature_dict.get("observation.state")
+    if state_feat is None or "names" not in state_feat:
+        return {"available": False}
+    state_names: list[str] = list(state_feat["names"])
+    spec = resolve_robot(state_names)
+    if spec is None:
+        return {"available": False}
+
+    # Read the two columns we need, scoped to this episode, then index in
+    # memory. Mirrors the feature-series endpoint: avoids decoding any
+    # video features that the full ``dataset[i]`` accessor would pull in.
+    raw_cols = ["episode_index", "observation.state"]
+    action_feat = feature_dict.get("action")
+    action_names: list[str] = list(action_feat["names"]) if action_feat and "names" in action_feat else []
+    if action_names:
+        raw_cols.append("action")
+
+    chunk_idx = int(ep["data/chunk_index"])
+    file_idx = int(ep["data/file_index"])
+    parquet_path = Path(dataset.root) / DEFAULT_DATA_PATH.format(chunk_index=chunk_idx, file_index=file_idx)
+    if not parquet_path.exists():
+        raise HTTPException(status_code=404, detail=f"Data parquet missing: {parquet_path}")
+    df = pd.read_parquet(parquet_path, columns=raw_cols)
+    df = df[df["episode_index"] == episode_idx].reset_index(drop=True)
+    if frame >= len(df):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Frame {frame} not present in parquet (have {len(df)} rows)",
+        )
+
+    state_vec = df["observation.state"].iloc[frame]
+    state_dict = {n: float(state_vec[i]) for i, n in enumerate(state_names) if i < len(state_vec)}
+    state_angles = compute_joint_angles(spec, state_dict)
+
+    action_angles: dict[str, dict[str, float]] = {}
+    if action_names and "action" in df.columns:
+        action_vec = df["action"].iloc[frame]
+        action_dict = {n: float(action_vec[i]) for i, n in enumerate(action_names) if i < len(action_vec)}
+        action_angles = compute_joint_angles(spec, action_dict)
+
+    arms_payload: list[dict] = []
+    for a in spec.arms:
+        entry: dict = {"prefix": a.obs_prefix, "state": state_angles.get(a.obs_prefix, {})}
+        if action_angles:
+            entry["action"] = action_angles.get(a.obs_prefix, {})
+        arms_payload.append(entry)
+    return {
+        "available": True,
+        "name": spec.name,
+        "urdf": f"/urdf-assets/{spec.urdf_url_path}",
+        "bimanual": len(spec.arms) == 2,
+        "arms": arms_payload,
+    }
+
+
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/feature-series")
 async def get_episode_feature_series(
     dataset_id: str,
