@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=35">
+    <link rel="stylesheet" href="/static/style.css?v=36">
 </head>
 <body>
     <div class="tab-bar">
@@ -14,7 +14,28 @@
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
         <span id="hf-auth-indicator" style="margin-left:auto; font-size:11px; color:var(--text-secondary, #666); padding-right:12px; cursor:default;" title="HuggingFace Hub login status"></span>
+        <!-- Transfers indicator: hidden until there's at least one job in the
+             registry. Click toggles the popover below; the popover lists one
+             card per active or recently-completed Hub transfer. -->
+        <button id="transfers-indicator" class="transfers-indicator" type="button"
+                onclick="toggleTransfersPopover()" hidden
+                title="Hub uploads / downloads in progress">
+            <span id="transfers-indicator-label">Transfers</span>
+        </button>
         <button id="bug-report-btn" class="bug-report-btn" onclick="openBugReportDialog()" title="Report a bug — screenshot is captured automatically">Report bug</button>
+    </div>
+
+    <!-- Transfers popover: anchored under the tab bar's transfers indicator.
+         Hidden by default; toggled by toggleTransfersPopover(). Body is
+         (re)rendered every time the polled /hub/jobs response comes back. -->
+    <div id="transfers-popover" class="transfers-popover" hidden>
+        <div class="transfers-popover-header">
+            <span>Hub transfers</span>
+            <button class="transfers-clear-btn" type="button"
+                    onclick="dismissAllFinishedTransfers()"
+                    title="Dismiss all finished transfers">Clear finished</button>
+        </div>
+        <div id="transfers-list" class="transfers-list"></div>
     </div>
 
     <!-- Data tab (existing) -->
@@ -452,7 +473,7 @@
         </form>
     </dialog>
 
-    <script src="/static/app.js?v=32"></script>
+    <script src="/static/app.js?v=33"></script>
     <script src="/static/feature_editing.js?v=24"></script>
     <script src="/static/add_feature_dialog.js?v=2"></script>
     <script src="/static/robot.js?v=18"></script>

@@ -1642,12 +1642,13 @@ async function executeHubAction() {
     const btn = document.getElementById('hub-execute-btn');
     const status = document.getElementById('hub-status');
     btn.disabled = true;
-    status.textContent =
-        _hubAction === 'upload' ? 'Uploading...' :
-        _hubAction === 'open-sync' ? 'Downloading & opening...' : 'Downloading...';
 
-    // 'open-sync' branches off entirely — different endpoint, different post-success flow.
+    // 'open-sync' is a separate, synchronous flow — different endpoint
+    // (the dataset-open one, not /hub/{upload,download}) and the response
+    // body IS the opened dataset. Keep it blocking; promoting it to the
+    // background-job pattern would require touching the open codepath.
     if (_hubAction === 'open-sync') {
+        status.textContent = 'Downloading & opening…';
         try {
             const res = await fetch('/api/datasets', {
                 method: 'POST',
@@ -1679,6 +1680,8 @@ async function executeHubAction() {
         return;
     }
 
+    // Upload / download: kick off a background job, close the modal
+    // immediately, surface progress in the top-bar Transfers tray.
     const endpoint = `/api/datasets/${encodeURIComponent(_hubDatasetId)}/hub/${_hubAction}`;
     try {
         const res = await fetch(endpoint, {
@@ -1700,26 +1703,26 @@ async function executeHubAction() {
 
         const data = await res.json();
         if (!res.ok) {
-            status.textContent = data.detail || 'Operation failed';
+            // 409 = a Hub transfer is already running for this dataset;
+            // close the modal anyway and surface the existing job in the
+            // tray so the user sees they don't need to start another.
+            if (res.status === 409 && data?.detail?.job_id) {
+                closeHubModal();
+                Transfers.refreshNow();
+                Transfers.openPopover();
+                showToast('Transfer already running', 'See the Transfers tray for progress.', 'info', 4000);
+                return;
+            }
+            status.textContent = (data.detail && data.detail.message) || data.detail || 'Operation failed';
             btn.disabled = false;
             return;
         }
 
+        // Job kicked off. Close modal, ping the tray, point the user at it.
         closeHubModal();
-        showToast(_hubAction === 'upload' ? 'Upload Complete' : 'Download Complete', data.message, 'info');
-
-        // Refresh dataset after download (data changed)
-        if (_hubAction === 'download') {
-            try {
-                const epRes = await fetch(`/api/datasets/${encodeURIComponent(_hubDatasetId)}/episodes`);
-                if (epRes.ok) {
-                    episodes[_hubDatasetId] = await epRes.json();
-                    datasets[_hubDatasetId].total_episodes = episodes[_hubDatasetId].length;
-                    datasets[_hubDatasetId].total_frames = episodes[_hubDatasetId].reduce((s, e) => s + e.length, 0);
-                }
-            } catch (e) { /* ignore */ }
-            renderTree();
-        }
+        Transfers.refreshNow();
+        const verb = _hubAction === 'upload' ? 'Upload' : 'Download';
+        showToast(`${verb} started`, 'Progress in the Transfers tray (top right).', 'info', 4000);
     } catch (e) {
         status.textContent = 'Error: ' + e.message;
         btn.disabled = false;
@@ -1732,8 +1735,249 @@ document.addEventListener('click', (e) => {
     if (e.target === overlay) closeHubModal();
 });
 
+// ── Hub Transfers tray ─────────────────────────────────────────────────
+//
+// Top-bar indicator + popover that lists every active or recently-finished
+// Hub transfer. The single polling loop covers all transfers for the whole
+// app — no more per-modal polling. Poll cadence:
+//   - while any job is active: 1 Hz (counters tick once per file, faster
+//     polling would just re-render the same snapshot)
+//   - while idle (only-finished or empty): off — refreshNow() restarts it
+//     when a fresh transfer is kicked off via executeHubAction
+//
+// Keyed by Transfers.* as a tiny module so executeHubAction + listeners
+// don't have to know the internal state names. Globally exposed so the
+// inline `onclick` handlers in the tab bar can call into it.
+
+const Transfers = (function () {
+    let _pollTimer = null;
+    let _jobs = [];               // latest snapshot from /hub/jobs
+    let _completionShown = new Set();  // job_ids we've already toasted
+    let _popoverOpen = false;
+
+    function _fmtBytes(n) {
+        if (!n) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        let i = 0;
+        while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+        return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+    }
+
+    function _isActive(j) { return j.status === 'pending' || j.status === 'running'; }
+
+    function _renderIndicator() {
+        const ind = document.getElementById('transfers-indicator');
+        const label = document.getElementById('transfers-indicator-label');
+        if (!ind || !label) return;
+        const active = _jobs.filter(_isActive);
+        if (_jobs.length === 0) {
+            ind.hidden = true;
+            return;
+        }
+        ind.hidden = false;
+        if (active.length > 0) {
+            ind.classList.add('active');
+            label.textContent = `Transfers · ${active.length}`;
+        } else {
+            ind.classList.remove('active');
+            label.textContent = `Transfers`;
+        }
+    }
+
+    function _renderPopover() {
+        const list = document.getElementById('transfers-list');
+        if (!list) return;
+        if (_jobs.length === 0) {
+            list.innerHTML = '';
+            return;
+        }
+        list.innerHTML = _jobs.map(_cardHtml).join('');
+        const clearBtn = document.querySelector('.transfers-clear-btn');
+        if (clearBtn) {
+            const hasFinished = _jobs.some(j => !_isActive(j));
+            clearBtn.disabled = !hasFinished;
+        }
+    }
+
+    function _cardHtml(j) {
+        const dir = j.direction === 'upload' ? '▲ Upload' : '▼ Download';
+        const repoUrl = `https://huggingface.co/datasets/${j.repo_id}`;
+        const pct = j.files_total > 0
+            ? Math.min(100, Math.round(100 * j.files_done / j.files_total))
+            : 0;
+        const bytesLine = j.bytes_total > 0
+            ? `${_fmtBytes(j.bytes_done)} / ${_fmtBytes(j.bytes_total)}`
+            : '';
+        const filesLine = `${j.files_done} / ${j.files_total} files`;
+
+        let action = '';
+        let extra = '';
+        if (_isActive(j)) {
+            action = `<button class="transfer-action-btn danger" type="button"
+                onclick="Transfers.cancel('${j.job_id}')" title="Cancel">×</button>`;
+            extra = `<div class="transfer-current-file" title="${j.current_file || ''}">${j.current_file || ''}</div>`;
+        } else {
+            action = `<button class="transfer-action-btn" type="button"
+                onclick="Transfers.dismiss('${j.job_id}')" title="Dismiss">×</button>`;
+            if (j.status === 'failed') {
+                extra = `<div class="transfer-msg failed">Failed: ${j.message || 'unknown error'}</div>`;
+            } else if (j.status === 'cancelled') {
+                extra = `<div class="transfer-msg cancelled">Cancelled after ${j.files_done} / ${j.files_total} files.</div>`;
+            } else if (j.status === 'complete') {
+                extra = `<div class="transfer-msg complete">Done · ${_fmtBytes(j.bytes_done)}</div>`;
+            }
+        }
+        return (
+            `<div class="transfer-card ${j.status}">` +
+              `<div class="transfer-card-head">` +
+                `<span class="transfer-direction">${dir}</span>` +
+                `<a class="transfer-repo" href="${repoUrl}" target="_blank" rel="noopener noreferrer" title="${j.repo_id}">${j.repo_id}</a>` +
+                action +
+              `</div>` +
+              `<div class="transfer-stats">${filesLine}${bytesLine ? ' — ' + bytesLine : ''}<span class="pct">${pct}%</span></div>` +
+              `<progress value="${j.files_done}" max="${Math.max(1, j.files_total)}"></progress>` +
+              extra +
+            `</div>`
+        );
+    }
+
+    function _onJobsUpdated(prevJobs, jobs) {
+        // Surface a one-shot toast for each transition into a terminal
+        // state so the user notices even when the popover is closed. We
+        // record the job_id in _completionShown to avoid re-toasting on
+        // re-polls.
+        for (const j of jobs) {
+            if (_isActive(j) || _completionShown.has(j.job_id)) continue;
+            _completionShown.add(j.job_id);
+            const verb = j.direction === 'upload' ? 'Upload' : 'Download';
+            if (j.status === 'complete') {
+                showToast(`${verb} complete`, `${j.repo_id} — ${j.files_done} files, ${_fmtBytes(j.bytes_done)}`, 'info');
+                // After a download, refresh the local episode list so the
+                // tree reflects the freshly-pulled metadata.
+                if (j.direction === 'download' && datasets[j.dataset_id]) {
+                    _refreshAfterDownload(j.dataset_id);
+                }
+            } else if (j.status === 'failed') {
+                showToast(`${verb} failed`, `${j.repo_id}: ${j.message || 'unknown error'}`, 'error', 8000);
+            } else if (j.status === 'cancelled') {
+                showToast(`${verb} cancelled`, j.repo_id, 'warning');
+            }
+        }
+    }
+
+    async function _refreshAfterDownload(datasetId) {
+        try {
+            const epRes = await fetch(`/api/datasets/${encodeURIComponent(datasetId)}/episodes`);
+            if (epRes.ok) {
+                episodes[datasetId] = await epRes.json();
+                datasets[datasetId].total_episodes = episodes[datasetId].length;
+                datasets[datasetId].total_frames = episodes[datasetId].reduce((s, e) => s + e.length, 0);
+                renderTree();
+            }
+        } catch (e) { /* non-critical refresh */ }
+    }
+
+    async function poll() {
+        try {
+            const res = await fetch('/api/datasets/hub/jobs');
+            if (!res.ok) return;
+            const data = await res.json();
+            const prev = _jobs;
+            _jobs = data.jobs || [];
+            _onJobsUpdated(prev, _jobs);
+            _renderIndicator();
+            if (_popoverOpen) _renderPopover();
+        } catch (e) {
+            // Network blip — keep last snapshot, try again next tick.
+        }
+        // Schedule next poll only if there's work to watch. When all jobs
+        // are terminal, the indicator stays visible until dismissed but
+        // we stop hammering the server.
+        if (_pollTimer) clearTimeout(_pollTimer);
+        _pollTimer = null;
+        if (_jobs.some(_isActive)) {
+            _pollTimer = setTimeout(poll, 1000);
+        }
+    }
+
+    function refreshNow() {
+        // Called when a new transfer is kicked off — restarts the poll
+        // loop unconditionally (so a job initiated when the tray was
+        // idle gets immediate attention).
+        if (_pollTimer) clearTimeout(_pollTimer);
+        _pollTimer = null;
+        poll();
+    }
+
+    function openPopover() {
+        _popoverOpen = true;
+        const pop = document.getElementById('transfers-popover');
+        if (pop) pop.hidden = false;
+        _renderPopover();
+    }
+
+    function closePopover() {
+        _popoverOpen = false;
+        const pop = document.getElementById('transfers-popover');
+        if (pop) pop.hidden = true;
+    }
+
+    function toggle() {
+        if (_popoverOpen) closePopover();
+        else openPopover();
+    }
+
+    async function cancel(jobId) {
+        try {
+            await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+            refreshNow();
+        } catch (e) { /* ignored */ }
+    }
+
+    async function dismiss(jobId) {
+        try {
+            const res = await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss`, { method: 'POST' });
+            if (res.ok) refreshNow();
+        } catch (e) { /* ignored */ }
+    }
+
+    async function dismissAllFinished() {
+        // Sequential dismiss requests — the count is bounded by what's
+        // visible in the popover, so we don't bother parallelising.
+        const targets = _jobs.filter(j => !_isActive(j)).map(j => j.job_id);
+        for (const id of targets) {
+            try {
+                await fetch(`/api/datasets/hub/progress/${encodeURIComponent(id)}/dismiss`, { method: 'POST' });
+            } catch (e) { /* ignored */ }
+        }
+        refreshNow();
+    }
+
+    return { poll, refreshNow, openPopover, closePopover, toggle, cancel, dismiss, dismissAllFinished };
+})();
+
+// Global handles for the inline onclick attributes in index.html.
+window.toggleTransfersPopover = () => Transfers.toggle();
+window.dismissAllFinishedTransfers = () => Transfers.dismissAllFinished();
+window.Transfers = Transfers;
+
+// Click-outside closes the popover. Anchored to the indicator: if the
+// click is on the indicator or inside the popover, leave it alone.
+document.addEventListener('click', (e) => {
+    const pop = document.getElementById('transfers-popover');
+    const ind = document.getElementById('transfers-indicator');
+    if (!pop || pop.hidden) return;
+    if (ind && ind.contains(e.target)) return;
+    if (pop.contains(e.target)) return;
+    Transfers.closePopover();
+});
+
 // Initialize
 refreshPendingEdits();
 loadSources();
 restoreOpenedDatasets();
 checkHubAuth();
+// Pick up any in-flight transfers from a prior session (the server keeps
+// them until they finish + 30 min). One probe at startup is enough — if
+// it returns active jobs the poll loop schedules itself thereafter.
+Transfers.refreshNow();
