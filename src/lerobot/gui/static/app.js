@@ -1703,14 +1703,51 @@ async function executeHubAction() {
 
         const data = await res.json();
         if (!res.ok) {
-            // 409 = a Hub transfer is already running for this dataset;
-            // close the modal anyway and surface the existing job in the
-            // tray so the user sees they don't need to start another.
+            // 409 with job_id = a Hub transfer is already running for this dataset.
             if (res.status === 409 && data?.detail?.job_id) {
                 closeHubModal();
                 Transfers.refreshNow();
                 Transfers.openPopover();
                 showToast('Transfer already running', 'See the Transfers tray for progress.', 'info', 4000);
+                return;
+            }
+            // 409 with code=incomplete_local_state = the upload-time completeness
+            // check found files present on the remote but missing locally. This is
+            // the download-fail-then-upload guardrail. Ask the user before proceeding.
+            if (res.status === 409 && data?.detail?.code === 'incomplete_local_state') {
+                const missing = (data.detail.missing_locally || []).slice(0, 5);
+                const incomplete = (data.detail.incomplete_locally || []).slice(0, 5);
+                const detailLines = [];
+                if (missing.length) detailLines.push('Missing: ' + missing.join(', '));
+                if (incomplete.length) detailLines.push('Incomplete: ' + incomplete.join(', '));
+                const ok = confirm(
+                    'Your local copy is missing files that exist on the remote ' +
+                    '(likely from an interrupted download). Uploading would push a ' +
+                    'worse-than-remote state, but HF history preserves the old commit ' +
+                    'so the prior state remains recoverable.\n\n' +
+                    detailLines.join('\n') +
+                    '\n\nUpload anyway?'
+                );
+                if (!ok) {
+                    status.textContent = 'Cancelled. Re-download first to restore the missing files.';
+                    btn.disabled = false;
+                    return;
+                }
+                // Re-issue with confirm_force=true to bypass the guardrail.
+                const force = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ repo_id: repoId, confirm_force: true }),
+                });
+                if (!force.ok) {
+                    const fd = await force.json().catch(() => ({}));
+                    status.textContent = fd?.detail?.message || fd?.detail || 'Upload failed';
+                    btn.disabled = false;
+                    return;
+                }
+                closeHubModal();
+                Transfers.refreshNow();
+                showToast('Upload started', 'Progress in the Transfers tray (top right).', 'info', 4000);
                 return;
             }
             status.textContent = (data.detail && data.detail.message) || data.detail || 'Operation failed';
@@ -1799,43 +1836,88 @@ const Transfers = (function () {
         }
     }
 
+    function _errorClassMessage(j) {
+        // Map the server's error_class to a remediation hint. Fallback to
+        // the raw error string if we don't recognize the class.
+        if (!j.error) return '';
+        switch (j.error_class) {
+            case 'auth':
+                return 'Authentication failed. Your HF token may be expired or lacks write permission. Run `huggingface-cli login` and click Retry.';
+            case 'rate_limit':
+                return 'Rate-limited by the Hub. Wait a few minutes and click Retry.';
+            case 'network':
+                return `Network error: ${j.error}. Click Retry to resume.`;
+            case 'cancelled':
+                return 'Cancelled by user.';
+            default:
+                return j.error;
+        }
+    }
+
     function _cardHtml(j) {
         const dir = j.direction === 'upload' ? '▲ Upload' : '▼ Download';
-        const repoUrl = `https://huggingface.co/datasets/${j.repo_id}`;
-        const pct = j.files_total > 0
-            ? Math.min(100, Math.round(100 * j.files_done / j.files_total))
+        // Link to the PR for uploads (when one exists) so the user can
+        // inspect the staged state. Falls back to the repo URL otherwise.
+        const linkUrl = j.pr_url
+            ? j.pr_url
+            : `https://huggingface.co/datasets/${j.repo_id}`;
+        const filesDone = j.files_done_estimate ?? 0;
+        const filesTotal = j.files_total ?? 0;
+        const bytesDone = j.bytes_done_estimate ?? 0;
+        const bytesTotal = j.bytes_total ?? 0;
+        const pct = filesTotal > 0
+            ? Math.min(100, Math.round(100 * filesDone / filesTotal))
             : 0;
-        const bytesLine = j.bytes_total > 0
-            ? `${_fmtBytes(j.bytes_done)} / ${_fmtBytes(j.bytes_total)}`
-            : '';
-        const filesLine = `${j.files_done} / ${j.files_total} files`;
 
-        let action = '';
+        // Action buttons depend on terminal-vs-active state. Three verbs,
+        // three distinct icons — see design doc § "Tray card actions".
+        let actions = '';
         let extra = '';
         if (_isActive(j)) {
-            action = `<button class="transfer-action-btn danger" type="button"
-                onclick="Transfers.cancel('${j.job_id}')" title="Cancel">×</button>`;
-            extra = `<div class="transfer-current-file" title="${j.current_file || ''}">${j.current_file || ''}</div>`;
+            // Active: Cancel only.
+            actions = `<button class="transfer-action-btn danger" type="button"
+                onclick="Transfers.cancel('${j.job_id}')" title="Cancel">✕</button>`;
+            const stageLine = j.milestone
+                ? `<div class="transfer-milestone">${j.milestone}</div>`
+                : '';
+            const curFile = j.current_file
+                ? `<div class="transfer-current-file" title="${j.current_file}">${j.current_file}</div>`
+                : '';
+            extra = stageLine + curFile;
+        } else if (j.status === 'complete') {
+            // Complete: Hide only (UI-only, nothing to clean up).
+            actions = `<button class="transfer-action-btn" type="button"
+                onclick="Transfers.hide('${j.job_id}')" title="Hide">✕</button>`;
+            const bytesText = bytesDone > 0 ? ` · ${_fmtBytes(bytesDone)}` : '';
+            extra = `<div class="transfer-msg complete">Done${bytesText}</div>`;
         } else {
-            action = `<button class="transfer-action-btn" type="button"
-                onclick="Transfers.dismiss('${j.job_id}')" title="Dismiss">×</button>`;
-            if (j.status === 'failed') {
-                extra = `<div class="transfer-msg failed">Failed: ${j.message || 'unknown error'}</div>`;
-            } else if (j.status === 'cancelled') {
-                extra = `<div class="transfer-msg cancelled">Cancelled after ${j.files_done} / ${j.files_total} files.</div>`;
-            } else if (j.status === 'complete') {
-                extra = `<div class="transfer-msg complete">Done · ${_fmtBytes(j.bytes_done)}</div>`;
-            }
+            // Failed or cancelled: Retry + Discard.
+            const retryDisabled = j.status === 'failed' && j.error_class === 'auth' ? '' : '';
+            actions =
+                `<button class="transfer-action-btn" type="button" ${retryDisabled}
+                    onclick="Transfers.retry('${j.job_id}')" title="Retry">↻</button>` +
+                `<button class="transfer-action-btn danger" type="button"
+                    onclick="Transfers.discard('${j.job_id}')" title="Discard">🗑</button>`;
+            const msgClass = j.status === 'failed' ? 'failed' : 'cancelled';
+            extra = `<div class="transfer-msg ${msgClass}">${_errorClassMessage(j) || 'Cancelled'}</div>`;
         }
+
+        const showBar = filesTotal > 0 || _isActive(j);
+        const progressLine = showBar
+            ? `<div class="transfer-stats">${filesDone} / ${filesTotal} files` +
+              (bytesTotal > 0 ? ` — ${_fmtBytes(bytesDone)} / ${_fmtBytes(bytesTotal)}` : '') +
+              `<span class="pct">${pct}%</span></div>` +
+              `<progress value="${filesDone}" max="${Math.max(1, filesTotal)}"></progress>`
+            : '';
+
         return (
             `<div class="transfer-card ${j.status}">` +
               `<div class="transfer-card-head">` +
                 `<span class="transfer-direction">${dir}</span>` +
-                `<a class="transfer-repo" href="${repoUrl}" target="_blank" rel="noopener noreferrer" title="${j.repo_id}">${j.repo_id}</a>` +
-                action +
+                `<a class="transfer-repo" href="${linkUrl}" target="_blank" rel="noopener noreferrer" title="${j.repo_id}">${j.repo_id}</a>` +
+                `<span class="transfer-actions">${actions}</span>` +
               `</div>` +
-              `<div class="transfer-stats">${filesLine}${bytesLine ? ' — ' + bytesLine : ''}<span class="pct">${pct}%</span></div>` +
-              `<progress value="${j.files_done}" max="${Math.max(1, j.files_total)}"></progress>` +
+              progressLine +
               extra +
             `</div>`
         );
@@ -1850,15 +1932,18 @@ const Transfers = (function () {
             if (_isActive(j) || _completionShown.has(j.job_id)) continue;
             _completionShown.add(j.job_id);
             const verb = j.direction === 'upload' ? 'Upload' : 'Download';
+            const filesDone = j.files_done_estimate ?? 0;
+            const bytesDone = j.bytes_done_estimate ?? 0;
             if (j.status === 'complete') {
-                showToast(`${verb} complete`, `${j.repo_id} — ${j.files_done} files, ${_fmtBytes(j.bytes_done)}`, 'info');
+                const bytesText = bytesDone > 0 ? `, ${_fmtBytes(bytesDone)}` : '';
+                showToast(`${verb} complete`, `${j.repo_id} — ${filesDone} files${bytesText}`, 'info');
                 // After a download, refresh the local episode list so the
                 // tree reflects the freshly-pulled metadata.
                 if (j.direction === 'download' && datasets[j.dataset_id]) {
                     _refreshAfterDownload(j.dataset_id);
                 }
             } else if (j.status === 'failed') {
-                showToast(`${verb} failed`, `${j.repo_id}: ${j.message || 'unknown error'}`, 'error', 8000);
+                showToast(`${verb} failed`, `${j.repo_id}: ${_errorClassMessage(j)}`, 'error', 8000);
             } else if (j.status === 'cancelled') {
                 showToast(`${verb} cancelled`, j.repo_id, 'warning');
             }
@@ -1928,13 +2013,76 @@ const Transfers = (function () {
     }
 
     async function cancel(jobId) {
+        // Confirmation only if the transfer has actually started moving
+        // bytes (active mid-flight). For a "still starting" / "just queued"
+        // job the cancel is free of regret.
+        const j = _jobs.find(x => x.job_id === jobId);
+        if (j && (j.files_done_estimate ?? 0) > 0 && j.direction === 'upload') {
+            const ok = confirm(
+                'Cancel upload? Already-uploaded chunks stay on the server. ' +
+                'The pending HF PR remains in draft so Retry can resume.'
+            );
+            if (!ok) return;
+        }
         try {
             await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
             refreshNow();
         } catch (e) { /* ignored */ }
     }
 
-    async function dismiss(jobId) {
+    async function retry(jobId) {
+        const j = _jobs.find(x => x.job_id === jobId);
+        if (!j) return;
+        // Retry is just re-POSTing the upload/download endpoint with the
+        // same dataset+repo. The server detects the existing draft PR and
+        // resumes into it via the reuse_pr_num path.
+        const endpoint = `/api/datasets/${encodeURIComponent(j.dataset_id)}/hub/${j.direction}`;
+        try {
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ repo_id: j.repo_id }),
+            });
+            if (res.status === 409) {
+                // Already running (concurrent retry); just refresh.
+                refreshNow();
+                return;
+            }
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                showToast('Retry failed', data.detail?.message || data.detail || 'Could not restart transfer', 'error');
+                return;
+            }
+            // Drop the old terminal entry so the tray shows only the new attempt.
+            await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss`, { method: 'POST' });
+            refreshNow();
+        } catch (e) {
+            showToast('Retry failed', e.message, 'error');
+        }
+    }
+
+    async function discard(jobId) {
+        const j = _jobs.find(x => x.job_id === jobId);
+        const isUpload = j && j.direction === 'upload';
+        const hasPR = j && j.pr_num != null;
+        if (isUpload && hasPR) {
+            const ok = confirm(
+                'Discard upload? The pending HF PR will be closed and ' +
+                'partially uploaded data will be cleaned up. Resume will ' +
+                'no longer be possible. Use Retry to resume instead.'
+            );
+            if (!ok) return;
+        }
+        try {
+            const res = await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss`, { method: 'POST' });
+            if (res.ok) refreshNow();
+        } catch (e) { /* ignored */ }
+    }
+
+    async function hide(jobId) {
+        // "Hide" is just a UI-only dismiss on a complete job; the server's
+        // dismiss endpoint does the right thing (no PR to clean up since
+        // the upload already merged).
         try {
             const res = await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss`, { method: 'POST' });
             if (res.ok) refreshNow();
@@ -1942,8 +2090,8 @@ const Transfers = (function () {
     }
 
     async function dismissAllFinished() {
-        // Sequential dismiss requests — the count is bounded by what's
-        // visible in the popover, so we don't bother parallelising.
+        // Hide-all for complete cards + discard-all for failed/cancelled.
+        // Iterates serially; the count is bounded by what's visible.
         const targets = _jobs.filter(j => !_isActive(j)).map(j => j.job_id);
         for (const id of targets) {
             try {
@@ -1953,7 +2101,7 @@ const Transfers = (function () {
         refreshNow();
     }
 
-    return { poll, refreshNow, openPopover, closePopover, toggle, cancel, dismiss, dismissAllFinished };
+    return { poll, refreshNow, openPopover, closePopover, toggle, cancel, retry, discard, hide, dismissAllFinished };
 })();
 
 // Global handles for the inline onclick attributes in index.html.

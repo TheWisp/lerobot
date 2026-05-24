@@ -84,6 +84,12 @@ async def startup_event():
     if n:
         logger.info("Swept %d stale obs-stream shm segment(s) from a previous run", n)
 
+    # Sweep Hub-transfer PID files left by workers that outlived the prior
+    # server process. Marks their HubJobState entries as failed (so the
+    # tray's "recently-failed" cards surface them with a Retry button) and
+    # cleans up the stale PID files. Idempotent on a clean server.
+    datasets._sweep_orphan_pid_files()
+
 
 async def _terminate_active_process(*, sigint_grace_s: float = 5.0) -> bool:
     """Kill the active teleop/record subprocess, if any.
