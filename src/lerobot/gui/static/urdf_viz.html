@@ -13,8 +13,9 @@
   /* bottom-right ghost toggle. Pointer-events on so it's clickable; everything
      else in the page is the orbit-controls canvas. */
   /* Solid button (not a translucent label like the camera-key overlays) so
-     it reads as an actionable control. Filled cyan when on, dark gray
-     when off; the round indicator on the right doubles the state signal. */
+     it reads as an actionable control. Filled cyan when on, dark gray when
+     off; a check appears only on the on side so the signal is unambiguous
+     for colour-blind users too (not just bg-colour). */
   #ghost-toggle { position: absolute; bottom: 6px; right: 6px;
                   font-size: 11px; font-family: monospace;
                   color: #ccc; background: #2a2a3a;
@@ -25,14 +26,15 @@
   #ghost-toggle.on { color: #0a1622; background: #4dd0ff; border-color: #4dd0ff;
                      font-weight: 600; }
   #ghost-toggle.on:hover { background: #7be0ff; border-color: #7be0ff; }
-  #ghost-toggle .dot { width: 8px; height: 8px; border-radius: 50%;
-                       border: 1px solid currentColor; }
-  #ghost-toggle.on .dot { background: currentColor; }
+  /* The check is hidden in the off state and revealed in the on state.
+     Width stays reserved either way so the button doesn't reflow. */
+  #ghost-toggle .check { width: 9px; text-align: center; visibility: hidden; }
+  #ghost-toggle.on .check { visibility: visible; }
 </style>
 </head>
 <body>
 <div id="status">starting…</div>
-<button id="ghost-toggle" title="Overlay the commanded action as a translucent ghost robot"><span class="label">action ghost</span><span class="dot"></span></button>
+<button id="ghost-toggle" title="Overlay the commanded action as a translucent robot on top of the recorded state"><span class="check">✓</span><span class="label">show action</span></button>
 <script type="importmap">
 {
   "imports": {
