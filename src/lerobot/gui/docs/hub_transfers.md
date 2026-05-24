@@ -111,13 +111,15 @@ Steps 1, 3, 4, 5 are server-side metadata operations totaling well under a secon
 
 Downloads have a single, separate mode — see [Download mode](#download-mode) below.
 
-### Cleanup and failure handling for the PR branch
+### Cleanup and failure handling for the HF pull-request branch
 
-The PR branch is the staging area. Its lifecycle is owned by the worker:
+Throughout this doc, "PR" refers to a **HuggingFace pull request** created via `HfApi.create_pull_request` — not the GitHub PR the developer is reviewing this design from. HF PRs are first-class objects on the dataset repo, with their own `refs/pr/<num>` branch and discussion thread.
+
+The HF PR branch is the staging area for one upload. Its lifecycle is owned by the worker:
 
 - **On successful merge**: HF's PR machinery cleans up `refs/pr/<num>` automatically. Nothing for us to do.
-- **On worker SIGTERM / failure mid-upload**: the PR is left in draft state, `refs/pr/<num>` retains whatever commits made it. The user can Retry from the GUI — the retry worker re-uploads to the same PR branch (Xet dedupe makes it cheap) and resumes from `<folder>/.cache/.huggingface/`. Or the user can dismiss the failed job, in which case the worker closes the discussion (`change_discussion_status("closed")`) on cleanup.
-- **On GUI server crash**: PR branches outlive the GUI process; the discussion list on the repo is the persistent record. On next GUI startup, a sweep reconciles the `hub_jobs.jsonl` analytics with open draft PRs and offers to resume or dismiss orphan ones.
+- **On worker SIGTERM / failure mid-upload**: the PR is left in draft state, `refs/pr/<num>` retains whatever commits made it. The user can **Retry** from the GUI — the retry worker re-uploads to the same PR branch (Xet dedupe makes it cheap) and resumes from `<folder>/.cache/.huggingface/`. Or the user can **Discard** the failed job, in which case the worker closes the discussion (`change_discussion_status("closed")`) as cleanup. (Discard vs Retry vs Hide is spelled out in [Tray card actions](#tray-card-actions-and-their-confirmation-prompts).)
+- **On GUI server crash**: PR branches outlive the GUI process; the discussion list on the repo is the persistent record. On next GUI startup, a sweep reconciles the `hub_transfers.jsonl` analytics with open draft PRs and offers Retry or Discard on each.
 - **Worst-case "dead" PRs**: if neither the GUI nor the user ever cleans up, the PR branch remains as a draft on the repo. Visible in HF's web UI; not visible to anyone fetching from `main`. A periodic sweep (e.g., > 30 days draft, no associated active job) garbage-collects.
 
 ### Upload skip behavior
@@ -157,6 +159,19 @@ The temptation to write into `/tmp/<job_id>/` and atomically rename into `datase
 The interaction with our open-dataset precheck closes the last gap. A download interrupted mid-run leaves `dataset.root` partially populated; if the user closes and reopens the dataset before retrying, the precheck returns HTTP 409 with `code=incomplete_local_cache` and the GUI prompts to resume. That mechanism already exists.
 
 `max_workers=8` is HF's default; we don't tune it. The download throughput is bandwidth-bound for any realistic dataset; more workers don't help once the pipe is full.
+
+### Per-file atomicity on overwrite
+
+A fresh file lands atomically in the obvious way (it didn't exist; now it does). The interesting case is **overwriting an existing local file with a newer remote version** — what happens if a process is currently reading the old version, or the download is interrupted between bytes?
+
+HF's writer uses a `<filename>.incomplete` staging file and `os.rename` to its final name only on successful completion + hash verification. POSIX `rename` over an existing file is atomic at the filesystem level: an open file descriptor on the old inode keeps reading the old content; new `open()` calls see the new file. So:
+
+- **Mid-stream interruption.** No partial bytes ever reach `dataset.root/<filename>` itself. The `.incomplete` file holds the partial bytes; on retry, HF's `Range:` request resumes from offset N and the rename happens only at the end.
+- **In-flight reader of the old version.** The GUI's video playback or parquet reader holds the file open via an fd. The rename swaps the directory entry but the fd stays bound to the old inode. The reader finishes reading the old content; the next `open()` after rename sees the new content. **No truncation race, no half-overwritten bytes.**
+- **Hash mismatch on download.** HF re-downloads the file. The `.incomplete` from the failed attempt is discarded; only a successful hash-verified file gets renamed in. We never see a wrong-content-but-right-size file in `dataset.root`.
+- **Windows.** `os.rename` over an existing in-use file fails. HF falls back to a write-then-`os.replace` pattern that works on Windows ≥ Vista but can race with file-in-use. Since LeRobot's primary deployment target is Linux + macOS, this is acceptable; on Windows, users would need to close any process holding the file open before re-downloading.
+
+In short: download overwrites are per-file atomic on POSIX, with no truncation visible to concurrent readers. The guarantee only spans single files — the directory as a whole is not atomic, but the open-precheck (above) is what catches partial-directory states.
 
 ---
 
@@ -201,16 +216,47 @@ The worker redirects HF's stderr to `<job_id>.log` under the same directory. Two
 - **Debug.** Full HF output preserved for post-mortem on a failed transfer.
 - **Milestone extraction.** Lines matching certain patterns (e.g., `Fetching N files`, `Pre-uploading file ...`, `Committing ...`) drive `milestone` updates in the progress JSON. Best-effort parsing; if HF's format shifts, milestones degrade to `"running"` and the rest of the system stays functional.
 
+### Robustness of stderr-based progress
+
+Parsing tqdm output from HF's helpers is intentionally a soft dependency. We design assuming it can break across HF versions and keep the system functional when it does:
+
+- **Pinned HF version**: `huggingface_hub` is pinned to a specific minor in `uv.lock`. A `huggingface_hub` upgrade is a deliberate user action, not a silent supply-chain shift.
+- **Read by byte, not line.** tqdm uses `\r` (carriage return) to overwrite progress on the same terminal line, not `\n`. The worker reads its subprocess's stderr stream byte-by-byte (or with `\r`-aware line splitting), not via the default line-buffered text reader. A naive `for line in proc.stderr` misses every progress tick.
+- **Unit tests with recorded samples.** A handful of pinned stderr captures from real `upload_large_folder` / `snapshot_download` runs live as test fixtures; the milestone parser is exercised against them, and any regression in the recognized patterns fails fast. When HF's format does shift, updating the fixtures is the breakage signal.
+- **E2E test on a tiny real upload.** A `pytest` marker (`@pytest.mark.hub_live`) runs an actual upload of a few-MB random payload to a throwaway repo, asserts that the milestone parser produces at least the "uploading", "committing", "complete" transitions, and cleans up. Gated behind opt-in (network + auth required) so it doesn't run in default CI but does run when we touch this code.
+- **Graceful degradation.** If parsing fails entirely on a given line, the milestone falls back to `"running, <elapsed>s"`. The job still completes correctly; the user just sees a less informative status. Correctness is independent of parser quality.
+- **Cross-platform.** tqdm output is the same on Linux, macOS, and Windows in terms of byte content. The `\r`-overwrite handling, however, depends on disabling line-buffering at the `subprocess.Popen` level — `bufsize=0` and `text=False`. The parser then handles encoding to UTF-8 itself. (Windows console quirks around `\r\n` are handled by treating `\r` as the progress-update delimiter regardless of OS.)
+
 ### Cancel
 
-`Transfers.cancel(job_id)` on the GUI calls `POST /hub/progress/{job_id}/cancel`. The server `os.killpg(worker.pid, SIGTERM)`s the subprocess group. The worker has a SIGTERM handler that:
+`Transfers.cancel(job_id)` on the GUI calls `POST /hub/progress/{job_id}/cancel`. The server `os.killpg(worker.pid, SIGTERM)`s the subprocess group. The cancel path is designed under the assumption that **the worker may be buggy or stuck and must not be trusted to do the right thing**. If the worker is well-behaved, we lose at most some progress; if it's misbehaved, we never compromise correctness.
 
-1. Writes `status: cancelled` + last known counters to the progress JSON.
-2. For the upload pipeline, closes the PR's discussion (`change_discussion_status("closed")`) only if the user explicitly _dismisses_ — leaves it open otherwise so Retry can reuse the same PR branch (preserves both server-side committed state and local `<folder>/.cache/.huggingface/` resume cache).
-3. For downloads, leaves the partial files + HF's `.incomplete` markers in place for the natural resume on retry.
-4. Exits.
+Specific patterns:
 
-SIGKILL escalation after a 5-second grace period covers the case where the HF call is stuck and ignores SIGTERM.
+- **PID-reuse safety**: the server verifies `(pid, process_start_time)` matches what it recorded at spawn before sending SIGTERM. On Linux, `/proc/<pid>/stat` field 22 is the start_time in jiffies since boot; on macOS, `psutil.Process(pid).create_time()`. If the recorded tuple doesn't match, the PID has been reused and we **do not kill** — we just mark the job failed locally. (The original worker is presumed dead anyway.)
+- **Escalation**: SIGTERM → 5-second grace → SIGKILL the process group. SIGKILL cannot be ignored.
+- **Server is the source of truth for terminal status**, not the worker. After SIGTERM the server `waitpid`s the worker; only on confirmed exit does the server write `status: cancelled` to the progress JSON. The worker's own SIGTERM handler is best-effort — if it manages to write `cancelled` first, great; if not, the server's write wins on the next `waitpid` return.
+- **Idempotent**: repeated cancel requests on a job that's already terminal or already mid-cancel are no-ops. Returns the current status without re-issuing signals.
+- **PID file ownership**: at spawn time the worker writes `<job_id>.pid` containing `{pid, start_time, started_at}`. Any code that wants to act on a job (cancel, status read, server-restart sweep) consults this file. A stale `.pid` whose recorded process doesn't exist or doesn't match start_time is treated as a dead-worker indicator.
+- **Server-restart sweep**: on GUI server startup, every `.pid` file in `~/.cache/lerobot/gui/hub_jobs/` is checked. If the PID is alive and start_time matches, the job is adopted and the progress JSON keeps being read. If it's dead, the job is marked `failed` ("worker exited without finalizing") and the `.pid` cleaned up.
+- **Worst-case (worker stuck in uninterruptible syscall, SIGKILL'd but still consuming an fd somewhere)**: this is rare but possible. The OS reclaims the resources eventually; our state stays consistent because the server confirmed exit via `waitpid` and updated the progress JSON accordingly. The user sees "cancelled," can retry, and the new worker spawns cleanly (the old PID is gone from the process table after kernel cleanup).
+
+After cancel:
+
+- For the upload pipeline: the worker leaves the draft PR + `refs/pr/<num>` and the local `<folder>/.cache/.huggingface/` untouched. Retry reuses both, preserves Xet pre-upload state, picks up at the last completed file. The PR is closed only when the user explicitly **Discards** the cancelled job (see [Cancellation and pause](#cancellation-and-pause)).
+- For downloads: partial files + HF's `.incomplete` markers stay; retry resumes via `Range:` requests.
+
+### Spawn
+
+A worker is spawned in response to user action (Upload, Download, Retry). Multiple safety patterns prevent races:
+
+- **Per-dataset spawn lock**: the server holds an `asyncio.Lock` keyed by `dataset_id` over the spawn step. Rapid Upload clicks queue rather than racing.
+- **Pre-spawn registry check**: before constructing a new worker, the server checks `_app_state.active_hub_job_for(dataset_id)`. If a non-terminal job exists, the endpoint returns 409 with the existing `job_id`. The frontend treats 409 by attaching to the existing job instead of creating a new one. (This invariant is enforced by the same lock from the previous bullet — read and write of the registry happen under the lock.)
+- **Cross-process invariant via PID files**: spawn writes the `<job_id>.pid` file atomically (`.tmp` + rename) before exec'ing the worker. If two server processes (e.g., a stale one and a freshly started one) both try to spawn for the same job, the second's PID-file write either races and one wins, or — better — the second's server-restart sweep finds the first's PID file and adopts the existing worker instead of spawning a duplicate.
+- **Retry semantics**: Retry is just a fresh spawn with the same args. The retry path inspects `hub_transfers.jsonl` for the most-recent terminal entry of `(dataset_id, repo_id)` and, if an HF PR number is recorded with `status: draft`, reuses it. Otherwise creates a new PR. This is what makes Retry cheap (Xet sees the pre-uploaded chunks already on the server-side content store).
+- **Idempotent at the user level**: if the user clicks Retry twice in rapid succession on the same job, the second click is absorbed by the spawn lock + registry check; only one new worker comes up.
+
+Best-practice references the design follows: PID-file + identity-tuple verification ([rsyslog's pid-file design notes](https://www.rsyslog.com/doc/), [systemd PIDFile= semantics](https://www.freedesktop.org/software/systemd/man/systemd.exec.html)), `waitpid`-confirmed termination (POSIX), and the "server is the source of truth, worker is opportunistic" invariant common to long-running task queues (Celery, RQ, Sidekiq all follow this pattern for resilience against misbehaving workers).
 
 ---
 
@@ -220,11 +266,11 @@ HF's helpers retry internally on transient 5xx and connection errors with expone
 
 What the GUI does with terminal failures:
 
-| Surface             | Behavior                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------ |
-| Transfers tray card | Red-bordered, shows the error string verbatim. Per-card **Retry** and dismiss (×) buttons. |
-| Toast               | One-shot "<Direction> failed: <error>" with 8-second visibility.                           |
-| Analytics line      | JSONL entry with `outcome: "failed"`, `error`, `duration_s`, all counters as last known.   |
+| Surface             | Behavior                                                                                                                                                                |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transfers tray card | Red-bordered, shows the error string verbatim. Per-card **Retry** and **Discard** buttons (see [Tray card actions](#tray-card-actions-and-their-confirmation-prompts)). |
+| Toast               | One-shot "<Direction> failed: <error>" with 8-second visibility.                                                                                                        |
+| Analytics line      | JSONL entry with `outcome: "failed"`, `error`, `duration_s`, all counters as last known.                                                                                |
 
 **Retry** is a fresh worker spawn. For uploads, the worker checks `hub_jobs.jsonl` to see if a draft PR exists for this dataset+repo combination — if so, it reuses that PR's `refs/pr/<num>` so resume picks up the server-committed state, the local `.cache/.huggingface/`, and the Xet pre-upload cache simultaneously. For downloads, the `.incomplete` cache + etag skip handle resume without any client-side bookkeeping. We don't build retry logic on top — HF's resume primitives are the retry mechanism; we just re-invoke them.
 
@@ -243,26 +289,31 @@ A theoretical alternative is OS-level suspension: `SIGSTOP` the worker on pause,
 
 If pause becomes a real ask later, the right shape is a separate worker pool with checkpoint serialization that doesn't rely on OS signals. Out of scope here.
 
-### Confirmation UX on cancel
+### Tray card actions and their confirmation prompts
 
-A confirmation dialog appears only when the cancel is meaningfully destructive:
+Every tray card has at most one or two action buttons depending on its state. They are visually distinct (× alone is not enough — there are two meanings of × in this design, and we don't conflate them):
 
-- **Download cancel**: no confirm. Retry is free (etag-skip).
-- **Upload cancel before any byte transfer**: no confirm. Nothing was sent.
-- **Upload cancel mid-transfer**: confirm with "Cancel upload? Already-uploaded chunks stay on the server for resume. The pending PR remains in draft."
-- **Upload dismiss after cancel (closes the draft PR)**: confirm with "Discard the cancelled upload? The PR branch and any pre-uploaded chunks will be cleaned up; resume will not be possible."
+| Card state                       | Available actions                   | Confirmation prompt                                                                                                                                                                              |
+| -------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Active upload, mid-transfer      | **Cancel** (✕)                      | "Cancel upload? Already-uploaded chunks stay on the server. The pending HF PR remains in draft so Retry can resume."                                                                             |
+| Active upload, no bytes sent yet | **Cancel** (✕)                      | None — nothing was sent.                                                                                                                                                                         |
+| Active download                  | **Cancel** (✕)                      | None — `Range:`-resume on retry is free.                                                                                                                                                         |
+| Cancelled or failed              | **Retry**, **Discard** (trash icon) | Discard prompt: "Discard upload? The pending HF PR will be closed and partially uploaded data will be cleaned up. Resume will no longer be possible. Use Retry to resume from where it stopped." |
+| Complete                         | **Hide** (✕)                        | None — the upload is on `main`; this just removes the tray entry from view.                                                                                                                      |
 
-The dismiss flow is the only "definitely destroy resumable state" path; everything else cancels into a resumable state by default.
+**Cancel** (✕ on active) stops the worker; **Discard** (trash icon on terminal) cleans up the orphan staging PR on HF; **Hide** (✕ on complete) is a UI-only no-op. Three distinct verbs, three distinct icons. This addresses the past confusion around "dismiss" — that word is replaced by either **Discard** (destructive cleanup of remote state) or **Hide** (purely visual) depending on whether there's anything left to clean up.
 
 ---
 
 ## Safety guardrails
 
-The corruption scenario worth pre-empting:
+Two corruption scenarios worth pre-empting:
 
-> _User uploads dataset to repo R, upload fails halfway, user doesn't notice. Later the user (or another user) downloads from R, overwriting the local copy with a half-uploaded state. Work is lost._
+> **Upload-fail → bad download.** _User uploads dataset to repo R, upload fails halfway, user doesn't notice. Later the user (or another user) downloads from R, overwriting the local copy with a half-uploaded state. Work is lost._
+>
+> **Download-fail → bad upload.** _User downloads dataset from repo R, download fails halfway, user doesn't notice. User then makes local edits and uploads. The upload pushes a dataset missing whatever the download didn't finish fetching — so the remote loses files that were there before the partial-download._
 
-Under the PR-based pipeline this **cannot happen** for any failure mode short of HF itself losing data. Each protection layer is explicit below.
+Under the PR-based pipeline neither **can happen** for any failure mode short of HF itself losing data. The defense against the first lives in the atomic PR merge; the defense against the second lives in a completeness check at upload time + HF's immutable history. Each protection layer is explicit below.
 
 ### What HuggingFace gives us
 
@@ -295,20 +346,37 @@ HF dataset repos are git-backed. Concretely:
 - **Web UI**: HF shows pending PRs in the "Community" / "Discussions" tab. The PR's "Files changed" view shows the staged state for inspection.
 - **Local GUI**: `hub_transfers.jsonl` records every terminal outcome with the PR number. If the user (or future-them on the same machine) wants to know "did my last push to this repo succeed?", grepping the JSONL is the source of truth. The GUI can surface this proactively — see Local safety surfacing below.
 
+### Download-fail → bad upload — the upload-side guardrail
+
+The mirror-image scenario is uploading from a corrupted local state. Concrete failure path:
+
+1. User downloads `repo/A` to `dataset.root`. Network drops mid-flight at 80%; the GUI tray shows "cancelled" but the user misses it.
+2. User makes some local edits — adds an episode, fixes a label — without ever re-opening the dataset (so the open-precheck doesn't fire).
+3. User uploads. Without a guardrail, this pushes a dataset missing the 20% the download didn't finish, **overwriting the good remote with a worse one**.
+
+Defenses, layered:
+
+- **Upload-time completeness check.** Before constructing the upload operations, the worker queries `HfApi.dataset_info(repo_id).siblings` (when the repo already exists on the Hub) and diffs against the local file set. Any file present on the remote but missing or `.incomplete` locally is a red flag: the worker pauses, the tray surfaces "Your local copy is missing files that exist on the remote — this looks like an interrupted download. Re-download or confirm to upload anyway." User confirms or aborts.
+- **HF's immutable history is the safety net.** Even if a bad upload lands (user confirmed past the warning, or the warning was off), HF retains the prior commit. Reverting via `HfApi.create_commit` with the old tree, or via the web UI, restores the good state. No data is ever truly lost — it's just one commit deeper in history.
+- **The open-precheck for re-opens.** A user who closes and re-opens the dataset between the failed download and the upload attempt is caught by `_check_local_dataset_complete`'s 409 response and forced to acknowledge the incomplete state. The upload-time check is the same logic, run at a different lifecycle point, to catch the "never re-opened" path.
+
+For models (when this design extends to `repo_type="model"`): the access pattern is read-mostly, so download-fail-upload is rarer. But the same guardrail applies — upload-time completeness check against the remote's siblings. The framework's symmetry holds across repo types.
+
 ### What we don't promise
 
 - **Cross-machine awareness.** If you upload from machine A and the upload fails draft on the repo, then download from machine B, B does not _automatically_ know that A had a pending failed upload. But B downloading from `main` still gets a consistent state (just possibly missing files A intended to add). Inspecting the repo's PRs on the web UI reveals A's draft.
-- **Per-file conflict resolution.** If A's draft PR adds files, then B uploads a different set of files without inspecting A's draft, B's PR overwrites A's draft. Both PRs are visible in the discussions list, but we don't proactively warn about overlap. (Adding such warnings is straightforward in a follow-up — `get_repo_discussions` + name match — but not in the initial design.)
+- **Per-file conflict resolution between concurrent draft PRs.** If A's draft PR adds files, then B uploads a different set of files without inspecting A's draft, B's PR overwrites A's draft on merge. Both PRs are visible in the discussions list; we don't proactively warn about overlap. This is acceptable behavior — the use case (large datasets, no exclusive write locks anywhere) doesn't have a clean "merge" semantics; last-merged-wins is the natural and expected outcome, matching how git itself behaves under similar conditions.
 
 ### Local safety surfacing
 
-The GUI proactively protects the user against the failure-mode-they-didn't-notice case:
+The GUI proactively protects the user against the failure-mode-they-didn't-notice case in both directions:
 
 - **Before any download to `dataset.root`**, the GUI checks `hub_transfers.jsonl` for the most recent terminal outcome of any upload from this machine to the same repo. If the most recent outcome is `failed` or `cancelled`, the download confirmation prompt includes: _"Your last upload to this repo on this machine ended in `<status>` state and may not be complete. Check the repo's open PRs before overwriting your local copy."_
-- **The open-dataset precheck** already catches a half-downloaded local cache (HTTP 409 `incomplete_local_cache`). It does not need adjustment for this design.
-- **The Transfers tray** retains terminal entries for 30 minutes specifically so a user who walks away returns to a clearly-visible "your upload failed" indicator with the error string + Retry button. Not silently hidden.
+- **Before any upload from `dataset.root`**, the worker runs the upload-time completeness check above. The same `hub_transfers.jsonl` lookup also catches the case where the user's most recent terminal outcome was a failed download — the prompt becomes: _"Your last download from this repo on this machine ended in `<status>` state. Your local copy may be missing files. Re-download or proceed?"_
+- **The open-dataset precheck** already catches a half-downloaded local cache (HTTP 409 `incomplete_local_cache`) on open. It does not need adjustment for this design.
+- **The Transfers tray** retains terminal entries for 30 minutes specifically so a user who walks away returns to a clearly-visible "your transfer failed" indicator with the error string + Retry button. Not silently hidden.
 
-The combined effect: a failure that goes unnoticed on `main` is structurally impossible (atomic merge), a failure that goes unnoticed locally is opt-in (terminal tray entries don't auto-dismiss), and a cross-machine consistency story is visible via HF's first-class PR/discussion surface.
+The combined effect: a failure that goes unnoticed on `main` is structurally impossible (atomic merge), a failure that goes unnoticed locally is opt-in (terminal tray entries don't auto-dismiss), and the symmetric upload-fail-download / download-fail-upload pair is caught by completeness checks at both directions' entry points.
 
 ---
 
@@ -317,7 +385,7 @@ The combined effect: a failure that goes unnoticed on `main` is structurally imp
 The visible surface is the Transfers tray in the tab bar — already on this branch as scaffolding. The pieces:
 
 - **Indicator pill** in the tab bar, hidden when no jobs exist, cyan + pulsing when at least one job is active, neutral when only terminal entries remain.
-- **Popover** anchored under the pill, listing one card per active or recently-terminal job. Each card shows direction, clickable repo link, status, milestone text from the worker, and a per-card cancel-or-dismiss button (with the confirmation behavior from [Cancellation and pause](#cancellation-and-pause)).
+- **Popover** anchored under the pill, listing one card per active or recently-terminal job. Each card shows direction, clickable repo link, status, milestone text from the worker, and the per-card action buttons described in [Tray card actions](#tray-card-actions-and-their-confirmation-prompts) (Cancel for active jobs, Retry + Discard for terminal failed/cancelled, Hide for terminal complete).
 - **Hub Upload modal** stays simple: repo_id input + remote/local info + the Upload button. No mode dropdown — since there's only one upload pipeline, there's nothing to select.
 - **Per-card link to the PR** during the upload (while the worker has a PR open): clicking the repo link in the tray jumps to the PR on the HF web UI, so a user wanting to inspect the in-flight state can do so. For terminal cards the link goes to the merged commit (success) or to the closed PR (cancelled/failed).
 
