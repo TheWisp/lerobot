@@ -32,6 +32,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     align-items: center;
     gap: 6px;
 }
+/* Class selectors (above) outrank the user-agent `[hidden] { display: none }`
+   rule, so without this we'd render the indicator even when hidden=true. */
+.transfers-indicator[hidden] { display: none; }
 .transfers-indicator:hover { color: #ccc; border-color: #4fc3f7; background: rgba(79,195,247,0.08); }
 .transfers-indicator.active { color: #4fc3f7; border-color: #4fc3f7; }
 .transfers-indicator.active::before {
