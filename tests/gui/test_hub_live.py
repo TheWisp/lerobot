@@ -13,10 +13,32 @@
 # limitations under the License.
 """End-to-end tests against a real HuggingFace Hub.
 
-Opt-in only: skipped unless run with ``-m hub_live``. Requires:
+**Two opt-in gates, both required:**
+
+1. ``pytest -m hub_live`` (pyproject's default ``addopts`` excludes this marker).
+2. ``LEROBOT_HUB_LIVE=1`` env var, asserted in the fixture.
+
+The double gate is intentional. The marker keeps these tests out of any
+default ``pytest`` invocation (local dev, CI, ad-hoc runs). The env var
+prevents the case where someone discovers the marker, runs ``-m hub_live``
+without realizing it creates real HF repos under whoever's logged in via
+``huggingface-cli login``, and pollutes their account.
+
+To run::
+
+    LEROBOT_HUB_LIVE=1 pytest tests/gui/test_hub_live.py -m hub_live
+
+Requires:
   - A valid HF token via ``huggingface-cli login`` or the ``HF_TOKEN`` env var
   - Network access to huggingface.co
-  - A throwaway repo namespace the user owns (defaults to the logged-in user)
+  - The repo namespace ``<your-username>/_lerobot_hub_live_*`` is unused
+
+No hardcoded credentials anywhere — the token comes from
+``huggingface_hub.HfApi()``'s default resolution (env or cached login),
+and the repo namespace uses the logged-in user's name via ``whoami()``.
+Each test deletes its throwaway repo in a ``finally`` block; if a test
+crashes mid-flight, manually delete leftover ``_lerobot_hub_live_*``
+repos from the HF web UI (they're timestamped for visibility).
 
 These tests verify the **performance** and **error-handling guarantees**
 the design promises, against the real Hub:
@@ -58,7 +80,21 @@ pytestmark = pytest.mark.hub_live
 
 @pytest.fixture
 def hf_api():
-    """A real HfApi. Skips the test if not logged in."""
+    """A real HfApi. Skips the test unless BOTH gates are explicitly opened.
+
+    Pre: ``LEROBOT_HUB_LIVE=1`` is set in the environment AND the user is
+    logged in to HF (either via ``HF_TOKEN`` env var or
+    ``huggingface-cli login``).
+
+    The env-var gate is intentional — even with ``-m hub_live`` on the
+    command line, we require an explicit opt-in to actually hit the
+    network. This makes it impossible to accidentally create HF repos
+    under the developer's account just by running the test marker.
+    """
+    if os.environ.get("LEROBOT_HUB_LIVE") != "1":
+        pytest.skip(
+            "Live HF tests require LEROBOT_HUB_LIVE=1 env var. See module docstring."
+        )
     try:
         from huggingface_hub import HfApi
 

@@ -558,6 +558,11 @@ ignore_errors = false
 # ignore_errors = false
 
 [tool.pytest.ini_options]
+# Exclude live-HF tests from default runs. They hit the real Hub, create
+# real throwaway repos under whoever's logged in via `huggingface-cli
+# login`, and take ~15s each. Opt in with `pytest -m hub_live` when you
+# actually want to exercise the live path.
+addopts = "-m 'not hub_live'"
 markers = [
-    "hub_live: Tests that hit the real HuggingFace Hub. Skipped by default; run with `pytest -m hub_live`. Require a logged-in HF token + network.",
+    "hub_live: Tests that hit the real HuggingFace Hub. Skipped by default; opt in with `pytest -m hub_live`. Require a logged-in HF token + network; tests auto-skip if not logged in. Repos go under the logged-in user's namespace as `_lerobot_hub_live_*` and are deleted on test exit.",
 ]
