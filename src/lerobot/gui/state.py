@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.gui.frame_cache import FrameCache
+    from lerobot.gui.hub_jobs import HubJobState
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,11 @@ class AppState:
     datasets: dict[str, LeRobotDataset] = field(default_factory=dict)
     pending_edits: list[PendingEdit] = field(default_factory=list)
     _dataset_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+    # Active + recently-finished Hub transfers, keyed by job_id. The GUI's
+    # top-bar Transfers tray polls /hub/jobs for the live list; completed
+    # jobs stick around (bounded by hub_job_retention_s below) so a brief
+    # tab close doesn't lose the "done — N MB pushed" status.
+    hub_jobs: dict[str, HubJobState] = field(default_factory=dict)
 
     def add_edit(self, edit: PendingEdit) -> None:
         """Add a pending edit."""
@@ -121,6 +127,41 @@ class AppState:
         """Check if a dataset is currently locked."""
         lock = self._dataset_locks.get(dataset_id)
         return lock is not None and lock.locked()
+
+    def active_hub_job_for(self, dataset_id: str) -> HubJobState | None:
+        """Return the in-flight Hub job for ``dataset_id``, if any.
+
+        "In-flight" = ``status in {"pending", "running"}``. Completed,
+        cancelled, and failed jobs stay in ``hub_jobs`` for the Transfers
+        tray but don't block a new transfer on the same dataset.
+        """
+        for job in self.hub_jobs.values():
+            if job.dataset_id == dataset_id and job.status in ("pending", "running"):
+                return job
+        return None
+
+    def gc_finished_hub_jobs(self, *, max_age_s: float = 1800.0) -> int:
+        """Drop completed / cancelled / failed jobs older than ``max_age_s``.
+
+        Active jobs (pending / running) are never collected; their state
+        is still being mutated by the executor thread. Returns the number
+        of jobs dropped — caller can log this if non-zero.
+
+        Called opportunistically from the list endpoint so the registry
+        doesn't grow without bound across a long GUI session.
+        """
+        import time as _time
+
+        now = _time.time()
+        terminal = {"complete", "cancelled", "failed"}
+        to_drop = [
+            jid
+            for jid, j in self.hub_jobs.items()
+            if j.status in terminal and j.finished_at is not None and (now - j.finished_at) > max_age_s
+        ]
+        for jid in to_drop:
+            del self.hub_jobs[jid]
+        return len(to_drop)
 
     def discard_lock(self, dataset_id: str) -> None:
         """Drop the asyncio.Lock for a dataset that's no longer open.
