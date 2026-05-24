@@ -12,29 +12,27 @@
             border-radius: 3px; pointer-events: none; }
   /* bottom-right ghost toggle. Pointer-events on so it's clickable; everything
      else in the page is the orbit-controls canvas. */
-  /* Solid button (not a translucent label like the camera-key overlays) so
-     it reads as an actionable control. Filled cyan when on, dark gray when
-     off; a check appears only on the on side so the signal is unambiguous
-     for colour-blind users too (not just bg-colour). */
+  /* Outlined-when-off, filled-when-on — the standard Material/Tailwind/
+     Bootstrap toggle-button pattern. The cyan border in the off state is
+     what tells the user "this is a control", and switching from outlined
+     to filled is the on-state signal. No reserved-space-for-an-icon
+     awkwardness, and the fill change is a strong non-text signal. */
   #ghost-toggle { position: absolute; bottom: 6px; right: 6px;
                   font-size: 11px; font-family: monospace;
-                  color: #ccc; background: #2a2a3a;
-                  padding: 4px 9px; border-radius: 3px;
-                  border: 1px solid #555; cursor: pointer; user-select: none;
-                  display: inline-flex; align-items: center; gap: 6px; }
-  #ghost-toggle:hover { background: #3a3a4a; border-color: #777; }
-  #ghost-toggle.on { color: #0a1622; background: #4dd0ff; border-color: #4dd0ff;
-                     font-weight: 600; }
-  #ghost-toggle.on:hover { background: #7be0ff; border-color: #7be0ff; }
-  /* The check is hidden in the off state and revealed in the on state.
-     Width stays reserved either way so the button doesn't reflow. */
-  #ghost-toggle .check { width: 9px; text-align: center; visibility: hidden; }
-  #ghost-toggle.on .check { visibility: visible; }
+                  color: #4dd0ff; background: rgba(10, 22, 34, 0.7);
+                  padding: 4px 10px; border-radius: 12px;
+                  border: 1px solid #4dd0ff; cursor: pointer; user-select: none;
+                  letter-spacing: 0.02em;
+                  transition: background 0.1s, color 0.1s; }
+  #ghost-toggle:hover { background: rgba(77, 208, 255, 0.18); }
+  #ghost-toggle.on { color: #0a1622; background: #4dd0ff; font-weight: 600; }
+  #ghost-toggle.on:hover { background: #7be0ff; }
+  #ghost-toggle:focus-visible { outline: 2px solid #4dd0ff; outline-offset: 1px; }
 </style>
 </head>
 <body>
 <div id="status">starting…</div>
-<button id="ghost-toggle" title="Overlay the commanded action as a translucent robot on top of the recorded state"><span class="check">✓</span><span class="label">show action</span></button>
+<button id="ghost-toggle" title="Overlay the commanded action as a translucent robot on top of the recorded state">show action</button>
 <script type="importmap">
 {
   "imports": {
@@ -313,11 +311,16 @@ async function init() {
   }
   _label = (data.name || 'robot') + (data.bimanual ? ' (bimanual)' : '');
   setStatus(_label);
-  setInterval(() => {
-    setStatus(`${_label} · ${_polls} Hz`);
-    _polls = 0;
-  }, 1000);
-  if (MODE === 'live') _pollLive();
+  if (MODE === 'live') {
+    // Hz is a meaningful signal in live mode (dropped polls = stale obs).
+    // In dataset mode we only refresh on scrubber moves, so steady-state
+    // is genuinely 0 Hz and the readout would just be misleading noise.
+    setInterval(() => {
+      setStatus(`${_label} · ${_polls} Hz`);
+      _polls = 0;
+    }, 1000);
+    _pollLive();
+  }
   // dataset mode is event-driven — postMessage handler above does the work.
 }
 
