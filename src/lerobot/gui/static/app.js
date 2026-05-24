@@ -441,13 +441,16 @@ function renderCameraGrid() {
 
     const ds = datasets[currentDataset];
     const cameras = ds.camera_keys;
-    const numCameras = cameras.length;
+    // The URDF tile counts as one cell in the grid; treat it as a virtual
+    // camera for layout purposes (and append it physically below). Whether
+    // it survives is decided async by _probeAndAttachUrdfViz, which removes
+    // the placeholder if this dataset's motor set has no vendored URDF.
+    const tileCount = cameras.length + 1;
 
-    // Determine grid layout
     let cols = 1;
-    if (numCameras === 2) cols = 2;
-    else if (numCameras >= 3 && numCameras <= 4) cols = 2;
-    else if (numCameras >= 5) cols = 3;
+    if (tileCount === 2) cols = 2;
+    else if (tileCount >= 3 && tileCount <= 4) cols = 2;
+    else if (tileCount >= 5) cols = 3;
 
     grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
 
@@ -463,7 +466,71 @@ function renderCameraGrid() {
             </div>
         `;
     }
+    html += `
+        <div class="camera-panel" id="urdf-viz-panel" style="display: none;">
+            <div class="camera-title">URDF viz</div>
+            <div class="camera-frame">
+                <iframe id="urdf-viz-iframe" src="" title="URDF state visualization"
+                        style="width: 100%; height: 100%; border: none; background: #1a1a1a;"></iframe>
+            </div>
+        </div>
+    `;
     grid.innerHTML = html;
+    _probeAndAttachUrdfViz(currentDataset, currentEpisode);
+}
+
+let _urdfVizAvailability = {};  // dataset_id -> bool (cached after first probe)
+
+async function _probeAndAttachUrdfViz(datasetId, episodeIdx) {
+    const panel = document.getElementById('urdf-viz-panel');
+    const iframe = document.getElementById('urdf-viz-iframe');
+    if (!panel || !iframe) return;
+
+    let available = _urdfVizAvailability[datasetId];
+    if (available === undefined) {
+        try {
+            const url = `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${episodeIdx}/urdf-viz?frame=0`;
+            const r = await fetch(url);
+            const d = await r.json();
+            available = !!d.available;
+        } catch (e) {
+            available = false;
+        }
+        _urdfVizAvailability[datasetId] = available;
+    }
+    // Bail if the user has navigated away while we were probing — a later
+    // selectEpisode call has re-rendered the grid and a new probe is in
+    // flight for the new episode.
+    if (currentDataset !== datasetId || currentEpisode !== episodeIdx) return;
+    if (!available) {
+        panel.remove();
+        // Drop the empty cell back out of the column count.
+        const grid = document.getElementById('camera-grid');
+        const cams = datasets[datasetId].camera_keys.length;
+        let cols = 1;
+        if (cams === 2) cols = 2;
+        else if (cams >= 3 && cams <= 4) cols = 2;
+        else if (cams >= 5) cols = 3;
+        grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+        return;
+    }
+    panel.style.display = '';
+    // mode=dataset means the iframe waits for postMessage frame updates from
+    // the parent (this page), driven by the scrubber via _postFrameToUrdfViz.
+    // `?urdfGhost=on` on the parent URL propagates as the iframe's initial
+    // ghost state — bookmarkable, and what the screenshot script keys off.
+    const ghostInit = new URLSearchParams(location.search).get('urdfGhost') === 'on' ? '&ghost=on' : '';
+    iframe.src = `/static/urdf_viz.html?mode=dataset&v=1${ghostInit}`;
+    iframe.addEventListener('load', () => _postFrameToUrdfViz(currentFrame), { once: true });
+}
+
+function _postFrameToUrdfViz(frameIdx) {
+    const iframe = document.getElementById('urdf-viz-iframe');
+    if (!iframe || !iframe.contentWindow || !currentDataset || currentEpisode === null) return;
+    iframe.contentWindow.postMessage(
+        { type: 'frame', dataset: currentDataset, episode: currentEpisode, frame: frameIdx },
+        '*',
+    );
 }
 
 function loadAllFrames(idx) {
@@ -499,6 +566,7 @@ function loadAllFrames(idx) {
     document.getElementById('time-info').textContent = `${currentTime} / ${totalTime}`;
 
     if (window.FeatureEditing) window.FeatureEditing.onPlayheadChanged();
+    _postFrameToUrdfViz(currentFrame);
 
     return Promise.all(promises);
 }

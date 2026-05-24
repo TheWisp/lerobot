@@ -1236,11 +1236,13 @@ async def obs_stream_state() -> dict:
 async def urdf_viz_state() -> dict:
     """URDF reference + per-joint angles for the in-browser URDF viewer.
 
-    Resolves the robot from the live observation stream and converts each
-    motor position to a URDF joint angle (see :mod:`lerobot.gui.urdf_viz`).
-    The frontend (``static/urdf_viz.html``) loads ``urdf`` once, then polls
-    this for ``arms[*].joints``. ``{"available": false}`` when no run is
-    streaming or the robot has no vendored URDF.
+    Resolves the robot from the live observation stream and converts both
+    the observed state and (when available) the last commanded action to
+    URDF joint angles (see :mod:`lerobot.gui.urdf_viz`). The frontend
+    (``static/urdf_viz.html``) loads ``urdf`` once, then polls this for
+    ``arms[*].state`` (solid robot) and the optional ``arms[*].action``
+    (ghost overlay). ``{"available": false}`` when no run is streaming or
+    the robot has no vendored URDF.
     """
     from lerobot.gui.urdf_viz import compute_joint_angles, resolve_robot
 
@@ -1254,13 +1256,27 @@ async def urdf_viz_state() -> dict:
     spec = resolve_robot(obs.keys())
     if spec is None:
         return {"available": False}
-    angles = compute_joint_angles(spec, obs)
+    state_angles = compute_joint_angles(spec, obs)
+    # Action stream is independent of obs: a run may stream obs without
+    # ever writing actions (e.g. policy eval with replay-only). Treat it
+    # as optional and only emit per-arm `action` when the reader returns
+    # something on this tick.
+    action_angles: dict[str, dict[str, float]] = {}
+    act_result = reader.read_action()
+    if act_result:
+        action_angles = compute_joint_angles(spec, act_result[0])
+    arms_payload: list[dict] = []
+    for a in spec.arms:
+        entry: dict = {"prefix": a.obs_prefix, "state": state_angles.get(a.obs_prefix, {})}
+        if action_angles:
+            entry["action"] = action_angles.get(a.obs_prefix, {})
+        arms_payload.append(entry)
     return {
         "available": True,
         "name": spec.name,
         "urdf": f"/urdf-assets/{spec.urdf_url_path}",
         "bimanual": len(spec.arms) == 2,
-        "arms": [{"prefix": a.obs_prefix, "joints": angles.get(a.obs_prefix, {})} for a in spec.arms],
+        "arms": arms_payload,
     }
 
 
