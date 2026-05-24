@@ -480,6 +480,24 @@ The format is plain JSONL, greppable from a shell, parseable with one-line Pytho
 
 ---
 
+## Extending to model repos
+
+The current endpoints live under `/api/datasets/.../hub/...` and the spawn paths default `repo_type="dataset"` because that's this module's scope. The underlying machinery — `JobConfig`, `HubJobState`, the worker subprocess, the IPC files, the tray UI, the cancel/retry/discard flow — is **already `repo_type`-agnostic**. Six HF calls in the worker pipeline all read `cfg.repo_type`; the retry-PR lookup reads `job.repo_type`; the cancel/dismiss paths read `job.repo_type`.
+
+Adding model support means a small parallel layer, not a rewrite. The shape:
+
+- **New endpoints** under `/api/models/{model_id}/hub/upload` (and `…/hub/download`) that mirror the dataset ones but call `make_job(..., repo_type="model")` and `_spawn_hub_worker(...)` exactly as the dataset endpoints do. Probably ~80 lines total — most is parameter wiring + the auto-open path adapted for model objects on `_app_state`.
+- **Shared progress/cancel/dismiss endpoints**: the existing `/api/datasets/hub/jobs`, `/api/datasets/hub/progress/{job_id}/cancel`, etc. are already generic — they look the job up by `job_id`, not by repo type. Either reuse them as-is, or (cleaner) move them to `/api/hub/...` so the URL doesn't lie about repo-type scope.
+- **Worker code**: no changes. The worker only reads `cfg.repo_type` and passes it through.
+- **Frontend tray**: no changes. The cards already render `j.repo_type` from the job state and link to the right repo namespace; existing CSS / templates already handle "this card might be a model upload."
+- **Tests**: add a `repo_type="model"` variant of the live E2E test once model uploads are in scope. The unit tests already exercise the `Literal["dataset", "model"]` boundary in `JobConfig.__post_init__`.
+
+The one wrinkle: completeness check (`check_upload_completeness`) currently calls `api.repo_info(repo_id, repo_type=repo_type, files_metadata=True)` which works for both datasets and models. But what counts as "incomplete locally" for a model differs — there's no `.parquet` index, files are usually a flat set of `*.safetensors` + `config.json` + tokenizer. The siblings-diff approach works regardless; the user-facing copy in the warning prompt may want to say "model files" rather than "dataset files," which is a one-line UI tweak.
+
+When the time comes, the implementation order is: (1) add `/api/models/{id}/hub/upload` and `/download` endpoints calling the existing spawn helpers, (2) decide whether to keep job-tray endpoints under `/api/datasets/hub/...` or refactor to `/api/hub/...`, (3) tweak the completeness-check warning text to be model-aware, (4) add a live E2E test with a small model repo.
+
+---
+
 ## Open questions
 
 - **Re-enable `super_squash_history`.** Currently disabled because it causes `BadRequestError: There are merge conflicts` on the subsequent merge for second-upload-to-the-same-repo. Need to either (a) find the correct HF API usage that preserves the fast-forward relationship, (b) follow squash with a separate "rebase onto current main" call, or (c) accept multi-commit main history as the permanent design (and remove the squash machinery entirely). Live E2E test `tests/gui/test_hub_live.py::TestDedupePerformance` reproduces the failure when squash is re-enabled.
