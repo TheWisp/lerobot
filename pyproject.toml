@@ -556,3 +556,8 @@ ignore_errors = false
 # [[tool.mypy.overrides]]
 # module = "lerobot.scripts.*"
 # ignore_errors = false
+
+[tool.pytest.ini_options]
+markers = [
+    "hub_live: Tests that hit the real HuggingFace Hub. Skipped by default; run with `pytest -m hub_live`. Require a logged-in HF token + network.",
+]

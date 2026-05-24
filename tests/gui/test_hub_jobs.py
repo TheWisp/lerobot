@@ -11,642 +11,420 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for the per-file Hub transfer loops in ``hub_jobs.py``.
+"""Unit tests for the Hub-transfer helper layer.
 
-The sync functions are exercised directly with monkeypatched HF imports —
-we don't hit the network. Endpoint tests then verify the FastAPI plumbing
-returns ``job_id`` synchronously and surfaces job state via the polling
-endpoint.
+What this file covers:
+  * JobConfig JSON round-trip
+  * JobPaths derives consistent locations from a job_id
+  * HubJobState shape + merge_progress invariants (won't un-terminalize)
+  * PID-file identity: pid_file_payload, is_worker_alive against live + dead processes
+  * Error classification across the HF exception hierarchy
+  * Milestone extraction against recorded HF stderr samples
+  * Upload-side file enumeration (respects ignore patterns, sorted)
+  * check_upload_completeness logic (fresh repo, missing locally, incomplete)
+
+What this file does NOT cover (separate test files):
+  * Worker subprocess end-to-end — see test_hub_worker.py
+  * Endpoint flow with FastAPI TestClient — see test_hub_endpoints.py
+  * Real HF interaction — see test_hub_live.py (gated by ``@pytest.mark.hub_live``)
 """
 
 from __future__ import annotations
 
-import asyncio
-import threading
+import json
+import os
 import time
-import types
 
-import httpx
 import pytest
-from fastapi import FastAPI
 
-from lerobot.gui.api import datasets as datasets_module
-from lerobot.gui.frame_cache import FrameCache
-from lerobot.gui.hub_jobs import (
-    enumerate_upload_files,
-    make_job,
-    run_download_sync,
-    run_upload_sync,
-)
-from lerobot.gui.state import AppState
+from lerobot.gui import hub_jobs
 
-# ── enumerate_upload_files ──────────────────────────────────────────────────
+# ── JobConfig ───────────────────────────────────────────────────────────────
 
 
-class TestEnumerateUploadFiles:
-    """Pure path-walking logic — no HF involved."""
+class TestJobConfig:
+    def _good(self, **overrides):
+        defaults = {
+            "job_id": "abc123",
+            "dataset_id": "user/foo",
+            "direction": "upload",
+            "repo_id": "user/foo",
+            "repo_type": "dataset",
+            "local_path": "/tmp/foo",
+            "jobs_dir": "/tmp/jobs",
+        }
+        defaults.update(overrides)
+        return hub_jobs.JobConfig(**defaults)
 
-    def test_returns_every_regular_file(self, tmp_path):
-        (tmp_path / "meta").mkdir()
-        (tmp_path / "meta" / "info.json").write_text("{}")
-        (tmp_path / "data.parquet").write_bytes(b"abc")
-        (tmp_path / "video.mp4").write_bytes(b"xyz")
-
-        files = enumerate_upload_files(tmp_path)
-        rels = sorted(p.relative_to(tmp_path).as_posix() for p in files)
-        assert rels == ["data.parquet", "meta/info.json", "video.mp4"]
-
-    def test_skips_cache_and_lerobot_metadata(self, tmp_path):
-        """``.cache/`` and ``.lerobot_gui_edits.json`` are never pushed."""
-        (tmp_path / "data.parquet").write_bytes(b"x")
-        (tmp_path / ".lerobot_gui_edits.json").write_text("{}")
-        (tmp_path / ".cache").mkdir()
-        (tmp_path / ".cache" / "huggingface").mkdir()
-        (tmp_path / ".cache" / "huggingface" / "tmp").write_bytes(b"junk")
-
-        files = enumerate_upload_files(tmp_path)
-        rels = [p.relative_to(tmp_path).as_posix() for p in files]
-        assert rels == ["data.parquet"]
-
-    def test_sorted_for_determinism(self, tmp_path):
-        """File order is sorted — the progress display advances predictably."""
-        for name in ["z.bin", "a.bin", "m.bin"]:
-            (tmp_path / name).write_bytes(b"x")
-
-        files = enumerate_upload_files(tmp_path)
-        rels = [p.relative_to(tmp_path).as_posix() for p in files]
-        assert rels == ["a.bin", "m.bin", "z.bin"]
-
-    def test_missing_root_asserts(self, tmp_path):
-        with pytest.raises(AssertionError):
-            enumerate_upload_files(tmp_path / "nope")
-
-
-# ── run_upload_sync ─────────────────────────────────────────────────────────
-
-
-class _FakeHfApi:
-    """Stands in for ``huggingface_hub.HfApi``; records every call."""
-
-    instances: list[_FakeHfApi] = []
-
-    def __init__(self):
-        self.create_repo_calls: list[dict] = []
-        self.dataset_info_calls: list[dict] = []
-        _FakeHfApi.instances.append(self)
-
-    def create_repo(self, **kwargs):
-        self.create_repo_calls.append(kwargs)
-
-    def whoami(self):
-        return {"name": "test-user"}
-
-    def dataset_info(self, repo_id, files_metadata=False):
-        # Configurable per-test via class attribute. The default mirrors a
-        # small two-file dataset, enough to exercise the sibling loop.
-        return _FakeHfApi._dataset_info_payload
-
-    _dataset_info_payload: types.SimpleNamespace = types.SimpleNamespace(siblings=[])
-
-
-@pytest.fixture(autouse=True)
-def reset_fake_api_instances():
-    """Each test starts with an empty instance log so assertions stay scoped."""
-    _FakeHfApi.instances.clear()
-    yield
-    _FakeHfApi.instances.clear()
-
-
-@pytest.fixture
-def patch_hf_upload(monkeypatch):
-    """Patch the HF imports used by ``run_upload_sync``.
-
-    Returns the list of recorded ``upload_file`` invocations so tests can
-    assert which files were pushed and in what order.
-    """
-    import huggingface_hub
-
-    uploads: list[dict] = []
-
-    def fake_upload_file(**kwargs):
-        uploads.append(kwargs)
-        return f"https://huggingface.co/{kwargs['repo_id']}/blob/main/{kwargs['path_in_repo']}"
-
-    monkeypatch.setattr(huggingface_hub, "HfApi", _FakeHfApi)
-    monkeypatch.setattr(huggingface_hub, "upload_file", fake_upload_file)
-    return uploads
-
-
-class TestRunUploadSync:
-    def test_populates_totals_then_increments_per_file(self, tmp_path, patch_hf_upload):
-        (tmp_path / "meta").mkdir()
-        (tmp_path / "meta" / "info.json").write_text("{}")
-        (tmp_path / "data.parquet").write_bytes(b"x" * 100)
-
-        job = make_job("ds1", "upload", "user/ds1")
-        run_upload_sync(root=tmp_path, repo_id="user/ds1", job=job)
-
-        assert job.status == "complete" or job.status == "running"
-        # Status is left at "running" by the sync function on success — the
-        # caller (in datasets.py) flips it to "complete". So we accept both
-        # to keep the sync function's contract self-contained.
-        assert job.files_total == 2
-        assert job.files_done == 2
-        assert job.bytes_done == job.bytes_total  # all bytes accounted
-        assert job.bytes_total >= 100  # at minimum, the parquet's bytes
-        # Files uploaded in sorted order — order matters for predictable progress.
-        rels = [u["path_in_repo"] for u in patch_hf_upload]
-        assert rels == ["data.parquet", "meta/info.json"]
-        # Repo was created once before the loop.
-        assert len(_FakeHfApi.instances) == 1
-        assert _FakeHfApi.instances[0].create_repo_calls == [
-            {"repo_id": "user/ds1", "repo_type": "dataset", "exist_ok": True, "private": True}
-        ]
-
-    def test_current_file_cleared_after_completion(self, tmp_path, patch_hf_upload):
-        """The 'in flight' indicator goes blank when nothing is uploading."""
-        (tmp_path / "a.bin").write_bytes(b"x")
-        job = make_job("ds", "upload", "user/ds")
-        run_upload_sync(root=tmp_path, repo_id="user/ds", job=job)
-        assert job.current_file is None
-
-    def test_cancel_between_files_stops_loop(self, tmp_path, monkeypatch):
-        """Setting ``cancel_event`` mid-loop short-circuits subsequent uploads."""
-        import huggingface_hub
-
-        # Three files; cancel after the first completes.
-        for name in ["a.bin", "b.bin", "c.bin"]:
-            (tmp_path / name).write_bytes(b"x" * 10)
-
-        uploads: list[str] = []
-        job = make_job("ds", "upload", "user/ds")
-
-        def fake_upload_file(**kwargs):
-            uploads.append(kwargs["path_in_repo"])
-            # Trigger cancellation after the first file. The cancel check
-            # at the TOP of the next iteration should short-circuit.
-            if len(uploads) == 1:
-                job.cancel_event.set()
-
-        monkeypatch.setattr(huggingface_hub, "HfApi", _FakeHfApi)
-        monkeypatch.setattr(huggingface_hub, "upload_file", fake_upload_file)
-
-        run_upload_sync(root=tmp_path, repo_id="user/ds", job=job)
-
-        assert job.status == "cancelled"
-        assert uploads == ["a.bin"]  # second & third never reached
-        assert job.files_done == 1
-        assert job.files_total == 3
-
-    def test_create_repo_can_be_skipped(self, tmp_path, patch_hf_upload):
-        """Some flows (e.g. re-upload after a prior create) want to skip create_repo."""
-        (tmp_path / "x.bin").write_bytes(b"x")
-        job = make_job("ds", "upload", "user/ds")
-        run_upload_sync(root=tmp_path, repo_id="user/ds", job=job, create_repo=False)
-        assert _FakeHfApi.instances == []  # HfApi never instantiated
-
-
-# ── run_download_sync ───────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def patch_hf_download(monkeypatch):
-    """Patch HF download imports + dataset_info to return a fixed sibling list."""
-    import huggingface_hub
-
-    downloads: list[dict] = []
-
-    def fake_hf_hub_download(**kwargs):
-        downloads.append(kwargs)
-        # Write a stub file so a follow-up read can verify the download
-        # happened — mirrors HF's real "writes file under local_dir" behaviour.
-        from pathlib import Path as _Path
-
-        target = _Path(kwargs["local_dir"]) / kwargs["filename"]
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("stub")
-        return str(target)
-
-    monkeypatch.setattr(huggingface_hub, "HfApi", _FakeHfApi)
-    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_hub_download)
-    return downloads
-
-
-def _set_dataset_info(siblings: list[dict]) -> None:
-    """Configure the next ``HfApi.dataset_info`` return value."""
-    sib_objs = [types.SimpleNamespace(rfilename=s["rfilename"], size=s.get("size", 0)) for s in siblings]
-    _FakeHfApi._dataset_info_payload = types.SimpleNamespace(siblings=sib_objs)
-
-
-class TestRunDownloadSync:
-    def test_iterates_siblings_and_calls_hf_hub_download(self, tmp_path, patch_hf_download):
-        _set_dataset_info(
-            [
-                {"rfilename": "meta/info.json", "size": 50},
-                {"rfilename": "data/chunk-000/file_000000.parquet", "size": 1000},
-            ]
+    def test_json_roundtrip_preserves_all_fields(self):
+        cfg = self._good(
+            private=False,
+            commit_message="hello",
+            ignore_patterns=(".cache/", ".DS_Store"),
+            reuse_pr_num=42,
         )
+        round_tripped = hub_jobs.JobConfig.from_json(cfg.to_json())
+        assert round_tripped == cfg
 
-        job = make_job("ds", "download", "user/ds")
-        run_download_sync(root=tmp_path / "ds", repo_id="user/ds", job=job)
+    def test_rejects_bad_direction(self):
+        with pytest.raises(ValueError, match="bad direction"):
+            self._good(direction="sideways")
 
-        assert job.files_total == 2
-        assert job.files_done == 2
-        assert job.bytes_total == 1050
-        assert job.bytes_done == 1050
-        assert [d["filename"] for d in patch_hf_download] == [
-            "meta/info.json",
-            "data/chunk-000/file_000000.parquet",
-        ]
-        # Files actually written under root — full posix subpath preserved.
-        assert (tmp_path / "ds" / "meta" / "info.json").exists()
-        assert (tmp_path / "ds" / "data" / "chunk-000" / "file_000000.parquet").exists()
+    def test_rejects_bad_repo_type(self):
+        with pytest.raises(ValueError, match="bad repo_type"):
+            self._good(repo_type="bucket")
 
-    def test_empty_repo_completes_with_zero_totals(self, tmp_path, patch_hf_download):
-        """Repo with no siblings is a valid no-op, not an error."""
-        _set_dataset_info([])
-        job = make_job("ds", "download", "user/ds")
-        run_download_sync(root=tmp_path / "ds", repo_id="user/ds", job=job)
-        assert job.files_total == 0
-        assert job.files_done == 0
-        assert job.bytes_total == 0
+    def test_ignore_patterns_normalized_to_tuple(self):
+        cfg = self._good(ignore_patterns=(".cache/",))
+        # Round-trip through JSON to confirm the list-roundtrip turns it back to tuple.
+        rt = hub_jobs.JobConfig.from_json(cfg.to_json())
+        assert isinstance(rt.ignore_patterns, tuple)
+        assert rt.ignore_patterns == (".cache/",)
 
-    def test_cancel_stops_after_current_file(self, tmp_path, monkeypatch):
-        import huggingface_hub
+    def test_ignore_patterns_none_stays_none(self):
+        cfg = self._good(ignore_patterns=None)
+        rt = hub_jobs.JobConfig.from_json(cfg.to_json())
+        assert rt.ignore_patterns is None
 
-        _set_dataset_info([{"rfilename": f"f{i}.bin", "size": 10} for i in range(4)])
-        downloads: list[str] = []
-        job = make_job("ds", "download", "user/ds")
 
-        def fake_hf_hub_download(**kwargs):
-            downloads.append(kwargs["filename"])
-            if len(downloads) == 2:
-                job.cancel_event.set()
+# ── JobPaths ────────────────────────────────────────────────────────────────
 
-        monkeypatch.setattr(huggingface_hub, "HfApi", _FakeHfApi)
-        monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_hub_download)
 
-        run_download_sync(root=tmp_path, repo_id="user/ds", job=job)
+class TestJobPaths:
+    def test_paths_share_directory_and_job_id_prefix(self, tmp_path):
+        paths = hub_jobs.JobPaths.for_job("abc123", tmp_path)
+        assert paths.progress == tmp_path / "abc123.json"
+        assert paths.log == tmp_path / "abc123.log"
+        assert paths.pid == tmp_path / "abc123.pid"
 
-        assert job.status == "cancelled"
-        assert downloads == ["f0.bin", "f1.bin"]  # third never reached
-        assert job.files_done == 2
+    def test_paths_for_different_jobs_dont_collide(self, tmp_path):
+        p1 = hub_jobs.JobPaths.for_job("aaa", tmp_path)
+        p2 = hub_jobs.JobPaths.for_job("bbb", tmp_path)
+        assert p1.progress != p2.progress
+        assert p1.log != p2.log
+        assert p1.pid != p2.pid
 
 
 # ── HubJobState ─────────────────────────────────────────────────────────────
 
 
 class TestHubJobState:
-    def test_to_dict_omits_internal_event(self):
-        """The JSON snapshot must not leak the cancel_event (not serialisable)."""
-        job = make_job("ds", "upload", "user/ds")
-        snap = job.to_dict()
-        assert "cancel_event" not in snap
-        assert snap["job_id"] == job.job_id
-        assert snap["direction"] == "upload"
-        assert snap["status"] == "pending"
+    def test_make_job_starts_pending(self):
+        j = hub_jobs.make_job(dataset_id="ds", direction="upload", repo_id="u/r")
+        assert j.status == "pending"
+        assert j.started_at > 0
+        assert j.finished_at is None
+        assert j.pr_num is None
+        assert j.error is None
 
-    def test_make_job_generates_unique_ids(self):
-        ids = {make_job("ds", "upload", "x/y").job_id for _ in range(50)}
-        assert len(ids) == 50
+    def test_unique_job_ids(self):
+        ids = {
+            hub_jobs.make_job(dataset_id="ds", direction="upload", repo_id="u/r").job_id for _ in range(20)
+        }
+        assert len(ids) == 20
 
-
-# ── AppState.active_hub_job_for ─────────────────────────────────────────────
-
-
-class TestActiveHubJobLookup:
-    def test_returns_pending_or_running_job(self):
-        state = AppState(frame_cache=FrameCache(max_bytes=1_000))
-        job = make_job("ds1", "upload", "u/r")
-        state.hub_jobs[job.job_id] = job
-
-        assert state.active_hub_job_for("ds1") is job
-        assert state.active_hub_job_for("ds2") is None
-
-        job.status = "running"
-        assert state.active_hub_job_for("ds1") is job
-
-        job.status = "complete"
-        assert state.active_hub_job_for("ds1") is None
-
-        job.status = "failed"
-        assert state.active_hub_job_for("ds1") is None
-
-
-# ── Endpoint integration ────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def app_with_state(monkeypatch):
-    """FastAPI app + clean module state; patches HF auth + transfers to mocks."""
-    import huggingface_hub
-
-    app = FastAPI()
-    app.include_router(datasets_module.router)
-
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
-    datasets_module.set_app_state(state)
-
-    # Always-OK auth so the endpoint's pre-flight whoami doesn't 401 us.
-    monkeypatch.setattr(huggingface_hub, "HfApi", _FakeHfApi)
-
-    yield app, state, monkeypatch
-
-
-def _make_open_dataset(state: AppState, dataset_id: str, root) -> None:
-    """Register a minimal fake dataset on AppState so the endpoint can find it.
-
-    We don't need a real LeRobotDataset for these endpoint tests — the
-    upload/download endpoints only read ``.root`` and ``.repo_id`` off it.
-    """
-    state.datasets[dataset_id] = types.SimpleNamespace(
-        root=str(root),
-        repo_id=dataset_id,
-        meta=types.SimpleNamespace(total_episodes=0, total_frames=0),
-    )
-
-
-class TestHubUploadEndpoint:
-    def test_returns_job_id_synchronously(self, app_with_state, tmp_path, monkeypatch):
-        """POST returns immediately with a job_id; the transfer runs in the background."""
-        import huggingface_hub
-
-        app, state, _ = app_with_state
-        ds_root = tmp_path / "ds"
-        ds_root.mkdir()
-        (ds_root / "x.bin").write_bytes(b"x" * 10)
-        _make_open_dataset(state, "user/ds", ds_root)
-
-        # Block the upload until we say so — proves the endpoint is non-blocking.
-        upload_gate = threading.Event()
-        upload_seen: list[str] = []
-
-        def fake_upload_file(**kwargs):
-            upload_seen.append(kwargs["path_in_repo"])
-            assert upload_gate.wait(timeout=2.0), "upload_gate never released"
-
-        monkeypatch.setattr(huggingface_hub, "upload_file", fake_upload_file)
-
-        async def run():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                t0 = time.monotonic()
-                resp = await client.post(
-                    "/api/datasets/user%2Fds/hub/upload",
-                    json={"repo_id": "user/ds"},
-                )
-                elapsed = time.monotonic() - t0
-                # The endpoint must NOT wait for the upload — request returns
-                # while the worker is still gated.
-                assert elapsed < 1.0, f"endpoint blocked for {elapsed:.2f}s"
-                assert resp.status_code == 200, resp.text
-                job_id = resp.json()["job_id"]
-
-                # Job is registered immediately.
-                assert job_id in state.hub_jobs
-
-                # Poll once: status is pending or running, files_done < total.
-                progress = await client.get(f"/api/datasets/hub/progress/{job_id}")
-                assert progress.status_code == 200
-                snap = progress.json()
-                assert snap["direction"] == "upload"
-                assert snap["status"] in ("pending", "running")
-
-                # Let the worker complete; poll until done.
-                upload_gate.set()
-                for _ in range(50):  # up to ~2.5s
-                    await asyncio.sleep(0.05)
-                    snap = (await client.get(f"/api/datasets/hub/progress/{job_id}")).json()
-                    if snap["status"] in ("complete", "failed", "cancelled"):
-                        break
-                assert snap["status"] == "complete", snap
-                assert snap["files_done"] == 1
-                assert upload_seen == ["x.bin"]
-
-        asyncio.run(run())
-
-    def test_second_upload_returns_409_with_existing_job_id(self, app_with_state, tmp_path, monkeypatch):
-        """Concurrent transfer requests surface the in-flight job rather than racing."""
-        import huggingface_hub
-
-        app, state, _ = app_with_state
-        ds_root = tmp_path / "ds"
-        ds_root.mkdir()
-        (ds_root / "x.bin").write_bytes(b"x")
-        _make_open_dataset(state, "user/ds", ds_root)
-
-        gate = threading.Event()
-        monkeypatch.setattr(
-            huggingface_hub,
-            "upload_file",
-            lambda **kw: gate.wait(timeout=2.0),
+    def test_merge_progress_updates_live_state(self):
+        j = hub_jobs.make_job(dataset_id="ds", direction="upload", repo_id="u/r")
+        j.status = "running"
+        j.merge_progress(
+            {
+                "status": "running",
+                "milestone": "Uploading files",
+                "milestone_at": 12345.0,
+                "files_total": 10,
+                "files_done_estimate": 4,
+                "pr_num": 7,
+            }
         )
+        assert j.milestone == "Uploading files"
+        assert j.files_total == 10
+        assert j.files_done_estimate == 4
+        assert j.pr_num == 7
 
-        async def run():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                first = await client.post("/api/datasets/user%2Fds/hub/upload", json={"repo_id": "user/ds"})
-                assert first.status_code == 200
-                first_job = first.json()["job_id"]
+    def test_merge_progress_cannot_un_terminalize(self):
+        """Once status is terminal, no merge from the worker drags it back.
 
-                # Give the worker a tick to flip the job to "running" before
-                # the second call; otherwise the second call could observe
-                # "pending" and the race-prevention assertion is still valid
-                # but less interesting.
-                await asyncio.sleep(0.05)
+        Protects against a confused worker writing a stale snapshot after
+        we've already marked the job failed/cancelled server-side.
+        """
+        j = hub_jobs.make_job(dataset_id="ds", direction="upload", repo_id="u/r")
+        j.status = "failed"
+        j.error = "auth"
+        j.merge_progress({"status": "running", "milestone": "Uploading"})
+        assert j.status == "failed"
+        # Other fields also don't move (the snapshot is ignored entirely).
+        assert j.milestone == "starting"
 
-                second = await client.post("/api/datasets/user%2Fds/hub/upload", json={"repo_id": "user/ds"})
-                assert second.status_code == 409, second.text
-                detail = second.json()["detail"]
-                assert detail["job_id"] == first_job
-
-                gate.set()
-
-        asyncio.run(run())
-
-
-class TestHubProgressEndpoint:
-    def test_unknown_job_returns_404(self, app_with_state):
-        app, _state, _ = app_with_state
-
-        async def run():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.get("/api/datasets/hub/progress/nope-not-a-job")
-                assert resp.status_code == 404
-
-        asyncio.run(run())
-
-    def test_cancel_sets_cancel_event(self, app_with_state):
-        app, state, _ = app_with_state
-        job = make_job("ds", "upload", "user/ds")
-        state.hub_jobs[job.job_id] = job
-        assert not job.cancel_event.is_set()
-
-        async def run():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.post(f"/api/datasets/hub/progress/{job.job_id}/cancel")
-                assert resp.status_code == 200
-                assert resp.json()["status"] == "cancel_requested"
-                assert job.cancel_event.is_set()
-
-        asyncio.run(run())
-
-    def test_cancel_unknown_job_returns_404(self, app_with_state):
-        app, _state, _ = app_with_state
-
-        async def run():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.post("/api/datasets/hub/progress/nope/cancel")
-                assert resp.status_code == 404
-
-        asyncio.run(run())
+    def test_to_dict_omits_nothing_serialisable(self):
+        """Sanity: every field in to_dict() is JSON-serialisable."""
+        j = hub_jobs.make_job(dataset_id="ds", direction="upload", repo_id="u/r")
+        json.dumps(j.to_dict())  # raises if any value is non-JSON
 
 
-# ── /hub/jobs list + DELETE dismiss ─────────────────────────────────────────
+# ── PID-file identity ───────────────────────────────────────────────────────
 
 
-class TestHubJobsList:
-    """The Transfers tray polls /hub/jobs; it must return every job in the
-    registry, sorted newest-first, with the same per-job shape /progress
-    returns."""
+class TestPidFileIdentity:
+    def test_payload_contains_pid_and_started_at(self):
+        payload = hub_jobs.pid_file_payload(os.getpid())
+        assert payload["pid"] == os.getpid()
+        assert "start_time" in payload
+        assert "started_at" in payload
+        assert payload["started_at"] > 0
 
-    def test_lists_all_jobs_sorted_newest_first(self, app_with_state):
-        app, state, _ = app_with_state
-        # Three jobs with deliberately out-of-order started_at timestamps;
-        # response order should not depend on insertion.
-        for ds, dir_, started in [
-            ("u/older", "upload", 100.0),
-            ("u/newest", "download", 300.0),
-            ("u/middle", "upload", 200.0),
-        ]:
-            j = make_job(ds, dir_, ds)
-            j.started_at = started
-            state.hub_jobs[j.job_id] = j
+    def test_alive_check_for_current_process_is_true(self):
+        payload = hub_jobs.pid_file_payload(os.getpid())
+        assert hub_jobs.is_worker_alive(payload) is True
 
-        async def run():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.get("/api/datasets/hub/jobs")
-                assert resp.status_code == 200
-                jobs = resp.json()["jobs"]
-                assert [j["dataset_id"] for j in jobs] == ["u/newest", "u/middle", "u/older"]
-                # Same JSON shape as /progress, including cancel_event omitted.
-                assert "cancel_event" not in jobs[0]
-                assert {"job_id", "direction", "status", "files_total", "bytes_done"} <= set(jobs[0])
+    def test_alive_check_for_dead_pid_is_false(self):
+        # Use PID 1 (init) but tamper the start_time so the identity check
+        # fails. init's process exists but its start_time differs from any
+        # we'd record, simulating PID reuse.
+        payload = {"pid": 1, "start_time": -1.0, "started_at": 0.0}
+        # On Linux, init's start_time is well-defined and != -1.0; the
+        # check should reject. On non-Linux, start_time is None so we
+        # degrade to "process exists" — which also returns True for init.
+        # We accept either outcome on non-Linux; on Linux we expect False.
+        result = hub_jobs.is_worker_alive(payload)
+        if hub_jobs._process_start_time(1) is not None:
+            assert result is False, "Linux should reject mismatched start_time"
+        # Otherwise the result is platform-dependent; just verify no crash.
 
-        asyncio.run(run())
+    def test_alive_check_for_truly_dead_pid_is_false(self):
+        # Spawn a short-lived child, capture its pid, wait for it to die.
+        import subprocess
 
-    def test_empty_registry_returns_empty_list(self, app_with_state):
-        app, _state, _ = app_with_state
+        proc = subprocess.Popen(["true"])
+        proc.wait()
+        payload = {"pid": proc.pid, "start_time": None, "started_at": time.time()}
+        # The pid is now dead. is_worker_alive should return False.
+        assert hub_jobs.is_worker_alive(payload) is False
 
-        async def run():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.get("/api/datasets/hub/jobs")
-                assert resp.status_code == 200
-                assert resp.json() == {"jobs": []}
+    def test_alive_check_handles_missing_pid_key(self):
+        assert hub_jobs.is_worker_alive({}) is False
+        assert hub_jobs.is_worker_alive({"pid": "not an int"}) is False
 
-        asyncio.run(run())
+    def test_read_pid_file_returns_none_for_missing_path(self, tmp_path):
+        assert hub_jobs.read_pid_file(tmp_path / "nope.pid") is None
 
-    def test_gc_drops_stale_terminal_jobs_but_keeps_active(self, app_with_state):
-        """Polling /hub/jobs opportunistically GCs old terminal jobs. Active
-        jobs (pending / running) are never collected regardless of age — they're
-        still being mutated by the executor thread."""
-        import time as _time
+    def test_read_pid_file_returns_none_for_malformed_json(self, tmp_path):
+        path = tmp_path / "bad.pid"
+        path.write_text("not json {")
+        assert hub_jobs.read_pid_file(path) is None
 
-        app, state, _ = app_with_state
-        now = _time.time()
-        # Old-terminal: should be dropped.
-        for status, age in [("complete", 3600.0), ("cancelled", 3600.0), ("failed", 3600.0)]:
-            j = make_job("ds", "upload", "user/ds")
-            j.status = status
-            j.finished_at = now - age
-            state.hub_jobs[j.job_id] = j
-        # Fresh-terminal: just finished, should still be visible.
-        fresh = make_job("ds", "download", "user/ds")
-        fresh.status = "complete"
-        fresh.finished_at = now - 5.0
-        state.hub_jobs[fresh.job_id] = fresh
-        # Active: even ancient started_at, should never be collected.
-        active = make_job("ds", "upload", "user/ds")
-        active.status = "running"
-        active.started_at = now - 99999.0
-        state.hub_jobs[active.job_id] = active
-
-        assert len(state.hub_jobs) == 5
-
-        async def run():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.get("/api/datasets/hub/jobs")
-                jobs = resp.json()["jobs"]
-                # The 3 stale-terminal are gone; fresh-terminal + active remain.
-                assert len(jobs) == 2
-                ids = {j["job_id"] for j in jobs}
-                assert fresh.job_id in ids
-                assert active.job_id in ids
-
-        asyncio.run(run())
+    def test_read_pid_file_roundtrips(self, tmp_path):
+        path = tmp_path / "ok.pid"
+        payload = hub_jobs.pid_file_payload(os.getpid())
+        path.write_text(json.dumps(payload))
+        assert hub_jobs.read_pid_file(path) == payload
 
 
-class TestHubJobDismiss:
-    """DELETE /hub/progress/{id} removes a finished job from the tray."""
+# ── Error classification ────────────────────────────────────────────────────
 
-    def test_dismiss_completed_job(self, app_with_state):
-        app, state, _ = app_with_state
-        job = make_job("ds", "upload", "user/ds")
-        job.status = "complete"
-        job.finished_at = 1.0
-        state.hub_jobs[job.job_id] = job
 
-        async def run():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.post(f"/api/datasets/hub/progress/{job.job_id}/dismiss")
-                assert resp.status_code == 200
-                assert resp.json()["status"] == "dismissed"
-                assert job.job_id not in state.hub_jobs
+class TestErrorClassification:
+    def _hf_http_error(self, status_code: int, message: str):
+        """Construct an HfHubHTTPError with the given status, version-agnostic.
 
-        asyncio.run(run())
+        Newer huggingface_hub (1.x) requires a real httpx.Response. We build
+        a minimal one — only the status_code attribute matters for our
+        classification.
+        """
+        import httpx
+        from huggingface_hub.errors import HfHubHTTPError
 
-    def test_dismiss_active_job_refuses_with_409(self, app_with_state):
-        """A running transfer must be cancelled first — otherwise we'd lose
-        the registry entry while the executor thread is still mutating it."""
-        app, state, _ = app_with_state
-        job = make_job("ds", "upload", "user/ds")
-        job.status = "running"
-        state.hub_jobs[job.job_id] = job
+        response = httpx.Response(status_code, request=httpx.Request("GET", "http://x"))
+        return HfHubHTTPError(message, response=response)
 
-        async def run():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.post(f"/api/datasets/hub/progress/{job.job_id}/dismiss")
-                assert resp.status_code == 409, resp.text
-                assert job.job_id in state.hub_jobs
+    def test_classifies_auth_via_status_code(self):
+        assert hub_jobs.classify_error(self._hf_http_error(401, "unauthorized")) == "auth"
+        assert hub_jobs.classify_error(self._hf_http_error(403, "forbidden")) == "auth"
 
-        asyncio.run(run())
+    def test_classifies_rate_limit(self):
+        assert hub_jobs.classify_error(self._hf_http_error(429, "too many requests")) == "rate_limit"
 
-    def test_dismiss_unknown_job_returns_404(self, app_with_state):
-        app, _state, _ = app_with_state
+    def test_classifies_5xx_as_network(self):
+        assert hub_jobs.classify_error(self._hf_http_error(503, "service unavailable")) == "network"
+        assert hub_jobs.classify_error(self._hf_http_error(502, "bad gateway")) == "network"
 
-        async def run():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.post("/api/datasets/hub/progress/nope/dismiss")
-                assert resp.status_code == 404
+    def test_classifies_repository_not_found_as_auth(self):
+        """Private-repo-no-access surfaces as RepositoryNotFoundError; treat as auth.
 
-        asyncio.run(run())
+        Construct one with the required response kwarg (newer HF) or fall
+        back to setting response post-init (older HF).
+        """
+        import httpx
+        from huggingface_hub.errors import RepositoryNotFoundError
+
+        response = httpx.Response(404, request=httpx.Request("GET", "http://x"))
+        try:
+            rnf = RepositoryNotFoundError("private_inaccessible", response=response)
+        except TypeError:
+            rnf = RepositoryNotFoundError("private_inaccessible")  # type: ignore[call-arg]
+            rnf.response = response
+        assert hub_jobs.classify_error(rnf) == "auth"
+
+    def test_classifies_connection_error_as_network(self):
+        err = ConnectionError("name resolution failed")
+        assert hub_jobs.classify_error(err) == "network"
+
+    def test_classifies_timeout_error_as_network(self):
+        err = TimeoutError("read timed out")
+        assert hub_jobs.classify_error(err) == "network"
+
+    def test_classifies_text_substring_fallback_auth(self):
+        # Plain Exception with auth-related message → "auth"
+        assert hub_jobs.classify_error(Exception("401 Unauthorized")) == "auth"
+        assert hub_jobs.classify_error(Exception("403 Forbidden")) == "auth"
+
+    def test_classifies_unknown_as_other(self):
+        assert hub_jobs.classify_error(Exception("something else")) == "other"
+        assert hub_jobs.classify_error(ValueError("bad input")) == "other"
+
+
+# ── Milestone extraction ────────────────────────────────────────────────────
+#
+# Pinned samples of HF/tqdm stderr. If HF's format shifts in a future
+# version, update the samples + fixtures here; the parser falls back to
+# unmatched and the rest of the system stays functional.
+
+
+class TestMilestoneExtraction:
+    """The parser is best-effort — these tests pin the patterns we recognise.
+
+    The graceful-degradation contract is more important than format
+    coverage: if the parser returns None on a line, the system uses the
+    fallback ``"running"`` milestone. So a regression here is a UX
+    degradation, not a correctness bug.
+    """
+
+    def test_upload_processing_files(self):
+        from lerobot.gui.hub_worker import extract_milestone
+
+        result = extract_milestone("Processing Files (3 / 47)", "upload")
+        assert result == "Processing files 3 / 47"
+
+    def test_upload_committing(self):
+        from lerobot.gui.hub_worker import extract_milestone
+
+        assert extract_milestone("Committing files (5 / 12)", "upload") == "Committing 5 / 12"
+
+    def test_download_fetching(self):
+        from lerobot.gui.hub_worker import extract_milestone
+
+        result = extract_milestone("Fetching 8 files: 100%|########| 5/8 [00:02<00:00]", "download")
+        # Pattern matches "Fetching {N} files" and "{k}/{N}"
+        assert result == "Downloading 5 / 8 files"
+
+    def test_download_bare_percentage(self):
+        from lerobot.gui.hub_worker import extract_milestone
+
+        # Generic tqdm percentage matches the fallback pattern.
+        assert extract_milestone("42%|####     |  4/10", "download") == "Downloading 42%"
+
+    def test_unmatched_returns_none(self):
+        from lerobot.gui.hub_worker import extract_milestone
+
+        assert extract_milestone("Some unrelated log line", "upload") is None
+        assert extract_milestone("", "upload") is None
+        assert extract_milestone("Some unrelated log line", "download") is None
+
+
+# ── enumerate_upload_files ──────────────────────────────────────────────────
+
+
+class TestEnumerateUploadFiles:
+    def test_returns_every_regular_file(self, tmp_path):
+        (tmp_path / "meta").mkdir()
+        (tmp_path / "meta" / "info.json").write_text("{}")
+        (tmp_path / "data.parquet").write_bytes(b"x")
+        files = hub_jobs.enumerate_upload_files(tmp_path)
+        rels = sorted(p.relative_to(tmp_path).as_posix() for p in files)
+        assert rels == ["data.parquet", "meta/info.json"]
+
+    def test_skips_default_ignores(self, tmp_path):
+        (tmp_path / "data.parquet").write_bytes(b"x")
+        (tmp_path / ".lerobot_gui_edits.json").write_text("{}")
+        (tmp_path / ".cache").mkdir()
+        (tmp_path / ".cache" / "stuff").write_bytes(b"y")
+        (tmp_path / ".DS_Store").write_bytes(b"z")
+        files = hub_jobs.enumerate_upload_files(tmp_path)
+        rels = sorted(p.relative_to(tmp_path).as_posix() for p in files)
+        assert rels == ["data.parquet"]
+
+    def test_returns_sorted_order(self, tmp_path):
+        for name in ["z.bin", "a.bin", "m.bin"]:
+            (tmp_path / name).write_bytes(b"")
+        files = hub_jobs.enumerate_upload_files(tmp_path)
+        rels = [p.relative_to(tmp_path).as_posix() for p in files]
+        assert rels == ["a.bin", "m.bin", "z.bin"]
+
+    def test_asserts_on_missing_root(self, tmp_path):
+        with pytest.raises(AssertionError):
+            hub_jobs.enumerate_upload_files(tmp_path / "nope")
+
+
+# ── check_upload_completeness ──────────────────────────────────────────────
+#
+# Defends against the download-fail-then-upload corruption scenario.
+
+
+class _FakeApi:
+    """Minimal HfApi mock for the completeness check."""
+
+    def __init__(self, siblings=None, raise_not_found=False):
+        self._siblings = siblings or []
+        self._raise = raise_not_found
+
+    def repo_info(self, repo_id, repo_type="dataset", files_metadata=False):
+        if self._raise:
+            import httpx
+            from huggingface_hub.errors import RepositoryNotFoundError
+
+            response = httpx.Response(404, request=httpx.Request("GET", "http://x"))
+            try:
+                err: Exception = RepositoryNotFoundError(f"{repo_id} not found", response=response)
+            except TypeError:
+                err = RepositoryNotFoundError(f"{repo_id} not found")  # type: ignore[call-arg]
+            raise err
+
+        class _Sib:
+            def __init__(self, rfilename):
+                self.rfilename = rfilename
+
+        class _Info:
+            siblings = [_Sib(s) for s in self._siblings]
+
+        return _Info()
+
+
+class TestCheckUploadCompleteness:
+    def test_fresh_repo_returns_empty(self, tmp_path):
+        api = _FakeApi(raise_not_found=True)
+        out = hub_jobs.check_upload_completeness(tmp_path, "user/new_repo", api=api)
+        assert out == {"missing_locally": [], "incomplete_locally": []}
+
+    def test_all_files_present_returns_empty(self, tmp_path):
+        (tmp_path / "a.bin").write_bytes(b"x")
+        (tmp_path / "meta").mkdir()
+        (tmp_path / "meta" / "info.json").write_text("{}")
+        api = _FakeApi(siblings=["a.bin", "meta/info.json"])
+        out = hub_jobs.check_upload_completeness(tmp_path, "user/repo", api=api)
+        assert out["missing_locally"] == []
+        assert out["incomplete_locally"] == []
+
+    def test_detects_missing_locally(self, tmp_path):
+        (tmp_path / "a.bin").write_bytes(b"x")
+        # remote has a.bin AND b.bin; b.bin is missing locally
+        api = _FakeApi(siblings=["a.bin", "b.bin"])
+        out = hub_jobs.check_upload_completeness(tmp_path, "user/repo", api=api)
+        assert out["missing_locally"] == ["b.bin"]
+        assert out["incomplete_locally"] == []
+
+    def test_detects_incomplete_marker(self, tmp_path):
+        (tmp_path / "a.bin").write_bytes(b"x")
+        # Simulate a half-finished download: HF leaves <name>.incomplete.
+        (tmp_path / "a.bin.incomplete").write_bytes(b"partial")
+        api = _FakeApi(siblings=["a.bin"])
+        out = hub_jobs.check_upload_completeness(tmp_path, "user/repo", api=api)
+        assert out["incomplete_locally"] == ["a.bin"]

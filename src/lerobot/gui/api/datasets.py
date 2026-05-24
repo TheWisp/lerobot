@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -2733,6 +2735,10 @@ async def hub_diff(dataset_id: str, repo_id: str | None = None):
 
 class HubUploadRequest(BaseModel):
     repo_id: str | None = None  # If None, uses dataset's repo_id
+    # If True, bypasses the completeness check that warns about uploading
+    # from a local copy missing files present on the remote. Used by the
+    # frontend's "Upload anyway" follow-up after the user sees the warning.
+    confirm_force: bool = False
 
 
 class HubDownloadRequest(BaseModel):
@@ -2757,60 +2763,257 @@ def _verify_hub_auth() -> None:
         ) from e
 
 
-async def _spawn_hub_job(
-    dataset_id: str,
-    job,  # HubJobState
-    sync_fn,  # zero-arg callable, runs in default executor
-    *,
-    on_complete=None,  # async hook for post-transfer reload, None for upload
-) -> None:
-    """Schedule the executor-bound transfer + per-dataset lock dance.
+# Async lock keyed by dataset_id to serialise spawn-vs-spawn for the same
+# dataset. Two rapid Upload clicks on the same dataset queue rather than
+# race. Lock is held only across the spawn step (PID file write + state
+# registration); the actual transfer runs in a subprocess outside the
+# lock so the GUI server stays responsive.
+_hub_spawn_locks: dict[str, Any] = {}  # values are asyncio.Lock
 
-    The asyncio task holds the per-dataset lock for the duration of the
-    transfer, but the HTTP request returns as soon as we've created the
-    job + scheduled the task. The Transfers tray polls /hub/jobs to see
-    progress regardless of whether the original request is still alive.
-    """
+
+def _hub_spawn_lock_for(dataset_id: str):
+    """Get-or-create the spawn lock for a dataset."""
     import asyncio
 
-    state = _app_state
+    lock = _hub_spawn_locks.get(dataset_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _hub_spawn_locks[dataset_id] = lock
+    return lock
 
-    async def _run() -> None:
-        import time as _time
 
-        loop = asyncio.get_event_loop()
-        async with state.get_lock(dataset_id):
-            try:
-                await loop.run_in_executor(None, sync_fn)
-                if job.status == "running":
-                    job.status = "complete"
-            except Exception as e:  # noqa: BLE001 — any HF / IO failure
-                logger.exception("Hub %s failed for %s: %s", job.direction, dataset_id, e)
-                job.status = "failed"
-                job.message = str(e)
-            finally:
-                job.finished_at = _time.time()
-            if job.status == "complete" and on_complete is not None:
-                try:
-                    await on_complete()
-                except Exception as e:  # noqa: BLE001
-                    logger.exception("Post-transfer hook failed for %s: %s", dataset_id, e)
-                    job.status = "failed"
-                    job.message = f"Transfer succeeded but reload failed: {e}"
+def _refresh_progress_from_file(job) -> None:
+    """Merge the worker's progress JSON into the in-memory HubJobState.
 
-    asyncio.create_task(_run())
+    Called on every /hub/jobs and /hub/progress poll. If the worker's
+    progress file is missing or unreadable, leaves the in-memory state
+    as-is — the server-side fallback (PID liveness check + sweep) handles
+    the "worker is dead" case separately.
+    """
+    import json
+
+    from lerobot.gui.hub_jobs import JOBS_DIR, JobPaths
+
+    paths = JobPaths.for_job(job.job_id, JOBS_DIR)
+    if not paths.progress.exists():
+        return
+    try:
+        snap = json.loads(paths.progress.read_text())
+    except (OSError, json.JSONDecodeError):
+        return
+    job.merge_progress(snap)
+
+
+def _send_signal_with_identity_check(job, sig) -> bool:
+    """Send ``sig`` to ``job``'s worker, verifying (pid, start_time) first.
+
+    Returns True if the signal was sent; False if the worker isn't alive
+    or the PID has been recycled (in which case we mark the job failed).
+    """
+    import os
+
+    from lerobot.gui.hub_jobs import JOBS_DIR, JobPaths, is_worker_alive, read_pid_file
+
+    paths = JobPaths.for_job(job.job_id, JOBS_DIR)
+    payload = read_pid_file(paths.pid)
+    if payload is None or not is_worker_alive(payload):
+        # Worker is already gone — synthesize a failure state.
+        if job.status not in ("complete", "failed", "cancelled"):
+            job.status = "failed"
+            job.error = "Worker exited without finalizing"
+            job.error_class = "other"
+            job.finished_at = time.time()
+        return False
+    try:
+        os.kill(payload["pid"], sig)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def _sweep_orphan_pid_files() -> int:
+    """Inspect every <job_id>.pid in the jobs dir; reap dead workers.
+
+    For each PID file:
+      * If the worker is alive AND we have a registry entry → adopt
+        (no-op; the entry's progress JSON catches up on next poll).
+      * If the worker is alive AND we have no registry entry → leave
+        the file alone; future restart-sweep iterations will pick it up
+        once the registry knows about the job. (This case is rare —
+        the registry is the spawn-time source of truth.)
+      * If the worker is dead → mark any matching registry entry
+        ``failed`` and delete the PID file.
+
+    Called once on server startup. Returns the number of orphan files
+    that were reaped.
+    """
+    from lerobot.gui.hub_jobs import JOBS_DIR, is_worker_alive, read_pid_file
+
+    if not JOBS_DIR.exists():
+        return 0
+
+    reaped = 0
+    for pid_path in JOBS_DIR.glob("*.pid"):
+        job_id = pid_path.stem
+        payload = read_pid_file(pid_path)
+        if payload is None:
+            # safe-destruct: malformed PID file we wrote; cleaning up our own debris
+            pid_path.unlink(missing_ok=True)
+            reaped += 1
+            continue
+        if is_worker_alive(payload):
+            continue
+        # Worker is dead.
+        entry = _app_state.hub_jobs.get(job_id)
+        if entry is not None and entry.status not in ("complete", "failed", "cancelled"):
+            entry.status = "failed"
+            entry.error = "Worker exited without finalizing (detected on server startup)"
+            entry.error_class = "other"
+            entry.finished_at = time.time()
+        # safe-destruct: stale PID file from a dead worker we owned
+        pid_path.unlink(missing_ok=True)
+        reaped += 1
+    if reaped:
+        logger.info("Reaped %d orphan Hub worker PID file(s) on startup", reaped)
+    return reaped
+
+
+def _find_existing_pr_for_retry(dataset_id: str, repo_id: str) -> int | None:
+    """For an upload retry, find a draft PR we can reuse.
+
+    Looks back through ``_app_state.hub_jobs`` for the most recent
+    terminal (failed/cancelled) entry matching this (dataset, repo). If
+    that entry has a ``pr_num`` AND the PR is still in draft state on
+    HF, return it for the new worker to resume into.
+
+    Returns ``None`` if no resumable PR exists; the new worker will
+    create a fresh one.
+    """
+    candidates = sorted(
+        (
+            j
+            for j in _app_state.hub_jobs.values()
+            if j.dataset_id == dataset_id
+            and j.repo_id == repo_id
+            and j.status in ("failed", "cancelled")
+            and j.pr_num is not None
+        ),
+        key=lambda j: j.started_at,
+        reverse=True,
+    )
+    if not candidates:
+        return None
+    pr_num = candidates[0].pr_num
+    try:
+        from huggingface_hub import HfApi
+
+        details = HfApi().get_discussion_details(
+            repo_id=repo_id,
+            repo_type="dataset",
+            discussion_num=pr_num,
+        )
+        if details.status == "draft":
+            return pr_num
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "Could not check PR #%d on %s for resume: %s. Will create a fresh PR.",
+            pr_num,
+            repo_id,
+            e,
+        )
+    return None
+
+
+def _spawn_hub_worker(
+    *,
+    job,
+    local_path: Path,
+    reuse_pr_num: int | None = None,
+    private: bool = True,
+    commit_message: str | None = None,
+) -> None:
+    """Spawn the worker subprocess for ``job``.
+
+    Pre: ``job`` already in ``_app_state.hub_jobs``. Caller holds the
+    per-dataset spawn lock.
+    Post: ``job.pid`` is set; the worker is running detached
+    (``start_new_session=True``) so killing the GUI server doesn't
+    immediately reap the worker until PR_SET_PDEATHSIG kicks in inside
+    the worker.
+    """
+    import subprocess
+    import sys
+
+    from lerobot.gui.hub_jobs import DEFAULT_UPLOAD_IGNORES, JOBS_DIR, JobConfig, JobPaths
+
+    JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    paths = JobPaths.for_job(job.job_id, JOBS_DIR)
+
+    # Build the config. For uploads we forward the default ignore set;
+    # downloads pass them through too (snapshot_download will skip these
+    # patterns from the remote sibling list if they exist).
+    cfg = JobConfig(
+        job_id=job.job_id,
+        dataset_id=job.dataset_id,
+        direction=job.direction,
+        repo_id=job.repo_id,
+        repo_type=job.repo_type,
+        local_path=str(local_path),
+        jobs_dir=str(JOBS_DIR),
+        private=private,
+        commit_message=commit_message,
+        allow_patterns=None,
+        ignore_patterns=DEFAULT_UPLOAD_IGNORES if job.direction == "upload" else None,
+        reuse_pr_num=reuse_pr_num,
+    )
+
+    # Stub the progress + PID files so a /hub/jobs poll right after spawn
+    # has something to read. The worker rewrites them on its own schedule.
+    paths.progress.write_text(
+        json.dumps(
+            {
+                "job_id": job.job_id,
+                "status": "pending",
+                "milestone": "starting",
+                "milestone_at": job.started_at,
+            }
+        )
+    )
+
+    env = os.environ.copy()
+    env["LEROBOT_HUB_WORKER_CONFIG"] = cfg.to_json()
+
+    proc = subprocess.Popen(  # noqa: S603 — args are well-controlled
+        [sys.executable, "-m", "lerobot.gui.hub_worker"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    job.pid = proc.pid
+    logger.info(
+        "Spawned Hub worker pid=%d job=%s dir=%s repo=%s reuse_pr=%s",
+        proc.pid,
+        job.job_id,
+        job.direction,
+        job.repo_id,
+        reuse_pr_num,
+    )
 
 
 @router.post("/{dataset_id:path}/hub/upload")
 async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
     """Start a Hub upload. Returns ``{job_id}`` immediately.
 
-    The transfer runs as a background asyncio task; the Transfers tray
-    polls ``/hub/jobs`` to follow it. A second concurrent transfer on
-    the same dataset returns 409 with the existing ``job_id`` in the
-    body so the tray can show it instead of racing.
+    Spawns a subprocess worker that runs the full PR pipeline
+    (create_pull_request → upload_large_folder → super_squash_history →
+    merge_pull_request). The Transfers tray polls /hub/jobs for progress.
+
+    On retry of a failed/cancelled job for the same (dataset, repo), the
+    worker is told to resume into the previous PR branch rather than
+    creating a new one.
     """
-    from lerobot.gui.hub_jobs import make_job, run_upload_sync
+    from lerobot.gui.hub_jobs import check_upload_completeness, make_job
 
     dataset_id = unquote(dataset_id)
     if dataset_id not in _app_state.datasets:
@@ -2824,34 +3027,64 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
         else:
             raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
 
-    # Check the Hub-job registry BEFORE the generic dataset lock: a
-    # running Hub transfer holds the lock for its full duration, so
-    # reading the lock first would hide the existing job_id behind a
-    # generic 423 and the frontend would lose the ability to attach
-    # to the in-flight transfer.
-    active = _app_state.active_hub_job_for(dataset_id)
-    if active is not None:
-        raise HTTPException(
-            status_code=409,
-            detail={"message": "A Hub transfer is already in progress", "job_id": active.job_id},
-        )
-    if _app_state.is_locked(dataset_id):
-        raise HTTPException(status_code=423, detail="Dataset is busy")
-
-    _verify_hub_auth()
-
     dataset = _app_state.datasets[dataset_id]
     repo_id = (request.repo_id if request and request.repo_id else None) or dataset.repo_id
 
-    job = make_job(dataset_id, "upload", repo_id)
-    _app_state.hub_jobs[job.job_id] = job
+    # Spawn lock: serialises concurrent spawn attempts for the same dataset.
+    async with _hub_spawn_lock_for(dataset_id):
+        active = _app_state.active_hub_job_for(dataset_id)
+        if active is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "A Hub transfer is already in progress", "job_id": active.job_id},
+            )
 
-    logger.info("Hub upload start: dataset=%s repo=%s job=%s", dataset_id, repo_id, job.job_id)
+        _verify_hub_auth()
 
-    def _sync():
-        run_upload_sync(root=Path(dataset.root), repo_id=repo_id, job=job)
+        # Upload-time completeness check: defends against download-fail-then-upload
+        # corruption. If local is missing files that exist on the remote, warn the
+        # caller. The frontend can re-issue with confirm_force=true to override.
+        confirm_force = bool(request and getattr(request, "confirm_force", False))
+        if not confirm_force:
+            try:
+                missing = check_upload_completeness(Path(dataset.root), repo_id)
+            except Exception as e:  # noqa: BLE001 — completeness check is best-effort
+                logger.warning("Completeness check failed for %s vs %s: %s", dataset_id, repo_id, e)
+                missing = {"missing_locally": [], "incomplete_locally": []}
+            if missing["missing_locally"] or missing["incomplete_locally"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "incomplete_local_state",
+                        "message": (
+                            "Local copy is missing files that exist on the remote. "
+                            "Re-download first, or confirm to upload anyway."
+                        ),
+                        "missing_locally": missing["missing_locally"][:20],
+                        "incomplete_locally": missing["incomplete_locally"][:20],
+                    },
+                )
 
-    await _spawn_hub_job(dataset_id, job, _sync)
+        reuse_pr = _find_existing_pr_for_retry(dataset_id, repo_id)
+        job = make_job(dataset_id=dataset_id, direction="upload", repo_id=repo_id)
+        _app_state.hub_jobs[job.job_id] = job
+        if reuse_pr is not None:
+            job.pr_num = reuse_pr
+
+        logger.info(
+            "Hub upload start: dataset=%s repo=%s job=%s reuse_pr=%s",
+            dataset_id,
+            repo_id,
+            job.job_id,
+            reuse_pr,
+        )
+        _spawn_hub_worker(
+            job=job,
+            local_path=Path(dataset.root),
+            reuse_pr_num=reuse_pr,
+            private=True,
+        )
+
     return {"job_id": job.job_id, "status": "started"}
 
 
@@ -2859,51 +3092,34 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
 async def hub_download(dataset_id: str, request: HubDownloadRequest | None = None):
     """Start a Hub download. Returns ``{job_id}`` immediately.
 
-    The local dataset is reloaded in-place after the transfer succeeds
-    so the GUI sees refreshed metadata without an explicit re-open.
+    snapshot_download writes directly into dataset.root; HF's etag-skip
+    and .incomplete-resume primitives handle resumability without a temp
+    staging directory.
     """
-    from lerobot.gui.hub_jobs import make_job, run_download_sync
+    from lerobot.gui.hub_jobs import make_job
 
     dataset_id = unquote(dataset_id)
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
 
-    active = _app_state.active_hub_job_for(dataset_id)
-    if active is not None:
-        raise HTTPException(
-            status_code=409,
-            detail={"message": "A Hub transfer is already in progress", "job_id": active.job_id},
-        )
-    if _app_state.is_locked(dataset_id):
-        raise HTTPException(status_code=423, detail="Dataset is busy")
-
-    _verify_hub_auth()
-
     dataset = _app_state.datasets[dataset_id]
     repo_id = (request.repo_id if request and request.repo_id else None) or dataset.repo_id
-    root = dataset.root
 
-    job = make_job(dataset_id, "download", repo_id)
-    _app_state.hub_jobs[job.job_id] = job
+    async with _hub_spawn_lock_for(dataset_id):
+        active = _app_state.active_hub_job_for(dataset_id)
+        if active is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "A Hub transfer is already in progress", "job_id": active.job_id},
+            )
 
-    logger.info("Hub download start: dataset=%s repo=%s job=%s", dataset_id, repo_id, job.job_id)
+        _verify_hub_auth()
 
-    def _sync():
-        run_download_sync(root=Path(root), repo_id=repo_id, job=job)
+        job = make_job(dataset_id=dataset_id, direction="download", repo_id=repo_id)
+        _app_state.hub_jobs[job.job_id] = job
+        logger.info("Hub download start: dataset=%s repo=%s job=%s", dataset_id, repo_id, job.job_id)
+        _spawn_hub_worker(job=job, local_path=Path(dataset.root))
 
-    async def _post_download():
-        import asyncio
-
-        from lerobot.gui.cache_invalidation import invalidate_caches
-        from lerobot.gui.dataset_reload import reload_dataset_from_disk
-
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: reload_dataset_from_disk(dataset, root=root))
-        invalidate_caches(
-            _app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices
-        )
-
-    await _spawn_hub_job(dataset_id, job, _sync, on_complete=_post_download)
     return {"job_id": job.job_id, "status": "started"}
 
 
@@ -2911,14 +3127,14 @@ async def hub_download(dataset_id: str, request: HubDownloadRequest | None = Non
 async def hub_jobs():
     """Return all Hub transfers, sorted newest-first.
 
-    The Transfers tray polls this while at least one job is active.
-    Calling it also opportunistically garbage-collects terminal jobs
-    older than 30 minutes so the registry doesn't grow unbounded over
-    a long GUI session — that bound matches the tray's "auto-dismiss
-    completed jobs" UX, so users don't see jobs disappear from under
-    them.
+    Each entry is the merged view of the server's in-memory HubJobState
+    + the worker's latest progress JSON. Calling this opportunistically
+    garbage-collects terminal jobs older than 30 minutes.
     """
     _app_state.gc_finished_hub_jobs()
+    for j in _app_state.hub_jobs.values():
+        if j.status in ("pending", "running"):
+            _refresh_progress_from_file(j)
     jobs = sorted(
         (j.to_dict() for j in _app_state.hub_jobs.values()),
         key=lambda d: d["started_at"],
@@ -2929,49 +3145,41 @@ async def hub_jobs():
 
 @router.get("/hub/progress/{job_id}")
 async def hub_progress(job_id: str):
-    """Single-job snapshot, used as a fallback when the tray wants to
-    attach to a specific job_id (e.g. after a 409 response surfaced one).
-
-    Most consumers should poll /hub/jobs instead and find the entry
-    they care about; that's one request per tick regardless of how
-    many transfers are in flight.
-    """
+    """Single-job snapshot for clients that want to attach to one specific job."""
     job = _app_state.hub_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    if job.status in ("pending", "running"):
+        _refresh_progress_from_file(job)
     return job.to_dict()
 
 
 @router.post("/hub/progress/{job_id}/cancel")
 async def hub_progress_cancel(job_id: str):
-    """Request cancellation of a running Hub transfer.
+    """SIGTERM the worker for an active job. Idempotent."""
+    import signal as _signal
 
-    The flag is checked between files, so cancellation isn't instant —
-    the file currently in flight finishes first (HF's upload_file /
-    hf_hub_download are not interruptible mid-call). Idempotent;
-    cancelling a completed/failed job is a no-op.
-    """
     job = _app_state.hub_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
     if job.status in ("pending", "running"):
-        job.cancel_event.set()
+        sent = _send_signal_with_identity_check(job, _signal.SIGTERM)
+        if not sent:
+            # Worker already gone — status was synthesized to failed.
+            pass
     return {"status": "cancel_requested", "job_id": job_id}
 
 
 @router.post("/hub/progress/{job_id}/dismiss")
 async def hub_progress_dismiss(job_id: str):
-    """Drop a terminal job from the registry.
+    """Remove a terminal job from the registry + clean up its IPC files.
 
-    Used when the user clicks the "×" on a completed/failed/cancelled
-    entry in the Transfers tray. Refuses to drop a job that's still
-    pending/running — cancel it first.
-
-    We use POST (not DELETE) because the dataset module's catch-all
-    ``DELETE /{dataset_id:path}`` route is registered earlier and would
-    swallow ``DELETE /hub/progress/...``. Consistent verb shape with
-    the sibling ``/cancel`` endpoint anyway.
+    For cancelled/failed uploads with a draft PR still on HF, also close
+    the discussion to prevent it from cluttering the repo's discussion
+    list. (Set ``close_pr=False`` in the body to opt out.)
     """
+    from lerobot.gui.hub_jobs import JOBS_DIR, JobPaths
+
     job = _app_state.hub_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
@@ -2980,5 +3188,38 @@ async def hub_progress_dismiss(job_id: str):
             status_code=409,
             detail="Job is still running; cancel it before dismissing.",
         )
+
+    # Close the draft PR if we created one and it's still open. Only on
+    # cancelled/failed paths — a completed upload's PR was already merged
+    # (and HF auto-cleans it).
+    if job.status in ("cancelled", "failed") and job.pr_num is not None:
+        try:
+            from huggingface_hub import HfApi
+
+            details = HfApi().get_discussion_details(
+                repo_id=job.repo_id,
+                repo_type=job.repo_type,
+                discussion_num=job.pr_num,
+            )
+            if details.status == "draft":
+                HfApi().change_discussion_status(
+                    repo_id=job.repo_id,
+                    repo_type=job.repo_type,
+                    discussion_num=job.pr_num,
+                    new_status="closed",
+                    comment="Discarded from LeRobot GUI.",
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Could not close PR #%d for discarded job %s: %s", job.pr_num, job_id, e)
+
+    # Clean up the per-job IPC files.
+    paths = JobPaths.for_job(job_id, JOBS_DIR)
+    import contextlib as _contextlib
+
+    for p in (paths.progress, paths.log, paths.pid):
+        with _contextlib.suppress(OSError):
+            # safe-destruct: per-job IPC files we created, user-confirmed dismiss
+            p.unlink(missing_ok=True)
+
     del _app_state.hub_jobs[job_id]
     return {"status": "dismissed", "job_id": job_id}
