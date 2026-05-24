@@ -468,7 +468,7 @@ function renderCameraGrid() {
     }
     html += `
         <div class="camera-panel" id="urdf-viz-panel" style="display: none;">
-            <div class="camera-title">URDF viz</div>
+            <div class="camera-title">visualizer</div>
             <div class="camera-frame">
                 <iframe id="urdf-viz-iframe" src="" title="URDF state visualization"
                         style="width: 100%; height: 100%; border: none; background: #1a1a1a;"></iframe>
