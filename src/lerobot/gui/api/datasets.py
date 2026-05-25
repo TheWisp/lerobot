@@ -2795,11 +2795,9 @@ def _refresh_progress_from_file(job) -> None:
     from lerobot.gui.hub_jobs import JOBS_DIR, JobPaths
 
     paths = JobPaths.for_job(job.job_id, JOBS_DIR)
-    if not paths.progress.exists():
-        return
     try:
         snap = json.loads(paths.progress.read_text())
-    except (OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
         return
     job.merge_progress(snap)
 
@@ -2817,12 +2815,17 @@ def _send_signal_with_identity_check(job, sig) -> bool:
     paths = JobPaths.for_job(job.job_id, JOBS_DIR)
     payload = read_pid_file(paths.pid)
     if payload is None or not is_worker_alive(payload):
-        # Worker is already gone — synthesize a failure state.
+        # Worker is already gone — synthesize a failure state and drop the
+        # stale PID file so we don't keep re-checking it on every cancel
+        # attempt (the startup sweep would catch it eventually, but only on
+        # next server restart).
         if job.status not in ("complete", "failed", "cancelled"):
             job.status = "failed"
             job.error = "Worker exited without finalizing"
             job.error_class = "other"
             job.finished_at = time.time()
+        # safe-destruct: stale PID file from a dead worker we owned
+        paths.pid.unlink(missing_ok=True)
         return False
     try:
         os.kill(payload["pid"], sig)
@@ -2950,7 +2953,13 @@ def _spawn_hub_worker(
     import subprocess
     import sys
 
-    from lerobot.gui.hub_jobs import DEFAULT_UPLOAD_IGNORES, JOBS_DIR, JobConfig, JobPaths
+    from lerobot.gui.hub_jobs import (
+        DEFAULT_UPLOAD_IGNORES,
+        JOBS_DIR,
+        JobConfig,
+        JobPaths,
+        atomic_write_json,
+    )
 
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     paths = JobPaths.for_job(job.job_id, JOBS_DIR)
@@ -2973,17 +2982,16 @@ def _spawn_hub_worker(
         reuse_pr_num=reuse_pr_num,
     )
 
-    # Stub the progress + PID files so a /hub/jobs poll right after spawn
-    # has something to read. The worker rewrites them on its own schedule.
-    paths.progress.write_text(
-        json.dumps(
-            {
-                "job_id": job.job_id,
-                "status": "pending",
-                "milestone": "starting",
-                "milestone_at": job.started_at,
-            }
-        )
+    # Stub the progress file so a /hub/jobs poll right after spawn has
+    # something to read. The worker rewrites it on its own schedule.
+    atomic_write_json(
+        paths.progress,
+        {
+            "job_id": job.job_id,
+            "status": "pending",
+            "milestone": "starting",
+            "milestone_at": job.started_at,
+        },
     )
 
     env = os.environ.copy()
@@ -3050,7 +3058,7 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
         # Upload-time completeness check: defends against download-fail-then-upload
         # corruption. If local is missing files that exist on the remote, warn the
         # caller. The frontend can re-issue with confirm_force=true to override.
-        confirm_force = bool(request and getattr(request, "confirm_force", False))
+        confirm_force = request.confirm_force if request else False
         if not confirm_force:
             try:
                 missing = check_upload_completeness(Path(dataset.root), repo_id)

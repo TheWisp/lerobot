@@ -92,9 +92,7 @@ def hf_api():
     under the developer's account just by running the test marker.
     """
     if os.environ.get("LEROBOT_HUB_LIVE") != "1":
-        pytest.skip(
-            "Live HF tests require LEROBOT_HUB_LIVE=1 env var. See module docstring."
-        )
+        pytest.skip("Live HF tests require LEROBOT_HUB_LIVE=1 env var. See module docstring.")
     try:
         from huggingface_hub import HfApi
 
@@ -162,7 +160,7 @@ class TestLiveUploadFlow:
         repo_id = f"{user}/_lerobot_hub_live_{int(time.time())}_{uuid.uuid4().hex[:6]}"
 
         local = tmp_path / "payload"
-        total_bytes = _make_random_payload(local, file_count=4, file_size=64 * 1024)
+        _make_random_payload(local, file_count=4, file_size=64 * 1024)
         jobs_dir = tmp_path / "jobs"
 
         cfg = hub_jobs.JobConfig(
