@@ -179,6 +179,72 @@ class TestUploadEndpoint:
 
             asyncio.run(run())
 
+    def test_concurrent_uploads_funnel_to_single_spawn(self, app_with_state, tmp_path):
+        """N truly-concurrent POSTs on the same dataset → 1 spawn, N-1 conflicts.
+
+        Defends against the "user double-clicks Upload" / "two tabs racing"
+        case. The test fires ``n`` POSTs in parallel via asyncio.gather +
+        httpx ASGI transport and asserts exactly one Popen actually ran,
+        the others all got 409 referencing the winner's job_id.
+
+        What protects the invariant: ``async with _hub_spawn_lock_for(ds)``
+        wraps both the active-job check AND the new-job registration.
+        Two coroutines cannot both observe ``active_hub_job_for() is None``
+        and proceed to spawn.
+
+        Caveat — what this test does NOT distinguish on its own: the
+        production critical section happens to be entirely synchronous
+        today (no awaits between lock-acquire and lock-release), so
+        Python's cooperative scheduling alone funnels concurrent POSTs
+        even with the lock removed. The lock is defense-in-depth against
+        anyone adding an ``await`` (e.g. an async hub call) inside the
+        critical section in the future — if that happens, the post-
+        condition this test asserts must continue to hold, and only the
+        lock guarantees that.
+        """
+        app, state, monkeypatch, jobs_dir = app_with_state
+        ds_root = tmp_path / "ds"
+        ds_root.mkdir()
+        (ds_root / "data.bin").write_bytes(b"x")
+        _make_open_dataset(state, "user/ds", ds_root)
+
+        n = 5
+
+        with patch("subprocess.Popen", _FakePopen):
+            datasets_module._hub_spawn_locks.clear()
+
+            async def post_one(client):
+                return await client.post("/api/datasets/user%2Fds/hub/upload", json={"repo_id": "user/ds"})
+
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://test"
+                ) as client:
+                    posts = [asyncio.create_task(post_one(client)) for _ in range(n)]
+                    return await asyncio.gather(*posts)
+
+            results = asyncio.run(run())
+
+        statuses = sorted(r.status_code for r in results)
+        # Exactly one winner, N-1 conflicts.
+        assert statuses == [200] + [409] * (n - 1), [r.text for r in results]
+
+        # The losers all reference the same winning job_id — proves the
+        # 409s came from "an active job exists," not from some unrelated
+        # error path.
+        winner = next(r for r in results if r.status_code == 200).json()["job_id"]
+        losers = [r for r in results if r.status_code == 409]
+        for loser in losers:
+            assert loser.json()["detail"]["job_id"] == winner, loser.text
+
+        # Decisive invariant: exactly one worker subprocess was spawned and
+        # one job registered — user clicking Upload twice cannot result in
+        # two HF transfers fighting each other.
+        assert len(_FakePopen.instances) == 1, (
+            f"{len(_FakePopen.instances)} workers spawned for the same dataset"
+        )
+        assert len(state.hub_jobs) == 1
+
 
 class TestUploadCompletenessGuardrail:
     """Defends against download-fail-then-upload corruption."""
