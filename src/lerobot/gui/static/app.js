@@ -1869,14 +1869,16 @@ const Transfers = (function () {
             ? Math.min(100, Math.round(100 * filesDone / filesTotal))
             : 0;
 
-        // Action buttons depend on terminal-vs-active state. Three verbs,
-        // three distinct icons — see design doc § "Tray card actions".
+        // Action buttons depend on terminal-vs-active state. Cancel and
+        // Discard get text labels because they affect remote state (kill
+        // worker / close draft PR); Hide is icon-only because it's pure UI
+        // dismissal with no consequences.
         let actions = '';
         let extra = '';
         if (_isActive(j)) {
-            // Active: Cancel only.
+            // Active: Cancel only (kills the worker subprocess).
             actions = `<button class="transfer-action-btn danger" type="button"
-                onclick="Transfers.cancel('${j.job_id}')" title="Cancel">✕</button>`;
+                onclick="Transfers.cancel('${j.job_id}')">Cancel</button>`;
             const stageLine = j.milestone
                 ? `<div class="transfer-milestone">${j.milestone}</div>`
                 : '';
@@ -1885,19 +1887,18 @@ const Transfers = (function () {
                 : '';
             extra = stageLine + curFile;
         } else if (j.status === 'complete') {
-            // Complete: Hide only (UI-only, nothing to clean up).
-            actions = `<button class="transfer-action-btn" type="button"
+            // Complete: Hide is UI-only, nothing to clean up server-side.
+            actions = `<button class="transfer-action-btn hide-btn" type="button"
                 onclick="Transfers.hide('${j.job_id}')" title="Hide">✕</button>`;
             const bytesText = bytesDone > 0 ? ` · ${_fmtBytes(bytesDone)}` : '';
             extra = `<div class="transfer-msg complete">Done${bytesText}</div>`;
         } else {
-            // Failed or cancelled: Retry + Discard.
-            const retryDisabled = j.status === 'failed' && j.error_class === 'auth' ? '' : '';
+            // Failed or cancelled: Retry (re-POST) + Discard (closes draft PR).
             actions =
-                `<button class="transfer-action-btn" type="button" ${retryDisabled}
-                    onclick="Transfers.retry('${j.job_id}')" title="Retry">↻</button>` +
+                `<button class="transfer-action-btn" type="button"
+                    onclick="Transfers.retry('${j.job_id}')">Retry</button>` +
                 `<button class="transfer-action-btn danger" type="button"
-                    onclick="Transfers.discard('${j.job_id}')" title="Discard">🗑</button>`;
+                    onclick="Transfers.discard('${j.job_id}')">Discard</button>`;
             const msgClass = j.status === 'failed' ? 'failed' : 'cancelled';
             extra = `<div class="transfer-msg ${msgClass}">${_errorClassMessage(j) || 'Cancelled'}</div>`;
         }
@@ -1925,23 +1926,26 @@ const Transfers = (function () {
 
     function _onJobsUpdated(prevJobs, jobs) {
         // Surface a one-shot toast for each transition into a terminal
-        // state so the user notices even when the popover is closed. We
-        // record the job_id in _completionShown to avoid re-toasting on
-        // re-polls.
+        // state — but only when the popover is closed. When the popover is
+        // open the card itself shows the new status, and an overlapping
+        // toast on the same screen edge is redundant + visually noisy
+        // (they share the top-right corner). We still record the job_id
+        // in _completionShown so a later open/close doesn't re-toast.
         for (const j of jobs) {
             if (_isActive(j) || _completionShown.has(j.job_id)) continue;
             _completionShown.add(j.job_id);
+            // Download still needs the post-completion refresh regardless
+            // of toast visibility — it's not a notification, it's state sync.
+            if (j.status === 'complete' && j.direction === 'download' && datasets[j.dataset_id]) {
+                _refreshAfterDownload(j.dataset_id);
+            }
+            if (_popoverOpen) continue;
             const verb = j.direction === 'upload' ? 'Upload' : 'Download';
             const filesDone = j.files_done_estimate ?? 0;
             const bytesDone = j.bytes_done_estimate ?? 0;
             if (j.status === 'complete') {
                 const bytesText = bytesDone > 0 ? `, ${_fmtBytes(bytesDone)}` : '';
                 showToast(`${verb} complete`, `${j.repo_id} — ${filesDone} files${bytesText}`, 'info');
-                // After a download, refresh the local episode list so the
-                // tree reflects the freshly-pulled metadata.
-                if (j.direction === 'download' && datasets[j.dataset_id]) {
-                    _refreshAfterDownload(j.dataset_id);
-                }
             } else if (j.status === 'failed') {
                 showToast(`${verb} failed`, `${j.repo_id}: ${_errorClassMessage(j)}`, 'error', 8000);
             } else if (j.status === 'cancelled') {

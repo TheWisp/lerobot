@@ -134,7 +134,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     line-height: 1.2;
 }
 .transfer-action-btn:hover { color: #ccc; border-color: #4fc3f7; }
+/* Destructive actions (Cancel active worker, Discard draft PR): tinted red
+   on rest AND hover, so they read distinctly from the neutral text labels
+   (Retry, Hide). */
+.transfer-action-btn.danger { color: #c97a82; border-color: #5a3a3f; }
 .transfer-action-btn.danger:hover { color: #e06c75; border-color: #e06c75; }
+/* Hide button on a completed card is pure UI dismissal — keep it neutral
+   (no red) and slightly more compact since it's just an X. */
+.transfer-action-btn.hide-btn { padding: 1px 5px; font-size: 12px; }
 
 .transfer-stats { font-size: 11px; color: #888; margin: 2px 0; }
 .transfer-stats .pct { float: right; }

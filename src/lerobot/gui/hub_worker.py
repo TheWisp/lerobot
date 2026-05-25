@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import json
 import logging
 import os
 import re
@@ -45,6 +44,7 @@ from lerobot.gui.hub_jobs import (
     PROGRESS_WRITE_INTERVAL_S,
     JobConfig,
     JobPaths,
+    atomic_write_json,
     classify_error,
     pid_file_payload,
 )
@@ -125,16 +125,8 @@ class _WorkerState:
         self.write_progress()
 
     def write_progress(self) -> None:
-        """Atomically write the current snapshot to the progress JSON file.
-
-        ``.tmp`` + ``os.replace`` pattern: a reader on the server side that
-        opens the file mid-write sees either the previous coherent state or
-        the new coherent state, never a partial write.
-        """
-        data = self.snapshot()
-        tmp = self.paths.progress.with_suffix(self.paths.progress.suffix + ".tmp")
-        tmp.write_text(json.dumps(data))
-        os.replace(tmp, self.paths.progress)
+        """Atomically write the current snapshot to the progress JSON file."""
+        atomic_write_json(self.paths.progress, self.snapshot())
 
     def start_writer_thread(self) -> threading.Thread:
         """Background thread that flushes the snapshot at the configured rate.
@@ -203,17 +195,19 @@ def extract_milestone(line: str, direction: str) -> str | None:
     return None
 
 
+_SEPARATORS = b"\r\n"
+
+
 def stream_stderr_to_log_and_state(
     pipe: io.BufferedIOBase,
     log_path: Path,
     state: _WorkerState,
 ) -> None:
-    """Read worker-subprocess-of-HF-internals stderr byte-by-byte.
+    """Read the HF helpers' stderr stream, splitting on ``\\r`` and ``\\n``.
 
     HF / tqdm use ``\\r`` carriage returns to overwrite progress lines on
     the same terminal line. A line-buffered reader misses every progress
-    tick. We read byte-by-byte and treat both ``\\r`` and ``\\n`` as
-    record separators.
+    tick, so we read in chunks and split on both separators ourselves.
 
     Each parsed "line" is:
       (1) appended to the per-job log file verbatim (post-pended ``\\n``),
@@ -224,23 +218,25 @@ def stream_stderr_to_log_and_state(
     buf = bytearray()
     with open(log_path, "ab") as log_f:
         while True:
-            chunk = pipe.read(1)
+            chunk = pipe.read(4096)
             if not chunk:
                 break
-            if chunk in (b"\r", b"\n"):
-                if buf:
-                    try:
-                        line = buf.decode("utf-8", errors="replace")
-                    except Exception:  # noqa: BLE001 — defensive
-                        line = "<undecodable bytes>"
-                    log_f.write(line.encode("utf-8", errors="replace") + b"\n")
-                    log_f.flush()
-                    milestone = extract_milestone(line, state.config.direction)
-                    if milestone is not None:
-                        state.set_milestone(milestone)
-                    buf.clear()
-            else:
-                buf.extend(chunk)
+            buf.extend(chunk)
+            # Drain whole records out of the buffer; anything past the last
+            # separator stays for the next chunk.
+            start = 0
+            for i, byte in enumerate(buf):
+                if byte in _SEPARATORS:
+                    if i > start:
+                        line = bytes(buf[start:i]).decode("utf-8", errors="replace")
+                        log_f.write(line.encode("utf-8", errors="replace") + b"\n")
+                        milestone = extract_milestone(line, state.config.direction)
+                        if milestone is not None:
+                            state.set_milestone(milestone)
+                    start = i + 1
+            if start:
+                log_f.flush()
+                del buf[:start]
 
 
 # ── Signal handling ─────────────────────────────────────────────────────────
@@ -288,10 +284,7 @@ def _write_pid_file(paths: JobPaths) -> None:
     ``started_at`` — the server uses ``(pid, start_time)`` to disambiguate
     against a recycled PID.
     """
-    payload = pid_file_payload(os.getpid())
-    tmp = paths.pid.with_suffix(paths.pid.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload))
-    os.replace(tmp, paths.pid)
+    atomic_write_json(paths.pid, pid_file_payload(os.getpid()))
 
 
 def _cleanup_pid_file(paths: JobPaths) -> None:

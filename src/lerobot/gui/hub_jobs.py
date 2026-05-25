@@ -367,6 +367,19 @@ def read_pid_file(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def atomic_write_json(path: Path, data: Any) -> None:
+    """Write ``data`` as JSON to ``path`` atomically.
+
+    ``.tmp`` + ``os.replace``: a concurrent reader sees either the previous
+    coherent contents or the new ones, never a partial write. Used for
+    the progress file (rewritten ~2 Hz by the worker, polled at 1 Hz by
+    the server) and the PID file (written once at worker startup).
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data))
+    os.replace(tmp, path)
+
+
 def is_worker_alive(pid_payload: dict[str, Any]) -> bool:
     """True iff the PID in ``pid_payload`` is still the worker we spawned.
 
