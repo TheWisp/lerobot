@@ -174,64 +174,112 @@ class TestComputeJointAngles:
 
 
 # ============================================================================
-# /api/run/urdf-viz endpoint
+# /api/run/urdf-viz {meta, source} endpoints
 # ============================================================================
 
 
-def _call_endpoint():
-    from lerobot.gui.api.run import urdf_viz_state
+def _call_meta():
+    from lerobot.gui.api.run import urdf_viz_meta
 
-    return asyncio.run(urdf_viz_state())
+    return asyncio.run(urdf_viz_meta())
 
 
-class TestUrdfVizEndpoint:
+def _call_source(source: str = "state"):
+    from lerobot.gui.api.run import urdf_viz_source
+
+    return asyncio.run(urdf_viz_source(source))
+
+
+class TestUrdfVizMeta:
     def test_unavailable_when_no_reader(self):
         with patch("lerobot.gui.api.run._get_obs_reader", return_value=None):
-            assert _call_endpoint() == {"available": False}
+            assert _call_meta() == {"available": False}
 
     def test_unavailable_when_no_observation(self):
         reader = MagicMock()
         reader.read_obs.return_value = []
         with patch("lerobot.gui.api.run._get_obs_reader", return_value=reader):
-            assert _call_endpoint() == {"available": False}
+            assert _call_meta() == {"available": False}
 
     def test_unavailable_for_unknown_robot(self):
         reader = MagicMock()
         reader.read_obs.return_value = [{"mystery_a.pos": 1.0, "mystery_b.pos": 2.0}]
         with patch("lerobot.gui.api.run._get_obs_reader", return_value=reader):
-            assert _call_endpoint() == {"available": False}
+            assert _call_meta() == {"available": False}
 
-    def test_returns_urdf_and_state_for_known_robot(self):
+    def test_advertises_state_only_when_no_action_stream(self):
         reader = MagicMock()
         reader.read_obs.return_value = ({f"{m}.pos": 0.0 for m in SO107_MOTORS}, 0.0)
         reader.read_action.return_value = None
         with patch("lerobot.gui.api.run._get_obs_reader", return_value=reader):
-            result = _call_endpoint()
+            result = _call_meta()
         assert result["available"] is True
         assert result["name"] == "SO-107"
         assert result["urdf"].startswith("/urdf-assets/so107_description/")
         assert result["bimanual"] is False
-        assert len(result["arms"]) == 1
-        assert result["arms"][0]["prefix"] == ""
-        # Angles are radians, keyed by URDF joint name.
-        assert result["arms"][0]["state"]["S2"] == pytest.approx(math.radians(-90.0))
-        # No action stream -> the response omits `action` entirely (so the
-        # frontend can hide the ghost toggle).
-        assert "action" not in result["arms"][0]
+        # Only state is advertised — frontend will hide the overlay toggle.
+        assert result["sources"] == ["state"]
 
-    def test_includes_action_overlay_when_reader_supplies_it(self):
+    def test_advertises_action_when_reader_supplies_it(self):
         reader = MagicMock()
-        # Distinct values so we can verify state vs action ends up on
-        # different angles (not just one mirrored into both).
         reader.read_obs.return_value = ({f"{m}.pos": 0.0 for m in SO107_MOTORS}, 0.0)
         reader.read_action.return_value = ({f"{m}.pos": 10.0 for m in SO107_MOTORS}, 0.0)
         with patch("lerobot.gui.api.run._get_obs_reader", return_value=reader):
-            result = _call_endpoint()
+            result = _call_meta()
+        assert result["sources"] == ["state", "action"]
+
+
+class TestUrdfVizSource:
+    def test_unavailable_when_no_reader(self):
+        with patch("lerobot.gui.api.run._get_obs_reader", return_value=None):
+            assert _call_source("state") == {"available": False}
+
+    def test_state_returns_unified_frames_shape(self):
+        reader = MagicMock()
+        reader.read_obs.return_value = ({f"{m}.pos": 0.0 for m in SO107_MOTORS}, 0.0)
+        reader.read_action.return_value = None
+        with patch("lerobot.gui.api.run._get_obs_reader", return_value=reader):
+            result = _call_source("state")
+        assert result["available"] is True
+        assert len(result["arms"]) == 1
         arm = result["arms"][0]
+        # Always a frames[] — len 1 for poses, len N for future chunks. The
+        # renderer's contract is "look at frames[0]" today.
+        assert "frames" in arm
+        assert len(arm["frames"]) == 1
+        assert arm["frames"][0]["joints"]["S2"] == pytest.approx(math.radians(-90.0))
+
+    def test_action_returns_distinct_pose_from_state(self):
+        reader = MagicMock()
+        reader.read_obs.return_value = ({f"{m}.pos": 0.0 for m in SO107_MOTORS}, 0.0)
+        reader.read_action.return_value = ({f"{m}.pos": 10.0 for m in SO107_MOTORS}, 0.0)
+        with patch("lerobot.gui.api.run._get_obs_reader", return_value=reader):
+            state = _call_source("state")
+            action = _call_source("action")
         # shoulder_lift carries an offset of -90, so pos=0 -> -90 deg (state)
-        # and pos=10 -> -80 deg (action). Distinct + correctly aligned.
-        assert arm["state"]["S2"] == pytest.approx(math.radians(-90.0))
-        assert arm["action"]["S2"] == pytest.approx(math.radians(-80.0))
+        # and pos=10 -> -80 deg (action). Each source returns its own data.
+        assert state["arms"][0]["frames"][0]["joints"]["S2"] == pytest.approx(math.radians(-90.0))
+        assert action["arms"][0]["frames"][0]["joints"]["S2"] == pytest.approx(math.radians(-80.0))
+
+    def test_action_unavailable_when_reader_has_no_action(self):
+        reader = MagicMock()
+        reader.read_obs.return_value = ({f"{m}.pos": 0.0 for m in SO107_MOTORS}, 0.0)
+        reader.read_action.return_value = None
+        with patch("lerobot.gui.api.run._get_obs_reader", return_value=reader):
+            assert _call_source("action") == {"available": False}
+
+    def test_unknown_source_raises_400(self):
+        from fastapi import HTTPException
+
+        reader = MagicMock()
+        reader.read_obs.return_value = ({f"{m}.pos": 0.0 for m in SO107_MOTORS}, 0.0)
+        reader.read_action.return_value = None
+        with (
+            patch("lerobot.gui.api.run._get_obs_reader", return_value=reader),
+            pytest.raises(HTTPException) as exc,
+        ):
+            _call_source("policy_chunk")
+        assert exc.value.status_code == 400
 
 
 # ============================================================================
@@ -265,13 +313,19 @@ def _make_so107_bimanual_dataset(ep_length: int = 50):
     return ds
 
 
-def _call_dataset_endpoint(dataset_id: str, episode_idx: int, frame: int):
-    from lerobot.gui.api.datasets import get_urdf_viz_frame
+def _call_dataset_meta(dataset_id: str, episode_idx: int):
+    from lerobot.gui.api.datasets import get_urdf_viz_dataset_meta
 
-    return asyncio.run(get_urdf_viz_frame(dataset_id, episode_idx, frame))
+    return asyncio.run(get_urdf_viz_dataset_meta(dataset_id, episode_idx))
 
 
-class TestUrdfVizDatasetEndpoint:
+def _call_dataset_source(dataset_id: str, episode_idx: int, frame: int, source: str = "state"):
+    from lerobot.gui.api.datasets import get_urdf_viz_dataset_source
+
+    return asyncio.run(get_urdf_viz_dataset_source(dataset_id, episode_idx, frame, source))
+
+
+class TestUrdfVizDatasetEndpoints:
     @pytest.fixture
     def app_with_so107(self):
         import pandas as pd
@@ -303,39 +357,58 @@ class TestUrdfVizDatasetEndpoint:
 
         datasets_module._app_state = original
 
-    def test_404_for_unknown_dataset(self, app_with_so107):
+    def test_meta_404_for_unknown_dataset(self, app_with_so107):
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc:
-            _call_dataset_endpoint("nope/missing", 0, 0)
+            _call_dataset_meta("nope/missing", 0)
         assert exc.value.status_code == 404
 
-    def test_returns_state_and_action_for_so107(self, app_with_so107):
-        result = _call_dataset_endpoint("test/so107", 0, 0)
+    def test_meta_advertises_both_sources_when_action_feature_present(self, app_with_so107):
+        result = _call_dataset_meta("test/so107", 0)
         assert result["available"] is True
         assert result["name"] == "SO-107"
         assert result["bimanual"] is True
-        assert len(result["arms"]) == 2
-        # left shoulder_lift alignment is (+1, -90): state pos 0 -> -90 deg,
-        # action pos 10 -> -80 deg. Verifies state/action are independently
-        # converted with the right per-arm alignment.
-        left = next(a for a in result["arms"] if a["prefix"] == "left_")
-        assert left["state"]["S2"] == pytest.approx(math.radians(-90.0))
-        assert left["action"]["S2"] == pytest.approx(math.radians(-80.0))
+        assert result["sources"] == ["state", "action"]
 
-    def test_action_omitted_when_dataset_has_no_action_feature(self, app_with_so107):
-        # Strip the action feature; endpoint should still serve state-only.
+    def test_meta_advertises_state_only_when_action_feature_absent(self, app_with_so107):
         app_with_so107.meta.features.pop("action")
-        result = _call_dataset_endpoint("test/so107", 0, 0)
+        result = _call_dataset_meta("test/so107", 0)
         assert result["available"] is True
-        for arm in result["arms"]:
-            assert "state" in arm
-            assert "action" not in arm
+        assert result["sources"] == ["state"]
 
-    def test_unavailable_for_dataset_without_observation_state(self, app_with_so107):
+    def test_meta_unavailable_without_observation_state(self, app_with_so107):
         app_with_so107.meta.features.pop("observation.state")
-        result = _call_dataset_endpoint("test/so107", 0, 0)
-        assert result == {"available": False}
+        assert _call_dataset_meta("test/so107", 0) == {"available": False}
+
+    def test_source_state_returns_unified_frames_shape(self, app_with_so107):
+        result = _call_dataset_source("test/so107", 0, 0, "state")
+        assert result["available"] is True
+        assert len(result["arms"]) == 2
+        # left shoulder_lift alignment is (+1, -90): state pos 0 -> -90 deg.
+        left = next(a for a in result["arms"] if a["prefix"] == "left_")
+        assert len(left["frames"]) == 1
+        assert left["frames"][0]["joints"]["S2"] == pytest.approx(math.radians(-90.0))
+
+    def test_source_action_distinct_from_state(self, app_with_so107):
+        state = _call_dataset_source("test/so107", 0, 0, "state")
+        action = _call_dataset_source("test/so107", 0, 0, "action")
+        left_state = next(a for a in state["arms"] if a["prefix"] == "left_")
+        left_action = next(a for a in action["arms"] if a["prefix"] == "left_")
+        assert left_state["frames"][0]["joints"]["S2"] == pytest.approx(math.radians(-90.0))
+        # pos=10 with offset -90 -> -80 deg
+        assert left_action["frames"][0]["joints"]["S2"] == pytest.approx(math.radians(-80.0))
+
+    def test_source_action_unavailable_when_dataset_has_no_action_feature(self, app_with_so107):
+        app_with_so107.meta.features.pop("action")
+        assert _call_dataset_source("test/so107", 0, 0, "action") == {"available": False}
+
+    def test_source_unknown_raises_400(self, app_with_so107):
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            _call_dataset_source("test/so107", 0, 0, "policy_chunk")
+        assert exc.value.status_code == 400
 
 
 # ============================================================================

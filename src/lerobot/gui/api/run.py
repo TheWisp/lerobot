@@ -1232,17 +1232,59 @@ async def obs_stream_state() -> dict:
     }
 
 
-@router.get("/urdf-viz")
-async def urdf_viz_state() -> dict:
-    """URDF reference + per-joint angles for the in-browser URDF viewer.
+@router.get("/urdf-viz/meta")
+async def urdf_viz_meta() -> dict:
+    """One-shot identity + advertised sources for the in-browser URDF viewer.
 
-    Resolves the robot from the live observation stream and converts both
-    the observed state and (when available) the last commanded action to
-    URDF joint angles (see :mod:`lerobot.gui.urdf_viz`). The frontend
-    (``static/urdf_viz.html``) loads ``urdf`` once, then polls this for
-    ``arms[*].state`` (solid robot) and the optional ``arms[*].action``
-    (ghost overlay). ``{"available": false}`` when no run is streaming or
-    the robot has no vendored URDF.
+    The frontend fetches this once at iframe init to learn (1) which robot is
+    on the run (so it can load the URDF and arrange arms in the scene) and
+    (2) which pose sources are currently available. ``sources`` is a list of
+    user-facing names — today ``"state"`` (always) and ``"action"`` (when the
+    run is writing the commanded action to the obs stream). Future sources
+    (e.g. ``"prediction"`` from a debug model) appear here without changing
+    the rest of the contract.
+
+    ``{"available": false}`` when no run is streaming or the robot has no
+    vendored URDF.
+    """
+    from lerobot.gui.urdf_viz import resolve_robot
+
+    reader = _get_obs_reader()
+    if reader is None:
+        return {"available": False}
+    obs_result = reader.read_obs()
+    if not obs_result:
+        return {"available": False}
+    spec = resolve_robot(obs_result[0].keys())
+    if spec is None:
+        return {"available": False}
+    sources = ["state"]
+    if reader.read_action():
+        sources.append("action")
+    return {
+        "available": True,
+        "name": spec.name,
+        "urdf": f"/urdf-assets/{spec.urdf_url_path}",
+        "bimanual": len(spec.arms) == 2,
+        "sources": sources,
+    }
+
+
+@router.get("/urdf-viz")
+async def urdf_viz_source(source: str = "state") -> dict:
+    """Per-arm URDF joint angles for one named source.
+
+    ``source`` mirrors the user-facing names advertised by
+    :func:`urdf_viz_meta` (``"state"`` / ``"action"``); the backend decides
+    how to fulfil each one. The response is the same shape regardless of
+    source — a list of arms, each with one or more ``frames``. A teleop's
+    action is a single frame; a future chunk-output policy would return many
+    with an ``fps`` for playback timing. The renderer applies frames[0] for
+    a pose and steps through for a chunk; it does not need to know which
+    backend produced the data.
+
+    ``{"available": false}`` when no run is streaming, the robot has no
+    vendored URDF, or the requested source has no current data.
     """
     from lerobot.gui.urdf_viz import compute_joint_angles, resolve_robot
 
@@ -1256,28 +1298,22 @@ async def urdf_viz_state() -> dict:
     spec = resolve_robot(obs.keys())
     if spec is None:
         return {"available": False}
-    state_angles = compute_joint_angles(spec, obs)
-    # Action stream is independent of obs: a run may stream obs without
-    # ever writing actions (e.g. policy eval with replay-only). Treat it
-    # as optional and only emit per-arm `action` when the reader returns
-    # something on this tick.
-    action_angles: dict[str, dict[str, float]] = {}
-    act_result = reader.read_action()
-    if act_result:
-        action_angles = compute_joint_angles(spec, act_result[0])
-    arms_payload: list[dict] = []
-    for a in spec.arms:
-        entry: dict = {"prefix": a.obs_prefix, "state": state_angles.get(a.obs_prefix, {})}
-        if action_angles:
-            entry["action"] = action_angles.get(a.obs_prefix, {})
-        arms_payload.append(entry)
-    return {
-        "available": True,
-        "name": spec.name,
-        "urdf": f"/urdf-assets/{spec.urdf_url_path}",
-        "bimanual": len(spec.arms) == 2,
-        "arms": arms_payload,
-    }
+
+    if source == "state":
+        sample = obs
+    elif source == "action":
+        act_result = reader.read_action()
+        if not act_result:
+            return {"available": False}
+        sample = act_result[0]
+    else:
+        raise HTTPException(status_code=400, detail=f"unknown source: {source!r}")
+
+    angles = compute_joint_angles(spec, sample)
+    arms_payload = [
+        {"prefix": a.obs_prefix, "frames": [{"joints": angles.get(a.obs_prefix, {})}]} for a in spec.arms
+    ]
+    return {"available": True, "arms": arms_payload}
 
 
 @router.get("/obs-stream/image/{cam_key}")
