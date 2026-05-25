@@ -23,7 +23,8 @@ resolve_robot(obs_keys)            urdf_viz.py — matches the motor set to a
 compute_joint_angles(spec, obs)    urdf_viz.py — motor pos -> URDF rad
         │  {prefix: {urdf_joint: radians}}
         ▼
-GET /api/run/urdf-viz              run.py — thin JSON glue
+GET /api/run/urdf-viz/meta         run.py — one-shot identity + sources
+GET /api/run/urdf-viz?source=X     run.py — per-source frames
         │
         ▼
 static/urdf_viz.html               three.js + urdf-loader, in an iframe tile
@@ -33,6 +34,70 @@ All kinematics lives in **Python** (`urdf_viz.py`), not JavaScript. The
 motor->URDF conversion is the correctness-critical part, so it sits under
 pytest (`tests/gui/test_urdf_viz.py`) and carries asserts. The browser page
 only fetches angles and draws them — it does no math.
+
+## Sources — uniform shape, backend decides
+
+The viewer is parameterised by a **source name**. Today: `"state"` (always)
+and `"action"` (when the run has a commanded action stream, or the dataset
+has an `action` feature). The names are user-facing concepts. The backend
+decides how to fulfil each one — a teleop's "action" is a single commanded
+pose; a future chunk-output policy's "action" would be N predicted poses
+with a playback fps. The frontend doesn't know which.
+
+The frontend speaks two endpoints:
+
+- `GET .../urdf-viz/meta` → `{name, urdf, bimanual, sources: ["state", "action", ...]}`.
+  Fetched once at iframe mount. Determines which sources to expose in the UI.
+- `GET .../urdf-viz?source=X` → `{available, arms: [{prefix, frames: [{joints}, ...], fps?}]}`.
+  Polled per tick (live mode) or per scrubber move (dataset mode).
+
+The response shape is uniform across sources and modes:
+
+| `frames.length` | Meaning                                   | Renderer behaviour today                            |
+| --------------- | ----------------------------------------- | --------------------------------------------------- |
+| 1               | A single pose (state, or teleop's action) | Set the URDF's joint values to `frames[0].joints`   |
+| > 1             | A chunk of N future poses (`fps` present) | Apply `frames[0]` only; chunk playback is scope-out |
+
+The list-of-frames format is in the API now even though the renderer only
+reads `frames[0]`, so future sources (policy chunks, debug-model chunks)
+slot in without an API rename.
+
+### Adding a new source
+
+A source is "a producer registered in the backend that can supply joint
+values from the same `compute_joint_angles` pipeline". The two existing
+ones — state and action — read from `ObservationStreamReader.read_obs()` /
+`read_action()` for live, and from the parquet's `observation.state` /
+`action` columns for datasets. A future debug-model source would register
+a handler that reads from wherever the model's output is buffered, and
+return the same `frames[]` shape.
+
+The frontend UI today is a single "show action" toggle. When a second
+candidate overlay source appears in meta (e.g. `"prediction"`), the toggle
+will need to become a multi-pick — but the API contract doesn't change.
+
+## Future sources (out of scope for this stack, intentionally)
+
+Two follow-up directions worth designing for now even if not implemented:
+
+1. **Chunk playback with a paused producer.** If a policy outputs an
+   action chunk of N future poses, naively previewing the chunk as a
+   _moving_ ghost robot while the _actual_ robot is also moving creates a
+   visual mess (two robots both moving, neither overlapping the other in
+   time). The right UX is pause-then-step: the policy's producer needs a
+   pause/snapshot mode the GUI can drive; the viewer scrubs through the
+   captured chunk's frames at the producer's `fps`. Affects both ends — a
+   pause hook on the policy side + a scrubber in the viewer.
+2. **EE-trajectory line, always-live.** A reduced version that always
+   shows the chunk as a static line through 3D space — `FK(joints)` of
+   each frame projected to its EE position, drawn as a polyline tail.
+   No animation, no pause requirement; always safe to render alongside
+   the live robot since it's a path, not a moving figure. Less rich than
+   chunk playback but doesn't fight the live motion.
+
+Both should live in this same viewer, behind the same `?source=` API. The
+producer simply returns `frames[]` (already supported) and `fps`; the
+viewer dispatches on length.
 
 ## The two-layer motor->URDF mapping
 

@@ -10,13 +10,10 @@
   #status { position: absolute; top: 4px; right: 6px; color: #9cf; font-size: 11px;
             font-family: monospace; background: rgba(0,0,0,0.6); padding: 1px 5px;
             border-radius: 3px; pointer-events: none; }
-  /* bottom-right ghost toggle. Pointer-events on so it's clickable; everything
-     else in the page is the orbit-controls canvas. */
   /* Outlined-when-off, filled-when-on — the standard Material/Tailwind/
      Bootstrap toggle-button pattern. The cyan border in the off state is
      what tells the user "this is a control", and switching from outlined
-     to filled is the on-state signal. No reserved-space-for-an-icon
-     awkwardness, and the fill change is a strong non-text signal. */
+     to filled is the on-state signal. */
   #ghost-toggle { position: absolute; bottom: 6px; right: 6px;
                   font-size: 11px; font-family: monospace;
                   color: #4dd0ff; background: rgba(10, 22, 34, 0.7);
@@ -44,13 +41,23 @@
 }
 </script>
 <script type="module">
-// Thin renderer with two drivers:
-//   - mode=live (default): polls /api/run/urdf-viz at 30 Hz; the response
-//     carries `state` (solid robot) and optionally `action` (ghost overlay).
-//   - mode=dataset: parent posts {type:'frame', dataset, episode, frame};
-//     we fetch /api/datasets/{id}/episodes/{ep}/urdf-viz?frame=N.
-// Either way the response shape is the same and the renderer doesn't care
-// where the angles came from.
+// Thin renderer over a uniform source API:
+//
+//   meta endpoint  -> {name, urdf, bimanual, sources: ["state", "action", ...]}
+//   source endpoint(source=X) -> {arms: [{prefix, frames: [{joints}, ...], fps?}]}
+//
+// The frontend speaks only the meta- + source- vocabulary. It doesn't know
+// whether "action" is a teleop's single commanded pose or a policy's chunk
+// of N predicted poses — that's the backend's decision, expressed by the
+// number of frames returned. For now the renderer applies frames[0] only;
+// chunk playback (stepping through frames at `fps`) is a documented next
+// step (see gui/docs/urdf_viz.md "Future sources").
+//
+// Two drivers feed the same machinery:
+//   - mode=live (default): polls the run endpoint at 30 Hz.
+//   - mode=dataset:        listens for {type:'frame', dataset, episode, frame}
+//                          postMessage from the parent page and fetches the
+//                          dataset endpoint on demand.
 import * as THREE from 'three';
 import { OrbitControls } from '/static/vendor/OrbitControls.js';
 import { STLLoader } from '/static/vendor/STLLoader.js';
@@ -59,13 +66,28 @@ import URDFLoader from 'urdf-loader';
 const PARAMS = new URLSearchParams(location.search);
 const MODE = PARAMS.get('mode') || 'live';  // 'live' | 'dataset'
 let _ghostOn = PARAMS.get('ghost') === 'on';
-const LIVE_ENDPOINT = '/api/run/urdf-viz';
-const datasetEndpoint = (ds, ep, frame) =>
-  `/api/datasets/${encodeURIComponent(ds)}/episodes/${ep}/urdf-viz?frame=${frame}`;
 const BIMANUAL_X = 0.165;  // half the physical center-to-center arm spacing
 const STATE_COLOR = 0xe0b020;
 const GHOST_COLOR = 0x4dd0ff;
 const setStatus = (m) => { document.getElementById('status').textContent = m; };
+
+// Endpoints are mode-specific only in their URL prefix; the response shape
+// is identical (meta vs source = frames).
+const endpoints = (() => {
+  if (MODE === 'live') {
+    return {
+      meta: () => '/api/run/urdf-viz/meta',
+      source: (name) => `/api/run/urdf-viz?source=${encodeURIComponent(name)}`,
+    };
+  }
+  // dataset mode — closures over _datasetCtx, filled by postMessage
+  return {
+    meta: () => `/api/datasets/${encodeURIComponent(_datasetCtx.dataset)}/episodes/${_datasetCtx.episode}/urdf-viz/meta`,
+    source: (name) =>
+      `/api/datasets/${encodeURIComponent(_datasetCtx.dataset)}/episodes/${_datasetCtx.episode}/urdf-viz`
+      + `?frame=${_datasetCtx.frame}&source=${encodeURIComponent(name)}`,
+  };
+})();
 
 // ── three.js scene ────────────────────────────────────────────────────────
 const scene = new THREE.Scene();
@@ -90,7 +112,6 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-// _polls counts updates applied in the last second — drives the status readout.
 let _polls = 0, _label = '';
 function animate() {
   requestAnimationFrame(animate);
@@ -99,9 +120,14 @@ function animate() {
 }
 animate();
 
-// ── one arm = solid (state) + optional ghost (action). Ghost is lazily
-//    loaded on first toggle-on so we don't pay STL parse + scene cost for
-//    users who never enable the overlay. ─────────────────────────────────
+// ── per-arm URDFRobot bookkeeping ─────────────────────────────────────────
+// Each arm has one solid robot for state and (lazily) one translucent ghost
+// for the active overlay source. The ghost robot is loaded on first toggle-
+// on so users who never enable the overlay don't pay STL + scene cost.
+let _meta = null;             // {name, urdf, bimanual, sources}
+let _arms = [];               // [{prefix, baseX, state, ghost, _lastGhost}]
+let _datasetCtx = null;       // dataset mode only: {dataset, episode, frame}
+
 function _loadRobot(urdfUrl, baseX, color, opts = {}) {
   const transparent = !!opts.transparent;
   const matOpts = { color };
@@ -134,10 +160,8 @@ function _loadRobot(urdfUrl, baseX, color, opts = {}) {
     };
     loader.load(urdfUrl, (robot) => {
       if (!robot) { reject(new Error('URDF failed to load: ' + urdfUrl)); return; }
-      // urdf-loader clamps setJointValue to the URDF <limit> by default;
-      // the calibration offsets legitimately exceed the CAD limits.
       for (const name in robot.joints) robot.joints[name].ignoreLimits = true;
-      robot.rotation.x = -Math.PI / 2;  // URDF Z-up -> three.js Y-up
+      robot.rotation.x = -Math.PI / 2;
       robot.position.x = baseX;
       scene.add(robot);
       resolve(robot);
@@ -145,23 +169,18 @@ function _loadRobot(urdfUrl, baseX, color, opts = {}) {
   });
 }
 
-// One entry per arm: {prefix, baseX, state: URDFRobot, ghost: URDFRobot | null}
-let _arms = [];
-let _urdfUrl = null;
-
 async function _ensureGhost(armEntry) {
   if (armEntry.ghost) return;
-  // Cache the in-flight load promise so concurrent calls (e.g. the toggle
-  // click overlapping with the init's apply) share one URDFLoader run
-  // rather than racing and orphaning a duplicate ghost in the scene.
+  // Cache the in-flight load so concurrent calls (toggle click overlapping
+  // the init's apply) share one URDFLoader run rather than racing and
+  // orphaning a duplicate ghost in the scene.
   if (!armEntry._ghostLoading) {
-    armEntry._ghostLoading = _loadRobot(_urdfUrl, armEntry.baseX, GHOST_COLOR, { transparent: true })
+    armEntry._ghostLoading = _loadRobot(_meta.urdf, armEntry.baseX, GHOST_COLOR, { transparent: true })
       .then((robot) => { armEntry.ghost = robot; return robot; });
   }
   await armEntry._ghostLoading;
-  // Re-apply the last action angles if we have them cached, so the ghost
-  // doesn't flash at home pose on first show.
-  if (armEntry._lastAction) _applyAngles(armEntry.ghost, armEntry._lastAction);
+  // Re-apply the last action angles so the ghost doesn't flash at home pose.
+  if (armEntry._lastGhost) _applyAngles(armEntry.ghost, armEntry._lastGhost);
 }
 
 function _setGhostVisible(visible) {
@@ -177,58 +196,69 @@ function _applyAngles(robot, angles) {
   }
 }
 
-async function _applyResponse(data) {
-  if (!data || !data.available || _arms.length !== data.arms.length) return;
-  let hadAction = false;
+// Apply one source-response. For state, sets the solid robot. For any other
+// source ("action" today, more later), sets the ghost — lazy-loading it if
+// needed. frames[0] is always applied; frames[1..] are reserved for chunk
+// playback (next-step work, see gui/docs/urdf_viz.md).
+async function _applySource(name, data) {
+  if (!data || !data.available || !data.arms || data.arms.length !== _arms.length) return;
   for (let i = 0; i < data.arms.length; i++) {
-    const arm = _arms[i];
     const armData = data.arms[i];
-    if (armData.state) _applyAngles(arm.state, armData.state);
-    if (armData.action) {
-      hadAction = true;
-      arm._lastAction = armData.action;
+    const frame0 = armData.frames && armData.frames[0];
+    if (!frame0) continue;
+    const arm = _arms[i];
+    if (name === 'state') {
+      _applyAngles(arm.state, frame0.joints || {});
+    } else {
+      arm._lastGhost = frame0.joints || {};
       if (_ghostOn) {
         await _ensureGhost(arm);
-        _applyAngles(arm.ghost, armData.action);
+        _applyAngles(arm.ghost, arm._lastGhost);
       }
     }
   }
-  // Hide the toggle when this driver can't supply action — keeps the UI
-  // honest when e.g. the run never wrote actions, or the dataset has no
-  // `action` feature.
-  document.getElementById('ghost-toggle').style.display = hadAction ? '' : 'none';
   _polls++;
+}
+
+async function _fetchSource(name) {
+  try {
+    const r = await fetch(endpoints.source(name));
+    const data = await r.json();
+    await _applySource(name, data);
+  } catch (e) { /* transient — keep the last pose */ }
 }
 
 // ── driver: live (poll) ───────────────────────────────────────────────────
 async function _pollLive() {
-  try {
-    const r = await fetch(LIVE_ENDPOINT);
-    await _applyResponse(await r.json());
-  } catch (e) { /* transient — keep the last pose */ }
-  setTimeout(_pollLive, 33);  // ~30 Hz, matches the observation rate
+  const tasks = [_fetchSource('state')];
+  // Only fetch the overlay source when the toggle is on AND meta declares
+  // it. Saves 30 req/s when the user isn't asking for the comparison.
+  if (_ghostOn && _meta.sources.length > 1) {
+    tasks.push(_fetchSource(_meta.sources[1]));  // first non-state source
+  }
+  await Promise.all(tasks);
+  setTimeout(_pollLive, 33);
 }
 
 // ── driver: dataset (postMessage-driven) ──────────────────────────────────
-let _datasetCtx = null;  // {dataset, episode}
 let _pendingFrame = null;
 let _fetchInflight = false;
 
-async function _fetchDatasetFrame(frame) {
-  if (!_datasetCtx) return;
-  try {
-    const r = await fetch(datasetEndpoint(_datasetCtx.dataset, _datasetCtx.episode, frame));
-    await _applyResponse(await r.json());
-  } catch (e) { /* transient */ }
+async function _refreshDatasetFrame() {
+  const tasks = [_fetchSource('state')];
+  if (_ghostOn && _meta && _meta.sources.length > 1) {
+    tasks.push(_fetchSource(_meta.sources[1]));
+  }
+  await Promise.all(tasks);
 }
 
 async function _drainDataset() {
   if (_fetchInflight || _pendingFrame === null) return;
   _fetchInflight = true;
   while (_pendingFrame !== null) {
-    const f = _pendingFrame;
+    _datasetCtx.frame = _pendingFrame;
     _pendingFrame = null;
-    await _fetchDatasetFrame(f);
+    await _refreshDatasetFrame();
   }
   _fetchInflight = false;
 }
@@ -238,7 +268,7 @@ window.addEventListener('message', (e) => {
   if (!msg || typeof msg !== 'object') return;
   if (msg.type === 'frame') {
     if (!_datasetCtx || _datasetCtx.dataset !== msg.dataset || _datasetCtx.episode !== msg.episode) {
-      _datasetCtx = { dataset: msg.dataset, episode: msg.episode };
+      _datasetCtx = { dataset: msg.dataset, episode: msg.episode, frame: msg.frame };
     }
     _pendingFrame = msg.frame;
     _drainDataset();
@@ -248,9 +278,6 @@ window.addEventListener('message', (e) => {
 // ── ghost toggle ──────────────────────────────────────────────────────────
 const ghostBtn = document.getElementById('ghost-toggle');
 function _updateGhostBtn() {
-  // State signal is the .on class — CSS swaps colors + fills the indicator
-  // dot. The label text stays static so the control reads as one button
-  // (not as a status badge whose text changes).
   ghostBtn.classList.toggle('on', _ghostOn);
 }
 _updateGhostBtn();
@@ -259,57 +286,71 @@ ghostBtn.addEventListener('click', async () => {
   _updateGhostBtn();
   if (_ghostOn) {
     for (const arm of _arms) await _ensureGhost(arm);
+    // Immediately fetch the overlay source so the ghost shows up without
+    // waiting for the next poll tick.
+    if (_meta.sources.length > 1) await _fetchSource(_meta.sources[1]);
   }
   _setGhostVisible(_ghostOn);
 });
 
-// ── init: probe one frame, build the scene, hand off to the driver ───────
-async function _initialProbe() {
-  if (MODE === 'live') {
-    setStatus('waiting for a run…');
-    for (let i = 0; i < 240; i++) {
-      try {
-        const r = await fetch(LIVE_ENDPOINT);
-        const d = await r.json();
-        if (d.available) return d;
-      } catch (e) { /* not ready */ }
-      await new Promise((res) => setTimeout(res, 500));
+// ── init: fetch meta, build scene, hand off to the driver ────────────────
+async function _waitForMeta() {
+  if (MODE === 'dataset') {
+    // Wait for the parent's first {type:'frame', ...} postMessage so we know
+    // which dataset/episode to query meta for.
+    setStatus('waiting for dataset…');
+    for (let i = 0; i < 240 && !_datasetCtx; i++) {
+      await new Promise((res) => setTimeout(res, 100));
     }
-    return null;
+    if (!_datasetCtx) return null;
+  } else {
+    setStatus('waiting for a run…');
   }
-  // dataset mode: we need the parent to tell us which (dataset, episode) and
-  // an initial frame. Hold here until the first postMessage gives us context,
-  // then probe frame 0.
-  setStatus('waiting for dataset…');
-  for (let i = 0; i < 240 && !_datasetCtx; i++) {
-    await new Promise((res) => setTimeout(res, 100));
+  for (let i = 0; i < 240; i++) {
+    try {
+      const r = await fetch(endpoints.meta());
+      const d = await r.json();
+      if (d.available) return d;
+    } catch (e) { /* not ready */ }
+    await new Promise((res) => setTimeout(res, MODE === 'live' ? 500 : 100));
   }
-  if (!_datasetCtx) return null;
-  try {
-    const r = await fetch(datasetEndpoint(_datasetCtx.dataset, _datasetCtx.episode, 0));
-    const d = await r.json();
-    return d.available ? d : null;
-  } catch (e) { return null; }
+  return null;
 }
 
 async function init() {
-  const data = await _initialProbe();
-  if (!data) { setStatus('no robot to visualize'); return; }
-  _urdfUrl = data.urdf;
-  const baseXs = data.bimanual
-    ? data.arms.map((a) => (a.prefix === 'left_' ? BIMANUAL_X : -BIMANUAL_X))
-    : [0];
-  for (let i = 0; i < data.arms.length; i++) {
-    const arm = data.arms[i];
-    const stateRobot = await _loadRobot(_urdfUrl, baseXs[i], STATE_COLOR);
-    _arms.push({ prefix: arm.prefix, baseX: baseXs[i], state: stateRobot, ghost: null, _lastAction: null });
+  _meta = await _waitForMeta();
+  if (!_meta) { setStatus('no robot to visualize'); return; }
+
+  const baseXs = _meta.bimanual
+    ? [{prefix: 'left_', x: BIMANUAL_X}, {prefix: 'right_', x: -BIMANUAL_X}]
+    : [{prefix: '', x: 0}];
+  for (const {prefix, x} of baseXs) {
+    const stateRobot = await _loadRobot(_meta.urdf, x, STATE_COLOR);
+    _arms.push({ prefix, baseX: x, state: stateRobot, ghost: null, _lastGhost: null });
   }
-  await _applyResponse(data);
-  if (_ghostOn) {
-    for (const arm of _arms) await _ensureGhost(arm);
-    _setGhostVisible(true);
+
+  // Initial fetch — fills state immediately so the user sees the pose
+  // before the polling/event loop spins up.
+  if (MODE === 'live') {
+    await _fetchSource('state');
+    if (_ghostOn && _meta.sources.length > 1) {
+      for (const arm of _arms) await _ensureGhost(arm);
+      await _fetchSource(_meta.sources[1]);
+    }
+  } else if (_datasetCtx) {
+    await _refreshDatasetFrame();
+    if (_ghostOn) for (const arm of _arms) await _ensureGhost(arm);
   }
-  _label = (data.name || 'robot') + (data.bimanual ? ' (bimanual)' : '');
+  _setGhostVisible(_ghostOn);
+
+  // Hide the toggle when meta doesn't advertise an overlay source. Keeps
+  // the UI honest when e.g. the run never wrote actions or the dataset has
+  // no `action` feature.
+  if (_meta.sources.length < 2) {
+    document.getElementById('ghost-toggle').style.display = 'none';
+  }
+
+  _label = (_meta.name || 'robot') + (_meta.bimanual ? ' (bimanual)' : '');
   setStatus(_label);
   if (MODE === 'live') {
     // Hz is a meaningful signal in live mode (dropped polls = stale obs).
@@ -321,7 +362,6 @@ async function init() {
     }, 1000);
     _pollLive();
   }
-  // dataset mode is event-driven — postMessage handler above does the work.
 }
 
 init();
