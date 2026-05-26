@@ -94,12 +94,18 @@ See [docs/data_tab.md](docs/data_tab.md) for full design.
 
 ### HuggingFace Hub Sync
 
-- [ ] `GET /api/hub/auth-status` — check login state
-- [ ] `POST /api/hub/login` — store HF token
-- [ ] `POST /api/datasets/{id}/hub/download` — pull from Hub (overwrites local, with confirmation)
-- [ ] `POST /api/datasets/{id}/hub/upload` — push to Hub (overwrites remote, with confirmation)
-- [ ] Frontend: auth indicator in header, download/upload buttons per dataset
-- [High] **Hub progress bar (uploads + downloads)**: every `snapshot_download` / `upload_folder` call writes a tqdm bar to the server stderr that the GUI never sees. The Hub modal (upload / download / open-sync) just shows a static "Uploading…" / "Downloading…" status while the request blocks for minutes. Wire real progress for all Hub transfers: hook `huggingface_hub.utils.tqdm` into a per-request callback that pushes byte counts + current filename into a shared progress dict, expose via SSE or a poll endpoint, and render a progress bar in the modal status area. Affects all three Hub modal modes; most visible for the open-sync flow because users see it before they have any sense of dataset size.
+Background Transfers tray + subprocess-worker pipeline landed in PR #15
+(merged 2026-05-26). Design: [docs/hub_transfers.md](docs/hub_transfers.md).
+
+- [x] `GET /api/hub/auth-status` — check login state
+- [x] `POST /api/datasets/{id}/hub/download` — pull from Hub (with completeness check + confirm_force override)
+- [x] `POST /api/datasets/{id}/hub/upload` — push to Hub via PR (atomic merge to main)
+- [x] Frontend: auth indicator in header, Hub Upload / Hub Download per-dataset entry points
+- [x] **Background Transfers tray** — pill in top-right, popover with one card per job, real progress, Cancel / Retry / Discard / Hide actions. Multi-tab consistent (server holds state), workers survive server restart, multi-dataset parallel.
+- [ ] **Stale-PR sweep** ([open question in design doc](docs/hub_transfers.md#open-questions)) — failed uploads leave draft PRs; surface them on Upload-modal-open so the user sees stale attempts.
+- [ ] **Re-enable `super_squash_history`** ([open question](docs/hub_transfers.md#open-questions)) — currently disabled; main accumulates N commits per upload (cosmetic only — atomicity and throughput unaffected). Need correct HF API usage or post-merge squash-on-main.
+- [ ] **Retry budget UX** — third-strike retries should surface differently ("Failed 3× — check connection") rather than repeating the latest error.
+- [ ] **`POST /api/hub/login`** — currently delegated to `huggingface-cli login` (out-of-band terminal flow). Add an in-GUI login form only if the standalone GUI runtime (no terminal) is supported.
 
 ## Model Tab
 
