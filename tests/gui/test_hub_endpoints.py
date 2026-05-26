@@ -487,6 +487,144 @@ class TestDismiss:
         asyncio.run(run())
 
 
+class TestRetryPRTransfer:
+    """Regression for the retry/dismiss interaction bug.
+
+    Before the fix: Retry on a failed upload spawned a new worker with
+    reuse_pr_num=N, but the frontend's follow-up Dismiss then called
+    change_discussion_status(closed) on that same PR — destroying the
+    very PR the new worker was resuming into.
+
+    After the fix: _find_existing_pr_for_retry transfers PR ownership
+    by clearing pr_num on every source-entry pointing at the resumed
+    PR, so the subsequent dismiss skips the close branch.
+    """
+
+    def test_pr_ownership_transferred_off_source_on_retry(self, app_with_state, tmp_path, monkeypatch):
+        app, state, monkeypatch_, jobs_dir = app_with_state
+        ds_root = tmp_path / "ds"
+        ds_root.mkdir()
+        (ds_root / "data.bin").write_bytes(b"x")
+        _make_open_dataset(state, "user/ds", ds_root)
+
+        # Source entry: a failed upload that left a draft PR behind.
+        source = hub_jobs.make_job(dataset_id="user/ds", direction="upload", repo_id="user/ds")
+        source.status = "failed"
+        source.finished_at = time.time()
+        source.pr_num = 42
+        state.hub_jobs[source.job_id] = source
+
+        # Patch HfApi so _find_existing_pr_for_retry sees a draft PR.
+        import huggingface_hub
+
+        class _FakeApi:
+            def whoami(self):
+                return {"name": "test"}
+
+            def repo_info(self, *a, **k):
+                class _Info:
+                    siblings = []
+
+                return _Info()
+
+            def get_discussion_details(self, *a, **k):
+                class _Details:
+                    status = "draft"
+
+                return _Details()
+
+        monkeypatch_.setattr(huggingface_hub, "HfApi", _FakeApi)
+
+        with patch("subprocess.Popen", _FakePopen):
+            datasets_module._hub_spawn_locks.clear()
+
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://test"
+                ) as client:
+                    resp = await client.post(
+                        "/api/datasets/user%2Fds/hub/upload", json={"repo_id": "user/ds"}
+                    )
+                    assert resp.status_code == 200, resp.text
+                    new_job_id = resp.json()["job_id"]
+
+                    new_job = state.hub_jobs[new_job_id]
+                    # New job inherited pr_num=42.
+                    assert new_job.pr_num == 42
+                    # Source's pr_num was transferred away — this is the
+                    # invariant that makes the follow-up dismiss safe.
+                    assert source.pr_num is None, (
+                        "pr_num was not transferred off the source; "
+                        "subsequent dismiss would close the resumed PR"
+                    )
+
+            asyncio.run(run())
+
+    def test_dismiss_after_retry_does_not_close_resumed_pr(self, app_with_state, tmp_path, monkeypatch):
+        """End-to-end: source dismiss after retry must not call change_discussion_status."""
+        app, state, monkeypatch_, jobs_dir = app_with_state
+        ds_root = tmp_path / "ds"
+        ds_root.mkdir()
+        (ds_root / "data.bin").write_bytes(b"x")
+        _make_open_dataset(state, "user/ds", ds_root)
+
+        source = hub_jobs.make_job(dataset_id="user/ds", direction="upload", repo_id="user/ds")
+        source.status = "failed"
+        source.finished_at = time.time()
+        source.pr_num = 42
+        state.hub_jobs[source.job_id] = source
+
+        change_status_calls: list[dict] = []
+
+        import huggingface_hub
+
+        class _FakeApi:
+            def whoami(self):
+                return {"name": "test"}
+
+            def repo_info(self, *a, **k):
+                class _Info:
+                    siblings = []
+
+                return _Info()
+
+            def get_discussion_details(self, *a, **k):
+                class _Details:
+                    status = "draft"
+
+                return _Details()
+
+            def change_discussion_status(self, **kwargs):
+                change_status_calls.append(kwargs)
+
+        monkeypatch_.setattr(huggingface_hub, "HfApi", _FakeApi)
+
+        with patch("subprocess.Popen", _FakePopen):
+            datasets_module._hub_spawn_locks.clear()
+
+            async def run():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://test"
+                ) as client:
+                    # Retry → spawns new worker with reuse_pr_num=42.
+                    resp = await client.post(
+                        "/api/datasets/user%2Fds/hub/upload", json={"repo_id": "user/ds"}
+                    )
+                    assert resp.status_code == 200
+
+                    # Mirror the frontend: dismiss the source job after retry.
+                    dismiss = await client.post(f"/api/datasets/hub/progress/{source.job_id}/dismiss")
+                    assert dismiss.status_code == 200
+
+                    # The critical assertion: dismiss must NOT have closed
+                    # the resumed PR.
+                    assert change_status_calls == [], (
+                        f"dismiss closed the resumed PR — calls: {change_status_calls}"
+                    )
+
+            asyncio.run(run())
+
+
 class TestStartupSweep:
     """Server-startup PID sweep reaps orphan workers from a previous run."""
 

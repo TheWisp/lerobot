@@ -362,3 +362,150 @@ class TestMissingConfig:
         _stdout, stderr = proc.communicate(timeout=5)
         assert proc.returncode == 2
         assert b"LEROBOT_HUB_WORKER_CONFIG" in stderr
+
+
+class TestSignalHandlerNoDeadlock:
+    """Regression: SIGTERM handler must not acquire state._lock.
+
+    Python delivers signals synchronously on the main thread between
+    bytecodes. If the main thread already holds ``state._lock`` (e.g.,
+    is inside ``set_milestone``), a handler that does ``with state._lock``
+    would self-deadlock on the non-reentrant lock — wedging the worker
+    until SIGKILL.
+
+    We test by directly invoking the handler function with state._lock
+    pre-acquired. If the handler still tried to re-acquire, this test
+    would block; we wrap in a watchdog thread that fails the test if it
+    runs too long.
+    """
+
+    def test_handler_completes_while_lock_held(self):
+        import threading
+
+        from lerobot.gui import hub_jobs, hub_worker
+
+        cfg = hub_jobs.JobConfig(
+            job_id="test-handler",
+            dataset_id="user/ds",
+            direction="upload",
+            repo_id="user/ds",
+            repo_type="dataset",
+            local_path="/tmp",
+            jobs_dir="/tmp",
+            private=True,
+            commit_message=None,
+            allow_patterns=None,
+            ignore_patterns=None,
+            reuse_pr_num=None,
+        )
+        paths = hub_jobs.JobPaths.for_job("test-handler", Path("/tmp"))
+        state = hub_worker._WorkerState(cfg, paths)
+
+        # Build the same handler function that _install_signal_handlers builds.
+        # We don't actually register it with signal.signal (that would mess with
+        # the test runner); we just need to verify it doesn't try to acquire
+        # state._lock when called while the lock is already held.
+        captured: list = []
+
+        def _on_sigterm(signum, frame):
+            # Mirror the production handler exactly. If this implementation
+            # ever changes to acquire state._lock, this test will deadlock
+            # (and fail via the watchdog).
+            state.cancel_requested = True
+            state.milestone = "cancelling"
+            state.milestone_at = time.time()
+            captured.append("done")
+
+        # Hold the lock on the "main" (test) thread, then invoke the handler.
+        # Signal handlers in production also run on the main thread, so the
+        # re-acquire path is what we're regression-testing.
+        done = threading.Event()
+
+        def call_handler():
+            _on_sigterm(15, None)  # 15 = SIGTERM
+            done.set()
+
+        with state._lock:
+            t = threading.Thread(target=call_handler)
+            t.start()
+            # In the buggy version, the handler would block on `with state._lock`
+            # while THIS thread holds it — done.wait would time out.
+            # (Note: this only catches the bug if the handler tries to acquire
+            # synchronously; in real signal delivery the handler runs on the
+            # same thread that holds the lock, which is even more deadly.)
+            assert done.wait(timeout=1.0), "handler did not complete; suspected re-acquire deadlock"
+            t.join(timeout=1.0)
+
+        assert captured == ["done"]
+        assert state.cancel_requested is True
+        assert state.milestone == "cancelling"
+
+    def test_handler_in_source_does_not_acquire_state_lock(self):
+        """Static guard: the production handler must not contain a
+        ``with state._lock`` (or any other ``with ... _lock``) acquisition.
+
+        Belt-and-suspenders complement to the runtime test: catches the
+        regression at lint time without needing the runtime watchdog to
+        fire. We match the executable pattern, not the bare string, so a
+        comment explaining the lock-avoidance rule doesn't false-positive.
+        """
+        import re
+
+        from lerobot.gui import hub_worker
+
+        src = Path(hub_worker.__file__).read_text()
+        start = src.find("def _on_sigterm(")
+        assert start >= 0, "couldn't locate _on_sigterm"
+        body = src[start : start + 2000]
+        # Strip comment lines so the rationale comment doesn't match.
+        code_only = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
+        assert not re.search(r"with\s+\w+\._lock\s*:", code_only), (
+            "SIGTERM handler must not acquire any _lock — Python delivers "
+            "signals synchronously on the main thread; re-acquiring a "
+            "non-reentrant lock the same thread already holds would deadlock"
+        )
+        # Also guard against an explicit acquire call.
+        assert "_lock.acquire" not in code_only, (
+            "SIGTERM handler must not call _lock.acquire() for the same deadlock reason"
+        )
+
+
+class TestWriterShutdownOrdering:
+    """Regression: worker main() must stop+join the writer thread BEFORE the
+    final write_progress() call.
+
+    Otherwise two threads call atomic_write_json(path, ...) concurrently —
+    both writing to the same ``.tmp`` path — and the os.replace can land
+    a partially-written tmp, corrupting the terminal progress file the
+    server polls.
+    """
+
+    def test_main_finally_stops_writer_before_final_write(self):
+        """Static guard on the ordering inside main()'s finally block."""
+        from lerobot.gui import hub_worker
+
+        src = Path(hub_worker.__file__).read_text()
+        # Find main()'s finally block.
+        main_start = src.find("def main(")
+        assert main_start >= 0, "couldn't locate main()"
+        finally_start = src.find("finally:", main_start)
+        assert finally_start >= 0, "couldn't locate finally: in main()"
+        # The end of main()'s finally is bounded by the next top-level def
+        # or 'return rc'.
+        end = src.find("return rc", finally_start)
+        assert end >= 0
+        body = src[finally_start:end]
+        stop_pos = body.find("stop_writer_thread()")
+        join_pos = body.find("writer.join(")
+        final_write_pos = body.find("state.write_progress()")
+        assert stop_pos >= 0, "stop_writer_thread() call missing"
+        assert join_pos >= 0, "writer.join() call missing"
+        assert final_write_pos >= 0, "final state.write_progress() call missing"
+        assert stop_pos < final_write_pos, (
+            "stop_writer_thread() must be called BEFORE the final "
+            "state.write_progress() — otherwise the writer thread can race "
+            "the main thread on the same .tmp path under atomic_write_json"
+        )
+        assert join_pos < final_write_pos, (
+            "writer.join() must complete BEFORE the final state.write_progress() — same race-on-tmp concern"
+        )

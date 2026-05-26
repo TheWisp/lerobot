@@ -170,7 +170,10 @@ _PATTERNS_UPLOAD = [
         re.compile(r"New Data Upload\s*:\s*\|.*\|\s*([\d.]+\s*\w+)\s*/\s*([\d.]+\s*\w+)"),
         "Uploading {0} / {1}",
     ),
-    (re.compile(r"Fetching\s+(\d+)\s+files:.*?(\d+)/\1"), "Downloading {1} / {0} files"),
+    # HF's upload helpers also emit "Fetching N files" during the pre-upload
+    # remote-state probe (before any byte is sent). Calling that "Downloading"
+    # while the user is uploading is confusing — relabel as a check pass.
+    (re.compile(r"Fetching\s+(\d+)\s+files:.*?(\d+)/\1"), "Checking remote files {1} / {0}"),
     (re.compile(r"Committing files\s*\((\d+)\s*/\s*(\d+)\)"), "Committing {0} / {1}"),
 ]
 
@@ -247,14 +250,24 @@ def _install_signal_handlers(state: _WorkerState) -> None:
         # Set the flag and let the main thread observe it at the next
         # pipeline-stage boundary. Don't try to abort the HF call mid-flight;
         # the server's SIGKILL escalation will handle that case if needed.
+        #
+        # Crucially: do NOT acquire ``state._lock`` here. Python delivers
+        # signals synchronously on the main thread between bytecodes; if
+        # the main thread is already inside ``set_milestone`` (or any
+        # other ``with state._lock`` block) when SIGTERM arrives, this
+        # handler would re-acquire a non-reentrant lock held by the same
+        # thread → self-deadlock, wedging the worker until SIGKILL.
+        #
+        # The individual field assignments below are atomic in CPython
+        # (refcount manipulation + pointer write), so a snapshot taken
+        # mid-handler may see "cancelling" milestone with the previous
+        # timestamp (or vice versa). That transient inconsistency is
+        # strictly preferable to a frozen worker, and the next writer-
+        # thread tick (within PROGRESS_WRITE_INTERVAL_S) will write a
+        # coherent snapshot anyway.
         state.cancel_requested = True
-        with state._lock:
-            state.milestone = "cancelling"
-            state.milestone_at = time.time()
-        with contextlib.suppress(Exception):
-            # Best-effort on the cancel path — the server's own writer
-            # will see the SIGTERM-induced exit regardless.
-            state.write_progress()
+        state.milestone = "cancelling"
+        state.milestone_at = time.time()
 
     signal.signal(signal.SIGTERM, _on_sigterm)
     signal.signal(signal.SIGINT, _on_sigterm)
@@ -487,17 +500,22 @@ def main() -> int:
         rc = 1
     finally:
         state.finished_at = time.time()
-        # Restore stderr so any late writes (from the writer thread shutdown,
-        # for instance) don't deadlock against a half-closed pipe.
+        # Restore stderr first so any late writes (from the writer thread's
+        # final flush, for instance) don't deadlock against a half-closed pipe.
         try:
             os.dup2(original_stderr_fd, 2)
             os.close(original_stderr_fd)
         except Exception:  # noqa: BLE001
             pass
-        # Final state write so the server sees terminal status.
-        state.write_progress()
+        # Stop + join the writer thread BEFORE the final write_progress so
+        # two threads don't race on the same .tmp path under atomic_write_json
+        # (writer-thread tick + main-thread final write would otherwise
+        # interleave, potentially leaving the progress file with garbage
+        # content or stale-snapshot content).
         state.stop_writer_thread()
         writer.join(timeout=1.0)
+        # Final state write so the server sees terminal status.
+        state.write_progress()
         # Reader is daemon; it exits when stderr pipe closes (above).
         _cleanup_pid_file(paths)
 
