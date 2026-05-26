@@ -2039,25 +2039,53 @@ const Transfers = (function () {
         if (!j) return;
         // Retry is just re-POSTing the upload/download endpoint with the
         // same dataset+repo. The server detects the existing draft PR and
-        // resumes into it via the reuse_pr_num path.
+        // resumes into it via the reuse_pr_num path (transferring pr_num
+        // ownership off the old terminal entry as a side effect, so the
+        // follow-up dismiss below does NOT close the resumed PR).
         const endpoint = `/api/datasets/${encodeURIComponent(j.dataset_id)}/hub/${j.direction}`;
+        const post = (body) => fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
         try {
-            const res = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ repo_id: j.repo_id }),
-            });
+            let res = await post({ repo_id: j.repo_id });
             if (res.status === 409) {
-                // Already running (concurrent retry); just refresh.
-                refreshNow();
-                return;
-            }
-            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                const detail = data && data.detail;
+                // Two distinct 409 shapes: "active job exists" carries job_id;
+                // the completeness guardrail carries code: 'incomplete_local_state'.
+                if (detail && detail.code === 'incomplete_local_state') {
+                    const missing = detail.missing_locally || [];
+                    const incomplete = detail.incomplete_locally || [];
+                    const lines = [];
+                    if (missing.length) lines.push('Missing: ' + missing.join(', '));
+                    if (incomplete.length) lines.push('Incomplete: ' + incomplete.join(', '));
+                    const ok = confirm(
+                        'Local copy is missing files that exist on the remote.\n\n' +
+                        lines.join('\n') +
+                        '\n\nRetry the upload anyway?'
+                    );
+                    if (!ok) return;
+                    res = await post({ repo_id: j.repo_id, confirm_force: true });
+                    if (!res.ok) {
+                        const fd = await res.json().catch(() => ({}));
+                        showToast('Retry failed', fd?.detail?.message || fd?.detail || 'Could not restart transfer', 'error');
+                        return;
+                    }
+                } else {
+                    // Already running (concurrent retry); attach to the existing job.
+                    refreshNow();
+                    return;
+                }
+            } else if (!res.ok) {
                 const data = await res.json().catch(() => ({}));
                 showToast('Retry failed', data.detail?.message || data.detail || 'Could not restart transfer', 'error');
                 return;
             }
             // Drop the old terminal entry so the tray shows only the new attempt.
+            // Safe: server already transferred pr_num ownership; this dismiss
+            // will not close the resumed PR.
             await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss`, { method: 'POST' });
             refreshNow();
         } catch (e) {
@@ -2096,10 +2124,30 @@ const Transfers = (function () {
     async function dismissAllFinished() {
         // Hide-all for complete cards + discard-all for failed/cancelled.
         // Iterates serially; the count is bounded by what's visible.
-        const targets = _jobs.filter(j => !_isActive(j)).map(j => j.job_id);
-        for (const id of targets) {
+        const targets = _jobs.filter(j => !_isActive(j));
+        // Discarding a failed/cancelled upload with a draft PR closes that
+        // PR on HF (server's dismiss endpoint behavior). The single-card
+        // Discard button confirms because of that; "Clear" must do the same
+        // for the bulk path or the user can lose multiple resumable PRs in
+        // one click. Complete uploads' PRs are already merged, and successful
+        // retries have transferred PR ownership (pr_num cleared on the
+        // source), so neither contributes to the count.
+        const closingPRs = targets.filter(
+            j => j.direction === 'upload'
+                && (j.status === 'failed' || j.status === 'cancelled')
+                && j.pr_num != null
+        );
+        if (closingPRs.length > 0) {
+            const ok = confirm(
+                `Discard ${closingPRs.length} failed/cancelled upload(s)? ` +
+                `Their draft PRs on HF will be closed and resume will no longer ` +
+                `be possible. Use Retry on each card to resume instead.`
+            );
+            if (!ok) return;
+        }
+        for (const j of targets) {
             try {
-                await fetch(`/api/datasets/hub/progress/${encodeURIComponent(id)}/dismiss`, { method: 'POST' });
+                await fetch(`/api/datasets/hub/progress/${encodeURIComponent(j.job_id)}/dismiss`, { method: 'POST' });
             } catch (e) { /* ignored */ }
         }
         refreshNow();

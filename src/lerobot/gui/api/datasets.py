@@ -2895,6 +2895,14 @@ def _find_existing_pr_for_retry(dataset_id: str, repo_id: str, repo_type: str = 
     Returns ``None`` if no resumable PR exists; the new worker will
     create a fresh one.
 
+    Side effect: when a usable PR is found, **transfers ownership of
+    that pr_num to the new caller** by clearing ``pr_num`` on every
+    terminal source-job entry that pointed at the same PR. Callers
+    that subsequently invoke ``hub_progress_dismiss`` on those source
+    entries will then skip the ``change_discussion_status(closed)``
+    branch — without this transfer, a Retry click would close the very
+    PR the new worker is trying to resume into.
+
     ``repo_type`` flows through so the lookup works for ``"model"`` repos
     when the future Model Tab adds model-upload endpoints — the
     underlying mechanism is the same, only the repo namespace differs.
@@ -2924,6 +2932,11 @@ def _find_existing_pr_for_retry(dataset_id: str, repo_id: str, repo_type: str = 
             discussion_num=pr_num,
         )
         if details.status == "draft":
+            # Transfer ownership: clear pr_num on every source-entry pointing
+            # at this PR so a follow-up dismiss does not close it.
+            for src in candidates:
+                if src.pr_num == pr_num:
+                    src.pr_num = None
             return pr_num
     except Exception as e:  # noqa: BLE001
         logger.warning(
@@ -3082,7 +3095,10 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
                     },
                 )
 
-        reuse_pr = _find_existing_pr_for_retry(dataset_id, repo_id)
+        # Note: model-repo uploads (when the Model Tab adds the endpoint)
+        # will need to thread the repo's true repo_type here instead of the
+        # default "dataset".
+        reuse_pr = _find_existing_pr_for_retry(dataset_id, repo_id, repo_type="dataset")
         job = make_job(dataset_id=dataset_id, direction="upload", repo_id=repo_id)
         _app_state.hub_jobs[job.job_id] = job
         if reuse_pr is not None:
@@ -3191,9 +3207,13 @@ async def hub_progress_cancel(job_id: str):
 async def hub_progress_dismiss(job_id: str):
     """Remove a terminal job from the registry + clean up its IPC files.
 
-    For cancelled/failed uploads with a draft PR still on HF, also close
-    the discussion to prevent it from cluttering the repo's discussion
-    list. (Set ``close_pr=False`` in the body to opt out.)
+    For cancelled/failed uploads whose ``pr_num`` is still set, also close
+    the draft PR on HF to prevent it from cluttering the repo's discussion
+    list. PR-ownership transfer happens earlier in the retry path: when a
+    new worker inherits a source job's PR via ``_find_existing_pr_for_retry``,
+    that function clears the source's ``pr_num`` so a subsequent dismiss
+    on the source skips the close branch. A Retry-then-Discard sequence
+    therefore does not close the PR the retry is resuming into.
     """
     from lerobot.gui.hub_jobs import JOBS_DIR, JobPaths
 
