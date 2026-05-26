@@ -50,6 +50,12 @@ def _viz_spec() -> dict:
             "left_": {m: (a.sign, a.offset_deg) for m, a in LEFT_ARM_ALIGNMENT.items()},
             "right_": {m: (a.sign, a.offset_deg) for m, a in RIGHT_ARM_ALIGNMENT.items()},
         },
+        # EE link for trajectory visualization — the gripper tip
+        # downstream of S7. This is the "tool point" a user reads off
+        # the trace, even though it picks up some gripper-open/close
+        # jiggle. Trades the gripper-independent cleanliness of L6 for
+        # the more intuitive "where will the gripper be?" reading.
+        "ee_link": "L7_1",
     }
 
 

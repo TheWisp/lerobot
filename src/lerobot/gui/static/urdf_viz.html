@@ -71,21 +71,41 @@ const STATE_COLOR = 0xe0b020;
 const GHOST_COLOR = 0x4dd0ff;
 const setStatus = (m) => { document.getElementById('status').textContent = m; };
 
+// Horizon (# of future frames) we ask the backend to return for the
+// overlay source. The renderer applies frames[0] to the ghost robot and
+// FKs frames[1..] into a polyline through the EE link. Backend clips
+// at end-of-episode; renderer copes with a shorter-than-requested list.
+// Single-frame producers (teleop's "action" today) ignore the param —
+// they always return one frame.
+//
+// In dataset mode this is large enough to cover the rest of any
+// reasonable episode — the backend clips so a 200-frame episode returns
+// 200 frames, a 5000-frame one returns 5000. The trajectory then reads
+// as "the EE path of the rest of this episode" rather than "the next
+// ~second of motion", which is what the data tab is actually for. FK
+// cost is linear in horizon — ~3500 ops for 500 frames, fine for the
+// scrubber's once-per-move cadence.
+const TRAJECTORY_HORIZON = 5000;
+
 // Endpoints are mode-specific only in their URL prefix; the response shape
 // is identical (meta vs source = frames).
 const endpoints = (() => {
   if (MODE === 'live') {
     return {
       meta: () => '/api/run/urdf-viz/meta',
-      source: (name) => `/api/run/urdf-viz?source=${encodeURIComponent(name)}`,
+      // Live source: backend is the source of truth for how many frames
+      // it has (single tick today). horizon is a no-op for now but kept
+      // in the URL so future chunk-publishing producers slot in.
+      source: (name, horizon = 1) =>
+        `/api/run/urdf-viz?source=${encodeURIComponent(name)}&horizon=${horizon}`,
     };
   }
   // dataset mode — closures over _datasetCtx, filled by postMessage
   return {
     meta: () => `/api/datasets/${encodeURIComponent(_datasetCtx.dataset)}/episodes/${_datasetCtx.episode}/urdf-viz/meta`,
-    source: (name) =>
+    source: (name, horizon = 1) =>
       `/api/datasets/${encodeURIComponent(_datasetCtx.dataset)}/episodes/${_datasetCtx.episode}/urdf-viz`
-      + `?frame=${_datasetCtx.frame}&source=${encodeURIComponent(name)}`,
+      + `?frame=${_datasetCtx.frame}&source=${encodeURIComponent(name)}&horizon=${horizon}`,
   };
 })();
 
@@ -124,8 +144,10 @@ animate();
 // Each arm has one solid robot for state and (lazily) one translucent ghost
 // for the active overlay source. The ghost robot is loaded on first toggle-
 // on so users who never enable the overlay don't pay STL + scene cost.
-let _meta = null;             // {name, urdf, bimanual, sources}
-let _arms = [];               // [{prefix, baseX, state, ghost, _lastGhost}]
+// Each arm also has (lazily) one THREE.Line trajLine — the EE-path polyline
+// drawn when the overlay source returns more than one frame.
+let _meta = null;             // {name, urdf, bimanual, sources, ee_link}
+let _arms = [];               // [{prefix, baseX, state, ghost, trajLine, _lastGhost}]
 let _datasetCtx = null;       // dataset mode only: {dataset, episode, frame}
 
 function _loadRobot(urdfUrl, baseX, color, opts = {}) {
@@ -184,9 +206,201 @@ async function _ensureGhost(armEntry) {
 }
 
 function _setGhostVisible(visible) {
+  // Toggle the overlay overall. _drawTrajectory keeps the per-arm split
+  // (ghost body in single-frame mode, trajectory tube in multi-frame
+  // mode) — here we only mass-hide when the toggle is off.
   for (const arm of _arms) {
-    if (arm.ghost) arm.ghost.visible = visible;
+    if (arm.ghost) arm.ghost.visible = visible && !arm.trajLine;
+    if (arm.trajLine) arm.trajLine.visible = visible;
   }
+}
+
+const TRAJ_TUBE_RADIUS = 0.002;  // 2 mm — thin enough to read as a curve, not a chain of segments
+const TRAJ_TUBE_MATERIAL = new THREE.MeshPhongMaterial({
+  color: GHOST_COLOR,
+  transparent: true,
+  opacity: 0.85,
+  depthWrite: false,
+});
+
+// FK helper — turn a list of joint-frame dicts into EE-link world points
+// by briefly mutating the ghost URDF's joints. Caller restores ghost pose
+// afterwards if needed.
+function _fkPointsFromFrames(armEntry, frames) {
+  if (!armEntry.ghost || !_meta.ee_link) return null;
+  const eeLink = armEntry.ghost.links[_meta.ee_link];
+  if (!eeLink) return null;
+  const points = [];
+  const tmp = new THREE.Vector3();
+  for (const f of frames) {
+    _applyAngles(armEntry.ghost, f.joints || {});
+    armEntry.ghost.updateMatrixWorld(true);
+    eeLink.getWorldPosition(tmp);
+    points.push(tmp.clone());
+  }
+  return points;
+}
+
+// Pure tube-renderer: given EE-link points, (re)build the cyan tube mesh.
+// Hides the ghost body whenever a tube is drawn so the curve reads
+// unambiguously; restores ghost.visible for the single-frame fallback.
+//
+// Tube (not line): WebGL line widths are ignored on most platforms
+// (always 1 px); a tube has actual 3D thickness.
+function _drawTubeFromPoints(armEntry, points) {
+  if (armEntry.trajLine) {
+    scene.remove(armEntry.trajLine);
+    armEntry.trajLine.geometry.dispose();
+    armEntry.trajLine = null;
+  }
+  if (!points || points.length < 2) {
+    // No trajectory — ghost body is the only overlay signal again.
+    if (armEntry.ghost) armEntry.ghost.visible = _ghostOn;
+    return;
+  }
+  // Subsample to keep tube cost bounded AND keep control points spaced
+  // far enough that CatmullRom doesn't overshoot near-duplicate points
+  // (which it does when motion is low between samples — producing the
+  // "chain of blobs" artefact we saw with 100 points on a 385-frame
+  // low-motion episode).
+  const MAX_TUBE_POINTS = 40;
+  let pts = points;
+  if (points.length > MAX_TUBE_POINTS) {
+    pts = [];
+    const stride = (points.length - 1) / (MAX_TUBE_POINTS - 1);
+    for (let i = 0; i < MAX_TUBE_POINTS; i++) pts.push(points[Math.round(i * stride)]);
+  }
+  // Drop run-length-zero stretches (consecutive identical points cause
+  // CatmullRom to misbehave and TubeGeometry to render a degenerate
+  // segment at that point — looks like a kink).
+  const dedup = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].distanceToSquared(dedup[dedup.length - 1]) > 1e-8) dedup.push(pts[i]);
+  }
+  if (dedup.length < 2) {
+    if (armEntry.ghost) armEntry.ghost.visible = _ghostOn;
+    return;
+  }
+  const curve = new THREE.CatmullRomCurve3(dedup, false, 'centripetal');
+  const tubular = Math.max(8, dedup.length * 4);
+  const geom = new THREE.TubeGeometry(curve, tubular, TRAJ_TUBE_RADIUS, 8, false);
+  const tube = new THREE.Mesh(geom, TRAJ_TUBE_MATERIAL);
+  tube.renderOrder = 2;  // after state (0); ghost is hidden when tube is up
+  scene.add(tube);
+  armEntry.trajLine = tube;
+  if (armEntry.ghost) armEntry.ghost.visible = false;
+}
+
+// Dataset-mode trajectory cache: episode action stream is static, so FK
+// it ONCE on episode change, slice on every scrubber move. Avoids
+// re-FK'ing 100-1000+ frames on every playback tick (the old design
+// could not keep up at 30fps and made the tube blink / disappear).
+// Dataset-mode caches: both action (-> EE tube) and state (-> state robot
+// pose) are static per (episode, frame). Fetch each once on episode
+// change; on every scrubber move just index into the cached arrays.
+//
+// Without this, the state robot's pose came from a per-tick network
+// fetch (~30-50 ms round trip server-side) that capped scrubber
+// updates at ~12-15 Hz even though the trajectory cache made the tube
+// redraw essentially free.
+let _datasetTrajCache = null;        // {dataset, episode, perArm: Vector3[][]}
+let _datasetStateCache = null;       // {dataset, episode, perArm: Array<jointDict>[]}
+let _datasetTrajCachePromise = null; // shared in-flight populate
+
+async function _ensureDatasetTrajCache() {
+  if (MODE !== 'dataset' || !_datasetCtx) return;
+  if (!_meta || _meta.sources.length < 2 || !_meta.ee_link) return;
+  if (_datasetTrajCache
+      && _datasetTrajCache.dataset === _datasetCtx.dataset
+      && _datasetTrajCache.episode === _datasetCtx.episode) return;
+  if (_datasetTrajCachePromise) return _datasetTrajCachePromise;
+  _datasetTrajCachePromise = (async () => {
+    try {
+      await _populateDatasetTrajCache();
+    } finally {
+      _datasetTrajCachePromise = null;
+    }
+  })();
+  return _datasetTrajCachePromise;
+}
+
+async function _populateDatasetTrajCache() {
+  // FK needs the ghost URDF tree — make sure it's loaded before we ask
+  // for forward kinematics. Without this, the first populate after
+  // init returns empty point arrays and the tube never builds.
+  for (const arm of _arms) await _ensureGhost(arm);
+  // Hide ghosts during the FK loop. Without this, the visible ghost
+  // animates through every episode frame in fast-forward as we mutate
+  // its joints to read EE positions — looks like "the trajectory is
+  // being constructed" to the user (it isn't; we're just using the
+  // ghost URDF as an FK helper). _drawTubeFromPoints decides final
+  // visibility after the tube is built.
+  for (const arm of _arms) if (arm.ghost) arm.ghost.visible = false;
+
+  // Pull state and the overlay source for the whole episode in parallel.
+  // Backend clips horizon at episode end, so we get N rows for an
+  // N-frame episode regardless of the param value.
+  const baseUrl = `/api/datasets/${encodeURIComponent(_datasetCtx.dataset)}/episodes/${_datasetCtx.episode}/urdf-viz`;
+  const overlay = _meta.sources[1];
+  let stateData, overlayData;
+  try {
+    const [stateResp, overlayResp] = await Promise.all([
+      fetch(`${baseUrl}?frame=0&source=state&horizon=99999`),
+      fetch(`${baseUrl}?frame=0&source=${encodeURIComponent(overlay)}&horizon=99999`),
+    ]);
+    stateData = await stateResp.json();
+    overlayData = await overlayResp.json();
+  } catch (e) { return; }
+  if (!overlayData.available || !overlayData.arms || overlayData.arms.length !== _arms.length) return;
+
+  // Trajectory: FK each overlay frame's joints to an EE world position.
+  const trajPerArm = overlayData.arms.map((armData, i) =>
+    _fkPointsFromFrames(_arms[i], armData.frames) || []
+  );
+  // Restore each ghost to its frame-0 overlay pose so its FK tree is in
+  // a sane state if a later live-mode poll arrives.
+  for (let i = 0; i < _arms.length; i++) {
+    const arm = _arms[i];
+    const f0 = overlayData.arms[i].frames && overlayData.arms[i].frames[0];
+    if (arm.ghost && f0) {
+      _applyAngles(arm.ghost, f0.joints || {});
+      arm.ghost.updateMatrixWorld(true);
+    }
+  }
+  _datasetTrajCache = {
+    dataset: _datasetCtx.dataset, episode: _datasetCtx.episode, perArm: trajPerArm,
+  };
+  // Public ready signal for scripts that need to wait for the cache to
+  // settle before driving playback. (No effect on production behaviour
+  // — just exposes the bit a poll can read.)
+  window.__urdfTrajCacheReady = `${_datasetCtx.dataset}/${_datasetCtx.episode}`;
+
+  // State: keep per-frame joint dicts so scrubber moves don't pay
+  // a network roundtrip just to update the state robot's pose.
+  if (stateData && stateData.available && stateData.arms) {
+    const statePerArm = stateData.arms.map(
+      (armData) => (armData.frames || []).map((f) => f.joints || {})
+    );
+    _datasetStateCache = {
+      dataset: _datasetCtx.dataset, episode: _datasetCtx.episode, perArm: statePerArm,
+    };
+  }
+}
+
+function _redrawDatasetTrajectory() {
+  if (!_datasetTrajCache) return;
+  for (let i = 0; i < _arms.length; i++) {
+    const fullPoints = _datasetTrajCache.perArm[i] || [];
+    const startIdx = Math.min(_datasetCtx.frame, Math.max(0, fullPoints.length - 1));
+    _drawTubeFromPoints(_arms[i], fullPoints.slice(startIdx));
+  }
+  // Force a render NOW. The animate() loop runs via requestAnimationFrame,
+  // which Chrome can throttle in iframes that aren't the focused frame —
+  // during fast scrubbing or playback the rAF rate can drop to ~10 Hz
+  // even though the page is fully visible. An explicit render() decouples
+  // the visible state from rAF scheduling, so the canvas matches the
+  // current scrubber position regardless of throttling.
+  renderer.render(scene, camera);
 }
 
 function _applyAngles(robot, angles) {
@@ -196,33 +410,46 @@ function _applyAngles(robot, angles) {
   }
 }
 
-// Apply one source-response. For state, sets the solid robot. For any other
-// source ("action" today, more later), sets the ghost — lazy-loading it if
-// needed. frames[0] is always applied; frames[1..] are reserved for chunk
-// playback (next-step work, see gui/docs/urdf_viz.md).
+// Apply one source-response. For "state" set the solid robot pose. For
+// any other source (overlay), in *live* mode set the ghost body to
+// frames[0] and FK any extra frames into a tube on the fly. Dataset
+// mode doesn't go through this path for the overlay source — it uses
+// the per-episode trajectory cache via _redrawDatasetTrajectory.
 async function _applySource(name, data) {
   if (!data || !data.available || !data.arms || data.arms.length !== _arms.length) return;
   for (let i = 0; i < data.arms.length; i++) {
     const armData = data.arms[i];
-    const frame0 = armData.frames && armData.frames[0];
-    if (!frame0) continue;
+    const frames = armData.frames || [];
+    if (!frames.length) continue;
     const arm = _arms[i];
     if (name === 'state') {
-      _applyAngles(arm.state, frame0.joints || {});
+      _applyAngles(arm.state, frames[0].joints || {});
     } else {
-      arm._lastGhost = frame0.joints || {};
+      arm._lastGhost = frames[0].joints || {};
       if (_ghostOn) {
         await _ensureGhost(arm);
         _applyAngles(arm.ghost, arm._lastGhost);
+        // frames.length > 1 happens only in live mode here (dataset
+        // overlay bypasses _applySource). Live chunks are short so the
+        // per-tick FK cost stays cheap.
+        if (frames.length > 1) {
+          const pts = _fkPointsFromFrames(arm, frames);
+          _drawTubeFromPoints(arm, pts);
+          // Restore ghost to current pose after FK mutations.
+          _applyAngles(arm.ghost, arm._lastGhost);
+          arm.ghost.updateMatrixWorld(true);
+        } else {
+          _drawTubeFromPoints(arm, null);
+        }
       }
     }
   }
   _polls++;
 }
 
-async function _fetchSource(name) {
+async function _fetchSource(name, horizon = 1) {
   try {
-    const r = await fetch(endpoints.source(name));
+    const r = await fetch(endpoints.source(name, horizon));
     const data = await r.json();
     await _applySource(name, data);
   } catch (e) { /* transient — keep the last pose */ }
@@ -234,7 +461,10 @@ async function _pollLive() {
   // Only fetch the overlay source when the toggle is on AND meta declares
   // it. Saves 30 req/s when the user isn't asking for the comparison.
   if (_ghostOn && _meta.sources.length > 1) {
-    tasks.push(_fetchSource(_meta.sources[1]));  // first non-state source
+    // horizon=N is a no-op for live producers that ship one frame at a
+    // time (teleop's "action" today); kept symmetric for future chunk-
+    // publishing producers (ACT/diffusion/HVLA) that can fulfil N>1.
+    tasks.push(_fetchSource(_meta.sources[1], TRAJECTORY_HORIZON));
   }
   await Promise.all(tasks);
   setTimeout(_pollLive, 33);
@@ -245,11 +475,35 @@ let _pendingFrame = null;
 let _fetchInflight = false;
 
 async function _refreshDatasetFrame() {
-  const tasks = [_fetchSource('state')];
-  if (_ghostOn && _meta && _meta.sources.length > 1) {
-    tasks.push(_fetchSource(_meta.sources[1]));
+  // Both state and trajectory come from the per-episode caches when
+  // available — populates lazily on first call (one combined fetch,
+  // both sources in parallel), every later tick is pure indexing +
+  // bounded tube rebuild + force-render. Total <10ms regardless of
+  // episode length, which is what lets the scrubber actually feel
+  // continuous instead of capping at the ~15 Hz of a network fetch.
+  let needCache = _ghostOn && _meta && _meta.sources.length > 1 && _meta.ee_link;
+  if (needCache) await _ensureDatasetTrajCache();
+  const stateHit = _datasetStateCache
+    && _datasetStateCache.dataset === _datasetCtx.dataset
+    && _datasetStateCache.episode === _datasetCtx.episode;
+  if (stateHit) {
+    for (let i = 0; i < _arms.length; i++) {
+      const armFrames = _datasetStateCache.perArm[i];
+      const f = Math.min(_datasetCtx.frame, Math.max(0, armFrames.length - 1));
+      const joints = armFrames[f];
+      if (joints) _applyAngles(_arms[i].state, joints);
+    }
+  } else {
+    // Cache wasn't populated (toggle off — no overlay source — or
+    // unavailable). Fall back to the per-tick fetch path.
+    await _fetchSource('state');
   }
-  await Promise.all(tasks);
+  if (needCache) _redrawDatasetTrajectory();
+  // Force-render here too (in addition to in _redrawDatasetTrajectory)
+  // so the state-only path (overlay off) still gets a guaranteed paint
+  // and doesn't rely on possibly-throttled rAF.
+  renderer.render(scene, camera);
+  _polls++;
 }
 
 async function _drainDataset() {
@@ -269,6 +523,10 @@ window.addEventListener('message', (e) => {
   if (msg.type === 'frame') {
     if (!_datasetCtx || _datasetCtx.dataset !== msg.dataset || _datasetCtx.episode !== msg.episode) {
       _datasetCtx = { dataset: msg.dataset, episode: msg.episode, frame: msg.frame };
+      // Episode change → drop BOTH caches; the new episode's state and
+      // trajectory will be fetched + FK'd on the next refresh.
+      _datasetTrajCache = null;
+      _datasetStateCache = null;
     }
     _pendingFrame = msg.frame;
     _drainDataset();
@@ -286,9 +544,17 @@ ghostBtn.addEventListener('click', async () => {
   _updateGhostBtn();
   if (_ghostOn) {
     for (const arm of _arms) await _ensureGhost(arm);
-    // Immediately fetch the overlay source so the ghost shows up without
-    // waiting for the next poll tick.
-    if (_meta.sources.length > 1) await _fetchSource(_meta.sources[1]);
+    if (_meta.sources.length > 1) {
+      if (MODE === 'dataset') {
+        // Populate (or reuse) the cache, then slice + draw without
+        // waiting another scrubber tick.
+        await _ensureDatasetTrajCache();
+        _redrawDatasetTrajectory();
+      } else {
+        // Live mode: kick a fresh fetch so the ghost/tube appears now.
+        await _fetchSource(_meta.sources[1], TRAJECTORY_HORIZON);
+      }
+    }
   }
   _setGhostVisible(_ghostOn);
 });
@@ -317,6 +583,7 @@ async function _waitForMeta() {
   return null;
 }
 
+
 async function init() {
   _meta = await _waitForMeta();
   if (!_meta) { setStatus('no robot to visualize'); return; }
@@ -335,7 +602,7 @@ async function init() {
     await _fetchSource('state');
     if (_ghostOn && _meta.sources.length > 1) {
       for (const arm of _arms) await _ensureGhost(arm);
-      await _fetchSource(_meta.sources[1]);
+      await _fetchSource(_meta.sources[1], TRAJECTORY_HORIZON);
     }
   } else if (_datasetCtx) {
     await _refreshDatasetFrame();

@@ -76,9 +76,50 @@ The frontend UI today is a single "show action" toggle. When a second
 candidate overlay source appears in meta (e.g. `"prediction"`), the toggle
 will need to become a multi-pick — but the API contract doesn't change.
 
-## Future sources (out of scope for this stack, intentionally)
+## Trajectory tube (EE path of multi-frame sources)
 
-Two follow-up directions worth designing for now even if not implemented:
+When a source returns `frames` of length > 1 (a chunk), the renderer
+swaps from "ghost body" mode to "trajectory" mode: the ghost body is
+hidden and a thin cyan tube (~3 mm radius) is drawn through the EE
+link's world position at each frame. Single-frame "action" (today: a
+teleop's per-tick commanded pose) keeps the ghost body so the pose
+comparison is still available there.
+
+How the tube is computed (entirely in JS, no extra backend work):
+
+1. The frontend already keeps a hidden _ghost_ URDF tree per arm (loaded
+   lazily on first "show action" toggle).
+2. For each frame in `frames`, the renderer briefly sets the ghost's
+   joint values, calls `updateMatrixWorld`, reads the EE link's world
+   position, and collects it.
+3. The list of positions becomes a `CatmullRomCurve3`; `TubeGeometry`
+   wraps the curve into a thin tube mesh.
+4. The ghost is restored to `frames[0]` (then made invisible) so the FK
+   tree is in a sane state for the next tick.
+
+The visual choice — hide the ghost body when there's a trajectory — is
+deliberate. A same-coloured body overlay and a same-coloured tube blur
+together; you can't tell whether you're looking at "the body at the next
+step" or "the path through space". The body is a pose comparison; the
+tube is a path-through-space comparison. They're answering different
+questions, so the viewer shows one or the other based on what the data
+actually contains, not both.
+
+The **EE link name** comes from the description package's `VIZ_SPEC.ee_link`
+field. It should be the tool / gripper tip (SO-107: `L7_1`; SO-101:
+`gripper_frame_link`) — the trace then reads as "where the gripper will
+be", which is what a user wants from a future-EE-path visualisation.
+For SO-107 specifically the tip is downstream of the gripper joint so
+it picks up some gripper-open/close jiggle; we accept that for the
+intuitive reading. If the description omits `ee_link`, the trajectory
+tube is skipped silently (the ghost body still renders as a single-
+frame fallback).
+
+WebGL line widths are ignored on most platforms (always 1px) which made
+a naive polyline invisible at typical view scale. The tube has actual
+3D thickness, so it stays visible at any zoom and any motion magnitude.
+
+## Future sources (out of scope here, intentionally designed-for)
 
 1. **Chunk playback with a paused producer.** If a policy outputs an
    action chunk of N future poses, naively previewing the chunk as a
@@ -87,17 +128,17 @@ Two follow-up directions worth designing for now even if not implemented:
    time). The right UX is pause-then-step: the policy's producer needs a
    pause/snapshot mode the GUI can drive; the viewer scrubs through the
    captured chunk's frames at the producer's `fps`. Affects both ends — a
-   pause hook on the policy side + a scrubber in the viewer.
-2. **EE-trajectory line, always-live.** A reduced version that always
-   shows the chunk as a static line through 3D space — `FK(joints)` of
-   each frame projected to its EE position, drawn as a polyline tail.
-   No animation, no pause requirement; always safe to render alongside
-   the live robot since it's a path, not a moving figure. Less rich than
-   chunk playback but doesn't fight the live motion.
-
-Both should live in this same viewer, behind the same `?source=` API. The
-producer simply returns `frames[]` (already supported) and `fps`; the
-viewer dispatches on length.
+   pause hook on the policy side + a scrubber in the viewer. The
+   trajectory tube already shows the chunk's path in space; playback adds
+   the time dimension.
+2. **Chunk-publishing for live policy modes.** Today the trajectory tube
+   appears whenever a source returns N frames. In dataset/replay mode we
+   already know the future (next N rows of `action`) so the tube lights
+   up immediately. In live mode, a teleop's "action" is one frame and an
+   ACT/diffusion/HVLA policy currently writes one frame per step too.
+   Lighting up the tube live needs the policy to publish the _chunk_, not
+   just per-step actions — a small additional shared-memory channel.
+   Once it's there, the renderer reads it without changes.
 
 ## The two-layer motor->URDF mapping
 
@@ -135,8 +176,13 @@ VIZ_SPEC = {
     "urdf_joints": tuple[str, ...],    # URDF joint name per motor (parallel)
     "urdf_file":   str,                # URDF filename within urdf/
     "alignment":   {prefix: {motor: (sign, offset_deg)}} | None,
+    "ee_link":     str | None,         # URDF link name for trajectory tube
 }
 ```
+
+`ee_link` should name a link _upstream of the gripper joint_ so the
+trajectory tube traces arm motion rather than gripper jiggle. `None`
+(or omitted) disables the trajectory tube for this robot.
 
 `alignment` is layer 2; `None` means identity. `prefix` is `"left_"` /
 `"right_"` for a bimanual robot; a unimanual robot reuses the `"right_"`

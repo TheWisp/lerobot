@@ -101,11 +101,15 @@ class RobotVizSpec:
         urdf_url_path: Path of the URDF *within* the ``/urdf-assets/`` mount,
             e.g. ``so107_description/urdf/SO107.urdf``.
         arms: One :class:`ArmSpec` (unimanual) or two (bimanual: left, right).
+        ee_link: URDF link name to read the world position from for
+            trajectory visualization. ``None`` when the description package
+            didn't declare one — no polyline will be drawn for this robot.
     """
 
     name: str
     urdf_url_path: str
     arms: list[ArmSpec]
+    ee_link: str | None = None
 
 
 @functools.cache
@@ -179,6 +183,7 @@ def resolve_robot(obs_keys: Iterable[str]) -> RobotVizSpec | None:
         name=viz_spec.get("name") or pkg_name.removesuffix("_description"),
         urdf_url_path=f"{pkg_name}/urdf/{viz_spec['urdf_file']}",
         arms=arms,
+        ee_link=viz_spec.get("ee_link"),
     )
 
 
