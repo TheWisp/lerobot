@@ -2763,11 +2763,14 @@ def _verify_hub_auth() -> None:
         ) from e
 
 
-# Async lock keyed by dataset_id to serialise spawn-vs-spawn for the same
-# dataset. Two rapid Upload clicks on the same dataset queue rather than
-# race. Lock is held only across the spawn step (PID file write + state
-# registration); the actual transfer runs in a subprocess outside the
-# lock so the GUI server stays responsive.
+# Async lock keyed by dataset_id to serialise the active-job check and
+# the job-registration step for the same dataset. Two rapid Upload clicks
+# do NOT both run: the first registers a job and spawns a worker; the
+# second acquires the lock, finds the just-registered job via
+# active_hub_job_for(), and is rejected with 409 carrying the first's
+# job_id (so both tabs/clicks end up watching the same Transfers card).
+# Lock is held only across check + registration; the actual transfer
+# runs in a subprocess outside the lock so the GUI server stays responsive.
 _hub_spawn_locks: dict[str, Any] = {}  # values are asyncio.Lock
 
 
