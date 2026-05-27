@@ -548,8 +548,25 @@ async function _probeAndAttachUrdfViz(datasetId, episodeIdx) {
     // postMessage protocol) changes so an old cached iframe doesn't stick.
     const ghostInit = _urdfGhostPref() ? '&ghost=on' : '';
     iframe.src = `/static/urdf_viz.html?mode=dataset&v=2${ghostInit}`;
+    // Fast path: iframe.onload fires when the document is parsed, which is
+    // usually before the module script has registered its message listener
+    // but in practice fast enough for an idle main thread. Belt:
+    // `urdfVizReady` from the iframe's module script (see urdf_viz.html)
+    // arrives once the listener IS registered. Heavy main-thread load
+    // (Playwright video recording, dev tools, etc.) can race the fast path;
+    // the ready signal re-posts after the listener is guaranteed live.
     iframe.addEventListener('load', () => _postFrameToUrdfViz(currentFrame), { once: true });
 }
+
+// Re-post the frame on the iframe's ready signal — robust to the
+// module-script-deferred-registration race the fast iframe.onload path
+// can hit under heavy main-thread load.
+window.addEventListener('message', (e) => {
+    const msg = e.data;
+    if (!msg || typeof msg !== 'object' || msg.type !== 'urdfVizReady') return;
+    if (currentDataset == null || currentEpisode == null) return;
+    _postFrameToUrdfViz(currentFrame);
+});
 
 function _postFrameToUrdfViz(frameIdx) {
     const iframe = document.getElementById('urdf-viz-iframe');
