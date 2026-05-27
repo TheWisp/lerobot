@@ -353,3 +353,56 @@ def make_so107_arm_ik_controller(
         workspace_min=SO107_WORKSPACE_MIN,
         workspace_max=SO107_WORKSPACE_MAX,
     )
+
+
+def is_so107_bimanual_cartesian_teleop(teleop: Any) -> bool:
+    """True iff ``teleop`` looks like a bimanual SO-107 Cartesian source.
+
+    Cheap structural check: ``action_features.names`` contains
+    ``left_target_x`` and ``right_target_x``. Use to gate the Cartesian
+    branch in a follower's ``attach_teleop`` before pulling in
+    pin-pink-dependent IK setup.
+
+    Does NOT verify the teleop has ``set_action_transform`` /
+    ``get_action_raw``; callers should assert those separately if
+    they require them.
+    """
+    try:
+        names = teleop.action_features.get("names", {})
+    except (AttributeError, TypeError):
+        return False
+    return "left_target_x" in names and "right_target_x" in names
+
+
+def build_so107_bimanual_ik_transform(
+    ik_kinematics: dict[str, JointMappedKinematics],
+    left_arm: Any,
+    right_arm: Any,
+) -> Callable[[dict], dict]:
+    """Build a Cartesian-action → joint-action transform for a bimanual
+    SO-107 follower.
+
+    Seeds per-arm IK controllers from each arm's current observation
+    (both arms must be connected — ``arm.get_observation()`` is called
+    once at build time to read the latch reference), then composes them
+    through the bimanual prefix split/merge.
+
+    The returned callable is the shape ``teleop.set_action_transform``
+    expects: takes a bimanual Cartesian action dict, returns a
+    motor-joint dict prefixed with ``left_`` / ``right_``.
+
+    Used by:
+      * ``BiSO107Follower.attach_teleop`` — installs synchronously via
+        ``set_action_transform`` (IK runs on-demand at ``get_action()``).
+      * ``BiSO107FollowerPredictive._attach_cartesian_teleop`` — wraps in
+        :class:`~lerobot.robots.predictive.cartesian_adapter.BimanualCartesianIKAdapter`
+        so IK runs in a background thread at WebXR rate.
+    """
+
+    def _seed(arm: Any) -> np.ndarray:
+        obs = arm.get_observation()
+        return np.array([float(obs[f"{m}.pos"]) for m in MOTOR_NAMES], dtype=float)
+
+    left_ik = make_so107_arm_ik_controller(ik_kinematics["left"], _seed(left_arm))
+    right_ik = make_so107_arm_ik_controller(ik_kinematics["right"], _seed(right_arm))
+    return make_bimanual_ik_transform(left_ik, right_ik)
