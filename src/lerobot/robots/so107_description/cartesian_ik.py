@@ -345,9 +345,22 @@ def make_so107_arm_kinematics(
     return JointMappedKinematics(with_tip, list(MOTOR_NAMES), alignment)
 
 
+# Effectively-unbounded workspace box for the IK controller: a meter cubed
+# on each side, far past anything an SO-107 link tree can physically reach
+# (~0.5 m max). Use this for a perfect-tracker / sim robot that has no
+# physical-safety concern — the production ``SO107_WORKSPACE_*`` clip is
+# there to keep a real arm + jittery hand-tracking input from being driven
+# into the table or into self-collision, neither of which applies to a
+# motor-less follower.
+SO107_WORKSPACE_UNBOUNDED_MIN: tuple[float, float, float] = (-1.0, -1.0, -1.0)
+SO107_WORKSPACE_UNBOUNDED_MAX: tuple[float, float, float] = (+1.0, +1.0, +1.0)
+
+
 def make_so107_arm_ik_controller(
     kinematics: JointMappedKinematics,
     q_init: np.ndarray,
+    workspace_min: tuple[float, float, float] = SO107_WORKSPACE_MIN,
+    workspace_max: tuple[float, float, float] = SO107_WORKSPACE_MAX,
 ) -> CartesianIKController:
     """Build a Cartesian-IK controller for one SO-107 arm.
 
@@ -359,13 +372,18 @@ def make_so107_arm_ik_controller(
         kinematics: This arm's kinematics from :func:`make_so107_arm_kinematics`.
         q_init: The arm's current joint configuration, motor-space degrees,
             in :data:`joint_alignment.MOTOR_NAMES` order.
+        workspace_min, workspace_max: EE-position clip box, URDF world frame.
+            Defaults are the production safety bounds (conservative; chosen
+            to keep a real arm + Quest hand-tracking input out of trouble).
+            Override with ``SO107_WORKSPACE_UNBOUNDED_{MIN,MAX}`` for a
+            motor-less / sim robot with no physical-safety concern.
     """
     return CartesianIKController(
         kinematics=kinematics,
         motor_names=list(MOTOR_NAMES),
         q_init=q_init,
-        workspace_min=SO107_WORKSPACE_MIN,
-        workspace_max=SO107_WORKSPACE_MAX,
+        workspace_min=workspace_min,
+        workspace_max=workspace_max,
     )
 
 
@@ -392,6 +410,8 @@ def build_so107_bimanual_ik_transform(
     ik_kinematics: dict[str, JointMappedKinematics],
     left_arm: Any,
     right_arm: Any,
+    workspace_min: tuple[float, float, float] = SO107_WORKSPACE_MIN,
+    workspace_max: tuple[float, float, float] = SO107_WORKSPACE_MAX,
 ) -> Callable[[dict], dict]:
     """Build a Cartesian-action → joint-action transform for a bimanual
     SO-107 follower.
@@ -411,12 +431,19 @@ def build_so107_bimanual_ik_transform(
       * ``BiSO107FollowerPredictive._attach_cartesian_teleop`` — wraps in
         :class:`~lerobot.robots.predictive.cartesian_adapter.BimanualCartesianIKAdapter`
         so IK runs in a background thread at WebXR rate.
+      * ``VirtualBiSO107Follower.attach_teleop`` — passes
+        ``SO107_WORKSPACE_UNBOUNDED_*`` since a perfect-tracker robot has
+        no physical-safety concern.
     """
 
     def _seed(arm: Any) -> np.ndarray:
         obs = arm.get_observation()
         return np.array([float(obs[f"{m}.pos"]) for m in MOTOR_NAMES], dtype=float)
 
-    left_ik = make_so107_arm_ik_controller(ik_kinematics["left"], _seed(left_arm))
-    right_ik = make_so107_arm_ik_controller(ik_kinematics["right"], _seed(right_arm))
+    left_ik = make_so107_arm_ik_controller(
+        ik_kinematics["left"], _seed(left_arm), workspace_min, workspace_max
+    )
+    right_ik = make_so107_arm_ik_controller(
+        ik_kinematics["right"], _seed(right_arm), workspace_min, workspace_max
+    )
     return make_bimanual_ik_transform(left_ik, right_ik)

@@ -297,7 +297,7 @@ def test_attach_teleop_wires_cartesian_adapter(bi_follower):
     with (
         patch(
             "lerobot.robots.so107_description.cartesian_ik.make_so107_arm_ik_controller",
-            side_effect=lambda kin, q_init: MagicMock(),
+            side_effect=lambda kin, q_init, *_args, **_kw: MagicMock(),
         ),
         patch(
             "lerobot.robots.so107_description.cartesian_ik.make_bimanual_ik_transform",

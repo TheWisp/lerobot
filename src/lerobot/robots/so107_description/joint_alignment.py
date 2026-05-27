@@ -86,3 +86,23 @@ LEFT_ARM_ALIGNMENT: dict[str, JointAlignment] = {
     "wrist_roll": JointAlignment(sign=-1.0, offset_deg=+90.00),
     "gripper": JointAlignment(sign=+1.0, offset_deg=-90.00),
 }
+
+# Canonical "ready" pose in URDF joint-space degrees (S1..S7). Shoulder down,
+# elbow at +60°, wrist at -40° — far from URDF joint limits (±π) so the IK
+# can manoeuvre freely without joint-limit struggle, and well-centered in
+# the kinematic reach. Used as the seed for IK trajectory tests, the
+# trajectory-closure benchmark, and the virtual follower's connect() default.
+READY_POSE_URDF_DEG: np.ndarray = np.array([0.0, -90.0, 60.0, 0.0, -40.0, 0.0, 0.0])
+
+
+def motor_pose_from_urdf(urdf_deg: np.ndarray, alignment: dict[str, JointAlignment]) -> np.ndarray:
+    """Invert the per-joint ``urdf = sign*motor + offset`` alignment.
+
+    Given a URDF-space joint vector in :data:`MOTOR_NAMES` order and an
+    arm alignment dict, returns the motor-space vector that produces it.
+    Used to seed a controller / virtual arm from a pose that's natural to
+    name in URDF coords (e.g. :data:`READY_POSE_URDF_DEG`).
+    """
+    sign = np.array([alignment[m].sign for m in MOTOR_NAMES], dtype=float)
+    offset = np.array([alignment[m].offset_deg for m in MOTOR_NAMES], dtype=float)
+    return (urdf_deg - offset) / sign
