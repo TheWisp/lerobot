@@ -76,6 +76,10 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .bi_so107_follower_predictive import BiSO107FollowerPredictive
 
         return BiSO107FollowerPredictive(config)
+    elif config.type == "virtual_bi_so107":
+        from .virtual_bi_so107 import VirtualBiSO107Follower
+
+        return VirtualBiSO107Follower(config)
     elif config.type == "reachy2":
         from .reachy2 import Reachy2Robot
 

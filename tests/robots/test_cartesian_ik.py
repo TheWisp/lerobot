@@ -638,23 +638,20 @@ def test_bimanual_tracks_shape(shape, size_m, pos_tol_mm, rot_tol_deg):
         make_bimanual_ik_transform,
         make_so107_arm_kinematics,
     )
-    from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT
 
-    # PR #9's seed is in URDF space; with the per-arm motor->URDF alignment
-    # applied here, the same motor values land at very different URDF poses
-    # per arm (the alignment offsets differ). Reverse the alignment so each
-    # arm starts at the same well-conditioned URDF pose PR #9 used — far
-    # from the URDF joint limits (±π) so the IK can manoeuvre freely and
-    # the test measures the bimanual stack, not joint-limit struggle.
-    urdf_seed = np.array([0.0, -90.0, 60.0, 0.0, -40.0, 0.0, 0.0])
+    # PR #9's seed is in URDF space; reverse the per-arm motor->URDF
+    # alignment so each arm lands at the same well-conditioned URDF pose
+    # (the alignment offsets differ across arms). Uses the canonical
+    # ``READY_POSE_URDF_DEG`` — same pose ``cartesian_ik_trajectory_viz``
+    # and ``VirtualBiSO107Follower.connect()`` use.
+    from lerobot.robots.so107_description.joint_alignment import (
+        LEFT_ARM_ALIGNMENT,
+        READY_POSE_URDF_DEG,
+        motor_pose_from_urdf,
+    )
 
-    def _motor_seed(alignment) -> np.ndarray:
-        sign = np.array([alignment[m].sign for m in MOTOR_NAMES])
-        offset = np.array([alignment[m].offset_deg for m in MOTOR_NAMES])
-        return (urdf_seed - offset) / sign
-
-    q_left = _motor_seed(LEFT_ARM_ALIGNMENT)
-    q_right = _motor_seed(RIGHT_ARM_ALIGNMENT)
+    q_left = motor_pose_from_urdf(READY_POSE_URDF_DEG, LEFT_ARM_ALIGNMENT)
+    q_right = motor_pose_from_urdf(READY_POSE_URDF_DEG, RIGHT_ARM_ALIGNMENT)
     # The gripper slot has different motor values per arm (the alignment
     # offsets differ); using the same gripper_pos for both would force the
     # IK to move the gripper joint every tick, perturbing the EE frame.
