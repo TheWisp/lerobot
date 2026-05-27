@@ -19,6 +19,8 @@ import time
 from functools import cached_property
 from typing import Any
 
+import numpy as np
+
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.robots.so_follower import SO107Follower, SO107FollowerConfig
 from lerobot.types import ActionChunk, action_first_frame
@@ -88,6 +90,34 @@ class BiSO107Follower(Robot):
                     max_depth=0.6,  # Max depth in meters (60cm)
                 )
 
+        # Build the per-arm IK kinematics now: PinkKinematics parses the
+        # SO-107 URDF (~1-2 s/arm, CPU-bound). Doing it here — before
+        # connect() starts the RealSense read thread — keeps that parse
+        # from starving the camera and tripping its frame-age watchdog.
+        # None if pin-pink is missing (Cartesian teleop then no-ops).
+        self._ik_kinematics: dict[str, Any] | None = None
+        try:
+            from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
+            from lerobot.robots.so107_description.joint_alignment import (
+                LEFT_ARM_ALIGNMENT,
+                RIGHT_ARM_ALIGNMENT,
+            )
+
+            self._ik_kinematics = {
+                "left": make_so107_arm_kinematics(
+                    LEFT_ARM_ALIGNMENT,
+                    posture_cost=config.ik_posture_cost,
+                    max_iters=config.ik_max_iters,
+                ),
+                "right": make_so107_arm_kinematics(
+                    RIGHT_ARM_ALIGNMENT,
+                    posture_cost=config.ik_posture_cost,
+                    max_iters=config.ik_max_iters,
+                ),
+            }
+        except Exception:
+            logger.exception("%s: Cartesian-IK kinematics unavailable; Cartesian teleop disabled", self.name)
+
     @property
     def _motors_ft(self) -> dict[str, type]:
         return {f"left_{motor}.pos": float for motor in self.left_arm.bus.motors} | {
@@ -142,6 +172,60 @@ class BiSO107Follower(Robot):
     def setup_motors(self) -> None:
         self.left_arm.setup_motors()
         self.right_arm.setup_motors()
+
+    def attach_teleop(self, teleop: Any) -> None:
+        """Wire a teleoperator as this robot's intent source.
+
+        For a bimanual Cartesian VR teleop (Quest), build a per-arm IK
+        controller and install it into the teleop via
+        ``set_action_transform`` so ``teleop.get_action()`` returns
+        motor-space joint commands. The IK stays robot-owned and the
+        upstream teleoperate / record / replay loops are untouched — they
+        just call ``get_action()`` and receive joints.
+
+        For a joint-space leader teleop this is a no-op: it already emits
+        joint dicts, which ``send_action`` consumes directly.
+
+        Precondition: the robot is connected — each arm's IK controller is
+        seeded from that arm's current joint configuration.
+        """
+        # Detect a bimanual Cartesian teleop by its action features. Done
+        # before importing the IK module so a joint-space leader never
+        # triggers the optional pin-pink import.
+        try:
+            names = teleop.action_features.get("names", {})
+        except (AttributeError, TypeError):
+            names = {}
+        if not ("left_target_x" in names and "right_target_x" in names):
+            return
+
+        assert self.is_connected, "attach_teleop requires the robot to be connected"
+        assert hasattr(teleop, "set_action_transform"), (
+            "a Cartesian teleop must expose set_action_transform()"
+        )
+
+        if self._ik_kinematics is None:
+            logger.warning(
+                "%s: Cartesian teleop attached but IK kinematics are unavailable "
+                "(is pin-pink installed?) — the arms will not be driven.",
+                self.name,
+            )
+            return
+
+        from lerobot.robots.so107_description.cartesian_ik import (
+            make_bimanual_ik_transform,
+            make_so107_arm_ik_controller,
+        )
+        from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+        def _seed(arm: SO107Follower) -> np.ndarray:
+            obs = arm.get_observation()
+            return np.array([float(obs[f"{m}.pos"]) for m in MOTOR_NAMES], dtype=float)
+
+        left_ik = make_so107_arm_ik_controller(self._ik_kinematics["left"], _seed(self.left_arm))
+        right_ik = make_so107_arm_ik_controller(self._ik_kinematics["right"], _seed(self.right_arm))
+        teleop.set_action_transform(make_bimanual_ik_transform(left_ik, right_ik))
+        logger.info("%s: installed Cartesian-IK transform into %s", self.name, type(teleop).__name__)
 
     def _read_camera_frame(self, cam) -> Any:
         """Read one camera frame using the configured strategy.

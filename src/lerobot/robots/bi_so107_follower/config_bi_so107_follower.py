@@ -105,3 +105,35 @@ class BiSO107FollowerConfig(RobotConfig):
     # Note: torque is still enabled on connect (the motors hold position
     # so they don't drop under gravity), but no goal positions are sent.
     dry_run: bool = False
+
+    # Per-arm Cartesian-IK tuning. Only consulted when a Cartesian teleop
+    # is attached (Quest VR, scripted_bimanual_ee); a joint-space leader
+    # never builds the IK kinematics so these are inert. Two arms share
+    # one setting because the IK behavior is per-arm-geometry, not
+    # per-physical-motor — both arms are the same URDF.
+    ik_posture_cost: float = field(
+        default=0.05,
+        metadata={
+            "description": (
+                "PostureTask weight relative to FrameTask (which is 1.0). "
+                "Default 0.05 makes posture a null-space tiebreaker. Raise "
+                "(e.g. 0.3) for stronger 'stay near previous pose' — tighter "
+                "joint continuity near reach limits / singularities, at the "
+                "cost of small EE tracking lag. The primary lever for the "
+                "twisty / wrist-flipped configs the IK can pick near "
+                "boundaries."
+            ),
+        },
+    )
+    ik_max_iters: int = field(
+        default=50,
+        metadata={
+            "description": (
+                "QP iteration budget per IK call. Pink's default is 10; the "
+                "SO-107 ships at 50 because a moving teleop target benefits "
+                "from extra iterations to close per-call lag (mm-scale at "
+                "typical speeds). Lower to 10–20 for more 'stick to seed' "
+                "feel at the cost of moving-target tracking accuracy."
+            ),
+        },
+    )
