@@ -142,37 +142,170 @@ class BiSO107FollowerPredictive(BiSO107Follower):
                     max_depth=0.6,
                 )
 
+        # Per-arm IK kinematics — same pre-build logic as plain BiSO107Follower:
+        # parse the URDF here (~1-2 s/arm, CPU-bound) before connect() spins
+        # up the RealSense read thread, so the parse can't starve it.
+        # None if pin-pink is missing (Cartesian teleop then no-ops).
+        self._ik_kinematics: dict[str, Any] | None = None
+        try:
+            from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
+            from lerobot.robots.so107_description.joint_alignment import (
+                LEFT_ARM_ALIGNMENT,
+                RIGHT_ARM_ALIGNMENT,
+            )
+
+            self._ik_kinematics = {
+                "left": make_so107_arm_kinematics(
+                    LEFT_ARM_ALIGNMENT,
+                    posture_cost=config.ik_posture_cost,
+                    max_iters=config.ik_max_iters,
+                ),
+                "right": make_so107_arm_kinematics(
+                    RIGHT_ARM_ALIGNMENT,
+                    posture_cost=config.ik_posture_cost,
+                    max_iters=config.ik_max_iters,
+                ),
+            }
+        except Exception:
+            logger.exception("%s: Cartesian-IK kinematics unavailable; Cartesian teleop disabled", self.name)
+
+        # Lifetime: started by attach_teleop when wrapping a Cartesian VR
+        # teleop, stopped on detach. None when no Cartesian adapter is
+        # active (e.g. joint-space leader, or no teleop attached).
+        self._cartesian_adapter: Any = None
+
     def attach_teleop(self, teleop) -> None:
-        """Route per-arm teleop bindings to each predictive arm.
+        """Wire a teleop to the per-arm predictive controllers' pull path.
 
-        Expects a bimanual leader teleop with ``left_arm`` / ``right_arm``
-        sub-teleop attributes (BiSO107Leader / BiSO107LeaderHighRate both
-        expose this). Each predictive arm's controller polls its own
-        arm's teleop directly — no cross-arm coordination, no shared
-        cache. The two controllers operate independently at their own
-        rates against independent bus reads.
+        Three teleop shapes are supported:
 
-        ``None`` detaches both arms.
+        * **Bimanual joint-space leader** (``BiSO107Leader``,
+          ``BiSO107LeaderHighRate`` — has ``left_arm`` / ``right_arm``
+          sub-teleop attributes). Each predictive arm polls its arm's
+          sub-teleop directly.
+
+        * **Bimanual Cartesian VR teleop** (``QuestVRTeleop`` —
+          ``action_features.names`` contains ``left_target_x`` etc.). A
+          :class:`BimanualCartesianIKAdapter` is built that wraps the
+          teleop + the bimanual IK transform, runs IK at WebXR rate in a
+          background thread, and exposes ``.left_arm`` / ``.right_arm``
+          sub-teleops returning per-arm joint dicts. Same downstream
+          contract as the leader case, so the per-arm controllers don't
+          know which kind of teleop is upstream. The Cartesian teleop
+          also gets an ``action_transform`` installed that returns the
+          adapter's cached joint dict, so the script-side
+          ``teleop.get_action()`` keeps returning a recordable joint
+          dict — consistent with the plain-follower path.
+
+        * **Anything else** (chunk-aware policy outputs, etc.): skip.
+          The push path (``send_action``) is the route for chunks.
+
+        ``None`` detaches both arms, stops the Cartesian adapter if any,
+        and clears the Cartesian teleop's installed transform.
         """
         if teleop is None:
+            self._teardown_cartesian_adapter()
             self.left_arm.attach_teleop(None)
             self.right_arm.attach_teleop(None)
             return
-        if not hasattr(teleop, "left_arm") or not hasattr(teleop, "right_arm"):
-            # Not a bimanual leader — likely a chunk-aware source like
-            # TrajectoryReplayTeleop. The dict-pull path doesn't apply
-            # (we'd silently feed the same dict to both arms). Skip the
-            # attach and let the send_action chunk path handle routing.
-            # Logged at INFO so it's visible without being alarming.
-            logger.info(
-                "%s: teleop %r is not bimanual (no left_arm/right_arm) — "
-                "skipping pull-path attach; send_action chunk path will be used",
-                self,
-                type(teleop).__name__,
+
+        # Bimanual joint-space leader path (unchanged).
+        if hasattr(teleop, "left_arm") and hasattr(teleop, "right_arm"):
+            self.left_arm.attach_teleop(teleop.left_arm)
+            self.right_arm.attach_teleop(teleop.right_arm)
+            return
+
+        # Bimanual Cartesian VR teleop path. Detect by the teleop's
+        # action_features — same key (``left_target_x``) plain
+        # BiSO107Follower.attach_teleop uses.
+        try:
+            names = teleop.action_features.get("names", {})
+        except (AttributeError, TypeError):
+            names = {}
+        if "left_target_x" in names and "right_target_x" in names:
+            self._attach_cartesian_teleop(teleop)
+            return
+
+        logger.info(
+            "%s: teleop %r is not a recognised bimanual leader or Cartesian teleop — "
+            "skipping pull-path attach; send_action chunk path will be used",
+            self,
+            type(teleop).__name__,
+        )
+
+    def _attach_cartesian_teleop(self, teleop: Any) -> None:
+        """Build and start the bimanual Cartesian IK adapter; route sub-teleops."""
+        if self._ik_kinematics is None:
+            logger.warning(
+                "%s: Cartesian teleop attached but IK kinematics are unavailable "
+                "(is pin-pink installed?) — the arms will not be driven.",
+                self.name,
             )
             return
-        self.left_arm.attach_teleop(teleop.left_arm)
-        self.right_arm.attach_teleop(teleop.right_arm)
+        assert hasattr(teleop, "set_action_transform"), (
+            "a Cartesian teleop must expose set_action_transform()"
+        )
+        assert hasattr(teleop, "get_action_raw"), (
+            "a Cartesian teleop bound to the predictive follower must expose "
+            "get_action_raw() — see BimanualCartesianIKAdapter._tick"
+        )
+        assert self.is_connected, "attach_teleop requires the robot to be connected"
+
+        # Tear down any previous Cartesian adapter — re-attach is supported.
+        self._teardown_cartesian_adapter()
+
+        from lerobot.robots.so107_description.cartesian_ik import (
+            make_bimanual_ik_transform,
+            make_so107_arm_ik_controller,
+        )
+        from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+        from ..predictive.cartesian_adapter import BimanualCartesianIKAdapter
+
+        def _seed(arm) -> Any:
+            import numpy as np
+
+            obs = arm.get_observation()
+            return np.array([float(obs[f"{m}.pos"]) for m in MOTOR_NAMES], dtype=float)
+
+        left_ik = make_so107_arm_ik_controller(self._ik_kinematics["left"], _seed(self.left_arm))
+        right_ik = make_so107_arm_ik_controller(self._ik_kinematics["right"], _seed(self.right_arm))
+        transform = make_bimanual_ik_transform(left_ik, right_ik)
+
+        adapter = BimanualCartesianIKAdapter(teleop, transform, rate_hz=90.0)
+        adapter.start()
+        self._cartesian_adapter = adapter
+
+        # Install a teleop-side transform that returns the adapter's
+        # cached joint dict. Script-side ``teleop.get_action()`` then
+        # yields a recordable joint dict, and the predictive controllers
+        # ALSO read the same cached value through the per-arm sub-
+        # teleops below — single source of truth (the adapter cache),
+        # no parallel IK runs.
+        def _cached_joints(_action: dict) -> dict:
+            return adapter.get_full_joint_action() or {}
+
+        teleop.set_action_transform(_cached_joints)
+
+        # Route the adapter's per-arm sub-teleops to each predictive arm's
+        # controller. Same downstream contract as the leader path.
+        self.left_arm.attach_teleop(adapter.left_arm)
+        self.right_arm.attach_teleop(adapter.right_arm)
+        logger.info(
+            "%s: installed BimanualCartesianIKAdapter for %s",
+            self.name,
+            type(teleop).__name__,
+        )
+
+    def _teardown_cartesian_adapter(self) -> None:
+        """Stop and forget the Cartesian adapter, if any. Idempotent."""
+        if self._cartesian_adapter is None:
+            return
+        try:
+            self._cartesian_adapter.stop()
+        except Exception:
+            logger.exception("%s: failed to stop Cartesian adapter cleanly", self.name)
+        self._cartesian_adapter = None
 
     def send_action(
         self,
