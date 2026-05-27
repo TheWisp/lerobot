@@ -215,14 +215,13 @@ class BiSO107FollowerPredictive(BiSO107Follower):
             self.right_arm.attach_teleop(teleop.right_arm)
             return
 
-        # Bimanual Cartesian VR teleop path. Detect by the teleop's
-        # action_features — same key (``left_target_x``) plain
-        # BiSO107Follower.attach_teleop uses.
-        try:
-            names = teleop.action_features.get("names", {})
-        except (AttributeError, TypeError):
-            names = {}
-        if "left_target_x" in names and "right_target_x" in names:
+        # Bimanual Cartesian VR teleop path (same detection as plain
+        # BiSO107Follower.attach_teleop).
+        from lerobot.robots.so107_description.cartesian_ik import (
+            is_so107_bimanual_cartesian_teleop,
+        )
+
+        if is_so107_bimanual_cartesian_teleop(teleop):
             self._attach_cartesian_teleop(teleop)
             return
 
@@ -255,23 +254,12 @@ class BiSO107FollowerPredictive(BiSO107Follower):
         self._teardown_cartesian_adapter()
 
         from lerobot.robots.so107_description.cartesian_ik import (
-            make_bimanual_ik_transform,
-            make_so107_arm_ik_controller,
+            build_so107_bimanual_ik_transform,
         )
-        from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
         from ..predictive.cartesian_adapter import BimanualCartesianIKAdapter
 
-        def _seed(arm) -> Any:
-            import numpy as np
-
-            obs = arm.get_observation()
-            return np.array([float(obs[f"{m}.pos"]) for m in MOTOR_NAMES], dtype=float)
-
-        left_ik = make_so107_arm_ik_controller(self._ik_kinematics["left"], _seed(self.left_arm))
-        right_ik = make_so107_arm_ik_controller(self._ik_kinematics["right"], _seed(self.right_arm))
-        transform = make_bimanual_ik_transform(left_ik, right_ik)
-
+        transform = build_so107_bimanual_ik_transform(self._ik_kinematics, self.left_arm, self.right_arm)
         adapter = BimanualCartesianIKAdapter(teleop, transform, rate_hz=90.0)
         adapter.start()
         self._cartesian_adapter = adapter

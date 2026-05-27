@@ -19,8 +19,6 @@ import time
 from functools import cached_property
 from typing import Any
 
-import numpy as np
-
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.robots.so_follower import SO107Follower, SO107FollowerConfig
 from lerobot.types import ActionChunk, action_first_frame
@@ -192,11 +190,12 @@ class BiSO107Follower(Robot):
         # Detect a bimanual Cartesian teleop by its action features. Done
         # before importing the IK module so a joint-space leader never
         # triggers the optional pin-pink import.
-        try:
-            names = teleop.action_features.get("names", {})
-        except (AttributeError, TypeError):
-            names = {}
-        if not ("left_target_x" in names and "right_target_x" in names):
+        from lerobot.robots.so107_description.cartesian_ik import (
+            build_so107_bimanual_ik_transform,
+            is_so107_bimanual_cartesian_teleop,
+        )
+
+        if not is_so107_bimanual_cartesian_teleop(teleop):
             return
 
         assert self.is_connected, "attach_teleop requires the robot to be connected"
@@ -212,19 +211,8 @@ class BiSO107Follower(Robot):
             )
             return
 
-        from lerobot.robots.so107_description.cartesian_ik import (
-            make_bimanual_ik_transform,
-            make_so107_arm_ik_controller,
-        )
-        from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
-
-        def _seed(arm: SO107Follower) -> np.ndarray:
-            obs = arm.get_observation()
-            return np.array([float(obs[f"{m}.pos"]) for m in MOTOR_NAMES], dtype=float)
-
-        left_ik = make_so107_arm_ik_controller(self._ik_kinematics["left"], _seed(self.left_arm))
-        right_ik = make_so107_arm_ik_controller(self._ik_kinematics["right"], _seed(self.right_arm))
-        teleop.set_action_transform(make_bimanual_ik_transform(left_ik, right_ik))
+        transform = build_so107_bimanual_ik_transform(self._ik_kinematics, self.left_arm, self.right_arm)
+        teleop.set_action_transform(transform)
         logger.info("%s: installed Cartesian-IK transform into %s", self.name, type(teleop).__name__)
 
     def _read_camera_frame(self, cam) -> Any:
