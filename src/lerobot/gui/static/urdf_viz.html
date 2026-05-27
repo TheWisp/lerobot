@@ -533,6 +533,18 @@ window.addEventListener('message', (e) => {
   }
 });
 
+// Tell the parent we're ready to receive frames. Because this script is an
+// ES module, the browser defers its execution until after the document is
+// parsed — so the parent's iframe.onload fires BEFORE this listener is
+// attached. If the parent posts the first frame from its onload handler
+// (the historical fast path), heavy main-thread load (e.g. Playwright's
+// video-recording overhead) can stretch the gap and drop the message.
+// Broadcasting readiness from the iframe lets the parent re-post on receipt
+// — robust to whatever the event-loop schedule looks like.
+if (window.parent && window.parent !== window) {
+  window.parent.postMessage({ type: 'urdfVizReady' }, '*');
+}
+
 // ── ghost toggle ──────────────────────────────────────────────────────────
 const ghostBtn = document.getElementById('ghost-toggle');
 function _updateGhostBtn() {
