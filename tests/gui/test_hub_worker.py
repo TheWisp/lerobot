@@ -651,17 +651,55 @@ class _Synthetic429Transport:
 class TestFatalHttpHookUnit:
     """Direct exercise of the worker's httpx-hook helpers, no subprocess.
 
-    These prove (1) the hook reaches into HF's shared client and (2) the
-    BaseException-subclass strategy propagates past HF's own
-    ``except Exception`` filters. The subprocess-level fail-fast contract
-    is covered by tests further below.
+    Production uses an abort callback that os._exit's the process, so
+    these tests use the default (raising) install variant. The abort
+    helper itself is covered by a separate subprocess-level test that
+    actually invokes it and asserts the resulting on-disk state.
     """
 
-    def test_hook_raises_on_429_with_retry_after_in_message(self, monkeypatch):
+    def _uninstall_all(self, client):
+        """Strip every tagged hook from the shared HF client between tests."""
+        client.event_hooks["response"] = [
+            h for h in client.event_hooks.get("response", []) if not getattr(h, "_lerobot_fatal_hook", False)
+        ]
+
+    def test_classify_response_pure_function(self):
+        """The classifier is the unit that decides "is this fatal" and
+        builds the message HF's text gets stitched into. Cover it directly
+        so the message-construction contract is pinned independently of
+        the hook install plumbing.
+        """
+        import httpx
+
+        from lerobot.gui.hub_worker import _classify_response
+
+        req = httpx.Request("POST", "https://huggingface.co/api/test")
+
+        resp_429 = httpx.Response(429, headers={"Retry-After": "200"}, content=b"go away", request=req)
+        exc = _classify_response(resp_429)
+        assert exc is not None
+        assert exc.status == 429
+        assert exc.error_class == "rate_limit"
+        assert "Retry-After: 200s" in exc.message
+        assert "go away" in exc.message
+
+        # Non-fatal short-circuits before touching the body.
+        assert _classify_response(httpx.Response(200, content=b"ok", request=req)) is None
+
+        # 5xx deliberately ignored — HF's adaptive retry was designed for
+        # 504 commit timeouts and intercepting would defeat it.
+        assert _classify_response(httpx.Response(504, content=b"timeout", request=req)) is None
+        assert _classify_response(httpx.Response(500, content=b"boom", request=req)) is None
+
+    def test_default_hook_raises_on_429(self):
+        """Calling install() with no callback registers a hook that
+        raises _FatalHFError — useful for tests that want to assert
+        against the exception type without going through process exit.
+        """
         import huggingface_hub
         from huggingface_hub.utils._http import get_session
 
-        from lerobot.gui.hub_worker import _FatalHFError, _install_fatal_http_hook, _on_response
+        from lerobot.gui.hub_worker import _FatalHFError, _install_fatal_http_hook
 
         client = get_session()
         original_transport = client._transport
@@ -669,91 +707,150 @@ class TestFatalHttpHookUnit:
         _install_fatal_http_hook()
         try:
             with pytest.raises(_FatalHFError) as exc_info:
-                # Any HF API call routed through the shared client triggers
-                # the hook. create_repo is the first call from _do_upload
-                # in production; using it here mirrors the real entry point.
                 huggingface_hub.HfApi().create_repo(
                     repo_id="not-real/repro", repo_type="dataset", exist_ok=True
                 )
         finally:
             client._transport = original_transport
-            if _on_response in client.event_hooks.get("response", []):
-                client.event_hooks["response"].remove(_on_response)
+            self._uninstall_all(client)
 
         assert exc_info.value.status == 429
         assert exc_info.value.error_class == "rate_limit"
-        # The exact text from HF gets surfaced verbatim (modulo truncation),
-        # including the documented Retry-After header. This is what the
-        # GUI tray will render — without it the user only sees a class name.
         msg = exc_info.value.message
-        assert "429" in msg
         assert "Retry-After: 130" in msg
-        assert "128 per hour" in msg, (
-            f"HF's documented commit-rate-limit text should pass through; got {msg!r}"
-        )
+        assert "128 per hour" in msg, f"verbatim HF text should pass through; got {msg!r}"
 
-    def test_5xx_is_not_intercepted(self):
-        """upload_large_folder's adaptive shrink-and-retry exists FOR the
-        5xx case (504 commit timeouts). Intercepting 5xx would break the
-        library's intended recovery path, so the hook deliberately
-        ignores it.
+    def test_abort_callback_receives_constructed_exception(self):
+        """The production install path: pass an on_fatal callback (e.g.
+        the closure that calls _abort_to_terminal_state). Verify the
+        callback gets called with a fully-populated _FatalHFError on a
+        fatal response.
         """
         import huggingface_hub
         from huggingface_hub.utils._http import get_session
 
-        from lerobot.gui.hub_worker import _install_fatal_http_hook, _on_response
+        from lerobot.gui.hub_worker import _FatalHFError, _install_fatal_http_hook
+
+        captured: list[_FatalHFError] = []
+
+        def _record(exc: _FatalHFError) -> None:
+            captured.append(exc)
+            # Raise something Exception-derived so HF's call returns
+            # (HF catches Exception in its worker thread; this lets
+            # the test continue rather than hang).
+            raise RuntimeError("test stub raised after recording")
 
         client = get_session()
         original_transport = client._transport
-        client._transport = _Synthetic429Transport(status=504)
-        _install_fatal_http_hook()
+        client._transport = _Synthetic429Transport()
+        _install_fatal_http_hook(_record)
         try:
-            # No _FatalHFError; HF will surface its own error per its
-            # usual path (likely an HfHubHTTPError on the create_repo call
-            # since this is its first HTTP attempt).
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(RuntimeError):
                 huggingface_hub.HfApi().create_repo(
                     repo_id="not-real/repro", repo_type="dataset", exist_ok=True
                 )
-            # Specifically NOT a _FatalHFError — we want HF's normal flow.
-            from lerobot.gui.hub_worker import _FatalHFError
-
-            assert not isinstance(exc_info.value, _FatalHFError), (
-                "504 must not trigger fail-fast — that's the case the "
-                "library's adaptive retry was designed for"
-            )
         finally:
             client._transport = original_transport
-            if _on_response in client.event_hooks.get("response", []):
-                client.event_hooks["response"].remove(_on_response)
+            self._uninstall_all(client)
 
-    def test_install_is_idempotent(self):
-        """Re-calling the install function does not stack duplicate hooks."""
+        assert len(captured) == 1
+        exc = captured[0]
+        assert exc.status == 429
+        assert exc.error_class == "rate_limit"
+        assert "128 per hour" in exc.message
+
+    def test_install_is_idempotent_across_callback_variants(self):
+        """Calling install repeatedly — with or without a callback — must
+        not stack multiple hooks on the shared HF client. We tag by
+        attribute so dedup is robust to closure identity differences.
+        """
         from huggingface_hub.utils._http import get_session
 
-        from lerobot.gui.hub_worker import _install_fatal_http_hook, _on_response
+        from lerobot.gui.hub_worker import _install_fatal_http_hook
 
         client = get_session()
         try:
             _install_fatal_http_hook()
+            _install_fatal_http_hook(lambda exc: None)
             _install_fatal_http_hook()
-            _install_fatal_http_hook()
-            count = client.event_hooks["response"].count(_on_response)
-            assert count == 1, f"install should be idempotent — got {count} copies of the hook"
+            tagged = [
+                h for h in client.event_hooks.get("response", []) if getattr(h, "_lerobot_fatal_hook", False)
+            ]
+            assert len(tagged) == 1, f"install should be idempotent — got {len(tagged)} tagged hooks"
         finally:
-            if _on_response in client.event_hooks.get("response", []):
-                client.event_hooks["response"].remove(_on_response)
+            self._uninstall_all(client)
 
-    def test_fatal_hf_error_is_base_exception_not_exception(self):
-        """Critical invariant. ``upload_large_folder``'s worker pool
-        catches ``Exception``; if our class accidentally inherits from
-        ``Exception`` we'd be silently swallowed and back to the wedge.
-        """
-        from lerobot.gui.hub_worker import _FatalHFError
 
-        assert issubclass(_FatalHFError, BaseException)
-        assert not issubclass(_FatalHFError, Exception), (
-            "_FatalHFError must inherit BaseException directly so HF's "
-            "except-Exception clauses don't catch it; this is the whole "
-            "point of the design"
+class TestAbortToTerminalState:
+    """``_abort_to_terminal_state`` is what production hooks call when
+    they detect a fatal HF response. It must (1) mark the in-memory
+    state as failed with the right fields, (2) write the terminal
+    snapshot to disk synchronously, (3) remove the pid file so the
+    server's PID-liveness sweep doesn't overwrite our error_class
+    with a generic one, and (4) os._exit(1) so the wedged main thread
+    inside HF's library doesn't keep the process alive. We exercise
+    the helper directly with os._exit monkey-patched so it raises
+    SystemExit instead of killing the test process.
+    """
+
+    def _build_state(self, tmp_path):
+        from lerobot.gui.hub_jobs import JobConfig, JobPaths
+        from lerobot.gui.hub_worker import _WorkerState
+
+        jobs_dir = tmp_path / "jobs"
+        jobs_dir.mkdir()
+        cfg = JobConfig(
+            job_id="job-test",
+            dataset_id="ds",
+            direction="upload",
+            repo_id="u/r",
+            repo_type="dataset",
+            local_path=str(tmp_path),
+            jobs_dir=str(jobs_dir),
         )
+        paths = JobPaths.for_job(cfg.job_id, jobs_dir)
+        # Write a pid file so we can verify the abort removes it.
+        paths.pid.write_text('{"pid": 99999, "started_at": 0, "start_time": 0}')
+        return _WorkerState(cfg, paths)
+
+    def test_abort_writes_failed_state_and_calls_exit(self, tmp_path, monkeypatch):
+        from lerobot.gui import hub_worker
+        from lerobot.gui.hub_worker import _abort_to_terminal_state, _FatalHFError
+
+        state = self._build_state(tmp_path)
+        exc = _FatalHFError(429, "rate_limit", "HTTP 429 — 128 per hour cap exceeded")
+
+        # Replace os._exit with one that raises SystemExit so we can
+        # assert post-state. The production behavior is process death.
+        called_with: list[int] = []
+
+        def _fake_exit(code: int) -> None:
+            called_with.append(code)
+            raise SystemExit(code)
+
+        monkeypatch.setattr(hub_worker.os, "_exit", _fake_exit)
+
+        with pytest.raises(SystemExit) as exit_info:
+            _abort_to_terminal_state(state, exc)
+
+        assert exit_info.value.code == 1
+        assert called_with == [1]
+
+        # In-memory state mutated to terminal failed.
+        assert state.status == "failed"
+        assert state.error_class == "rate_limit"
+        assert "128 per hour" in state.error
+        assert state.finished_at is not None
+        assert "Failed" in state.milestone
+
+        # Progress JSON on disk reflects the same terminal state — this is
+        # what the GUI server polls, so the user sees the real reason.
+        import json as _json
+
+        snap = _json.loads(state.paths.progress.read_text())
+        assert snap["status"] == "failed"
+        assert snap["error_class"] == "rate_limit"
+        assert "128 per hour" in snap["error"]
+
+        # PID file removed so PID-liveness sweep doesn't second-guess us.
+        assert not state.paths.pid.exists()
