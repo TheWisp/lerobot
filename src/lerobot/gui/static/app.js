@@ -1918,6 +1918,12 @@ const Transfers = (function () {
                 return j.error || 'Authentication failed. Your HF token may be expired or lacks write permission. Run `huggingface-cli login` and click Retry.';
             case 'rate_limit':
                 return j.error || 'Rate-limited by the Hub. Wait a few minutes and click Retry.';
+            case 'bad_request':
+                // Common cause we've observed: local HF upload cache
+                // claims blobs are uploaded but HF doesn't have them
+                // (state from a prior aborted upload). Verbatim message
+                // first; if blank, point at the cache as the likely fix.
+                return j.error || 'HF rejected the request. If this is a re-upload of a dataset that previously failed mid-flight, try clearing the dataset\'s `.cache/huggingface/upload/` directory before retrying.';
             case 'network':
                 return `Network error: ${j.error}. Click Retry to resume.`;
             case 'cancelled':

@@ -302,11 +302,22 @@ class _FatalHFError(BaseException):
 # Status codes we treat as terminal. 5xx is intentionally absent — the
 # library's shrink-and-retry exists for 504 commit timeouts under load
 # and intercepting those would defeat the design.
+#
+# 4xx codes are all "the request will fail again on retry without
+# something changing" — and the library doesn't change the request, it
+# only shrinks the batch. Smaller-of-the-same-bad-request still fails.
+# We've observed 400 storms on LFS-pointer-without-blob state (corrupt
+# upload cache after a prior abort) keeping the worker busy long enough
+# to also trip 429 — fail-fasting on 400 lets the user see the actual
+# cause (HF's body text) and act on it (clear local cache, fix the bad
+# files) instead of watching a retry loop chew through their commit cap.
 _FATAL_STATUS_TO_CLASS: dict[int, str] = {
-    429: "rate_limit",
+    400: "bad_request",  # malformed request — observed on LFS-pointer corruption
     401: "auth",
     403: "auth",  # storage-quota exhausted also surfaces as 403, same retry storm
     404: "auth",  # repo missing / renamed mid-flight; no retry helps
+    422: "bad_request",  # unprocessable entity — validation failure equivalent of 400
+    429: "rate_limit",
 }
 
 

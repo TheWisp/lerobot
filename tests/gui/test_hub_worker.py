@@ -691,6 +691,25 @@ class TestFatalHttpHookUnit:
         assert _classify_response(httpx.Response(504, content=b"timeout", request=req)) is None
         assert _classify_response(httpx.Response(500, content=b"boom", request=req)) is None
 
+        # 4xx are all fatal — the library only changes the batch SIZE on
+        # retry, not the request CONTENTS, so a malformed-request 400/422
+        # will fail identically on every retry until the rate limit fires.
+        # Pin the specific case we observed in the wild (LFS pointer
+        # corruption surfaces as 400 with that body text).
+        resp_400 = httpx.Response(
+            400, content=b"LFS pointer pointed to a file that does not exist", request=req
+        )
+        exc_400 = _classify_response(resp_400)
+        assert exc_400 is not None
+        assert exc_400.status == 400
+        assert exc_400.error_class == "bad_request"
+        assert "LFS pointer" in exc_400.message
+
+        resp_422 = httpx.Response(422, content=b"validation failed", request=req)
+        exc_422 = _classify_response(resp_422)
+        assert exc_422 is not None
+        assert exc_422.error_class == "bad_request"
+
     def test_default_hook_raises_on_429(self):
         """Calling install() with no callback registers a hook that
         raises _FatalHFError — useful for tests that want to assert
