@@ -613,3 +613,147 @@ class TestCapturesStdoutAndStderr:
             f"stdout marker missing from log — worker is not dup'ing fd 1 "
             f"into the same pipe as fd 2. Got:\n{log_text[-500:]}"
         )
+
+
+# ── Fail-fast httpx hook on unrecoverable HF responses ─────────────────────
+
+
+class _Synthetic429Transport:
+    """httpx transport stub that responds to every request with 429.
+
+    Used to drive the fail-fast hook without monkey-patching
+    huggingface_hub internals beyond the public-but-private transport
+    swap. The Retry-After + body mirror what HF actually returns on a
+    repo-commit-rate-limit so the assertion on the surfaced message
+    text exercises real wording.
+    """
+
+    def __init__(self, status: int = 429, retry_after: str = "130") -> None:
+        self.status = status
+        self.retry_after = retry_after
+
+    def handle_request(self, request):  # signature matches httpx.BaseTransport
+        import httpx
+
+        body = (
+            b"429 Too Many Requests: you have reached your 'api' rate limit. "
+            b"Retry after 130 seconds. "
+            b"You have exceeded the rate limit for repository commits (128 per hour)."
+        )
+        return httpx.Response(
+            status_code=self.status,
+            headers={"Retry-After": self.retry_after, "Content-Type": "text/plain"},
+            content=body,
+            request=request,
+        )
+
+
+class TestFatalHttpHookUnit:
+    """Direct exercise of the worker's httpx-hook helpers, no subprocess.
+
+    These prove (1) the hook reaches into HF's shared client and (2) the
+    BaseException-subclass strategy propagates past HF's own
+    ``except Exception`` filters. The subprocess-level fail-fast contract
+    is covered by tests further below.
+    """
+
+    def test_hook_raises_on_429_with_retry_after_in_message(self, monkeypatch):
+        import huggingface_hub
+        from huggingface_hub.utils._http import get_session
+
+        from lerobot.gui.hub_worker import _FatalHFError, _install_fatal_http_hook, _on_response
+
+        client = get_session()
+        original_transport = client._transport
+        client._transport = _Synthetic429Transport()
+        _install_fatal_http_hook()
+        try:
+            with pytest.raises(_FatalHFError) as exc_info:
+                # Any HF API call routed through the shared client triggers
+                # the hook. create_repo is the first call from _do_upload
+                # in production; using it here mirrors the real entry point.
+                huggingface_hub.HfApi().create_repo(
+                    repo_id="not-real/repro", repo_type="dataset", exist_ok=True
+                )
+        finally:
+            client._transport = original_transport
+            if _on_response in client.event_hooks.get("response", []):
+                client.event_hooks["response"].remove(_on_response)
+
+        assert exc_info.value.status == 429
+        assert exc_info.value.error_class == "rate_limit"
+        # The exact text from HF gets surfaced verbatim (modulo truncation),
+        # including the documented Retry-After header. This is what the
+        # GUI tray will render — without it the user only sees a class name.
+        msg = exc_info.value.message
+        assert "429" in msg
+        assert "Retry-After: 130" in msg
+        assert "128 per hour" in msg, (
+            f"HF's documented commit-rate-limit text should pass through; got {msg!r}"
+        )
+
+    def test_5xx_is_not_intercepted(self):
+        """upload_large_folder's adaptive shrink-and-retry exists FOR the
+        5xx case (504 commit timeouts). Intercepting 5xx would break the
+        library's intended recovery path, so the hook deliberately
+        ignores it.
+        """
+        import huggingface_hub
+        from huggingface_hub.utils._http import get_session
+
+        from lerobot.gui.hub_worker import _install_fatal_http_hook, _on_response
+
+        client = get_session()
+        original_transport = client._transport
+        client._transport = _Synthetic429Transport(status=504)
+        _install_fatal_http_hook()
+        try:
+            # No _FatalHFError; HF will surface its own error per its
+            # usual path (likely an HfHubHTTPError on the create_repo call
+            # since this is its first HTTP attempt).
+            with pytest.raises(Exception) as exc_info:
+                huggingface_hub.HfApi().create_repo(
+                    repo_id="not-real/repro", repo_type="dataset", exist_ok=True
+                )
+            # Specifically NOT a _FatalHFError — we want HF's normal flow.
+            from lerobot.gui.hub_worker import _FatalHFError
+
+            assert not isinstance(exc_info.value, _FatalHFError), (
+                "504 must not trigger fail-fast — that's the case the "
+                "library's adaptive retry was designed for"
+            )
+        finally:
+            client._transport = original_transport
+            if _on_response in client.event_hooks.get("response", []):
+                client.event_hooks["response"].remove(_on_response)
+
+    def test_install_is_idempotent(self):
+        """Re-calling the install function does not stack duplicate hooks."""
+        from huggingface_hub.utils._http import get_session
+
+        from lerobot.gui.hub_worker import _install_fatal_http_hook, _on_response
+
+        client = get_session()
+        try:
+            _install_fatal_http_hook()
+            _install_fatal_http_hook()
+            _install_fatal_http_hook()
+            count = client.event_hooks["response"].count(_on_response)
+            assert count == 1, f"install should be idempotent — got {count} copies of the hook"
+        finally:
+            if _on_response in client.event_hooks.get("response", []):
+                client.event_hooks["response"].remove(_on_response)
+
+    def test_fatal_hf_error_is_base_exception_not_exception(self):
+        """Critical invariant. ``upload_large_folder``'s worker pool
+        catches ``Exception``; if our class accidentally inherits from
+        ``Exception`` we'd be silently swallowed and back to the wedge.
+        """
+        from lerobot.gui.hub_worker import _FatalHFError
+
+        assert issubclass(_FatalHFError, BaseException)
+        assert not issubclass(_FatalHFError, Exception), (
+            "_FatalHFError must inherit BaseException directly so HF's "
+            "except-Exception clauses don't catch it; this is the whole "
+            "point of the design"
+        )

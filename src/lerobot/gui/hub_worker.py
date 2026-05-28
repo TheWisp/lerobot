@@ -249,6 +249,135 @@ def stream_stderr_to_log_and_state(
                 del buf[:start]
 
 
+# ── Fail-fast on unrecoverable HF responses ────────────────────────────────
+#
+# `huggingface_hub.upload_large_folder` catches HTTP errors at the worker
+# level and adaptively shrinks its commit batch on any failure. The
+# behavior is intentional for 504 Gateway Timeouts (HF's commit endpoint
+# times out validating large batches; shrinking + retrying is the right
+# move). But the same blanket `except Exception` swallows 429/401/403/404,
+# producing a multi-hour, thousand-attempts-per-minute storm that ignores
+# HF's own Retry-After header.
+#
+# This is a known upstream issue (huggingface/huggingface_hub#3325 and
+# related). The sanctioned consumer-side fix is to hook the httpx client
+# HF shares via `get_session()` and raise a BaseException subclass on
+# the unrecoverable status codes. Because HF only catches `Exception`,
+# our BaseException propagates cleanly through their thread pool out to
+# our worker's outer try, where we mark the job failed with HF's own
+# actionable error text.
+#
+# We deliberately do NOT intercept 5xx codes — that's the case the
+# adaptive shrink-and-retry was designed for.
+
+
+class _FatalHFError(BaseException):
+    """Signal from the httpx hook that the worker should fail immediately.
+
+    Inherits from BaseException (not Exception) so it bypasses
+    huggingface_hub's blanket `except Exception` clauses in
+    `_upload_large_folder.py` and propagates straight out to our
+    worker's outer try block.
+
+    Carries the HTTP status code, the structured remediation class for
+    the GUI tray (`rate_limit` | `auth`), and a human-readable message
+    composed from HF's response body and any Retry-After header.
+    """
+
+    def __init__(self, status: int, error_class: str, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.error_class = error_class
+        self.message = message
+
+
+# Status codes we treat as terminal. 5xx is intentionally absent — the
+# library's shrink-and-retry exists for 504 commit timeouts under load
+# and intercepting those would defeat the design.
+_FATAL_STATUS_TO_CLASS: dict[int, str] = {
+    429: "rate_limit",
+    401: "auth",
+    403: "auth",  # storage-quota exhausted also surfaces as 403, same retry storm
+    404: "auth",  # repo missing / renamed mid-flight; no retry helps
+}
+
+
+def _install_fatal_http_hook() -> None:
+    """Attach an httpx response hook to HF's shared client.
+
+    Idempotent — re-installing on a second call is a no-op. Best-effort:
+    if huggingface_hub's internal API changes and we can't reach the
+    session, the worker logs a warning and runs without fail-fast.
+    """
+    try:
+        from huggingface_hub.utils._http import get_session
+    except ImportError:
+        logger.warning(
+            "huggingface_hub.utils._http.get_session not importable; "
+            "fail-fast on rate-limit/auth disabled for this session"
+        )
+        return
+
+    try:
+        client = get_session()
+    except Exception:  # noqa: BLE001 — guard against any internal HF changes
+        logger.warning(
+            "Couldn't obtain HF shared http client; fail-fast disabled",
+            exc_info=True,
+        )
+        return
+
+    hooks = getattr(client, "event_hooks", None)
+    if hooks is None or "response" not in hooks:
+        logger.warning(
+            "HF http client has no response event_hooks; fail-fast disabled (client type=%s)",
+            type(client).__name__,
+        )
+        return
+
+    # Idempotency check — function identity, not by name, so re-imports
+    # in tests don't re-register.
+    if _on_response in hooks["response"]:
+        return
+    hooks["response"].append(_on_response)
+
+
+def _on_response(response: Any) -> None:
+    """httpx response hook — raise on the fail-fast status codes.
+
+    Pre: ``response`` is an httpx.Response that has not yet had its body
+    consumed by the calling code.
+    Post: on a fatal status, raises ``_FatalHFError`` carrying status,
+    remediation class, and a message composed from HF's response body
+    (truncated) and ``Retry-After`` header. On a non-fatal status,
+    returns normally; the body remains unread.
+    """
+    status = response.status_code
+    error_class = _FATAL_STATUS_TO_CLASS.get(status)
+    if error_class is None:
+        return
+    # Read the body so we can surface HF's actionable text. The library
+    # is going to read it next anyway; reading here means we can include
+    # the exact wording HF wanted us to see.
+    try:
+        body = response.read().decode("utf-8", errors="replace").strip()
+    except Exception:  # noqa: BLE001 — best-effort message enrichment
+        body = "(body unavailable)"
+    # Trim hard — the tray renders this verbatim and a multi-KB body
+    # makes the card a wall of text.
+    if len(body) > 800:
+        body = body[:800] + "…"
+    retry_after = response.headers.get("Retry-After")
+    url = str(response.url)
+    parts = [f"HTTP {status} from {url}"]
+    if retry_after:
+        parts.append(f"Retry-After: {retry_after}s")
+    if body:
+        parts.append(body)
+    message = " — ".join(parts)
+    raise _FatalHFError(status, error_class, message)
+
+
 # ── Signal handling ─────────────────────────────────────────────────────────
 
 
@@ -481,6 +610,13 @@ def main() -> int:
     )
     reader_thread.start()
 
+    # Install the fail-fast httpx hook BEFORE the pipeline runs so the
+    # first 429/401/403/404 from any HF call (create_repo, create_pr,
+    # the commit step inside upload_large_folder, etc.) raises out
+    # immediately instead of getting absorbed by the library's
+    # adaptive-shrink-and-retry loop.
+    _install_fatal_http_hook()
+
     rc = 0
     try:
         if cfg.direction == "upload":
@@ -501,6 +637,17 @@ def main() -> int:
         state.status = "cancelled"
         state.error = "Cancelled (SIGINT)"
         state.error_class = "cancelled"
+    except _FatalHFError as e:
+        # Raised by our httpx hook on 429/401/403/404. The HF library's
+        # `except Exception` clauses don't catch this (BaseException), so
+        # the exception bubbles up through their thread pool and lands
+        # here. We expose the structured error class to the GUI tray and
+        # the verbatim HF message (with Retry-After) to the user, then
+        # exit cleanly — no automatic backoff/retry; the user decides.
+        state.status = "failed"
+        state.error_class = e.error_class
+        state.error = e.message
+        rc = 1
     except Exception as e:  # noqa: BLE001 — terminal-error catch is intentional
         state.status = "failed"
         state.error = f"{type(e).__name__}: {e}"

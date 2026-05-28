@@ -1907,14 +1907,17 @@ const Transfers = (function () {
     }
 
     function _errorClassMessage(j) {
-        // Map the server's error_class to a remediation hint. Fallback to
-        // the raw error string if we don't recognize the class.
-        if (!j.error) return '';
+        // Prefer HF's own error text when present — for the fail-fast
+        // cases (429, 401, 403) it's far more actionable than a canned
+        // hint (e.g. carries the exact retry-after seconds and the
+        // documented rate-limit caps). Fall back to a generic remediation
+        // string when the worker didn't capture a specific message.
+        if (!j.error && j.error_class !== 'cancelled') return '';
         switch (j.error_class) {
             case 'auth':
-                return 'Authentication failed. Your HF token may be expired or lacks write permission. Run `huggingface-cli login` and click Retry.';
+                return j.error || 'Authentication failed. Your HF token may be expired or lacks write permission. Run `huggingface-cli login` and click Retry.';
             case 'rate_limit':
-                return 'Rate-limited by the Hub. Wait a few minutes and click Retry.';
+                return j.error || 'Rate-limited by the Hub. Wait a few minutes and click Retry.';
             case 'network':
                 return `Network error: ${j.error}. Click Retry to resume.`;
             case 'cancelled':
