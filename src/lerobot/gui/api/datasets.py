@@ -2739,6 +2739,40 @@ async def hub_auth_status():
         return {"logged_in": False, "username": None}
 
 
+@router.post("/hub/open-job-folder")
+async def hub_open_job_folder() -> dict:
+    """Open the per-job IPC directory in the GUI host's file manager.
+
+    Same pattern as ``/open-in-files``, but the path is fixed to the
+    hub-jobs directory so the frontend doesn't have to know (or be
+    trusted with) the absolute path. The directory contains one trio of
+    files per job (``<job_id>.json``, ``.log``, ``.pid``); from there
+    the user can open the ``.log`` to read the raw HF output that drove
+    the milestone string they saw in the Transfers tray.
+
+    Caveat: this opens on the *server*, not the frontend machine — same
+    constraint as the existing Open-data-directory affordance. Useful
+    when the GUI is running locally; degrades gracefully (xdg-open fails
+    with a clean 500) on a headless server.
+    """
+    import asyncio
+    import subprocess as _subprocess
+
+    from lerobot.gui.hub_jobs import JOBS_DIR
+
+    JOBS_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _spawn() -> None:
+        _subprocess.Popen(["xdg-open", str(JOBS_DIR)])  # nosec B607 - standard Linux file-opener
+
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, _spawn)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail="xdg-open not found") from e
+
+    return {"status": "ok", "path": str(JOBS_DIR)}
+
+
 @router.get("/hub/repo-info")
 async def hub_repo_info(repo_id: str):
     """Get info about a dataset repo on HuggingFace Hub."""

@@ -1981,11 +1981,20 @@ const Transfers = (function () {
               `<progress value="${filesDone}" max="${Math.max(1, filesTotal)}"></progress>`
             : '';
 
+        // Short job-id prefix so a user clicking "Open log folder" can
+        // identify which <job_id>.log file is theirs in the directory
+        // listing. Full id is in the title attribute for copy/paste.
+        const jobIdShort = (j.job_id || '').slice(0, 8);
+        const jobIdChip = jobIdShort
+            ? `<span class="transfer-jobid" title="job_id=${j.job_id}\nLog file: ${jobIdShort}…log" style="margin-left:auto; font-family:monospace; font-size:10px; color:var(--text-tertiary,#888);">${jobIdShort}</span>`
+            : '';
+
         return (
             `<div class="transfer-card ${j.status}">` +
               `<div class="transfer-card-head">` +
                 `<span class="transfer-direction">${dir}</span>` +
                 `<a class="transfer-repo" href="${linkUrl}" target="_blank" rel="noopener noreferrer" title="${j.repo_id}">${j.repo_id}</a>` +
+                jobIdChip +
                 `<span class="transfer-actions">${actions}</span>` +
               `</div>` +
               progressLine +
@@ -2230,6 +2239,22 @@ const Transfers = (function () {
 window.toggleTransfersPopover = () => Transfers.toggle();
 window.dismissAllFinishedTransfers = () => Transfers.dismissAllFinished();
 window.Transfers = Transfers;
+
+// Opens the per-job log directory on the GUI host machine. Same constraint
+// as the dataset "open in files" buttons: this is the host's filesystem,
+// not the frontend's — fine when the GUI is running locally, degrades to
+// a clear error toast when xdg-open isn't available (e.g. headless server).
+window.openHubJobFolder = async () => {
+    try {
+        const res = await fetch('/api/datasets/hub/open-job-folder', { method: 'POST' });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            showToast('Couldn\'t open folder', data?.detail || 'xdg-open failed on the GUI host', 'error', 6000);
+        }
+    } catch (e) {
+        showToast('Couldn\'t open folder', e.message, 'error', 6000);
+    }
+};
 
 // Click-outside closes the popover. Anchored to the indicator: if the
 // click is on the indicator or inside the popover, leave it alone.

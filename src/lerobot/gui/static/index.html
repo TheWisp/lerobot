@@ -33,6 +33,9 @@
         <div class="transfers-popover-header">
             <span>Hub transfers</span>
             <button class="transfers-clear-btn" type="button"
+                    onclick="openHubJobFolder()"
+                    title="Open the per-job log directory on the GUI host (xdg-open)">Open log folder</button>
+            <button class="transfers-clear-btn" type="button"
                     onclick="dismissAllFinishedTransfers()"
                     title="Dismiss all finished transfers">Clear finished</button>
         </div>

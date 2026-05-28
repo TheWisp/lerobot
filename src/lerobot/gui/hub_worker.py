@@ -206,7 +206,14 @@ def stream_stderr_to_log_and_state(
     log_path: Path,
     state: _WorkerState,
 ) -> None:
-    """Read the HF helpers' stderr stream, splitting on ``\\r`` and ``\\n``.
+    """Read the HF helpers' merged stdout+stderr stream, splitting on ``\\r``
+    and ``\\n``.
+
+    The caller dup2s both fd 1 and fd 2 to the same pipe before spawning
+    this thread, so the byte stream interleaves stdout and stderr in
+    write order. We don't distinguish them at parse time — for our
+    purposes the per-job log is the authoritative "what did HF actually
+    say" record.
 
     HF / tqdm use ``\\r`` carriage returns to overwrite progress lines on
     the same terminal line. A line-buffered reader misses every progress
@@ -447,21 +454,30 @@ def main() -> int:
     state.write_progress()
     writer = state.start_writer_thread()
 
-    # Redirect HF's stderr through our reader-thread so we can extract
-    # milestones AND keep the verbatim text in the per-job log. We replace
-    # the worker's own stderr fd to point at a writable pipe; a background
-    # thread drains the read end.
+    # Redirect HF's stderr AND stdout through our reader-thread so we can
+    # extract milestones AND keep the verbatim text in the per-job log.
+    # We replace the worker's own fd 1 and fd 2 to point at the same
+    # writable pipe; a background thread drains the read end.
+    #
+    # Both streams unified into one pipe (rather than two pipes + two
+    # reader threads) keeps the ordering between stdout and stderr writes
+    # faithful to the kernel's, and avoids interleaved log files where
+    # cause-and-effect text from the same library is split across two
+    # capture channels.
     r_fd, w_fd = os.pipe()
     original_stderr_fd = os.dup(2)
+    original_stdout_fd = os.dup(1)
     os.dup2(w_fd, 2)
+    os.dup2(w_fd, 1)
     os.close(w_fd)
     sys.stderr = os.fdopen(2, "w", buffering=1)  # line-buffered text wrapper
+    sys.stdout = os.fdopen(1, "w", buffering=1)
 
     reader_thread = threading.Thread(
         target=stream_stderr_to_log_and_state,
         args=(os.fdopen(r_fd, "rb", buffering=0), paths.log, state),
         daemon=True,
-        name="hub-worker-stderr-reader",
+        name="hub-worker-output-reader",
     )
     reader_thread.start()
 
@@ -500,11 +516,14 @@ def main() -> int:
         rc = 1
     finally:
         state.finished_at = time.time()
-        # Restore stderr first so any late writes (from the writer thread's
-        # final flush, for instance) don't deadlock against a half-closed pipe.
+        # Restore stderr + stdout first so any late writes (from the
+        # writer thread's final flush, for instance) don't deadlock
+        # against a half-closed pipe.
         try:
             os.dup2(original_stderr_fd, 2)
             os.close(original_stderr_fd)
+            os.dup2(original_stdout_fd, 1)
+            os.close(original_stdout_fd)
         except Exception:  # noqa: BLE001
             pass
         # Stop + join the writer thread BEFORE the final write_progress so

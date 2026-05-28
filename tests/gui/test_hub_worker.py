@@ -509,3 +509,107 @@ class TestWriterShutdownOrdering:
         assert join_pos < final_write_pos, (
             "writer.join() must complete BEFORE the final state.write_progress() — same race-on-tmp concern"
         )
+
+
+# ── Capture both stdout and stderr in the per-job log ──────────────────────
+
+
+# Mock that writes to BOTH stdout and stderr so we can verify the worker
+# captures both into the same per-job log file. Without dup'ing fd 1 too,
+# the stdout writes would silently disappear (server spawns the worker
+# with stdout=DEVNULL) — exactly the leak that hid HF's rate-limit
+# messages from view in the original bug investigation.
+_MOCK_HF_STDOUT_AND_STDERR = """
+import json
+import os
+import sys
+
+def _mock_config():
+    return json.loads(os.environ.get('LEROBOT_HUB_TEST_MOCK_CONFIG', '{}'))
+
+
+class _PRDetails:
+    def __init__(self, num):
+        self.num = num
+
+
+class HfApi:
+    def create_repo(self, **kwargs): return None
+    def create_pull_request(self, **kwargs): return _PRDetails(1)
+    def change_discussion_status(self, **kwargs): return None
+    def merge_pull_request(self, **kwargs): return None
+    def super_squash_history(self, **kwargs): return None
+    def whoami(self): return {'name': 'test-user'}
+
+
+def upload_large_folder(**kwargs):
+    # Emit a recognizable marker to each stream. The captured log must
+    # contain BOTH or the dup is broken.
+    sys.stdout.write('MARKER_STDOUT_from_hf\\n')
+    sys.stdout.flush()
+    sys.stderr.write('MARKER_STDERR_from_hf\\n')
+    sys.stderr.flush()
+
+
+def snapshot_download(**kwargs):
+    sys.stdout.write('MARKER_STDOUT_from_hf\\n')
+    sys.stdout.flush()
+    sys.stderr.write('MARKER_STDERR_from_hf\\n')
+    sys.stderr.flush()
+
+
+from huggingface_hub import errors  # re-export for import compat
+"""
+
+
+@pytest.fixture
+def mock_hf_stdout_and_stderr(tmp_path, monkeypatch):
+    """Variant of the mock_hf_install fixture whose mock emits to both
+    streams, so we can prove the worker captures both into ``paths.log``.
+    """
+    mock_pkg = tmp_path / "mock_hf" / "huggingface_hub"
+    mock_pkg.mkdir(parents=True)
+    (mock_pkg / "__init__.py").write_text(_MOCK_HF_STDOUT_AND_STDERR)
+    (mock_pkg / "errors.py").write_text("from huggingface_hub.errors import *  # noqa: F401, F403\n")
+    monkeypatch.setenv("PYTHONPATH", str(mock_pkg.parent) + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    return mock_pkg.parent
+
+
+class TestCapturesStdoutAndStderr:
+    """Both stdout and stderr from the HF library land in the per-job log.
+
+    The original visibility bug had HF's rate-limit error message in
+    stderr (where we already captured it), but parts of HF's library
+    output go to stdout. The server spawns the worker with stdout=DEVNULL,
+    so without an explicit fd-1 dup the worker's own stdout would be
+    sent into the void. This test guards against silently regressing
+    that dup.
+    """
+
+    def test_marker_from_stderr_is_in_log(self, tmp_path, mock_hf_stdout_and_stderr):
+        cfg, paths = _build_config(tmp_path)
+        proc = _spawn_worker(cfg)
+        try:
+            snap = _wait_until_status(paths, timeout_s=10)
+        finally:
+            proc.wait(timeout=5)
+        assert snap["status"] == "complete"
+        log_text = paths.log.read_text()
+        assert "MARKER_STDERR_from_hf" in log_text, f"stderr marker missing from log; got:\n{log_text[-500:]}"
+
+    def test_marker_from_stdout_is_in_log(self, tmp_path, mock_hf_stdout_and_stderr):
+        """The regression: without dup2(w_fd, 1), this assertion fails
+        because the server's stdout=DEVNULL eats the marker.
+        """
+        cfg, paths = _build_config(tmp_path)
+        proc = _spawn_worker(cfg)
+        try:
+            snap = _wait_until_status(paths, timeout_s=10)
+        finally:
+            proc.wait(timeout=5)
+        assert snap["status"] == "complete"
+        log_text = paths.log.read_text()
+        assert "MARKER_STDOUT_from_hf" in log_text, (
+            f"stdout marker missing from log — worker is not dup'ing fd 1 "
+            f"into the same pipe as fd 2. Got:\n{log_text[-500:]}"
+        )
