@@ -72,7 +72,7 @@ class _WorkerState:
         # write to disk.
         self.status: str = "pending"  # pending | running | complete | failed | cancelled
         self.stage: str = "starting"
-        self.milestone: str = "starting"
+        self.milestone: str = f"Starting {config.direction}"
         self.milestone_at: float = self.started_at
         self.files_total: int = 0
         self.files_done_estimate: int = 0

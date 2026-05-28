@@ -3121,7 +3121,7 @@ def _spawn_hub_worker(
         {
             "job_id": job.job_id,
             "status": "pending",
-            "milestone": "starting",
+            "milestone": f"Starting {job.direction}",
             "milestone_at": job.started_at,
         },
     )

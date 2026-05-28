@@ -1834,11 +1834,9 @@ async function executeHubAction() {
     }
 }
 
-// Close hub modal on overlay click
-document.addEventListener('click', (e) => {
-    const overlay = document.getElementById('hub-modal-overlay');
-    if (e.target === overlay) closeHubModal();
-});
+// Hub modal: dismissal is intentionally Cancel-button-only. The transfer
+// settings (repo id, sync direction) are easy to misclick away from when
+// click-on-overlay closes the dialog, so we don't bind a backdrop handler.
 
 // ── Hub Transfers tray ─────────────────────────────────────────────────
 //
@@ -1875,10 +1873,9 @@ const Transfers = (function () {
         const label = document.getElementById('transfers-indicator-label');
         if (!ind || !label) return;
         const active = _jobs.filter(_isActive);
-        if (_jobs.length === 0) {
-            ind.hidden = true;
-            return;
-        }
+        // Indicator is always present (the HTML omits `hidden`); we only
+        // toggle the active styling + count badge based on job state. The
+        // user can always find the popover entry point.
         ind.hidden = false;
         if (active.length > 0) {
             ind.classList.add('active');
@@ -1893,7 +1890,12 @@ const Transfers = (function () {
         const list = document.getElementById('transfers-list');
         if (!list) return;
         if (_jobs.length === 0) {
-            list.innerHTML = '';
+            list.innerHTML =
+                '<div class="transfers-empty" style="padding:14px 16px; color:var(--text-tertiary,#888); font-size:12px;">' +
+                'No Hub transfers. Start one from a dataset\'s right-click menu &rarr; Upload / Download.' +
+                '</div>';
+            const clearBtn = document.querySelector('.transfers-clear-btn');
+            if (clearBtn) clearBtn.disabled = true;
             return;
         }
         list.innerHTML = _jobs.map(_cardHtml).join('');

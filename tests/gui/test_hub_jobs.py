@@ -117,6 +117,19 @@ class TestHubJobState:
         assert j.pr_num is None
         assert j.error is None
 
+    def test_initial_milestone_is_direction_aware(self):
+        """Pre-worker-spawn milestone must say which direction the job is.
+
+        A bare "starting" was historically rendered in the tray before the
+        worker process attached, leading users to misread an upload as a
+        download (see the Hub-transfers UX bug). The default now spells the
+        direction out so the tray cannot ambiguate.
+        """
+        up = hub_jobs.make_job(dataset_id="ds", direction="upload", repo_id="u/r")
+        down = hub_jobs.make_job(dataset_id="ds", direction="download", repo_id="u/r")
+        assert up.milestone == "Starting upload"
+        assert down.milestone == "Starting download"
+
     def test_unique_job_ids(self):
         ids = {
             hub_jobs.make_job(dataset_id="ds", direction="upload", repo_id="u/r").job_id for _ in range(20)
@@ -153,7 +166,11 @@ class TestHubJobState:
         j.merge_progress({"status": "running", "milestone": "Uploading"})
         assert j.status == "failed"
         # Other fields also don't move (the snapshot is ignored entirely).
-        assert j.milestone == "starting"
+        # The default milestone is direction-aware so a user looking at the
+        # tray during the brief pre-spawn window sees "Starting upload" rather
+        # than a context-free "starting" that historically read as ambiguous
+        # (could be download — see the original Hub-transfers UX bug report).
+        assert j.milestone == "Starting upload"
 
     def test_to_dict_omits_nothing_serialisable(self):
         """Sanity: every field in to_dict() is JSON-serialisable."""

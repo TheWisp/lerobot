@@ -304,6 +304,7 @@ def make_job(
         repo_type=repo_type,
         status="pending",
         started_at=now,
+        milestone=f"Starting {direction}",
         milestone_at=now,
     )
 

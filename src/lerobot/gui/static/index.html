@@ -14,12 +14,13 @@
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
         <span id="hf-auth-indicator" style="margin-left:auto; font-size:11px; color:var(--text-secondary, #666); padding-right:12px; cursor:default;" title="HuggingFace Hub login status"></span>
-        <!-- Transfers indicator: hidden until there's at least one job in the
-             registry. Click toggles the popover below; the popover lists one
-             card per active or recently-completed Hub transfer. -->
+        <!-- Transfers indicator: always visible so the user can find their
+             Hub transfers without remembering a hidden trigger. Click toggles
+             the popover below; the popover lists one card per active or
+             recently-completed Hub transfer (empty when idle). -->
         <button id="transfers-indicator" class="transfers-indicator" type="button"
-                onclick="toggleTransfersPopover()" hidden
-                title="Hub uploads / downloads in progress">
+                onclick="toggleTransfersPopover()"
+                title="Hub uploads / downloads">
             <span id="transfers-indicator-label">Transfers</span>
         </button>
         <button id="bug-report-btn" class="bug-report-btn" onclick="openBugReportDialog()" title="Report a bug — screenshot is captured automatically">Report bug</button>
