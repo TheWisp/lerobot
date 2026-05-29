@@ -336,6 +336,69 @@ def test_attach_teleop_wires_cartesian_adapter(bi_follower):
     assert robot.right_arm._controller._teleop is None
 
 
+def test_cartesian_adapter_install_surfaces_hold_per_arm_to_teleop(bi_follower):
+    """The IK-hold rumble path on the Quest VR teleop polls its installed
+    ``action_transform.hold_per_arm``. On the plain follower the installed
+    transform IS the BimanualSO107IKTransform which exposes that property.
+    On the predictive path the installed transform is a thin adapter shim
+    (the per-arm controllers read the adapter cache directly), so the shim
+    must ALSO expose hold_per_arm — otherwise the rumble dies at this seam.
+
+    Regression for: on-hardware Quest VR session reported no haptic at all
+    (predictive path is the on-hardware path).
+    """
+    from unittest.mock import patch
+
+    robot, _l, _r = bi_follower
+    installed = []
+
+    teleop = MagicMock()
+    teleop.action_features = {
+        "names": {"left_target_x": 0, "right_target_x": 1, "left_enabled": 2, "right_enabled": 3}
+    }
+    teleop.get_action.return_value = {}
+    teleop.set_action_transform = installed.append
+    del teleop.left_arm
+    del teleop.right_arm
+
+    fake_kin = MagicMock()
+    fake_kin.forward_kinematics.return_value = MagicMock()
+    robot._ik_kinematics = {"left": fake_kin, "right": fake_kin}
+
+    # Fake the bimanual transform with a settable hold_per_arm so we can
+    # see whether the predictive-path shim propagates it.
+    class _FakeTransform:
+        def __init__(self):
+            self.hold_per_arm = (False, False)
+
+        def __call__(self, _action):
+            return {}
+
+    fake_transform = _FakeTransform()
+    with patch(
+        "lerobot.robots.so107_description.cartesian_ik.build_so107_bimanual_ik_transform",
+        return_value=fake_transform,
+    ):
+        robot.attach_teleop(teleop)
+
+    try:
+        assert len(installed) == 1, "an action_transform must be installed"
+        shim = installed[0]
+        # Initial state propagates.
+        assert shim.hold_per_arm == (False, False)
+        # Flipping the underlying transform's hold state shows up live —
+        # not snapshotted at install time, because the rumble path reads
+        # this every tick.
+        fake_transform.hold_per_arm = (True, False)
+        assert shim.hold_per_arm == (True, False)
+        fake_transform.hold_per_arm = (False, True)
+        assert shim.hold_per_arm == (False, True)
+        # Callable contract still works (used by script-side get_action).
+        assert isinstance(shim({}), dict)
+    finally:
+        robot.attach_teleop(None)
+
+
 def test_send_action_rejects_chunk_missing_one_arms_keys(bi_follower):
     """A frame missing all left_* keys (or right_*) would have produced an
     empty per-arm sub-chunk, which then races: left_arm.send_action

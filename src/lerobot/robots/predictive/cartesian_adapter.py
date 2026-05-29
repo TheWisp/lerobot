@@ -155,6 +155,19 @@ class BimanualCartesianIKAdapter:
         with self._cache_lock:
             return dict(self._cached) if self._cached is not None else None
 
+    @property
+    def hold_per_arm(self) -> tuple[bool, bool]:
+        """Per-arm IK-hold state from the wrapped transform.
+
+        Surfaced so a teleop that polls its installed action_transform
+        for ``hold_per_arm`` (Quest VR's haptic-rumble path) sees through
+        the adapter to the underlying ``BimanualSO107IKTransform`` —
+        without this the rumble dies at the adapter wrapper. ``(False,
+        False)`` if the wrapped transform doesn't expose it (e.g. a
+        generic bimanual transform).
+        """
+        return getattr(self._transform, "hold_per_arm", (False, False))
+
     def _filtered(self, prefix: str) -> dict[str, float]:
         """Return one arm's joint dict (unprefixed) from the cache, or {}."""
         with self._cache_lock:
