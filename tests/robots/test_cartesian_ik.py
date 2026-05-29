@@ -410,6 +410,41 @@ def test_implausible_ik_jump_is_held():
             assert out[f"{motor}.pos"] == pytest.approx(q_init[i])
 
 
+def test_unsolvable_ik_is_held():
+    """A Pink QP that raises NoSolutionFound (target unreachable from the
+    seed under joint/velocity limits) must hold the previous command — not
+    propagate the exception and crash the teleop process.
+
+    Regression for: Quest VR user stretched past reach -> ``pink.exceptions.
+    NoSolutionFound`` -> uncaught -> ``lerobot-teleoperate`` exited rc=1.
+    Same conceptual treatment as the implausible-jump guard above.
+    """
+    from lerobot.robots.so107_description.cartesian_ik import _NoSolutionFound
+
+    class _InfeasibleIK:
+        def forward_kinematics(self, q):
+            t = np.eye(4)
+            t[:3, 3] = np.asarray(q, dtype=float)[:3]
+            return t
+
+        def inverse_kinematics(self, seed, target):
+            raise _NoSolutionFound("target unreachable")
+
+    q_init = np.array([0.0, -0.2, 0.15, 0.0, 0.0, 0.0, 50.0])
+    ctrl = CartesianIKController(
+        kinematics=_InfeasibleIK(),
+        motor_names=list(MOTOR_NAMES),
+        q_init=q_init,
+        workspace_min=_WS_MIN,
+        workspace_max=_WS_MAX,
+    )
+    # No exception escapes; output is the held configuration.
+    out = ctrl(_ee_action(enabled=1.0, target_x=0.01))
+    for i, motor in enumerate(MOTOR_NAMES):
+        if motor != "gripper":
+            assert out[f"{motor}.pos"] == pytest.approx(q_init[i])
+
+
 def test_quest_controller_reanchors_after_tracking_dropout():
     """A controller moved while untracked must not emit a phantom target delta.
 

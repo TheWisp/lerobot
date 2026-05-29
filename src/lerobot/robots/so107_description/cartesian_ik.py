@@ -45,6 +45,19 @@ import numpy as np
 
 from lerobot.utils.rotation import Rotation
 
+# Optional pin-pink dependency: bind the QP "no solution" exception at
+# import-time, with a sentinel fallback so ``except _NoSolutionFound:``
+# is syntactically valid even without pin-pink installed. The fallback
+# never fires (it's only ever raised from inside Pink's solver), so the
+# guard collapses to a no-op in the no-pink case.
+try:
+    from pink.exceptions import NoSolutionFound as _NoSolutionFound
+except ImportError:
+
+    class _NoSolutionFound(Exception):  # noqa: N818 — mirrors pink.exceptions.NoSolutionFound; sentinel never fires in no-pink envs
+        pass
+
+
 from .joint_alignment import (
     MOTOR_NAMES,
     TIP_OFFSET,
@@ -235,7 +248,17 @@ class CartesianIKController:
                 pos = self._last_pos + step * (self._max_step / n)
             desired[:3, 3] = pos
 
-            q_new = np.asarray(self._kin.inverse_kinematics(self._q_last, desired), dtype=float)
+            # Hold this tick if the QP can't solve at all (e.g. the user
+            # stretched past reach). Symmetric with the implausible-jump
+            # guard below — internal state stays put so the next tick
+            # re-evaluates from the held pose, and the user just has to
+            # move back into the workspace for tracking to resume.
+            try:
+                q_new = np.asarray(self._kin.inverse_kinematics(self._q_last, desired), dtype=float)
+            except _NoSolutionFound:
+                logger.warning("CartesianIKController: IK has no solution — holding this tick")
+                self._prev_enabled = enabled
+                return {f"{name}.pos": float(self._q_last[i]) for i, name in enumerate(self._motor_names)}
             # Backstop: hold this tick if IK swings an arm joint implausibly
             # far. _q_last / _ref / _last_pos are left untouched, so the next
             # tick re-evaluates from the held state.
