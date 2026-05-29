@@ -214,6 +214,13 @@ class CartesianIKController:
         self._prev_enabled = False
         self._ref: np.ndarray | None = None  # latched reference pose (4x4)
         self._last_pos: np.ndarray | None = None  # last commanded EE position
+        # True iff the last ``__call__`` ended up returning the held command
+        # (NoSolutionFound or implausible-IK-jump branches). Inspected by
+        # the bimanual-transform wrapper so the WebXR client can render a
+        # tactile "you're pushing against an invisible wall" rumble while
+        # the IK is held. Engagement gating (clutch released) is NOT a
+        # hold — the operator's hand is allowed to move freely there.
+        self.is_holding: bool = False
 
     def __call__(self, action: dict[str, Any]) -> dict[str, float]:
         enabled = bool(action["enabled"])
@@ -257,6 +264,7 @@ class CartesianIKController:
                 q_new = np.asarray(self._kin.inverse_kinematics(self._q_last, desired), dtype=float)
             except _NoSolutionFound:
                 logger.warning("CartesianIKController: IK has no solution — holding this tick")
+                self.is_holding = True
                 self._prev_enabled = enabled
                 return {f"{name}.pos": float(self._q_last[i]) for i, name in enumerate(self._motor_names)}
             # Backstop: hold this tick if IK swings an arm joint implausibly
@@ -268,10 +276,16 @@ class CartesianIKController:
                     "CartesianIKController: implausible IK jump (%.0f deg) — holding this tick",
                     joint_step,
                 )
+                self.is_holding = True
             else:
                 q_new[self._gripper_idx] = gripper_pos
                 self._q_last = q_new
                 self._last_pos = pos.copy()
+                self.is_holding = False
+        else:
+            # Disengaged is not "holding" — the operator's hand is free to
+            # move without any IK-target feedback.
+            self.is_holding = False
 
         self._prev_enabled = enabled
         return {f"{name}.pos": float(self._q_last[i]) for i, name in enumerate(self._motor_names)}
@@ -415,13 +429,43 @@ def is_so107_bimanual_cartesian_teleop(teleop: Any) -> bool:
     return "left_target_x" in names and "right_target_x" in names
 
 
+class BimanualSO107IKTransform:
+    """Callable Cartesian-action → joint-action transform for a bimanual
+    SO-107 follower, with per-arm IK-hold state readable by the teleop.
+
+    Wraps :func:`make_bimanual_ik_transform` so callers that only need the
+    dict→dict behavior (``set_action_transform``) keep working unchanged,
+    and adds :attr:`hold_per_arm` for callers (the Quest VR teleop) that
+    want to surface "the IK is holding the last command" to the operator
+    as a tactile signal.
+    """
+
+    def __init__(self, left: CartesianIKController, right: CartesianIKController) -> None:
+        self.left = left
+        self.right = right
+        self._inner = make_bimanual_ik_transform(left, right)
+
+    def __call__(self, action: dict) -> dict:
+        return self._inner(action)
+
+    @property
+    def hold_per_arm(self) -> tuple[bool, bool]:
+        """``(left_holding, right_holding)`` from the last ``__call__``.
+
+        True iff that arm's IK ended up returning the held command
+        (NoSolutionFound, implausible-jump backstop). The teleop signals
+        each rising / falling edge to the operator via haptic pulse.
+        """
+        return (self.left.is_holding, self.right.is_holding)
+
+
 def build_so107_bimanual_ik_transform(
     ik_kinematics: dict[str, JointMappedKinematics],
     left_arm: Any,
     right_arm: Any,
     workspace_min: tuple[float, float, float] = SO107_WORKSPACE_MIN,
     workspace_max: tuple[float, float, float] = SO107_WORKSPACE_MAX,
-) -> Callable[[dict], dict]:
+) -> BimanualSO107IKTransform:
     """Build a Cartesian-action → joint-action transform for a bimanual
     SO-107 follower.
 
@@ -430,9 +474,11 @@ def build_so107_bimanual_ik_transform(
     once at build time to read the latch reference), then composes them
     through the bimanual prefix split/merge.
 
-    The returned callable is the shape ``teleop.set_action_transform``
+    The returned object is callable (the shape ``teleop.set_action_transform``
     expects: takes a bimanual Cartesian action dict, returns a
-    motor-joint dict prefixed with ``left_`` / ``right_``.
+    motor-joint dict prefixed with ``left_`` / ``right_``) AND exposes
+    :attr:`BimanualSO107IKTransform.hold_per_arm` for callers that want
+    per-arm hold state.
 
     Used by:
       * ``BiSO107Follower.attach_teleop`` — installs synchronously via
@@ -455,4 +501,4 @@ def build_so107_bimanual_ik_transform(
     right_ik = make_so107_arm_ik_controller(
         ik_kinematics["right"], _seed(right_arm), workspace_min, workspace_max
     )
-    return make_bimanual_ik_transform(left_ik, right_ik)
+    return BimanualSO107IKTransform(left_ik, right_ik)

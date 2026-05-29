@@ -116,11 +116,25 @@ class QuestServer:
         port: int,
         cert_dir: Path,
         on_frame: Any,  # callable taking parsed frame dict
+        page_vars: dict[str, str] | None = None,
+        get_hold_state: Any = None,  # callable () -> (left_holding, right_holding) | None
     ) -> None:
         self.html_path = Path(html_path)
         self.port = port
         self.cert_dir = Path(cert_dir)
         self.on_frame = on_frame
+        # ``{{KEY}}`` markers in the served HTML are substituted with these
+        # values at request time. Used to pass per-session config (e.g.
+        # ``clutch_button_index`` for the haptic-feedback path) into the
+        # page without a back-channel from the WebSocket.
+        self.page_vars: dict[str, str] = dict(page_vars or {})
+        # Optional hook: every WebXR frame, the WS handler calls this and
+        # sends a ``{type: "hold", left, right}`` message to the client
+        # whenever the boolean tuple changes. The client uses that to drive
+        # the IK-hold continuous-rumble haptic. Polled instead of pushed
+        # (no cross-thread queue) — the read is one tuple, atomic under the
+        # GIL. None disables the channel.
+        self.get_hold_state = get_hold_state
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._runner: web.AppRunner | None = None
@@ -243,7 +257,10 @@ class QuestServer:
     async def _handle_index(self, request: web.Request) -> web.Response:
         from aiohttp import web
 
-        return web.Response(text=self.html_path.read_text(), content_type="text/html")
+        html = self.html_path.read_text()
+        for key, value in self.page_vars.items():
+            html = html.replace("{{" + key + "}}", value)
+        return web.Response(text=html, content_type="text/html")
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         from aiohttp import WSMsgType, web
@@ -267,6 +284,10 @@ class QuestServer:
                 await asyncio.sleep(PING_INTERVAL_S)
 
         ping_task = asyncio.create_task(ping_loop())
+        # Track the last hold-state tuple sent to the client so we only
+        # emit a message on transitions. Starts at "neither holding" —
+        # matches the client-side initial state, so no spurious first edge.
+        last_hold_sent: tuple[bool, bool] = (False, False)
         try:
             async for msg in ws:
                 if msg.type != WSMsgType.TEXT:
@@ -284,6 +305,19 @@ class QuestServer:
                         self.on_frame(data)
                     except Exception:
                         logger.exception("on_frame callback raised")
+                    # Push a hold-state update if it changed since last send.
+                    # Cheap (one bool-tuple read + at most one WS write per
+                    # transition); rate-limited by client frame cadence.
+                    if self.get_hold_state is not None:
+                        try:
+                            current = tuple(bool(b) for b in self.get_hold_state())
+                        except Exception:
+                            logger.exception("get_hold_state raised")
+                            current = last_hold_sent
+                        if current != last_hold_sent:
+                            with contextlib.suppress(ConnectionError):
+                                await ws.send_json({"type": "hold", "left": current[0], "right": current[1]})
+                            last_hold_sent = current
         finally:
             ping_task.cancel()
             logger.info("QuestVR client disconnected")

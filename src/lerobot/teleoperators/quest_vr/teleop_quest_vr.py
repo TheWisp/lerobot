@@ -141,6 +141,13 @@ class QuestVRTeleop(Teleoperator):
             port=self.config.port,
             cert_dir=CERT_DIR,
             on_frame=self._on_frame,
+            # ``{{KEY}}`` markers in the served HTML get these values
+            # substituted at request time. Used for the haptic-feedback
+            # path: the page fires a pulse on the rising/falling edge of
+            # the clutch button, but it doesn't otherwise know which
+            # button index that is.
+            page_vars={"CLUTCH_BUTTON_INDEX": str(self.config.clutch_button_index)},
+            get_hold_state=self._read_ik_hold_state,
         )
         self._server.start()
         logger.info(
@@ -195,6 +202,24 @@ class QuestVRTeleop(Teleoperator):
         ``get_action()`` and receive whatever the robot wired up.
         """
         self._action_transform = transform
+
+    def _read_ik_hold_state(self) -> tuple[bool, bool]:
+        """Probe the installed transform for per-arm IK-hold state.
+
+        Returns ``(left_holding, right_holding)``. Called from the server's
+        asyncio thread (after each received WebXR frame) — a cheap
+        attribute read with no lock; the tuple is constructed fresh each
+        call and the underlying booleans are GIL-atomic.
+
+        Returns ``(False, False)`` when no transform with ``hold_per_arm``
+        is installed (e.g. a non-Cartesian downstream, or before
+        ``attach_teleop`` runs).
+        """
+        t = self._action_transform
+        hold = getattr(t, "hold_per_arm", None)
+        if hold is None:
+            return (False, False)
+        return (bool(hold[0]), bool(hold[1]))
 
     # ── Server-thread callback ────────────────────────────────────────────
 

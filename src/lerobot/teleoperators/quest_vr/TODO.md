@@ -42,3 +42,23 @@ Related — the action-feature shape that a follower's `attach_teleop`
 matches against currently checks for `left_target_x` AND `right_target_x`
 ([cartesian_ik.py: `is_so107_bimanual_cartesian_teleop`](cartesian_ik.py)).
 A unimanual variant will need a sibling detector or a broader contract.
+
+## Tracking-lost / re-acquired haptic
+
+The page pulses on clutch edges and IK-hold transitions; the only
+event left from the original design sketch is a controller-tracking
+dropout. Tricky UX:
+
+- The lost controller can't pulse (its actuator is gone with its
+  pose). The remaining one would have to signal on the lost
+  controller's behalf — e.g. a two-pulse pattern on the right
+  controller meaning "your LEFT just dropped out." Pattern isn't
+  obvious to the operator without prior training.
+- Re-acquired is easier: the regained controller fires its own
+  pulse. Trivial extension if we add the lost-signal path.
+
+Worth designing before shipping. The plumbing for it (server→page WS
+message on transition, per-handedness page-side handler) already
+exists from the IK-hold path — adding a `{type: "tracking_lost",
+hand: "left"}` message is mostly an extension of the existing
+`ws.onmessage` branches, ~15 lines.

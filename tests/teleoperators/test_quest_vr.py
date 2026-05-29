@@ -278,6 +278,132 @@ def test_config_registers_under_quest_vr_type_string():
     assert QuestVRTeleopConfig().type == "quest_vr"
 
 
+def test_served_html_substitutes_clutch_button_index():
+    """The server replaces ``{{CLUTCH_BUTTON_INDEX}}`` with the configured
+    index so the page-side haptic feedback fires on the right button. A
+    template marker that leaks through to the browser would silently
+    disable the feedback (parseInt(\"{{...}}\") -> NaN -> fallback 1)."""
+    import socket
+
+    from lerobot.teleoperators.quest_vr.teleop_quest_vr import QuestVRTeleop
+
+    with socket.socket() as ss:
+        ss.bind(("127.0.0.1", 0))
+        port = ss.getsockname()[1]
+    cfg = QuestVRTeleopConfig(port=port, clutch_button_index=3)
+    teleop = QuestVRTeleop(cfg)
+    teleop.connect()
+    try:
+        # Local-bound request to the just-started server. We disable cert
+        # verification because the cert is self-signed at first run.
+        import ssl as _ssl
+        import urllib.request
+
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        with urllib.request.urlopen(f"https://127.0.0.1:{port}/", context=ctx, timeout=5) as resp:
+            html = resp.read().decode()
+        # Marker substituted with the configured value, not leaking through.
+        assert "{{CLUTCH_BUTTON_INDEX}}" not in html
+        assert 'parseInt("3", 10)' in html
+    finally:
+        teleop.disconnect()
+
+
+def test_server_pushes_hold_messages_on_state_change():
+    """End-to-end check that ``QuestServer`` translates a per-arm IK-hold
+    flag flip into a ``{type: "hold"}`` WS message — the back-channel the
+    page-side rumble feedback rides on. No browser; the test is a
+    direct-WS client driving the server.
+
+    Verifies:
+      * No ``hold`` on the first frame (state matches initial ``(False, False)``)
+      * A ``hold`` message lands when the state flips
+      * No duplicate ``hold`` while steady
+    """
+    import asyncio
+    import socket
+    import ssl as _ssl
+
+    import aiohttp
+
+    from lerobot.teleoperators.quest_vr.server import QuestServer
+    from lerobot.teleoperators.quest_vr.teleop_quest_vr import CERT_DIR, HTML_PATH
+
+    async def _drive():
+        with socket.socket() as ss:
+            ss.bind(("127.0.0.1", 0))
+            port = ss.getsockname()[1]
+
+        hold_state = {"value": (False, False)}
+        server = QuestServer(
+            html_path=HTML_PATH,
+            port=port,
+            cert_dir=CERT_DIR,
+            on_frame=lambda _frame: None,
+            get_hold_state=lambda: hold_state["value"],
+        )
+        server.start()
+        try:
+            ctx = _ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_NONE
+            connector = aiohttp.TCPConnector(ssl=ctx)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.ws_connect(f"wss://127.0.0.1:{port}/ws") as ws:
+
+                    async def collect_for(seconds: float) -> list[dict]:
+                        out: list[dict] = []
+                        deadline = asyncio.get_event_loop().time() + seconds
+                        while True:
+                            remaining = deadline - asyncio.get_event_loop().time()
+                            if remaining <= 0:
+                                break
+                            try:
+                                msg = await asyncio.wait_for(ws.receive(), timeout=remaining)
+                            except TimeoutError:
+                                break
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                out.append(msg.json())
+                        return out
+
+                    # Frame 1: state still (False, False). No `hold` should fire.
+                    await ws.send_json({"type": "frame", "t_quest_send": 0.0, "poses": []})
+                    msgs = await collect_for(0.2)
+                    assert not any(m.get("type") == "hold" for m in msgs), msgs
+
+                    # Flip left to True, send a frame — expect exactly one hold message.
+                    hold_state["value"] = (True, False)
+                    await ws.send_json({"type": "frame", "t_quest_send": 0.0, "poses": []})
+                    msgs = await collect_for(0.2)
+                    holds = [m for m in msgs if m.get("type") == "hold"]
+                    assert holds == [{"type": "hold", "left": True, "right": False}], holds
+
+                    # Steady-state frame — no further hold message.
+                    await ws.send_json({"type": "frame", "t_quest_send": 0.0, "poses": []})
+                    msgs = await collect_for(0.2)
+                    assert not any(m.get("type") == "hold" for m in msgs), msgs
+
+                    # Flip right too — single transition message.
+                    hold_state["value"] = (True, True)
+                    await ws.send_json({"type": "frame", "t_quest_send": 0.0, "poses": []})
+                    msgs = await collect_for(0.2)
+                    holds = [m for m in msgs if m.get("type") == "hold"]
+                    assert holds == [{"type": "hold", "left": True, "right": True}], holds
+
+                    # Release both — single back-to-rest message.
+                    hold_state["value"] = (False, False)
+                    await ws.send_json({"type": "frame", "t_quest_send": 0.0, "poses": []})
+                    msgs = await collect_for(0.2)
+                    holds = [m for m in msgs if m.get("type") == "hold"]
+                    assert holds == [{"type": "hold", "left": False, "right": False}], holds
+        finally:
+            server.stop()
+
+    asyncio.run(_drive())
+
+
 def test_config_clutch_and_gripper_button_defaults():
     cfg = QuestVRTeleopConfig()
     # Default Quest 3 mapping: grip (1) = clutch, trigger (0) = gripper.

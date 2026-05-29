@@ -443,6 +443,131 @@ def test_unsolvable_ik_is_held():
     for i, motor in enumerate(MOTOR_NAMES):
         if motor != "gripper":
             assert out[f"{motor}.pos"] == pytest.approx(q_init[i])
+    # The hold flag is set so the WebXR client can rumble the controller.
+    assert ctrl.is_holding is True
+
+
+def test_is_holding_flag_tracks_solve_outcome():
+    """``is_holding`` is True iff the last call returned the held command —
+    the per-arm signal the bimanual transform exposes to the teleop for
+    haptic-feedback dispatch."""
+
+    class _Solver:
+        def __init__(self):
+            self.next_raises = False
+            self.next_returns = None
+
+        def forward_kinematics(self, q):
+            t = np.eye(4)
+            t[:3, 3] = np.asarray(q, dtype=float)[:3]
+            return t
+
+        def inverse_kinematics(self, seed, target):
+            from lerobot.robots.so107_description.cartesian_ik import _NoSolutionFound
+
+            if self.next_raises:
+                raise _NoSolutionFound("infeasible")
+            return self.next_returns if self.next_returns is not None else seed
+
+    q_init = np.array([0.0, -0.2, 0.15, 0.0, 0.0, 0.0, 50.0])
+    solver = _Solver()
+    ctrl = CartesianIKController(
+        kinematics=solver,
+        motor_names=list(MOTOR_NAMES),
+        q_init=q_init,
+        workspace_min=_WS_MIN,
+        workspace_max=_WS_MAX,
+    )
+
+    # Disengaged: not "holding" (operator's hand free).
+    ctrl(_ee_action(enabled=0.0, target_x=0.0))
+    assert ctrl.is_holding is False
+
+    # Engaged successful solve: not holding.
+    solver.next_returns = np.asarray(q_init, dtype=float)
+    ctrl(_ee_action(enabled=1.0, target_x=0.0))
+    assert ctrl.is_holding is False
+
+    # Infeasible solve: holding flag set.
+    solver.next_raises = True
+    ctrl(_ee_action(enabled=1.0, target_x=0.01))
+    assert ctrl.is_holding is True
+
+    # Back to a successful solve: flag clears on its own (no manual reset).
+    solver.next_raises = False
+    ctrl(_ee_action(enabled=1.0, target_x=0.0))
+    assert ctrl.is_holding is False
+
+
+def test_bimanual_transform_exposes_per_arm_hold_state():
+    """``BimanualSO107IKTransform.hold_per_arm`` mirrors the underlying
+    controllers' ``is_holding`` flags so the teleop can read per-arm state
+    without reaching for the controllers directly."""
+    from lerobot.robots.so107_description.cartesian_ik import (
+        BimanualSO107IKTransform,
+        _NoSolutionFound,
+    )
+
+    class _Stub:
+        def __init__(self, raises=False):
+            self.raises = raises
+
+        def forward_kinematics(self, q):
+            t = np.eye(4)
+            t[:3, 3] = np.asarray(q, dtype=float)[:3]
+            return t
+
+        def inverse_kinematics(self, seed, target):
+            if self.raises:
+                raise _NoSolutionFound("infeasible")
+            return seed
+
+    q_init = np.array([0.0, -0.2, 0.15, 0.0, 0.0, 0.0, 50.0])
+
+    def _ctrl(stub):
+        return CartesianIKController(
+            kinematics=stub,
+            motor_names=list(MOTOR_NAMES),
+            q_init=q_init.copy(),
+            workspace_min=_WS_MIN,
+            workspace_max=_WS_MAX,
+        )
+
+    left_stub = _Stub(raises=False)
+    right_stub = _Stub(raises=True)
+    transform = BimanualSO107IKTransform(_ctrl(left_stub), _ctrl(right_stub))
+
+    # Drive one tick. Left solves cleanly; right's IK raises.
+    action = {
+        f"left_{k}": 0.0
+        for k in (
+            "enabled",
+            "target_x",
+            "target_y",
+            "target_z",
+            "target_wx",
+            "target_wy",
+            "target_wz",
+            "gripper_pos",
+        )
+    } | {
+        f"right_{k}": 0.0
+        for k in (
+            "enabled",
+            "target_x",
+            "target_y",
+            "target_z",
+            "target_wx",
+            "target_wy",
+            "target_wz",
+            "gripper_pos",
+        )
+    }
+    action["left_enabled"] = 1.0
+    action["right_enabled"] = 1.0
+    action["right_target_x"] = 0.01
+    transform(action)
+    assert transform.hold_per_arm == (False, True)
 
 
 def test_quest_controller_reanchors_after_tracking_dropout():
