@@ -8,7 +8,7 @@
 
 """Scripted bimanual Cartesian-EE-delta trajectory teleop.
 
-Same action surface as :class:`BimanualQuestVRTeleop` — the bimanual
+Same action surface as :class:`QuestVRTeleop` — the bimanual
 ``left_target_x/y/z, left_target_wx/wy/wz, left_gripper_pos`` + right
 keys, ``set_action_transform`` / ``get_action_raw`` for the predictive
 adapter, ``action_features`` exposing the keys so a follower's
@@ -46,7 +46,7 @@ from .configuration_scripted_ee import ScriptedBimanualEETeleopConfig
 logger = logging.getLogger(__name__)
 
 # Output action keys: every per-arm Cartesian-VR key, doubled with
-# left_ / right_ prefixes. Matches :class:`BimanualQuestVRTeleop`.
+# left_ / right_ prefixes. Matches :class:`QuestVRTeleop`.
 _PER_ARM_KEYS = (
     "enabled",
     "target_x",

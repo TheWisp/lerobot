@@ -184,7 +184,7 @@ class BiSO107FollowerPredictive(BiSO107Follower):
           sub-teleop attributes). Each predictive arm polls its arm's
           sub-teleop directly.
 
-        * **Bimanual Cartesian VR teleop** (``BimanualQuestVRTeleop`` —
+        * **Bimanual Cartesian VR teleop** (``QuestVRTeleop`` —
           ``action_features.names`` contains ``left_target_x`` etc.). A
           :class:`BimanualCartesianIKAdapter` is built that wraps the
           teleop + the bimanual IK transform, runs IK at WebXR rate in a

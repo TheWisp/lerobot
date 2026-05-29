@@ -131,10 +131,6 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .quest_vr import QuestVRTeleop
 
         return QuestVRTeleop(config)
-    elif config.type == "bimanual_quest_vr":
-        from .quest_vr import BimanualQuestVRTeleop
-
-        return BimanualQuestVRTeleop(config)
     else:
         try:
             return cast("Teleoperator", make_device_from_device_class(config))

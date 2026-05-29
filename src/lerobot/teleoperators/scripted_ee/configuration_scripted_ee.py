@@ -31,7 +31,7 @@ class ScriptedBimanualEETeleopConfig(TeleoperatorConfig):
     """Bimanual scripted Cartesian-EE-delta trajectory source.
 
     Emits one Cartesian-EE-delta dict per tick (the action_features
-    shape :class:`BimanualQuestVRTeleop` produces), driving each arm's
+    shape :class:`QuestVRTeleop` produces), driving each arm's
     ``CartesianIKController`` through ``ramp_in → shape → ramp_out``.
     Both arms get the **same** delta in robot-base frame; the user
     stages the bimanual arms so their workspaces accept that motion.
