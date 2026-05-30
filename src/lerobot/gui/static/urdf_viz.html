@@ -94,7 +94,22 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a1a);
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
 camera.position.set(0.55, 0.4, 0.55);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+// THREE.WebGLRenderer's constructor throws synchronously when the browser
+// can't grant a WebGL context — typically because hardware acceleration is
+// disabled, the browser is sandboxed without GPU access, or the driver is
+// broken (Chrome's chrome://gpu reports the actual reason). If we let it
+// throw, the rest of this module never runs and the operator sees the
+// initial 'starting…' status forever with zero indication of why. Catch +
+// surface a clear, actionable status, then bail so we don't try to use the
+// renderer downstream.
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (err) {
+  console.error('THREE.WebGLRenderer failed to initialise:', err);
+  setStatus('WebGL unavailable — enable hardware acceleration in your browser (chrome://gpu)');
+  throw err;
+}
 document.body.appendChild(renderer.domElement);
 scene.add(new THREE.AmbientLight(0xffffff, 0.75));
 const dl = new THREE.DirectionalLight(0xffffff, 1.0);

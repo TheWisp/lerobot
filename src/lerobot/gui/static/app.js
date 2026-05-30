@@ -520,7 +520,7 @@ async function _probeAndAttachUrdfViz(datasetId, episodeIdx) {
     // `?urdfGhost=on` on the parent URL propagates as the iframe's initial
     // ghost state — bookmarkable, and what the screenshot script keys off.
     const ghostInit = new URLSearchParams(location.search).get('urdfGhost') === 'on' ? '&ghost=on' : '';
-    iframe.src = `/static/urdf_viz.html?mode=dataset&v=1${ghostInit}`;
+    iframe.src = `/static/urdf_viz.html?mode=dataset&v=2${ghostInit}`;
     iframe.addEventListener('load', () => _postFrameToUrdfViz(currentFrame), { once: true });
 }
 
