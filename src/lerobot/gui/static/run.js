@@ -2120,6 +2120,10 @@ async function startObsStreamViewer() {
 
     container.appendChild(grid);
 
+    // Click-to-goto overlay + click handler attach. Runs whenever the grid
+    // rebuilds; lives next to the grid so it tears down with stopObsStreamViewer.
+    _attachClickTarget(imgElements, camKeys);
+
     // Poll camera frames at ~10fps
     let frameSeq = 0;
     obsStreamTimer = setInterval(() => {
@@ -2141,6 +2145,7 @@ function stopObsStreamViewer() {
     }
     obsStreamMeta = null;
     _hideSubtaskOverlay();
+    _detachClickTarget();
 
     const container = document.getElementById('rerun-viewer');
     if (!container) return;
@@ -2150,6 +2155,790 @@ function stopObsStreamViewer() {
     const placeholder = document.getElementById('rerun-placeholder');
     if (placeholder) placeholder.style.display = '';
 }
+
+
+// =============================================================================
+// Click-to-goto (experimental)
+// =============================================================================
+//
+// Lives in the GUI process. The robot subprocess owns the camera, FK, and a
+// ClickCalibrationService that polls a file mailbox; the backend exposes
+// /api/run/click-target/{sample-pixel, sample-fk, goto, finalize, status}.
+//
+// Two-step calibration capture, teleop-agnostic:
+//   1. User clicks a surface point on the top cam → /sample-pixel returns
+//      cam_xyz. A yellow marker is dropped on that point.
+//   2. User drives the gripper to the marker with whatever teleop they have
+//      running. They click Confirm → /sample-fk returns base_xyz. Marker
+//      turns green and the pair is added to the list. Repeat ≥ 4 times.
+// After Save (>= 4 done pairs), extrinsics are persisted. With click_target
+// also attached, a single click in the top cam triggers goto via /goto.
+//
+// State is recreated on each obs-stream start; torn down on stop.
+
+let _clickTargetStatus = null;          // {has_extrinsics, top_camera_key, arm, ...} | null
+let _clickTargetPanelEl = null;         // right-side docked panel
+let _clickTargetMarkersEl = null;       // overlay container for pixel markers
+let _clickTargetTopImg = null;          // <img> the click handler is bound to
+let _clickTargetClickHandler = null;    // bound click handler (for removeEventListener)
+let _clickTargetWheelHandler = null;    // bound wheel handler (for removeEventListener)
+let _calibrationActive = false;         // true while the user is in calibration mode
+let _calibrationPending = null;         // {u, v, cam_xyz, depth_m} — pixel sampled, awaiting Confirm
+let _calibrationRows = [];              // [{id, u, v, depth_m, cam_xyz, base_xyz, arm}]
+let _calibrationRowSeq = 0;             // monotonic id for marker labels
+// Persistent goto-mode state. The Z offset is the PLANNED hover height
+// above the clicked surface (meters, base-frame Z). Scroll wheel adjusts
+// it in 2 mm increments — the hover cursor's circle grows/shrinks to
+// preview the height; the arm does NOT move until the user clicks. Floor
+// at +10 mm so a click never sends the gripper into the table.
+let _clickTargetZOffset = 0.06;
+// Floor is set conservatively above the typical 4-pt calibration RMSE
+// (~10-15 mm). At RMSE × 2 the gripper has a safe vertical margin from
+// the surface even when the click's depth read drifts by one RMSE.
+const _CLICK_TARGET_Z_OFFSET_MIN = 0.03;
+const _CLICK_TARGET_Z_OFFSET_MAX = 0.30;
+const _CLICK_TARGET_Z_OFFSET_STEP = 0.002; // 2 mm per scroll detent
+let _clickTargetLastGoto = null;            // {cam_key, u, v} — display only
+let _clickTargetHoverMoveHandler = null;    // bound mousemove handler
+let _clickTargetHoverLeaveHandler = null;   // bound mouseleave handler
+let _clickTargetLastMouseEv = null;         // last mousemove ev — used to redraw on scroll
+// Hover preview: rate-limit sample-pixel during goto mode so the cursor
+// label can show the planned target Z BEFORE the user clicks. Without this
+// the operator can't tell they're hovering over the gripper / a tall
+// object — depth there is closer to camera, surface Z is higher than the
+// desk, and the goto ends up surprisingly high.
+let _clickTargetHoverPreview = null;        // {u, v, surface_z, depth_m} | null
+let _clickTargetHoverPreviewSeq = 0;        // monotonic id for stale-response gating
+let _clickTargetHoverTimer = null;          // setTimeout handle for debounce
+
+async function _fetchClickTargetStatus() {
+    try {
+        const r = await fetch('/api/run/click-target/status');
+        if (!r.ok) return null;
+        return await r.json();
+    } catch (_e) {
+        return null;
+    }
+}
+
+function _imgPixelFromClick(img, ev) {
+    // Map a click on an <img> rendered with object-fit: contain back to
+    // (u, v) in the natural image pixel grid. Returns null if the click
+    // landed in the letterbox margin (outside the actual image content).
+    const rect = img.getBoundingClientRect();
+    const natW = img.naturalWidth, natH = img.naturalHeight;
+    if (!natW || !natH) return null;
+    const scale = Math.min(rect.width / natW, rect.height / natH);
+    const drawW = natW * scale, drawH = natH * scale;
+    const offsetX = (rect.width - drawW) / 2;
+    const offsetY = (rect.height - drawH) / 2;
+    const clickX = ev.clientX - rect.left;
+    const clickY = ev.clientY - rect.top;
+    if (clickX < offsetX || clickX > offsetX + drawW ||
+        clickY < offsetY || clickY > offsetY + drawH) {
+        return null;
+    }
+    return {
+        u: Math.round((clickX - offsetX) / scale),
+        v: Math.round((clickY - offsetY) / scale),
+    };
+}
+
+async function _attachClickTarget(imgElements, camKeys) {
+    _detachClickTarget();
+    _clickTargetStatus = await _fetchClickTargetStatus();
+    if (!_clickTargetStatus) return;
+
+    const topKey = _clickTargetStatus.top_camera_key;
+    const topImg = imgElements[topKey];
+
+    const container = document.getElementById('rerun-viewer');
+    if (!container) return;
+
+    // Dock the panel to the right of the camera grid. The grid keeps its
+    // flex sizing and just shares the row with the panel, so the camera
+    // view is never covered by a modal.
+    container.style.display = 'flex';
+    container.style.flexDirection = 'row';
+
+    const panel = document.createElement('div');
+    panel.id = 'click-target-panel';
+    panel.style.cssText = `
+        width: 300px;
+        background: #16213e;
+        border-left: 1px solid #0f3460;
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 12px;
+        color: #ddd;
+    `;
+    panel.innerHTML = `
+        <div style="padding: 12px 14px; border-bottom: 1px solid #0f3460;">
+            <div style="font-size: 13px; color: #4fc3f7; font-weight: 600;">Click target</div>
+            <div id="ct-status-line" style="margin-top: 4px; font-size: 11px;"></div>
+        </div>
+        <div id="ct-panel-body" style="flex: 1; overflow-y: auto; padding: 10px 14px;"></div>
+        <div id="ct-panel-footer" style="padding: 10px 14px; border-top: 1px solid #0f3460; display: flex; gap: 6px; flex-wrap: wrap;"></div>
+    `;
+    container.appendChild(panel);
+    _clickTargetPanelEl = panel;
+
+    // Wire the click + wheel + mousemove handlers to the top camera tile.
+    // The pixel-marker overlay sits in the same parent cell so it tracks
+    // the image's letterbox area. In goto mode the native cursor is hidden
+    // and replaced with a custom circle that grows with the planned Z
+    // offset — the wheel scrolls Z offset but does NOT move the arm; the
+    // click is what commits the goto.
+    if (topImg && camKeys.includes(topKey)) {
+        _clickTargetTopImg = topImg;
+        _clickTargetClickHandler = (ev) => _onTopCameraClick(ev, topKey);
+        topImg.addEventListener('click', _clickTargetClickHandler);
+        _clickTargetWheelHandler = (ev) => _onTopCameraWheel(ev);
+        topImg.addEventListener('wheel', _clickTargetWheelHandler, {passive: false});
+        _clickTargetHoverMoveHandler = (ev) => _onTopCameraMouseMove(ev);
+        topImg.addEventListener('mousemove', _clickTargetHoverMoveHandler);
+        _clickTargetHoverLeaveHandler = () => _hideHoverCursor();
+        topImg.addEventListener('mouseleave', _clickTargetHoverLeaveHandler);
+
+        const markers = document.createElement('div');
+        markers.id = 'click-target-markers';
+        markers.style.cssText = `
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+        `;
+        topImg.parentElement.appendChild(markers);
+        _clickTargetMarkersEl = markers;
+        _updateCursorForMode();
+    }
+
+    _renderPanel();
+}
+
+// Toggle the native cursor based on what the click does right now:
+// calibration mode → crosshair (a click samples a pixel); goto mode with
+// extrinsics → none (we draw a custom hover circle); otherwise default.
+function _updateCursorForMode() {
+    if (!_clickTargetTopImg) return;
+    if (_calibrationActive) {
+        _clickTargetTopImg.style.cursor = 'crosshair';
+        _hideHoverCursor();
+    } else if (_clickTargetStatus?.has_extrinsics) {
+        _clickTargetTopImg.style.cursor = 'none';
+    } else {
+        _clickTargetTopImg.style.cursor = '';
+        _hideHoverCursor();
+    }
+}
+
+function _detachClickTarget() {
+    if (_clickTargetPanelEl) {
+        _clickTargetPanelEl.remove();
+        _clickTargetPanelEl = null;
+    }
+    if (_clickTargetMarkersEl) {
+        _clickTargetMarkersEl.remove();
+        _clickTargetMarkersEl = null;
+    }
+    if (_clickTargetTopImg) {
+        if (_clickTargetClickHandler) {
+            _clickTargetTopImg.removeEventListener('click', _clickTargetClickHandler);
+        }
+        if (_clickTargetWheelHandler) {
+            _clickTargetTopImg.removeEventListener('wheel', _clickTargetWheelHandler);
+        }
+        if (_clickTargetHoverMoveHandler) {
+            _clickTargetTopImg.removeEventListener('mousemove', _clickTargetHoverMoveHandler);
+        }
+        if (_clickTargetHoverLeaveHandler) {
+            _clickTargetTopImg.removeEventListener('mouseleave', _clickTargetHoverLeaveHandler);
+        }
+        _clickTargetTopImg.style.cursor = '';
+    }
+    _clickTargetTopImg = null;
+    _clickTargetClickHandler = null;
+    _clickTargetWheelHandler = null;
+    _clickTargetHoverMoveHandler = null;
+    _clickTargetHoverLeaveHandler = null;
+    _clickTargetLastMouseEv = null;
+    if (_clickTargetHoverTimer !== null) {
+        clearTimeout(_clickTargetHoverTimer);
+        _clickTargetHoverTimer = null;
+    }
+    _clickTargetHoverPreview = null;
+    _clickTargetHoverPreviewSeq = 0;
+    _calibrationActive = false;
+    _calibrationPending = null;
+    _calibrationRows = [];
+    _calibrationRowSeq = 0;
+    _clickTargetLastGoto = null;
+    _clickTargetStatus = null;
+    const container = document.getElementById('rerun-viewer');
+    if (container) {
+        container.style.display = '';
+        container.style.flexDirection = '';
+    }
+}
+
+// Build a marker dot at image-pixel (u, v), accounting for the image's
+// object-fit: contain letterbox. Returns the DOM element to append into
+// _clickTargetMarkersEl, or null if the image hasn't loaded yet.
+function _buildMarker(u, v, label, color) {
+    const img = _clickTargetTopImg;
+    if (!img) return null;
+    const rect = img.getBoundingClientRect();
+    const natW = img.naturalWidth, natH = img.naturalHeight;
+    if (!natW || !natH) return null;
+    const scale = Math.min(rect.width / natW, rect.height / natH);
+    const drawW = natW * scale, drawH = natH * scale;
+    const offsetX = (rect.width - drawW) / 2;
+    const offsetY = (rect.height - drawH) / 2;
+    const px = offsetX + u * scale;
+    const py = offsetY + v * scale;
+    const m = document.createElement('div');
+    m.style.cssText = `
+        position: absolute;
+        left: ${px - 8}px; top: ${py - 8}px;
+        width: 16px; height: 16px;
+        border-radius: 50%;
+        background: ${color};
+        border: 2px solid white;
+        box-shadow: 0 0 4px rgba(0,0,0,0.7);
+        font-family: monospace; font-size: 10px; font-weight: 700;
+        color: white; text-align: center; line-height: 12px;
+    `;
+    if (label !== undefined && label !== null) m.textContent = String(label);
+    return m;
+}
+
+function _repaintMarkers() {
+    if (!_clickTargetMarkersEl) return;
+    _clickTargetMarkersEl.innerHTML = '';
+    for (const row of _calibrationRows) {
+        const m = _buildMarker(row.u, row.v, row.id, '#5cdb7a');
+        if (m) _clickTargetMarkersEl.appendChild(m);
+    }
+    if (_calibrationPending) {
+        const m = _buildMarker(_calibrationPending.u, _calibrationPending.v, '?', '#f6c453');
+        if (m) _clickTargetMarkersEl.appendChild(m);
+    }
+}
+
+function _renderPanel() {
+    if (!_clickTargetPanelEl || !_clickTargetStatus) return;
+
+    const statusLine = document.getElementById('ct-status-line');
+    const body = document.getElementById('ct-panel-body');
+    const footer = document.getElementById('ct-panel-footer');
+
+    if (_calibrationActive) {
+        const completed = _calibrationRows.length;
+        statusLine.textContent = `Calibrating — ${completed} pair${completed === 1 ? '' : 's'} captured`;
+        statusLine.style.color = '#f6c453';
+
+        let bodyHtml = '';
+        if (_calibrationPending) {
+            const cam = _calibrationPending.cam_xyz.map(x => x.toFixed(3)).join(', ');
+            bodyHtml += `
+                <div style="background: #2a3a5a; border: 1px solid #f6c453; border-radius: 4px; padding: 8px; margin-bottom: 10px;">
+                    <div style="color: #f6c453; font-weight: 600; margin-bottom: 4px;">Pending pair (?)</div>
+                    <div style="font-family: monospace; font-size: 10px; line-height: 1.5;">
+                        pixel (${_calibrationPending.u}, ${_calibrationPending.v})<br>
+                        depth ${_calibrationPending.depth_m.toFixed(3)} m<br>
+                        cam (${cam}) m
+                    </div>
+                    <div style="margin-top: 6px; font-size: 11px; color: #ccc; line-height: 1.4;">
+                        Drive the gripper tip to the yellow marker. Then click <b>Confirm</b>.
+                        Click the camera again to re-sample if the marker is wrong.
+                    </div>
+                </div>
+            `;
+        } else {
+            bodyHtml += `
+                <div style="color: #aaa; margin-bottom: 10px; line-height: 1.5;">
+                    Click on a surface in the top camera. Drive your gripper to
+                    that point using your existing teleop (leader, gamepad, etc.),
+                    then <b>Confirm</b>. Repeat ≥ 4 times.
+                </div>
+            `;
+        }
+
+        bodyHtml += `<div style="font-weight: 600; margin: 8px 0 4px; color: #ccc;">Captured pairs:</div>`;
+        if (_calibrationRows.length === 0) {
+            bodyHtml += `<div style="color: #777; font-style: italic; font-size: 11px;">(none yet)</div>`;
+        } else {
+            bodyHtml += _calibrationRows.map((row, i) => {
+                const cam = row.cam_xyz.map(x => x.toFixed(3)).join(', ');
+                const base = row.base_xyz.map(x => x.toFixed(3)).join(', ');
+                return `
+                    <div style="display: flex; gap: 6px; align-items: flex-start; padding: 5px 0; border-bottom: 1px solid #0f3460;">
+                        <button data-row-idx="${i}" class="ct-row-remove"
+                            style="background: #4a1a1a; color: #ddd; border: 1px solid #774;
+                            border-radius: 3px; padding: 0 6px; cursor: pointer; font-size: 11px;
+                            line-height: 16px; align-self: center;" title="Remove pair">×</button>
+                        <div style="font-family: monospace; font-size: 10px; line-height: 1.4; color: #bbb;">
+                            <b style="color: #5cdb7a;">#${row.id}</b> px (${row.u}, ${row.v}) d=${row.depth_m.toFixed(3)}<br>
+                            cam (${cam})<br>
+                            base (${base}) [${row.arm}]
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        body.innerHTML = bodyHtml;
+
+        body.querySelectorAll('.ct-row-remove').forEach(btn => {
+            btn.onclick = () => {
+                const idx = parseInt(btn.dataset.rowIdx, 10);
+                _calibrationRows.splice(idx, 1);
+                _repaintMarkers();
+                _renderPanel();
+            };
+        });
+
+        const confirmDisabled = _calibrationPending === null;
+        const saveDisabled = _calibrationRows.length < 4;
+        footer.innerHTML = `
+            <button id="ct-stop-btn" style="background: #2a2a2a; color: #ddd; border: 1px solid #555;
+                border-radius: 3px; padding: 5px 10px; cursor: pointer; flex: 1;">Stop</button>
+            <button id="ct-confirm-btn" ${confirmDisabled ? 'disabled' : ''}
+                style="background: ${confirmDisabled ? '#444' : '#1976d2'}; color: #fff;
+                border: 1px solid ${confirmDisabled ? '#555' : '#2196f3'};
+                border-radius: 3px; padding: 5px 10px; cursor: pointer; flex: 1;
+                opacity: ${confirmDisabled ? '0.5' : '1'};">Confirm</button>
+            <button id="ct-save-btn" ${saveDisabled ? 'disabled' : ''}
+                style="background: ${saveDisabled ? '#444' : '#2e7d32'}; color: #fff;
+                border: 1px solid ${saveDisabled ? '#555' : '#4caf50'};
+                border-radius: 3px; padding: 5px 10px; cursor: pointer; flex: 1 0 100%;
+                opacity: ${saveDisabled ? '0.5' : '1'};">Save (${_calibrationRows.length})</button>
+        `;
+        document.getElementById('ct-stop-btn').onclick = _stopCalibration;
+        document.getElementById('ct-confirm-btn').onclick = _confirmPair;
+        document.getElementById('ct-save-btn').onclick = _saveCalibration;
+    } else {
+        if (_clickTargetStatus.has_extrinsics) {
+            statusLine.textContent = `Calibrated — click camera to go-to`;
+            statusLine.style.color = '#5cdb7a';
+        } else {
+            statusLine.textContent = `Not calibrated`;
+            statusLine.style.color = '#ff8080';
+        }
+        if (_clickTargetStatus.has_extrinsics) {
+            const offsetMm = Math.round(_clickTargetZOffset * 1000);
+            const range = _CLICK_TARGET_Z_OFFSET_MAX - _CLICK_TARGET_Z_OFFSET_MIN;
+            const t = Math.max(0, Math.min(1,
+                (_clickTargetZOffset - _CLICK_TARGET_Z_OFFSET_MIN) / range));
+            const hue = 50 + t * 80; // matches _hoverCursorColor
+            const offsetColor = `hsl(${hue}, 75%, 55%)`;
+            const lastLine = _clickTargetLastGoto
+                ? `Last click: pixel (${_clickTargetLastGoto.u}, ${_clickTargetLastGoto.v})`
+                : `<i style="color: #777">No click yet.</i>`;
+            body.innerHTML = `
+                <div style="color: #aaa; line-height: 1.5; margin-bottom: 10px;">
+                    <b>Scroll</b> over the top camera to set the hover height
+                    above the surface (cursor ring grows). <b>Click</b> to
+                    commit — the <b>${_clickTargetStatus.arm}</b> arm walks to
+                    the clicked point + that hover height.
+                </div>
+                <div style="background:#0f1a2e;border:1px solid #0f3460;border-radius:4px;
+                    padding:8px;font-family:monospace;font-size:11px;line-height:1.5;">
+                    <div>Planned hover: <b style="color:${offsetColor}">${offsetMm} mm</b>
+                        (floor ${Math.round(_CLICK_TARGET_Z_OFFSET_MIN * 1000)} mm,
+                        max ${Math.round(_CLICK_TARGET_Z_OFFSET_MAX * 1000)} mm)</div>
+                    <div style="color:#888;margin-top:4px;">${lastLine}</div>
+                </div>
+                <div style="color:#888;font-size:11px;margin-top:8px;line-height:1.4;">
+                    Scroll step is 2 mm. Scrolling does NOT move the arm —
+                    only a click commits a goto. STOP halts current motion
+                    and the arm holds at its current pose.
+                </div>
+            `;
+            footer.innerHTML = `
+                <button id="ct-stop-goto-btn" style="background: #4a1a1a; color: #fff;
+                    border: 1px solid #aa3333; border-radius: 3px; padding: 6px 12px;
+                    cursor: pointer; flex: 1; font-weight: 600;">STOP</button>
+                <button id="ct-start-btn" style="background: #2a2a2a; color: #ddd;
+                    border: 1px solid #555; border-radius: 3px; padding: 6px 12px;
+                    cursor: pointer; flex: 1;">Re-calibrate</button>
+            `;
+            document.getElementById('ct-stop-goto-btn').onclick = _clickTargetClear;
+            document.getElementById('ct-start-btn').onclick = _startCalibration;
+        } else {
+            body.innerHTML = `
+                <div style="color: #aaa; line-height: 1.5;">
+                    Click <b>Calibrate top cam</b> to capture ≥ 4
+                    (pixel, gripper) pairs. Use whatever teleop you have
+                    running to drive the gripper between captures —
+                    calibration is teleop-agnostic.
+                </div>
+            `;
+            footer.innerHTML = `
+                <button id="ct-start-btn" style="background: #2a2a2a; color: #ddd;
+                    border: 1px solid #555; border-radius: 3px; padding: 6px 12px;
+                    cursor: pointer; flex: 1;">Calibrate top cam</button>
+            `;
+            document.getElementById('ct-start-btn').onclick = _startCalibration;
+        }
+    }
+}
+
+function _startCalibration() {
+    _calibrationActive = true;
+    _calibrationPending = null;
+    _calibrationRows = [];
+    _calibrationRowSeq = 0;
+    _repaintMarkers();
+    _renderPanel();
+    _updateCursorForMode();
+}
+
+function _stopCalibration() {
+    _calibrationActive = false;
+    _calibrationPending = null;
+    _calibrationRows = [];
+    _calibrationRowSeq = 0;
+    _repaintMarkers();
+    _renderPanel();
+    _updateCursorForMode();
+}
+
+async function _onTopCameraClick(ev, camKey) {
+    const px = _imgPixelFromClick(ev.target, ev);
+    if (px === null) return;
+    if (_calibrationActive) {
+        await _samplePixel(camKey, px.u, px.v);
+    } else if (_clickTargetStatus?.has_extrinsics) {
+        await _doGoto(camKey, px.u, px.v);
+    } else {
+        showToast('Click target', 'Calibrate the top cam first.', 'warning', 3000);
+    }
+}
+
+async function _samplePixel(camKey, u, v) {
+    try {
+        const r = await fetch('/api/run/click-target/sample-pixel', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({cam_key: camKey, u, v}),
+        });
+        if (!r.ok) {
+            const e = await r.json().catch(() => ({detail: 'sample failed'}));
+            showToast('Sample failed', e.detail || 'sample failed', 'error', 4000);
+            return;
+        }
+        const data = await r.json();
+        _calibrationPending = {
+            u: data.u, v: data.v,
+            depth_m: data.depth_m,
+            cam_xyz: data.cam_xyz,
+        };
+        _repaintMarkers();
+        _renderPanel();
+    } catch (e) {
+        showToast('Sample error', String(e), 'error', 4000);
+    }
+}
+
+async function _confirmPair() {
+    if (!_calibrationPending) return;
+    try {
+        const r = await fetch('/api/run/click-target/sample-fk', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({}),
+        });
+        if (!r.ok) {
+            const e = await r.json().catch(() => ({detail: 'confirm failed'}));
+            showToast('Confirm failed', e.detail || 'confirm failed', 'error', 4000);
+            return;
+        }
+        const data = await r.json();
+        _calibrationRowSeq += 1;
+        _calibrationRows.push({
+            id: _calibrationRowSeq,
+            u: _calibrationPending.u,
+            v: _calibrationPending.v,
+            depth_m: _calibrationPending.depth_m,
+            cam_xyz: _calibrationPending.cam_xyz,
+            base_xyz: data.base_xyz,
+            arm: data.arm,
+        });
+        _calibrationPending = null;
+        _repaintMarkers();
+        _renderPanel();
+    } catch (e) {
+        showToast('Confirm error', String(e), 'error', 4000);
+    }
+}
+
+async function _doGoto(camKey, u, v) {
+    try {
+        const r = await fetch('/api/run/click-target/goto', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({cam_key: camKey, u, v, z_offset: _clickTargetZOffset}),
+        });
+        if (!r.ok) {
+            const e = await r.json().catch(() => ({detail: 'goto failed'}));
+            showToast('Goto failed', e.detail || 'goto failed', 'error', 4000);
+            return;
+        }
+        const data = await r.json();
+        _clickTargetLastGoto = {cam_key: camKey, u, v};
+        _renderPanel();
+        const w = data.world_xyz.map(x => x.toFixed(3)).join(', ');
+        showToast(
+            'Goto',
+            `world (${w}) m · hover ${(data.z_offset * 1000).toFixed(0)} mm above`,
+            'info', 2000,
+        );
+    } catch (e) {
+        showToast('Goto error', String(e), 'error', 4000);
+    }
+}
+
+async function _clickTargetClear() {
+    _clickTargetLastGoto = null;
+    try {
+        const r = await fetch('/api/run/click-target/clear', {method: 'POST'});
+        if (!r.ok) {
+            const e = await r.json().catch(() => ({detail: 'clear failed'}));
+            showToast('Stop failed', e.detail || 'clear failed', 'error', 3000);
+            return;
+        }
+        showToast('Stopped', 'Arm holds at current pose.', 'info', 1500);
+        _renderPanel();
+    } catch (e) {
+        showToast('Stop error', String(e), 'error', 3000);
+    }
+}
+
+function _onTopCameraWheel(ev) {
+    // Scroll only updates the PLANNED Z offset (preview). The arm does
+    // not move until the user clicks — re-firing goto on every scroll
+    // detent led to runaway motion. The hover-cursor circle grows /
+    // shrinks to visualise the new planned height.
+    if (_calibrationActive) return;
+    if (!_clickTargetStatus?.has_extrinsics) return;
+    ev.preventDefault();
+    // deltaY < 0 = scrolling up = +Z (raise hover).
+    const delta = (ev.deltaY < 0 ? +1 : -1) * _CLICK_TARGET_Z_OFFSET_STEP;
+    const next = Math.max(
+        _CLICK_TARGET_Z_OFFSET_MIN,
+        Math.min(_CLICK_TARGET_Z_OFFSET_MAX, _clickTargetZOffset + delta),
+    );
+    if (next !== _clickTargetZOffset) {
+        _clickTargetZOffset = next;
+    }
+    _renderPanel();
+    if (_clickTargetLastMouseEv) _showHoverCursor(_clickTargetLastMouseEv);
+}
+
+function _onTopCameraMouseMove(ev) {
+    _clickTargetLastMouseEv = ev;
+    if (_calibrationActive || !_clickTargetStatus?.has_extrinsics) return;
+    // Invalidate the existing preview the moment the mouse moves — the
+    // pixel under the cursor changed, so the cached surface_z is stale.
+    // The cursor label falls back to "+N mm" alone until the debounce
+    // fires and a fresh sample-pixel comes back.
+    _clickTargetHoverPreview = null;
+    _showHoverCursor(ev);
+    _scheduleHoverPreview(ev);
+}
+
+// Debounce mousemove so we sample the depth + surface_z at the cursor
+// only after the operator pauses ~150 ms. Each pixel under the cursor
+// fires at most one mailbox request. The sequence id gates stale
+// responses (an earlier hover's response arriving after a newer hover's
+// would overwrite the wrong cursor state).
+const _CLICK_TARGET_HOVER_DEBOUNCE_MS = 150;
+
+function _scheduleHoverPreview(ev) {
+    if (_clickTargetHoverTimer !== null) {
+        clearTimeout(_clickTargetHoverTimer);
+    }
+    const camKey = _clickTargetStatus?.top_camera_key;
+    if (!camKey || !_clickTargetTopImg) return;
+    const px = _imgPixelFromClick(_clickTargetTopImg, ev);
+    if (px === null) return;
+    _clickTargetHoverTimer = setTimeout(() => {
+        _clickTargetHoverTimer = null;
+        _fetchHoverPreview(camKey, px.u, px.v);
+    }, _CLICK_TARGET_HOVER_DEBOUNCE_MS);
+}
+
+async function _fetchHoverPreview(camKey, u, v) {
+    const seq = ++_clickTargetHoverPreviewSeq;
+    try {
+        const r = await fetch('/api/run/click-target/sample-pixel', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({cam_key: camKey, u, v}),
+        });
+        if (!r.ok) return;
+        const data = await r.json();
+        if (seq !== _clickTargetHoverPreviewSeq) return;  // stale
+        if (!data.world_xyz_surface) return;
+        _clickTargetHoverPreview = {
+            u: data.u, v: data.v,
+            depth_m: data.depth_m,
+            surface_z: data.world_xyz_surface[2],
+        };
+        if (_clickTargetLastMouseEv) _showHoverCursor(_clickTargetLastMouseEv);
+    } catch (_e) {
+        // Hover preview is best-effort; quietly drop transient errors so
+        // we don't toast the operator every time depth misses on a hole.
+    }
+}
+
+// Map the current Z offset to the hover-cursor circle's radius in pixels.
+// Floor maps to a small dot (8 px); ceiling to a wide ring (38 px). Linear
+// in offset, which lines up with the user's reading of "bigger = higher".
+function _hoverCursorRadius() {
+    const range = _CLICK_TARGET_Z_OFFSET_MAX - _CLICK_TARGET_Z_OFFSET_MIN;
+    const t = Math.max(0, Math.min(1,
+        (_clickTargetZOffset - _CLICK_TARGET_Z_OFFSET_MIN) / range));
+    return 8 + t * 30;
+}
+
+// Yellow at floor (close to surface, risk of impact) → green near max
+// (safely high). Same hue ramp as the status badge so the operator's
+// glance maps colour → height the same way panel-wide.
+function _hoverCursorColor() {
+    const range = _CLICK_TARGET_Z_OFFSET_MAX - _CLICK_TARGET_Z_OFFSET_MIN;
+    const t = Math.max(0, Math.min(1,
+        (_clickTargetZOffset - _CLICK_TARGET_Z_OFFSET_MIN) / range));
+    const hue = 50 + t * 80; // 50 (yellow) → 130 (green)
+    return `hsl(${hue}, 75%, 55%)`;
+}
+
+function _showHoverCursor(ev) {
+    if (!_clickTargetMarkersEl || !_clickTargetTopImg) return;
+    let cursor = document.getElementById('click-target-hover-cursor');
+    let label = null;
+    if (!cursor) {
+        cursor = document.createElement('div');
+        cursor.id = 'click-target-hover-cursor';
+        cursor.style.cssText = `
+            position: absolute;
+            pointer-events: none;
+            border-radius: 50%;
+            box-sizing: border-box;
+            transform: translate(-50%, -50%);
+            transition: width 0.08s linear, height 0.08s linear,
+                        background 0.08s linear, border-color 0.08s linear;
+        `;
+        // Center dot (so the user knows exactly where the click lands).
+        const dot = document.createElement('div');
+        dot.style.cssText = `
+            position: absolute; left: 50%; top: 50%;
+            width: 4px; height: 4px; border-radius: 50%;
+            background: white;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 2px rgba(0,0,0,0.8);
+        `;
+        cursor.appendChild(dot);
+        // Persistent numeric label to the right of the cursor. Operators
+        // could miss the ring-size delta between 30 mm and 60 mm in their
+        // peripheral vision; the explicit number makes it impossible to
+        // miss what the next click commits.
+        label = document.createElement('div');
+        label.id = 'click-target-hover-label';
+        label.style.cssText = `
+            position: absolute; left: 100%; top: 50%;
+            transform: translate(8px, -50%);
+            font-family: monospace; font-size: 13px; font-weight: 700;
+            color: white;
+            background: rgba(0,0,0,0.65);
+            padding: 2px 6px; border-radius: 3px;
+            text-shadow: 0 0 2px rgba(0,0,0,0.8);
+            white-space: nowrap;
+        `;
+        cursor.appendChild(label);
+        _clickTargetMarkersEl.appendChild(cursor);
+    } else {
+        label = cursor.querySelector('#click-target-hover-label');
+    }
+    const rect = _clickTargetTopImg.getBoundingClientRect();
+    const r = _hoverCursorRadius();
+    const color = _hoverCursorColor();
+    cursor.style.left = `${ev.clientX - rect.left}px`;
+    cursor.style.top = `${ev.clientY - rect.top}px`;
+    cursor.style.width = `${r * 2}px`;
+    cursor.style.height = `${r * 2}px`;
+    cursor.style.border = `2px solid ${color}`;
+    // Translucent fill so the camera image stays visible under the ring.
+    cursor.style.background = color.replace('hsl(', 'hsla(').replace(')', ', 0.18)');
+    if (label) {
+        const offsetMm = Math.round(_clickTargetZOffset * 1000);
+        // When a fresh hover preview is in hand, show the surface Z and
+        // the planned target Z directly — that's what the operator needs
+        // to know BEFORE clicking. "+60 mm" alone hides the fact that the
+        // cursor is over the gripper (which has its own large surface Z).
+        // Without the preview (stale or pending), fall back to just the
+        // offset value so the cursor isn't blank during the debounce.
+        if (_clickTargetHoverPreview) {
+            const surfMm = Math.round(_clickTargetHoverPreview.surface_z * 1000);
+            const targetMm = surfMm + offsetMm;
+            // Highlight target Z in red when it exceeds 200 mm, since the
+            // SO-107 workspace tops out around 360 mm and that's where the
+            // "clicked the gripper and the arm flew way up" failure mode
+            // lands. Below 200 mm we trust the offset color.
+            const targetColor = targetMm > 200 ? '#ff6060' : color;
+            label.innerHTML = (
+                `<div>surface Z: ${surfMm} mm</div>` +
+                `<div style="color: ${targetColor};">target Z: ${targetMm} mm</div>` +
+                `<div style="color: #aaa; font-size: 11px;">+${offsetMm} mm hover</div>`
+            );
+            label.style.color = '';
+        } else {
+            label.textContent = `+${offsetMm} mm`;
+            label.style.color = color;
+        }
+    }
+}
+
+function _hideHoverCursor() {
+    const cursor = document.getElementById('click-target-hover-cursor');
+    if (cursor) cursor.remove();
+}
+
+async function _saveCalibration() {
+    const camKey = _clickTargetStatus?.top_camera_key || 'top';
+    try {
+        const r = await fetch('/api/run/click-target/finalize', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                pairs: _calibrationRows.map(row => ({cam_xyz: row.cam_xyz, base_xyz: row.base_xyz})),
+                cam_key: camKey,
+            }),
+        });
+        if (!r.ok) {
+            const e = await r.json().catch(() => ({detail: 'save failed'}));
+            showToast('Save failed', e.detail || 'save failed', 'error', 4000);
+            return;
+        }
+        const data = await r.json();
+        showToast(
+            'Calibrated',
+            `${data.n_points} points, RMSE ${(data.rmse_m * 1000).toFixed(1)} mm`,
+            'success', 5000,
+        );
+        _stopCalibration();
+        _clickTargetStatus = await _fetchClickTargetStatus();
+        _renderPanel();
+    } catch (e) {
+        showToast('Save error', String(e), 'error', 4000);
+    }
+}
+
+// Repaint pixel markers when the window resizes (image rect changes).
+window.addEventListener('resize', () => {
+    if (_clickTargetMarkersEl) _repaintMarkers();
+});
 
 
 // =============================================================================

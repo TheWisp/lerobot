@@ -116,6 +116,45 @@ class BiSO107Follower(Robot):
         except Exception:
             logger.exception("%s: Cartesian-IK kinematics unavailable; Cartesian teleop disabled", self.name)
 
+        # Click-target calibration service. Runs unconditionally for the
+        # lifetime of connect() ↔ disconnect() — calibration captures work
+        # regardless of which teleop is attached (so the user can drive
+        # the arm with their normal leader during calibration). Goto
+        # requires a click_target teleop ALSO attached; that wiring
+        # happens in attach_teleop via ``set_goto_target_callback``.
+        self._click_service: Any = None
+        self._init_click_service()
+
+    def _init_click_service(self) -> None:
+        """Construct the click-target mailbox service.
+
+        Factored out so :class:`BiSO107FollowerPredictive` — which bypasses
+        this class's ``__init__`` to swap in predictive arms — can call
+        this once it's built its own cameras + kinematics. Without this
+        helper the predictive follower's instances had no
+        ``_click_service`` and the calibration mailbox went unanswered.
+        """
+        try:
+            from lerobot.teleoperators.click_target import (
+                ClickCalibrationService,
+                ClickTargetBimanualEETeleopConfig,
+            )
+
+            ct_cfg = ClickTargetBimanualEETeleopConfig()
+            self._click_service = ClickCalibrationService(
+                cameras=self.cameras,
+                get_observation=self.get_observation,
+                kin_left=(self._ik_kinematics or {}).get("left"),
+                kin_right=(self._ik_kinematics or {}).get("right"),
+                mailbox_path=ct_cfg.mailbox_path,
+                extrinsics_path=ct_cfg.extrinsics_path,
+                top_camera_key=ct_cfg.top_camera_key,
+                default_arm=ct_cfg.arm,
+                mailbox_poll_hz=ct_cfg.mailbox_poll_hz,
+            )
+        except Exception:
+            logger.exception("%s: ClickCalibrationService unavailable", self.name)
+
     @property
     def _motors_ft(self) -> dict[str, type]:
         return {f"left_{motor}.pos": float for motor in self.left_arm.bus.motors} | {
@@ -155,6 +194,11 @@ class BiSO107Follower(Robot):
         for cam in self.cameras.values():
             cam.connect()
 
+        # NOTE: ``_click_service.start()`` is deliberately deferred to
+        # ``attach_teleop`` — its poll thread reads observations (motor bus)
+        # for sample_fk / goto requests, which must not race with the main
+        # thread's ``_seed`` motor read during the Cartesian-IK setup.
+
     @property
     def is_calibrated(self) -> bool:
         return self.left_arm.is_calibrated and self.right_arm.is_calibrated
@@ -181,8 +225,10 @@ class BiSO107Follower(Robot):
         upstream teleoperate / record / replay loops are untouched — they
         just call ``get_action()`` and receive joints.
 
-        For a joint-space leader teleop this is a no-op: it already emits
-        joint dicts, which ``send_action`` consumes directly.
+        For a joint-space leader teleop this just starts the click-target
+        calibration service: the joint-space path needs no other setup,
+        but the service still wants to run so calibration captures work
+        regardless of the active teleop's shape.
 
         Precondition: the robot is connected — each arm's IK controller is
         seeded from that arm's current joint configuration.
@@ -195,25 +241,48 @@ class BiSO107Follower(Robot):
             is_so107_bimanual_cartesian_teleop,
         )
 
-        if not is_so107_bimanual_cartesian_teleop(teleop):
-            return
-
-        assert self.is_connected, "attach_teleop requires the robot to be connected"
-        assert hasattr(teleop, "set_action_transform"), (
-            "a Cartesian teleop must expose set_action_transform()"
-        )
-
-        if self._ik_kinematics is None:
-            logger.warning(
-                "%s: Cartesian teleop attached but IK kinematics are unavailable "
-                "(is pin-pink installed?) — the arms will not be driven.",
-                self.name,
+        if is_so107_bimanual_cartesian_teleop(teleop):
+            assert self.is_connected, "attach_teleop requires the robot to be connected"
+            assert hasattr(teleop, "set_action_transform"), (
+                "a Cartesian teleop must expose set_action_transform()"
             )
-            return
 
-        transform = build_so107_bimanual_ik_transform(self._ik_kinematics, self.left_arm, self.right_arm)
-        teleop.set_action_transform(transform)
-        logger.info("%s: installed Cartesian-IK transform into %s", self.name, type(teleop).__name__)
+            if self._ik_kinematics is None:
+                logger.warning(
+                    "%s: Cartesian teleop attached but IK kinematics are unavailable "
+                    "(is pin-pink installed?) — the arms will not be driven.",
+                    self.name,
+                )
+            else:
+                transform = build_so107_bimanual_ik_transform(
+                    self._ik_kinematics, self.left_arm, self.right_arm
+                )
+                teleop.set_action_transform(transform)
+                logger.info(
+                    "%s: installed Cartesian-IK transform into %s",
+                    self.name,
+                    type(teleop).__name__,
+                )
+
+                # Click-target goto wiring: if this teleop exposes
+                # ``set_world_target`` (click_target_bimanual_ee), register
+                # its setter with the always-on calibration service so an
+                # incoming goto mailbox request pushes a world XYZ into the
+                # teleop's _target_world. Detected by hasattr so any new
+                # goto-capable Cartesian teleop slots in without code here.
+                if self._click_service is not None and hasattr(teleop, "set_world_target"):
+                    self._click_service.set_goto_target_callback(teleop.set_world_target)
+                    logger.info("%s: wired click_target goto callback", self.name)
+
+        # Start the click service AFTER every motor-touching setup above
+        # (build_so107_bimanual_ik_transform reads each arm's current joints
+        # via _seed). The service's poll thread can call ``get_observation``
+        # for sample_fk / goto requests; starting it earlier raced the main
+        # thread on the motor bus and tripped "device disconnected or
+        # multiple access on port" SerialExceptions during attach_teleop.
+        # ``start()`` is idempotent so re-attaching is fine.
+        if self._click_service is not None:
+            self._click_service.start()
 
     def _read_camera_frame(self, cam) -> Any:
         """Read one camera frame using the configured strategy.
@@ -319,6 +388,9 @@ class BiSO107Follower(Robot):
         return {**prefixed_send_action_left, **prefixed_send_action_right}
 
     def disconnect(self):
+        if self._click_service is not None:
+            self._click_service.set_goto_target_callback(None)
+            self._click_service.stop()
         self.left_arm.disconnect()
         self.right_arm.disconnect()
 

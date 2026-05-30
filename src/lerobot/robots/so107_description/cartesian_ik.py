@@ -89,6 +89,26 @@ _MAX_EE_STEP_M: float = 0.10
 # ("make safety limits explicit and configurable").
 _MAX_JOINT_STEP_DEG: float = 20.0
 
+# Absolute-world goto (``use_world_target`` action) has different ergonomics
+# than smooth Quest-VR deltas: the user explicitly asked to move 20+ cm, and
+# the first tick almost always needs a non-trivial joint move to get the EE
+# walking in the right direction. The smooth-teleop caps therefore reject
+# perfectly legitimate goto starts and the arm wedges (observed: 33 deg held
+# for the first preset XYZ from a typical SO-107 home pose).
+#
+# Per-tick caps for the absolute-world branch. These are SAFETY-tuned for
+# the click_target goto path: the user is one click away from commanding
+# a 30 cm reach, so the per-tick step is what stands between an "I clicked
+# the wrong pixel" and a fast bash into a fixture.
+#
+# 1.5 cm/tick × 90 Hz = ~1.4 m/s peak EE speed — fast enough that a goto
+# to a typical desk point arrives in ~0.3 s, slow enough that an operator
+# has time to hit STOP. Joint cap at 25 deg/tick is just above the first-
+# tick reconfiguration the IK needs for far targets (observed: 33 deg
+# from one home pose) and still tight enough to catch a true singularity.
+_GOTO_MAX_EE_STEP_M: float = 0.015
+_GOTO_MAX_JOINT_STEP_DEG: float = 25.0
+
 
 class _Kinematics(Protocol):
     """Minimal FK/IK surface the controller needs (degrees in, degrees out)."""
@@ -235,24 +255,60 @@ class CartesianIKController:
                 self._ref = self._kin.forward_kinematics(self._q_last)
                 self._last_pos = self._ref[:3, 3].copy()
 
-            delta_p = np.array(
-                [float(action["target_x"]), float(action["target_y"]), float(action["target_z"])],
-                dtype=float,
-            )
-            r_delta = Rotation.from_rotvec(
-                [float(action["target_wx"]), float(action["target_wy"]), float(action["target_wz"])]
-            ).as_matrix()
+            # Two action shapes share this branch:
+            # * delta mode (Quest VR, scripted_ee): pos = ref + (target_x/y/z),
+            #   rot = ref_R @ rotvec(target_wx/wy/wz)
+            # * absolute-world mode (click_target): pos = (target_world_x/y/z),
+            #   rot = top-down if ``world_target_top_down``, else ref_R. The
+            #   per-tick step cap below still applies, so a far click walks
+            #   in at <= per-tick cap m/tick instead of teleporting.
+            #
+            # Absolute mode uses relaxed caps below: the user explicitly
+            # asked to traverse 20+ cm, so the first tick almost always
+            # needs a non-trivial joint move and the smooth-teleop caps
+            # would wedge the arm. See ``_GOTO_MAX_*`` constants for why.
+            is_goto = bool(action.get("use_world_target", 0.0))
+            if is_goto:
+                pos = np.array(
+                    [
+                        float(action["target_world_x"]),
+                        float(action["target_world_y"]),
+                        float(action["target_world_z"]),
+                    ],
+                    dtype=float,
+                )
+                desired = np.eye(4, dtype=float)
+                if bool(action.get("world_target_top_down", 1.0)):
+                    desired[:3, :3] = np.array(
+                        [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]], dtype=float
+                    )
+                else:
+                    desired[:3, :3] = self._ref[:3, :3]
+                pos = np.clip(pos, self._ws_min, self._ws_max)
+            else:
+                delta_p = np.array(
+                    [float(action["target_x"]), float(action["target_y"]), float(action["target_z"])],
+                    dtype=float,
+                )
+                r_delta = Rotation.from_rotvec(
+                    [
+                        float(action["target_wx"]),
+                        float(action["target_wy"]),
+                        float(action["target_wz"]),
+                    ]
+                ).as_matrix()
 
-            desired = np.eye(4, dtype=float)
-            desired[:3, :3] = self._ref[:3, :3] @ r_delta
-            pos = self._ref[:3, 3] + delta_p
-            pos = np.clip(pos, self._ws_min, self._ws_max)
+                desired = np.eye(4, dtype=float)
+                desired[:3, :3] = self._ref[:3, :3] @ r_delta
+                pos = self._ref[:3, 3] + delta_p
+                pos = np.clip(pos, self._ws_min, self._ws_max)
 
             assert self._last_pos is not None
             step = pos - self._last_pos
             n = float(np.linalg.norm(step))
-            if n > self._max_step > 0.0:
-                pos = self._last_pos + step * (self._max_step / n)
+            max_step = _GOTO_MAX_EE_STEP_M if is_goto else self._max_step
+            if n > max_step > 0.0:
+                pos = self._last_pos + step * (max_step / n)
             desired[:3, 3] = pos
 
             # Hold this tick if the QP can't solve at all (e.g. the user
@@ -269,12 +325,16 @@ class CartesianIKController:
                 return {f"{name}.pos": float(self._q_last[i]) for i, name in enumerate(self._motor_names)}
             # Backstop: hold this tick if IK swings an arm joint implausibly
             # far. _q_last / _ref / _last_pos are left untouched, so the next
-            # tick re-evaluates from the held state.
+            # tick re-evaluates from the held state. Absolute-mode (click_target
+            # goto) uses a relaxed cap because the user explicitly asked for a
+            # large EE move.
             joint_step = float(np.max(np.abs(q_new[self._arm_idx] - self._q_last[self._arm_idx])))
-            if joint_step > _MAX_JOINT_STEP_DEG:
+            max_joint_step = _GOTO_MAX_JOINT_STEP_DEG if is_goto else _MAX_JOINT_STEP_DEG
+            if joint_step > max_joint_step:
                 logger.warning(
-                    "CartesianIKController: implausible IK jump (%.0f deg) — holding this tick",
+                    "CartesianIKController: implausible IK jump (%.0f deg, cap %.0f) — holding this tick",
                     joint_step,
+                    max_joint_step,
                 )
                 self.is_holding = True
             else:

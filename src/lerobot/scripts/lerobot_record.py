@@ -148,6 +148,7 @@ from lerobot.teleoperators import (  # noqa: F401
     bi_so107_leader,
     bi_so107_leader_highrate,
     bi_so_leader,
+    click_target,
     homunculus,
     koch_leader,
     make_teleoperator_from_config,

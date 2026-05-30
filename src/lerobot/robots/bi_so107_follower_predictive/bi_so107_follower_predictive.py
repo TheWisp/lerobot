@@ -174,6 +174,13 @@ class BiSO107FollowerPredictive(BiSO107Follower):
         # active (e.g. joint-space leader, or no teleop attached).
         self._cartesian_adapter: Any = None
 
+        # Build the click-target service explicitly: this class bypasses
+        # ``BiSO107Follower.__init__`` (it swaps in predictive arms before
+        # the parent could install plain ones), so the parent-side init
+        # never runs. The helper takes care of the same setup.
+        self._click_service: Any = None
+        self._init_click_service()
+
     def attach_teleop(self, teleop) -> None:
         """Wire a teleop to the per-arm predictive controllers' pull path.
 
@@ -209,10 +216,14 @@ class BiSO107FollowerPredictive(BiSO107Follower):
             self.right_arm.attach_teleop(None)
             return
 
-        # Bimanual joint-space leader path (unchanged).
+        # Bimanual joint-space leader path.
         if hasattr(teleop, "left_arm") and hasattr(teleop, "right_arm"):
             self.left_arm.attach_teleop(teleop.left_arm)
             self.right_arm.attach_teleop(teleop.right_arm)
+            # Start the click service AFTER per-arm attach; see comment in
+            # the Cartesian branch below for why deferred starting matters.
+            if self._click_service is not None:
+                self._click_service.start()
             return
 
         # Bimanual Cartesian VR teleop path (same detection as plain
@@ -223,6 +234,13 @@ class BiSO107FollowerPredictive(BiSO107Follower):
 
         if is_so107_bimanual_cartesian_teleop(teleop):
             self._attach_cartesian_teleop(teleop)
+            # Start the click service AFTER the IK adapter is wired (which
+            # internally calls _seed → motor read for both arms). Earlier
+            # starts raced the main thread on the motor bus and tripped
+            # "device disconnected or multiple access on port" Serial-
+            # Exceptions during attach_teleop. ``start()`` is idempotent.
+            if self._click_service is not None:
+                self._click_service.start()
             return
 
         logger.info(
@@ -285,8 +303,18 @@ class BiSO107FollowerPredictive(BiSO107Follower):
             type(teleop).__name__,
         )
 
+        # Click-target goto wiring: if this teleop exposes
+        # ``set_world_target`` (duck-typed), register its setter with the
+        # always-on calibration service so an incoming goto mailbox
+        # request pushes a world XYZ here. Detected by hasattr, so a new
+        # goto-capable teleop doesn't need this branch touched.
+        if self._click_service is not None and hasattr(teleop, "set_world_target"):
+            self._click_service.set_goto_target_callback(teleop.set_world_target)
+
     def _teardown_cartesian_adapter(self) -> None:
         """Stop and forget the Cartesian adapter, if any. Idempotent."""
+        if self._click_service is not None:
+            self._click_service.set_goto_target_callback(None)
         if self._cartesian_adapter is None:
             return
         try:

@@ -256,11 +256,7 @@ class RealSenseCamera(Camera):
             self.async_read(timeout_ms=self.warmup_s * 1000)
             time.sleep(0.1)
         with self.frame_lock:
-            # A post_grab_processor consumes depth in the grab thread and
-            # caches only the processed color — by design ``latest_depth_frame``
-            # stays None for those cameras, so don't require depth here.
-            needs_depth = self.use_depth and self.post_grab_processor is None
-            if self.latest_color_frame is None or (needs_depth and self.latest_depth_frame is None):
+            if self.latest_color_frame is None or (self.use_depth and self.latest_depth_frame is None):
                 raise ConnectionError(f"{self} failed to capture frames during warmup.")
 
         logger.info(f"{self} connected.")
@@ -506,13 +502,6 @@ class RealSenseCamera(Camera):
             raise DeviceNotConnectedError(f"{self} is not connected.")
         if not self.use_depth:
             raise RuntimeError(f"Depth stream is not enabled for {self}.")
-        if self.post_grab_processor is not None:
-            raise RuntimeError(
-                f"{self}: depth has been consumed by post_grab_processor "
-                f"({type(self.post_grab_processor).__name__}); the processed color is in "
-                f"``read_latest()`` / ``async_read()``. Detach the processor first if you "
-                f"need raw depth."
-            )
 
         if self.thread is None or not self.thread.is_alive():
             raise RuntimeError(f"{self} read thread is not running.")
@@ -529,6 +518,37 @@ class RealSenseCamera(Camera):
             raise RuntimeError(f"No aligned frames available for {self}.")
 
         return color_frame, depth_frame
+
+    @check_if_not_connected
+    def get_color_intrinsics(self) -> dict[str, float]:
+        """Return the color stream's pinhole intrinsics.
+
+        Aligned depth (from ``read_color_and_aligned_depth``) shares the
+        color stream's frame, so these are the intrinsics a caller should
+        use to unproject a (u, v, depth) pixel to a camera-frame 3D point.
+
+        Returns a dict ``{fx, fy, ppx, ppy, width, height}`` in pixels.
+        Distortion coeffs are not returned — the realsense color stream
+        is already rectified for the aligned-depth path.
+        """
+        # Only NO_ROTATION is supported: the rotation flag below affects the
+        # uint8 ndarray a consumer sees but NOT the intrinsics the SDK reports,
+        # which always describe the native sensor frame. Click-to-3D would
+        # silently use mismatched (u, v) ↔ K coords otherwise.
+        assert self.rotation in (None, cv2.ROTATE_180), (
+            f"{self}: get_color_intrinsics() requires rotation in (NO_ROTATION, 180); got {self.rotation}"
+        )
+        assert self.rs_profile is not None, f"{self}: pipeline must be connected"
+        stream = self.rs_profile.get_stream(rs.stream.color).as_video_stream_profile()
+        intr = stream.get_intrinsics()
+        return {
+            "fx": float(intr.fx),
+            "fy": float(intr.fy),
+            "ppx": float(intr.ppx),
+            "ppy": float(intr.ppy),
+            "width": int(intr.width),
+            "height": int(intr.height),
+        }
 
     @check_if_not_connected
     def read(self, color_mode: ColorMode | None = None, timeout_ms: int = 0) -> NDArray[Any]:
@@ -681,8 +701,9 @@ class RealSenseCamera(Camera):
                         logger.warning(
                             "%s: post_grab_processor failed (%s); caching raw color frame.", self, e
                         )
-                    # Depth has been consumed; don't cache it for consumers.
-                    processed_depth_frame = None
+                    # Depth is also cached for direct consumers (e.g. the
+                    # click_target teleop's unprojection) — the processor reads
+                    # but does not modify the depth buffer.
 
                 capture_time = time.perf_counter()
 

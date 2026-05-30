@@ -1359,3 +1359,210 @@ async def obs_stream_image(cam_key: str) -> Response:
         media_type="image/jpeg",
         headers={"Cache-Control": "no-store"},
     )
+
+
+# ── Click-to-goto endpoints (experimental) ───────────────────────────────
+#
+# Talks to the running click_target_bimanual_ee teleop via the file mailbox
+# (default ``/tmp/lerobot_click_target_mailbox.json``). The teleop subprocess
+# owns the camera, FK, and IK adapter; the GUI is a thin orchestrator that
+# accumulates calibration pairs in JS and POSTs them here for Kabsch
+# fitting + persistence.
+
+
+def _click_target_defaults() -> dict[str, str]:
+    """Return the teleop config defaults the GUI needs.
+
+    Lazy import so loading run.py doesn't pull in pin-pink (the
+    click_target teleop's deeper deps live in calibration.py, which is light,
+    but keeping the import inside the request handler keeps cold-start cheap
+    and avoids surfacing teleop errors during GUI boot).
+    """
+    from lerobot.teleoperators.click_target import ClickTargetBimanualEETeleopConfig
+
+    cfg = ClickTargetBimanualEETeleopConfig()
+    return {
+        "mailbox_path": str(Path(cfg.mailbox_path).expanduser()),
+        "extrinsics_path": str(Path(cfg.extrinsics_path).expanduser()),
+        "top_camera_key": cfg.top_camera_key,
+        "arm": cfg.arm,
+    }
+
+
+async def _click_mailbox_request(
+    command: str,
+    args: dict[str, Any],
+    *,
+    timeout_s: float = 2.0,
+    poll_s: float = 0.05,
+) -> dict[str, Any]:
+    """Post a command to the click_target mailbox and await its response.
+
+    Returns the teleop's response dict, or raises HTTPException(504) if no
+    response within ``timeout_s`` — usually that means no click_target
+    teleop is running, or the subprocess crashed.
+    """
+    from lerobot.teleoperators.click_target import ClickMailbox
+
+    defaults = _click_target_defaults()
+    mailbox = ClickMailbox(defaults["mailbox_path"])
+    req_seq = await asyncio.get_event_loop().run_in_executor(None, mailbox.post_request, command, args)
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        response = await asyncio.get_event_loop().run_in_executor(None, mailbox.poll_response, req_seq)
+        if response is not None:
+            return response
+        await asyncio.sleep(poll_s)
+    raise HTTPException(
+        504,
+        f"click_target mailbox timeout after {timeout_s:.1f}s for command={command!r}; "
+        "is the click_target teleop running?",
+    )
+
+
+class ClickPixelRequest(BaseModel):
+    """Pixel click in a camera frame; (u, v) are in image coords (0,0)=top-left."""
+
+    cam_key: str
+    u: int
+    v: int
+    arm: str | None = None  # "left" | "right"; teleop falls back to its config default
+    # Raise the goto target this many meters above the clicked surface in
+    # base-frame Z. Used only by ``/click-target/goto``; ignored by
+    # ``/click-target/sample-pixel``. The service clips it to a safe range.
+    z_offset: float | None = None
+
+
+@router.post("/click-target/sample-pixel")
+async def click_target_sample_pixel(request: ClickPixelRequest) -> dict[str, Any]:
+    """Calibration step 1: capture the camera-frame XYZ of a clicked pixel.
+
+    The service reads the top camera's aligned depth at ``(u, v)`` (median
+    of a small window), applies the intrinsics, and returns ``cam_xyz`` +
+    ``depth_m``. The frontend pins this to a calibration row and prompts
+    the user to drive the gripper to that point with their own teleop.
+    """
+    args: dict[str, Any] = {"u": int(request.u), "v": int(request.v), "cam_key": request.cam_key}
+    response = await _click_mailbox_request("sample_pixel", args)
+    if response.get("status") != "ok":
+        raise HTTPException(400, response.get("message", "sample_pixel failed"))
+    return response
+
+
+class SampleFkRequest(BaseModel):
+    """Calibration step 2 input: just the arm to FK."""
+
+    arm: str | None = None  # "left" | "right"; service falls back to its default
+
+
+@router.post("/click-target/sample-fk")
+async def click_target_sample_fk(request: SampleFkRequest) -> dict[str, Any]:
+    """Calibration step 2: capture the base-frame XYZ of the gripper NOW.
+
+    The service reads the live observation, FKs the configured arm's
+    motor positions, and returns ``base_xyz``. The frontend pairs this
+    with the previously-sampled pixel to form one Kabsch input row.
+    """
+    args: dict[str, Any] = {}
+    if request.arm is not None:
+        args["arm"] = request.arm
+    response = await _click_mailbox_request("sample_fk", args)
+    if response.get("status") != "ok":
+        raise HTTPException(400, response.get("message", "sample_fk failed"))
+    return response
+
+
+@router.post("/click-target/goto")
+async def click_target_goto(request: ClickPixelRequest) -> dict[str, Any]:
+    """Drive the active arm to the clicked pixel — requires click_target attached.
+
+    Unprojects (u, v) via depth + intrinsics, applies the saved
+    ``T_base_camera``, optionally raises the target by ``z_offset`` meters
+    in base-frame Z (so the arm hovers above the clicked surface instead
+    of diving into it), and pushes that XYZ as the IK target. Returns an
+    error response if the calibration service has no click_target teleop
+    registered or no extrinsics file exists.
+    """
+    args: dict[str, Any] = {"u": int(request.u), "v": int(request.v), "cam_key": request.cam_key}
+    if request.z_offset is not None:
+        args["z_offset"] = float(request.z_offset)
+    response = await _click_mailbox_request("goto", args)
+    if response.get("status") != "ok":
+        raise HTTPException(400, response.get("message", "goto failed"))
+    return response
+
+
+@router.post("/click-target/clear")
+async def click_target_clear() -> dict[str, Any]:
+    """Clear the click_target's active world target so the IK reverts to held."""
+    response = await _click_mailbox_request("clear", {})
+    if response.get("status") != "ok":
+        raise HTTPException(400, response.get("message", "clear failed"))
+    return response
+
+
+class ClickFinalizeRequest(BaseModel):
+    """Calibration pairs collected from the modal. Each entry is one click."""
+
+    pairs: list[dict[str, list[float]]]  # each entry: {"cam_xyz": [...], "base_xyz": [...]}
+    cam_key: str
+
+
+@router.post("/click-target/finalize")
+async def click_target_finalize(request: ClickFinalizeRequest) -> dict[str, Any]:
+    """Run Kabsch on the collected pairs; save T_base_camera; report RMSE.
+
+    Pairs are validated (>= 4 points, well-shaped). On success the
+    teleop's next goto request will load the saved extrinsics.
+    """
+    import numpy as np
+
+    from lerobot.teleoperators.click_target import kabsch_se3, save_extrinsics
+
+    if len(request.pairs) < 4:
+        raise HTTPException(400, f"need >= 4 calibration points, got {len(request.pairs)}")
+
+    try:
+        cam = np.array([p["cam_xyz"] for p in request.pairs], dtype=float)
+        base = np.array([p["base_xyz"] for p in request.pairs], dtype=float)
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(400, f"malformed pairs: {e!r}") from e
+    if cam.shape != base.shape or cam.shape[1] != 3:
+        raise HTTPException(400, f"shape mismatch: cam={cam.shape}, base={base.shape}")
+
+    T, rmse = await asyncio.get_event_loop().run_in_executor(None, kabsch_se3, cam, base)  # noqa: N806
+    defaults = _click_target_defaults()
+    extrinsics_path = defaults["extrinsics_path"]
+    await asyncio.get_event_loop().run_in_executor(
+        None, save_extrinsics, extrinsics_path, T, rmse, len(request.pairs), request.cam_key
+    )
+    return {
+        "status": "ok",
+        "rmse_m": float(rmse),
+        "n_points": len(request.pairs),
+        "extrinsics_path": extrinsics_path,
+        "T_base_camera": T.tolist(),
+    }
+
+
+@router.get("/click-target/status")
+async def click_target_status() -> dict[str, Any]:
+    """Report whether extrinsics are present + the configured paths.
+
+    The frontend gates the goto-on-click handler on
+    ``has_extrinsics`` so the user can't trigger goto before calibration.
+    """
+    from lerobot.teleoperators.click_target import load_extrinsics
+
+    defaults = _click_target_defaults()
+    extrinsics_path = defaults["extrinsics_path"]
+    T = await asyncio.get_event_loop().run_in_executor(None, load_extrinsics, extrinsics_path)  # noqa: N806
+    return {
+        "has_extrinsics": T is not None,
+        "mailbox_path": defaults["mailbox_path"],
+        "extrinsics_path": extrinsics_path,
+        "top_camera_key": defaults["top_camera_key"],
+        "arm": defaults["arm"],
+        "extrinsics_exists_at": str(Path(extrinsics_path)) if T is not None else None,
+    }
