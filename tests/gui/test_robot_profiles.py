@@ -436,3 +436,28 @@ class TestCollectAllPortAssignments:
             assignments = _collect_all_port_assignments()
 
         assert assignments == []
+
+
+class TestPortConflictSuppression:
+    """The port-conflict UI lives in robot.js and there's no JS test runner, so this is a
+    static guard over the source.
+
+    Two profiles that map the same physical port to the same field are a shared setup —
+    one device wired to one role, referenced by both (e.g. "white" and "white_pred" sharing
+    arms). renderPortList must treat that as agreement, not flag it as "in use by" the other
+    profile. This guard fails if the suppression is dropped in a future refactor.
+    """
+
+    def _render_port_list_source(self) -> str:
+        import lerobot.gui as gui_pkg
+
+        robot_js = Path(gui_pkg.__file__).parent / "static" / "robot.js"
+        src = robot_js.read_text()
+        start = src.index("function renderPortList")
+        end = src.index("\nfunction ", start + 1)
+        return src[start:end]
+
+    def test_render_port_list_suppresses_shared_setup(self):
+        body = self._render_port_list_source()
+        assert "curPortToField" in body, "shared-setup suppression removed from renderPortList"
+        assert "curPortToField[a.port] === a.field_name" in body
