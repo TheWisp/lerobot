@@ -434,6 +434,30 @@ is the spec.
 - [High] Extract frontend to separate files (then optionally migrate to React/Vite)
 - [Mid] FastAPI dependency injection for AppState — replace global `_app_state` with `Depends(get_app_state)`
 - [Mid] Consolidate module-level caches (`_episode_start_indices`, `_dataset_info_mtime`) into AppState
+- [High] **Unified intervention contract — any teleop in any flow.** Three call sites assume a human-intervention surface on the teleop: [`s1_process.py` (HVLA + RLT)](../policies/hvla/s1_process.py), [`lerobot_record.py` (regular record with policy)](../scripts/lerobot_record.py), and [`hil_processor.py` (HIL serl gym)](../processor/hil_processor.py). The "contract" today is **five methods that every teleop re-implements independently**:
+  - `intervention_enabled: bool` field in the config (HVLA forces it `True` at launch — a teleop config that doesn't declare the field crashes at draccus decode time)
+  - `get_teleop_events() → {IS_INTERVENTION: bool, TERMINATE_EPISODE: bool, SUCCESS: bool, RERECORD_EPISODE: bool}`
+  - `reset_intervention()` at episode boundary
+  - `disable_torque()` / `enable_torque()` for the policy↔teleop swap (only meaningful for physical leaders; non-physical teleops like Quest VR have nothing to do here, but the call sites guard with `hasattr` so this is more annoyance than blocker)
+  - `set_intervention_transition_lock(bool)` to gate user toggles while the swap is mid-flight (servo sync, torque enable, etc.)
+
+  Every leader teleop (`so_leader`, `bi_so107_leader`, the two highrate variants, `keyboard`, `gamepad`) re-implements the toggle plumbing — each spins up its own `pynput` SPACE listener, owns its own `_intervention_active` / `_intervention_transition_lock` / `_intervention_debounce_s` state, duplicates the `_try_toggle_intervention` decision function. There's no shared mixin, wrapper, or protocol. A new teleop (Quest VR landed 2026-05-31 with **zero** intervention surface) doesn't plug in — it can't be used as the human source for HVLA RLT, the record-loop's intervention path, or HIL gym, until five methods + one config field are added by hand.
+
+  There's a second, deeper gap: **`teleop.get_action()` is assumed to return joint commands**. A Cartesian teleop (Quest VR) returns Cartesian EE deltas until a Cartesian-IK robot wires it up via `robot.attach_teleop(teleop)`. HVLA / record never call `attach_teleop`, so even if Quest VR sprouted the five intervention methods tomorrow, the joint dict the intervention path needs wouldn't materialise. Today the joint-emitting teleop is implicit in the leader's hardware; for any non-leader teleop the call site has to opt in.
+
+  Proposed shape (design before code):
+  - **Shared toggle abstraction** — extract the SPACE-listener + `_intervention_active` + debounce + transition-lock state into a small `InterventionState` class (or `InterventionMixin`) the teleop composes in. The **toggle source is pluggable**: keyboard SPACE for leaders, gamepad button for `gamepad`, **Quest controller face button B/Y at WebXR index 5** for VR (haptic-feedback path already exists to signal "intervention engaged" without the operator looking outside the headset).
+  - **Joint-emission entry point** — HVLA / record / HIL-gym call `robot.attach_teleop(teleop)` after `teleop.connect()`. Robots that don't need it (leaders that already emit joints) keep today's no-op `attach_teleop`. Robots with Cartesian-IK paths (`BiSO107Follower`, `BiSO107FollowerPredictive`, `VirtualBiSO107Follower`) install the IK transform transparently. Same machinery `lerobot_teleoperate` already uses for the Cartesian path; intervention paths just have to call it.
+  - **Torque ops are optional** — keep the `hasattr` guards in the call sites, but document explicitly that `enable_torque`/`disable_torque` are leader-only. Non-physical teleops (VR) implement neither.
+
+  Until this lands, every new teleop pays the duplicated-plumbing tax, and the immediate Quest VR ask "use VR for HVLA intervention" requires per-teleop hacks rather than a clean opt-in.
+
+  Open design questions before any code:
+  - Mixin vs wrapper class — mixin is less invasive, wrapper composes more cleanly and survives multiple inheritance. Wrapper probably wins.
+  - Where does the toggle binding live — config field (per-teleop, declared in the config dataclass) vs hardcoded in each teleop class? Config field is more flexible but inflates each config; per-class with a class-level default is probably the right shape.
+  - Bimanual leaders attach the intervention state to one arm only (the left arm owns the SPACE listener). Quest VR is intrinsically bimanual — what does intervention mean when only one Quest controller is engaged? Likely: any-arm-engaged = intervention is active. Document the per-teleop semantics.
+  - Bidirectional torque sync on leaders (servo to follower at intervention release) is leader-specific. For Quest VR the equivalent is "re-anchor the engage snapshot at intervention start" (which the existing reset-button path already does — same primitive). Both can be expressed as a single `on_intervention_transition(direction)` hook the teleop implements.
+
 - [High] **Decouple data loaders from UI state**: today, three loaders gate data fetching on UI flags:
   - `model.js::loadModelSources` only scans sources where `s.expanded` is true
   - `app.js::loadSources` (datasets) — same shape
