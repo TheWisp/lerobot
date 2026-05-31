@@ -304,6 +304,62 @@ wizard. Designed as three phases; ship phase 1 first as its own PR.
 - [ ] **Phase 3 — kinematic calibration (research).** Beyond joint zero/range:
       link-length / mounting-offset estimation. Scope TBD.
 
+### Motor Diagnostics (per-arm health panel)
+
+When a motor on a real arm misbehaves the user currently has to drop into
+ad-hoc Python (e.g. `scripts/diag_motor_2.py`, `scripts/scan_motor_variants.py`)
+to figure out _why_. Surface the same information in the Robot tab as a
+per-arm diagnostic panel so the diagnosis flow is "click → see structured
+report" instead of "open a terminal, write a probe, paste output to a
+collaborator." Captured after a real session where a dying right-arm motor
+took several rounds of CLI work to isolate.
+
+- [ ] **Per-motor health probe.** For each motor on the selected robot
+      profile: ping, then read `Torque_Enable`, `Goal_Position`,
+      `Present_Position`, `Present_Current`, `Moving`, `Operating_Mode`,
+      `Lock`, `Min_Position_Limit`, `Max_Position_Limit`, `Max_Torque_Limit`,
+      `Torque_Limit`, `P_Coefficient`, plus a tiny commanded-move test
+      (both directions) with a watch loop. Diagnostic verdict ladder:
+      _bus failure_ (ping fails) → _MCU rejects writes_ (Torque*Enable
+      doesn't latch) → \_driver dead* (Goal/Present diverge but Current=0)
+      → _mechanical jam_ (Current spikes, Position doesn't change) →
+      _misconfigured_ (Operating_Mode / Lock / P=0). Sounds-like-buttons
+      next to each motor row.
+- [ ] **Motor registry / per-arm inventory.** Read
+      `Firmware_Major/Minor_Version`, `Max_Voltage_Limit`, `Present_Voltage`,
+      `Model_Number` for every motor on every connected port and surface
+      them in a per-arm table. Caveats discovered while building the CLI
+      version: STS3215 variants (7.4V vs 12V; 1:147, 1:191, 1:345 gear
+      ratios) all share `Model_Number=777` and identical firmware
+      (3.10). **`Max_Voltage_Limit` is a writable EEPROM field**, so a
+      heuristic that calls 8.0V "7.4V variant" and 12.0V "12V variant"
+      breaks the moment anyone writes that register (real example:
+      shoulder*lift motors on both leaders of `white` read 8.0V while
+      the rest of the same arm read 12.0V — manual rewrites, not actual
+      variant difference). **Gear ratio isn't readable from firmware at
+      all** — the MCU only sees the encoder. So the registry is honest
+      diagnostic info but **must not pretend to identify variant or gear
+      ratio**; ground truth is the printed label on the motor housing.
+      A useful UI gives the user a place to \_record* the variant they
+      see on the label, persisting alongside the calibration so future
+      sessions remember which motor is where.
+- [ ] **Swap-preserving recalibration helper.** When a single motor needs
+      replacement, the standard `calibrate()` flow throws away the rest
+      of the arm's calibration and re-measures _everything_ via human
+      eyeballing the canonical pose (±2-5° per joint of drift versus old
+      datasets). A surgical tool would let the user (1) before pulling
+      the dying motor, capture `raw_old` and `homing_offset_old` at any
+      held pose; (2) pause for the swap; (3) re-read `raw_new` at the
+      same physical pose; (4) compute `homing_offset_new = raw_new -
+(raw_old - homing_offset_old)` and update only that one motor's
+      entry in the calibration JSON. Preserves the rest of the arm's
+      old calibration exactly, so existing datasets, FK, and IK frames
+      stay valid without recalibrating six other joints. Critical detail:
+      the captured-pose step needs a visual / mechanical reference the
+      user can reproduce post-swap (mechanical end-stop, marked tape, or
+      lining the broken arm against the working twin) — surface those
+      options in the wizard.
+
 ## Architecture
 
 - [**Critical**] **Reactive UI state management**: the current imperative DOM manipulation (innerHTML + manual toggle/refresh calls scattered across functions) is fundamentally broken. Field state (disabled, visible, selected) must be called at every possible code path that reveals the element, leading to endless monkey-patching. Migrate to a reactive pattern where UI state is derived from data (React, Preact, or even a minimal reactive store + render loop). This blocks every new UI feature.
