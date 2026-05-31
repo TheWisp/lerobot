@@ -800,12 +800,28 @@ function renderPortList(ports, allAssignments) {
     }
     const portFields = _getPortFields();
 
+    // Map of physical port -> field name in the CURRENT profile, so we can recognize
+    // a shared setup (the same device wired to the same role in more than one profile).
+    const curKind = currentProfile ? currentProfile.kind : null;
+    const curFields = (currentProfile && currentProfile.data.fields) || {};
+    const curPortToField = {};
+    for (const f of portFields) {
+        const v = curFields[f.name];
+        if (typeof v === 'string' && v.trim()) curPortToField[v.trim()] = f.name;
+    }
+
     // Build map of ports claimed by OTHER profiles: { "/dev/ttyACM0": { profile_name, profile_kind, field_name } }
     const usedByOthers = {};
     if (allAssignments) {
         for (const a of allAssignments) {
             // Skip assignments belonging to the currently edited profile
             if (currentProfile && a.profile_name === currentProfile.name && a.profile_kind === currentProfile.kind) {
+                continue;
+            }
+            // Shared setup: this profile maps the same port to the same field of the same
+            // kind. That's one physical device playing one role across profiles (e.g. "white"
+            // and "white_pred" sharing arms) — agreement, not a conflict. Don't flag it.
+            if (a.profile_kind === curKind && curPortToField[a.port] === a.field_name) {
                 continue;
             }
             usedByOthers[a.port] = a;
