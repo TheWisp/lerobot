@@ -185,6 +185,30 @@ See [docs/model_tab.md](docs/model_tab.md) for full design.
 - [Mid] **RLT dashboard chart smoothing**. Per-inference series like `actor_deltas` have per-sample noise comparable to the actual trend (e.g. δ raw σ ≈ 0.015 per sample vs a real β-driven shift of 0.018 — z=17.8 over 500 samples but invisible in any single-sample view). The dashboard plots raw values, so genuine learning signals get hidden. Add a smoothing toggle / moving-average overlay (window picker: raw / 50 / 200 / 500), or always show both the raw line (light) and a smoothed line (bold). Same applies to `q_values_*`, `critic_losses`, `actor_q_term`, `actor_bc_term` — all have per-grad-step noise. Cheap if the smoothing happens in JS over the buffered series the dashboard already pulls.
 - [Mid] **Backend-driven Launch validation schema**. The Launch button's required-field rules currently live in JS-side `_WORKFLOW_VALIDATORS` and `_POLICY_VALIDATORS` registries in `gui/static/run.js`. Each policy_type's Pydantic/Draccus config already declares its required fields in Python — the JS registry has to be updated by hand whenever those declarations change, and silent drift between the two is invisible until a user clicks Launch and gets a backend 400. Replace with a `GET /api/policy-schemas/{policy_type}` (and similar for workflows) returning e.g. `{required: ["task"], required_when: {"rlt_token_checkpoint": "rlt_mode"}}`; the frontend consumes that verbatim, so adding a new policy means only one Python edit. Until then, any change to a policy's required fields must be reflected in both places.
 - [Mid] **Audit `torch.load()` for `weights_only=True`** (bandit B614, currently in global skips). Call sites: `src/lerobot/policies/act_vlm/modeling_act_vlm.py`, `src/lerobot/policies/hvla/s1/flow_matching/model.py`, `src/lerobot/policies/hvla/s1_process.py`. Since PyTorch 2.6 the default flipped to `weights_only=True`; our checkpoints predate that and contain non-tensor pickled metadata, so wholesale flip would break loaders. Plan: per-site, switch to `weights_only=True` and migrate any non-tensor state to a sidecar JSON / safetensors. Remove B614 from `pyproject.toml` `[tool.bandit].skips` once the audit completes.
+- [Mid] **Predictive follower amplifies Quest VR hand jitter — feel A/B.**
+  Real-arm Quest-VR session 2026-05-30 (right shoulder_lift freshly
+  swapped, calibration preserved): the **plain** `bi_so107_follower`
+  logged 67 IK-warning events (66 on the right arm) but felt OK to
+  drive. The **predictive** `bi_so107_follower_predictive` with VR
+  logged 0 IK warnings — strictly cleaner targets — yet felt harder to
+  control subjectively, with the arm appearing to overshoot small hand
+  motions. Hypothesis: the predictive controller's 80 ms lookahead
+  multiplied by the small high-frequency jitter that the VR hand
+  carries (controller pose is a noisy 6-DoF estimate, not a smoothed
+  leader-arm encoder) produces velocity-corrected setpoints that
+  amplify rather than dampen hand tremor. Plain-follower's leader-pose
+  is a low-pass-filtered motor encoder so the equivalent jitter never
+  reaches the IK. To pursue: (1) record matched VR sessions on both
+  followers + replay through both with a tremor-injected leader stream
+  to confirm the predictive path amplifies frequencies the encoder
+  path attenuates; (2) if confirmed, add a VR-specific
+  `velocity_lowpass_hz` (or disable corrector_alpha) just on the
+  `BimanualCartesianIKAdapter` -> predictive path, leaving leader-arm
+  teleop unaffected. The 66/1 right-vs-left IK warning split on plain
+  also needs explanation — could be the swapped motor's tighter range
+  limits clipping IK output, or VR-hand resting orientation that
+  drives the right arm closer to a singularity than the left. Worth
+  splitting the two questions before tuning.
 
 ### Recording Loop Performance
 
@@ -314,6 +338,13 @@ report" instead of "open a terminal, write a probe, paste output to a
 collaborator." Captured after a real session where a dying right-arm motor
 took several rounds of CLI work to isolate.
 
+**Working CLI today:** the diagnostic + migration flows already exist as
+`scripts/motor_tools.py` on the `feat/motor-tools` branch
+(`inventory` / `health` / `read` / `write` / `set-id` subcommands) plus
+`scripts/MOTOR_MIGRATION.md` for the end-to-end swap-preserving
+procedure. The work below is to lift those flows into the GUI; the CLI
+is the spec.
+
 - [ ] **Per-motor health probe.** For each motor on the selected robot
       profile: ping, then read `Torque_Enable`, `Goal_Position`,
       `Present_Position`, `Present_Current`, `Moving`, `Operating_Mode`,
@@ -358,7 +389,15 @@ took several rounds of CLI work to isolate.
       the captured-pose step needs a visual / mechanical reference the
       user can reproduce post-swap (mechanical end-stop, marked tape, or
       lining the broken arm against the working twin) — surface those
-      options in the wizard.
+      options in the wizard. **Also write `Min_Position_Limit` /
+      `Max_Position_Limit` to the new motor's EEPROM**, not just
+      `Homing_Offset` — a fresh motor harvested from a different role
+      carries stale limit registers that silently clip `Goal_Position`
+      to a narrow window unrelated to your arm. The CLI counterpart
+      (`scripts/motor_tools.py write … --min-position-limit=… \
+      --max-position-limit=…`) hit this exactly: first attempt drove to
+      809 ticks then froze at 958 because the new motor had been a
+      gripper on its previous arm with max=952.
 
 ## Architecture
 
