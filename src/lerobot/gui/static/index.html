@@ -199,6 +199,8 @@
                 <div class="run-actions">
                     <button class="btn-launch" id="run-launch-btn" onclick="launchRun()">Launch</button>
                     <button class="btn-stop" id="run-stop-btn" onclick="stopRun()" disabled>Stop</button>
+                    <button class="btn-control" id="run-next-btn" onclick="sendControl('exit_early')" disabled title="End the current episode and start the next one (was: right-arrow key)">Next Episode</button>
+                    <button class="btn-control" id="run-rerecord-btn" onclick="sendControl('rerecord_episode')" disabled title="Discard the current episode and re-record it (was: left-arrow key)">Rerecord</button>
                 </div>
             </div>
             <div class="sidebar-resize-handle"></div>

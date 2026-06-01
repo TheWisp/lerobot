@@ -377,7 +377,16 @@ async def _launch_subprocess(
     # segments; any existing reader is mapped to old (possibly unlinked) segments.
     _close_obs_reader()
 
-    env = {**__import__("os").environ, "LEROBOT_OBS_STREAM": "1"}
+    env = {
+        **__import__("os").environ,
+        "LEROBOT_OBS_STREAM": "1",
+        # Signals to the subprocess's control channel
+        # (lerobot.common.control_channel) that stdin is a flow-control RPC
+        # input, not a terminal. Lets the GUI's POST /api/run/control endpoint
+        # write JSON command lines that the subprocess's record loop polls
+        # via the existing events dict.
+        "LEROBOT_CONTROL_CHANNEL_STDIN": "1",
+    }
     if extra_env:
         env.update(extra_env)
     cmd_str = " ".join(args)
@@ -387,6 +396,7 @@ async def _launch_subprocess(
 
     _active_process = await asyncio.create_subprocess_exec(
         *args,
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
@@ -1034,6 +1044,53 @@ async def set_rlt_config(body: dict) -> dict:
     except Exception as e:
         logger.warning("RLT config write failed: %s", e)
         raise HTTPException(500, str(e)) from e
+
+
+_KNOWN_CONTROL_COMMANDS: frozenset[str] = frozenset({"exit_early", "rerecord_episode", "stop_recording"})
+
+
+class ControlCommand(BaseModel):
+    """Body for ``POST /api/run/control``.
+
+    ``cmd`` must be one of :data:`_KNOWN_CONTROL_COMMANDS`. Pinning this
+    server-side prevents typo-bugs in the frontend from silently going
+    nowhere — the subprocess would log "unknown command" but the GUI
+    would think the click landed.
+    """
+
+    cmd: str
+
+
+@router.post("/control")
+async def send_control_command(cmd: ControlCommand) -> dict:
+    """Send a flow-control command to the running orchestrator subprocess.
+
+    Writes ``{"v": 1, "cmd": "<verb>"}\\n`` to the subprocess's stdin.
+    The subprocess's :class:`ControlChannel` (see
+    ``lerobot.common.control_channel``) parses the line and flips the
+    matching flag in the events dict the orchestrator loop polls every
+    tick. Same destination as pressing the corresponding keyboard key
+    in the CLI workflow — but routed through the GUI button instead of
+    pynput's global keyboard hook.
+    """
+    if cmd.cmd not in _KNOWN_CONTROL_COMMANDS:
+        raise HTTPException(
+            400, f"unknown command {cmd.cmd!r}; expected one of {sorted(_KNOWN_CONTROL_COMMANDS)}"
+        )
+    if _active_process is None or _active_process.stdin is None:
+        raise HTTPException(409, "no active process to control")
+    if _active_process.returncode is not None:
+        raise HTTPException(409, "active process has already exited")
+
+    payload = json.dumps({"v": 1, "cmd": cmd.cmd}).encode("utf-8") + b"\n"
+    try:
+        _active_process.stdin.write(payload)
+        await _active_process.stdin.drain()
+    except (BrokenPipeError, ConnectionResetError) as e:
+        raise HTTPException(409, f"subprocess stdin closed: {e}") from e
+
+    logger.info("Control: sent %s to active subprocess", cmd.cmd)
+    return {"status": "ok", "cmd": cmd.cmd}
 
 
 @router.post("/stop")

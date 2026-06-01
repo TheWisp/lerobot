@@ -1605,6 +1605,28 @@ async function launchRun() {
     }
 }
 
+async function sendControl(cmd) {
+    // Flow-control RPC to the orchestrator subprocess. Lands in its
+    // events dict via stdin JSON lines — same destination as the
+    // legacy keyboard handlers (right arrow / left arrow / esc).
+    try {
+        const res = await fetch('/api/run/control', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({cmd}),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({detail: res.statusText}));
+            showToast('Error', err.detail || `Failed to send ${cmd}`, 'error');
+            return;
+        }
+        const verbLabel = {exit_early: 'Next Episode', rerecord_episode: 'Rerecord'}[cmd] || cmd;
+        showToast('Sent', verbLabel, 'info');
+    } catch (e) {
+        showToast('Error', e.message, 'error');
+    }
+}
+
 async function stopRun() {
     try {
         const res = await fetch('/api/run/stop', { method: 'POST' });
@@ -1935,10 +1957,18 @@ async function pollRunStatus() {
 function updateRunUI(isRunning) {
     _isRunning = isRunning;  // mirror for _validateLaunch
     const stopBtn = document.getElementById('run-stop-btn');
+    const nextBtn = document.getElementById('run-next-btn');
+    const rerecordBtn = document.getElementById('run-rerecord-btn');
     const formInputs = document.querySelectorAll('#run-form input, #run-form select');
     const workflowBtns = document.querySelectorAll('.workflow-btn');
 
     if (stopBtn) stopBtn.disabled = !isRunning;
+    // Flow-control buttons are only valid while the orchestrator
+    // subprocess is alive — they POST to /api/run/control which writes
+    // to its stdin. The endpoint will 409 if no process; mirroring the
+    // state to the UI just keeps users from clicking a dead button.
+    if (nextBtn) nextBtn.disabled = !isRunning;
+    if (rerecordBtn) rerecordBtn.disabled = !isRunning;
 
     formInputs.forEach(el => el.disabled = isRunning);
     workflowBtns.forEach(el => el.disabled = isRunning);
