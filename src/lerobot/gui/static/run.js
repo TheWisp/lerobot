@@ -1609,16 +1609,26 @@ async function sendControl(cmd) {
     // Flow-control RPC to the orchestrator subprocess. Lands in its
     // events dict via stdin JSON lines — same destination as the
     // legacy keyboard handlers (right arrow / left arrow / esc).
+    //
+    // For "rerecord_episode": the record loop's inner recording phase
+    // polls events["exit_early"] to break. Pressing left-arrow on the
+    // legacy keyboard set BOTH flags (the channel's pynput source
+    // preserves this via multi-key binding). On the stdin path, each
+    // line fires one verb, so we send both back-to-back to reproduce
+    // the same "exit current recording AND rerecord" intent.
+    const verbs = (cmd === 'rerecord_episode') ? ['rerecord_episode', 'exit_early'] : [cmd];
     try {
-        const res = await fetch('/api/run/control', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({cmd}),
-        });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({detail: res.statusText}));
-            showToast('Error', err.detail || `Failed to send ${cmd}`, 'error');
-            return;
+        for (const verb of verbs) {
+            const res = await fetch('/api/run/control', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({cmd: verb}),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({detail: res.statusText}));
+                showToast('Error', err.detail || `Failed to send ${verb}`, 'error');
+                return;
+            }
         }
         const verbLabel = {exit_early: 'Next Episode', rerecord_episode: 'Rerecord'}[cmd] || cmd;
         showToast('Sent', verbLabel, 'info');

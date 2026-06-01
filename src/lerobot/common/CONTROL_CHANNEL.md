@@ -81,6 +81,21 @@ if events["intervene"]:
 
 ### P0 — Foundation `[done]`
 
+**Demo recording**: [`docs/control_channel/gui_demo.mp4`](docs/control_channel/gui_demo.mp4)
+— Playwright drives the GUI through a real `lerobot-record` run
+(virtual robot + scripted Cartesian-EE teleop, no hardware) and
+clicks the new **Next Episode** button to advance through the
+episode → reset → episode → reset → episode → stop cycle. Each click
+is a `POST /api/run/control` → subprocess stdin → events dict edge,
+visible in the GUI's terminal panel as the `Control channel:
+exit_early from stdin` log line followed by the loop's phase
+transition.
+
+**Regression test**: `scripts/control_channel/smoke_record.py` —
+same scenario driven via raw subprocess stdin (no GUI). Reusable
+baseline for future phases; each new verb adds a phase to the
+driver.
+
 - `common/control_channel.py`: `ControlChannel` registry + `Action`
   dataclass + pynput / stdin sources. Bindings currently live on
   `Action.keyboard_keys` — P1 moves them into the source class.
