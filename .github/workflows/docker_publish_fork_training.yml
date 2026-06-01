@@ -27,7 +27,12 @@ name: Publish fork training image
 
 on:
   push:
-    branches: [main]
+    # main: publishes :latest + :main-<sha> as the canonical artifact.
+    # feat/**: produces a per-branch test image for verifying the build
+    # before a PR lands, tagged :<branch-slug>-<sha>. The :latest tag is
+    # gated to the default branch in the tag matrix below, so feature
+    # branches never overwrite production.
+    branches: [main, "feat/**"]
     paths:
       - "pyproject.toml"
       - "uv.lock"
@@ -69,13 +74,21 @@ jobs:
 
       # Lowercases the owner since GHCR requires lowercase; computes tags
       # automatically from the trigger (branch / sha / semver release).
+      #
+      # Tag matrix:
+      #   main push       → :main-<sha>  +  :latest
+      #   feat/** push    → :<branch-slugified>-<sha>   (test artifact only)
+      #   release tag     → :<version>  +  :<major>.<minor>
       - name: Compute tags + labels
         id: meta
         uses: docker/metadata-action@v5 # zizmor: ignore[unpinned-uses]
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # `type=ref,event=branch,suffix=-{{sha}}` yields `<branch-slug>-<sha>`
+          # for any branch push — `main-<sha>` on main, `feat-x-<sha>` on
+          # feat/x. Slug-safe (slashes → dashes) by default.
           tags: |
-            type=sha,prefix=main-,format=short
+            type=ref,event=branch,suffix=-{{sha}}
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
