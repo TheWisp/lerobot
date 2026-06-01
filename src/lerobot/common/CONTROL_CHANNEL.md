@@ -138,21 +138,79 @@ OS-level capture that works when the GUI is in background. Useful
 for emergency stops. Skip until there's a concrete need; first cut
 contract is "GUI tab must be focused for keyboard hotkeys to fire."
 
-### Action manifest — how the browser knows what's registered
+### Action manifest — shared Python module
 
 The browser's settings page renders one row per registered action; the
 keyboard handler dispatches keypresses against the same registry. The
-subprocess running the loop is the source of truth for "what actions
-exist." Piggyback on the existing GUI output stream:
+action vocabulary needs to be **known to both** the subprocess
+(registering them on the channel at startup) and the GUI process
+(rendering them in the settings page) **without depending on a stdout
+log parse** — that path is too fragile for a critical UI dependency
+(log buffering, SSE timing, format drift).
 
-```
-[subprocess startup]
-##ACTIONS:[{"name":"record.next_episode","description":"…"}, …]##
+A small shared module declares the manifest; both processes import
+from it.
+
+```python
+# src/lerobot/common/actions.py
+
+@dataclass(frozen=True)
+class ActionDecl:
+    name: str
+    description: str
+
+GLOBAL_ACTIONS = [
+    ActionDecl("intervene", "Toggle intervention (operator takes over)"),
+]
+
+RECORD_ACTIONS = [
+    ActionDecl("record.exit_early", "End current episode / reset and advance"),
+    ActionDecl("record.rerecord_episode", "Discard current episode and re-record"),
+    ActionDecl("record.stop_recording", "End the recording session"),
+]
+
+HVLA_RLT_ACTIONS = [
+    ActionDecl("hvla.rlt.success", "Episode SUCCESS (+1 terminal reward)"),
+    ActionDecl("hvla.rlt.abort", "Episode ABORT (negative terminal reward)"),
+    ActionDecl("hvla.rlt.ignore", "Discard this episode (OOD)"),
+    ActionDecl("hvla.rlt.toggle_engage", "Toggle RL actor on/off"),
+]
+
+
+def actions_for_workflow(workflow: str, *, rlt_mode: bool = False) -> list[ActionDecl]:
+    """Return the actions an orchestrator should register for ``workflow``.
+
+    Single source of truth for what actions exist. Subprocess calls
+    this at startup and ``ch.register(a.name, description=a.description)``
+    for each entry. GUI calls the same function (via a thin
+    ``/api/hotkeys/actions`` wrapper) when rendering the settings page.
+    Static, type-checked, no inter-process protocol.
+    """
+    actions = list(GLOBAL_ACTIONS)
+    if workflow == "record":
+        actions += RECORD_ACTIONS
+    elif workflow == "hvla":
+        actions += RECORD_ACTIONS + (HVLA_RLT_ACTIONS if rlt_mode else [])
+    return actions
 ```
 
-GUI parses the line from the SSE, populates the settings page. Same
-pattern as `##OVERLAY:LABEL:COLOR##` already in use for the HVLA S2
-debug overlay. No new transport, no new lifecycle.
+What this buys us over stdout parsing:
+
+- **Critical path is in-process imports**, not log buffer races.
+- **Type-checked at edit time** — adding a new action without touching
+  this module is impossible; renaming silently is impossible.
+- **GUI knows the full vocabulary across workflows** even if no
+  subprocess is currently running, so the settings page can configure
+  bindings for actions that aren't live yet.
+- **Dynamic-config switches** (the `rlt_mode` flag, future intervention
+  modes) are explicit function arguments, not implicit-on-runtime
+  state. Both processes resolve identically given the same arguments.
+
+The GUI exposes `GET /api/hotkeys/actions` returning the union of
+all known workflows (so the settings page is always showing the full
+action surface). Per-launch resolution (which actions are live RIGHT
+NOW) happens in the subprocess; the settings page is
+workflow-agnostic.
 
 ## Phases
 
@@ -359,18 +417,18 @@ The browser-side-source architecture simplifies the work substantially
 from the earlier "Python source class per device" sketch. Estimates
 below reflect the new shape.
 
-| Component                                                                                                                          | LoC     | Notes                                                                                   |
-| ---------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------- |
-| **P1**: `Action` loses `keyboard_keys`; bindings live in `hotkeys.json` (read by pynput in CLI; by JS in GUI)                      | ~60     | Mechanical; touches the channel + `init_keyboard_listener` + tests.                     |
-| **P2 backend**: `hotkeys.json` load/save + `GET/POST /api/hotkeys/bindings` + `##ACTIONS:[...]##` parsing in GUI                   | ~120    | New module `lerobot.common.hotkeys`; GUI API thin wrapper; SSE parser tweak.            |
-| **P2 frontend (keyboard handler)**: capture `keydown` + skip on input focus + POST to `/api/run/control`                           | ~50 JS  | Single module; loaded on any tab that wants hotkeys live.                               |
-| **P2 frontend (Quest handler)**: WebXR button-edge detection (already partly there) + POST                                         | ~40 JS  | In the Quest VR teleop's served HTML; replaces the in-process button parsing for edges. |
-| **P2 frontend (gamepad handler)**: poll `navigator.getGamepads()` + edge detect + POST                                             | ~50 JS  | New JS module; replaces pygame-as-source in GUI mode.                                   |
-| **P2 frontend (settings page)**: page markup, SVG embeds, click-to-remap dialog, status badges                                     | ~250 JS | Mostly HTML/JS; SVG assets one-time effort.                                             |
-| **SVG assets**: Xbox gamepad + Quest Touch Plus left + Quest Touch Plus right                                                      | one-off | Public-domain diagrams exist; or trace from photos. ~3 files.                           |
-| **CLI fallback**: keep pynput in `init_keyboard_listener` (gated off in GUI mode via env var); leave pygame for the gamepad teleop | ~10     | Tiny gate — most of the work is just `pynput=False` when GUI is launching.              |
-| **P3 / P4 / P5 / P6 / P7 / P8**                                                                                                    | —       | See per-phase entries below — P6/P7 collapse mostly into P2's browser modules.          |
-| **Tests**: hotkeys.json round-trip; pynput consults JSON in CLI; browser handler dispatches; conflict detection                    | ~100    | Unit-level — no GUI E2E needed at first cut.                                            |
+| Component                                                                                                                                             | LoC     | Notes                                                                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **P1**: `Action` loses `keyboard_keys`; bindings live in `hotkeys.json` (read by pynput in CLI; by JS in GUI)                                         | ~60     | Mechanical; touches the channel + `init_keyboard_listener` + tests.                                                    |
+| **P2 backend**: `hotkeys.json` load/save + `GET/POST /api/hotkeys/bindings` + `GET /api/hotkeys/actions` (delegates to shared `actions_for_workflow`) | ~120    | New modules `lerobot.common.actions` (action manifest) and `lerobot.common.hotkeys` (bindings); GUI API thin wrappers. |
+| **P2 frontend (keyboard handler)**: capture `keydown` + skip on input focus + POST to `/api/run/control`                                              | ~50 JS  | Single module; loaded on any tab that wants hotkeys live.                                                              |
+| **P2 frontend (Quest handler)**: WebXR button-edge detection (already partly there) + POST                                                            | ~40 JS  | In the Quest VR teleop's served HTML; replaces the in-process button parsing for edges.                                |
+| **P2 frontend (gamepad handler)**: poll `navigator.getGamepads()` + edge detect + POST                                                                | ~50 JS  | New JS module; replaces pygame-as-source in GUI mode.                                                                  |
+| **P2 frontend (settings page)**: page markup, SVG embeds, click-to-remap dialog, status badges                                                        | ~250 JS | Mostly HTML/JS; SVG assets one-time effort.                                                                            |
+| **SVG assets**: Xbox gamepad + Quest Touch Plus left + Quest Touch Plus right                                                                         | one-off | Public-domain diagrams exist; or trace from photos. ~3 files.                                                          |
+| **CLI fallback**: keep pynput in `init_keyboard_listener` (gated off in GUI mode via env var); leave pygame for the gamepad teleop                    | ~10     | Tiny gate — most of the work is just `pynput=False` when GUI is launching.                                             |
+| **P3 / P4 / P5 / P6 / P7 / P8**                                                                                                                       | —       | See per-phase entries below — P6/P7 collapse mostly into P2's browser modules.                                         |
+| **Tests**: hotkeys.json round-trip; pynput consults JSON in CLI; browser handler dispatches; conflict detection                                       | ~100    | Unit-level — no GUI E2E needed at first cut.                                                                           |
 
 **Total**: ~600 LoC (split ~250 Python + ~390 JS) + 3 SVG assets. One
 cohesive PR, smaller than the earlier ~800 LoC estimate because
