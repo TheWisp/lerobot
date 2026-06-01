@@ -136,25 +136,186 @@ One file, all source classes update together. Mechanical migration
 of the existing `keyboard_keys`. `Action` becomes name + optional
 description metadata for the settings UI.
 
-### P2 — User-overridable bindings
+### P2 — User-overridable bindings + GUI
 
-`~/.config/lerobot/hotkeys.json` schema:
+**Lands together with P1 / P6 / P7** so all sources arrive with their
+own UI, registry, and config plumbing in one cohesive change. The
+visual UI is the headline; the JSON config + per-source code are what
+the UI displays.
+
+#### Config: `~/.config/lerobot/hotkeys.json`
+
+Flat list of `(action, source, binding)` rows. One file, all sources,
+trivially diffable. Versioned for forward migrations.
 
 ```json
 {
   "version": 1,
-  "bindings": {
-    "exit_early": { "keyboard": ["right"] },
-    "rerecord_episode": { "keyboard": ["left"] },
-    "intervene": { "keyboard": ["space"], "quest": ["B"] }
+  "bindings": [
+    { "action": "exit_early", "source": "keyboard", "binding": "right" },
+    { "action": "exit_early", "source": "keyboard", "binding": "left" },
+    { "action": "exit_early", "source": "keyboard", "binding": "esc" },
+    { "action": "rerecord_episode", "source": "keyboard", "binding": "left" },
+    { "action": "intervene", "source": "keyboard", "binding": "space" },
+    { "action": "intervene", "source": "quest", "binding": "right_grip" },
+    { "action": "rlt_success", "source": "quest", "binding": "right_B" },
+    { "action": "rlt_abort", "source": "quest", "binding": "left_Y" },
+    { "action": "mark_success", "source": "gamepad", "binding": "Y" }
+  ]
+}
+```
+
+Each source class loads the rows that match its `source` field at
+`attach()` time, overriding any code-side default bindings. Bindings
+are **static** — they live in the JSON whether or not the source is
+currently connected. Connection state is a runtime concern shown
+separately in the UI.
+
+#### GUI: one page, three per-source views
+
+New tab (or Robot-tab sub-section — design call):
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Hotkeys                                                                  │
+│                                                                          │
+│ Connected:  [⌨ Keyboard ●]  [🎮 Gamepad ●]  [🥽 Quest ○ no session]      │
+│                                                                          │
+│ ┌─ Keyboard ─────────────────────────────────────────────────────────┐  │
+│ │  Action            Binding                                          │  │
+│ │  exit_early        [right]  [left]  [esc]      [+ Add key]          │  │
+│ │  rerecord_episode  [left]                      [+ Add key]          │  │
+│ │  intervene         [space]                     [+ Add key]          │  │
+│ │  rlt_success       [r]                         [+ Add key]          │  │
+│ │  ...                                                                │  │
+│ └─────────────────────────────────────────────────────────────────────┘  │
+│                                                                          │
+│ ┌─ Quest controllers ──────────────────────────────────────────────────┐ │
+│ │                                                                       │ │
+│ │  [SVG: left Touch Plus]            [SVG: right Touch Plus]            │ │
+│ │   X — reset (reserved)              A — reset (reserved)              │ │
+│ │   Y — rlt_abort                     B — rlt_success                   │ │
+│ │   grip — clutch (reserved)          grip — intervene                  │ │
+│ │   trigger — gripper (reserved)      trigger — gripper (reserved)      │ │
+│ │   thumbstick — rlt_toggle_engage    thumbstick — rlt_ignore           │ │
+│ │   menu — (unbound)                                                    │ │
+│ │                                                                       │ │
+│ │  (Click any non-reserved button to remap)                             │ │
+│ └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│ ┌─ Gamepad ────────────────────────────────────────────────────────────┐ │
+│ │  [SVG: Xbox-style gamepad with button labels]                         │ │
+│ │  (Click any button to remap)                                          │ │
+│ └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+Per-section interaction model:
+
+- **Keyboard**: action-by-action list; each row has chips for the
+  currently-bound keys plus an "+ Add key" affordance that captures
+  the next keypress (or accepts a typed key name). Reflects the fact
+  that keyboard keys aren't spatial — a list is more efficient than
+  a keyboard image.
+- **Quest controllers**: side-by-side SVGs of the left + right Touch
+  Plus controllers. Each button shows its current binding as an
+  overlay label. Reserved buttons (grip, trigger, A/X — set by the
+  Quest VR teleop itself for clutch/gripper/reset) are greyed and
+  non-editable; the rest open a "Bind to action" picker on click.
+- **Gamepad**: single SVG of a generic Xbox-style layout. pygame
+  normalizes button indices across DualSense / Xbox / generic
+  gamepads, so one diagram covers the class. Same click-to-remap as
+  Quest.
+
+Conflict detection: client-side warning if a binding is reused across
+actions within the same source (e.g. binding `B` on the right Quest
+controller to both `rlt_success` and `intervene` — last write wins,
+warn the user). Cross-source conflicts are fine (`space` on keyboard
+and `right_grip` on Quest both mapping to `intervene` is the _point_).
+
+#### Connection-status badges
+
+Top of the page. Dynamic, derived from a `GET /api/hotkeys/status`
+endpoint that the server populates per-source:
+
+- **Keyboard** — always connected (pynput is always loadable; headless
+  environments grey it out).
+- **Gamepad** — pygame's `joystick.get_count() > 0` polled every few
+  seconds.
+- **Quest** — `WebXR session active` if the Quest VR teleop's WebSocket
+  has at least one connected client.
+
+When a source disconnects, its section in the UI doesn't disappear —
+it gets a subtle "no device" overlay so the user can still configure
+bindings for next time. (Bindings survive disconnects; the JSON is
+the source of truth, not the live device.)
+
+#### Action registry shape (what the GUI fetches)
+
+`GET /api/hotkeys/actions` returns the channel's
+`registered_names()`, paired with a one-line description from
+`Action.description` (P1 adds this field). Each known source publishes
+its own bindable-button list:
+
+```json
+{
+  "actions": [
+    { "name": "exit_early", "description": "End the current episode / reset phase and advance." },
+    { "name": "intervene", "description": "Toggle intervention mode (operator takes over)." },
+    { "name": "rlt_success", "description": "End the episode with positive terminal reward (RLT only)." },
+    ...
+  ],
+  "sources": {
+    "keyboard": { "kind": "list" },
+    "gamepad": { "kind": "diagram", "buttons": ["A", "B", "X", "Y", "LB", "RB", ...] },
+    "quest":   { "kind": "diagram", "buttons": ["left_A", "left_B", "left_X", "left_Y", "left_grip", ...] }
   }
 }
 ```
 
-Each source consults the JSON at `attach()` time, overriding its
-defaults. A GUI settings page surfaces the registry + lets the user
-remap. Conflicts (same binding mapped to two actions) raise at
-attach time.
+The GUI is purely a view of this registry — adding a new action in
+code shows up as a new row in the table without any frontend edit.
+
+#### Build cost
+
+| Component                                                                                                                              | LoC     | Notes                                                               |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------- |
+| **P1**: `Action` loses `keyboard_keys`; each source class owns its own bindings map                                                    | ~80     | Mechanical; touches the channel + tests + `init_keyboard_listener`. |
+| **P2 backend**: `hotkeys.json` load/save + `/api/hotkeys/{actions,status,bindings}` endpoints + source classes consult on attach       | ~150    | New module `lerobot.common.hotkeys`; GUI API thin wrapper.          |
+| **P2 frontend**: page markup, SVG embeds, click-to-remap dialog, status polling                                                        | ~250    | Mostly HTML/JS; SVG assets one-time effort.                         |
+| **SVG assets**: Xbox gamepad + Quest Touch Plus left + Quest Touch Plus right                                                          | one-off | Public-domain diagrams exist; or trace from photos. ~3 files.       |
+| **P6**: `QuestControllerSource` class + Quest VR teleop integration + `set_control_channel` on Teleoperator base                       | ~100    | New source class; Quest VR `_on_frame` adds button-edge emit.       |
+| **P7**: `GamepadSource` class + gamepad teleop refactor (drops `get_teleop_events`)                                                    | ~100    | Same shape as P6.                                                   |
+| **Tests**: hotkeys.json round-trip; per-source attach honours JSON; conflict warning; channel emit chain through Quest/Gamepad sources | ~120    | Unit-level — no GUI E2E needed at first cut.                        |
+
+**Total**: ~800 LoC + 3 SVG assets. One cohesive PR, big enough to
+warrant a per-section commit history but small enough to land
+together.
+
+#### Design decisions to settle before code
+
+- **Where does the page live**: top-level "Hotkeys" tab vs sub-section
+  of Robot tab vs new "Settings" tab. Hotkeys are a global concern,
+  not per-robot-profile, so a top-level "Settings" tab probably wins
+  long-term (also a natural home for the persistence-policy item in
+  `gui/TODO.md`).
+- **Default-bindings policy**: ship sensible defaults in code; `hotkeys.json`
+  stores overrides only (smaller diff, "reset to defaults" works
+  trivially) vs always-explicit (every binding written; defaults exist
+  as a Python constant the GUI reads to produce a fresh JSON on first
+  open). Defaults-as-overrides is probably right.
+- **Reserved-button policy**: should the Quest VR teleop's
+  hardware-reserved buttons (grip / trigger / A-X) be configurable, or
+  hard-coded to their semantic role? Hard-coded keeps the UX simple but
+  removes ergonomic flexibility (e.g. a user wanting the trigger to do
+  intervention instead of gripper). For first cut: hard-coded with a
+  follow-up to make them configurable.
+- **Conflict resolution**: client-side warning only, or server-side
+  reject on save? Warning is friendlier; reject is safer. Probably
+  warning + visual indicator on the conflicting cell.
+- **Versioning**: `hotkeys.json` schema version field — on bump, the
+  loader either migrates or raises. Need a migration table next to
+  the loader.
 
 ### P3 — Intervention migration in record loop
 
