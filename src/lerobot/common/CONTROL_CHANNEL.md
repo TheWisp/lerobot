@@ -49,13 +49,8 @@ A thin in-process bus:
 
 ```python
 ch, events = init_control_channel()
-ch.register("next_episode")
-ch.register("intervene")
-
-# Each source owns its own bindings:
-PynputSource(ch).bind("right", "next_episode").bind("space", "intervene").attach()
-QuestControllerSource(ch).bind(controller="right", button="B", action="intervene").attach()
-StdinSource(ch).attach()  # no bindings — accepts any registered name
+ch.register("record.next_episode")
+ch.register("intervene")  # global (no scope prefix — see Action scoping below)
 
 # Orchestrator polls (consumer-owned state):
 if events["intervene"]:
@@ -66,16 +61,98 @@ if events["intervene"]:
 - **Channel knows nothing about intervention, episodes, or recording.**
   Pure name registry + per-name bool. Adding `mark_success`, `freeze`,
   `terminate_episode` is one `register()` call.
-- **Sources own their own bindings.** Keyboard, Quest, gamepad, stdin
-  each have a source class with its own binding map. Adding a new
-  input type doesn't touch existing sources.
-- **Bindings are user-overridable.** `~/.config/lerobot/hotkeys.json`
-  consulted at registration; a GUI settings page surfaces the
-  registry.
+- **Action names are dotted scopes.** `record.next_episode`,
+  `hvla.rlt.success`, `intervene` (no dot = global). Two actions are
+  potentially co-active iff their names share a common ancestor or
+  one is a prefix of the other. Two bindings conflict iff they map
+  the same `(source, key)` pair to actions that could be co-active —
+  different scopes (`record.*` vs `hvla.*`) never conflict. Globals
+  (no dot) are always-active and conflict with anything.
+- **Bindings are user-overridable.** Single `~/.config/lerobot/hotkeys.json`
+  config; the GUI settings page edits it visually.
 - **Teleops become pure action sources.** No `_intervention_active`,
   no `_start_keyboard_listener`, no `get_teleop_events`. The
   orchestrator owns all flow-control state and integrates `events`
   edges into whatever state machine it needs.
+
+## Source location: browser vs Python
+
+The "source" that captures user input lives in **different places
+depending on whether the GUI is running**. The channel itself doesn't
+care — both paths land at the same events dict via the same `emit`
+surface — but the architecture is clearer once the split is named.
+
+### GUI mode (the common case)
+
+The **browser is the source of truth for all input**: keyboard,
+gamepad, Quest controllers. The Python subprocess never attaches
+pynput or pygame. Input flows:
+
+```
+Browser captures input
+  ↓
+fetch('/api/run/control', {cmd: "..."})
+  ↓
+GUI server writes JSON line to subprocess stdin
+  ↓
+channel's stdin source: channel.emit("...", source="stdin")
+  ↓
+events dict → consumer polls
+```
+
+**Why this is the right answer:**
+
+- **OS-level focus management is automatic.** Browser `keydown` events
+  only fire when the tab has focus. Window minimized → no events.
+  Tab unfocused → no events. Browser closed → no events. Pynput's
+  global capture has been a UX disaster for years; this fixes it for
+  free.
+- **Text inputs work normally.** The browser handler skips emit when
+  `event.target` matches `input, textarea, [contenteditable]` — user
+  types into the search box and nothing fires.
+- **Quest is naturally bound.** The WebXR session is browser-driven;
+  it's only "connected" when the user is actively in VR through the
+  GUI. No accidental fires.
+- **Gamepad uses the Web Gamepad API** — also focus-aware, fires
+  only when the tab has focus.
+- **No new Python source classes.** What we previously sketched as
+  `QuestControllerSource` / `GamepadSource` collapses to "JS modules
+  in the GUI page" — ~30-50 LoC each instead of ~100 LoC of Python.
+
+### CLI mode (no GUI)
+
+Pynput (keyboard) and pygame (gamepad) attach as today. Same `channel.emit`
+surface, just a different source. Used for legacy `lerobot-record`
+sessions from a terminal — global capture is the expected behaviour
+there (the user is in a terminal, not a GUI).
+
+`init_keyboard_listener` detects which mode is active via the
+`LEROBOT_CONTROL_CHANNEL_STDIN` env var (set by the GUI's subprocess
+launcher) and skips the pynput attach in GUI mode — no global hook
+ever installs.
+
+### Global hotkeys (deferred)
+
+A binding marked `"global": true` would re-introduce a pynput-style
+OS-level capture that works when the GUI is in background. Useful
+for emergency stops. Skip until there's a concrete need; first cut
+contract is "GUI tab must be focused for keyboard hotkeys to fire."
+
+### Action manifest — how the browser knows what's registered
+
+The browser's settings page renders one row per registered action; the
+keyboard handler dispatches keypresses against the same registry. The
+subprocess running the loop is the source of truth for "what actions
+exist." Piggyback on the existing GUI output stream:
+
+```
+[subprocess startup]
+##ACTIONS:[{"name":"record.next_episode","description":"…"}, …]##
+```
+
+GUI parses the line from the SSE, populates the settings page. Same
+pattern as `##OVERLAY:LABEL:COLOR##` already in use for the HVLA S2
+debug overlay. No new transport, no new lifecycle.
 
 ## Phases
 
@@ -278,19 +355,27 @@ code shows up as a new row in the table without any frontend edit.
 
 #### Build cost
 
-| Component                                                                                                                              | LoC     | Notes                                                               |
-| -------------------------------------------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------- |
-| **P1**: `Action` loses `keyboard_keys`; each source class owns its own bindings map                                                    | ~80     | Mechanical; touches the channel + tests + `init_keyboard_listener`. |
-| **P2 backend**: `hotkeys.json` load/save + `/api/hotkeys/{actions,status,bindings}` endpoints + source classes consult on attach       | ~150    | New module `lerobot.common.hotkeys`; GUI API thin wrapper.          |
-| **P2 frontend**: page markup, SVG embeds, click-to-remap dialog, status polling                                                        | ~250    | Mostly HTML/JS; SVG assets one-time effort.                         |
-| **SVG assets**: Xbox gamepad + Quest Touch Plus left + Quest Touch Plus right                                                          | one-off | Public-domain diagrams exist; or trace from photos. ~3 files.       |
-| **P6**: `QuestControllerSource` class + Quest VR teleop integration + `set_control_channel` on Teleoperator base                       | ~100    | New source class; Quest VR `_on_frame` adds button-edge emit.       |
-| **P7**: `GamepadSource` class + gamepad teleop refactor (drops `get_teleop_events`)                                                    | ~100    | Same shape as P6.                                                   |
-| **Tests**: hotkeys.json round-trip; per-source attach honours JSON; conflict warning; channel emit chain through Quest/Gamepad sources | ~120    | Unit-level — no GUI E2E needed at first cut.                        |
+The browser-side-source architecture simplifies the work substantially
+from the earlier "Python source class per device" sketch. Estimates
+below reflect the new shape.
 
-**Total**: ~800 LoC + 3 SVG assets. One cohesive PR, big enough to
-warrant a per-section commit history but small enough to land
-together.
+| Component                                                                                                                          | LoC     | Notes                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------- |
+| **P1**: `Action` loses `keyboard_keys`; bindings live in `hotkeys.json` (read by pynput in CLI; by JS in GUI)                      | ~60     | Mechanical; touches the channel + `init_keyboard_listener` + tests.                     |
+| **P2 backend**: `hotkeys.json` load/save + `GET/POST /api/hotkeys/bindings` + `##ACTIONS:[...]##` parsing in GUI                   | ~120    | New module `lerobot.common.hotkeys`; GUI API thin wrapper; SSE parser tweak.            |
+| **P2 frontend (keyboard handler)**: capture `keydown` + skip on input focus + POST to `/api/run/control`                           | ~50 JS  | Single module; loaded on any tab that wants hotkeys live.                               |
+| **P2 frontend (Quest handler)**: WebXR button-edge detection (already partly there) + POST                                         | ~40 JS  | In the Quest VR teleop's served HTML; replaces the in-process button parsing for edges. |
+| **P2 frontend (gamepad handler)**: poll `navigator.getGamepads()` + edge detect + POST                                             | ~50 JS  | New JS module; replaces pygame-as-source in GUI mode.                                   |
+| **P2 frontend (settings page)**: page markup, SVG embeds, click-to-remap dialog, status badges                                     | ~250 JS | Mostly HTML/JS; SVG assets one-time effort.                                             |
+| **SVG assets**: Xbox gamepad + Quest Touch Plus left + Quest Touch Plus right                                                      | one-off | Public-domain diagrams exist; or trace from photos. ~3 files.                           |
+| **CLI fallback**: keep pynput in `init_keyboard_listener` (gated off in GUI mode via env var); leave pygame for the gamepad teleop | ~10     | Tiny gate — most of the work is just `pynput=False` when GUI is launching.              |
+| **P3 / P4 / P5 / P6 / P7 / P8**                                                                                                    | —       | See per-phase entries below — P6/P7 collapse mostly into P2's browser modules.          |
+| **Tests**: hotkeys.json round-trip; pynput consults JSON in CLI; browser handler dispatches; conflict detection                    | ~100    | Unit-level — no GUI E2E needed at first cut.                                            |
+
+**Total**: ~600 LoC (split ~250 Python + ~390 JS) + 3 SVG assets. One
+cohesive PR, smaller than the earlier ~800 LoC estimate because
+P6/P7 collapse from Python source classes to ~30-50 LoC each in
+browser JS.
 
 #### Design decisions to settle before code
 
@@ -298,7 +383,9 @@ together.
   of Robot tab vs new "Settings" tab. Hotkeys are a global concern,
   not per-robot-profile, so a top-level "Settings" tab probably wins
   long-term (also a natural home for the persistence-policy item in
-  `gui/TODO.md`).
+  `gui/TODO.md`). Settings being "far away" is acceptable because
+  with browser-side capture the user configures once and runs — no
+  mid-session source switching, no live rebinding pressure.
 - **Default-bindings policy**: ship sensible defaults in code; `hotkeys.json`
   stores overrides only (smaller diff, "reset to defaults" works
   trivially) vs always-explicit (every binding written; defaults exist
@@ -310,9 +397,13 @@ together.
   removes ergonomic flexibility (e.g. a user wanting the trigger to do
   intervention instead of gripper). For first cut: hard-coded with a
   follow-up to make them configurable.
-- **Conflict resolution**: client-side warning only, or server-side
-  reject on save? Warning is friendlier; reject is safer. Probably
-  warning + visual indicator on the conflicting cell.
+- **Conflict resolution**: only flag intra-scope conflicts.
+  `(source, key)` pairs that map to actions sharing a common scope
+  ancestor (or globals, which are everywhere) get a warning. Different
+  scopes — `record.next_episode` and `hvla.rlt.success` both bound to
+  the right arrow — never warn; they can't be co-active. Client-side
+  warning + visual indicator on the conflicting cell, no server-side
+  reject.
 - **Versioning**: `hotkeys.json` schema version field — on bump, the
   loader either migrates or raises. Need a migration table next to
   the loader.
@@ -430,27 +521,35 @@ listener to the channel's pynput source. User-visible: identical
 through the same path as GUI buttons. Risk: any downstream consumer
 of `get_teleop_events` outside this repo breaks.
 
-### P6 — QuestControllerSource
+### P6 — Quest button source (browser-side)
 
-New source class. Quest VR teleop instantiates and binds B / Y face
-buttons to actions:
+Folds into P2. The Quest VR teleop's served HTML page already runs
+button-state parsing in `_on_frame` for clutch / gripper / reset
+(continuous state). Add a button-edge detector alongside it: on the
+rising edge of a configured face button (B / Y / joystick-click /
+menu), POST to `/api/run/control` with the bound action. ~30-40 LoC
+of JS in `webxr_teleop.html`.
 
-```python
-quest_source = QuestControllerSource(ch)
-quest_source.bind(controller="right", button="B", action="intervene")
-quest_source.bind(controller="left",  button="Y", action="mark_success")
-# On WebXR frame, button edges call quest_source.on_button_edge(...)
-```
+Why this isn't a Python source class:
 
-Quest VR teleop's existing button parsing in `_on_frame` calls into
-the source. No new wire format — same in-process emit path the
-pynput source uses.
+- The Quest is **inherently browser-mediated** (WebXR is browser-only).
+  A Python `QuestControllerSource` would duplicate the button parsing
+  that already happens in JS, then pipe it back through stdin — extra
+  hop for no value.
+- The browser knows when the WebXR session is connected / disconnected;
+  no separate Python-side polling.
 
-### P7 — GamepadSource
+### P7 — Gamepad button source (browser-side, with CLI fallback)
 
-Same pattern. Replaces the gamepad teleop's `get_teleop_events` +
-pygame button polling for flow-control. The gamepad's joint-control
-loop stays; only the flow-control buttons move.
+Folds into P2 for GUI mode. The browser polls
+`navigator.getGamepads()` once per frame, edge-detects button presses
+that have a binding in `hotkeys.json`, POSTs to `/api/run/control`.
+~50 LoC of JS.
+
+CLI fallback retained: the existing `gamepad` teleop's pygame loop
+continues to fire `events["..."]` directly into the channel (same
+pattern as the pynput CLI fallback). Two consumers, one
+`hotkeys.json`.
 
 ### P8 — Delete `get_teleop_events` from the Teleoperator protocol
 
@@ -474,15 +573,15 @@ producing actions, full stop.
 
 ## Status
 
-| Phase                            | State   | Branch / commit        |
-| -------------------------------- | ------- | ---------------------- |
-| P0 — Foundation                  | done    | `feat/control-channel` |
-| P1 — Source-owned bindings       | pending | —                      |
-| P2 — User-overridable bindings   | pending | —                      |
-| P3 — Intervention in record loop | pending | —                      |
-| P4 — HVLA RLT migration          | done    | `feat/control-channel` |
-| P4 (cont.) — HIL gym migration   | pending | —                      |
-| P5 — Delete leader's listener    | pending | —                      |
-| P6 — QuestControllerSource       | pending | —                      |
-| P7 — GamepadSource               | pending | —                      |
-| P8 — Delete `get_teleop_events`  | pending | —                      |
+| Phase                                                                   | State   | Branch / commit        |
+| ----------------------------------------------------------------------- | ------- | ---------------------- |
+| P0 — Foundation                                                         | done    | `feat/control-channel` |
+| P1 — Source-owned bindings                                              | pending | —                      |
+| P2 — User-overridable bindings                                          | pending | —                      |
+| P3 — Intervention in record loop                                        | pending | —                      |
+| P4 — HVLA RLT migration                                                 | done    | `feat/control-channel` |
+| P4 (cont.) — HIL gym migration                                          | pending | —                      |
+| P5 — Delete leader's listener                                           | pending | —                      |
+| P6 — Quest button source (browser-side, folds into P2)                  | pending | —                      |
+| P7 — Gamepad button source (browser-side + CLI fallback, folds into P2) | pending | —                      |
+| P8 — Delete `get_teleop_events`                                         | pending | —                      |
