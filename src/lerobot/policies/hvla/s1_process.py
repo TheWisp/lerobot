@@ -274,36 +274,34 @@ def _drain_rlt_events(events: dict, rlt_state: dict, infer_thread) -> None:
 def _register_rlt_actions(listener) -> None:
     """Bind the four RLT operator intents to the control channel.
 
-    The legacy pre-channel code monkey-patched
-    ``listener.on_press`` to grab raw pynput Key objects. The
-    channel-native shape is one ``register()`` call per intent —
-    bindings live on the channel, side effects live in
-    ``_drain_rlt_events``.
-
-    * ``rlt_success``      — ``r`` key. Also fires ``exit_early``
-                              via the rebind below so the loop breaks.
-    * ``rlt_abort``        — ``Key.left``. Also fires ``exit_early``.
-                              Critically, ``rerecord_episode`` is
-                              REBOUND to drop ``left`` — RLT wants the
-                              aborted trajectory STORED as a negative-
-                              reward terminal, not discarded.
-    * ``rlt_ignore``       — ``Key.down``. Fires ``exit_early`` AND
-                              ``rerecord_episode`` (dataset rollback,
-                              since the episode is OOD garbage).
-    * ``rlt_toggle_engage`` — ``e`` key. Does NOT fire ``exit_early``
-                              — toggling the actor mid-episode is fine.
+    Pulls the action declarations from
+    :func:`lerobot.common.actions.actions_for_workflow` so the
+    subprocess and the GUI share a single vocabulary, then applies
+    the two RLT-specific rebinds the manifest can't express
+    cleanly: extending ``exit_early``'s multi-key set to include
+    the terminal keys, and dropping ``"left"`` from
+    ``rerecord_episode`` (since in RLT mode left = abort = save
+    trajectory, NOT rerecord = discard).
     """
-    listener.register("rlt_success", keyboard_key="r")
-    listener.register("rlt_abort", keyboard_key="left")
-    listener.register("rlt_ignore", keyboard_key="down")
-    listener.register("rlt_toggle_engage", keyboard_key="e")
-    # Extend ``exit_early`` to include the RLT terminal keys ("r" and
-    # "down"). "left" and "esc" are already there from the legacy
-    # init_keyboard_listener defaults.
+    from lerobot.common.actions import actions_for_workflow, register_actions
+
+    # Manifest-driven registration of rlt_success / rlt_abort /
+    # rlt_ignore / rlt_toggle_engage (each with its default key
+    # binding). ``register_actions`` is idempotent — the legacy
+    # exit_early / rerecord_episode / stop_recording entries from
+    # ``init_keyboard_listener`` get re-registered with the same
+    # defaults, then immediately re-rebinded below for RLT semantics.
+    register_actions(listener, actions_for_workflow("hvla", rlt_mode=True))
+
+    # RLT-specific multi-key extension: ``r`` and ``down`` also fire
+    # ``exit_early`` so the recording loop breaks. ``right``, ``left``,
+    # ``esc`` are the record defaults; this just adds two more.
     listener.register("exit_early", keyboard_keys=("right", "left", "esc", "r", "down"))
-    # In RLT mode, "left" means abort (trajectory saved) NOT rerecord
-    # (trajectory discarded). Drop "left" from rerecord_episode and add
-    # "down" — the IGNORE key, which IS supposed to roll back the dataset.
+    # RLT-specific rebind: in RLT mode, "left" means abort (trajectory
+    # SAVED as negative-reward terminal), NOT rerecord (trajectory
+    # DISCARDED). Drop "left" from rerecord_episode; bind it to "down"
+    # (the IGNORE key) instead, since IGNORE is the one that wants
+    # rollback.
     listener.register("rerecord_episode", keyboard_key="down")
 
 
@@ -1374,6 +1372,14 @@ def run_s1(
         )
         logger.info("RLT: Press DOWN ARROW = ignore episode (discard transitions, no count)")
         logger.info("RLT: Press 'e' = toggle RL actor on/off")
+
+    # Hand the channel to the teleop so its own input source (e.g.
+    # Quest VR face buttons) can emit channel actions. Default
+    # implementation is a no-op for teleops that don't capture
+    # flow-control input (leaders, scripted, etc) — so this call is
+    # safe to make unconditionally.
+    if teleop is not None and listener is not None:
+        teleop.set_control_channel(listener)
 
     recorded_episodes = 0
 

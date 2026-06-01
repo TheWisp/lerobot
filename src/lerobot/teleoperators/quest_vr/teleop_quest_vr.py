@@ -111,6 +111,15 @@ class QuestVRTeleop(Teleoperator):
         # ``attach_teleop`` via :meth:`set_action_transform`. None = the
         # teleop emits its native EE deltas.
         self._action_transform: Callable[[dict], dict] | None = None
+        # Optional control channel handoff from the orchestrator —
+        # installed via :meth:`set_control_channel`. When present,
+        # rising edges on configured Quest face buttons emit channel
+        # actions (e.g. right B → ``rlt_success`` for HVLA RLT terminal
+        # signalling). Hardcoded mapping below; the hotkeys.json layer
+        # (P2 in CONTROL_CHANNEL.md) will eventually own this.
+        self._control_channel = None
+        self._prev_left_buttons: list[float] = []
+        self._prev_right_buttons: list[float] = []
 
     # ── Properties ────────────────────────────────────────────────────────
 
@@ -255,6 +264,74 @@ class QuestVRTeleop(Teleoperator):
             )
             self._cached_action = base
 
+        # Flow-control: edge-detect face buttons against the installed
+        # channel. Done OUTSIDE the cache lock so a slow channel emit
+        # never stalls the per-frame action update.
+        if self._control_channel is not None:
+            self._dispatch_button_edges(left_pose, right_pose)
+
+    # ── Flow-control via the channel ──────────────────────────────────────
+
+    # Quest Touch Plus button index → channel action name.
+    # WebXR gamepad indexing on Quest 3:
+    #   0: trigger (analog) — owned by gripper, not flow-control
+    #   1: grip (analog) — owned by clutch, not flow-control
+    #   3: thumbstick click — bindable
+    #   4: A (right) / X (left) — owned by reset ramp, not flow-control
+    #   5: B (right) / Y (left) — bindable
+    # Hardcoded for first cut. P2 (hotkeys.json) replaces this.
+    _LEFT_BUTTON_BINDINGS: dict[int, str] = {
+        5: "rlt_abort",  # Y → abort terminal (negative reward, save)
+        3: "rlt_toggle_engage",  # left joystick click → toggle RL actor
+    }
+    _RIGHT_BUTTON_BINDINGS: dict[int, str] = {
+        5: "rlt_success",  # B → success terminal (+1 reward)
+        3: "rlt_ignore",  # right joystick click → discard episode
+    }
+
+    def _dispatch_button_edges(self, left_pose, right_pose) -> None:
+        """Emit channel actions on rising edges of bound Quest buttons.
+
+        Only emits if (a) a channel was handed in via
+        :meth:`set_control_channel` and (b) the action name was
+        registered on that channel by the orchestrator. Unregistered
+        actions are silently dropped (logged by the channel itself) so
+        the Quest VR teleop works in record / pure-teleop sessions
+        that don't know about RLT.
+        """
+        left_btns = list(left_pose.get("buttons", [])) if left_pose else []
+        right_btns = list(right_pose.get("buttons", [])) if right_pose else []
+
+        for idx, action in self._LEFT_BUTTON_BINDINGS.items():
+            if _is_rising_edge(
+                self._prev_left_buttons, left_btns, idx
+            ) and self._control_channel.is_registered(action):
+                self._control_channel.emit(action, source=f"quest_left_{idx}")
+
+        for idx, action in self._RIGHT_BUTTON_BINDINGS.items():
+            if _is_rising_edge(
+                self._prev_right_buttons, right_btns, idx
+            ) and self._control_channel.is_registered(action):
+                self._control_channel.emit(action, source=f"quest_right_{idx}")
+
+        self._prev_left_buttons = left_btns
+        self._prev_right_buttons = right_btns
+
+    def set_control_channel(self, channel) -> None:
+        """Install (or clear, with ``None``) the orchestrator's channel.
+
+        After install, rising edges on configured Quest face buttons
+        (B / Y / joystick clicks) call ``channel.emit(...)`` with the
+        bound action name. Continuous-state buttons (grip / trigger /
+        A-X — owned by the teleop's clutch / gripper / reset semantics)
+        are untouched.
+        """
+        self._control_channel = channel
+        # Reset edge baselines so the first frame after install
+        # doesn't fire spurious edges from buttons held at install time.
+        self._prev_left_buttons = []
+        self._prev_right_buttons = []
+
     # ── Diagnostics ───────────────────────────────────────────────────────
 
     @property
@@ -264,3 +341,10 @@ class QuestVRTeleop(Teleoperator):
     @property
     def last_rtt_ms(self) -> float | None:
         return self._server.last_rtt_ms if self._server is not None else None
+
+
+def _is_rising_edge(prev: list[float], curr: list[float], idx: int, threshold: float = 0.5) -> bool:
+    """True iff button ``idx`` went from below to above threshold between frames."""
+    prev_pressed = idx < len(prev) and prev[idx] > threshold
+    curr_pressed = idx < len(curr) and curr[idx] > threshold
+    return curr_pressed and not prev_pressed

@@ -136,9 +136,18 @@ def init_keyboard_listener():
     ``stop_recording`` keys, all initially False, with default keyboard bindings
     on right / left / esc — so callers like ``lerobot_record.py`` see no change.
 
-    Stdin JSON-lines is auto-attached when ``LEROBOT_CONTROL_CHANNEL_STDIN=1``
-    (set by the GUI's subprocess launcher), so a GUI-launched record run is
-    controllable via ``POST /api/run/control`` without code changes here.
+    Two source-attach modes, picked by the ``LEROBOT_CONTROL_CHANNEL_STDIN`` env
+    var that the GUI's subprocess launcher sets:
+
+    * **CLI mode** (env var unset). Pynput attaches a global keyboard listener
+      — the only way to capture keys when there's no GUI to do it from.
+    * **GUI mode** (env var = ``"1"``). Pynput is **skipped**. The GUI's
+      browser captures keyboard events with proper focus-awareness and POSTs
+      them to ``/api/run/control`` → subprocess stdin → channel. No global
+      pynput hook is installed in the subprocess, which means typing in the
+      GUI's search box never accidentally fires a hotkey, the listener
+      doesn't outlive the GUI session, and a minimised browser stops
+      capturing — exactly the OS-level focus behaviour you'd expect.
 
     The returned ``listener`` is a :class:`ControlChannel` whose ``.stop()``
     tears down all sources — drop-in for the old ``pynput.keyboard.Listener``.
@@ -148,7 +157,10 @@ def init_keyboard_listener():
     """
     from lerobot.common.control_channel import init_control_channel
 
-    channel, events = init_control_channel()
+    # In GUI mode the browser owns keyboard capture (focus-aware, scoped
+    # to the GUI tab). Skip pynput entirely to eliminate the global hook.
+    gui_managing_input = os.environ.get("LEROBOT_CONTROL_CHANNEL_STDIN") == "1"
+    channel, events = init_control_channel(pynput=not gui_managing_input)
     # Legacy bindings — match the pre-channel ``init_keyboard_listener``
     # behavior exactly. The pynput source already attached above will
     # pick these up on the next keypress because it walks the registry
