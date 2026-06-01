@@ -116,6 +116,17 @@ class ControlChannel:
         self.events: dict[str, bool] = {}
         self._sources: list[_Source] = []
         self._stop_evt = threading.Event()
+        # Legacy ``pynput.keyboard.Listener.on_press`` compat. Code in
+        # HVLA RLT mode does ``_orig = listener.on_press; listener.on_press
+        # = my_wrapper`` to chain its own key handlers without losing the
+        # registry dispatch. Default is ``_default_keyboard_handler``
+        # which forwards into ``emit_for_keyboard_key`` — so the getter
+        # returns a non-None callable that can be invoked from a wrapper.
+        # Setting it REPLACES the registry dispatch with the caller's
+        # function (i.e. the caller's wrapper is now the only thing the
+        # pynput listener calls); if the wrapper still wants registry
+        # behaviour it should chain through the captured original.
+        self._on_press_hook = self._default_keyboard_handler
 
     # ── Registry ──────────────────────────────────────────────────────────
 
@@ -182,6 +193,59 @@ class ControlChannel:
         self.events[name] = True
         logger.info("Control channel: %s from %s", name, source)
 
+    def _default_keyboard_handler(self, key) -> None:
+        """Default callback installed under :attr:`on_press`.
+
+        Resolves the pynput ``Key`` to a string and dispatches via the
+        registry. Captured by callers (HVLA RLT) that want to chain
+        the registry dispatch after their own key handling.
+        """
+        key_str = _pynput_key_to_str(key)
+        if key_str is None:
+            return
+        self.emit_for_keyboard_key(key_str)
+
+    @property
+    def on_press(self):
+        """The currently installed keyboard callback (legacy
+        ``pynput.keyboard.Listener.on_press`` compat).
+
+        Returns the function the pynput source invokes on every press;
+        defaults to the registry dispatcher. Callers can capture the
+        current value, install a wrapper that does pre-processing,
+        then chain through the captured value to keep registry dispatch.
+        Used by HVLA RLT mode to add ``r`` / ``Key.left`` / ``Key.down``
+        / ``e`` handling on top of the legacy three verbs.
+        """
+        return self._on_press_hook
+
+    @on_press.setter
+    def on_press(self, hook) -> None:
+        if hook is None:
+            self._on_press_hook = self._default_keyboard_handler
+        else:
+            self._on_press_hook = hook
+
+    def emit_for_keyboard_key(self, key_str: str, *, source: str = "keyboard") -> list[str]:
+        """Emit every action whose ``keyboard_keys`` contains ``key_str``.
+
+        Returns the list of action names that fired. Public so the
+        legacy compound contract — ``left`` fires both ``rerecord_episode``
+        AND ``exit_early`` — is testable without spinning up a real
+        pynput Listener: a unit test constructs a Channel, registers
+        actions with overlapping keys, calls this method with a single
+        key string, and asserts the expected names fired.
+
+        The pynput source's ``on_press`` callback delegates to this
+        method so its behaviour is the same code path the tests exercise.
+        """
+        fired: list[str] = []
+        for action in self._actions.values():
+            if key_str in action.keyboard_keys:
+                self.emit(action.name, source=source)
+                fired.append(action.name)
+        return fired
+
     # ── Sources ───────────────────────────────────────────────────────────
 
     def attach_pynput(self) -> bool:
@@ -206,16 +270,12 @@ class ControlChannel:
 
         def on_press(key) -> None:
             try:
-                key_str = _pynput_key_to_str(key)
-                if key_str is None:
-                    return
-                # Walk the registry on each press so actions registered
-                # AFTER attach are picked up — and so one key can fire
-                # multiple actions (the legacy "left also sets
-                # exit_early" compound).
-                for action in self._actions.values():
-                    if key_str in action.keyboard_keys:
-                        self.emit(action.name, source="keyboard")
+                # Invoke the currently-installed on_press hook (defaults
+                # to ``_default_keyboard_handler`` which dispatches via
+                # the registry). Callers may replace ``channel.on_press``
+                # to chain their own logic — same legacy ``pynput.Listener
+                # .on_press = X`` mutation point HVLA RLT uses.
+                self._on_press_hook(key)
             except Exception:
                 logger.exception("Control channel: keyboard on_press failed")
 

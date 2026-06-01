@@ -79,6 +79,168 @@ def test_register_supports_multi_key_actions():
     assert ch._actions["exit_early"].keyboard_keys == ("right", "left", "esc")
 
 
+def test_one_keyboard_key_fires_multiple_actions():
+    """The legacy compound: pressing ``left`` had to fire BOTH
+    ``rerecord_episode`` AND ``exit_early`` (the inner record-loop polls
+    exit_early to break; the outer loop polls rerecord_episode to redo).
+    Multi-key bindings on the channel side preserve this; the pynput
+    source's on_press delegates here so it's exercised by the same code
+    path the tests cover."""
+    ch = ControlChannel()
+    ch.register("exit_early", keyboard_keys=("right", "left", "esc"))
+    ch.register("rerecord_episode", keyboard_key="left")
+    ch.register("stop_recording", keyboard_key="esc")
+
+    # left -> BOTH exit_early AND rerecord_episode.
+    fired = ch.emit_for_keyboard_key("left")
+    assert set(fired) == {"exit_early", "rerecord_episode"}
+    assert ch.events["exit_early"] is True
+    assert ch.events["rerecord_episode"] is True
+    assert ch.events["stop_recording"] is False
+
+    # Reset and try esc -> BOTH exit_early AND stop_recording.
+    ch.events["exit_early"] = False
+    ch.events["rerecord_episode"] = False
+    fired = ch.emit_for_keyboard_key("esc")
+    assert set(fired) == {"exit_early", "stop_recording"}
+    assert ch.events["exit_early"] is True
+    assert ch.events["stop_recording"] is True
+
+    # right -> just exit_early (no compound).
+    ch.events["exit_early"] = False
+    fired = ch.emit_for_keyboard_key("right")
+    assert fired == ["exit_early"]
+
+
+def test_emit_for_keyboard_key_unbound_key_is_noop():
+    """A key with no binding emits nothing — the pynput source can
+    forward every keypress without worrying about polluting events."""
+    ch = ControlChannel()
+    ch.register("intervene", keyboard_key="space")
+    fired = ch.emit_for_keyboard_key("z")
+    assert fired == []
+    assert ch.events["intervene"] is False
+
+
+# ── HVLA RLT compat (legacy listener.on_press chaining) ─────────────────
+
+
+class _FakeKey:
+    """Minimal stand-in for ``pynput.keyboard.Key`` / ``KeyCode``.
+
+    Has a ``name`` attribute for special keys ("right", "esc") and a
+    ``char`` attribute for letter keys. Matches the duck-typed surface
+    ``_pynput_key_to_str`` expects so the compat tests don't need a
+    real display.
+    """
+
+    def __init__(self, *, name: str | None = None, char: str | None = None) -> None:
+        if name is not None:
+            self.name = name
+        if char is not None:
+            self.char = char
+
+
+def test_on_press_default_dispatches_via_registry():
+    """``channel.on_press`` defaults to a callable that runs the registry
+    dispatch — so a legacy caller doing
+    ``_orig = listener.on_press; _orig(key)`` gets the same behaviour as
+    if the pynput source called the default."""
+    ch = ControlChannel()
+    ch.register("exit_early", keyboard_keys=("right", "left", "esc"))
+    ch.register("rerecord_episode", keyboard_key="left")
+    handler = ch.on_press
+    assert callable(handler)
+
+    handler(_FakeKey(name="left"))
+    assert ch.events["exit_early"] is True
+    assert ch.events["rerecord_episode"] is True
+
+
+def test_on_press_setter_chains_with_captured_original():
+    """The HVLA RLT pattern: capture the current handler, install a
+    wrapper that does extra work then chains through. This pins the
+    contract — replacing ``on_press`` does NOT silently drop the
+    registry dispatch unless the new handler explicitly skips the
+    chain (which RLT does for its own special keys)."""
+    ch = ControlChannel()
+    ch.register("exit_early", keyboard_key="right")
+    ch.register("rlt_success", keyboard_key="r")
+
+    _orig = ch.on_press  # registry dispatcher
+
+    side_effects: list[str] = []
+
+    def _rlt_wrapper(key):
+        # RLT's special-key short-circuit: handle 'r' itself, never
+        # chain through.
+        if hasattr(key, "char") and getattr(key, "char", None) == "r":
+            side_effects.append("rlt_success_signaled")
+            ch.events["exit_early"] = True
+            return
+        # For everything else, fall through to the registry.
+        _orig(key)
+
+    ch.on_press = _rlt_wrapper
+
+    # "r" triggers the wrapper's side effect; registry dispatch is
+    # short-circuited so ``rlt_success`` does NOT get emitted as an event
+    # (RLT signals reward via its own state, not via the events dict).
+    ch.on_press(_FakeKey(char="r"))
+    assert side_effects == ["rlt_success_signaled"]
+    assert ch.events["exit_early"] is True
+    assert ch.events["rlt_success"] is False  # wrapper handled, no chain
+
+    # "right" falls through to the registry dispatch via _orig.
+    ch.events["exit_early"] = False
+    ch.on_press(_FakeKey(name="right"))
+    assert ch.events["exit_early"] is True
+    assert side_effects == ["rlt_success_signaled"]  # no extra RLT side effect
+
+
+def test_on_press_setter_none_restores_default():
+    """Setting ``on_press = None`` reverts to the registry dispatcher —
+    cleanup path for code that installs a temporary wrapper."""
+    ch = ControlChannel()
+    ch.register("exit_early", keyboard_key="right")
+
+    def _temp_wrapper(key):
+        ch.events["exit_early"] = True  # unconditional — silly but observable
+
+    ch.on_press = _temp_wrapper
+    assert ch.on_press is _temp_wrapper
+
+    # Reset to default. Bound-method identity isn't preserved across
+    # attribute accesses (Python's descriptor protocol creates a fresh
+    # bound method each time), so assert behavioural equivalence: the
+    # default dispatches via the registry, and the wrapper does not
+    # fire any more.
+    ch.on_press = None
+    assert ch.on_press is not _temp_wrapper
+
+    ch.events["exit_early"] = False
+    ch.on_press(_FakeKey(name="right"))
+    assert ch.events["exit_early"] is True  # registry dispatched again
+
+
+def test_emit_for_keyboard_key_picks_up_actions_registered_after_attach():
+    """Pynput's on_press iterates the live registry, so an action
+    registered AFTER ``attach_pynput()`` is picked up the next time the
+    bound key is pressed. Critical for callers that want to ``register``
+    incrementally during startup."""
+    ch = ControlChannel()
+    # Simulate "pynput attached but no actions yet" — at this point a
+    # SPACE press would be a no-op.
+    assert ch.emit_for_keyboard_key("space") == []
+
+    # Later: orchestrator registers an action.
+    ch.register("intervene", keyboard_key="space")
+
+    # Now SPACE fires — same emit path, no re-attach needed.
+    assert ch.emit_for_keyboard_key("space") == ["intervene"]
+    assert ch.events["intervene"] is True
+
+
 def test_emit_unregistered_name_is_dropped(caplog):
     """Public ``emit`` API validates against the registry — a future
     teleop calling ``channel.emit("foo")`` without registering first

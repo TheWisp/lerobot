@@ -147,10 +147,15 @@ def main() -> int:
                 "teleop": {
                     "type": "scripted_bimanual_ee",
                     "fields": {
-                        "shape": "static_hold",
-                        "size_m": 0.0,
-                        "n_waypoints": 10000,
-                        "ramp_ticks": 5,
+                        # Heart trace so the arms visibly move. Many
+                        # waypoints + slow loop so a single pass lasts
+                        # longer than the demo's wall-clock — otherwise
+                        # the teleop runs out and the subprocess crashes
+                        # on save_episode with zero frames.
+                        "shape": "heart",
+                        "size_m": 0.05,
+                        "n_waypoints": 9000,
+                        "ramp_ticks": 30,
                         "loop_hz": 30,
                     },
                     "cameras": {},
@@ -176,6 +181,10 @@ def main() -> int:
                         const err = await r.json().catch(() => ({detail: r.statusText}));
                         throw new Error('launch failed: ' + (err.detail || r.statusText));
                     }
+                    // Status polling runs every 5 s; flip the UI flag
+                    // synchronously so the flow-control buttons enable
+                    // without a 0-5 s lag while the demo races forward.
+                    if (typeof updateRunUI === 'function') updateRunUI(true);
                 }""",
                 request_body,
             )
@@ -188,9 +197,25 @@ def main() -> int:
                 timeout=120000,
             )
             print("DEMO: episode 0 started", flush=True)
+            # The 5 s status poll in run.js drives the buttons' enabled
+            # state. Make sure the Next Episode button is actually
+            # clickable before the first click — Playwright's auto-wait
+            # would only retry for ~30 s otherwise.
+            page.wait_for_selector("#run-next-btn:not([disabled])", timeout=10000)
             time.sleep(3.0)  # let the user see ep 0 recording for a beat
 
             # ── Click Next Episode -> advance to reset ──────────────
+            btn_state = page.evaluate(
+                "(() => ({"
+                "disabled: document.getElementById('run-next-btn').disabled, "
+                "cls: document.getElementById('run-next-btn').className"
+                "}))()"
+            )
+            print(f"DEMO: pre-click state: {btn_state}", flush=True)
+            terminal_tail = page.evaluate(
+                "(() => document.getElementById('run-terminal').textContent.slice(-1500))()"
+            )
+            print(f"DEMO: terminal tail:\n{terminal_tail}\n----- end tail -----", flush=True)
             print("DEMO: click Next Episode (advance to reset)", flush=True)
             page.click("#run-next-btn")
             page.wait_for_function(
