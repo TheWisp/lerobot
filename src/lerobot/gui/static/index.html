@@ -13,6 +13,7 @@
         <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
+        <button class="tab" data-tab="settings" onclick="switchTab('settings')">Settings</button>
         <span id="hf-auth-indicator" style="margin-left:auto; font-size:11px; color:var(--text-secondary, #666); padding-right:12px; cursor:default;" title="HuggingFace Hub login status"></span>
         <!-- Transfers indicator: always visible so the user can find their
              Hub transfers without remembering a hidden trigger. Click toggles
@@ -360,6 +361,63 @@
         </div>
     </div>
 
+    <!-- Settings tab — hotkeys / bindings configuration. -->
+    <div class="tab-content" id="tab-settings">
+        <div class="settings-page">
+            <div class="settings-header">
+                <h1>Hotkeys</h1>
+                <p class="settings-sub">
+                    Configure which input fires each flow-control action. Bindings apply across all
+                    workflows — actions only fire when their workflow is currently running. Keyboard
+                    hotkeys are only active while the Run tab is focused and a subprocess is running.
+                </p>
+                <div class="settings-badges" id="hotkey-source-badges">
+                    <span class="source-badge" data-source="keyboard"><span class="dot"></span>Keyboard</span>
+                    <span class="source-badge" data-source="gamepad"><span class="dot"></span>Gamepad</span>
+                    <span class="source-badge" data-source="quest"><span class="dot"></span>Quest</span>
+                </div>
+            </div>
+
+            <!-- Keyboard: action-by-action list. Keys aren't spatial so a list is more efficient
+                 than a keyboard image. -->
+            <section class="hotkey-section">
+                <h2>Keyboard</h2>
+                <div class="hotkey-keyboard-list" id="hotkey-keyboard-list">
+                    <!-- Populated by hotkeys_ui.js -->
+                </div>
+            </section>
+
+            <!-- Quest controllers: side-by-side SVGs with overlay-labeled buttons. Reserved
+                 buttons (grip / trigger / A-X) greyed and locked. -->
+            <section class="hotkey-section">
+                <h2>Quest controllers</h2>
+                <div class="hotkey-quest-row" id="hotkey-quest-row">
+                    <div class="quest-controller" id="quest-left">
+                        <div class="controller-label">Left</div>
+                        <div class="controller-svg-host" id="quest-left-svg"></div>
+                    </div>
+                    <div class="quest-controller" id="quest-right">
+                        <div class="controller-label">Right</div>
+                        <div class="controller-svg-host" id="quest-right-svg"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Gamepad: single SVG of a generic Xbox-style layout. pygame normalises indices
+                 across DualSense / Xbox / generic. -->
+            <section class="hotkey-section">
+                <h2>Gamepad</h2>
+                <div class="hotkey-gamepad-host" id="hotkey-gamepad-svg"></div>
+            </section>
+
+            <div class="settings-footer">
+                <button class="btn-control" onclick="saveHotkeys()">Save</button>
+                <button class="btn-control" onclick="resetHotkeysToDefaults()">Reset to defaults</button>
+                <span class="settings-status" id="hotkey-save-status"></span>
+            </div>
+        </div>
+    </div>
+
     <!-- Episode context menu -->
     <div class="context-menu" id="context-menu">
         <div class="context-menu-item" onclick="contextAction('view')">View Episode</div>
@@ -485,7 +543,8 @@
     <script src="/static/add_feature_dialog.js?v=2"></script>
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=43"></script>
-    <script src="/static/hotkeys.js?v=1"></script>
+    <script src="/static/hotkeys.js?v=2"></script>
+    <script src="/static/hotkeys_ui.js?v=1"></script>
     <script src="/static/model.js?v=3"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
