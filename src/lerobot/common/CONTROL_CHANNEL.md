@@ -165,11 +165,90 @@ during transition. Adds an Intervene button to the GUI Run tab;
 server-side allowlist gains the verb. No deletion yet — leader's
 pynput listener stays.
 
-### P4 — Intervention migration in HVLA + HIL gym
+### P4 — HVLA RLT migration `[done]`
 
-Same change as P3, applied to `policies/hvla/s1_process.py` and
-`rl/gym_manipulator.py`. Independent commits — each consumer
-migrates on its own schedule.
+Done in this PR. Shows the shape of a real consumer adopting the
+channel beyond the legacy three verbs.
+
+**Before** — [`s1_process.py`](../policies/hvla/s1_process.py) wrapped
+`listener.on_press` to grab raw pynput `Key` objects and dispatch
+per-key inline:
+
+```python
+_orig_on_press = listener.on_press
+
+def _rlt_on_press(key, *args):
+    if hasattr(key, "char") and key.char == "r":
+        rlt_state["lifecycle"].signal_terminal(TerminalKind.SUCCESS)
+        events["exit_early"] = True
+        # ... 18 lines of inline sound playback ...
+        return
+    if key == _kb.Key.left:
+        # ... 30 more lines for abort ...
+    if hasattr(key, "char") and key.char == "e":
+        # ... toggle engage ...
+    if key == _kb.Key.down:
+        # ... 30 more lines for ignore ...
+    if _orig_on_press is not None:
+        _orig_on_press(key)
+
+listener.on_press = _rlt_on_press
+```
+
+**After** — register one action per intent, drain on the main thread:
+
+```python
+# _register_rlt_actions(listener):
+listener.register("rlt_success", keyboard_key="r")
+listener.register("rlt_abort", keyboard_key="left")
+listener.register("rlt_ignore", keyboard_key="down")
+listener.register("rlt_toggle_engage", keyboard_key="e")
+# Multi-key: r and down also fire exit_early (so the loop breaks).
+listener.register("exit_early", keyboard_keys=("right", "left", "esc", "r", "down"))
+# Critically: REBIND rerecord_episode to drop "left" (RLT wants the
+# aborted trajectory STORED as a negative-reward terminal) and add
+# "down" (IGNORE wants the dataset rolled back).
+listener.register("rerecord_episode", keyboard_key="down")
+
+# Main-loop tick: _drain_rlt_events(events, rlt_state, infer_thread)
+if events.get("rlt_success"):
+    events["rlt_success"] = False
+    rlt_state["lifecycle"].signal_terminal(TerminalKind.SUCCESS)
+    _play_rlt_tone([(800, 0.3, 1.0), (1200, 0.15, 1.0)])
+    # exit_early was set in the same emit_for_keyboard_key call
+if events.get("rlt_abort"): ...      # symmetric
+if events.get("rlt_ignore"): ...     # also rolls back via rerecord_episode multi-key
+if events.get("rlt_toggle_engage"): ...
+```
+
+Wins from the migration:
+
+- **No pynput-thread side effects.** Audio playback, log lines, and
+  overlay prints all run on the main loop now, sequenced with the
+  loop's own logging instead of racing with it.
+- **Sound playback factored.** Three near-identical 18-line blocks
+  collapse to one `_play_rlt_tone(segments)` helper. Distinct cues
+  (ascending success / descending abort / two-beep ignore) are one-
+  liner segment lists.
+- **No legacy compat shim.** The `on_press` getter/setter that was
+  added to keep this pattern alive is now removed — RLT no longer
+  depends on monkey-patching pynput.
+- **Same operator UX.** The 4 keys (r / left / down / e) trigger the
+  same lifecycle signals + cues as before. The legacy compound
+  ("left = abort, save trajectory" vs "down = ignore, discard
+  trajectory") is preserved via channel rebinding, not via
+  short-circuit returns in a handler.
+
+`test_rlt_actions_register_with_expected_bindings` in
+[`tests/common/test_control_channel.py`](../../../tests/common/test_control_channel.py)
+pins the bindings + the dispatch behaviour for each of the four keys.
+
+### P4 (cont.) — HIL gym migration
+
+`rl/gym_manipulator.py` reads `IS_INTERVENTION` from a teleop's
+`get_teleop_events()`. Same migration shape: register an `intervene`
+action, poll `events["intervene"]`, OR with the legacy call during
+transition. Independent commit.
 
 ### P5 — Delete leader's pynput SPACE listener
 
@@ -234,14 +313,15 @@ producing actions, full stop.
 
 ## Status
 
-| Phase                               | State   | Branch / commit        |
-| ----------------------------------- | ------- | ---------------------- |
-| P0 — Foundation                     | done    | `feat/control-channel` |
-| P1 — Source-owned bindings          | pending | —                      |
-| P2 — User-overridable bindings      | pending | —                      |
-| P3 — Intervention in record loop    | pending | —                      |
-| P4 — Intervention in HVLA + HIL gym | pending | —                      |
-| P5 — Delete leader's listener       | pending | —                      |
-| P6 — QuestControllerSource          | pending | —                      |
-| P7 — GamepadSource                  | pending | —                      |
-| P8 — Delete `get_teleop_events`     | pending | —                      |
+| Phase                            | State   | Branch / commit        |
+| -------------------------------- | ------- | ---------------------- |
+| P0 — Foundation                  | done    | `feat/control-channel` |
+| P1 — Source-owned bindings       | pending | —                      |
+| P2 — User-overridable bindings   | pending | —                      |
+| P3 — Intervention in record loop | pending | —                      |
+| P4 — HVLA RLT migration          | done    | `feat/control-channel` |
+| P4 (cont.) — HIL gym migration   | pending | —                      |
+| P5 — Delete leader's listener    | pending | —                      |
+| P6 — QuestControllerSource       | pending | —                      |
+| P7 — GamepadSource               | pending | —                      |
+| P8 — Delete `get_teleop_events`  | pending | —                      |

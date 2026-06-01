@@ -173,6 +173,140 @@ def _atomic_torch_save(obj, path) -> None:
     os.replace(tmp, target)
 
 
+def _play_rlt_tone(segments: list[tuple[float | None, float, float]]) -> None:
+    """Async audio cue for RLT operator feedback. Best-effort —
+    everything is wrapped in a broad except so a missing ``aplay`` or
+    audio device on a CI box doesn't disrupt the rollout.
+
+    ``segments`` is a list of ``(freq_hz_or_None, duration_s, amp_0_to_1)``
+    — ``None`` freq is a silent gap. Used to compose:
+
+    * success — ascending 800 → 1200 Hz
+    * abort   — descending 600 → 300 Hz
+    * ignore  — neutral 500/500 Hz with a 50 ms gap
+    """
+    try:
+        import subprocess
+
+        import numpy as _np
+
+        sr = 16000
+        chunks: list[_np.ndarray] = []
+        for freq, duration, amp in segments:
+            n = int(sr * duration)
+            if freq is None:
+                chunks.append(_np.zeros(n, dtype=_np.int16))
+            else:
+                t = _np.linspace(0, duration, n, dtype=_np.float32)
+                chunk = (_np.sin(2 * _np.pi * freq * t) * (20000 * amp)).astype(_np.int16)
+                chunks.append(chunk)
+        sound = _np.concatenate(chunks)
+        proc = subprocess.Popen(  # nosec B603,B607 — fixed argv, controlled binary
+            ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
+            stdin=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        proc.stdin.write(sound.tobytes())
+        proc.stdin.close()
+    except Exception:
+        pass
+
+
+def _drain_rlt_events(events: dict, rlt_state: dict, infer_thread) -> None:
+    """Translate channel events into RLT state-machine signals + UX cues.
+
+    Called once per tick from the main recording loop (and the reset
+    loop, since the ``rlt_toggle_engage`` toggle is valid there too).
+    Each event is consumed on first sighting; subsequent polls are
+    no-ops until a source sets the event again.
+
+    This replaces the pre-channel monkey-patched
+    ``listener.on_press = _rlt_on_press`` block: same set of operator
+    intents (success / abort / ignore / toggle engage) but the side
+    effects (lifecycle signal, sound cue, log line, overlay print) now
+    run on the main thread instead of pynput's daemon thread. Cleaner
+    threading discipline and the channel stays semantics-free —
+    *what* "r" means is the consumer's business.
+
+    Sources of the events:
+
+    * Keyboard (default): ``r`` / ``Key.left`` / ``Key.down`` / ``e``
+      via the channel's pynput source. Bindings are set up in
+      ``_register_rlt_actions`` below.
+    * GUI buttons / Quest controllers / future stdin clients: same
+      action names emitted via ``POST /api/run/control`` or
+      ``QuestControllerSource.bind``.
+    """
+    if events.get("rlt_success"):
+        events["rlt_success"] = False
+        rlt_state["lifecycle"].signal_terminal(TerminalKind.SUCCESS)
+        logger.info("RLT: SUCCESS — reward +1, ending episode")
+        _play_rlt_tone([(800, 0.3, 1.0), (1200, 0.15, 1.0)])
+
+    if events.get("rlt_abort"):
+        events["rlt_abort"] = False
+        rlt_state["lifecycle"].signal_terminal(TerminalKind.ABORT)
+        logger.info(
+            "RLT: ABORT — terminal reward %.2f, ending episode",
+            rlt_state["config"].abort_reward,
+        )
+        _play_rlt_tone([(600, 0.3, 1.0), (300, 0.15, 1.0)])
+
+    if events.get("rlt_ignore"):
+        events["rlt_ignore"] = False
+        rlt_state["lifecycle"].signal_ignore()
+        logger.info("RLT: IGNORE — episode ep%d will be discarded", rlt_state["episode"])
+        _play_rlt_tone([(500, 0.15, 0.9), (None, 0.05, 0.0), (500, 0.15, 0.9)])
+
+    if events.get("rlt_toggle_engage"):
+        events["rlt_toggle_engage"] = False
+        from lerobot.utils.utils import log_say
+
+        engaged = not infer_thread._rlt_user_engaged
+        infer_thread._rlt_user_engaged = engaged
+        label = "Policy + RL" if engaged else "Policy"
+        logger.info("RLT: RL actor %s (E key)", "ENGAGED" if engaged else "DISENGAGED")
+        log_say(label)
+        color = "#4fc3f7" if engaged else "#2ecc71"
+        print(f"##OVERLAY:{label}:{color}##", flush=True)
+
+
+def _register_rlt_actions(listener) -> None:
+    """Bind the four RLT operator intents to the control channel.
+
+    The legacy pre-channel code monkey-patched
+    ``listener.on_press`` to grab raw pynput Key objects. The
+    channel-native shape is one ``register()`` call per intent —
+    bindings live on the channel, side effects live in
+    ``_drain_rlt_events``.
+
+    * ``rlt_success``      — ``r`` key. Also fires ``exit_early``
+                              via the rebind below so the loop breaks.
+    * ``rlt_abort``        — ``Key.left``. Also fires ``exit_early``.
+                              Critically, ``rerecord_episode`` is
+                              REBOUND to drop ``left`` — RLT wants the
+                              aborted trajectory STORED as a negative-
+                              reward terminal, not discarded.
+    * ``rlt_ignore``       — ``Key.down``. Fires ``exit_early`` AND
+                              ``rerecord_episode`` (dataset rollback,
+                              since the episode is OOD garbage).
+    * ``rlt_toggle_engage`` — ``e`` key. Does NOT fire ``exit_early``
+                              — toggling the actor mid-episode is fine.
+    """
+    listener.register("rlt_success", keyboard_key="r")
+    listener.register("rlt_abort", keyboard_key="left")
+    listener.register("rlt_ignore", keyboard_key="down")
+    listener.register("rlt_toggle_engage", keyboard_key="e")
+    # Extend ``exit_early`` to include the RLT terminal keys ("r" and
+    # "down"). "left" and "esc" are already there from the legacy
+    # init_keyboard_listener defaults.
+    listener.register("exit_early", keyboard_keys=("right", "left", "esc", "r", "down"))
+    # In RLT mode, "left" means abort (trajectory saved) NOT rerecord
+    # (trajectory discarded). Drop "left" from rerecord_episode and add
+    # "down" — the IGNORE key, which IS supposed to roll back the dataset.
+    listener.register("rerecord_episode", keyboard_key="down")
+
+
 def _rlt_flush_intervention_terminal(rlt_state, rlt_recorder, rlt_replay, infer_thread, obs) -> None:
     """Flush a terminal transition for an intervention-rescued episode.
 
@@ -1225,134 +1359,14 @@ def run_s1(
         events = {"exit_early": False, "stop_recording": False}
         listener = None
 
-    # RLT: hook R key into existing keyboard listener for reward signal
+    # RLT: register operator-intent actions on the channel (was: monkey-
+    # patch listener.on_press to inspect raw pynput keys). Side effects
+    # — lifecycle signals, sound cues, overlay prints — fire from the
+    # main loop via _drain_rlt_events rather than from pynput's daemon
+    # thread. See _register_rlt_actions / _drain_rlt_events for the
+    # full migration shape.
     if rlt_mode and rlt_state is not None and listener is not None:
-        _orig_on_press = listener.on_press
-
-        def _rlt_on_press(key, *args):
-            try:
-                if hasattr(key, "char") and key.char == "r":
-                    rlt_state["lifecycle"].signal_terminal(TerminalKind.SUCCESS)
-                    events["exit_early"] = True
-                    logger.info("RLT: SUCCESS — reward +1, ending episode")
-                    # Play success sound
-                    try:
-                        import subprocess
-
-                        import numpy as _np
-
-                        sr = 16000
-                        t = _np.linspace(0, 0.3, int(sr * 0.3), dtype=_np.float32)
-                        tone = (_np.sin(2 * _np.pi * 800 * t) * 20000).astype(_np.int16)
-                        tone2 = (_np.sin(2 * _np.pi * 1200 * t[: len(t) // 2]) * 20000).astype(_np.int16)
-                        sound = _np.concatenate([tone, tone2])
-                        proc = subprocess.Popen(
-                            ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
-                            stdin=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        proc.stdin.write(sound.tobytes())
-                        proc.stdin.close()
-                    except Exception:
-                        pass
-                    return
-                # LEFT ARROW = abort/disaster in RLT mode. Mirrors LeRobot's
-                # convention (right = next, left = retry/reset) but with
-                # RL-specific semantics: episode ends, terminal reward is
-                # cfg.abort_reward (default -1.0). Intentionally short-
-                # circuits before the original handler so we DON'T also set
-                # rerecord_episode (which would discard the trajectory from
-                # the dataset; we want it stored as a negative-reward
-                # transition, not dropped).
-                from pynput import keyboard as _kb
-
-                if key == _kb.Key.left:
-                    rlt_state["lifecycle"].signal_terminal(TerminalKind.ABORT)
-                    events["exit_early"] = True
-                    logger.info(
-                        "RLT: ABORT — terminal reward %.2f, ending episode",
-                        rlt_state["config"].abort_reward,
-                    )
-                    # Distinct sound: descending tone (failure cue).
-                    try:
-                        import subprocess
-
-                        import numpy as _np
-
-                        sr = 16000
-                        t = _np.linspace(0, 0.3, int(sr * 0.3), dtype=_np.float32)
-                        tone = (_np.sin(2 * _np.pi * 600 * t) * 20000).astype(_np.int16)
-                        tone2 = (_np.sin(2 * _np.pi * 300 * t[: len(t) // 2]) * 20000).astype(_np.int16)
-                        sound = _np.concatenate([tone, tone2])
-                        proc = subprocess.Popen(
-                            ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
-                            stdin=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        proc.stdin.write(sound.tobytes())
-                        proc.stdin.close()
-                    except Exception:
-                        pass
-                    return
-                if hasattr(key, "char") and key.char == "e":
-                    from lerobot.utils.utils import log_say
-
-                    engaged = not infer_thread._rlt_user_engaged
-                    infer_thread._rlt_user_engaged = engaged
-                    label = "Policy + RL" if engaged else "Policy"
-                    logger.info("RLT: RL actor %s (E key)", "ENGAGED" if engaged else "DISENGAGED")
-                    log_say(label)
-                    color = "#4fc3f7" if engaged else "#2ecc71"
-                    print(f"##OVERLAY:{label}:{color}##", flush=True)
-                    return
-                # DOWN ARROW = "ignore current episode". For OOD scenes
-                # (camera glitch, accidental table bump, anything where
-                # neither success nor abort is a valid label) the
-                # operator marks this episode as never-happened. All
-                # transitions added during the episode are truncated
-                # from the replay buffer at episode end; the episode
-                # counter and metrics are not advanced. Has priority
-                # over abort/success — pressing DOWN after R or LEFT
-                # discards their effect too.
-                if key == _kb.Key.down:
-                    rlt_state["lifecycle"].signal_ignore()
-                    events["exit_early"] = True
-                    # Mark the dataset for rerecord so the LeRobot
-                    # framework's existing dataset-rollback path
-                    # discards the recorded frames too.
-                    events["rerecord_episode"] = True
-                    logger.info(
-                        "RLT: IGNORE — episode ep%d will be discarded",
-                        rlt_state["episode"],
-                    )
-                    # Neutral two-beep cue (distinguishable from success
-                    # ascending and abort descending).
-                    try:
-                        import subprocess
-
-                        import numpy as _np
-
-                        sr = 16000
-                        t = _np.linspace(0, 0.15, int(sr * 0.15), dtype=_np.float32)
-                        tone = (_np.sin(2 * _np.pi * 500 * t) * 18000).astype(_np.int16)
-                        gap = _np.zeros(int(sr * 0.05), dtype=_np.int16)
-                        sound = _np.concatenate([tone, gap, tone])
-                        proc = subprocess.Popen(
-                            ["aplay", "-f", "S16_LE", "-r", str(sr), "-c", "1", "-q"],
-                            stdin=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        proc.stdin.write(sound.tobytes())
-                        proc.stdin.close()
-                    except Exception:
-                        pass
-                    return
-            except AttributeError:
-                pass
-            if _orig_on_press is not None:
-                _orig_on_press(key)
-
-        listener.on_press = _rlt_on_press
+        _register_rlt_actions(listener)
         logger.info("RLT: Press 'r' = success (+1 reward, ends episode)")
         logger.info(
             "RLT: Press LEFT ARROW = abort/disaster (%.2f reward, ends episode)",
@@ -1412,6 +1426,17 @@ def run_s1(
                     obs = robot.get_observation()
                     for step in obs_processor_steps:
                         obs = step.observation(obs)
+
+                    # ``rlt_toggle_engage`` (the ``e`` key) is valid during
+                    # reset too — the operator may want to flip RL on/off
+                    # before the next episode starts. Drain here so the
+                    # event doesn't sit unconsumed until recording begins.
+                    # Terminal signals (success/abort/ignore) hitting during
+                    # reset are silently dropped by the lifecycle (no
+                    # active episode); the drain still consumes the event
+                    # so a stale flag can't leak into the next episode.
+                    if rlt_mode and rlt_state is not None:
+                        _drain_rlt_events(events, rlt_state, infer_thread)
 
                     dt = time.perf_counter() - loop_start
                     time.sleep(max(1.0 / fps - dt, 0.0))
@@ -1571,17 +1596,25 @@ def run_s1(
                     logger.info("S1: Episode time limit (%.0fs) reached", episode_time_s)
                     break
 
-                # Check exit_early (right/left arrow or R/X key in RLT mode)
+                # Drain channel events into RLT state-machine signals +
+                # UX cues (sound, log, overlay). Done on the main thread
+                # so all side effects are sequenced with the loop's own
+                # logging instead of racing pynput's daemon thread.
+                if rlt_mode and rlt_state is not None:
+                    _drain_rlt_events(events, rlt_state, infer_thread)
+
+                # Check exit_early (right / left / esc / r / down — see
+                # _register_rlt_actions for the multi-key bindings)
                 if events.get("exit_early"):
                     _peek = rlt_state["lifecycle"].peek_terminal() if (rlt_mode and rlt_state) else None
                     if _peek == TerminalKind.SUCCESS:
                         logger.info("S1: R key — episode SUCCESS, ending early")
                     elif _peek == TerminalKind.ABORT:
-                        logger.info("S1: X key — episode ABORTED, ending early")
+                        logger.info("S1: LEFT ARROW — episode ABORTED, ending early")
                     elif events.get("rerecord_episode"):
-                        logger.info("S1: Left arrow — ending episode (will rerecord)")
+                        logger.info("S1: DOWN ARROW — ending episode (will rerecord)")
                     else:
-                        logger.info("S1: Right arrow — ending episode early")
+                        logger.info("S1: RIGHT ARROW — ending episode early")
                     events["exit_early"] = False
                     break
 
