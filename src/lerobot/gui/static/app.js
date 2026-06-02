@@ -2,6 +2,12 @@
 
 let datasets = {};
 let episodes = {};
+// Bridge highlight state — repo_id → Set<episode_id>. Wired by
+// bridge_consumers.js when the AI calls highlight_in_viewer; renderTree()
+// reads from it so the cyan outline survives re-renders. Tab-scope (lost on
+// reload), intentionally not persisted.
+const bridgeHighlights = new Map();
+window.bridgeHighlights = bridgeHighlights;
 let expandedNodes = new Set();
 let currentDataset = null;
 let currentEpisode = null;
@@ -327,11 +333,13 @@ function renderTree() {
             // "quality-warning" is the unified visual state for any per-episode
             // quality issue. The tooltip distinguishes the cause.
             const hasQualityWarning = hasVideoMismatch || hasZeroActions;
+            const isBridgeHighlight = bridgeHighlights.get(id)?.has(ep.episode_index);
             const classes = ['tree-header'];
             if (isActive) classes.push('active');
             if (isDeleted) classes.push('deleted');
             if (isTrimmed) classes.push('trimmed');
             if (hasQualityWarning) classes.push('quality-warning');
+            if (isBridgeHighlight) classes.push('bridge-highlight');
 
             let icon = '🎬';
             if (isDeleted) icon = '🗑️';
@@ -363,6 +371,9 @@ function renderTree() {
 
             html += `
                 <div class="${classes.join(' ')}"
+                     data-episode-row
+                     data-dataset-id="${id}"
+                     data-episode-id="${ep.episode_index}"
                      onclick="selectEpisode('${id}', ${ep.episode_index}, ${ep.video_length || ep.length})"
                      oncontextmenu="showContextMenu(event, '${id}', ${ep.episode_index})"
                      ${titleAttr}>
