@@ -94,7 +94,14 @@ class _MdnsHandle:
             logger.warning("zeroconf close failed", exc_info=True)
 
 
-def advertise(*, host: str, port: int, base_name: str = "lerobot") -> _MdnsHandle | None:
+def advertise(
+    *,
+    host: str,
+    port: int,
+    base_name: str = "lerobot",
+    service_type: str = "_http._tcp.local.",
+    properties: dict[str, str] | None = None,
+) -> _MdnsHandle | None:
     """Advertise this host as ``<base_name>.local`` over mDNS.
 
     Args:
@@ -104,6 +111,13 @@ def advertise(*, host: str, port: int, base_name: str = "lerobot") -> _MdnsHandl
         port: the TCP port the server is listening on.
         base_name: the desired short hostname. ``zeroconf`` will append
             a counter (``-2``, ``-3``, ...) if the name is already in use.
+        service_type: the mDNS service type to register under. Defaults
+            to ``_http._tcp.local.`` (browsers discover this for hosts
+            advertising a web GUI). Pass ``_lerobot-mcp._tcp.local.`` for
+            the MCP daemon so MCP clients can filter for it cleanly.
+        properties: extra TXT-record key/value pairs to attach to the
+            service registration. Defaults to ``{"path": "/"}`` so a
+            generic mDNS browser can show the GUI root URL.
 
     Returns:
         An ``_MdnsHandle`` (call ``.unregister()`` on shutdown), or
@@ -149,6 +163,8 @@ def advertise(*, host: str, port: int, base_name: str = "lerobot") -> _MdnsHandl
         return None
 
     zc = Zeroconf(ip_version=IPVersion.V4Only)
+    if properties is None:
+        properties = {"path": "/"}
 
     # Pick a unique short hostname. zeroconf will reject collisions; we
     # retry with a counter suffix so two robot hosts on the same LAN can
@@ -159,12 +175,12 @@ def advertise(*, host: str, port: int, base_name: str = "lerobot") -> _MdnsHandl
         candidate = base_name if attempt == 1 else f"{base_name}-{attempt}"
         server_name = f"{candidate}.local."
         info = ServiceInfo(
-            type_="_http._tcp.local.",
-            name=f"{candidate}._http._tcp.local.",
+            type_=service_type,
+            name=f"{candidate}.{service_type}",
             addresses=[socket.inet_aton(lan_ip)],
             port=port,
             server=server_name,
-            properties={"path": "/"},
+            properties=properties,
         )
         try:
             zc.register_service(info, allow_name_change=False)

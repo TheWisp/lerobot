@@ -26,7 +26,17 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from lerobot.gui.api import bug_reports, datasets, edits, models, playback, robot, run
+from lerobot.gui.api import (
+    ai_setup,
+    bridge,
+    bug_reports,
+    datasets,
+    edits,
+    models,
+    playback,
+    robot,
+    run,
+)
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
@@ -83,6 +93,25 @@ async def startup_event():
     n = cleanup_stale_streams()
     if n:
         logger.info("Swept %d stale obs-stream shm segment(s) from a previous run", n)
+
+    # If _mount_mcp() attached an MCP instance, enter its session-manager's
+    # async context here. Starlette doesn't forward lifespan events to apps
+    # mounted via app.mount(), so the streamable-http transport's task group
+    # wouldn't initialize otherwise (and requests would 500 with
+    # "Task group is not initialized"). Wrapped in try/except so a
+    # transient MCP init failure (port conflict, token-store IO error)
+    # doesn't skip the rest of startup — orphan PID sweep below must
+    # still run regardless.
+    mcp_instance = getattr(app.state, "mcp_instance", None)
+    if mcp_instance is not None:
+        try:
+            mcp_ctx = mcp_instance.session_manager.run()
+            await mcp_ctx.__aenter__()
+            app.state.mcp_session_ctx = mcp_ctx
+            logger.info("MCP session manager started")
+        except Exception:  # noqa: BLE001 — broad on purpose; this is best-effort
+            logger.warning("MCP session manager failed to start; /mcp requests will 500", exc_info=True)
+            app.state.mcp_session_ctx = None
 
     # Sweep Hub-transfer PID files left by workers that outlived the prior
     # server process. Marks their HubJobState entries as failed (so the
@@ -187,6 +216,13 @@ async def shutdown_event():
         shutdown_decode_executor()
     except Exception:
         logger.exception("shutdown: shutdown_decode_executor failed")
+    # Exit the MCP session-manager context entered in startup_event.
+    mcp_ctx = getattr(app.state, "mcp_session_ctx", None)
+    if mcp_ctx is not None:
+        try:
+            await mcp_ctx.__aexit__(None, None, None)
+        except Exception:
+            logger.exception("shutdown: MCP session manager exit failed")
     # Send mDNS goodbye packet so clients don't keep a stale
     # lerobot.local entry cached after we stop.
     mdns_handle = getattr(app.state, "mdns_handle", None)
@@ -203,6 +239,8 @@ app.include_router(robot.router)
 app.include_router(run.router)
 app.include_router(models.router)
 app.include_router(bug_reports.router)
+app.include_router(ai_setup.router)
+app.include_router(bridge.router)
 
 # Serve static files (CSS, JS)
 _static_dir = Path(__file__).parent / "static"
@@ -227,6 +265,42 @@ async def root():
     return FileResponse(_static_dir / "index.html", media_type="text/html")
 
 
+def _mount_mcp(host: str, port: int) -> None:
+    """Mount the LeRobot MCP HTTP transport under ``/mcp`` in this process.
+
+    Single-process deployment: the GUI and the MCP server share an ASGI
+    app, one port (the GUI's), one log, one lifecycle. Bearer-token auth
+    is enforced inside the mounted MCP app (FastMCP's ``AuthSettings``);
+    other GUI paths remain LAN-trust as before.
+
+    Stdio mode and standalone HTTP (`lerobot-mcp serve --transport http`)
+    are unchanged for clients that need them.
+    """
+    from lerobot.mcp.auth import TokenStore, default_token_store_path
+    from lerobot.mcp.bridge_tools import configure_bridge
+    from lerobot.mcp.server import build_server
+
+    token_store_path = default_token_store_path()
+    token_store = TokenStore(token_store_path)
+    # streamable_http_path="/" so when this app is mounted under "/mcp",
+    # the public URL is just <host>:<port>/mcp — not /mcp/mcp.
+    mcp = build_server(
+        token_store=token_store,
+        host=host,
+        port=port,
+        streamable_http_path="/",
+    )
+    # Bridge tools (navigate_to / notify_user / ...) dispatch over HTTP to
+    # /api/bridge/_dispatch on the SAME process. Loopback-gated, so safe.
+    configure_bridge(f"http://127.0.0.1:{port}")
+    app.mount("/mcp", mcp.streamable_http_app())
+    # Stash so startup_event / shutdown_event can run the MCP session
+    # manager's task group — Starlette does NOT forward lifespan events to
+    # mounted sub-apps, so we have to enter/exit its context ourselves.
+    app.state.mcp_instance = mcp
+    logger.info("MCP HTTP transport mounted at /mcp (token store: %s)", token_store_path)
+
+
 def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_000_000_000):
     """Run the GUI server."""
     import uvicorn
@@ -234,6 +308,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_00
     from lerobot.gui.mdns import advertise, detect_lan_ip
 
     app.state.cache_size = cache_size
+    _mount_mcp(host=host, port=port)
 
     # Advertise on mDNS so phones / laptops on the same LAN can hit us
     # at http://lerobot.local:<port>/ without knowing the IP. The
@@ -247,7 +322,10 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_00
     # the uvicorn boot logs.
     lines = ["LeRobot host service ready:"]
     if app.state.mdns_handle is not None:
-        lines.append(f"  mDNS (no IP needed): http://{app.state.mdns_handle.hostname}:{port}/")
+        host_display = app.state.mdns_handle.hostname
+        lines.append(f"  mDNS (no IP needed): http://{host_display}:{port}/")
+        lines.append(f"  AI setup page:       http://{host_display}:{port}/ai_setup")
+        lines.append(f"  MCP endpoint:        http://{host_display}:{port}/mcp")
     lan_ip = detect_lan_ip()
     if lan_ip is not None and host not in ("127.0.0.1", "::1", "localhost"):
         lines.append(f"  LAN:                 http://{lan_ip}:{port}/")
