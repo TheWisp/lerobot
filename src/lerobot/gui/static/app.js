@@ -481,6 +481,30 @@ function renderCameraGrid() {
 
 let _urdfVizAvailability = {};  // dataset_id -> bool (cached after first probe)
 
+// Per-tab persisted preference for the data-tab URDF ghost / trajectory
+// toggle. Backed by sessionStorage so it survives episode changes (each
+// selectEpisode rebuilds the camera grid via ``grid.innerHTML``, which
+// destroys + recreates the iframe and loses its module-level ``_ghostOn``).
+// Falls back to the parent's ``?urdfGhost=on`` URL param (the bookmarkable
+// initial state, also what the screenshot script keys off).
+function _urdfGhostPref() {
+    const stored = sessionStorage.getItem('urdfGhost');
+    if (stored !== null) return stored === 'on';
+    return new URLSearchParams(location.search).get('urdfGhost') === 'on';
+}
+
+// One-time install: iframe postMessages ``urdfGhostChanged`` when the
+// user clicks the toggle inside it. We update sessionStorage so the
+// next iframe (built by the next selectEpisode) initializes with the
+// remembered value via _urdfGhostPref above.
+(function _wireUrdfGhostPersistence() {
+    window.addEventListener('message', (ev) => {
+        if (ev.data && ev.data.type === 'urdfGhostChanged') {
+            sessionStorage.setItem('urdfGhost', ev.data.on ? 'on' : 'off');
+        }
+    });
+})();
+
 async function _probeAndAttachUrdfViz(datasetId, episodeIdx) {
     const panel = document.getElementById('urdf-viz-panel');
     const iframe = document.getElementById('urdf-viz-iframe');
@@ -517,9 +541,12 @@ async function _probeAndAttachUrdfViz(datasetId, episodeIdx) {
     panel.style.display = '';
     // mode=dataset means the iframe waits for postMessage frame updates from
     // the parent (this page), driven by the scrubber via _postFrameToUrdfViz.
-    // `?urdfGhost=on` on the parent URL propagates as the iframe's initial
-    // ghost state — bookmarkable, and what the screenshot script keys off.
-    const ghostInit = new URLSearchParams(location.search).get('urdfGhost') === 'on' ? '&ghost=on' : '';
+    // ``_urdfGhostPref()`` reads sessionStorage first (sticky across episode
+    // changes within a tab) then falls back to the parent URL's
+    // ``?urdfGhost=on`` (bookmarkable initial state, used by the screenshot
+    // script). Bump the version any time this seams (URL param contract or
+    // postMessage protocol) changes so an old cached iframe doesn't stick.
+    const ghostInit = _urdfGhostPref() ? '&ghost=on' : '';
     iframe.src = `/static/urdf_viz.html?mode=dataset&v=2${ghostInit}`;
     iframe.addEventListener('load', () => _postFrameToUrdfViz(currentFrame), { once: true });
 }

@@ -219,6 +219,9 @@ class TestUrdfVizMeta:
         assert result["bimanual"] is False
         # Only state is advertised — frontend will hide the overlay toggle.
         assert result["sources"] == ["state"]
+        # ee_link is surfaced so the frontend can FK overlay frames into
+        # a polyline (the L6 anchor for SO-107 — gripper-independent).
+        assert result["ee_link"] == "L7_1"
 
     def test_advertises_action_when_reader_supplies_it(self):
         reader = MagicMock()
@@ -319,10 +322,12 @@ def _call_dataset_meta(dataset_id: str, episode_idx: int):
     return asyncio.run(get_urdf_viz_dataset_meta(dataset_id, episode_idx))
 
 
-def _call_dataset_source(dataset_id: str, episode_idx: int, frame: int, source: str = "state"):
+def _call_dataset_source(
+    dataset_id: str, episode_idx: int, frame: int, source: str = "state", horizon: int = 1
+):
     from lerobot.gui.api.datasets import get_urdf_viz_dataset_source
 
-    return asyncio.run(get_urdf_viz_dataset_source(dataset_id, episode_idx, frame, source))
+    return asyncio.run(get_urdf_viz_dataset_source(dataset_id, episode_idx, frame, source, horizon))
 
 
 class TestUrdfVizDatasetEndpoints:
@@ -370,6 +375,9 @@ class TestUrdfVizDatasetEndpoints:
         assert result["name"] == "SO-107"
         assert result["bimanual"] is True
         assert result["sources"] == ["state", "action"]
+        # Same ee_link as the live endpoint: frontend uses it for FK in
+        # the trajectory polyline.
+        assert result["ee_link"] == "L7_1"
 
     def test_meta_advertises_state_only_when_action_feature_absent(self, app_with_so107):
         app_with_so107.meta.features.pop("action")
@@ -408,6 +416,30 @@ class TestUrdfVizDatasetEndpoints:
 
         with pytest.raises(HTTPException) as exc:
             _call_dataset_source("test/so107", 0, 0, "policy_chunk")
+        assert exc.value.status_code == 400
+
+    def test_source_horizon_returns_n_consecutive_frames(self, app_with_so107):
+        # horizon=10 from frame 0 of a 50-frame episode -> exactly 10 frames.
+        result = _call_dataset_source("test/so107", 0, 0, "action", horizon=10)
+        assert result["available"] is True
+        for arm in result["arms"]:
+            assert len(arm["frames"]) == 10
+            for f in arm["frames"]:
+                assert "joints" in f
+
+    def test_source_horizon_clips_at_episode_end(self, app_with_so107):
+        # horizon=20 starting at frame 45 of a 50-frame episode -> clip to 5.
+        # Frontend has to be OK with shorter-than-requested trajectories.
+        result = _call_dataset_source("test/so107", 0, 45, "action", horizon=20)
+        assert result["available"] is True
+        for arm in result["arms"]:
+            assert len(arm["frames"]) == 5
+
+    def test_source_horizon_below_one_raises_400(self, app_with_so107):
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            _call_dataset_source("test/so107", 0, 0, "action", horizon=0)
         assert exc.value.status_code == 400
 
 

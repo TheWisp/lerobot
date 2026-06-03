@@ -2347,22 +2347,34 @@ async def get_urdf_viz_dataset_meta(dataset_id: str, episode_idx: int) -> dict:
         "urdf": f"/urdf-assets/{spec.urdf_url_path}",
         "bimanual": len(spec.arms) == 2,
         "sources": sources,
+        # ee_link is None for descriptions that didn't declare one; the
+        # frontend skips polyline rendering in that case.
+        "ee_link": spec.ee_link,
     }
 
 
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/urdf-viz")
 async def get_urdf_viz_dataset_source(
-    dataset_id: str, episode_idx: int, frame: int = 0, source: str = "state"
+    dataset_id: str,
+    episode_idx: int,
+    frame: int = 0,
+    source: str = "state",
+    horizon: int = 1,
 ) -> dict:
     """Per-arm URDF joint angles for one named source at one frame.
 
-    Mirrors the live endpoint's shape (``arms[*].frames[]``). Today every
-    frame is a single recorded pose, so ``frames`` always has length 1; the
-    schema is uniform with the live endpoint so a future chunk-output source
-    would slot in without UI change. ``source`` is one of the names from
+    Mirrors the live endpoint's shape (``arms[*].frames[]``). When
+    ``horizon`` is 1 (the default) ``frames`` has length 1 — the single
+    recorded pose at ``frame``. With ``horizon`` > 1 the endpoint returns
+    up to ``horizon`` consecutive frames starting at ``frame`` (clipped at
+    the end of the episode), enabling the frontend to draw an EE-trajectory
+    polyline through the future poses. ``source`` is one of the names from
     ``/urdf-viz/meta``.
     """
     from lerobot.gui.urdf_viz import compute_joint_angles
+
+    if horizon < 1:
+        raise HTTPException(status_code=400, detail=f"horizon must be >= 1 (got {horizon})")
 
     resolved = _resolve_dataset_urdf_spec(dataset_id, episode_idx)
     if resolved is None:
@@ -2401,12 +2413,16 @@ async def get_urdf_viz_dataset_source(
             detail=f"Frame {frame} not present in parquet (have {len(df)} rows)",
         )
 
-    vec = df[col].iloc[frame]
-    sample = {n: float(vec[i]) for i, n in enumerate(names) if i < len(vec)}
-    angles = compute_joint_angles(spec, sample)
-    arms_payload = [
-        {"prefix": a.obs_prefix, "frames": [{"joints": angles.get(a.obs_prefix, {})}]} for a in spec.arms
-    ]
+    # Clip the horizon at the end of the available rows. The renderer is
+    # fine with shorter-than-requested trajectories (just a shorter line).
+    end = min(frame + horizon, len(df))
+    arms_payload: list[dict] = [{"prefix": a.obs_prefix, "frames": []} for a in spec.arms]
+    for i in range(frame, end):
+        vec = df[col].iloc[i]
+        sample = {n: float(vec[j]) for j, n in enumerate(names) if j < len(vec)}
+        angles = compute_joint_angles(spec, sample)
+        for k, a in enumerate(spec.arms):
+            arms_payload[k]["frames"].append({"joints": angles.get(a.obs_prefix, {})})
     return {"available": True, "arms": arms_payload}
 
 
