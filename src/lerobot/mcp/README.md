@@ -251,12 +251,13 @@ stores it as `comment`. The migration is invisible to callers.
 
 ### Shipped today
 
-| Domain      | Tool                                                                                                         | Scope     |
-| ----------- | ------------------------------------------------------------------------------------------------------------ | --------- |
-| Bridge / UI | `navigate_to`, `notify_user`, `highlight_in_viewer`                                                          | `read`    |
-| Dataset     | `list_datasets`, `get_dataset_info`, `list_episodes`, `get_episode_summary`, `get_frame`, `get_episode_tags` | `read`    |
-| Dataset     | `tag_episode`, `delete_episode_tag`                                                                          | `comment` |
-| Introspect  | `list_my_scopes`                                                                                             | `read`    |
+| Domain      | Tool                                                                                                                               | Scope     |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Bridge / UI | `navigate_to`, `notify_user`, `highlight_in_viewer`                                                                                | `read`    |
+| Dataset     | `list_datasets`, `get_dataset_info`, `list_episodes`, `get_episode_summary`, `get_frame`, `get_episode_tags`, `list_pending_edits` | `read`    |
+| Dataset     | `tag_episode`, `delete_episode_tag`                                                                                                | `comment` |
+| Dataset     | `propose_set_feature`, `propose_delete_episode`, `propose_trim_episode`, `discard_pending_edits`, `apply_pending_edits`            | `edit`    |
+| Introspect  | `list_my_scopes`                                                                                                                   | `read`    |
 
 ### Designed but not yet shipped
 
@@ -264,24 +265,23 @@ The MCP surface the design calls for, grouped by domain and scope.
 Reviewers cross-check against the implementation when extending. Names
 may shift slightly on landing.
 
-| Domain      | Tool                                                                                                                                          | Scope     |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| Bridge / UI | `set_filter` (waits for a filter UI to land — see `gui/TODO.md`)                                                                              | `read`    |
-| Dataset     | `get_feature_series`, `list_tagged_episodes`                                                                                                  | `read`    |
-| Dataset     | `propose_set_feature`, `propose_delete_episode`, `propose_trim_episode`, `list_pending_edits`, `discard_pending_edits`, `apply_pending_edits` | `edit`    |
-| Dataset     | `delete_dataset`, `merge_into_dataset`, `vacuum_sidecar`, `drop_sidecar_database`                                                             | `edit`    |
-| Hub         | `hub_auth_status`, `hub_repo_info`, `hub_diff_local_vs_remote`, `hub_list_jobs`, `hub_job_progress`                                           | `read`    |
-| Hub         | `hub_start_upload`, `hub_start_download`, `hub_cancel_job`                                                                                    | `edit`    |
-| Models      | `list_model_sources`, `list_models_in_source`, `list_run_checkpoints`, `get_run_config`                                                       | `read`    |
-| Models      | `add_model_source`, `remove_model_source`                                                                                                     | `edit`    |
-| Models      | `load_debug_model`, `unload_debug_model`, `get_debug_status`                                                                                  | `operate` |
-| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `list_ports`, `get_all_port_assignments`                                  | `read`    |
-| Robots      | `create/update/rename/delete_robot_profile` (+ teleop equivalents), `detect_cameras_into_profile`, `assign_port_to_arm`, `identify_arm`       | `edit`    |
-| Robots      | `start/finish/cancel_rest_recording`, `move_to_rest_position`, `record/replay/delete_trajectory`, `recover_robot`                             | `operate` |
-| Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                                  | `read`    |
-| Run         | `update_rlt_config`                                                                                                                           | `edit`    |
-| Run         | `start_teleoperate`, `start_record`, `start_replay`, `start_hvla`, `stop_current_run`                                                         | `operate` |
-| Introspect  | `list_supported_tools`                                                                                                                        | `read`    |
+| Domain      | Tool                                                                                                                                    | Scope     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Bridge / UI | `set_filter` (waits for a filter UI to land — see `gui/TODO.md`)                                                                        | `read`    |
+| Dataset     | `get_feature_series`, `list_tagged_episodes`                                                                                            | `read`    |
+| Dataset     | `delete_dataset`, `merge_into_dataset`, `vacuum_sidecar`, `drop_sidecar_database`                                                       | `edit`    |
+| Hub         | `hub_auth_status`, `hub_repo_info`, `hub_diff_local_vs_remote`, `hub_list_jobs`, `hub_job_progress`                                     | `read`    |
+| Hub         | `hub_start_upload`, `hub_start_download`, `hub_cancel_job`                                                                              | `edit`    |
+| Models      | `list_model_sources`, `list_models_in_source`, `list_run_checkpoints`, `get_run_config`                                                 | `read`    |
+| Models      | `add_model_source`, `remove_model_source`                                                                                               | `edit`    |
+| Models      | `load_debug_model`, `unload_debug_model`, `get_debug_status`                                                                            | `operate` |
+| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `list_ports`, `get_all_port_assignments`                            | `read`    |
+| Robots      | `create/update/rename/delete_robot_profile` (+ teleop equivalents), `detect_cameras_into_profile`, `assign_port_to_arm`, `identify_arm` | `edit`    |
+| Robots      | `start/finish/cancel_rest_recording`, `move_to_rest_position`, `record/replay/delete_trajectory`, `recover_robot`                       | `operate` |
+| Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                            | `read`    |
+| Run         | `update_rlt_config`                                                                                                                     | `edit`    |
+| Run         | `start_teleoperate`, `start_record`, `start_replay`, `start_hvla`, `stop_current_run`                                                   | `operate` |
+| Introspect  | `list_supported_tools`                                                                                                                  | `read`    |
 
 Design conventions worth flagging:
 
@@ -368,17 +368,49 @@ Conventions worth keeping:
   server resolves IDs internally.
 - **Validate at the boundary.** `meta = s.get_meta(repo_id)` raises
   if the dataset doesn't exist. Episode-index bounds get checked
-  explicitly. Don't trust caller input.
+  explicitly. Don't trust caller input. **Use `raise ValueError(...)`,
+  never `assert`** — assertions disappear under `python -O` and
+  produce ugly tracebacks the AI can't parse.
 - **Docstrings ARE the prompt.** The AI sees the docstring when it
   picks which tool to call. Lead with what the tool does, then how.
+- **Param names anchor the semantics.** This matters because the AI
+  reads the schema, not just the docstring. Prefer names that close
+  off ambiguous readings — `keep_from` / `keep_to` over
+  `start_frame` / `end_frame` (which could be misread as "the range
+  to remove"). When the FastAPI surface uses different names for
+  backwards compat, translate at the MCP wrapper, don't propagate
+  the ambiguity.
+- **Make the response outcome-transparent.** The AI sees the
+  response and uses it to decide what to do next. The response
+  message should describe what actually happened in terms the agent
+  can self-correct from. Echo back the numbers that matter:
+  `"keep 6 of 770 frames; dropping 764"` is far more useful than
+  `"trim staged"`. For overwrites, include `previous_value` /
+  `overwrote: true`. For batch ops, include counts.
+- **Conflict-vs-validation split.** Hard failures (out of bounds,
+  unknown id, schema violation) raise `ValueError` → the AI sees
+  `isError=True` and the message. Recoverable conflicts (overlap
+  with prior state, large-batch threshold) return a structured
+  `{"status": "conflict", "detail": {"code": "...", ...}}` dict so
+  the AI can read `detail.code` and retry with the right confirm
+  flag rather than parsing error strings.
 - **Return shape is part of the contract.** Always a dict (or an MCP
-  `Image` for binary content). Keep keys stable across versions.
+  `Image` for binary content). Keep keys stable across versions;
+  additive changes (new fields) are safe, key removals/renames are
+  breaking.
+- **Thin wrapper around a unit-tested core.** When the same logic
+  also serves a FastAPI route (or any other surface), extract a
+  pure-Python helper that takes `AppState` + validated params and
+  raises typed exceptions; both surfaces wrap it. The MCP tool body
+  should be ~5-10 lines: validate scope, resolve state, call helper,
+  translate exceptions. **Do not auto-bind FastAPI routes to MCP
+  tools.** See the anti-patterns section.
 
-**3. Test it.** Add a unit test in `tests/mcp/test_server.py` (or
-`test_store.py` for storage-layer changes). Use the existing fixtures
-in `tests/mcp/`: they synthesize a minimal in-memory dataset, no
-network. The MCP test pattern (see `tests/mcp/test_bridge.py` for
-examples):
+**3. Test it.** Add a unit test in `tests/mcp/test_<domain>.py`. Use
+the existing fixtures in `tests/mcp/` — they synthesize a minimal
+in-memory dataset on `tmp_path`, no network, no real datasets. The
+MCP test pattern (see `tests/mcp/test_bridge.py` /
+`test_dataset_edit.py` for examples):
 
 ```python
 def test_my_new_tool() -> None:
@@ -389,7 +421,42 @@ def test_my_new_tool() -> None:
     assert structured["..."] == ...
 ```
 
-**4. Update the tool surface table.** Add the tool to the [Shipped
+Coverage bar — for every tool, the test file should include:
+
+- **Happy path** — verifies the response shape and state side-effect.
+- **One test per error case** the docstring promises (out-of-range,
+  unknown id, duplicate, schema violation, ...). Use
+  `pytest.raises(Exception, match="<message fragment>")` for hard
+  failures, or assert `result["status"] == "conflict"` for
+  recoverable ones.
+- **End-to-end test for destructive tools** — for `edit` / `operate`
+  tools that mutate disk or hardware, drive the full propose →
+  apply → verify-on-disk pipeline against a synthetic dataset in
+  `tmp_path`. See `TestApply::test_propose_then_apply_deletes_episode_from_disk`
+  for the pattern.
+- **NEVER point a test or proof at the user's real datasets.**
+  Always use the synthetic factory or a clearly-marked throwaway
+  (e.g. `thewisp/test_*_do_not_use`).
+
+**4. Add visible proof.** Two complementary artifacts for any tool
+with a user-observable effect:
+
+- **Screenshot proof** — Playwright drives the running GUI, fires
+  one MCP call, probes the DOM, captures before/after PNGs with a
+  verdict. See `mcp/docs/proofs_dataset_edit.py` /
+  `mcp/docs/proofs_e2e.py`.
+- **Transcript log** — generate a markdown of the call shape +
+  response shape, including happy paths AND error cases AND any
+  "confused agent" scenario where input semantics could be
+  misread. The same proof script can emit both — see
+  `mcp/docs/proofs/dataset_edit_transcript.md` for the format.
+
+Wire-level error response shape (`isError=True, content=[message]`)
+should also be probed at least once during development against the
+unified GUI's `/mcp/` endpoint. It doesn't need a formal test, but
+the PR body should cite the actual response strings the AI sees.
+
+**5. Update the tool surface table.** Add the tool to the [Shipped
 today](#shipped-today) table above (and remove from the [Designed but
 not yet shipped](#designed-but-not-yet-shipped) table if it was listed
 there). This is the human-readable index of what's available + at
