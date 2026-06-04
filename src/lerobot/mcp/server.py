@@ -761,6 +761,98 @@ def build_server(
 
         return list_hub_jobs(_require_app_state())
 
+    # ── Read-tier: Run observation ─────────────────────────────────────────
+    # Read-only view of the currently-active subprocess the GUI manages
+    # (teleop / record / replay / training). Lets the AI babysit a long
+    # job — poll status, tail output, watch latency/training metrics —
+    # without being able to start or stop one. The mutating tools
+    # (start_*, stop_current_run) ship as operate-tier in a follow-up
+    # after explicit operator sign-off.
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def get_run_status() -> dict[str, Any]:
+        """Current state of the GUI-managed subprocess.
+
+        Three-way response — the AI branches on ``running``:
+
+        - ``{"running": False, "command": None}`` — no subprocess at all.
+        - ``{"running": False, "command": "<kind>", "returncode": int}``
+          — a subprocess existed but has since exited.
+        - ``{"running": True, "command": "<kind>", "pid": int}`` —
+          subprocess is currently active.
+
+        ``command`` is one of ``'teleoperate'``, ``'record'``,
+        ``'replay'``, ``'hvla'`` — the same value the GUI's Run tab shows.
+        """
+        from lerobot.gui.api._run_core import get_run_status as _impl
+
+        return _impl()
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def get_run_output(last_n: int = 200) -> dict[str, Any]:
+        """Tail of the active subprocess's captured stdout/stderr.
+
+        Snapshot — not streaming. For live tailing the GUI's
+        ``/api/run/output`` SSE channel is the right surface; this MCP
+        tool is for "poll, look at the last 200 lines, decide what to
+        do."
+
+        Args:
+            last_n: Max lines to return (0..2000; buffer cap on the GUI
+                side is 2000, so larger values silently cap there).
+
+        Returns ``{"lines": [...], "total_buffered": N, "truncated": bool}``.
+        ``truncated=true`` when the buffer held more lines than were
+        returned.
+        """
+        from lerobot.gui.api._run_core import get_run_output_tail
+
+        return get_run_output_tail(last_n=last_n)
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def get_latency_metrics(source: str = "teleop") -> dict[str, Any]:
+        """Latest latency snapshot for the requested loop source.
+
+        Each subprocess (teleop / record / HVLA inference) atomically
+        replaces its ``latency_snapshot.json`` once per second; this
+        tool reads the matching file. Returns the empty-snapshot stub
+        when no snapshot exists yet (fresh session, source not running,
+        or unknown source) so the AI can branch on ``n_records`` instead
+        of error handling.
+
+        Args:
+            source: One of ``'teleop'``, ``'record'``, ``'hvla'``.
+                Unknown sources return the empty stub.
+
+        Returns ``{"n_records", "dropped_records", "overrun_ratio",
+        "stages", "series"}``. ``stages`` carries per-stage timing stats
+        (mean/p95/max); ``series`` is the windowed time-series the
+        dashboard plots.
+        """
+        from lerobot.gui.api._run_core import get_latency_metrics as _impl
+
+        return _impl(source)
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def get_rlt_metrics() -> dict[str, Any]:
+        """RLT training metrics for the currently-active RLT run.
+
+        Reads the ``metrics.json`` for the active RLT session. Returns
+        the empty-metrics stub when no RLT run is active, so the agent
+        branches on ``mode == "IDLE"`` instead of error-handling.
+
+        Returns ``{"episode", "step_count", "buffer_size", "total_updates",
+        "mode", "success_rate", "total_successes", "total_episodes",
+        "series"}`` — ``mode == "IDLE"`` means no live RLT session.
+        """
+        from lerobot.gui.api._run_core import get_rlt_metrics as _impl
+
+        return _impl()
+
     @mcp.tool()
     @requires_scope(SCOPE_READ)
     def hub_job_progress(job_id: str) -> dict[str, Any]:
