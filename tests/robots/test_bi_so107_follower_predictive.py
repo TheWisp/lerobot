@@ -237,6 +237,105 @@ def test_attach_teleop_skips_non_bimanual_teleop(bi_follower):
     assert robot.right_arm._controller._teleop is None
 
 
+def test_attach_teleop_wires_cartesian_adapter(bi_follower):
+    """A bimanual Cartesian VR teleop (Quest-like — has ``left_target_x`` in
+    ``action_features.names``) must trigger the Cartesian IK adapter path:
+    the adapter is built and started, its per-arm sub-teleops are routed
+    to each predictive arm's controller, and an ``action_transform`` is
+    installed on the teleop so script-side reads return joint dicts.
+    Detaching stops the adapter and clears the routing.
+    """
+    robot, _l, _r = bi_follower
+
+    # Build a fake Cartesian teleop with the Quest-shaped action_features
+    # and a settable action_transform. The adapter only reads
+    # ``get_action()`` and ``set_action_transform()`` — that's enough.
+    installed_transform: list = []  # captures whatever the follower installs
+
+    cart_teleop = MagicMock()
+    cart_teleop.action_features = {
+        "names": {
+            "left_enabled": 0,
+            "left_target_x": 1,
+            "right_enabled": 8,
+            "right_target_x": 9,
+        }
+    }
+    cart_teleop.get_action.return_value = {
+        "left_enabled": 0.0,
+        "left_target_x": 0.0,
+        "left_target_y": 0.0,
+        "left_target_z": 0.0,
+        "left_target_wx": 0.0,
+        "left_target_wy": 0.0,
+        "left_target_wz": 0.0,
+        "left_gripper_pos": 0.0,
+        "right_enabled": 0.0,
+        "right_target_x": 0.0,
+        "right_target_y": 0.0,
+        "right_target_z": 0.0,
+        "right_target_wx": 0.0,
+        "right_target_wy": 0.0,
+        "right_target_wz": 0.0,
+        "right_gripper_pos": 0.0,
+    }
+    cart_teleop.set_action_transform = lambda fn: installed_transform.append(fn)
+    # The "left_arm"/"right_arm" attribute MUST NOT be there — otherwise the
+    # leader-path branch fires first. MagicMock auto-creates attrs on access,
+    # so explicitly hasattr-block.
+    del cart_teleop.left_arm
+    del cart_teleop.right_arm
+
+    # Pretend IK kinematics are available even if pin-pink isn't installed
+    # in the test env — we don't need real IK to test the wiring.
+    fake_kin = MagicMock()
+    fake_kin.forward_kinematics.return_value = MagicMock()
+    robot._ik_kinematics = {"left": fake_kin, "right": fake_kin}
+
+    # Patch the IK-controller and bimanual-transform factories so the
+    # adapter gets a deterministic transform that doesn't need the real IK.
+    with (
+        patch(
+            "lerobot.robots.so107_description.cartesian_ik.make_so107_arm_ik_controller",
+            side_effect=lambda kin, q_init, *_args, **_kw: MagicMock(),
+        ),
+        patch(
+            "lerobot.robots.so107_description.cartesian_ik.make_bimanual_ik_transform",
+            return_value=lambda _action: {
+                **{f"left_{m}.pos": 0.0 for m in _MOTOR_NAMES},
+                **{f"right_{m}.pos": 0.0 for m in _MOTOR_NAMES},
+            },
+        ),
+    ):
+        robot.attach_teleop(cart_teleop)
+
+    # Adapter installed and running, transform installed on teleop.
+    assert robot._cartesian_adapter is not None
+    assert robot._cartesian_adapter.is_running
+    assert len(installed_transform) == 1, "an action_transform must be installed on the Cartesian teleop"
+
+    # Per-arm controllers see the adapter's sub-teleops (not the bimanual
+    # wrapper) — same contract as the leader path.
+    assert robot.left_arm._controller._teleop is robot._cartesian_adapter.left_arm
+    assert robot.right_arm._controller._teleop is robot._cartesian_adapter.right_arm
+
+    # Let the adapter's background loop run at least once so the cache
+    # has a sample, then verify the per-arm sub-teleops return one
+    # arm's unprefixed motor keys.
+    time.sleep(0.05)
+    left_dict = robot._cartesian_adapter.left_arm.get_action()
+    assert left_dict, "adapter's left sub-teleop must produce a non-empty dict after one tick"
+    assert all(k.endswith(".pos") and "left_" not in k for k in left_dict), (
+        f"unexpected keys in left arm dict: {list(left_dict)}"
+    )
+
+    # Detach: adapter stops, controllers' teleop refs cleared.
+    robot.attach_teleop(None)
+    assert robot._cartesian_adapter is None
+    assert robot.left_arm._controller._teleop is None
+    assert robot.right_arm._controller._teleop is None
+
+
 def test_send_action_rejects_chunk_missing_one_arms_keys(bi_follower):
     """A frame missing all left_* keys (or right_*) would have produced an
     empty per-arm sub-chunk, which then races: left_arm.send_action

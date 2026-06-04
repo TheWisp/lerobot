@@ -138,6 +138,7 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     so_follower_predictive,
     unitree_g1 as unitree_g1_robot,
+    virtual_bi_so107,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -153,7 +154,9 @@ from lerobot.teleoperators import (  # noqa: F401
     omx_leader,
     openarm_leader,
     openarm_mini,
+    quest_vr,
     reachy2_teleoperator,
+    scripted_ee,
     so107_leader_highrate,
     so_leader,
     so_leader_highrate,
