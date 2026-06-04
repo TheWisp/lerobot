@@ -373,11 +373,90 @@ class TestCrossSurfaceSharedState:
         assert result["edits"][0]["edit_type"] == "delete"
 
 
-# Smoke test that the apply tool surface exists; full apply-to-disk integration
-# is exercised by tests/gui/test_feature_edits.py's TestApplyEdits, which uses
-# the same _apply_edits_locked function the MCP tool delegates to.
-class TestApplyToolSmoke:
+class TestApplyEndToEnd:
+    """Propose → apply → verify the dataset on disk actually changed.
+
+    The synthetic dataset_factory builds a real on-disk dataset under
+    tmp_path; apply_pending_edits writes through to its parquet files.
+    Cross-checks both the in-memory ``meta.total_episodes`` and the
+    on-disk total_frames via meta reload.
+    """
+
     def test_apply_on_empty_queue_returns_zero(self, state_and_dataset):
         mcp, _, ds = state_and_dataset
         result = _call(mcp, "apply_pending_edits", {"repo_id": ds.repo_id})
         assert result["applied"] == 0
+
+    def test_propose_then_apply_deletes_episode_from_disk(self, state_and_dataset):
+        """The destructive end-to-end. AI proposes delete; AI applies;
+        the dataset's on-disk metadata reflects the deletion.
+        """
+        mcp, state, ds = state_and_dataset
+        episodes_before = ds.meta.total_episodes
+        frames_before = ds.meta.total_frames
+        ep_to_delete_length = int(ds.meta.episodes[1]["length"])
+
+        # 1) AI stages a delete via MCP.
+        _call(mcp, "propose_delete_episode", {"repo_id": ds.repo_id, "episode_id": 1})
+        assert state.is_episode_deleted(ds.repo_id, 1)
+        assert _call(mcp, "list_pending_edits", {})["total"] == 1
+
+        # 2) AI applies via MCP. This writes through to parquet on disk.
+        result = _call(mcp, "apply_pending_edits", {"repo_id": ds.repo_id})
+        assert result["status"] == "ok", result
+        assert result["applied"] == 1
+
+        # 3) State is cleared (in-memory queue + on-disk edit-state file).
+        assert state.pending_edits == []
+        edits_file = ds.root / ".lerobot_gui_edits.json"
+        assert not edits_file.exists() or edits_file.read_text().strip() in ("", "[]", "{}")
+
+        # 4) The dataset's metadata reflects the deletion. Reload from disk
+        # to bypass any in-memory caching — same path the GUI takes after
+        # apply, ensuring future opens see the same state.
+        from lerobot.gui.dataset_reload import reload_dataset_from_disk
+
+        reload_dataset_from_disk(ds)
+        assert ds.meta.total_episodes == episodes_before - 1
+        # Total frames dropped by exactly the deleted episode's length.
+        assert ds.meta.total_frames == frames_before - ep_to_delete_length
+
+    def test_apply_with_trim_changes_episode_length(self, tmp_path, lerobot_dataset_factory):
+        """Propose a trim and apply it; the trimmed episode's length
+        drops to the kept window.
+        """
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
+        state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+        state.datasets[ds.repo_id] = ds
+        orig_dat = datasets_module._app_state
+        orig_edits = edits_module._app_state
+        orig_idx = datasets_module._episode_start_indices.copy()
+        datasets_module.set_app_state(state)
+        edits_module.set_app_state(state)
+        try:
+            mcp = build_server(app_state=state, dataset_root=tmp_path / "_root")
+            ep_length_before = int(ds.meta.episodes[0]["length"])
+            keep_start, keep_end = 1, min(5, ep_length_before - 1)
+
+            _call(
+                mcp,
+                "propose_trim_episode",
+                {"repo_id": ds.repo_id, "episode_id": 0, "start_frame": keep_start, "end_frame": keep_end},
+            )
+            result = _call(mcp, "apply_pending_edits", {"repo_id": ds.repo_id})
+            assert result["status"] == "ok"
+            assert result["applied"] == 1
+
+            from lerobot.gui.dataset_reload import reload_dataset_from_disk
+
+            reload_dataset_from_disk(ds)
+            ep_length_after = int(ds.meta.episodes[0]["length"])
+            assert ep_length_after == keep_end - keep_start, (
+                f"trim window was [{keep_start}, {keep_end}) "
+                f"(width {keep_end - keep_start}), got length {ep_length_after}"
+            )
+        finally:
+            datasets_module._app_state = orig_dat
+            edits_module._app_state = orig_edits
+            datasets_module._episode_start_indices.clear()
+            datasets_module._episode_start_indices.update(orig_idx)
