@@ -296,8 +296,10 @@ def build_server(
             limit: Max episodes to return (1..500). Default 50.
             offset: Starting episode index.
         """
-        assert 1 <= limit <= 500, "limit must be in [1, 500]"
-        assert offset >= 0, "offset must be >= 0"
+        if not 1 <= limit <= 500:
+            raise ValueError(f"limit must be in [1, 500]; got {limit}")
+        if offset < 0:
+            raise ValueError(f"offset must be >= 0; got {offset}")
         meta = _state().get_meta(repo_id)
         total = meta.total_episodes
         end = min(offset + limit, total)
@@ -392,20 +394,35 @@ def build_server(
         host and persist across sessions — leave a note today and the next AI
         session can read it. Comments are eventually surfaced in the GUI too.
 
+        Last-write-wins on the same ``(episode_id, key)``. The response
+        carries ``overwrote`` (bool) and ``previous_value`` so the agent
+        can tell whether it just clobbered an existing comment.
+
         Args:
             repo_id: Dataset id.
             episode_id: Episode to comment on.
             key: Comment name (e.g. ``'outcome'``).
             value: JSON-serializable value (string, number, bool, list, dict).
 
-        Returns the full tag dict for the episode after the write.
+        Returns the full tag dict for the episode plus an explicit
+        ``overwrote`` / ``previous_value`` so the actual effect is visible.
         """
         s = _state()
         meta = s.get_meta(repo_id)  # also validates dataset exists
         if not (0 <= episode_id < meta.total_episodes):
             raise ValueError(f"episode_id {episode_id} out of range [0, {meta.total_episodes})")
+        existing = s.store.get_tags(repo_id, episode_id)
+        had_key = key in existing
+        previous_value = existing.get(key) if had_key else None
         s.store.set_tag(repo_id, episode_id, key, value)
-        return {"repo_id": repo_id, "episode_id": episode_id, "tags": s.store.get_tags(repo_id, episode_id)}
+        return {
+            "repo_id": repo_id,
+            "episode_id": episode_id,
+            "key": key,
+            "overwrote": had_key,
+            "previous_value": previous_value,
+            "tags": s.store.get_tags(repo_id, episode_id),
+        }
 
     @mcp.tool()
     @requires_scope(SCOPE_COMMENT)
