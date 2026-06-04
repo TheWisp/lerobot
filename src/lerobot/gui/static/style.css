@@ -443,6 +443,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .btn-stop { flex: 1; padding: 10px; border-radius: 4px; border: none; background: #e74c3c; color: #fff; cursor: pointer; font-size: 14px; font-weight: 600; }
 .btn-stop:hover { background: #c0392b; }
 .btn-stop:disabled { opacity: 0.3; cursor: not-allowed; }
+/* Flow-control buttons (Next Episode / Rerecord): visually secondary
+   to Launch / Stop so they read as "while-running" controls, not as
+   process-lifecycle actions. */
+.btn-control { padding: 10px 14px; border-radius: 4px; border: 1px solid #0f3460; background: #1a2950; color: #c8d6e5; cursor: pointer; font-size: 13px; font-weight: 500; }
+.btn-control:hover { background: #233066; color: #fff; }
+.btn-control:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Run tab main area */
 .run-main-split { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
@@ -1230,3 +1236,64 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     0%, 100% { background: rgba(79, 195, 247, 0.25) !important; }
     50%      { background: rgba(79, 195, 247, 0.55) !important; }
 }
+
+/* ─── Settings tab: Hotkeys ─────────────────────────────────────────────── */
+
+.settings-page { padding: 20px 28px; overflow-y: auto; max-width: 1200px; }
+.settings-header h1 { color: #4fc3f7; margin: 0 0 4px 0; font-size: 24px; }
+.settings-sub { color: #aab; font-size: 13px; margin: 0 0 14px 0; max-width: 800px; line-height: 1.5; }
+.settings-badges { display: flex; gap: 10px; margin: 14px 0 24px 0; flex-wrap: wrap; }
+.source-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 999px; background: #1a2950; color: #c8d6e5; font-size: 12px; border: 1px solid #2a3a66; }
+.source-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #777; transition: background 200ms; }
+.source-badge.connected .dot { background: #2ecc71; }
+.source-badge.disconnected .dot { background: #666; }
+.source-badge.disconnected { opacity: 0.55; }
+
+.hotkey-section { margin-bottom: 32px; border-top: 1px solid #1a2540; padding-top: 18px; }
+.hotkey-section h2 { color: #cde0f0; font-size: 16px; margin: 0 0 14px 0; font-weight: 500; }
+
+/* Keyboard list */
+.hotkey-keyboard-list { display: flex; flex-direction: column; gap: 6px; }
+.hotkey-keyboard-row { display: grid; grid-template-columns: 220px 1fr auto; gap: 16px; align-items: center; padding: 8px 12px; background: #11192c; border: 1px solid #1c2440; border-radius: 4px; }
+.hotkey-keyboard-row .action-name { color: #4fc3f7; font-weight: 500; font-size: 13px; font-family: monospace; }
+.hotkey-keyboard-row .action-desc { color: #aab; font-size: 12px; }
+.hotkey-keyboard-row .key-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.key-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: #2a3a66; color: #fff; border-radius: 3px; font-family: monospace; font-size: 12px; cursor: pointer; }
+.key-chip:hover { background: #3a4a76; }
+.key-chip .remove { color: #d8b070; font-weight: bold; }
+.key-add { padding: 4px 10px; background: transparent; color: #6a85b0; border: 1px dashed #2a3a66; border-radius: 3px; cursor: pointer; font-size: 12px; font-family: monospace; }
+.key-add:hover { color: #c8d6e5; border-color: #4a6090; }
+.key-add.capturing { color: #f0c060; border-color: #f0c060; animation: pulse 1.4s ease infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+/* Quest controllers */
+.hotkey-quest-row { display: flex; gap: 36px; justify-content: center; flex-wrap: wrap; }
+.quest-controller { display: flex; flex-direction: column; align-items: center; }
+.quest-controller .controller-label { color: #aab; font-size: 13px; margin-bottom: 8px; font-weight: 500; }
+.controller-svg-host { display: block; }
+
+/* Controller buttons (used inside Quest SVG and Gamepad SVG). */
+.btn-overlay { fill: #2a3a66; stroke: #4a5a86; stroke-width: 1; cursor: pointer; transition: fill 200ms; }
+.btn-overlay:hover { fill: #3a4a76; }
+.btn-overlay.reserved { fill: #1c2440; stroke: #2a3a55; cursor: not-allowed; }
+.btn-overlay.bound { fill: #2a5a3a; stroke: #4a8a5a; }
+.btn-overlay.bound:hover { fill: #3a6a4a; }
+.btn-label { fill: #cde0f0; font-size: 9px; font-family: sans-serif; pointer-events: none; text-anchor: middle; dominant-baseline: middle; user-select: none; }
+.btn-label.action { fill: #b8e8c8; font-weight: 500; font-size: 8px; }
+.btn-label.reserved { fill: #5a6580; }
+
+.hotkey-gamepad-host { display: flex; justify-content: center; }
+
+.settings-footer { margin-top: 24px; display: flex; gap: 12px; align-items: center; }
+.settings-status { color: #aab; font-size: 12px; }
+.settings-status.ok { color: #80f0a0; }
+.settings-status.err { color: #f08080; }
+
+/* Bind dialog */
+.bind-dialog { background: #1a2540; color: #cde0f0; border: 1px solid #2a3a66; border-radius: 4px; padding: 18px 22px; min-width: 280px; }
+.bind-dialog h3 { margin: 0 0 8px 0; color: #4fc3f7; font-size: 15px; }
+.bind-dialog p { margin: 0 0 10px 0; font-size: 12px; color: #aab; }
+.bind-dialog .bind-input { width: 100%; padding: 8px 10px; background: #11192c; color: #cde0f0; border: 1px solid #2a3a66; border-radius: 3px; font-family: monospace; }
+.bind-dialog menu { padding: 0; margin: 12px 0 0 0; display: flex; justify-content: flex-end; gap: 8px; }
+.bind-dialog button { padding: 5px 14px; background: transparent; color: #cde0f0; border: 1px solid #2a3a66; border-radius: 3px; cursor: pointer; font-size: 12px; }
+.bind-dialog button.primary { background: #2a5a3a; border-color: #4a8a5a; }

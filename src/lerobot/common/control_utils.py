@@ -127,55 +127,55 @@ def predict_action(
 
 def init_keyboard_listener():
     """
-    Initializes a non-blocking keyboard listener for real-time user interaction.
+    Initializes a flow-control channel pre-registered with the legacy three verbs.
 
-    This function sets up a listener for specific keys (right arrow, left arrow, escape) to control
-    the program flow during execution, such as stopping recording or exiting loops. It gracefully
-    handles headless environments where keyboard listening is not possible.
+    Despite the name, the underlying mechanism is now a pluggable
+    :class:`~lerobot.common.control_channel.ControlChannel` (a registry of action
+    names mapped to triggers). This helper preserves the legacy contract — the
+    returned events dict has ``exit_early`` / ``rerecord_episode`` /
+    ``stop_recording`` keys, all initially False, with default keyboard bindings
+    on right / left / esc — so callers like ``lerobot_record.py`` see no change.
+
+    Two source-attach modes, picked by the ``LEROBOT_CONTROL_CHANNEL_STDIN`` env
+    var that the GUI's subprocess launcher sets:
+
+    * **CLI mode** (env var unset). Pynput attaches a global keyboard listener
+      — the only way to capture keys when there's no GUI to do it from.
+    * **GUI mode** (env var = ``"1"``). Pynput is **skipped**. The GUI's
+      browser captures keyboard events with proper focus-awareness and POSTs
+      them to ``/api/run/control`` → subprocess stdin → channel. No global
+      pynput hook is installed in the subprocess, which means typing in the
+      GUI's search box never accidentally fires a hotkey, the listener
+      doesn't outlive the GUI session, and a minimised browser stops
+      capturing — exactly the OS-level focus behaviour you'd expect.
+
+    The returned ``listener`` is a :class:`ControlChannel` whose ``.stop()``
+    tears down all sources — drop-in for the old ``pynput.keyboard.Listener``.
 
     Returns:
-        A tuple containing:
-        - The `pynput.keyboard.Listener` instance, or `None` if in a headless environment.
-        - A dictionary of event flags (e.g., `exit_early`) that are set by key presses.
+        A tuple of (channel, events_dict).
     """
-    # Allow to exit early while recording an episode or resetting the environment,
-    # by tapping the right arrow key '->'. This might require a sudo permission
-    # to allow your terminal to monitor keyboard events.
-    events = {}
-    events["exit_early"] = False
-    events["rerecord_episode"] = False
-    events["stop_recording"] = False
+    from lerobot.common.control_channel import init_control_channel
 
-    if is_headless():
-        logging.warning(
-            "Headless environment detected. On-screen cameras display and keyboard inputs will not be available."
-        )
-        listener = None
-        return listener, events
-
-    # Only import pynput if not in a headless environment
-    from pynput import keyboard
-
-    def on_press(key):
-        try:
-            if key == keyboard.Key.right:
-                print("Right arrow key pressed. Exiting loop...")
-                events["exit_early"] = True
-            elif key == keyboard.Key.left:
-                print("Left arrow key pressed. Exiting loop and rerecord the last episode...")
-                events["rerecord_episode"] = True
-                events["exit_early"] = True
-            elif key == keyboard.Key.esc:
-                print("Escape key pressed. Stopping data recording...")
-                events["stop_recording"] = True
-                events["exit_early"] = True
-        except Exception as e:
-            print(f"Error handling key press: {e}")
-
-    listener = keyboard.Listener(on_press=on_press)
-    listener.start()
-
-    return listener, events
+    # In GUI mode the browser owns keyboard capture (focus-aware, scoped
+    # to the GUI tab). Skip pynput entirely to eliminate the global hook.
+    gui_managing_input = os.environ.get("LEROBOT_CONTROL_CHANNEL_STDIN") == "1"
+    channel, events = init_control_channel(pynput=not gui_managing_input)
+    # Legacy bindings — match the pre-channel ``init_keyboard_listener``
+    # behavior exactly. The pynput source already attached above will
+    # pick these up on the next keypress because it walks the registry
+    # at emit time, not at attach time.
+    #
+    # ``exit_early`` is multi-key because the legacy listener set it on
+    # every flow-control keypress: right alone advances; left also
+    # rerecords; esc also stops. Modelled here as "exit_early is
+    # triggered by any of {right, left, esc}", which keeps the inner
+    # episode loop's `if events["exit_early"]: break` working unchanged
+    # whether the user wanted advance, rerecord, or stop.
+    channel.register("exit_early", keyboard_keys=("right", "left", "esc"))
+    channel.register("rerecord_episode", keyboard_key="left")
+    channel.register("stop_recording", keyboard_key="esc")
+    return channel, events
 
 
 def sanity_check_dataset_name(repo_id, policy_cfg):

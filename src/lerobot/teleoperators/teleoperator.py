@@ -233,3 +233,21 @@ class Teleoperator(abc.ABC):
     def disconnect(self) -> None:
         """Disconnect from the teleoperator and perform any necessary cleanup."""
         pass
+
+    def set_control_channel(self, channel) -> None:
+        """Hand the teleop a reference to the orchestrator's control channel.
+
+        Default is a no-op — most teleops just emit per-tick actions and
+        don't need to talk to the channel. Subclasses that capture
+        flow-control inputs (Quest VR face buttons firing
+        ``hvla.rlt.success``; a hypothetical gamepad teleop firing
+        ``mark_success``) override this to store the reference and call
+        ``channel.emit(...)`` on rising edges of their bindable inputs.
+
+        Called by the orchestrator AFTER ``connect()`` succeeds and
+        BEFORE the main loop starts — so the teleop has a live channel
+        by the first tick. Passing ``None`` clears any previously
+        installed channel; safe to call any number of times.
+        """
+        # No-op default. Subclasses that need the channel override.
+        return  # noqa: B027 — intentional concrete no-op, not abstract

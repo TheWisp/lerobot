@@ -32,6 +32,7 @@ from lerobot.gui.api import (
     bug_reports,
     datasets,
     edits,
+    hotkeys,
     models,
     playback,
     robot,
@@ -83,6 +84,7 @@ async def startup_event():
     run.set_app_state(_app_state)
     models.set_app_state(_app_state)
     bug_reports.set_app_state(_app_state)
+    hotkeys.set_app_state(_app_state)
     logger.info(f"Initialized frame cache with {cache_size / 1_000_000:.0f} MB budget")
     # Sweep stale obs-stream shared-memory segments left by a previously-
     # crashed teleop/record subprocess. Without this, the GUI's reader
@@ -241,6 +243,7 @@ app.include_router(models.router)
 app.include_router(bug_reports.router)
 app.include_router(ai_setup.router)
 app.include_router(bridge.router)
+app.include_router(hotkeys.router)
 
 # Serve static files (CSS, JS)
 _static_dir = Path(__file__).parent / "static"
