@@ -108,11 +108,16 @@ class TestProposeTrim:
         result = _call(
             mcp,
             "propose_trim_episode",
-            {"repo_id": ds.repo_id, "episode_id": 0, "start_frame": 2, "end_frame": 8},
+            {"repo_id": ds.repo_id, "episode_id": 0, "keep_from": 2, "keep_to": 8},
         )
         assert result["status"] == "ok"
-        assert result["start_frame"] == 2
-        assert result["end_frame"] == 8
+        # MCP-layer naming: keep_from / keep_to (FastAPI keeps the legacy names)
+        assert result["keep_from"] == 2
+        assert result["keep_to"] == 8
+        # Outcome transparency: response also echoes how many frames are kept vs dropped
+        assert result["kept_frames"] == 6
+        assert result["dropped_frames"] == result["episode_length_before"] - 6
+        # Internal state is still keyed by start_frame/end_frame (FastAPI compat)
         assert state.get_episode_trim(ds.repo_id, 0) == (2, 8)
 
     def test_replaces_prior_trim(self, state_and_dataset):
@@ -120,12 +125,12 @@ class TestProposeTrim:
         _call(
             mcp,
             "propose_trim_episode",
-            {"repo_id": ds.repo_id, "episode_id": 0, "start_frame": 1, "end_frame": 5},
+            {"repo_id": ds.repo_id, "episode_id": 0, "keep_from": 1, "keep_to": 5},
         )
         _call(
             mcp,
             "propose_trim_episode",
-            {"repo_id": ds.repo_id, "episode_id": 0, "start_frame": 3, "end_frame": 9},
+            {"repo_id": ds.repo_id, "episode_id": 0, "keep_from": 3, "keep_to": 9},
         )
         assert state.get_episode_trim(ds.repo_id, 0) == (3, 9)
 
@@ -135,22 +140,22 @@ class TestProposeTrim:
         _call(
             mcp,
             "propose_trim_episode",
-            {"repo_id": ds.repo_id, "episode_id": 0, "start_frame": 2, "end_frame": 5},
+            {"repo_id": ds.repo_id, "episode_id": 0, "keep_from": 2, "keep_to": 5},
         )
         _call(
             mcp,
             "propose_trim_episode",
-            {"repo_id": ds.repo_id, "episode_id": 0, "start_frame": 0, "end_frame": ep_length},
+            {"repo_id": ds.repo_id, "episode_id": 0, "keep_from": 0, "keep_to": ep_length},
         )
         assert state.get_episode_trim(ds.repo_id, 0) is None
 
     def test_rejects_bad_range(self, state_and_dataset):
         mcp, _, ds = state_and_dataset
-        with pytest.raises(Exception, match="start_frame must be less than end_frame"):
+        with pytest.raises(Exception, match="keep window must have positive length"):
             _call(
                 mcp,
                 "propose_trim_episode",
-                {"repo_id": ds.repo_id, "episode_id": 0, "start_frame": 5, "end_frame": 5},
+                {"repo_id": ds.repo_id, "episode_id": 0, "keep_from": 5, "keep_to": 5},
             )
 
 
@@ -161,7 +166,7 @@ class TestListAndDiscard:
         _call(
             mcp,
             "propose_trim_episode",
-            {"repo_id": ds.repo_id, "episode_id": 1, "start_frame": 1, "end_frame": 5},
+            {"repo_id": ds.repo_id, "episode_id": 1, "keep_from": 1, "keep_to": 5},
         )
         result = _call(mcp, "list_pending_edits", {})
         assert result["total"] == 2
@@ -441,7 +446,7 @@ class TestApply:
             _call(
                 mcp,
                 "propose_trim_episode",
-                {"repo_id": ds.repo_id, "episode_id": 0, "start_frame": keep_start, "end_frame": keep_end},
+                {"repo_id": ds.repo_id, "episode_id": 0, "keep_from": keep_start, "keep_to": keep_end},
             )
             result = _call(mcp, "apply_pending_edits", {"repo_id": ds.repo_id})
             assert result["status"] == "ok"

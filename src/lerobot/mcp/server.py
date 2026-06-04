@@ -506,32 +506,45 @@ def build_server(
     def propose_trim_episode(
         repo_id: str,
         episode_id: int,
-        start_frame: int,
-        end_frame: int,
+        keep_from: int,
+        keep_to: int,
     ) -> dict[str, Any]:
-        """Stage a trim of one episode — keep frames ``[start_frame, end_frame)``, drop the rest.
+        """Stage a trim of one episode — keep frames ``[keep_from, keep_to)``, drop the rest.
 
-        This is a both-sides crop, not a middle-extract: the kept window
-        is one contiguous range, and frames outside it (``[0, start_frame)``
-        on the head and ``[end_frame, episode_length)`` on the tail) are
-        dropped at apply time. The episode does NOT split — one episode
-        in, one (shorter) episode out, with length ``end_frame - start_frame``.
+        Param names anchor the semantics: you specify the window to
+        **keep**, not the window to remove. Frames outside the kept
+        window — ``[0, keep_from)`` on the head and ``[keep_to,
+        episode_length)`` on the tail — are dropped at apply time. The
+        episode does NOT split: one episode in, one (shorter) episode
+        out, with length ``keep_to - keep_from``.
+
+        There is no "remove a middle range" operation. If you wanted
+        that, you'd have to delete the episode and re-record, or split
+        manually offline; this tool can't produce two episodes from one.
 
         Replaces any prior trim on the same episode (last-write-wins).
-        Passing the full range (``start_frame=0``, ``end_frame=episode_length``)
+        Passing the full range (``keep_from=0``, ``keep_to=episode_length``)
         clears an existing trim — useful for undoing a stage.
 
         Args:
             repo_id: Dataset id.
             episode_id: Episode to trim.
-            start_frame: First frame to keep (inclusive). Set to 0 to only chop the tail.
-            end_frame: First frame to drop (exclusive). Set to ``episode_length`` to only chop the head.
+            keep_from: First frame to keep (inclusive). Set to 0 to only chop the tail.
+            keep_to: First frame to drop (exclusive). Set to ``episode_length`` to only chop the head.
 
-        Returns the staged-edit confirmation.
+        Returns the staged-edit confirmation with an explicit "kept M of
+        N frames, dropped (N − M)" message so the actual outcome is
+        visible regardless of how the call was phrased.
         """
         from lerobot.gui.api._edits_core import propose_trim
 
-        return propose_trim(_require_app_state(), repo_id, episode_id, start_frame, end_frame)
+        result = propose_trim(_require_app_state(), repo_id, episode_id, keep_from, keep_to)
+        # _edits_core keeps the historical start_frame/end_frame names
+        # for FastAPI compat. Translate to keep_from/keep_to for the MCP
+        # response so the schema and the field names line up.
+        result["keep_from"] = result.pop("start_frame")
+        result["keep_to"] = result.pop("end_frame")
+        return result
 
     @mcp.tool()
     @requires_scope(SCOPE_EDIT)

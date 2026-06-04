@@ -147,6 +147,57 @@ async def _drain_pending(session: ClientSession) -> None:
     await asyncio.sleep(0.4)
 
 
+# ── transcript capture ────────────────────────────────────────────────────
+
+
+class Transcript:
+    """Records every MCP tool call + response as a markdown transcript.
+
+    Complements the screenshot proofs: screenshots show the GUI's visible
+    reaction, the transcript shows the AI agent's view — what it asked for
+    and what came back. Pairs well with the screenshots in PR review.
+    """
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def heading(self, text: str) -> None:
+        self.lines.append(f"\n## {text}\n")
+
+    def note(self, text: str) -> None:
+        self.lines.append(f"\n{text}\n")
+
+    def intent(self, text: str) -> None:
+        self.lines.append(f"\n_Intent: {text}_\n")
+
+    async def call(
+        self,
+        session: ClientSession,
+        name: str,
+        args: dict,
+    ):
+        """Execute the MCP call and record its request + response shape."""
+        import json
+
+        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+        self.lines.append(f"\n**→** `{name}({args_str})`\n")
+        result = await session.call_tool(name, args)
+        if result.isError:
+            err = result.content[0].text if result.content else "(no message)"
+            self.lines.append(f"\n**← error** — `{err}`\n")
+        elif result.structuredContent is not None:
+            body = json.dumps(result.structuredContent, indent=2)
+            self.lines.append(f"\n**←**\n```json\n{body}\n```\n")
+        else:
+            text = result.content[0].text if result.content else "(empty)"
+            self.lines.append(f"\n**←** {text}\n")
+        return result
+
+    def write(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(self.lines))
+
+
 # ── proofs ────────────────────────────────────────────────────────────────
 
 
@@ -207,7 +258,7 @@ async def proof_propose_trim(session: ClientSession, page: Page) -> None:
 
     await session.call_tool(
         "propose_trim_episode",
-        {"repo_id": REPO_ID, "episode_id": 0, "start_frame": start, "end_frame": end},
+        {"repo_id": REPO_ID, "episode_id": 0, "keep_from": start, "keep_to": end},
     )
     await asyncio.sleep(0.4)
     await page.evaluate("() => window.refreshPendingEdits && window.refreshPendingEdits()")
@@ -225,8 +276,8 @@ async def proof_propose_trim(session: ClientSession, page: Page) -> None:
     _compose_pair(
         before,
         after,
-        title=f"propose_trim_episode(repo_id, 0, {start}, {end})",
-        expected=f"queue contains trim on episode 0 with range [{start}, {end})",
+        title=f"propose_trim_episode(repo_id, 0, keep_from={start}, keep_to={end})",
+        expected=f"queue contains trim on episode 0 with kept window [{start}, {end})",
         observed=f"count={state['count']}, trim_range={state['trim_range']}",
         ok=ok,
         out=ARTIFACT_DIR / "feat_propose_trim.png",
@@ -248,7 +299,7 @@ async def proof_discard_pending(session: ClientSession, page: Page) -> None:
     if ep_length and ep_length >= 6:
         await session.call_tool(
             "propose_trim_episode",
-            {"repo_id": REPO_ID, "episode_id": 0, "start_frame": 1, "end_frame": min(5, ep_length - 1)},
+            {"repo_id": REPO_ID, "episode_id": 0, "keep_from": 1, "keep_to": min(5, ep_length - 1)},
         )
     await asyncio.sleep(0.4)
     await page.evaluate("() => window.refreshPendingEdits && window.refreshPendingEdits()")
@@ -298,9 +349,14 @@ async def main() -> None:
             ):
                 await session.initialize()
 
+                # Screenshot proofs first (visible-effect verification).
                 await proof_propose_delete(session, page)
                 await proof_propose_trim(session, page)
                 await proof_discard_pending(session, page)
+
+                # Transcript-style log of the same surface, plus error cases.
+                # This is the AI agent's view: what was sent, what came back.
+                await _capture_transcript(session)
 
             await ctx.close()
             await browser.close()
@@ -308,6 +364,81 @@ async def main() -> None:
         # Always revoke; never leave a long-lived edit token after the proof.
         await _revoke_token(token_name)
         print(f"\nartifacts in: {ARTIFACT_DIR}/")
+
+
+async def _capture_transcript(session: ClientSession) -> None:
+    """Drive each tool through happy paths + error cases, log every call.
+
+    Output: ``mcp/docs/proofs/dataset_edit_transcript.md``. Each block
+    shows the call shape (function + named args) and the response shape
+    the AI agent receives — including the structured-conflict dict for
+    overlap-class errors and the wire error message for validation
+    failures.
+    """
+    tx = Transcript()
+    tx.heading("Dataset Edit MCP — transcript")
+    tx.note(
+        "Captured live against the unified GUI at `127.0.0.1:8000` against "
+        f"the throwaway dataset `{REPO_ID}`. The dataset is left "
+        "untouched on disk — only the in-memory PendingEdit queue is "
+        "mutated, and every block ends with a `discard_pending_edits` "
+        "or the queue is otherwise drained."
+    )
+
+    tx.heading("Happy paths")
+
+    tx.intent("Stage a delete on episode 0")
+    await tx.call(session, "propose_delete_episode", {"repo_id": REPO_ID, "episode_id": 0})
+
+    tx.intent("Look at the queue from the AI's side")
+    await tx.call(session, "list_pending_edits", {"repo_id": REPO_ID})
+
+    tx.intent("Trim episode 0 to a 6-frame window — KEEP frames [2, 8)")
+    await tx.call(
+        session,
+        "propose_trim_episode",
+        {"repo_id": REPO_ID, "episode_id": 0, "keep_from": 2, "keep_to": 8},
+    )
+
+    tx.intent("Cancel everything")
+    await tx.call(session, "discard_pending_edits", {"repo_id": REPO_ID})
+
+    tx.heading("Error cases")
+
+    tx.intent("Out of range — only 1 episode exists, ask for ep 999")
+    await tx.call(session, "propose_delete_episode", {"repo_id": REPO_ID, "episode_id": 999})
+
+    tx.intent("Unknown dataset — typo or unloaded")
+    await tx.call(session, "propose_delete_episode", {"repo_id": "nope/does_not_exist", "episode_id": 0})
+
+    tx.intent("Duplicate delete — stage once, then again")
+    await tx.call(session, "propose_delete_episode", {"repo_id": REPO_ID, "episode_id": 0})
+    await tx.call(session, "propose_delete_episode", {"repo_id": REPO_ID, "episode_id": 0})
+    await tx.call(session, "discard_pending_edits", {"repo_id": REPO_ID})
+
+    tx.intent("Invalid trim — keep window has zero size (keep_from == keep_to)")
+    await tx.call(
+        session,
+        "propose_trim_episode",
+        {"repo_id": REPO_ID, "episode_id": 0, "keep_from": 5, "keep_to": 5},
+    )
+
+    tx.intent(
+        "If the AI confused 'trim' as 'remove this range', it would emit "
+        "this call expecting frames 3-7 to be removed. The tool keeps "
+        "[3, 7) (one contiguous window) and the response message states "
+        "the actual outcome so the AI can self-correct."
+    )
+    await tx.call(
+        session,
+        "propose_trim_episode",
+        {"repo_id": REPO_ID, "episode_id": 0, "keep_from": 3, "keep_to": 7},
+    )
+    await tx.call(session, "discard_pending_edits", {"repo_id": REPO_ID})
+
+    out = ARTIFACT_DIR / "dataset_edit_transcript.md"
+    tx.write(out)
+    print(f"transcript:    written to {out}")
 
 
 if __name__ == "__main__":

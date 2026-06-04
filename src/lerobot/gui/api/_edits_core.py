@@ -192,7 +192,9 @@ def propose_trim(
             f"{episode_index} (length={episode_length})"
         )
     if start_frame >= end_frame:
-        raise EditValidationError("start_frame must be less than end_frame")
+        raise EditValidationError(
+            f"Invalid trim range [{start_frame}, {end_frame}): the keep window must have positive length"
+        )
 
     # Drop any prior trim on this episode — replace semantics.
     app_state.pending_edits = [
@@ -213,13 +215,24 @@ def propose_trim(
         logger.info(f"Set trim for episode {episode_index}: frames [{start_frame}, {end_frame})")
 
     _save_edits(app_state, dataset_id)
+    kept = end_frame - start_frame
+    dropped = episode_length - kept
     return {
         "status": "ok",
-        "message": (f"Episode {episode_index} will be trimmed to frames [{start_frame}, {end_frame})"),
+        # The message states kept/dropped explicitly so a caller who got
+        # the semantics backwards (thinking it means "remove this range")
+        # sees the actual outcome in the response and can self-correct.
+        "message": (
+            f"Episode {episode_index}: keep frames [{start_frame}, {end_frame}) "
+            f"({kept} of {episode_length} frames; dropping {dropped})"
+        ),
         "dataset_id": dataset_id,
         "episode_index": episode_index,
         "start_frame": start_frame,
         "end_frame": end_frame,
+        "kept_frames": kept,
+        "dropped_frames": dropped,
+        "episode_length_before": episode_length,
     }
 
 
