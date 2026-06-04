@@ -1267,6 +1267,9 @@ async def urdf_viz_meta() -> dict:
         "urdf": f"/urdf-assets/{spec.urdf_url_path}",
         "bimanual": len(spec.arms) == 2,
         "sources": sources,
+        # ee_link is None for descriptions that didn't declare one; the
+        # frontend skips polyline rendering in that case.
+        "ee_link": spec.ee_link,
     }
 
 

@@ -42,6 +42,10 @@ VIZ_SPEC = {
     "urdf_joints": ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"),
     "urdf_file": "so101.urdf",
     "alignment": None,
+    # EE link for trajectory visualization. Pick the wrist anchor rather
+    # than the gripper-downstream link so the trace doesn't jiggle as the
+    # operator opens/closes the gripper.
+    "ee_link": "gripper_frame_link",
 }
 
 __all__ = ["get_urdf_path", "get_meshes_dir", "VIZ_SPEC"]
