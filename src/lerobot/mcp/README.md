@@ -251,12 +251,13 @@ stores it as `comment`. The migration is invisible to callers.
 
 ### Shipped today
 
-| Domain      | Tool                                                                                                         | Scope     |
-| ----------- | ------------------------------------------------------------------------------------------------------------ | --------- |
-| Bridge / UI | `navigate_to`, `notify_user`, `highlight_in_viewer`                                                          | `read`    |
-| Dataset     | `list_datasets`, `get_dataset_info`, `list_episodes`, `get_episode_summary`, `get_frame`, `get_episode_tags` | `read`    |
-| Dataset     | `tag_episode`, `delete_episode_tag`                                                                          | `comment` |
-| Introspect  | `list_my_scopes`                                                                                             | `read`    |
+| Domain      | Tool                                                                                                                               | Scope     |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Bridge / UI | `navigate_to`, `notify_user`, `highlight_in_viewer`                                                                                | `read`    |
+| Dataset     | `list_datasets`, `get_dataset_info`, `list_episodes`, `get_episode_summary`, `get_frame`, `get_episode_tags`, `list_pending_edits` | `read`    |
+| Dataset     | `tag_episode`, `delete_episode_tag`                                                                                                | `comment` |
+| Dataset     | `propose_set_feature`, `propose_delete_episode`, `propose_trim_episode`, `discard_pending_edits`, `apply_pending_edits`            | `edit`    |
+| Introspect  | `list_my_scopes`                                                                                                                   | `read`    |
 
 ### Designed but not yet shipped
 
@@ -264,24 +265,23 @@ The MCP surface the design calls for, grouped by domain and scope.
 Reviewers cross-check against the implementation when extending. Names
 may shift slightly on landing.
 
-| Domain      | Tool                                                                                                                                          | Scope     |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| Bridge / UI | `set_filter` (waits for a filter UI to land — see `gui/TODO.md`)                                                                              | `read`    |
-| Dataset     | `get_feature_series`, `list_tagged_episodes`                                                                                                  | `read`    |
-| Dataset     | `propose_set_feature`, `propose_delete_episode`, `propose_trim_episode`, `list_pending_edits`, `discard_pending_edits`, `apply_pending_edits` | `edit`    |
-| Dataset     | `delete_dataset`, `merge_into_dataset`, `vacuum_sidecar`, `drop_sidecar_database`                                                             | `edit`    |
-| Hub         | `hub_auth_status`, `hub_repo_info`, `hub_diff_local_vs_remote`, `hub_list_jobs`, `hub_job_progress`                                           | `read`    |
-| Hub         | `hub_start_upload`, `hub_start_download`, `hub_cancel_job`                                                                                    | `edit`    |
-| Models      | `list_model_sources`, `list_models_in_source`, `list_run_checkpoints`, `get_run_config`                                                       | `read`    |
-| Models      | `add_model_source`, `remove_model_source`                                                                                                     | `edit`    |
-| Models      | `load_debug_model`, `unload_debug_model`, `get_debug_status`                                                                                  | `operate` |
-| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `list_ports`, `get_all_port_assignments`                                  | `read`    |
-| Robots      | `create/update/rename/delete_robot_profile` (+ teleop equivalents), `detect_cameras_into_profile`, `assign_port_to_arm`, `identify_arm`       | `edit`    |
-| Robots      | `start/finish/cancel_rest_recording`, `move_to_rest_position`, `record/replay/delete_trajectory`, `recover_robot`                             | `operate` |
-| Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                                  | `read`    |
-| Run         | `update_rlt_config`                                                                                                                           | `edit`    |
-| Run         | `start_teleoperate`, `start_record`, `start_replay`, `start_hvla`, `stop_current_run`                                                         | `operate` |
-| Introspect  | `list_supported_tools`                                                                                                                        | `read`    |
+| Domain      | Tool                                                                                                                                    | Scope     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Bridge / UI | `set_filter` (waits for a filter UI to land — see `gui/TODO.md`)                                                                        | `read`    |
+| Dataset     | `get_feature_series`, `list_tagged_episodes`                                                                                            | `read`    |
+| Dataset     | `delete_dataset`, `merge_into_dataset`, `vacuum_sidecar`, `drop_sidecar_database`                                                       | `edit`    |
+| Hub         | `hub_auth_status`, `hub_repo_info`, `hub_diff_local_vs_remote`, `hub_list_jobs`, `hub_job_progress`                                     | `read`    |
+| Hub         | `hub_start_upload`, `hub_start_download`, `hub_cancel_job`                                                                              | `edit`    |
+| Models      | `list_model_sources`, `list_models_in_source`, `list_run_checkpoints`, `get_run_config`                                                 | `read`    |
+| Models      | `add_model_source`, `remove_model_source`                                                                                               | `edit`    |
+| Models      | `load_debug_model`, `unload_debug_model`, `get_debug_status`                                                                            | `operate` |
+| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `list_ports`, `get_all_port_assignments`                            | `read`    |
+| Robots      | `create/update/rename/delete_robot_profile` (+ teleop equivalents), `detect_cameras_into_profile`, `assign_port_to_arm`, `identify_arm` | `edit`    |
+| Robots      | `start/finish/cancel_rest_recording`, `move_to_rest_position`, `record/replay/delete_trajectory`, `recover_robot`                       | `operate` |
+| Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                            | `read`    |
+| Run         | `update_rlt_config`                                                                                                                     | `edit`    |
+| Run         | `start_teleoperate`, `start_record`, `start_replay`, `start_hvla`, `stop_current_run`                                                   | `operate` |
+| Introspect  | `list_supported_tools`                                                                                                                  | `read`    |
 
 Design conventions worth flagging:
 

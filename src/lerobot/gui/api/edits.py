@@ -22,7 +22,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from lerobot.gui.state import AppState, PendingEdit
+    from lerobot.gui.state import AppState
 
 logger = logging.getLogger(__name__)
 
@@ -90,126 +90,73 @@ class PendingEditsResponse(BaseModel):
     total: int
 
 
+def _map_core_exception(exc: Exception) -> HTTPException:
+    """Translate a typed exception from ``_edits_core`` into HTTPException.
+
+    Keeps the FastAPI layer free of business logic while preserving the
+    existing status-code contract.
+    """
+    from lerobot.gui.api._edits_core import (
+        DatasetBusyError,
+        DatasetNotFoundError,
+        EditConflictError,
+        EditValidationError,
+    )
+
+    if isinstance(exc, DatasetNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, EditConflictError):
+        return HTTPException(status_code=409, detail=exc.detail)
+    if isinstance(exc, EditValidationError):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, DatasetBusyError):
+        return HTTPException(status_code=423, detail=str(exc))
+    raise exc  # not ours
+
+
 @router.get("", response_model=PendingEditsResponse)
 async def list_pending_edits(dataset_id: str | None = None):
     """List all pending edits, optionally filtered by dataset."""
-    edits = _app_state.get_edits_for_dataset(dataset_id) if dataset_id else _app_state.pending_edits
+    from lerobot.gui.api._edits_core import list_pending
 
+    result = list_pending(_app_state, dataset_id)
     return PendingEditsResponse(
-        edits=[
-            EditInfo(
-                index=i,
-                edit_type=e.edit_type,
-                dataset_id=e.dataset_id,
-                episode_index=e.episode_index,
-                params=e.params,
-                created_at=e.created_at.isoformat(),
-            )
-            for i, e in enumerate(_app_state.pending_edits)
-            if dataset_id is None or e.dataset_id == dataset_id
-        ],
-        total=len(edits),
+        edits=[EditInfo(**e) for e in result["edits"]],
+        total=result["total"],
     )
 
 
 @router.post("/delete")
 async def mark_episode_deleted(request: DeleteRequest):
     """Mark an episode for deletion."""
-    from lerobot.gui.state import PendingEdit
+    from lerobot.gui.api._edits_core import propose_delete
 
-    _require_unlocked(request.dataset_id)
-
-    if request.dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset_id}")
-
-    dataset = _app_state.datasets[request.dataset_id]
-    if request.episode_index < 0 or request.episode_index >= dataset.meta.total_episodes:
-        raise HTTPException(status_code=400, detail=f"Invalid episode index: {request.episode_index}")
-
-    # Check if already marked for deletion
-    if _app_state.is_episode_deleted(request.dataset_id, request.episode_index):
-        raise HTTPException(status_code=400, detail="Episode already marked for deletion")
-
-    edit = PendingEdit(
-        edit_type="delete",
-        dataset_id=request.dataset_id,
-        episode_index=request.episode_index,
-    )
-    _app_state.add_edit(edit)
-    _save_edits_for_dataset(request.dataset_id)
-
-    logger.info(f"Marked episode {request.episode_index} for deletion in {request.dataset_id}")
-    return {"status": "ok", "message": f"Episode {request.episode_index} marked for deletion"}
+    try:
+        return propose_delete(_app_state, request.dataset_id, request.episode_index)
+    except Exception as e:
+        raise _map_core_exception(e) from e
 
 
 @router.post("/trim")
 async def set_episode_trim(request: TrimRequest):
     """Set trim range for an episode."""
-    from lerobot.gui.state import PendingEdit
+    from lerobot.gui.api._edits_core import propose_trim
 
-    _require_unlocked(request.dataset_id)
-
-    if request.dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset_id}")
-
-    dataset = _app_state.datasets[request.dataset_id]
-    if request.episode_index < 0 or request.episode_index >= dataset.meta.total_episodes:
-        raise HTTPException(status_code=400, detail=f"Invalid episode index: {request.episode_index}")
-
-    # Get episode length
-    episode = dataset.meta.episodes[request.episode_index]
-    episode_length = episode["length"]
-
-    if request.start_frame < 0 or request.end_frame > episode_length:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid trim range: {request.start_frame}-{request.end_frame} (length={episode_length})",
+    try:
+        return propose_trim(
+            _app_state,
+            request.dataset_id,
+            request.episode_index,
+            request.start_frame,
+            request.end_frame,
         )
-
-    if request.start_frame >= request.end_frame:
-        raise HTTPException(status_code=400, detail="Start frame must be less than end frame")
-
-    # Remove existing trim for this episode
-    _app_state.pending_edits = [
-        e
-        for e in _app_state.pending_edits
-        if not (
-            e.dataset_id == request.dataset_id
-            and e.episode_index == request.episode_index
-            and e.edit_type == "trim"
-        )
-    ]
-
-    # Only add trim if it's not the full range
-    if request.start_frame > 0 or request.end_frame < episode_length:
-        edit = PendingEdit(
-            edit_type="trim",
-            dataset_id=request.dataset_id,
-            episode_index=request.episode_index,
-            params={"start_frame": request.start_frame, "end_frame": request.end_frame},
-        )
-        _app_state.add_edit(edit)
-        logger.info(
-            f"Set trim for episode {request.episode_index}: frames {request.start_frame}-{request.end_frame}"
-        )
-
-    _save_edits_for_dataset(request.dataset_id)
-
-    return {
-        "status": "ok",
-        "message": f"Episode {request.episode_index} will be trimmed to frames {request.start_frame}-{request.end_frame}",
-    }
+    except Exception as e:
+        raise _map_core_exception(e) from e
 
 
 # ───────────────────────────────────────────────────────────────────────────
 # Feature-value editing (Phase B3 + B5)
 # ───────────────────────────────────────────────────────────────────────────
-
-
-# Read-only feature names / dtypes — editing is blocked.
-_DEFAULT_FEATURES = {"timestamp", "frame_index", "episode_index", "index", "task_index"}
-_READONLY_DTYPES = {"image", "video"}
-_LARGE_SAVE_FRAME_THRESHOLD = 10_000
 
 
 class FeatureSetRequest(BaseModel):
@@ -232,262 +179,6 @@ class FeatureSetRequest(BaseModel):
     # this flag, an overlap returns 409 so the frontend can prompt the user.
 
 
-def _resolve_synthetic_feature(dataset, requested_feature: str) -> str:
-    """Map a user-facing feature name to its storage feature name.
-
-    Hardcoded special case for the LeRobot 3.0 subtask format:
-    user-facing ``subtask`` (string) → storage ``subtask_index`` (int64)
-    when the dataset has ``meta/subtasks.parquet``. Returns the input
-    unchanged for any other feature name.
-    """
-    from lerobot.gui.api.datasets import (
-        SUBTASK_DISPLAY_FEATURE,
-        SUBTASK_STORAGE_FEATURE,
-        _has_subtask_lookup,
-    )
-
-    if (
-        requested_feature == SUBTASK_DISPLAY_FEATURE
-        and SUBTASK_STORAGE_FEATURE in dataset.meta.features
-        and _has_subtask_lookup(dataset)
-    ):
-        return SUBTASK_STORAGE_FEATURE
-    return requested_feature
-
-
-def _validate_feature_edit(
-    dataset, request: FeatureSetRequest
-) -> tuple[str, int, int, int, int, dict[str, Any]]:
-    """Validate the request against the dataset schema and trim envelope.
-
-    Returns ``(storage_feature, frame_from, frame_to, global_from, global_to,
-    feature_info)``. ``storage_feature`` is the canonical on-disk feature name
-    — for the LeRobot 3.0 subtask format it's ``"subtask_index"`` even when
-    the caller submitted ``"subtask"``. The returned frame_from/frame_to may
-    be coerced to ``[0, episode_length)`` when the feature is detected as
-    per-episode-broadcast (e.g. ``success``).
-
-    The request object itself is NOT mutated — error messages reference the
-    user-submitted name (``request.feature``) so feedback stays familiar,
-    while the storage name is what gets stored in PendingEdit and consumed
-    by the apply pipeline.
-
-    Raises HTTPException with appropriate 4xx codes on failure.
-    """
-    feature_dict = dataset.meta.features
-
-    # Translate synthetic display names (subtask) → storage names (subtask_index)
-    # for everything that operates on on-disk columns. ``request.feature``
-    # stays untouched so error messages reflect what the caller actually sent.
-    storage_feature = _resolve_synthetic_feature(dataset, request.feature)
-
-    if storage_feature not in feature_dict:
-        raise HTTPException(status_code=400, detail=f"Unknown feature: {request.feature!r}")
-
-    feature_info = feature_dict[storage_feature]
-    dtype = feature_info.get("dtype", "")
-
-    if storage_feature in _DEFAULT_FEATURES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Feature {request.feature!r} is auto-managed and not editable",
-        )
-    if dtype in _READONLY_DTYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Feature {request.feature!r} has dtype {dtype!r} and is not editable in V1",
-        )
-    if storage_feature == "action" or storage_feature.startswith("observation."):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Feature {request.feature!r} is recorded sensor / control data and is read-only in V1",
-        )
-
-    if request.episode_index < 0 or request.episode_index >= dataset.meta.total_episodes:
-        raise HTTPException(status_code=400, detail=f"Invalid episode index: {request.episode_index}")
-
-    ep = dataset.meta.episodes[request.episode_index]
-    ep_length = int(ep["length"])
-    if request.frame_from < 0 or request.frame_to > ep_length or request.frame_from >= request.frame_to:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Invalid range [{request.frame_from}, {request.frame_to}) for episode "
-                f"{request.episode_index} (length={ep_length})"
-            ),
-        )
-
-    # Per-episode broadcast features: silently coerce sub-range edits to the
-    # full episode. The frontend visualizes this; the staging endpoint enforces
-    # it as the source of truth so a stale frontend can't break the invariant.
-    from lerobot.gui.api.datasets import _detect_per_episode_features, _get_episode_start_index
-
-    per_episode = _detect_per_episode_features(request.dataset_id, dataset)
-    if storage_feature in per_episode:
-        frame_from, frame_to = 0, ep_length
-    else:
-        frame_from, frame_to = request.frame_from, request.frame_to
-
-    n_frames = frame_to - frame_from
-    if n_frames > _LARGE_SAVE_FRAME_THRESHOLD and not request.confirm_large:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "large_edit_confirmation_required",
-                "message": (
-                    f"This edit touches {n_frames} frames (> {_LARGE_SAVE_FRAME_THRESHOLD}). "
-                    "Re-send with confirm_large=true to proceed."
-                ),
-                "frames": n_frames,
-            },
-        )
-
-    # Declared bounds (info.json ``min``/``max``) and categorical (``names``)
-    # validation. We run this here rather than only at apply time so the user
-    # gets immediate 400 feedback when they type 7 into a 1-5 quality field —
-    # the alternative would be silently staging the bad value and only
-    # blowing up on Save. The error message uses the user-submitted name so
-    # they recognize it.
-    bounds_error = _validate_value_against_declared_bounds(request.feature, feature_info, request.value)
-    if bounds_error:
-        raise HTTPException(status_code=400, detail=bounds_error)
-
-    episode_start = _get_episode_start_index(request.dataset_id, request.episode_index)
-    global_from = episode_start + frame_from
-    global_to = episode_start + frame_to
-    return storage_feature, frame_from, frame_to, global_from, global_to, feature_info
-
-
-def _validate_value_against_declared_bounds(feature_name: str, feature_info: dict, value: Any) -> str:
-    """Run the declared-bounds / categorical check on the requested value.
-
-    Returns the error string from
-    :func:`validate_feature_numeric_bounds` (empty when valid). Skips
-    silently if the feature has no declared bounds or categorical names —
-    string features and unbounded numeric features fall through.
-    """
-    from lerobot.datasets.feature_utils import (
-        is_categorical_feature,
-        validate_feature_numeric_bounds,
-    )
-
-    has_bounds = feature_info.get("min") is not None or feature_info.get("max") is not None
-    if not has_bounds and not is_categorical_feature(feature_info):
-        return ""
-
-    import numpy as np
-
-    # Coerce JSON-y value to a numpy array. The bounds checker is shape-
-    # agnostic — it flattens before checking — so a scalar / list / vector
-    # all work.
-    try:
-        arr = np.asarray(value)
-    except (TypeError, ValueError):
-        return f"Could not interpret value {value!r} as numeric for bounds check"
-    return validate_feature_numeric_bounds(feature_name, feature_info, arr)
-
-
-def _find_overlapping_feature_edits(
-    dataset_id: str, episode_index: int, feature: str, frame_from: int, frame_to: int
-) -> list[tuple[int, PendingEdit]]:
-    """Return ``(index_in_pending_edits, edit)`` pairs that overlap the given range.
-
-    Half-open `[a, b)` overlaps `[c, d)` iff `a < d and c < b`. Only considers
-    feature_set edits on the same (dataset, episode, feature) tuple.
-    """
-    from lerobot.gui.state import PendingEdit  # noqa: F401  (referenced in type hint only)
-
-    overlaps: list[tuple[int, Any]] = []
-    for i, e in enumerate(_app_state.pending_edits):
-        if (
-            e.edit_type != "feature_set"
-            or e.dataset_id != dataset_id
-            or e.episode_index != episode_index
-            or e.params.get("feature") != feature
-        ):
-            continue
-        a = int(e.params.get("frame_from", 0))
-        b = int(e.params.get("frame_to", 0))
-        if frame_from < b and a < frame_to:
-            overlaps.append((i, e))
-    return overlaps
-
-
-def _clip_overlapping_edits(
-    overlaps: list[tuple[int, Any]],
-    new_from: int,
-    new_to: int,
-) -> int:
-    """Last-write-wins resolution: clip prior edits' ranges to the non-overlap.
-
-    Pre: ``overlaps`` is the result of :func:`_find_overlapping_feature_edits` for
-    the same ``(dataset, episode, feature)`` tuple. Iterates in reverse index
-    order so removals don't shift indices we still need.
-    Post: returns the count of removed (fully-contained) edits.
-
-    Cases per overlapping prior edit ``[a, b)``:
-
-    * ``new`` fully contains prior (``new_from <= a`` and ``new_to >= b``) → remove it.
-    * ``new`` cuts off the right tail (``a < new_from <= b <= new_to``) → clip to ``[a, new_from)``.
-    * ``new`` cuts off the left tail (``new_from <= a < new_to < b``) → clip to ``[new_to, b)``.
-    * ``new`` is strictly inside (``a < new_from`` and ``new_to < b``) → split into two pieces.
-      We keep the left piece in place and append a new edit for the right piece.
-    """
-    removed = 0
-    for i, e in sorted(overlaps, key=lambda x: x[0], reverse=True):
-        a = int(e.params["frame_from"])
-        b = int(e.params["frame_to"])
-        if new_from <= a and new_to >= b:
-            _app_state.pending_edits.pop(i)
-            removed += 1
-            continue
-        # Compute remaining piece(s).
-        left = (a, min(b, new_from))  # may be empty
-        right = (max(a, new_to), b)  # may be empty
-        left_keep = left[0] < left[1]
-        right_keep = right[0] < right[1]
-        if left_keep and right_keep:
-            # Strictly inside — split. Keep left in place, append right.
-            e.params["frame_from"] = left[0]
-            e.params["frame_to"] = left[1]
-            # Recompute global indices.
-            episode_start = e.params["global_from_index"] - a
-            e.params["global_from_index"] = episode_start + left[0]
-            e.params["global_to_index"] = episode_start + left[1]
-            from lerobot.gui.state import PendingEdit
-
-            split = PendingEdit(
-                edit_type="feature_set",
-                dataset_id=e.dataset_id,
-                episode_index=e.episode_index,
-                params={
-                    **e.params,
-                    "frame_from": right[0],
-                    "frame_to": right[1],
-                    "global_from_index": episode_start + right[0],
-                    "global_to_index": episode_start + right[1],
-                },
-            )
-            _app_state.pending_edits.append(split)
-        elif left_keep:
-            episode_start = e.params["global_from_index"] - a
-            e.params["frame_from"] = left[0]
-            e.params["frame_to"] = left[1]
-            e.params["global_from_index"] = episode_start + left[0]
-            e.params["global_to_index"] = episode_start + left[1]
-        elif right_keep:
-            episode_start = e.params["global_from_index"] - a
-            e.params["frame_from"] = right[0]
-            e.params["frame_to"] = right[1]
-            e.params["global_from_index"] = episode_start + right[0]
-            e.params["global_to_index"] = episode_start + right[1]
-        else:
-            # Both empty — should be caught by the "fully contains" branch above.
-            _app_state.pending_edits.pop(i)
-            removed += 1
-    return removed
-
-
 @router.post("/feature-set")
 async def stage_feature_set(request: FeatureSetRequest):
     """Stage a feature-set edit for later apply on Save.
@@ -497,92 +188,31 @@ async def stage_feature_set(request: FeatureSetRequest):
     unless ``request.confirm_overlap=True``, in which case prior edits are
     clipped (or removed if fully contained) and the new edit is staged.
     """
-    from lerobot.gui.state import PendingEdit
+    from lerobot.gui.api._edits_core import propose_feature_set
 
-    _require_unlocked(request.dataset_id)
-
-    if request.dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset_id}")
-
-    dataset = _app_state.datasets[request.dataset_id]
-    (
-        storage_feature,
-        frame_from,
-        frame_to,
-        global_from,
-        global_to,
-        _,
-    ) = _validate_feature_edit(dataset, request)
-
-    # Overlap detection runs against the canonical on-disk feature name —
-    # otherwise a user staging "subtask" twice would dodge the overlap
-    # check because each request has a different surface name even though
-    # both target subtask_index.
-    overlaps = _find_overlapping_feature_edits(
-        request.dataset_id, request.episode_index, storage_feature, frame_from, frame_to
-    )
-    if overlaps and not request.confirm_overlap:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "overlapping_edit",
-                "message": (
-                    f"You already have {len(overlaps)} staged edit(s) on "
-                    f"{request.feature!r} (episode {request.episode_index}) overlapping "
-                    f"frames {frame_from}…{frame_to - 1}. "
-                    "Re-send with confirm_overlap=true to clip the prior edit(s)."
-                ),
-                "feature": storage_feature,
-                "episode_index": request.episode_index,
-                "new_range": [frame_from, frame_to],
-                "overlapping": [
-                    {
-                        "edit_index": i,
-                        "frame_from": int(e.params["frame_from"]),
-                        "frame_to": int(e.params["frame_to"]),
-                        "value": e.params.get("value"),
-                    }
-                    for i, e in overlaps
-                ],
-            },
+    try:
+        result = propose_feature_set(
+            _app_state,
+            request.dataset_id,
+            request.episode_index,
+            request.feature,
+            request.frame_from,
+            request.frame_to,
+            request.value,
+            confirm_large=request.confirm_large,
+            confirm_overlap=request.confirm_overlap,
         )
-    if overlaps and request.confirm_overlap:
-        removed = _clip_overlapping_edits(overlaps, frame_from, frame_to)
-        logger.info(
-            f"Resolved {len(overlaps)} overlapping edit(s) on "
-            f"{storage_feature} ep={request.episode_index}: {removed} removed, "
-            f"{len(overlaps) - removed} clipped"
-        )
+    except Exception as e:
+        raise _map_core_exception(e) from e
 
-    # PendingEdit always stores the canonical on-disk feature name so the
-    # apply pipeline (set_feature_values) sees a consistent column to write.
-    edit = PendingEdit(
-        edit_type="feature_set",
-        dataset_id=request.dataset_id,
-        episode_index=request.episode_index,
-        params={
-            "feature": storage_feature,
-            "frame_from": frame_from,
-            "frame_to": frame_to,
-            "global_from_index": global_from,
-            "global_to_index": global_to,
-            "value": request.value,
-        },
-    )
-    _app_state.add_edit(edit)
-    _save_edits_for_dataset(request.dataset_id)
-
-    logger.info(
-        f"Staged feature-set edit: feature={storage_feature} ep={request.episode_index} "
-        f"frames=[{frame_from}, {frame_to}) global=[{global_from}, {global_to})"
-    )
-    response: dict[str, Any] = {"status": "ok", "message": "Feature-set edit staged"}
-    if frame_from != request.frame_from or frame_to != request.frame_to:
-        # Surface coercion (per-episode broadcast) so the GUI can update its
-        # selection band rather than show stale ranges.
-        response["coerced_range"] = [frame_from, frame_to]
-        response["coerce_reason"] = "per_episode_broadcast"
-    return response
+    # FastAPI clients expect the slim response (no dataset_id / feature
+    # echoes) — preserved from the original handler for compat with
+    # frontend code that pattern-matches on key presence.
+    out: dict[str, Any] = {"status": "ok", "message": result["message"]}
+    if "coerced_range" in result:
+        out["coerced_range"] = result["coerced_range"]
+        out["coerce_reason"] = result["coerce_reason"]
+    return out
 
 
 @router.delete("/{edit_index}")
@@ -604,32 +234,13 @@ async def remove_edit(edit_index: int):
 @router.post("/discard")
 async def discard_edits(dataset_id: str | None = None):
     """Discard all pending edits, optionally for a specific dataset."""
-    from lerobot.gui.state import clear_edits_file
+    from lerobot.gui.api._edits_core import discard_pending
 
-    if dataset_id:
-        _require_unlocked(dataset_id)
-    else:
-        # Discarding all — check no dataset is locked
-        for ds_id in _app_state.datasets:
-            _require_unlocked(ds_id)
-
-    count = len(
-        _app_state.pending_edits if dataset_id is None else _app_state.get_edits_for_dataset(dataset_id)
-    )
-
-    # Clear the edits file(s)
-    if dataset_id:
-        if dataset_id in _app_state.datasets:
-            clear_edits_file(_app_state.datasets[dataset_id].root)
-    else:
-        # Clear all datasets' edit files
-        for dataset in _app_state.datasets.values():
-            clear_edits_file(dataset.root)
-
-    _app_state.clear_edits(dataset_id)
-
-    logger.info(f"Discarded {count} pending edits")
-    return {"status": "ok", "message": f"Discarded {count} pending edits"}
+    try:
+        result = discard_pending(_app_state, dataset_id)
+    except Exception as e:
+        raise _map_core_exception(e) from e
+    return {"status": "ok", "message": result["message"]}
 
 
 @router.post("/apply")

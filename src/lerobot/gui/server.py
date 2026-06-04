@@ -289,6 +289,14 @@ def _mount_mcp(host: str, port: int) -> None:
         host=host,
         port=port,
         streamable_http_path="/",
+        # Edit-tier tools share the GUI's PendingEdit queue + dataset
+        # registry — the AI proposes / applies via the same in-memory
+        # state the GUI's UI is driving. Standalone ``lerobot-mcp serve``
+        # has no AppState; edit-tier tools raise a descriptive error there.
+        # Lambda (not value) because _mount_mcp runs in run_server BEFORE
+        # the FastAPI startup_event allocates _app_state — capture the
+        # module reference and resolve lazily.
+        app_state=lambda: _app_state,
     )
     # Bridge tools (navigate_to / notify_user / ...) dispatch over HTTP to
     # /api/bridge/_dispatch on the SAME process. Loopback-gated, so safe.

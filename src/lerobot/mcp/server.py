@@ -33,6 +33,7 @@ from lerobot.utils.constants import HF_LEROBOT_HOME
 
 from .auth import (
     SCOPE_COMMENT,
+    SCOPE_EDIT,
     SCOPE_READ,
     LeRobotTokenVerifier,
     TokenStore,
@@ -50,13 +51,41 @@ _DEFAULT_DB_PATH = HF_LEROBOT_HOME / "_mcp_annotations.sqlite"
 class ServerState:
     """Holds per-process state: dataset root, metadata cache, annotation store.
 
-    A single instance is bound to the FastMCP app at startup.
+    A single instance is bound to the FastMCP app at startup. ``app_state``
+    is a getter (zero-arg callable) returning the GUI's ``AppState`` when
+    MCP is mounted inside the GUI process (unified deployment); edit-tier
+    tools that write to the in-memory ``PendingEdit`` queue use it as the
+    shared surface. Returns ``None`` in standalone ``lerobot-mcp serve``
+    mode and during the GUI startup window before the AppState is
+    constructed — edit-tier tools raise a descriptive error there.
+
+    A getter rather than a value because in the unified mode, ``_mount_mcp``
+    runs in ``run_server`` *before* the FastAPI ``startup_event`` allocates
+    the AppState. Resolving lazily lets MCP attach early and pick up the
+    live AppState on the first tool call.
     """
 
-    def __init__(self, dataset_root: Path | None = None, db_path: Path | None = None):
+    def __init__(
+        self,
+        dataset_root: Path | None = None,
+        db_path: Path | None = None,
+        app_state: Any = None,
+    ):
         self.dataset_root = Path(dataset_root) if dataset_root is not None else HF_LEROBOT_HOME
         self.store = AnnotationStore(db_path if db_path is not None else _DEFAULT_DB_PATH)
         self._meta_cache: OrderedDict[str, LeRobotDatasetMetadata] = OrderedDict()
+        # Accept either a callable (preferred — handles startup ordering) or a
+        # bare AppState value (test convenience). Normalised to a getter.
+        if app_state is None:
+            self._app_state_getter = lambda: None
+        elif callable(app_state):
+            self._app_state_getter = app_state
+        else:
+            self._app_state_getter = lambda: app_state
+
+    @property
+    def app_state(self):
+        return self._app_state_getter()
 
     def discover_datasets(self) -> list[tuple[str, Path]]:
         """Return ``[(repo_id, local_root), ...]`` for datasets under ``dataset_root``."""
@@ -145,6 +174,7 @@ def build_server(
     host: str = "127.0.0.1",
     port: int = 7861,
     streamable_http_path: str | None = None,
+    app_state: Any = None,
 ) -> FastMCP:
     """Construct a FastMCP server with the tool surface registered.
 
@@ -167,7 +197,7 @@ def build_server(
             ``<host>/mcp``, not ``<host>/mcp/mcp``).
     """
     global state
-    state = ServerState(dataset_root=dataset_root, db_path=db_path)
+    state = ServerState(dataset_root=dataset_root, db_path=db_path, app_state=app_state)
 
     fastmcp_kwargs: dict[str, Any] = {"host": host, "port": port}
     if streamable_http_path is not None:
@@ -406,6 +436,250 @@ def build_server(
         if not (0 <= episode_id < meta.total_episodes):
             raise ValueError(f"episode_id {episode_id} out of range [0, {meta.total_episodes})")
         return {"repo_id": repo_id, "episode_id": episode_id, "tags": s.store.get_tags(repo_id, episode_id)}
+
+    # ── Edit-tier: dataset pending-edit pipeline ───────────────────────────
+    # These tools mirror the GUI's PendingEdit model. The AI proposes
+    # edits (delete / trim / set-feature), the GUI's existing UI shows
+    # them inline (badge in the header + range highlights in the
+    # Inspector), and apply_pending_edits writes them through to disk in
+    # one transaction. The same /api/edits routes the operator drives
+    # the GUI with are reading and writing the same queue — proposals
+    # via MCP and via the GUI are interchangeable.
+    #
+    # Requires unified deployment (`app_state` is set). Standalone
+    # ``lerobot-mcp serve`` raises a descriptive error.
+
+    def _require_app_state():
+        s = _state()
+        if s.app_state is None:
+            raise ValueError(
+                "Edit-tier tools require unified GUI deployment "
+                "(open the dataset in the LeRobot GUI; MCP must be mounted in the same process)."
+            )
+        return s.app_state
+
+    def _convert_edit_exception(exc: Exception) -> dict[str, Any] | None:
+        """Map _edits_core exceptions to MCP-friendly responses.
+
+        Returns a structured dict for conflicts (so the AI can retry with
+        confirm_overlap / confirm_large), or ``None`` if the exception
+        should propagate as a tool error.
+        """
+        from lerobot.gui.api._edits_core import EditConflictError
+
+        if isinstance(exc, EditConflictError):
+            return {"status": "conflict", "detail": exc.detail}
+        return None
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def list_pending_edits(repo_id: str | None = None) -> dict[str, Any]:
+        """List currently staged (unsaved) dataset edits.
+
+        Edits are staged into a per-process queue that the GUI also reads.
+        The same queue is used whether the proposal came from the GUI's
+        UI or from another MCP call. ``apply_pending_edits`` flushes them
+        to disk; ``discard_pending_edits`` drops them.
+
+        Args:
+            repo_id: If given, only edits for this dataset. Otherwise all.
+
+        Returns ``{"edits": [...], "total": N}``. Each edit carries its
+        ``index`` (stable while the queue isn't mutated), ``edit_type``
+        (``delete`` / ``trim`` / ``feature_set``), the target episode,
+        and the type-specific ``params``.
+        """
+        from lerobot.gui.api._edits_core import list_pending
+
+        app_state = _require_app_state()
+        return list_pending(app_state, repo_id)
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    def propose_delete_episode(repo_id: str, episode_id: int) -> dict[str, Any]:
+        """Stage the deletion of one episode from a dataset.
+
+        Doesn't touch disk — adds to the pending-edit queue. The episode
+        stays visible in the GUI's tree with a deletion badge until the
+        operator (or you, via ``apply_pending_edits``) commits.
+
+        Args:
+            repo_id: Dataset id.
+            episode_id: Episode to delete.
+
+        Returns the staged-edit confirmation. Raises if the episode is
+        already marked for deletion or out of range. Idempotent only on
+        the failure side — proposing the same delete twice is an error.
+        """
+        from lerobot.gui.api._edits_core import propose_delete
+
+        app_state = _require_app_state()
+        try:
+            return propose_delete(app_state, repo_id, episode_id)
+        except Exception as e:
+            conflict = _convert_edit_exception(e)
+            if conflict is not None:
+                return conflict
+            raise
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    def propose_trim_episode(
+        repo_id: str,
+        episode_id: int,
+        start_frame: int,
+        end_frame: int,
+    ) -> dict[str, Any]:
+        """Stage a trim of one episode to the half-open range ``[start, end)``.
+
+        Replaces any prior trim on the same episode (last-write-wins).
+        Passing the full range (``start_frame=0``, ``end_frame=ep_length``)
+        clears an existing trim — useful for undoing a stage.
+
+        Args:
+            repo_id: Dataset id.
+            episode_id: Episode to trim.
+            start_frame: Inclusive lower bound (frames before this are dropped).
+            end_frame: Exclusive upper bound (frames at and after are dropped).
+
+        Returns the staged-edit confirmation.
+        """
+        from lerobot.gui.api._edits_core import propose_trim
+
+        app_state = _require_app_state()
+        try:
+            return propose_trim(app_state, repo_id, episode_id, start_frame, end_frame)
+        except Exception as e:
+            conflict = _convert_edit_exception(e)
+            if conflict is not None:
+                return conflict
+            raise
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    def propose_set_feature(
+        repo_id: str,
+        episode_id: int,
+        feature: str,
+        frame_from: int,
+        frame_to: int,
+        value: Any,
+        confirm_large: bool = False,
+        confirm_overlap: bool = False,
+    ) -> dict[str, Any]:
+        """Stage a per-frame feature-value edit over the range ``[frame_from, frame_to)``.
+
+        For tagging episode outcomes, labelling subtasks, correcting per-frame
+        signals like ``reward`` or ``success``. The edit is staged; nothing
+        is written to disk until ``apply_pending_edits``. Per-episode
+        features (e.g. ``success``) are coerced to the full episode range
+        automatically.
+
+        Two retry-able conflicts surface via ``{"status": "conflict", "detail": {...}}``:
+        - ``code=large_edit_confirmation_required`` — touches > 10k frames;
+          retry with ``confirm_large=True``.
+        - ``code=overlapping_edit`` — overlaps prior staged edit(s);
+          retry with ``confirm_overlap=True`` to clip them (last-write-wins).
+
+        Other validation failures (unknown feature, out-of-range, bounds
+        violation) raise the tool with an error message.
+
+        Args:
+            repo_id: Dataset id.
+            episode_id: Target episode.
+            feature: Feature name (e.g. ``'reward'``, ``'success'``, ``'subtask'``).
+                Read-only features (`action`, `observation.*`, video / image
+                features) are rejected.
+            frame_from: Inclusive lower frame (in episode-local indices).
+            frame_to: Exclusive upper frame.
+            value: JSON-serializable value. Categorical features accept
+                string or int representations; declared min/max bounds
+                are enforced.
+            confirm_large: Acknowledge an edit touching > 10k frames.
+            confirm_overlap: Clip prior overlapping edits on retry.
+
+        Returns the staged-edit confirmation, possibly including
+        ``coerced_range`` when the range was widened (per-episode feature).
+        """
+        from lerobot.gui.api._edits_core import propose_feature_set
+
+        app_state = _require_app_state()
+        try:
+            return propose_feature_set(
+                app_state,
+                repo_id,
+                episode_id,
+                feature,
+                frame_from,
+                frame_to,
+                value,
+                confirm_large=confirm_large,
+                confirm_overlap=confirm_overlap,
+            )
+        except Exception as e:
+            conflict = _convert_edit_exception(e)
+            if conflict is not None:
+                return conflict
+            raise
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    def discard_pending_edits(repo_id: str | None = None) -> dict[str, Any]:
+        """Drop pending edits without applying them.
+
+        Use to abandon a staging session. Does not touch on-disk data —
+        only the in-memory queue and the per-dataset edit-state file are
+        cleared.
+
+        Args:
+            repo_id: If given, scope the discard to one dataset.
+                Otherwise discards every dataset's queue.
+
+        Returns ``{"status": "ok", "discarded": N}``.
+        """
+        from lerobot.gui.api._edits_core import discard_pending
+
+        app_state = _require_app_state()
+        return discard_pending(app_state, repo_id)
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def apply_pending_edits(repo_id: str) -> dict[str, Any]:
+        """Apply all staged edits for a dataset to disk in one transaction.
+
+        Acquires the dataset lock, writes feature-set edits first (cell
+        rewrites in existing rows), then trims (episode-bound changes),
+        then deletes (row removal). Re-aggregates stats once at the end.
+        Reloads the in-memory dataset object to reflect the new
+        ``total_episodes`` / ``total_frames``. Clears the pending-edit
+        queue + on-disk state file on success.
+
+        This is the destructive step. Reversibility for dataset-on-disk
+        comes from a clean Hub push beforehand or a filesystem-level
+        snapshot — there's no built-in undo at the MCP layer.
+
+        Args:
+            repo_id: Dataset id.
+
+        Returns ``{"status": "ok"|"partial", "applied": N, "errors": [...],
+        "warnings": [...]}``. ``partial`` means data writes landed but
+        stats recompute or verification surfaced issues — the user's
+        edits ARE on disk.
+        """
+        app_state = _require_app_state()
+        if repo_id not in app_state.datasets:
+            raise ValueError(f"Dataset not opened in GUI: {repo_id}")
+
+        # The lock is shared with the GUI's apply route — concurrent
+        # apply attempts from MCP and the GUI's "Save" button serialize
+        # cleanly without either having to know the other exists.
+        lock = app_state.get_lock(repo_id)
+        if lock.locked():
+            raise ValueError(f"Dataset {repo_id} is busy (operation in progress)")
+        async with lock:
+            from lerobot.gui.api.edits import _apply_edits_locked
+
+            return await _apply_edits_locked(repo_id)
 
     # Bridge tools (navigate_to / notify_user / highlight_in_viewer / set_filter)
     # are attached unconditionally; whether they actually deliver depends on
