@@ -458,19 +458,6 @@ def build_server(
             )
         return s.app_state
 
-    def _convert_edit_exception(exc: Exception) -> dict[str, Any] | None:
-        """Map _edits_core exceptions to MCP-friendly responses.
-
-        Returns a structured dict for conflicts (so the AI can retry with
-        confirm_overlap / confirm_large), or ``None`` if the exception
-        should propagate as a tool error.
-        """
-        from lerobot.gui.api._edits_core import EditConflictError
-
-        if isinstance(exc, EditConflictError):
-            return {"status": "conflict", "detail": exc.detail}
-        return None
-
     @mcp.tool()
     @requires_scope(SCOPE_READ)
     def list_pending_edits(repo_id: str | None = None) -> dict[str, Any]:
@@ -491,8 +478,7 @@ def build_server(
         """
         from lerobot.gui.api._edits_core import list_pending
 
-        app_state = _require_app_state()
-        return list_pending(app_state, repo_id)
+        return list_pending(_require_app_state(), repo_id)
 
     @mcp.tool()
     @requires_scope(SCOPE_EDIT)
@@ -513,14 +499,7 @@ def build_server(
         """
         from lerobot.gui.api._edits_core import propose_delete
 
-        app_state = _require_app_state()
-        try:
-            return propose_delete(app_state, repo_id, episode_id)
-        except Exception as e:
-            conflict = _convert_edit_exception(e)
-            if conflict is not None:
-                return conflict
-            raise
+        return propose_delete(_require_app_state(), repo_id, episode_id)
 
     @mcp.tool()
     @requires_scope(SCOPE_EDIT)
@@ -530,30 +509,29 @@ def build_server(
         start_frame: int,
         end_frame: int,
     ) -> dict[str, Any]:
-        """Stage a trim of one episode to the half-open range ``[start, end)``.
+        """Stage a trim of one episode — keep frames ``[start_frame, end_frame)``, drop the rest.
+
+        This is a both-sides crop, not a middle-extract: the kept window
+        is one contiguous range, and frames outside it (``[0, start_frame)``
+        on the head and ``[end_frame, episode_length)`` on the tail) are
+        dropped at apply time. The episode does NOT split — one episode
+        in, one (shorter) episode out, with length ``end_frame - start_frame``.
 
         Replaces any prior trim on the same episode (last-write-wins).
-        Passing the full range (``start_frame=0``, ``end_frame=ep_length``)
+        Passing the full range (``start_frame=0``, ``end_frame=episode_length``)
         clears an existing trim — useful for undoing a stage.
 
         Args:
             repo_id: Dataset id.
             episode_id: Episode to trim.
-            start_frame: Inclusive lower bound (frames before this are dropped).
-            end_frame: Exclusive upper bound (frames at and after are dropped).
+            start_frame: First frame to keep (inclusive). Set to 0 to only chop the tail.
+            end_frame: First frame to drop (exclusive). Set to ``episode_length`` to only chop the head.
 
         Returns the staged-edit confirmation.
         """
         from lerobot.gui.api._edits_core import propose_trim
 
-        app_state = _require_app_state()
-        try:
-            return propose_trim(app_state, repo_id, episode_id, start_frame, end_frame)
-        except Exception as e:
-            conflict = _convert_edit_exception(e)
-            if conflict is not None:
-                return conflict
-            raise
+        return propose_trim(_require_app_state(), repo_id, episode_id, start_frame, end_frame)
 
     @mcp.tool()
     @requires_scope(SCOPE_EDIT)
@@ -601,12 +579,11 @@ def build_server(
         Returns the staged-edit confirmation, possibly including
         ``coerced_range`` when the range was widened (per-episode feature).
         """
-        from lerobot.gui.api._edits_core import propose_feature_set
+        from lerobot.gui.api._edits_core import EditConflictError, propose_feature_set
 
-        app_state = _require_app_state()
         try:
             return propose_feature_set(
-                app_state,
+                _require_app_state(),
                 repo_id,
                 episode_id,
                 feature,
@@ -616,11 +593,12 @@ def build_server(
                 confirm_large=confirm_large,
                 confirm_overlap=confirm_overlap,
             )
-        except Exception as e:
-            conflict = _convert_edit_exception(e)
-            if conflict is not None:
-                return conflict
-            raise
+        except EditConflictError as e:
+            # Overlap / large-edit conflicts surface as structured data so
+            # the AI can read ``detail.code`` and retry with the right
+            # confirm_* flag. Validation errors (unknown feature, bad range,
+            # bounds violation) still propagate as tool errors.
+            return {"status": "conflict", "detail": e.detail}
 
     @mcp.tool()
     @requires_scope(SCOPE_EDIT)
@@ -639,8 +617,7 @@ def build_server(
         """
         from lerobot.gui.api._edits_core import discard_pending
 
-        app_state = _require_app_state()
-        return discard_pending(app_state, repo_id)
+        return discard_pending(_require_app_state(), repo_id)
 
     @mcp.tool()
     @requires_scope(SCOPE_EDIT)

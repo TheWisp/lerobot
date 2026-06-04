@@ -373,7 +373,7 @@ class TestCrossSurfaceSharedState:
         assert result["edits"][0]["edit_type"] == "delete"
 
 
-class TestApplyEndToEnd:
+class TestApply:
     """Propose → apply → verify the dataset on disk actually changed.
 
     The synthetic dataset_factory builds a real on-disk dataset under
