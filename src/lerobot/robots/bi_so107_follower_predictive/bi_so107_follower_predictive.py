@@ -265,15 +265,21 @@ class BiSO107FollowerPredictive(BiSO107Follower):
         self._cartesian_adapter = adapter
 
         # Install a teleop-side transform that returns the adapter's
-        # cached joint dict. Script-side ``teleop.get_action()`` then
-        # yields a recordable joint dict, and the predictive controllers
-        # ALSO read the same cached value through the per-arm sub-
-        # teleops below — single source of truth (the adapter cache),
-        # no parallel IK runs.
-        def _cached_joints(_action: dict) -> dict:
-            return adapter.get_full_joint_action() or {}
+        # cached joint dict (single source of truth — the per-arm sub-
+        # teleops below read the same cache; no parallel IK runs).
+        # Exposes ``hold_per_arm`` because the teleop's haptic-rumble
+        # path polls ``action_transform.hold_per_arm``; a plain function
+        # has no attribute to look up so the rumble silently dies at the
+        # adapter wrapper on the predictive path.
+        class _AdapterTransform:
+            def __call__(self, _action: dict) -> dict:
+                return adapter.get_full_joint_action() or {}
 
-        teleop.set_action_transform(_cached_joints)
+            @property
+            def hold_per_arm(self) -> tuple[bool, bool]:
+                return adapter.hold_per_arm
+
+        teleop.set_action_transform(_AdapterTransform())
 
         # Route the adapter's per-arm sub-teleops to each predictive arm's
         # controller. Same downstream contract as the leader path.

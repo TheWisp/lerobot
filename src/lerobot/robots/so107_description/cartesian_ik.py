@@ -38,12 +38,26 @@ URDF space. The upstream kinematic ProcessorSteps are not used or modified.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from typing import Any, Protocol
 
 import numpy as np
 
 from lerobot.utils.rotation import Rotation
+
+# Optional pin-pink dependency: bind the QP "no solution" exception at
+# import-time, with a sentinel fallback so ``except _NoSolutionFound:``
+# is syntactically valid even without pin-pink installed. The fallback
+# never fires (it's only ever raised from inside Pink's solver), so the
+# guard collapses to a no-op in the no-pink case.
+try:
+    from pink.exceptions import NoSolutionFound as _NoSolutionFound
+except ImportError:
+
+    class _NoSolutionFound(Exception):  # noqa: N818 — mirrors pink.exceptions.NoSolutionFound; sentinel never fires in no-pink envs
+        pass
+
 
 from .joint_alignment import (
     MOTOR_NAMES,
@@ -75,6 +89,28 @@ _MAX_EE_STEP_M: float = 0.10
 # TODO: provisional hardcoded limit; see teleoperators/quest_vr/TODO.md
 # ("make safety limits explicit and configurable").
 _MAX_JOINT_STEP_DEG: float = 20.0
+
+# Per-second ramp rate for the operator-commanded ``reset`` motion. The
+# reset button is hold-to-ramp: each call the controller advances every
+# arm joint toward the attach-time seed by at most
+# ``_RESET_RAMP_RATE_DEG_PER_SEC * dt`` degrees, where ``dt`` is wall-
+# clock since the previous reset call. Rate-based (not per-call) because
+# the IK transform is polled at different rates on different follower
+# paths — ~30 Hz inline on the plain follower's main-loop
+# ``get_action()`` vs 90 Hz on the predictive follower's
+# ``BimanualCartesianIKAdapter`` thread. A per-call step would give the
+# operator a 3× faster ramp on predictive, a noticeable feel difference.
+# 30 °/s = 3 s for a 90° joint move, slow enough to release if the
+# trajectory heads somewhere bad. Safe on a plain follower with
+# unbounded ``max_relative_target``; the predictive follower's own rate
+# limiter further constrains motor-side.
+_RESET_RAMP_RATE_DEG_PER_SEC: float = 30.0
+# Cap on the dt fed into the ramp. If the IK transform hasn't been
+# called for a long time (paused thread, startup, debugger pause), don't
+# let the first resumed reset tick fly across the whole arm — clamp the
+# step the way the per-call version did. 100 ms gives 3° max per call,
+# well under the implausible-jump backstop's 20°.
+_RESET_RAMP_DT_CAP_S: float = 0.1
 
 
 class _Kinematics(Protocol):
@@ -187,6 +223,7 @@ class CartesianIKController:
         workspace_min: tuple[float, float, float],
         workspace_max: tuple[float, float, float],
         max_ee_step_m: float = _MAX_EE_STEP_M,
+        label: str = "",
     ) -> None:
         assert "gripper" in motor_names, "motor_names must contain 'gripper'"
         assert len(q_init) == len(motor_names), "q_init length must match motor_names"
@@ -198,9 +235,31 @@ class CartesianIKController:
         self._ws_min = np.asarray(workspace_min, dtype=float)
         self._ws_max = np.asarray(workspace_max, dtype=float)
         self._max_step = float(max_ee_step_m)
+        # Tag for the per-tick hold-warning so a bimanual run log says
+        # which arm hit the backstop (the bimanual transform sets "left" /
+        # "right"). Empty default = no tag in the warning line.
+        self._label = str(label)
+        # Snapshot of the attach-time seed. The operator-commanded reset
+        # button (handled in __call__) snaps _q_last back to this so the
+        # arm goes "home" without needing a per-robot rest-pose config —
+        # if you started at a good pose, you can always get back to it.
+        self._q_init = self._q_last.copy()
+        # Wall-clock timestamp of the previous reset-ramp call, used to
+        # turn the per-second ramp rate into a per-call step. None when
+        # the reset button is not held — re-armed on the rising edge so
+        # a fresh hold starts with a zero-step warm-up rather than a
+        # snap.
+        self._reset_prev_t: float | None = None
         self._prev_enabled = False
         self._ref: np.ndarray | None = None  # latched reference pose (4x4)
         self._last_pos: np.ndarray | None = None  # last commanded EE position
+        # True iff the last ``__call__`` ended up returning the held command
+        # (NoSolutionFound or implausible-IK-jump branches). Inspected by
+        # the bimanual-transform wrapper so the WebXR client can render a
+        # tactile "you're pushing against an invisible wall" rumble while
+        # the IK is held. Engagement gating (clutch released) is NOT a
+        # hold — the operator's hand is allowed to move freely there.
+        self.is_holding: bool = False
 
     def __call__(self, action: dict[str, Any]) -> dict[str, float]:
         enabled = bool(action["enabled"])
@@ -209,6 +268,39 @@ class CartesianIKController:
         # motor-space target and it works whether or not the clutch is
         # engaged. Keep it in q_last so the seed stays a faithful command.
         self._q_last[self._gripper_idx] = gripper_pos
+
+        # Operator-commanded reset: hold-to-ramp toward the attach-time
+        # seed at _RESET_RAMP_RATE_DEG_PER_SEC, measured in wall-clock
+        # time so the ramp feels the same regardless of how often the
+        # transform is being polled (plain follower's main-loop
+        # get_action() vs predictive follower's 90 Hz adapter thread).
+        # Each call advances all arm joints by a clamped delta; release
+        # the button at any time and the arm stops where it is. This is
+        # the safety contract — snapping to the seed in a single call
+        # would be ~600°/s on a plain follower with unbounded
+        # max_relative_target. Intentionally bypasses the implausible-
+        # jump backstop because each clamped step is itself well below
+        # the backstop threshold (≤3° vs 20°). Gripper passthrough above
+        # stays.
+        if float(action.get("reset", 0.0)) > 0.5:
+            now = time.perf_counter()
+            # Rising edge of the hold: dt=0 warms up with zero step so a
+            # fast first call doesn't snap; ramp starts from the next
+            # call onward.
+            dt = 0.0 if self._reset_prev_t is None else min(now - self._reset_prev_t, _RESET_RAMP_DT_CAP_S)
+            self._reset_prev_t = now
+            step_deg = _RESET_RAMP_RATE_DEG_PER_SEC * dt
+            arm_diff = self._q_init[self._arm_idx] - self._q_last[self._arm_idx]
+            clamped = np.clip(arm_diff, -step_deg, step_deg)
+            self._q_last[self._arm_idx] += clamped
+            self._ref = None
+            self._last_pos = None
+            self._prev_enabled = False
+            self.is_holding = False
+            return {f"{name}.pos": float(self._q_last[i]) for i, name in enumerate(self._motor_names)}
+        # Reset button not held: drop the timestamp so a future press
+        # re-arms cleanly from the rising-edge zero-warm-up.
+        self._reset_prev_t = None
 
         if enabled:
             if not self._prev_enabled or self._ref is None:
@@ -249,20 +341,39 @@ class CartesianIKController:
                 pos = self._last_pos + step * (self._max_step / n)
             desired[:3, 3] = pos
 
-            q_new = np.asarray(self._kin.inverse_kinematics(self._q_last, desired), dtype=float)
+            # Hold this tick if the QP can't solve at all (e.g. the user
+            # stretched past reach). Symmetric with the implausible-jump
+            # guard below — internal state stays put so the next tick
+            # re-evaluates from the held pose, and the user just has to
+            # move back into the workspace for tracking to resume.
+            tag = f"[{self._label}] " if self._label else ""
+            try:
+                q_new = np.asarray(self._kin.inverse_kinematics(self._q_last, desired), dtype=float)
+            except _NoSolutionFound:
+                logger.warning("CartesianIKController %sIK has no solution — holding this tick", tag)
+                self.is_holding = True
+                self._prev_enabled = enabled
+                return {f"{name}.pos": float(self._q_last[i]) for i, name in enumerate(self._motor_names)}
             # Backstop: hold this tick if IK swings an arm joint implausibly
             # far. _q_last / _ref / _last_pos are left untouched, so the next
             # tick re-evaluates from the held state.
             joint_step = float(np.max(np.abs(q_new[self._arm_idx] - self._q_last[self._arm_idx])))
             if joint_step > _MAX_JOINT_STEP_DEG:
                 logger.warning(
-                    "CartesianIKController: implausible IK jump (%.0f deg) — holding this tick",
+                    "CartesianIKController %simplausible IK jump (%.0f deg) — holding this tick",
+                    tag,
                     joint_step,
                 )
+                self.is_holding = True
             else:
                 q_new[self._gripper_idx] = gripper_pos
                 self._q_last = q_new
                 self._last_pos = pos.copy()
+                self.is_holding = False
+        else:
+            # Disengaged is not "holding" — the operator's hand is free to
+            # move without any IK-target feedback.
+            self.is_holding = False
 
         self._prev_enabled = enabled
         return {f"{name}.pos": float(self._q_last[i]) for i, name in enumerate(self._motor_names)}
@@ -361,6 +472,8 @@ def make_so107_arm_ik_controller(
     q_init: np.ndarray,
     workspace_min: tuple[float, float, float] = SO107_WORKSPACE_MIN,
     workspace_max: tuple[float, float, float] = SO107_WORKSPACE_MAX,
+    *,
+    label: str = "",
 ) -> CartesianIKController:
     """Build a Cartesian-IK controller for one SO-107 arm.
 
@@ -384,6 +497,7 @@ def make_so107_arm_ik_controller(
         q_init=q_init,
         workspace_min=workspace_min,
         workspace_max=workspace_max,
+        label=label,
     )
 
 
@@ -406,13 +520,43 @@ def is_so107_bimanual_cartesian_teleop(teleop: Any) -> bool:
     return "left_target_x" in names and "right_target_x" in names
 
 
+class BimanualSO107IKTransform:
+    """Callable Cartesian-action → joint-action transform for a bimanual
+    SO-107 follower, with per-arm IK-hold state readable by the teleop.
+
+    Wraps :func:`make_bimanual_ik_transform` so callers that only need the
+    dict→dict behavior (``set_action_transform``) keep working unchanged,
+    and adds :attr:`hold_per_arm` for callers (the Quest VR teleop) that
+    want to surface "the IK is holding the last command" to the operator
+    as a tactile signal.
+    """
+
+    def __init__(self, left: CartesianIKController, right: CartesianIKController) -> None:
+        self.left = left
+        self.right = right
+        self._inner = make_bimanual_ik_transform(left, right)
+
+    def __call__(self, action: dict) -> dict:
+        return self._inner(action)
+
+    @property
+    def hold_per_arm(self) -> tuple[bool, bool]:
+        """``(left_holding, right_holding)`` from the last ``__call__``.
+
+        True iff that arm's IK ended up returning the held command
+        (NoSolutionFound, implausible-jump backstop). The teleop signals
+        each rising / falling edge to the operator via haptic pulse.
+        """
+        return (self.left.is_holding, self.right.is_holding)
+
+
 def build_so107_bimanual_ik_transform(
     ik_kinematics: dict[str, JointMappedKinematics],
     left_arm: Any,
     right_arm: Any,
     workspace_min: tuple[float, float, float] = SO107_WORKSPACE_MIN,
     workspace_max: tuple[float, float, float] = SO107_WORKSPACE_MAX,
-) -> Callable[[dict], dict]:
+) -> BimanualSO107IKTransform:
     """Build a Cartesian-action → joint-action transform for a bimanual
     SO-107 follower.
 
@@ -421,9 +565,11 @@ def build_so107_bimanual_ik_transform(
     once at build time to read the latch reference), then composes them
     through the bimanual prefix split/merge.
 
-    The returned callable is the shape ``teleop.set_action_transform``
+    The returned object is callable (the shape ``teleop.set_action_transform``
     expects: takes a bimanual Cartesian action dict, returns a
-    motor-joint dict prefixed with ``left_`` / ``right_``.
+    motor-joint dict prefixed with ``left_`` / ``right_``) AND exposes
+    :attr:`BimanualSO107IKTransform.hold_per_arm` for callers that want
+    per-arm hold state.
 
     Used by:
       * ``BiSO107Follower.attach_teleop`` — installs synchronously via
@@ -441,9 +587,9 @@ def build_so107_bimanual_ik_transform(
         return np.array([float(obs[f"{m}.pos"]) for m in MOTOR_NAMES], dtype=float)
 
     left_ik = make_so107_arm_ik_controller(
-        ik_kinematics["left"], _seed(left_arm), workspace_min, workspace_max
+        ik_kinematics["left"], _seed(left_arm), workspace_min, workspace_max, label="left"
     )
     right_ik = make_so107_arm_ik_controller(
-        ik_kinematics["right"], _seed(right_arm), workspace_min, workspace_max
+        ik_kinematics["right"], _seed(right_arm), workspace_min, workspace_max, label="right"
     )
-    return make_bimanual_ik_transform(left_ik, right_ik)
+    return BimanualSO107IKTransform(left_ik, right_ik)

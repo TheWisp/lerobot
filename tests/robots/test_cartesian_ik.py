@@ -45,6 +45,7 @@ from lerobot.utils.import_utils import _pin_pink_available
 # The eight keys a Quest controller emits and a CartesianIKController reads.
 _IK_INPUT_KEYS = {
     "enabled",
+    "reset",
     "target_x",
     "target_y",
     "target_z",
@@ -465,6 +466,292 @@ def test_implausible_ik_jump_is_held():
     for i, motor in enumerate(MOTOR_NAMES):
         if motor != "gripper":
             assert out[f"{motor}.pos"] == pytest.approx(q_init[i])
+
+
+def test_reset_action_ramps_arm_toward_attach_time_seed(monkeypatch):
+    """``reset=1.0`` is hold-to-ramp toward the q_init snapshot at
+    ``_RESET_RAMP_RATE_DEG_PER_SEC`` (wall-clock), NOT a single-call snap.
+    A snap would be ~600°/s on a plain follower with unbounded
+    ``max_relative_target``; the ramp gives the operator time to
+    release if the trajectory heads somewhere bad, and is safe on
+    every follower path.
+
+    Pins the rate-based contract by driving ``time.perf_counter`` with
+    a monkeypatched clock — the previous per-call step would have given
+    the predictive follower a 3× faster ramp than the plain follower.
+    """
+    from lerobot.robots.so107_description import cartesian_ik as ik_mod
+    from lerobot.robots.so107_description.cartesian_ik import (
+        _RESET_RAMP_DT_CAP_S,
+        _RESET_RAMP_RATE_DEG_PER_SEC,
+    )
+
+    fake_now = [0.0]
+    monkeypatch.setattr(ik_mod.time, "perf_counter", lambda: fake_now[0])
+
+    q_init = np.array([0.0, -0.2, 0.15, 0.0, 0.0, 0.0, 50.0])
+    ctrl = _make_controller(q_init)
+
+    # Move shoulder_pan to +0.05 (stub IK copies target_xyz delta into
+    # the first three joints). Now q_last[0] is +0.05 away from q_init[0].
+    ctrl(_ee_action(enabled=1.0, target_x=0.05))
+    assert ctrl._q_last[0] == pytest.approx(0.05)
+
+    # Rising edge of the reset hold: dt=0 (zero-step warm-up), so the
+    # arm does NOT move yet. Pins "first call is the arming call,
+    # second call is the first ramp call" — without this, the rate-
+    # based formula has nothing to multiply.
+    out = ctrl(_ee_action(reset=1.0))
+    assert out["shoulder_pan.pos"] == pytest.approx(0.05)
+
+    # Advance 100 ms and tick again — at 30 °/s that's 3°, more than the
+    # 0.05° distance to q_init, so the joint reaches q_init.
+    fake_now[0] += 0.1
+    out = ctrl(_ee_action(reset=1.0))
+    assert out["shoulder_pan.pos"] == pytest.approx(0.0)
+
+    # Multi-call ramp far from seed: 5° away, advancing 33 ms per call
+    # (≈ predictive 90-Hz cadence) gives ~1° per call, ~5 calls to
+    # converge. Independent of how often the call lands — the ramp is
+    # measured in wall-clock seconds.
+    ctrl._q_last[0] = 5.0
+    ctrl._reset_prev_t = None  # re-arm the rising edge
+    ctrl(_ee_action(reset=1.0))  # arming call (zero step)
+    assert ctrl._q_last[0] == pytest.approx(5.0)
+    for k in range(1, 7):
+        fake_now[0] += 1 / 30  # main-loop cadence
+        out = ctrl(_ee_action(reset=1.0))
+        # per-call step = 30 °/s × 1/30 s = 1°
+        expected = max(5.0 - k * 1.0, 0.0)
+        assert out["shoulder_pan.pos"] == pytest.approx(expected, abs=1e-6), f"call {k}"
+    # Converged.
+    assert out["shoulder_pan.pos"] == pytest.approx(0.0)
+
+    # Releasing reset disarms the timestamp so the next press warms up
+    # from a fresh zero-step rising edge — no big snap on resume.
+    ctrl._q_last[0] = 50.0
+    ctrl._reset_prev_t = None
+    out = ctrl(_ee_action(enabled=0.0, reset=0.0))
+    assert ctrl._reset_prev_t is None  # idle clears the timestamp
+    assert out["shoulder_pan.pos"] == pytest.approx(50.0)
+
+    # The dt cap bounds the per-call step even after a long pause —
+    # otherwise the first resumed reset call after a gap would slew the
+    # arm far past one ramp tick. Cap × rate = 0.1 s × 30 °/s = 3° max.
+    fake_now[0] += 5.0  # large pause
+    ctrl(_ee_action(reset=1.0))  # arming call (zero step)
+    fake_now[0] += 1.0  # another large gap
+    out = ctrl(_ee_action(reset=1.0))
+    capped_step = _RESET_RAMP_RATE_DEG_PER_SEC * _RESET_RAMP_DT_CAP_S
+    assert out["shoulder_pan.pos"] == pytest.approx(50.0 - capped_step, abs=1e-6)
+
+    # is_holding stays clear throughout reset (the operator IS commanding
+    # the motion — the IK-hold rumble should not fire).
+    assert ctrl.is_holding is False
+
+
+def test_reset_ramp_rate_independent_of_call_rate(monkeypatch):
+    """Pin the headline bug fix: hold-to-ramp feels the same on the
+    plain follower (transform polled inline at ~30 Hz on main-loop
+    ``get_action()``) and on the predictive follower (transform polled
+    at 90 Hz inside ``BimanualCartesianIKAdapter``). Pre-fix the
+    predictive ramp was 3× faster because the step was per-call.
+
+    Drives the same wall-clock duration through both call rates and
+    asserts the joint converges by the same elapsed time.
+    """
+    from lerobot.robots.so107_description import cartesian_ik as ik_mod
+
+    fake_now = [0.0]
+    monkeypatch.setattr(ik_mod.time, "perf_counter", lambda: fake_now[0])
+
+    q_init = np.array([0.0, -0.2, 0.15, 0.0, 0.0, 0.0, 50.0])
+
+    # Plain follower: 30 Hz transform polling, 0.5 s elapsed → 15 calls.
+    ctrl_plain = _make_controller(q_init)
+    ctrl_plain._q_last[0] = 90.0  # far from q_init[0]=0
+    ctrl_plain(_ee_action(reset=1.0))  # arming (zero step)
+    for _ in range(15):
+        fake_now[0] += 1 / 30
+        ctrl_plain(_ee_action(reset=1.0))
+    plain_pos = ctrl_plain._q_last[0]
+
+    # Predictive: 90 Hz transform polling, same 0.5 s elapsed → 45 calls.
+    fake_now[0] = 100.0  # reset clock to a fresh region
+    ctrl_pred = _make_controller(q_init)
+    ctrl_pred._q_last[0] = 90.0
+    ctrl_pred(_ee_action(reset=1.0))  # arming (zero step)
+    for _ in range(45):
+        fake_now[0] += 1 / 90
+        ctrl_pred(_ee_action(reset=1.0))
+    pred_pos = ctrl_pred._q_last[0]
+
+    # Both followers ramped for 0.5 s at 30 °/s → ~15° traversed →
+    # joint at 90 − 15 = 75°. Equal to within tiny float accumulation.
+    assert plain_pos == pytest.approx(pred_pos, abs=0.01), (
+        f"ramp rate not call-rate independent: plain={plain_pos}, pred={pred_pos}"
+    )
+    assert plain_pos == pytest.approx(75.0, abs=0.01)
+
+
+def test_unsolvable_ik_is_held():
+    """A Pink QP that raises NoSolutionFound (target unreachable from the
+    seed under joint/velocity limits) must hold the previous command — not
+    propagate the exception and crash the teleop process.
+
+    Regression for: Quest VR user stretched past reach -> ``pink.exceptions.
+    NoSolutionFound`` -> uncaught -> ``lerobot-teleoperate`` exited rc=1.
+    Same conceptual treatment as the implausible-jump guard above.
+    """
+    from lerobot.robots.so107_description.cartesian_ik import _NoSolutionFound
+
+    class _InfeasibleIK:
+        def forward_kinematics(self, q):
+            t = np.eye(4)
+            t[:3, 3] = np.asarray(q, dtype=float)[:3]
+            return t
+
+        def inverse_kinematics(self, seed, target):
+            raise _NoSolutionFound("target unreachable")
+
+    q_init = np.array([0.0, -0.2, 0.15, 0.0, 0.0, 0.0, 50.0])
+    ctrl = CartesianIKController(
+        kinematics=_InfeasibleIK(),
+        motor_names=list(MOTOR_NAMES),
+        q_init=q_init,
+        workspace_min=_WS_MIN,
+        workspace_max=_WS_MAX,
+    )
+    # No exception escapes; output is the held configuration.
+    out = ctrl(_ee_action(enabled=1.0, target_x=0.01))
+    for i, motor in enumerate(MOTOR_NAMES):
+        if motor != "gripper":
+            assert out[f"{motor}.pos"] == pytest.approx(q_init[i])
+    # The hold flag is set so the WebXR client can rumble the controller.
+    assert ctrl.is_holding is True
+
+
+def test_is_holding_flag_tracks_solve_outcome():
+    """``is_holding`` is True iff the last call returned the held command —
+    the per-arm signal the bimanual transform exposes to the teleop for
+    haptic-feedback dispatch."""
+
+    class _Solver:
+        def __init__(self):
+            self.next_raises = False
+            self.next_returns = None
+
+        def forward_kinematics(self, q):
+            t = np.eye(4)
+            t[:3, 3] = np.asarray(q, dtype=float)[:3]
+            return t
+
+        def inverse_kinematics(self, seed, target):
+            from lerobot.robots.so107_description.cartesian_ik import _NoSolutionFound
+
+            if self.next_raises:
+                raise _NoSolutionFound("infeasible")
+            return self.next_returns if self.next_returns is not None else seed
+
+    q_init = np.array([0.0, -0.2, 0.15, 0.0, 0.0, 0.0, 50.0])
+    solver = _Solver()
+    ctrl = CartesianIKController(
+        kinematics=solver,
+        motor_names=list(MOTOR_NAMES),
+        q_init=q_init,
+        workspace_min=_WS_MIN,
+        workspace_max=_WS_MAX,
+    )
+
+    # Disengaged: not "holding" (operator's hand free).
+    ctrl(_ee_action(enabled=0.0, target_x=0.0))
+    assert ctrl.is_holding is False
+
+    # Engaged successful solve: not holding.
+    solver.next_returns = np.asarray(q_init, dtype=float)
+    ctrl(_ee_action(enabled=1.0, target_x=0.0))
+    assert ctrl.is_holding is False
+
+    # Infeasible solve: holding flag set.
+    solver.next_raises = True
+    ctrl(_ee_action(enabled=1.0, target_x=0.01))
+    assert ctrl.is_holding is True
+
+    # Back to a successful solve: flag clears on its own (no manual reset).
+    solver.next_raises = False
+    ctrl(_ee_action(enabled=1.0, target_x=0.0))
+    assert ctrl.is_holding is False
+
+
+def test_bimanual_transform_exposes_per_arm_hold_state():
+    """``BimanualSO107IKTransform.hold_per_arm`` mirrors the underlying
+    controllers' ``is_holding`` flags so the teleop can read per-arm state
+    without reaching for the controllers directly."""
+    from lerobot.robots.so107_description.cartesian_ik import (
+        BimanualSO107IKTransform,
+        _NoSolutionFound,
+    )
+
+    class _Stub:
+        def __init__(self, raises=False):
+            self.raises = raises
+
+        def forward_kinematics(self, q):
+            t = np.eye(4)
+            t[:3, 3] = np.asarray(q, dtype=float)[:3]
+            return t
+
+        def inverse_kinematics(self, seed, target):
+            if self.raises:
+                raise _NoSolutionFound("infeasible")
+            return seed
+
+    q_init = np.array([0.0, -0.2, 0.15, 0.0, 0.0, 0.0, 50.0])
+
+    def _ctrl(stub):
+        return CartesianIKController(
+            kinematics=stub,
+            motor_names=list(MOTOR_NAMES),
+            q_init=q_init.copy(),
+            workspace_min=_WS_MIN,
+            workspace_max=_WS_MAX,
+        )
+
+    left_stub = _Stub(raises=False)
+    right_stub = _Stub(raises=True)
+    transform = BimanualSO107IKTransform(_ctrl(left_stub), _ctrl(right_stub))
+
+    # Drive one tick. Left solves cleanly; right's IK raises.
+    action = {
+        f"left_{k}": 0.0
+        for k in (
+            "enabled",
+            "target_x",
+            "target_y",
+            "target_z",
+            "target_wx",
+            "target_wy",
+            "target_wz",
+            "gripper_pos",
+        )
+    } | {
+        f"right_{k}": 0.0
+        for k in (
+            "enabled",
+            "target_x",
+            "target_y",
+            "target_z",
+            "target_wx",
+            "target_wy",
+            "target_wz",
+            "gripper_pos",
+        )
+    }
+    action["left_enabled"] = 1.0
+    action["right_enabled"] = 1.0
+    action["right_target_x"] = 0.01
+    transform(action)
+    assert transform.hold_per_arm == (False, True)
 
 
 def test_quest_controller_reanchors_after_tracking_dropout():
