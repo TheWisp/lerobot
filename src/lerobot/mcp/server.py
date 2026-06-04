@@ -688,6 +688,102 @@ def build_server(
 
             return await _apply_edits_locked(repo_id)
 
+    # ── Read-tier: Hugging Face Hub introspection ──────────────────────────
+    # Read-only Hub surface. Tells the AI whether the user is logged in,
+    # what a remote repo looks like, and how any in-flight transfers
+    # (kicked off via the GUI's "Push to Hub" or `hub_start_upload` once
+    # it lands) are progressing. No uploads / downloads here — those are
+    # edit-tier and ship in a follow-up PR.
+    #
+    # ``hub_auth_status`` and ``hub_repo_info`` work even in standalone
+    # ``lerobot-mcp serve`` mode (they don't need AppState). The two
+    # job-tracking tools require unified deployment because the job
+    # registry lives on the GUI's AppState.
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def hub_auth_status() -> dict[str, Any]:
+        """Whether the host process has a working HF Hub login.
+
+        Probes via ``HfApi().whoami()`` on every call (cheap; HF caches
+        the token resolution). Any failure path — no token, expired
+        token, network down — collapses to ``logged_in=False``. The
+        agent should treat all of these uniformly: ask the operator to
+        ``huggingface-cli login`` or set ``HF_TOKEN`` on the host.
+
+        Returns ``{"logged_in": bool, "username": str | None}``.
+        """
+        from lerobot.gui.api._hub_core import get_auth_status
+
+        return get_auth_status()
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def hub_repo_info(repo_id: str) -> dict[str, Any]:
+        """Look up a dataset repo on the Hub.
+
+        Reads basic repo metadata (visibility, last commit, file count,
+        total size) plus best-effort ``meta/info.json`` enrichment for
+        episode + frame counts. Useful before proposing a sync — the
+        agent can compare local vs remote sizes / episode counts and
+        warn the user before kicking off a big transfer.
+
+        Args:
+            repo_id: e.g. ``'thewisp/cylinder_ring_assembly'``.
+
+        Returns ``{"exists": bool, ...}``. When ``exists=False`` (repo
+        missing, private with no access, network down) only ``repo_id``
+        and ``error`` are filled; the AI should branch on ``"exists"``
+        rather than parse error text.
+        """
+        from lerobot.gui.api._hub_core import get_repo_info
+
+        return get_repo_info(repo_id)
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def hub_list_jobs() -> dict[str, Any]:
+        """List all Hub transfers the GUI is tracking, newest-first.
+
+        Same source the GUI's Transfers tray reads — pending / running
+        / complete / cancelled / failed jobs from all the operator's
+        sessions on this host. Terminal jobs older than 30 minutes are
+        opportunistically GC'd on this call.
+
+        Returns ``{"jobs": [...], "total": N, "active": N_active}``.
+        ``active`` is jobs in ``pending`` or ``running`` — the
+        outcome-transparent count so the agent doesn't have to filter
+        the array.
+
+        Requires unified GUI deployment (job registry lives on AppState).
+        """
+        from lerobot.gui.api._hub_core import list_hub_jobs
+
+        return list_hub_jobs(_require_app_state())
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def hub_job_progress(job_id: str) -> dict[str, Any]:
+        """Snapshot of one Hub job — for polling a long-running transfer.
+
+        For active jobs the snapshot is refreshed from the worker's
+        progress JSON before being returned, so an agent that just
+        kicked off a transfer can poll this without staleness.
+
+        Args:
+            job_id: From ``hub_list_jobs`` or from the response of the
+                (future) ``hub_start_upload`` / ``hub_start_download``
+                tool.
+
+        Raises if ``job_id`` is unknown.
+        """
+        from lerobot.gui.api._hub_core import HubJobNotFoundError, get_job_progress
+
+        try:
+            return get_job_progress(_require_app_state(), job_id)
+        except HubJobNotFoundError as e:
+            raise ValueError(str(e)) from e
+
     # Bridge tools (navigate_to / notify_user / highlight_in_viewer / set_filter)
     # are attached unconditionally; whether they actually deliver depends on
     # whether the GUI dispatch URL was configured via configure_bridge().
