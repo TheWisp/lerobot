@@ -2729,14 +2729,9 @@ async def visualize_episode(dataset_id: str, episode_idx: int) -> dict[str, str]
 @router.get("/hub/auth-status")
 async def hub_auth_status():
     """Check if the user is logged in to HuggingFace Hub."""
-    try:
-        from huggingface_hub import HfApi
+    from lerobot.gui.api._hub_core import get_auth_status
 
-        api = HfApi()
-        info = api.whoami()
-        return {"logged_in": True, "username": info.get("name", info.get("fullname", "unknown"))}
-    except Exception:
-        return {"logged_in": False, "username": None}
+    return get_auth_status()
 
 
 @router.post("/hub/open-job-folder")
@@ -2776,45 +2771,9 @@ async def hub_open_job_folder() -> dict:
 @router.get("/hub/repo-info")
 async def hub_repo_info(repo_id: str):
     """Get info about a dataset repo on HuggingFace Hub."""
-    try:
-        from huggingface_hub import HfApi
+    from lerobot.gui.api._hub_core import get_repo_info
 
-        api = HfApi()
-        info = api.dataset_info(repo_id, files_metadata=True)
-        siblings = info.siblings or []
-        total_size = sum(s.size for s in siblings if s.size)
-        # Fetch episode/frame counts from remote info.json
-        remote_episodes = None
-        remote_frames = None
-        remote_fps = None
-        try:
-            import json as _json
-
-            from huggingface_hub import hf_hub_download
-
-            info_path = hf_hub_download(repo_id, "meta/info.json", repo_type="dataset")
-            remote_info = _json.loads(Path(info_path).read_text())
-            remote_episodes = remote_info.get("total_episodes")
-            remote_frames = remote_info.get("total_frames")
-            remote_fps = remote_info.get("fps")
-        except Exception:  # nosec B110 - remote info is best-effort metadata
-            pass
-
-        return {
-            "exists": True,
-            "repo_id": info.id,
-            "private": info.private,
-            "last_modified": str(info.last_modified) if info.last_modified else None,
-            "downloads": info.downloads,
-            "files": len(siblings),
-            "total_size_mb": round(total_size / 1e6, 1),
-            "sha": info.sha[:12] if info.sha else None,
-            "total_episodes": remote_episodes,
-            "total_frames": remote_frames,
-            "fps": remote_fps,
-        }
-    except Exception:
-        return {"exists": False, "repo_id": repo_id}
+    return get_repo_info(repo_id)
 
 
 @router.get("/{dataset_id:path}/hub/diff")
@@ -3314,27 +3273,23 @@ async def hub_jobs():
     + the worker's latest progress JSON. Calling this opportunistically
     garbage-collects terminal jobs older than 30 minutes.
     """
-    _app_state.gc_finished_hub_jobs()
-    for j in _app_state.hub_jobs.values():
-        if j.status in ("pending", "running"):
-            _refresh_progress_from_file(j)
-    jobs = sorted(
-        (j.to_dict() for j in _app_state.hub_jobs.values()),
-        key=lambda d: d["started_at"],
-        reverse=True,
-    )
-    return {"jobs": jobs}
+    from lerobot.gui.api._hub_core import list_hub_jobs
+
+    result = list_hub_jobs(_app_state)
+    # Preserve the legacy FastAPI response shape (the GUI's Transfers
+    # tray only reads the "jobs" key).
+    return {"jobs": result["jobs"]}
 
 
 @router.get("/hub/progress/{job_id}")
 async def hub_progress(job_id: str):
     """Single-job snapshot for clients that want to attach to one specific job."""
-    job = _app_state.hub_jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-    if job.status in ("pending", "running"):
-        _refresh_progress_from_file(job)
-    return job.to_dict()
+    from lerobot.gui.api._hub_core import HubJobNotFoundError, get_job_progress
+
+    try:
+        return get_job_progress(_app_state, job_id)
+    except HubJobNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @router.post("/hub/progress/{job_id}/cancel")
