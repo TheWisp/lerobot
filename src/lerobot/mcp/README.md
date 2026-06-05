@@ -260,6 +260,7 @@ stores it as `comment`. The migration is invisible to callers.
 | Hub         | `hub_auth_status`, `hub_repo_info`, `hub_list_jobs`, `hub_job_progress`                                                            | `read`    |
 | Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                       | `read`    |
 | Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `get_teleop_profile`, `list_ports`, `get_all_port_assignments` | `read`    |
+| Robots      | `create/update/rename/delete_robot_profile`, `create/update/rename/delete_teleop_profile`, `assign_port_to_arm`                    | `edit`    |
 | Introspect  | `list_my_scopes`                                                                                                                   | `read`    |
 
 ### Designed but not yet shipped
@@ -278,8 +279,6 @@ may shift slightly on landing.
 | Models      | `list_model_sources`, `list_models_in_source`, `list_run_checkpoints`, `get_run_config`                                                                          | `read`    |
 | Models      | `add_model_source`, `remove_model_source`                                                                                                                        | `edit`    |
 | Models      | `load_debug_model`, `unload_debug_model`, `get_debug_status`                                                                                                     | `operate` |
-| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `list_ports`, `get_all_port_assignments`                                                     | `read`    |
-| Robots      | `create/update/rename/delete_robot_profile` (+ teleop equivalents), `assign_port_to_arm`                                                                         | `edit`    |
 | Robots      | `identify_arm`, `detect_cameras_into_profile`, `start/finish/cancel_rest_recording`, `move_to_rest_position`, `record/replay/delete_trajectory`, `recover_robot` | `operate` |
 | Run         | `update_rlt_config`                                                                                                                                              | `edit`    |
 | Run         | `start_teleoperate`, `start_record`, `start_replay`, `start_hvla`, `stop_current_run`                                                                            | `operate` |

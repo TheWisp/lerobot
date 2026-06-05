@@ -987,6 +987,346 @@ def build_server(
         assignments = _collect_all_port_assignments()
         return {"assignments": assignments, "total": len(assignments)}
 
+    # ── Edit-tier: Robots — profile CRUD + port assignment ─────────────────
+    # File CRUD on the operator's ~/.config/lerobot/{robots,teleops}/*.json
+    # profile files. Strictly file operations: no motor connections, no
+    # camera handles opened, no serial ports touched. The hardware-using
+    # helpers (identify_arm, detect_cameras_into_profile) are operate-tier
+    # in a separate PR.
+    #
+    # Same cross-private-import to gui.api.robot as the read tools — the
+    # underlying helpers (`_write_profile`, `_delete_profile`,
+    # `_rename_profile`, `ProfileData`) are well-tested and AppState-free.
+
+    def _build_profile_data(
+        name: str,
+        profile_type: str,
+        fields: dict[str, Any] | None,
+        cameras: dict[str, Any] | None,
+        rest_position: dict[str, float] | None,
+    ):
+        """Hand-build a ProfileData pydantic model from MCP arg dicts."""
+        from lerobot.gui.api.robot import ProfileData
+
+        return ProfileData(
+            name=name,
+            type=profile_type,
+            fields=fields or {},
+            cameras=cameras or {},
+            rest_position=rest_position or {},
+        )
+
+    def _create_profile(
+        profiles_dir,
+        name: str,
+        profile_type: str,
+        fields: dict[str, Any] | None,
+        cameras: dict[str, Any] | None,
+        rest_position: dict[str, float] | None,
+        kind: str,
+    ) -> dict[str, Any]:
+        from lerobot.gui.api.robot import _write_profile
+
+        path = profiles_dir / f"{name}.json"
+        if path.exists():
+            raise ValueError(
+                f"{kind.capitalize()} profile {name!r} already exists. "
+                f"Use update_{kind}_profile to overwrite, or pick a different name."
+            )
+        data = _build_profile_data(name, profile_type, fields, cameras, rest_position)
+        _write_profile(profiles_dir, data)
+        return {
+            "status": "ok",
+            "created": True,
+            "name": name,
+            "type": profile_type,
+            "path": str(path),
+        }
+
+    def _update_profile(
+        profiles_dir,
+        name: str,
+        profile_type: str,
+        fields: dict[str, Any] | None,
+        cameras: dict[str, Any] | None,
+        rest_position: dict[str, float] | None,
+        kind: str,
+    ) -> dict[str, Any]:
+        import json as _json
+
+        from lerobot.gui.api.robot import _write_profile
+
+        path = profiles_dir / f"{name}.json"
+        previous: dict[str, Any] | None = None
+        existed = path.exists()
+        if existed:
+            try:
+                previous = _json.loads(path.read_text())
+            except Exception:  # noqa: BLE001
+                previous = None
+        data = _build_profile_data(name, profile_type, fields, cameras, rest_position)
+        _write_profile(profiles_dir, data)
+        return {
+            "status": "ok",
+            "name": name,
+            "type": profile_type,
+            "overwrote": existed,
+            "previous_type": previous.get("type") if previous else None,
+            "previous_fields_count": len(previous.get("fields", {})) if previous else 0,
+        }
+
+    def _delete_profile_tool(profiles_dir, name: str, kind: str) -> dict[str, Any]:
+        from fastapi import HTTPException as _HTTPException
+
+        from lerobot.gui.api.robot import _delete_profile, _read_profile
+
+        try:
+            removed = _read_profile(profiles_dir, name)
+        except _HTTPException as e:
+            raise ValueError(f"{kind.capitalize()} profile not found: {name!r}") from e
+        # Echo back the on-disk shape so the agent (and any human reading
+        # the chat transcript) can see what was lost. Avoids a silent
+        # "deleted" without context.
+        try:
+            _delete_profile(profiles_dir, name)
+        except _HTTPException as e:
+            raise ValueError(str(e.detail)) from e
+        return {
+            "status": "ok",
+            "deleted": True,
+            "name": name,
+            "removed_type": removed.get("type"),
+            "removed_fields_count": len(removed.get("fields", {})),
+        }
+
+    def _rename_profile_tool(profiles_dir, old_name: str, new_name: str, kind: str) -> dict[str, Any]:
+        from fastapi import HTTPException as _HTTPException
+
+        from lerobot.gui.api.robot import _rename_profile
+
+        try:
+            _rename_profile(profiles_dir, old_name, new_name)
+        except _HTTPException as e:
+            if e.status_code == 404:
+                raise ValueError(f"{kind.capitalize()} profile not found: {old_name!r}") from e
+            if e.status_code == 409:
+                raise ValueError(
+                    f"{kind.capitalize()} profile {new_name!r} already exists "
+                    "— pick a different name or delete the existing one first."
+                ) from e
+            raise ValueError(str(e.detail)) from e
+        return {"status": "ok", "renamed": True, "from": old_name, "to": new_name}
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def create_robot_profile(
+        name: str,
+        type: str,
+        fields: dict[str, Any] | None = None,
+        cameras: dict[str, Any] | None = None,
+        rest_position: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new robot profile (writes a JSON file to disk).
+
+        Fails if a profile with this name already exists — use
+        ``update_robot_profile`` to overwrite. Profile schema follows
+        the GUI's Robot tab (``RobotConfig`` subclass type + its
+        type-specific fields + cameras + rest_position).
+
+        Args:
+            name: Unique profile name (filename will be ``<name>.json``).
+            type: ``RobotConfig`` choice — e.g. ``'bi_so107_follower'``,
+                ``'virtual_bi_so107'``. ``list_robot_profiles`` shows
+                examples already saved; full schema via the GUI.
+            fields: Type-specific config (e.g. ``{"port": "/dev/ttyACM0",
+                "baudrate": 1000000}`` for a Feetech-backed arm).
+            cameras: Camera config dict keyed by name.
+            rest_position: Per-joint rest target.
+
+        Returns ``{"status", "created": True, "name", "type", "path"}``.
+        """
+        from lerobot.gui.api.robot import ROBOT_PROFILES_DIR
+
+        return _create_profile(ROBOT_PROFILES_DIR, name, type, fields, cameras, rest_position, "robot")
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def update_robot_profile(
+        name: str,
+        type: str,
+        fields: dict[str, Any] | None = None,
+        cameras: dict[str, Any] | None = None,
+        rest_position: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        """Overwrite a robot profile (full-replace, not patch).
+
+        Last-write-wins on the same name. The response carries
+        ``overwrote: bool`` and ``previous_type`` / ``previous_fields_count``
+        so the agent can see whether it just clobbered an existing
+        profile and what shape it used to have.
+
+        Args:
+            name: Profile name (must exist for the response's
+                ``overwrote`` to be ``True``; passing a missing name
+                effectively creates it).
+            type, fields, cameras, rest_position: Same as
+                ``create_robot_profile``.
+
+        Returns the staged-edit confirmation with overwrite metadata.
+        """
+        from lerobot.gui.api.robot import ROBOT_PROFILES_DIR
+
+        return _update_profile(ROBOT_PROFILES_DIR, name, type, fields, cameras, rest_position, "robot")
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def rename_robot_profile(old_name: str, new_name: str) -> dict[str, Any]:
+        """Rename a robot profile.
+
+        Raises if ``old_name`` doesn't exist or ``new_name`` already does.
+        The profile's internal ``name`` field is updated too — both the
+        filename and the JSON contents reflect the new name.
+
+        Returns ``{"status": "ok", "renamed": True, "from": old, "to": new}``.
+        """
+        from lerobot.gui.api.robot import ROBOT_PROFILES_DIR
+
+        return _rename_profile_tool(ROBOT_PROFILES_DIR, old_name, new_name, "robot")
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def delete_robot_profile(name: str) -> dict[str, Any]:
+        """Delete a robot profile (removes the JSON file from disk).
+
+        The response echoes back ``removed_type`` and
+        ``removed_fields_count`` so a transcript reader can tell what
+        was lost — "robot profile gone" with no context is unhelpful
+        for an audit log.
+
+        Raises if no profile by that name exists.
+        """
+        from lerobot.gui.api.robot import ROBOT_PROFILES_DIR
+
+        return _delete_profile_tool(ROBOT_PROFILES_DIR, name, "robot")
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def create_teleop_profile(
+        name: str,
+        type: str,
+        fields: dict[str, Any] | None = None,
+        cameras: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new teleop profile (writes a JSON file to disk).
+
+        Same shape as ``create_robot_profile`` but for teleoperator
+        configs (leader arms, Quest 3 VR, scripted EE, …).
+
+        Returns ``{"status", "created": True, "name", "type", "path"}``.
+        """
+        from lerobot.gui.api.robot import TELEOP_PROFILES_DIR
+
+        return _create_profile(TELEOP_PROFILES_DIR, name, type, fields, cameras, None, "teleop")
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def update_teleop_profile(
+        name: str,
+        type: str,
+        fields: dict[str, Any] | None = None,
+        cameras: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Overwrite a teleop profile (full-replace).
+
+        Response carries ``overwrote`` and ``previous_type`` /
+        ``previous_fields_count`` for outcome transparency.
+        """
+        from lerobot.gui.api.robot import TELEOP_PROFILES_DIR
+
+        return _update_profile(TELEOP_PROFILES_DIR, name, type, fields, cameras, None, "teleop")
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def rename_teleop_profile(old_name: str, new_name: str) -> dict[str, Any]:
+        """Rename a teleop profile."""
+        from lerobot.gui.api.robot import TELEOP_PROFILES_DIR
+
+        return _rename_profile_tool(TELEOP_PROFILES_DIR, old_name, new_name, "teleop")
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def delete_teleop_profile(name: str) -> dict[str, Any]:
+        """Delete a teleop profile."""
+        from lerobot.gui.api.robot import TELEOP_PROFILES_DIR
+
+        return _delete_profile_tool(TELEOP_PROFILES_DIR, name, "teleop")
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def assign_port_to_arm(
+        profile_name: str,
+        port: str,
+        field_name: str = "port",
+        profile_kind: str = "robot",
+    ) -> dict[str, Any]:
+        """Set a port field on a saved profile to a specific device path.
+
+        Convenience over ``update_robot_profile`` / ``update_teleop_profile``
+        for the common case of "I just discovered which port is which arm,
+        write it to the profile." Reads the existing profile, swaps the
+        chosen field's value, writes it back.
+
+        Outcome transparency: response carries ``previous_port`` so the AI
+        can see whether the assignment changed anything or was a no-op.
+
+        Args:
+            profile_name: Name of the saved profile.
+            port: Device path (e.g. ``'/dev/ttyACM0'``).
+            field_name: Which port field to set (default ``'port'``).
+                Some bi-arm profiles have ``port_left`` / ``port_right``.
+            profile_kind: ``'robot'`` (default) or ``'teleop'``.
+
+        Returns ``{"status", "name", "field", "previous_port",
+        "new_port", "changed"}``.
+        """
+        from fastapi import HTTPException as _HTTPException
+
+        from lerobot.gui.api.robot import (
+            ROBOT_PROFILES_DIR,
+            TELEOP_PROFILES_DIR,
+            _read_profile,
+            _write_profile,
+        )
+
+        if profile_kind not in ("robot", "teleop"):
+            raise ValueError(f"profile_kind must be 'robot' or 'teleop'; got {profile_kind!r}")
+        profiles_dir = ROBOT_PROFILES_DIR if profile_kind == "robot" else TELEOP_PROFILES_DIR
+        try:
+            current = _read_profile(profiles_dir, profile_name)
+        except _HTTPException as e:
+            raise ValueError(f"{profile_kind.capitalize()} profile not found: {profile_name!r}") from e
+
+        previous_port = current.get("fields", {}).get(field_name)
+        current.setdefault("fields", {})[field_name] = port
+        # Build a ProfileData from the updated dict, then write through
+        # the same atomic-rename path the GUI uses.
+        data = _build_profile_data(
+            profile_name,
+            current.get("type", "unknown"),
+            current.get("fields"),
+            current.get("cameras"),
+            current.get("rest_position"),
+        )
+        _write_profile(profiles_dir, data)
+        return {
+            "status": "ok",
+            "name": profile_name,
+            "field": field_name,
+            "previous_port": previous_port,
+            "new_port": port,
+            "changed": previous_port != port,
+        }
+
     @mcp.tool()
     @requires_scope(SCOPE_READ)
     def hub_job_progress(job_id: str) -> dict[str, Any]:
