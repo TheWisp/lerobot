@@ -259,6 +259,7 @@ stores it as `comment`. The migration is invisible to callers.
 | Dataset     | `propose_set_feature`, `propose_delete_episode`, `propose_trim_episode`, `discard_pending_edits`, `apply_pending_edits`            | `edit`    |
 | Hub         | `hub_auth_status`, `hub_repo_info`, `hub_list_jobs`, `hub_job_progress`                                                            | `read`    |
 | Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                       | `read`    |
+| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `get_teleop_profile`, `list_ports`, `get_all_port_assignments` | `read`    |
 | Introspect  | `list_my_scopes`                                                                                                                   | `read`    |
 
 ### Designed but not yet shipped
