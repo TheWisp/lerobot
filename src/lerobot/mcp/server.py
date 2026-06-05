@@ -987,6 +987,68 @@ def build_server(
         assignments = _collect_all_port_assignments()
         return {"assignments": assignments, "total": len(assignments)}
 
+    # ── Edit-tier: Run — RLT training override ─────────────────────────────
+    # Updates the override JSON the active RLT training subprocess polls.
+    # Real impact: changes RL hyperparameters mid-training. Strictly file
+    # ops (writes ``rlt_overrides.json``) — no subprocess signal sent,
+    # no motor moved. Numeric values are clamped to their valid range;
+    # the response surfaces what was clamped so the AI can self-correct.
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def update_rlt_config(
+        beta: float | None = None,
+        exploration_sigma: float | None = None,
+        target_sigma: float | None = None,
+        dump_chunks: bool | None = None,
+    ) -> dict[str, Any]:
+        """Update RL hyperparameters on a running RLT training subprocess.
+
+        Writes ``rlt_overrides.json`` in the active session's output
+        directory; the training loop polls this file and re-reads
+        overrides at the next iteration boundary. Partial updates
+        merge — keys you don't pass are left alone.
+
+        Numeric ranges (silently clamped, not rejected):
+
+        - ``beta``: ``[0.0, 10.0]`` — KL regulariser weight.
+        - ``exploration_sigma``: ``[0.0, 1.0]`` — actor noise.
+        - ``target_sigma``: ``[0.0, 1.0]`` — target policy noise.
+
+        ``dump_chunks`` is boolean; no range.
+
+        Args:
+            beta: Optional new value for the KL regulariser weight.
+            exploration_sigma: Optional new exploration noise.
+            target_sigma: Optional new target-policy noise.
+            dump_chunks: Whether the training loop should dump per-chunk
+                debug artifacts.
+
+        Returns ``{"status", "applied", "previous_values", "override_path"}``.
+        When a numeric value is clamped, the response also carries
+        ``clamped: {key: {requested, applied, range}}`` so the agent can
+        tell apart "I set what I asked" from "the server pinned my value
+        to the boundary." Raises if no RLT session is active, or if all
+        four args were ``None``.
+        """
+        from lerobot.gui.api._run_core import (
+            EditValidationError,
+            NoActiveRunError,
+            update_rlt_overrides,
+        )
+
+        try:
+            return update_rlt_overrides(
+                beta=beta,
+                exploration_sigma=exploration_sigma,
+                target_sigma=target_sigma,
+                dump_chunks=dump_chunks,
+            )
+        except NoActiveRunError as e:
+            raise ValueError(str(e)) from e
+        except EditValidationError as e:
+            raise ValueError(str(e)) from e
+
     # ── Edit-tier: Robots — profile CRUD + port assignment ─────────────────
     # File CRUD on the operator's ~/.config/lerobot/{robots,teleops}/*.json
     # profile files. Strictly file operations: no motor connections, no
