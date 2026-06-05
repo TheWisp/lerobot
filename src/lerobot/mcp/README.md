@@ -261,6 +261,7 @@ stores it as `comment`. The migration is invisible to callers.
 | Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                       | `read`    |
 | Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `get_teleop_profile`, `list_ports`, `get_all_port_assignments` | `read`    |
 | Robots      | `create/update/rename/delete_robot_profile`, `create/update/rename/delete_teleop_profile`, `assign_port_to_arm`                    | `edit`    |
+| Run         | `update_rlt_config`                                                                                                                | `edit`    |
 | Introspect  | `list_my_scopes`                                                                                                                   | `read`    |
 
 ### Designed but not yet shipped

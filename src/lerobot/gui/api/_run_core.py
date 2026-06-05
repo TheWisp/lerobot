@@ -163,6 +163,114 @@ def get_latency_metrics(source: str = "teleop") -> dict[str, Any]:
     return dict(_EMPTY_LATENCY_SNAPSHOT)
 
 
+_RLT_RANGES = {
+    # Numeric override keys + their valid range. Updates outside the range
+    # are clamped, not rejected — same behavior the FastAPI handler has
+    # had since it shipped; the response surfaces the clamping so the
+    # caller knows what actually landed.
+    "beta": (0.0, 10.0),
+    "exploration_sigma": (0.0, 1.0),
+    "target_sigma": (0.0, 1.0),
+}
+
+
+class NoActiveRunError(RuntimeError):
+    """No active RLT training run — overrides have nowhere to land."""
+
+
+class EditValidationError(ValueError):
+    """Update call carried no valid override keys."""
+
+
+def update_rlt_overrides(
+    *,
+    beta: float | None = None,
+    exploration_sigma: float | None = None,
+    target_sigma: float | None = None,
+    dump_chunks: bool | None = None,
+) -> dict[str, Any]:
+    """Write RLT config overrides for the active training subprocess.
+
+    Numeric values are clamped to their valid range (``beta`` to
+    ``[0, 10]``, both sigma fields to ``[0, 1]``); the response carries
+    a ``clamped`` dict whenever a value was adjusted so the caller can
+    tell the difference between "I set what I asked for" and "the
+    server pinned my request to the boundary." Partial updates merge
+    with any existing override file — keys you don't pass are left
+    alone.
+
+    Raises:
+        NoActiveRunError: ``_active_config`` is unset or has no
+            ``rlt_output_dir`` — there's no live RLT session to update.
+        EditValidationError: every argument was ``None`` (nothing to do).
+    """
+    import json as _json
+    import os
+
+    from lerobot.gui.api import run as run_mod
+
+    if not run_mod._active_config or not run_mod._active_config.get("rlt_output_dir"):
+        raise NoActiveRunError("No active RLT session — start an HVLA run first, then update overrides.")
+
+    requested: dict[str, Any] = {}
+    if beta is not None:
+        requested["beta"] = float(beta)
+    if exploration_sigma is not None:
+        requested["exploration_sigma"] = float(exploration_sigma)
+    if target_sigma is not None:
+        requested["target_sigma"] = float(target_sigma)
+    if dump_chunks is not None:
+        requested["dump_chunks"] = bool(dump_chunks)
+
+    if not requested:
+        raise EditValidationError(
+            "No override fields provided. Pass at least one of: "
+            "beta, exploration_sigma, target_sigma, dump_chunks."
+        )
+
+    filtered: dict[str, Any] = {}
+    clamped: dict[str, dict[str, Any]] = {}
+    for key, (lo, hi) in _RLT_RANGES.items():
+        if key not in requested:
+            continue
+        raw = requested[key]
+        applied = max(lo, min(hi, raw))
+        filtered[key] = applied
+        if applied != raw:
+            clamped[key] = {"requested": raw, "applied": applied, "range": [lo, hi]}
+    if "dump_chunks" in requested:
+        filtered["dump_chunks"] = requested["dump_chunks"]
+
+    override_path = Path(run_mod._active_config["rlt_output_dir"]) / "rlt_overrides.json"
+    override_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Merge with existing file so partial updates don't wipe other keys.
+    previous: dict[str, Any] = {}
+    if override_path.exists():
+        try:
+            with open(override_path) as f:
+                previous = _json.load(f)
+        except Exception:  # noqa: BLE001 — corrupt file becomes "empty"
+            previous = None  # type: ignore[assignment]
+            previous = {}
+    merged = {**previous, **filtered}
+    tmp = str(override_path) + ".tmp"
+    with open(tmp, "w") as f:
+        _json.dump(merged, f)
+    os.replace(tmp, str(override_path))
+    logger.info("RLT config override written via _run_core: %s", filtered)
+
+    result: dict[str, Any] = {
+        "status": "ok",
+        "applied": filtered,
+        "previous_values": {k: previous.get(k) for k in filtered},
+        "override_path": str(override_path),
+    }
+    if clamped:
+        result["clamped"] = clamped
+    return result
+
+
 def get_rlt_metrics() -> dict[str, Any]:
     """RLT training metrics for the currently-active RLT run.
 

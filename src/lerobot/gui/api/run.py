@@ -924,58 +924,32 @@ async def get_rlt_config() -> dict:
 @router.post("/rlt-config")
 async def set_rlt_config(body: dict) -> dict:
     """Write RLT config overrides for the training subprocess to pick up."""
-    import json as _json
+    from lerobot.gui.api._run_core import (
+        EditValidationError,
+        NoActiveRunError,
+        update_rlt_overrides,
+    )
 
-    if not _active_config or not _active_config.get("rlt_output_dir"):
-        raise HTTPException(409, "No active RLT session")
-    # Validate: only known keys, numeric values in range. Legacy "actor_sigma"
-    # is accepted as a synonym for exploration_sigma so older GUI builds don't
-    # break mid-session.
+    # Back-compat: legacy "actor_sigma" maps to exploration_sigma so older
+    # GUI builds don't break mid-session. Translation happens here at the
+    # FastAPI boundary rather than in _run_core (the MCP surface, which
+    # exposes the new name, doesn't need to know about the alias).
     if "actor_sigma" in body and "exploration_sigma" not in body:
         body["exploration_sigma"] = body["actor_sigma"]
-    allowed = {
-        "beta": (0.0, 10.0),
-        "exploration_sigma": (0.0, 1.0),
-        "target_sigma": (0.0, 1.0),
-    }
-    filtered = {}
-    for key, (lo, hi) in allowed.items():
-        if key in body:
-            val = float(body[key])
-            filtered[key] = max(lo, min(hi, val))
-    # Boolean flags (no range)
-    if "dump_chunks" in body:
-        filtered["dump_chunks"] = bool(body["dump_chunks"])
-    if not filtered:
-        raise HTTPException(
-            400,
-            "No valid keys. Allowed: beta, exploration_sigma, target_sigma, dump_chunks",
-        )
-    override_path = Path(_active_config["rlt_output_dir"]) / "rlt_overrides.json"
-    # Ensure the output dir exists. The subprocess creates it inside ``run_s1``
-    # but only after model imports finish — there's a multi-second window
-    # right after launch where _active_config is set but the dir doesn't
-    # exist yet, and a Diagnostic-toggle click in that window used to fail
-    # with FileNotFoundError → 500 → red toast. Creating it here closes
-    # that window without needing to rendezvous with the subprocess.
-    override_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        # Merge with existing file so partial updates (e.g. only dump_chunks)
-        # don't wipe other keys (beta, actor_sigma).
-        existing = {}
-        if override_path.exists():
-            with contextlib.suppress(Exception), open(override_path) as f:
-                existing = _json.load(f)
-        merged = {**existing, **filtered}
-        tmp = str(override_path) + ".tmp"
-        with open(tmp, "w") as f:
-            _json.dump(merged, f)
-        os.replace(tmp, str(override_path))
-        logger.info("RLT config override written: %s", filtered)
-        return {"status": "ok", **filtered}
-    except Exception as e:
-        logger.warning("RLT config write failed: %s", e)
-        raise HTTPException(500, str(e)) from e
+        result = update_rlt_overrides(
+            beta=body.get("beta"),
+            exploration_sigma=body.get("exploration_sigma"),
+            target_sigma=body.get("target_sigma"),
+            dump_chunks=body.get("dump_chunks"),
+        )
+    except NoActiveRunError as e:
+        raise HTTPException(409, str(e)) from e
+    except EditValidationError as e:
+        raise HTTPException(400, str(e)) from e
+    # Preserve the legacy "flat" response shape the GUI's frontend
+    # expects (it spreads the applied values at the top level).
+    return {"status": "ok", **result["applied"]}
 
 
 @router.post("/stop")
