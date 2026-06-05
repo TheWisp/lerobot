@@ -853,6 +853,140 @@ def build_server(
 
         return _impl()
 
+    # ── Read-tier: Robots — profile and port introspection ─────────────────
+    # **Strictly read-only.** No motor connections, no port-opening, no
+    # camera streams. Profile files are JSON under
+    # ``~/.config/lerobot/{robots,teleops}/``. The port-scan path uses
+    # ``pyserial.list_ports.comports()`` which queries the kernel device
+    # tree (sysfs / udev on Linux, registry on Windows, IOKit on macOS)
+    # without opening any file descriptor on the device.
+    #
+    # The hardware-touching surface (`identify-arm`, `move-to-rest-position`,
+    # trajectory record/replay, camera detection) is `operate`-tier and
+    # ships in a separate PR after explicit operator sign-off.
+    #
+    # The helpers below import the GUI's existing private helpers rather
+    # than re-implement. The helpers in question (`_list_profiles`,
+    # `_read_profile`, `_collect_all_port_assignments`, `scan_ports`)
+    # have no AppState coupling and have an established test suite; the
+    # cross-private-import is documented here so future maintainers know
+    # why the MCP tool body reaches into ``lerobot.gui.api.robot``.
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    async def list_robot_profiles() -> dict[str, Any]:
+        """List saved robot profiles.
+
+        Profiles live under ``~/.config/lerobot/robots/*.json`` — operator
+        configurations the GUI's Robot tab writes when a user sets up an
+        arm or fleet. Each entry is the profile's display name + its
+        config type (e.g. ``'bi_so107_follower'``); the full config is
+        retrieved via ``get_robot_profile``.
+
+        Returns ``{"profiles": [{"name", "type"}, ...], "total": N}``.
+        """
+        from lerobot.gui.api.robot import ROBOT_PROFILES_DIR, _list_profiles
+
+        profiles = _list_profiles(ROBOT_PROFILES_DIR)
+        return {"profiles": profiles, "total": len(profiles)}
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    async def get_robot_profile(name: str) -> dict[str, Any]:
+        """Full saved robot profile by name.
+
+        Returns the on-disk JSON: ``{name, type, fields: {port,
+        baudrate, ...}, cameras: {...}, rest_position: {...}}``. The
+        ``fields`` dict contains the type-specific config for the
+        underlying ``RobotConfig`` subclass.
+
+        Args:
+            name: Profile name as listed by ``list_robot_profiles``.
+
+        Raises if no profile by that name exists.
+        """
+        from fastapi import HTTPException as _HTTPException
+
+        from lerobot.gui.api.robot import ROBOT_PROFILES_DIR, _read_profile
+
+        try:
+            return _read_profile(ROBOT_PROFILES_DIR, name)
+        except _HTTPException as e:
+            # Helper raises HTTPException for compat with FastAPI; translate
+            # 404 → ValueError so the AI sees a clean tool-error message.
+            raise ValueError(f"Robot profile not found: {name!r}") from e
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    async def list_teleop_profiles() -> dict[str, Any]:
+        """List saved teleoperator profiles.
+
+        Profiles live under ``~/.config/lerobot/teleops/*.json`` — operator
+        configurations for teleop devices (leader arms, Quest 3 VR, etc.).
+        Each entry is name + type; full config via ``get_teleop_profile``.
+
+        Returns ``{"profiles": [{"name", "type"}, ...], "total": N}``.
+        """
+        from lerobot.gui.api.robot import TELEOP_PROFILES_DIR, _list_profiles
+
+        profiles = _list_profiles(TELEOP_PROFILES_DIR)
+        return {"profiles": profiles, "total": len(profiles)}
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    async def get_teleop_profile(name: str) -> dict[str, Any]:
+        """Full saved teleop profile by name.
+
+        Returns the on-disk JSON. Raises if no profile by that name exists.
+        """
+        from fastapi import HTTPException as _HTTPException
+
+        from lerobot.gui.api.robot import TELEOP_PROFILES_DIR, _read_profile
+
+        try:
+            return _read_profile(TELEOP_PROFILES_DIR, name)
+        except _HTTPException as e:
+            raise ValueError(f"Teleop profile not found: {name!r}") from e
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    async def list_ports() -> dict[str, Any]:
+        """Enumerate USB serial ports (kernel-level, no device opened).
+
+        Uses ``pyserial.list_ports.comports()`` which queries the kernel
+        device tree — does NOT open or signal any device. Filters to USB
+        serial adapters (ttyACM*, ttyUSB* on Linux) and skips legacy /
+        virtual / console TTYs. Each entry includes device path,
+        description, manufacturer, and USB vid:pid when available.
+
+        Returns ``{"ports": [{"path", "name", "manufacturer", "vid_pid"}, ...],
+        "total": N}``.
+        """
+        from lerobot.gui.api.robot import scan_ports
+
+        ports = await scan_ports()
+        return {"ports": ports, "total": len(ports)}
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    async def get_all_port_assignments() -> dict[str, Any]:
+        """Cross-reference port paths against saved profile configs.
+
+        For every saved profile, finds the port-typed fields in its
+        config schema and lists their current values. Useful for spotting
+        port collisions ("two profiles think the same /dev/ttyACM0 is
+        their motor bus") or remembering which port a given profile is
+        bound to.
+
+        Returns ``{"assignments": [{"port", "profile_name",
+        "profile_kind", "field_name"}, ...], "total": N}``. ``profile_kind``
+        is ``'robot'`` or ``'teleop'``.
+        """
+        from lerobot.gui.api.robot import _collect_all_port_assignments
+
+        assignments = _collect_all_port_assignments()
+        return {"assignments": assignments, "total": len(assignments)}
+
     @mcp.tool()
     @requires_scope(SCOPE_READ)
     def hub_job_progress(job_id: str) -> dict[str, Any]:
