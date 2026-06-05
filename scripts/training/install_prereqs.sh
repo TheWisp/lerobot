@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # One-shot installer for the host-side prereqs of the LeRobot training-deploy
-# prototype: Docker Engine + nvidia-container-toolkit. Tested on Ubuntu 22.04
-# and 24.04. Idempotent — re-running is safe.
+# prototype: Docker Engine + nvidia-container-toolkit. Tested on Ubuntu 22.04,
+# 24.04, and the Nebius `ubuntu24.04-cuda13.0` image. Idempotent — re-running
+# is safe.
 #
 # Run via:  sudo bash scripts/training/install_prereqs.sh
 #
 # After install:
 #   - Log out and back in (so the docker group takes effect for your user), OR
 #   - Run `newgrp docker` in your current shell.
+#
+# Non-interactive runs (over SSH, in CI, agent-driven): all gpg operations
+# use `--batch --yes` and read keyrings from temp files, so we never block
+# on /dev/tty.
 
 set -euo pipefail
 
@@ -16,10 +21,23 @@ if [[ ${EUID} -ne 0 ]]; then
     exit 1
 fi
 
-# Resolve the real user (so we can add them to the docker group, not root)
 TARGET_USER="${SUDO_USER:-$USER}"
 
 log() { printf '\033[1;36m[install]\033[0m %s\n' "$*"; }
+
+# Download a remote GPG key to a temp file then dearmor it locally with
+# --batch --yes. The naïve `curl ... | gpg --dearmor` pattern fails over
+# non-interactive SSH with "cannot open '/dev/tty'" — see the gap notes
+# in scripts/training/README.md.
+download_and_dearmor() {
+    local url="$1"
+    local dest="$2"
+    local tmp
+    tmp=$(mktemp)
+    curl -fsSL "${url}" -o "${tmp}"
+    gpg --batch --yes --dearmor -o "${dest}" "${tmp}"
+    rm -f "${tmp}"
+}
 
 # ── Docker Engine ────────────────────────────────────────────────────────────
 
@@ -32,8 +50,9 @@ else
     apt-get install -y ca-certificates curl gnupg
 
     install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    download_and_dearmor \
+        "https://download.docker.com/linux/ubuntu/gpg" \
+        "/etc/apt/keyrings/docker.gpg"
     chmod a+r /etc/apt/keyrings/docker.gpg
 
     UBUNTU_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME}")
@@ -48,7 +67,10 @@ https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable" \
     log "Docker installed: $(docker --version)"
 fi
 
-# Add target user to docker group so they don't need sudo for docker
+# Add target user to docker group so they don't need sudo for docker.
+# Cloud-init's `sudo: ALL=(ALL) NOPASSWD:ALL` writes /etc/sudoers.d/ entries
+# but does NOT change group membership — so on a fresh cloud VM, the user
+# always needs to be explicitly added here.
 if ! id -nG "${TARGET_USER}" | grep -qw docker; then
     usermod -aG docker "${TARGET_USER}"
     log "Added ${TARGET_USER} to the docker group."
@@ -59,19 +81,44 @@ fi
 
 # ── nvidia-container-toolkit (GPU pass-through) ──────────────────────────────
 
-if dpkg -l nvidia-container-toolkit 2>/dev/null | grep -q '^ii'; then
-    log "nvidia-container-toolkit already installed."
-else
-    log "Installing nvidia-container-toolkit..."
+# Nebius's `ubuntu24.04-cuda13.0` image ships nvidia-container-toolkit as a
+# held package — plain `apt-get install -y` errors out with "Held packages
+# were changed and -y was used without --allow-change-held-packages." We
+# unhold first, then upgrade with the explicit flag.
 
-    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
-        | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+held_toolkit_packages() {
+    apt-mark showhold 2>/dev/null | grep -E \
+        '^(nvidia-container-toolkit|nvidia-container-toolkit-base|libnvidia-container-tools|libnvidia-container1)$' \
+        || true
+}
+
+if dpkg -l nvidia-container-toolkit 2>/dev/null | grep -q '^ii' && \
+   [[ -z $(held_toolkit_packages) ]]; then
+    log "nvidia-container-toolkit already installed (and not held). Skipping."
+else
+    log "Installing / upgrading nvidia-container-toolkit..."
+
+    # Unhold any held versions so apt can change them.
+    held=$(held_toolkit_packages)
+    if [[ -n "${held}" ]]; then
+        log "Unholding pre-installed (held) toolkit packages: $(echo ${held} | tr '\n' ' ')"
+        # shellcheck disable=SC2086
+        apt-mark unhold ${held}
+    fi
+
+    download_and_dearmor \
+        "https://nvidia.github.io/libnvidia-container/gpgkey" \
+        "/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"
+
     curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
         | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
         > /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-    apt-get update
-    apt-get install -y nvidia-container-toolkit
+    apt-get update -qq
+    # --allow-change-held-packages handles the case where we couldn't fully
+    # clear the hold above (e.g., the package was held via a different
+    # mechanism than apt-mark).
+    apt-get install -y --allow-change-held-packages nvidia-container-toolkit
 
     nvidia-ctk runtime configure --runtime=docker
     systemctl restart docker
@@ -81,7 +128,9 @@ fi
 # ── Sanity check ─────────────────────────────────────────────────────────────
 
 log "Verifying GPU access from a container..."
-# Use the target user's docker socket access if possible; falls back to root.
+# Try as the target user first (uses their docker socket access via the
+# group we just added). If they aren't in the group yet (need re-login),
+# fall back to root just to verify the toolkit/driver pair is working.
 SUDO_RUN="sudo -u ${TARGET_USER}"
 if ! ${SUDO_RUN} docker info >/dev/null 2>&1; then
     log "  (target user can't reach docker yet — they need to log out/in;"
@@ -102,4 +151,4 @@ fi
 log ""
 log "Done. Next steps:"
 log "  1. If you weren't already in the docker group, log out and back in now."
-log "  2. Then run:  bash scripts/training/deploy_local.sh"
+log "  2. Then run:  bash scripts/training/setup_host.sh"

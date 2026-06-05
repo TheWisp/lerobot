@@ -40,6 +40,23 @@ OUTPUTS_HOST="${REPO_ROOT}/outputs"
 log() { printf '\033[1;36m[run]\033[0m %s\n' "$*"; }
 err() { printf '\033[1;31m[run]\033[0m %s\n' "$*" >&2; }
 
+# Choose between `docker` and `sudo docker`. On a fresh cloud-init VM, the
+# user usually isn't in the `docker` group yet (cloud-init's `sudo:` adds
+# a sudoers entry but doesn't change group membership). Fall back to sudo
+# instead of failing — the user can fix this permanently by logging out
+# and back in (the install_prereqs.sh script adds them to the group).
+docker_cmd() {
+    if docker info >/dev/null 2>&1; then
+        echo "docker"
+    elif sudo -n docker info >/dev/null 2>&1; then
+        echo "sudo docker"
+    else
+        err "docker is unreachable both as your user AND via passwordless sudo."
+        err "Either log out/in (if you ran install_prereqs.sh) or check the daemon."
+        exit 2
+    fi
+}
+
 # ── Parse args ───────────────────────────────────────────────────────────────
 
 IMAGE_REF="${DEFAULT_IMAGE}"
@@ -73,12 +90,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Default smoke command if user supplied no training command at all
+# Default smoke command if user supplied no training command at all.
+# Note: lerobot-train requires --policy.repo_id even when wandb is off
+# (its validate() insists; it'll try to push to Hub at the end and 401
+# if HF_TOKEN isn't set — but training itself completes successfully).
 if [[ ${#TRAINING_CMD[@]} -eq 0 ]]; then
     log "No training command supplied; running bundled smoke (10-step ACT on pusht)"
     TRAINING_CMD=(
         lerobot-train
         --policy.type=act
+        --policy.repo_id=local/smoke-test-act-pusht
         --dataset.repo_id=lerobot/pusht
         --output_dir=/lerobot/outputs/smoke_act_pusht
         --job_name=smoke_act_pusht
@@ -98,7 +119,9 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
-if ! docker image inspect "${IMAGE_REF}" >/dev/null 2>&1; then
+DOCKER=$(docker_cmd)
+
+if ! ${DOCKER} image inspect "${IMAGE_REF}" >/dev/null 2>&1; then
     err "Image ${IMAGE_REF} not present locally."
     err "Run setup_host.sh first (or --image=<existing-tag>)."
     exit 2
@@ -107,6 +130,14 @@ fi
 # ── Container launch ─────────────────────────────────────────────────────────
 
 mkdir -p "${HF_CACHE_HOST}" "${OUTPUTS_HOST}"
+
+# The image's container user (`user_lerobot`, UID 1000 inside) and the host
+# user may have different UIDs, so a bind-mounted directory owned by the
+# host user may be unwritable from inside the container. Pre-relax the
+# permissions on the outputs dir so the container can write checkpoints.
+# (The HF cache mount has the same issue but is more delicate — see the
+# "HF cache bind-mount" entry in scripts/training/README.md's gap table.)
+chmod 0777 "${OUTPUTS_HOST}"
 
 # Build the mounts list. Always:
 #  - HF cache (for datasets, models, token; shared with host)
@@ -126,11 +157,23 @@ if [[ $BIND_LOCAL -eq 1 ]]; then
     log "  (your live edits will be picked up; deps still come from the image)"
 fi
 
-# HF token: forward as env var if the host has one. Avoids needing to
-# huggingface-cli login inside the container.
+# HF token: forward as env var. Order of preference:
+#   1. HF_TOKEN env var on the host (highest — explicit user intent)
+#   2. ~/.cache/huggingface/token (the file `huggingface-cli login` writes)
+# Avoids needing to huggingface-cli login inside the container.
 HF_TOKEN_ARGS=()
-if [[ -f "${HF_CACHE_HOST}/token" ]]; then
-    HF_TOKEN_ARGS+=(-e "HF_TOKEN=$(cat "${HF_CACHE_HOST}/token")")
+HF_TOKEN_VALUE=""
+if [[ -n "${HF_TOKEN:-}" ]]; then
+    HF_TOKEN_VALUE="${HF_TOKEN}"
+elif [[ -f "${HF_CACHE_HOST}/token" ]]; then
+    HF_TOKEN_VALUE=$(cat "${HF_CACHE_HOST}/token")
+fi
+if [[ -n "${HF_TOKEN_VALUE}" ]]; then
+    HF_TOKEN_ARGS+=(-e "HF_TOKEN=${HF_TOKEN_VALUE}")
+    log "Forwarding HF_TOKEN to container."
+else
+    log "No HF_TOKEN found on host. Training will run, but Hub push at"
+    log "end-of-run will 401. Use 'huggingface-cli login' to fix."
 fi
 
 # Override CI-test ENV vars baked into upstream Dockerfile.internal that
@@ -153,7 +196,7 @@ log ""
 # --rm:   container is removed on exit (outputs survive via bind-mount).
 # --gpus all: NVIDIA Container Toolkit pass-through; ~0% perf overhead.
 # --network host: skip Docker bridge for faster HF Hub traffic.
-docker run --rm \
+${DOCKER} run --rm \
     --init \
     --gpus all \
     --network host \

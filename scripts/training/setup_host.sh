@@ -84,6 +84,28 @@ fi
 
 # ── Prereq checks ────────────────────────────────────────────────────────────
 
+# Resolve `docker` vs `sudo docker`. On a fresh cloud-init VM, the user
+# usually isn't in the `docker` group yet (cloud-init's `sudo:` adds a
+# sudoers entry but doesn't change group membership). Falling back to sudo
+# avoids a "log out / back in" interruption right after install. The
+# permanent fix is handled by install_prereqs.sh which `usermod -aG`s the
+# user; this falls back gracefully until the user re-logs in.
+DOCKER=""
+docker_cmd() {
+    if docker info >/dev/null 2>&1; then
+        DOCKER="docker"
+    elif sudo -n docker info >/dev/null 2>&1; then
+        DOCKER="sudo docker"
+        log "  (using 'sudo docker' — your user isn't in the docker group yet."
+        log "   Log out + in after install_prereqs.sh ran to use 'docker' directly.)"
+    else
+        err "Docker daemon is unreachable both as your user AND via passwordless sudo. Try:"
+        err "    sudo systemctl start docker"
+        err "    sudo bash ${REPO_ROOT}/scripts/training/install_prereqs.sh"
+        exit 2
+    fi
+}
+
 check_prereqs() {
     local missing=0
 
@@ -101,15 +123,10 @@ check_prereqs() {
 
     [[ $missing -eq 1 ]] && exit 2
 
-    if ! docker info >/dev/null 2>&1; then
-        err "Docker daemon is unreachable. Try:"
-        err "    sudo systemctl start docker"
-        err "    sudo usermod -aG docker \$USER  # then log out and back in"
-        exit 2
-    fi
+    docker_cmd     # populates $DOCKER with "docker" or "sudo docker"
 
     # Probe GPU pass-through with a stock cuda image (small, ~150 MB)
-    if ! docker run --rm --gpus all \
+    if ! ${DOCKER} run --rm --gpus all \
             nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi >/dev/null 2>&1; then
         err "Docker can't access the GPU. Likely missing nvidia-container-toolkit."
         err "Install it via:"
@@ -123,7 +140,8 @@ check_prereqs() {
 build_locally() {
     log "Building from ${DOCKERFILE}"
     log "(first build ~5 min for dep solve + install; cached after)"
-    DOCKER_BUILDKIT=1 docker build \
+    # shellcheck disable=SC2086 # $DOCKER intentionally splits to "docker" or "sudo docker"
+    DOCKER_BUILDKIT=1 ${DOCKER} build \
         -f "${DOCKERFILE}" \
         -t "${LOCAL_IMAGE}" \
         "${REPO_ROOT}"
@@ -135,7 +153,8 @@ acquire_image() {
         pull)
             log "Pulling published image: ${IMAGE_REF}"
             log "(published by CI from our fork; see .github/workflows/docker_publish_fork_training.yml)"
-            if ! docker pull "${IMAGE_REF}" 2>&1; then
+            # shellcheck disable=SC2086
+            if ! ${DOCKER} pull "${IMAGE_REF}" 2>&1; then
                 err ""
                 err "Pull failed. Common causes:"
                 err "  - The image hasn't been published yet (push the workflow + wait for CI)"
@@ -153,9 +172,11 @@ acquire_image() {
             ;;
         custom)
             log "Using custom image: ${IMAGE_REF}"
-            if ! docker image inspect "${IMAGE_REF}" >/dev/null 2>&1; then
+            # shellcheck disable=SC2086
+            if ! ${DOCKER} image inspect "${IMAGE_REF}" >/dev/null 2>&1; then
                 log "Image not present locally — attempting pull..."
-                docker pull "${IMAGE_REF}"
+                # shellcheck disable=SC2086
+                ${DOCKER} pull "${IMAGE_REF}"
             else
                 log "Image present locally — skipping pull."
             fi
@@ -171,7 +192,8 @@ acquire_image() {
 
 verify_image() {
     log "Verifying image: python + cuda + lerobot importable..."
-    docker run --rm --gpus all --init "${IMAGE_REF}" \
+    # shellcheck disable=SC2086
+    ${DOCKER} run --rm --gpus all --init "${IMAGE_REF}" \
         python -c "
 import sys
 import torch

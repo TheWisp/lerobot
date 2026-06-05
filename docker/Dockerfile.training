@@ -7,17 +7,22 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 # Training image for LeRobot. Derived from Dockerfile.internal but trimmed
-# to training-relevant extras and adds tini as PID 1 so SIGTERM reaches
-# the Python process (preemption safety on cloud spot pods — see the
-# session-survival research notes in gui/docs/).
+# to training-relevant extras.
 #
 # Usage:
 #   docker build -f docker/Dockerfile.training -t lerobot-training:dev .
-#   docker run --rm --gpus all \
+#   docker run --rm --gpus all --init \
 #     -v ~/.cache/huggingface:/home/user_lerobot/.cache/huggingface \
 #     -v $PWD/outputs:/lerobot/outputs \
 #     lerobot-training:dev \
 #     lerobot-train --policy.type=act --dataset.repo_id=lerobot/pusht --steps=10
+#
+# Signal handling: we rely on `docker run --init` (Docker's built-in tini)
+# to be PID 1. We do NOT set an ENTRYPOINT here — nesting our own tini
+# under Docker's --init tini produces a "Tini is not running as PID 1"
+# warning at runtime. Pick one: leave it to the docker invocation, which
+# is more portable across hosts and works correctly when our image is
+# pulled by tools that don't know about our internal conventions.
 
 ARG CUDA_VERSION=12.4.1
 ARG OS_VERSION=22.04
@@ -30,9 +35,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/lerobot/.venv/bin:$PATH \
     DEVICE=cuda
 
-# System deps + Python + uv + tini (signal handling for SIGTERM-clean exec)
+# System deps + Python + uv.
+# Note: we don't install tini here — signal handling is delegated to
+# `docker run --init` which provides Docker's own minimal init as PID 1.
+# Nesting our own tini under that produced a runtime "Tini is not running
+# as PID 1" warning during the smoke test on 2026-06-04.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common build-essential git curl tini \
+    software-properties-common build-essential git curl \
     libglib2.0-0 libgl1-mesa-glx libegl1-mesa ffmpeg \
     libgeos-dev cmake pkg-config ninja-build \
     && add-apt-repository -y ppa:deadsnakes/ppa \
@@ -74,10 +83,9 @@ RUN uv sync --locked --extra dataset --extra training --extra pusht --no-cache
 # Triton ptxas binary needs +x for some torch.compile paths
 RUN chmod +x /lerobot/.venv/lib/python${PYTHON_VERSION}/site-packages/triton/backends/nvidia/bin/ptxas || true
 
-# tini as PID 1 ensures SIGTERM reaches the training process, not a shell
-# wrapper. Critical for spot-preemption grace-window handlers to actually
-# fire — see preemption research in docs/.
-ENTRYPOINT ["/usr/bin/tini", "--"]
+# No ENTRYPOINT — `docker run --init` provides Docker's tini as PID 1.
+# That covers signal propagation without producing the "Tini is not
+# running as PID 1" warning we saw with a nested tini.
 
-# Default to bash; the deploy script overrides with `lerobot-train ...`
+# Default to bash; deploy scripts override with `lerobot-train ...`
 CMD ["/bin/bash"]
