@@ -6,6 +6,19 @@ Companion to [`gui/docs/hub_transfers.md`](../../src/lerobot/gui/docs/hub_transf
 
 ---
 
+## Vocabulary
+
+Two host-management modes the GUI supports. Pinned terminology so the rest of this doc + code + UI copy stays consistent:
+
+| Term                | Meaning                                                                                                                                                                                                                                                                                       | When you'd pick it                                                                                                                                                        |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Persistent host** | User provisions the VM themselves (on Nebius / RunPod / their lab box / whatever). User pastes the SSH command into the GUI's "Add training host" dialog. GUI never creates or destroys VMs; only connects, runs trainings, and disconnects. The VM lives until the user manually deletes it. | Always-on lab box, dev VM you SSH into for other reasons, debugging session, vendor where we don't have an integration                                                    |
+| **Ephemeral host**  | GUI creates the VM on the fly when training starts and destroys it (VM + disk + public IP) when training finishes. Lifecycle is automatic; no idle resources between sessions. Requires the GUI to hold a vendor API token.                                                                   | The default for most users — cost-disciplined, no "I forgot to delete the disk" surprises, matches what Modal / SageMaker / Anyscale already do for training-as-a-service |
+
+The terms are deliberately not "on-demand vs spot" — that pairing already means something else in cloud-vendor pricing pages (on-demand = guaranteed duration, spot = preemptible). Persistent vs Ephemeral is about **VM lifecycle ownership**, orthogonal to whether the underlying instance is preemptible or not. An Ephemeral host CAN use a preemptible instance underneath (and probably will, for cost).
+
+---
+
 ## Status as of 2026-06-05
 
 Branch: [`feat/gui-training-deploy-proto`](https://github.com/TheWisp/lerobot/pull/new/feat/gui-training-deploy-proto)
@@ -34,7 +47,9 @@ bash scripts/training/run_training.sh -- lerobot-train --policy.type=act ...
 | `src/lerobot/gui/training_worker.py` — SshConnection, poll_once, run_polling_loop, events.jsonl, incremental log tail                                      | `617be0517` | ✅ Skeleton (spawn step deferred) |
 | `tests/gui/test_training_jobs.py` — 37 tests including full PollScheduler timeline, error classification matrix, monotonicity                              | `617be0517` | ✅ All passing                    |
 
-### Phase 2 — Worker spawn step + API endpoints 🚧
+### Phase 2 — Worker spawn step + API endpoints 🚧 (Persistent-only scope)
+
+Concrete-case-first: this phase wires the SSH-into-an-existing-host path end-to-end. The provider abstraction emerges from generalizing this in Phase 2.5 once the concrete case is solid.
 
 |                                                                                                                 | Status  |
 | --------------------------------------------------------------------------------------------------------------- | ------- |
@@ -45,6 +60,18 @@ bash scripts/training/run_training.sh -- lerobot-train --policy.type=act ...
 | `POST /api/training/runs/{id}/cancel` — SIGTERM the worker → SSH kill tmux session on pod                       | Pending |
 | `POST /api/training/runs/{id}/dismiss` — drop terminal run from registry                                        | Pending |
 | Integration tests with mocked Popen + mocked SSH (parallel of `tests/gui/test_hub_endpoints.py`)                | Pending |
+
+### Phase 2.5 — HostProvider protocol + Persistent implementation 🚧
+
+Once Phase 2 works against one concrete case, the abstraction falls out. Belongs **after** Phase 2, not before — Rule of Three: write the concrete case first, then generalize when a second case (Ephemeral / RunPod) is on the way.
+
+|                                                                                                                                                         | Status  |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `src/lerobot/gui/training_providers/protocol.py` — `HostProvider` Protocol + `SpawnSpec`, `HostHandle`, `CostSnapshot` dataclasses                      | Pending |
+| `src/lerobot/gui/training_providers/persistent.py` — wraps existing HostProfile, `spawn()` raises `NotImplementedError`, `destroy()` is a no-op         | Pending |
+| Refactor Phase 2's spawn step to consume a `HostHandle`, not a `HostProfile` directly                                                                   | Pending |
+| Protocol omits `stop()` / `start()` (Lambda has neither — every off-switch is `terminate`); omits SSH runtime (lives above protocol in `SshConnection`) | Pending |
+| Tests: `runtime_checkable` Protocol conformance + `PersistentSshProvider` no-op cost / no-op destroy / `verify_destroyed` → True                        | Pending |
 
 ### Phase 3 — Host profile CRUD + Add-host dialog 🚧
 
@@ -88,6 +115,57 @@ bash scripts/training/run_training.sh -- lerobot-train --policy.type=act ...
 | "Open in W&B" link from completed runs                                                           | Pending |
 | "Use in Run tab" handle: `from_pretrained(hf://...)` for the robot side                          | Pending |
 
+### Phase 6.5 — Ephemeral mode + RunPod provider 🚧
+
+The first Ephemeral provider. RunPod is chosen over Nebius for v1 because:
+
+- `--terminate-after <ttl>` is a built-in dead-man switch at pod-create time (Nebius requires us to implement TTL with a scheduled async delete op).
+- Network volumes are a separate billable object with explicit lifecycle ("network volumes survive pod termination, billed monthly regardless of any pod") — the correct primitive for persistent dataset cache.
+- Python SDK is a thin GraphQL wrapper, actively maintained.
+- Per-second billing.
+- Real SSH on a mapped TCP port; root container.
+
+Three guardrails on every Ephemeral spawn, baked into the protocol:
+
+1. **Hard TTL** (`--terminate-after` at the vendor layer) — REQUIRED on every `SpawnSpec`; provider rejects spawn without it. Default 24h, configurable in settings.
+2. **Spend cap per run** — computed from `(gpu_hourly × ttl_hours) + (disk_size × storage_rate × ttl_hours/720)` before spawn. Refuse to launch above the user-configured ceiling (default $25/run).
+3. **Destroy verification** — after the run terminates, re-list resources in the user's account; refuse to mark the run "complete" until `verify_destroyed()` returns True. Automates the "always check Compute → Disks after teardown" hygiene rule.
+
+|                                                                                                                                                 | Status  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `src/lerobot/gui/training_providers/runpod.py` — `spawn` calls `runpod.create_pod(terminate_after=...)`, `destroy` calls `runpod.terminate_pod` | Pending |
+| `spend_cap_usd` field on the Start-training form; estimate displayed before launch                                                              | Pending |
+| Destroy-verification UI: run badge stays yellow ("verifying cleanup") until `verify_destroyed()` returns True                                   | Pending |
+| Settings: API-key storage at `~/.config/lerobot/provider_credentials/runpod.json`, encrypted at rest (OS keyring or `cryptography.fernet`)      | Pending |
+| Default-mode toggle in Settings: Ephemeral (default) vs Persistent                                                                              | Pending |
+| End-to-end test: synthetic 10-step training run that spawns + destroys a RunPod pod via the protocol; verify_destroyed at end                   | Pending |
+
+### Phase 7 — Nebius provider 🚧
+
+Defer Nebius until Phase 7 even though it's the platform we've already paid on. Reasoning: Nebius's idempotency is undocumented (no `--idempotency-key`; the recommended pattern is `get-by-name` first, create-if-404), the SDK is 0.3.x with thin compute examples, and the disk-lifecycle gotcha needs to be encoded as defaults — landing it as the v1 reference would compete for design attention with the protocol itself.
+
+|                                                                                                                                                                | Status  |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `training_providers/nebius.py` — `spawn` declares disk **inline** on the VM (cascade delete); never use standalone disks unless user explicitly opts in        | Pending |
+| Warn at SpawnSpec validation if `disk_gib > 256` (most LeRobot training fits in <100; defends against the 1.28-TB-default trap)                                | Pending |
+| Warn on static public-IP allocation: _"If you stop a VM that has a static IP address, the address will not return to the range"_ — surface this in the UI      | Pending |
+| Idempotency wrapper: `get_instance_by_name(name)` before `create_instance(name)`. Server has no `--idempotency-key`.                                           | Pending |
+| `verify_destroyed` does the "Compute → Disks + VPC → IP addresses" re-check the cost-optimization section currently asks the user to do manually               | Pending |
+| End-to-end test against real Nebius (gated by env var, like Hub Transfers' `LEROBOT_HUB_LIVE=1`): 10-step training + cleanup, asserts $0 of leftover resources | Pending |
+
+### Phase 8+ — Modal / Lambda (separate code paths) 🚧
+
+These don't fit the SshConnection model and aren't a priority for v1.
+
+- **Modal** — fundamentally different shape (no VM, no SSH). A separate code path that ignores `SshConnection` entirely and just calls `modal.Function.from_name(...).remote()`. High UX ceiling once it works. Worth doing once the protocol matures, but as a "Modal backend" alongside the SshConnection-based providers, not inside the same protocol.
+- **Lambda Cloud** — clean REST, but no `stop` — every off-switch is `terminate`. Actually fits Ephemeral well (no way to leave a stopped VM bleeding compute; only the separate Filesystem product persists). Add once the protocol is stable.
+
+### Skipped vendors
+
+- **Vast.ai** — marketplace variance ("advertised 1500 Mbps NIC sometimes delivers ~100 Mbps", volumes pinned to a single physical host so 'persistent' isn't really persistent, no SLA). Power users can still use it through the Persistent SSH path; we just won't market it as a managed integration.
+- **Paperspace** — SDK story is broken (the `gradient` PyPI package's old surface is broken; the new `digitalocean/gradient-python` SDK does not manage Paperspace machines), auto-shutdown is console-only (not API/CLI), which defeats GUI-driven lifecycle. Defer indefinitely.
+- **Colab / Kaggle interactive** — browser-coupled lifecycle (already out-of-scope below).
+
 ---
 
 ## Known gaps to fix before v1 (carried forward from the prototype README)
@@ -129,6 +207,8 @@ What the 19,440 GiB-hours actually broke down as:
 Both VMs were Stopped most of those hours. Both disks were still alive in `Compute → Disks`. Both kept billing.
 
 ### Hygiene rules to follow
+
+These rules apply to **Persistent-host mode** (user owns the VM lifecycle) and to **Phase 0 / 1 / 2 / 2.5** while we're still bash-driven. The whole point of **Phase 6.5+ Ephemeral mode** is to automate these rules — `destroy()` + `verify_destroyed()` are the protocol's enforcement of items 2 and 3 below.
 
 - **Right-size the boot disk on VM creation.** 50–100 GiB is enough for OS + Docker + a couple of cached datasets for almost all LeRobot training. The Nebius web form default is enormous (~1 TB) — always override.
 - **Stopping a VM ≠ no disk charge.** If you're done with a VM for the day, **delete the disk too**. Use _"Delete instance + delete attached disks"_ in the console (or `terraform destroy` _and then_ verify in `Compute → Disks` that no orphans remain).
@@ -221,10 +301,94 @@ Storage: `~/.config/lerobot/training_hosts/<name>.json` — one JSON per host, e
 
 Test-connection on save: SSH probe runs `nvidia-smi`, `docker --version`, `which uv`, captures capabilities into the profile.
 
+### HostProvider protocol (Phase 2.5)
+
+Small surface, deliberately narrow. The SSH runtime (`SshConnection`, polling loop, log tail) lives **above** the protocol, not inside it — the provider's only job is to hand back a usable SSH endpoint and to make it (and its disk and its public IP) go away later. Same code path drives Persistent and Ephemeral; the discriminant is which provider is plugged in.
+
+```python
+# src/lerobot/gui/training_providers/protocol.py
+from dataclasses import dataclass
+from typing import Protocol, Literal, runtime_checkable
+
+GpuKind = Literal["RTX_4090", "L40S", "A100_80", "H100", "H200", "B200"]
+ProviderId = Literal["persistent", "runpod", "nebius", "lambda", "modal"]
+
+
+@dataclass(frozen=True, kw_only=True)
+class SpawnSpec:
+    """What the user asked for. Vendor-neutral."""
+    gpu: GpuKind
+    gpu_count: int = 1
+    preemptible: bool = True             # Ephemeral defaults to spot/interruptible
+    disk_gib: int = 100                  # boot + container disk
+    image: str                           # docker ref the training container pulls
+    region_hint: str | None = None       # provider may ignore; e.g. "us", "eu"
+    ttl_seconds: int                     # hard kill — REQUIRED, no default
+    estimated_cost_ceiling_usd: float    # refuse to spawn above this
+
+
+@dataclass(frozen=True, kw_only=True)
+class HostHandle:
+    """Live handle the SSH path uses. All vendors converge on this shape."""
+    provider: ProviderId
+    provider_resource_id: str            # vendor's pod/instance id, for destroy()
+    ssh_host: str
+    ssh_port: int
+    ssh_user: str = "root"
+    ssh_key_path: str                    # identity key; provider may have generated it
+    persistent_volume_id: str | None = None  # storage that survives the handle
+    region: str
+    expires_at_unix: int                 # provider's hard-TTL deadline — never None
+
+
+@dataclass(frozen=True, kw_only=True)
+class CostSnapshot:
+    compute_hourly_usd: float
+    storage_monthly_usd_per_gib: float
+    accrued_usd_estimate: float          # since spawn; provider-side or local clock
+
+
+@runtime_checkable
+class HostProvider(Protocol):
+    id: ProviderId
+    display_name: str
+
+    def estimate_cost(self, spec: SpawnSpec) -> CostSnapshot: ...
+    def spawn(self, spec: SpawnSpec) -> HostHandle: ...
+    def destroy(self, handle: HostHandle) -> None: ...
+    def verify_destroyed(self, handle: HostHandle) -> bool: ...
+    def current_cost(self, handle: HostHandle) -> CostSnapshot: ...
+```
+
+**What's deliberately NOT in the protocol:**
+
+- **`stop()` / `start()`.** Ephemeral never stops, it destroys. Lambda doesn't even have stop. Including stop would force a fiction onto vendors that don't support it, and (worse) hand the user a footgun — a stopped VM keeps billing disk.
+- **`ssh_run(cmd)` / `ssh_tail(log)`.** The existing `SshConnection` + `PollScheduler` are vendor-agnostic and live above the provider. The provider's responsibility ends at "here's a working SSH endpoint."
+- **Auth flow.** Each provider has its own credential storage (`~/.nebius/`, `~/.modal.toml`, RunPod env var). The provider implementation reads its own config; the GUI's API-key storage is a separate concern.
+- **Upload/download of artifacts.** Checkpoints go to HF Hub; no provider needs to push/pull files.
+- **Preemption notification.** Handled by `PollScheduler` (3 fails → disconnected, 10 → lost contact). Provider doesn't emit events.
+
+**Persistent host as a degenerate provider:**
+
+```python
+class PersistentSshProvider:
+    id = "persistent"
+    display_name = "BYO SSH endpoint"
+
+    def estimate_cost(self, spec):    return CostSnapshot(0.0, 0.0, 0.0)
+    def spawn(self, spec):            raise NotImplementedError("Persistent hosts are added, not spawned")
+    def destroy(self, handle):        pass            # user owns the VM
+    def verify_destroyed(self, handle): return True   # always
+    def current_cost(self, handle):   return CostSnapshot(0.0, 0.0, 0.0)
+```
+
+Run-driving code only ever talks to a `HostProvider` + a `HostHandle`. The two modes differ only in which provider is plugged in. Phase 3's HostProfile becomes "the way the Persistent provider gets its HostHandle." The first real spawn lands in Phase 6.5 (RunPod).
+
 ### What we don't try to do
 
-- **Pod provisioning.** User launches the pod on Nebius/RunPod/etc. themselves; we accept an SSH endpoint.
+- **Pod provisioning outside the HostProvider protocol.** Ephemeral mode (Phase 6.5+) provisions through a vetted vendor SDK with hard TTL, spend cap, and destroy-verification. The GUI does NOT embed vendor consoles, manage payment methods, or spawn without a TTL + spend cap. Persistent mode still accepts a user-provided SSH endpoint for vendors we don't (yet) wrap.
 - **In-GUI HF login.** Delegated to `huggingface-cli login` (out-of-band terminal flow).
 - **Multi-GPU / multi-node training.** Out of scope for v1.
 - **Image-everywhere for local dev.** Local CUDA uses the bash-subprocess path against the dev's venv. The image is for remote pods.
 - **Browser-coupled providers** (Colab Free/Pro/Pro+, Kaggle interactive). They kill on user-side idle regardless of GPU activity — no design from our side defeats that. Documented as out-of-scope.
+- **Vendor marketplaces with quality variance** (Vast.ai). Power users can still use them through the Persistent SSH path; we just don't market them as managed integrations.
