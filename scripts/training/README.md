@@ -2,6 +2,8 @@
 
 Demonstrates the "deploy an image, then run trainings" flow end-to-end on localhost. The same mechanism extends to remote SSH hosts later.
 
+> **Looking for the full design + progress tracker?** See [`DESIGN.md`](DESIGN.md) in this directory — phased plan, architecture, cost-optimization, known gaps. This README focuses on _how to use_ the bash scripts today.
+
 ## Why two scripts (and not one)
 
 Deploy and training launch are distinct operations:

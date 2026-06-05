@@ -42,7 +42,8 @@ PollScheduler integration, SSH wrapper, error classification, and event-
 log writer all live here — these are the resilience-design pieces from
 the design conversation.
 
-For the full design see (when drafted) :doc:`gui/docs/model_training.md`.
+For the full design see :doc:`/scripts/training/DESIGN.md` (colocated with
+the bash scaffolding that the worker subsumes).
 """
 
 from __future__ import annotations
@@ -475,7 +476,7 @@ def run_polling_loop(
 ) -> None:
     """The main loop. Polls until terminal state or cancel.
 
-    Resilience design (from gui/docs/model_training.md, when drafted):
+    Resilience design (from scripts/training/DESIGN.md):
     - Backoff via PollScheduler on transient failures
     - Immediate give-up on permanent failures (auth, host key, DNS)
     - State transitions logged to events.jsonl for audit
