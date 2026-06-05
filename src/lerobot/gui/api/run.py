@@ -820,76 +820,18 @@ async def start_hvla(req: HVLARunRequest) -> dict:
 
 @router.get("/rlt-metrics")
 async def get_rlt_metrics() -> dict:
-    """Return current RLT training metrics from file (cross-process).
+    """Return current RLT training metrics from file (cross-process)."""
+    from lerobot.gui.api._run_core import get_rlt_metrics as _impl
 
-    Reads the metrics.json that belongs to the currently-active RLT
-    session. The subprocess sets its own ``_metrics_path`` module global
-    but that's isolated to that process; the GUI process has to resolve
-    the file from ``_active_config["rlt_output_dir"]`` explicitly, or
-    else ``load_metrics_from_file`` falls back to a hardcoded default
-    path and returns stale data from whichever prior session happens to
-    have landed there.
-    """
-    try:
-        from lerobot.policies.hvla.rlt.metrics import load_metrics_from_file
-
-        path = None
-        if _active_config and _active_config.get("rlt_output_dir"):
-            path = str(Path(_active_config["rlt_output_dir"]) / "metrics.json")
-        data = load_metrics_from_file(path)
-        if data:
-            return data
-    except Exception as e:
-        logger.warning("RLT metrics read failed: %s", e)
-    return {
-        "episode": 0,
-        "step_count": 0,
-        "buffer_size": 0,
-        "total_updates": 0,
-        "mode": "IDLE",
-        "success_rate": 0,
-        "total_successes": 0,
-        "total_episodes": 0,
-        "series": {},
-    }
+    return _impl()
 
 
 @router.get("/latency-metrics")
 async def get_latency_metrics(source: str = "teleop") -> dict:
-    """Return the latest latency snapshot for the requested source.
+    """Return the latest latency snapshot for the requested source."""
+    from lerobot.gui.api._run_core import get_latency_metrics as _impl
 
-    ``source`` is a key in ``LATENCY_SOURCES`` (default: "teleop"). Each
-    subprocess (teleop / record / HVLA inference) atomically replaces
-    ``<source_dir>/latency_snapshot.json`` once per second; this endpoint
-    reads the matching file. Returns an empty stub when no snapshot exists
-    yet (fresh session, source not running, or unknown source).
-    """
-    source_dir = LATENCY_SOURCES.get(source)
-    if source_dir is None:
-        # Unknown source — return the empty stub rather than 404 so the
-        # dashboard's polling loop doesn't have to special-case errors.
-        return _empty_latency_snapshot()
-    snapshot_path = Path(source_dir) / "latency_snapshot.json"
-    try:
-        if snapshot_path.exists():
-            with open(snapshot_path, encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as e:  # noqa: BLE001
-        # Atomic-replace race: a concurrent rename could leave the path
-        # momentarily missing or the file partially-readable on slow disks.
-        # Either is harmless — the next poll will succeed.
-        logger.debug("latency snapshot read failed (source=%s): %s", source, e)
-    return _empty_latency_snapshot()
-
-
-def _empty_latency_snapshot() -> dict:
-    return {
-        "n_records": 0,
-        "dropped_records": 0,
-        "overrun_ratio": 0.0,
-        "stages": {},
-        "series": {},
-    }
+    return _impl(source)
 
 
 @router.get("/latency-sources")
@@ -1065,21 +1007,9 @@ async def stop_process() -> dict:
 
 @router.get("/status")
 async def get_status() -> dict:
-    if _active_process is None:
-        return {"running": False, "command": None}
+    from lerobot.gui.api._run_core import get_run_status
 
-    returncode = _active_process.returncode
-    if returncode is not None:
-        return {
-            "running": False,
-            "command": _active_command,
-            "returncode": returncode,
-        }
-    return {
-        "running": True,
-        "command": _active_command,
-        "pid": _active_process.pid,
-    }
+    return get_run_status()
 
 
 @router.get("/output")

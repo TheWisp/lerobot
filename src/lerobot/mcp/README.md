@@ -258,6 +258,7 @@ stores it as `comment`. The migration is invisible to callers.
 | Dataset     | `tag_episode`, `delete_episode_tag`                                                                                                | `comment` |
 | Dataset     | `propose_set_feature`, `propose_delete_episode`, `propose_trim_episode`, `discard_pending_edits`, `apply_pending_edits`            | `edit`    |
 | Hub         | `hub_auth_status`, `hub_repo_info`, `hub_list_jobs`, `hub_job_progress`                                                            | `read`    |
+| Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                       | `read`    |
 | Introspect  | `list_my_scopes`                                                                                                                   | `read`    |
 
 ### Designed but not yet shipped
@@ -279,7 +280,6 @@ may shift slightly on landing.
 | Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `list_ports`, `get_all_port_assignments`                            | `read`    |
 | Robots      | `create/update/rename/delete_robot_profile` (+ teleop equivalents), `detect_cameras_into_profile`, `assign_port_to_arm`, `identify_arm` | `edit`    |
 | Robots      | `start/finish/cancel_rest_recording`, `move_to_rest_position`, `record/replay/delete_trajectory`, `recover_robot`                       | `operate` |
-| Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                            | `read`    |
 | Run         | `update_rlt_config`                                                                                                                     | `edit`    |
 | Run         | `start_teleoperate`, `start_record`, `start_replay`, `start_hvla`, `stop_current_run`                                                   | `operate` |
 | Introspect  | `list_supported_tools`                                                                                                                  | `read`    |
