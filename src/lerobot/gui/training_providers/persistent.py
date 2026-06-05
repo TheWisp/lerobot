@@ -1,0 +1,109 @@
+# Copyright 2026 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+"""Persistent SSH provider — the "BYO SSH endpoint" degenerate case.
+
+User provisioned the VM themselves (on Nebius / RunPod / their lab box /
+whatever) and pasted the SSH command into the GUI. We just connect.
+
+Why is this a HostProvider at all, instead of a special case?
+
+Because the rest of the training stack (training_worker, API endpoints,
+frontend) talks only to HostProvider. Making the BYO-SSH path implement
+the same protocol means there's one code path through the system, not
+two. The provider abstractions are no-ops here:
+
+  - spawn() raises NotImplementedError — Persistent hosts are added by
+    the user via the "Add training host" dialog, not spawned by the GUI.
+    The GUI obtains a HostHandle by reading the saved HostProfile, NOT
+    by calling spawn().
+  - destroy() is a no-op — the user owns the VM lifecycle.
+  - verify_destroyed() always returns True — nothing for us to verify.
+  - cost is zero — the user pays the vendor directly; we don't see it.
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+from lerobot.gui.training_jobs import HostProfile
+from lerobot.gui.training_providers.protocol import (
+    CostSnapshot,
+    HostHandle,
+    SpawnSpec,
+)
+
+
+class PersistentSshProvider:
+    """Wraps a user-provided SSH endpoint as a HostProvider.
+
+    The GUI calls :meth:`handle_from_profile` to convert a saved
+    :class:`HostProfile` (one JSON per host on disk) into a HostHandle
+    that the SSH path can consume. spawn() is intentionally not
+    implemented — there's no VM to create.
+    """
+
+    id = "persistent"
+    display_name = "BYO SSH"
+
+    def estimate_cost(self, spec: SpawnSpec) -> CostSnapshot:
+        # User pays the vendor directly. The GUI has no visibility.
+        return CostSnapshot(
+            compute_hourly_usd=0.0,
+            storage_monthly_usd_per_gib=0.0,
+            accrued_usd_estimate=0.0,
+        )
+
+    def spawn(self, spec: SpawnSpec) -> HostHandle:
+        raise NotImplementedError(
+            "Persistent hosts are added by the user via the 'Add training host' "
+            "dialog (BYO SSH endpoint). Use handle_from_profile() to construct "
+            "a HostHandle from a saved HostProfile."
+        )
+
+    def destroy(self, handle: HostHandle) -> None:
+        # User owns the VM lifecycle. We don't touch their VM.
+        return
+
+    def verify_destroyed(self, handle: HostHandle) -> bool:
+        # By definition we haven't created anything billable.
+        return True
+
+    def current_cost(self, handle: HostHandle) -> CostSnapshot:
+        return CostSnapshot(
+            compute_hourly_usd=0.0,
+            storage_monthly_usd_per_gib=0.0,
+            accrued_usd_estimate=0.0,
+        )
+
+    # ── Persistent-mode-specific helper ───────────────────────────────────
+
+    @staticmethod
+    def handle_from_profile(profile: HostProfile) -> HostHandle:
+        """Construct a HostHandle from a saved BYO-SSH HostProfile.
+
+        Pre: ``profile`` is a Persistent host (has ssh_host, ssh_user
+        populated; not Ephemeral/Nebius shape).
+        Post: returned handle has expires_at_unix = +100 years (never
+        expires, since the user owns the VM).
+        """
+        ssh_key = profile.ssh_key_path or str(Path.home() / ".ssh" / "id_ed25519")
+        return HostHandle(
+            provider="persistent",
+            provider_resource_id=f"profile:{profile.name}",
+            ssh_host=profile.ssh_host,
+            ssh_port=profile.ssh_port,
+            ssh_user=profile.ssh_user,
+            ssh_key_path=ssh_key,
+            persistent_volume_id=profile.persistent_volume,
+            region="user-managed",
+            # "Never expires" — the user controls the VM, not us. ~100 years
+            # from now is more than enough; the UI just shouldn't show a
+            # countdown for Persistent hosts.
+            expires_at_unix=int(time.time()) + 100 * 365 * 24 * 3600,
+        )
