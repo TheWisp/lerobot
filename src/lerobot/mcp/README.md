@@ -267,22 +267,22 @@ The MCP surface the design calls for, grouped by domain and scope.
 Reviewers cross-check against the implementation when extending. Names
 may shift slightly on landing.
 
-| Domain      | Tool                                                                                                                                    | Scope     |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| Bridge / UI | `set_filter` (waits for a filter UI to land — see `gui/TODO.md`)                                                                        | `read`    |
-| Dataset     | `get_feature_series`, `list_tagged_episodes`                                                                                            | `read`    |
-| Dataset     | `delete_dataset`, `merge_into_dataset`, `vacuum_sidecar`, `drop_sidecar_database`                                                       | `edit`    |
-| Hub         | `hub_diff_local_vs_remote`                                                                                                              | `read`    |
-| Hub         | `hub_start_upload`, `hub_start_download`, `hub_cancel_job`                                                                              | `edit`    |
-| Models      | `list_model_sources`, `list_models_in_source`, `list_run_checkpoints`, `get_run_config`                                                 | `read`    |
-| Models      | `add_model_source`, `remove_model_source`                                                                                               | `edit`    |
-| Models      | `load_debug_model`, `unload_debug_model`, `get_debug_status`                                                                            | `operate` |
-| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `list_ports`, `get_all_port_assignments`                            | `read`    |
-| Robots      | `create/update/rename/delete_robot_profile` (+ teleop equivalents), `detect_cameras_into_profile`, `assign_port_to_arm`, `identify_arm` | `edit`    |
-| Robots      | `start/finish/cancel_rest_recording`, `move_to_rest_position`, `record/replay/delete_trajectory`, `recover_robot`                       | `operate` |
-| Run         | `update_rlt_config`                                                                                                                     | `edit`    |
-| Run         | `start_teleoperate`, `start_record`, `start_replay`, `start_hvla`, `stop_current_run`                                                   | `operate` |
-| Introspect  | `list_supported_tools`                                                                                                                  | `read`    |
+| Domain      | Tool                                                                                                                                                             | Scope     |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Bridge / UI | `set_filter` (waits for a filter UI to land — see `gui/TODO.md`)                                                                                                 | `read`    |
+| Dataset     | `get_feature_series`, `list_tagged_episodes`                                                                                                                     | `read`    |
+| Dataset     | `delete_dataset`, `merge_into_dataset`, `vacuum_sidecar`, `drop_sidecar_database`                                                                                | `edit`    |
+| Hub         | `hub_diff_local_vs_remote`                                                                                                                                       | `read`    |
+| Hub         | `hub_start_upload`, `hub_start_download`, `hub_cancel_job`                                                                                                       | `edit`    |
+| Models      | `list_model_sources`, `list_models_in_source`, `list_run_checkpoints`, `get_run_config`                                                                          | `read`    |
+| Models      | `add_model_source`, `remove_model_source`                                                                                                                        | `edit`    |
+| Models      | `load_debug_model`, `unload_debug_model`, `get_debug_status`                                                                                                     | `operate` |
+| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `list_ports`, `get_all_port_assignments`                                                     | `read`    |
+| Robots      | `create/update/rename/delete_robot_profile` (+ teleop equivalents), `assign_port_to_arm`                                                                         | `edit`    |
+| Robots      | `identify_arm`, `detect_cameras_into_profile`, `start/finish/cancel_rest_recording`, `move_to_rest_position`, `record/replay/delete_trajectory`, `recover_robot` | `operate` |
+| Run         | `update_rlt_config`                                                                                                                                              | `edit`    |
+| Run         | `start_teleoperate`, `start_record`, `start_replay`, `start_hvla`, `stop_current_run`                                                                            | `operate` |
+| Introspect  | `list_supported_tools`                                                                                                                                           | `read`    |
 
 Design conventions worth flagging:
 
