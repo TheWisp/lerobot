@@ -1,33 +1,33 @@
 # Model training — architecture
 
-End-to-end design for taking a user from "I want to train a policy" to "trained model on HF Hub", driven from the LeRobot GUI.
+End-to-end design for taking a user from "I want to train a policy" to "trained model in a checkpoint store", driven from the LeRobot GUI.
 
-Companion to [`gui/docs/hub_transfers.md`](../../src/lerobot/gui/docs/hub_transfers.md) — training reuses Hub Transfers' worker-IPC + polling + Hub-upload patterns wholesale.
+Companion to [`gui/docs/hub_transfers.md`](../../src/lerobot/gui/docs/hub_transfers.md) — training reuses Hub Transfers' worker-IPC + polling + upload patterns wholesale.
 
 ---
 
 ## Use cases
 
-Three host modes, in increasing complexity. Each builds on the last.
+Two host modes by lifecycle ownership. The workstation-GPU case is the easy slice of Persistent.
 
-### A. Local GPU (default for workstations)
+### A. Workstation (auto-registered Persistent host)
 
-**Who:** developer with a GPU in their own machine.
+**Who:** developer with a GPU in the same machine that runs the GUI server.
 
 **Setup:**
 
 ```
 huggingface-cli login
-lerobot-gui                                 # binds 127.0.0.1
+lerobot-gui                                 # binds 127.0.0.1; helper auto-launched
 ```
 
-**Flow:** open browser → pick dataset + recipe + hyperparams → click **Start** → training runs as a subprocess on the same machine → checkpoints push to HF Hub.
+On first start the GUI runs `nvidia-smi` locally; if a GPU is found, a host called "This server" appears in the dropdown. No further setup.
 
-No SSH, no cloud, no provider. The existing bash-subprocess training path the GUI already has.
+**Flow:** open browser → pick training host → pick dataset + recipe + hyperparams → click **Start** → training runs on that host → checkpoints push to the configured store.
 
-### B. Persistent SSH host (always-on lab box)
+### B. User-added Persistent host (lab box, leased VM, user's laptop)
 
-**Who:** developer with a remote machine they manage themselves — lab server, university cluster, leased EC2.
+**Who:** developer with a remote machine they manage themselves — lab server, university cluster, leased EC2, or their own laptop reachable from the GUI server.
 
 **Setup:**
 
@@ -37,7 +37,7 @@ lerobot-gui                                 # local or LAN
 # in GUI: Add training host → paste SSH command → name → save
 ```
 
-**Flow:** GUI's "Add training host" dialog accepts an `ssh user@host` command; GUI tests reachability + capabilities (`nvidia-smi`, `docker`, `uv`); training runs over SSH inside `tmux` on that host; GUI polls progress via incremental file tails.
+**Flow:** "Add training host" dialog accepts `ssh user@host`; GUI tests reachability + capabilities (`nvidia-smi`, `docker`, `uv`); training runs over SSH inside `tmux` on that host; GUI polls progress via incremental file tails.
 
 The GUI never creates or destroys the VM — that's the user's responsibility, as is paying for it.
 
@@ -48,24 +48,25 @@ The GUI never creates or destroys the VM — that's the user's responsibility, a
 **Setup** (one-time per laptop):
 
 ```
-nebius profile create
+<vendor> profile create                                            # whichever vendor's CLI
 huggingface-cli login
-lerobot auth-helper start --origin http://lab-server:8000   # only if the GUI is on a LAN box
+lerobot auth-helper start --origin http://lab-server:8000          # only if the GUI is on a LAN box
 ```
 
-**Flow:** GUI's "Start training" dialog has a GPU dropdown + spend cap + TTL fields. On Start: provider's `spawn()` shells out to the vendor CLI with the right SKU, disk size, server-side TTL; waits for SSH reachability; runs training inside tmux as in case B; on completion or TTL hit, calls `destroy()` and `verify_destroyed()` to ensure no orphan disks/IPs.
+**Flow:** "Start training" dialog has a GPU dropdown + spend cap + TTL fields. On Start: the provider's `spawn()` provisions the VM with the right SKU, disk size, and server-side TTL; waits for SSH reachability; runs training inside tmux as in case B; on completion or TTL hit, calls `destroy()` and `verify_destroyed()` to ensure no orphan disks/IPs.
 
-The provider abstraction (below) lets us add other vendors without changing the rest of the GUI.
+The provider abstraction (below) lets us add new vendors without changing the rest of the GUI.
 
 ---
 
 ## Vocabulary
 
-| Term                | Meaning                                                                                                                                                                          | Setup cost                           |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| **Local host**      | Training runs as a subprocess of the GUI server on the same machine. No SSH, no provider, no cloud.                                                                              | Zero beyond `huggingface-cli login`. |
-| **Persistent host** | User owns the VM (lab box, RunPod, leased EC2 — anything reachable by SSH). User pastes SSH command into GUI. GUI connects, trains, disconnects; VM lives until user deletes it. | One-time SSH command paste.          |
-| **Ephemeral host**  | GUI creates the VM on training start, destroys it on completion. Lifecycle automatic. Requires per-user cloud credential.                                                        | One-time `nebius profile create`.    |
+| Term                 | Meaning                                                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Training host**    | Any machine where training can run. May be the GUI server's own box, a user-added remote box, or an auto-spawned cloud VM.                       |
+| **Persistent host**  | User-managed lifecycle. GUI connects; doesn't create or destroy. Default for both the workstation case (auto-registered) and any user-added box. |
+| **Ephemeral host**   | Provider-managed lifecycle. GUI creates the VM on training start, destroys on completion.                                                        |
+| **Checkpoint store** | Where checkpoints land. May be HF Hub, a vendor-local object store, or anywhere else. Decoupled from the training host.                          |
 
 "Persistent" vs "Ephemeral" is about lifecycle ownership, orthogonal to spot/preemptible pricing. An Ephemeral host typically uses a preemptible instance underneath.
 
@@ -79,27 +80,27 @@ The provider abstraction (below) lets us add other vendors without changing the 
 Tier 0   User's browser (laptop / tablet)
                 │
                 ▼
-Tier 1   GUI server (workstation in local mode, LAN box in shared mode)
-                │   subprocess  (Local mode)
-                │   SSH         (Persistent / Ephemeral modes)
+Tier 1   GUI server (workstation or LAN box)
+                │   transport: subprocess  (host is the GUI server itself)
+                │   transport: SSH         (host is anywhere else)
                 ▼
 Tier 2   Training host (same machine, lab box, or cloud VM)
                 │
                 ▼
-              HF Hub (datasets + checkpoints + final model)
+       Checkpoint store (HF Hub, vendor object store, …)
 ```
 
-Tier 1 may collapse with Tier 0 (workstation GPU case). The design treats them as independent.
+Tier 1 may collapse with Tier 0 (workstation case). The design treats them as independent.
 
 ### HostProvider protocol
 
-The bridge between the GUI's orchestration code and vendor-specific VM lifecycle. Same code path drives Persistent and Ephemeral; the discriminant is which provider is plugged in. Local mode bypasses the provider entirely.
+The bridge between the GUI's orchestration code and vendor-specific VM lifecycle. Same code path drives Persistent and Ephemeral; the discriminant is which provider is plugged in.
 
 ```python
 @dataclass(frozen=True, kw_only=True)
 class SpawnSpec:                                      # vendor-neutral request
     gpu: GpuKind
-    gpu_count: int = 1
+    gpu_count: int = 1                                # v1: always 1; field reserved for later
     preemptible: bool = True
     disk_gib: int = 100
     image: str
@@ -109,13 +110,24 @@ class SpawnSpec:                                      # vendor-neutral request
 
 
 @dataclass(frozen=True, kw_only=True)
-class HostHandle:                                     # what the SSH path consumes
+class SshTransport:
+    host: str
+    port: int = 22
+    user: str = "root"
+    key_path: str
+
+@dataclass(frozen=True, kw_only=True)
+class SubprocessTransport:                            # for the workstation case
+    cwd: Path
+
+HostTransport = SshTransport | SubprocessTransport
+
+
+@dataclass(frozen=True, kw_only=True)
+class HostHandle:                                     # what the run-driving code consumes
     provider: ProviderId
-    provider_resource_id: str                         # vendor's VM/pod id
-    ssh_host: str
-    ssh_port: int
-    ssh_user: str = "root"
-    ssh_key_path: str
+    provider_resource_id: str                         # vendor's VM/pod id (or "local")
+    transport: HostTransport
     persistent_volume_id: str | None = None
     region: str
     expires_at_unix: int                              # provider's hard-TTL deadline
@@ -142,18 +154,43 @@ class HostProvider(Protocol):
 
 **Deliberately omitted:**
 
-- `stop()` / `start()` — not every vendor supports stop (Lambda doesn't); a stopped VM still bills its disk. Every off-switch is `terminate`.
-- `ssh_run()` / `ssh_tail()` — SSH runtime is vendor-agnostic and lives above the provider.
+- `stop()` / `start()` — not every vendor supports stop; a stopped VM still bills its disk. Every off-switch is `terminate`.
+- `ssh_run()` / `ssh_tail()` — transport runtime is vendor-agnostic and lives above the provider.
 - Auth flow — handled by the credential helper (below); credentials injected per-request as a provider constructor arg.
-- Upload/download — checkpoints flow through HF Hub; providers don't move files.
+- Upload/download — checkpoints flow through `CheckpointStore` (next section); providers don't move files.
 
-**Persistent as a degenerate provider:** `spawn()` raises (user supplied the SSH endpoint by hand); `destroy()` is a no-op; cost is zero.
+**Persistent as a degenerate provider:** `spawn()` raises (the host already exists); `destroy()` is a no-op; cost is zero. The auto-registered workstation host uses `SubprocessTransport`; user-added hosts use `SshTransport`.
 
-### SSH transport + log surfaces
+### CheckpointStore protocol
 
-Training launches inside `tmux new-session -d` on the host with `exec python -m lerobot.gui.train_worker`. The GUI server never holds an open SSH pipe to training. Polling is via short-lived `ssh … 'cat progress.json'` every 5s, reusing TCP via `ControlMaster` / `ControlPersist`.
+Parallel to `HostProvider`, but for where checkpoints land. Decouples storage choice from compute choice.
 
-Three log surfaces:
+```python
+@runtime_checkable
+class CheckpointStore(Protocol):
+    id: StoreId                                       # "hf_hub", "nebius_s3", ...
+    display_name: str
+    pricing_info_url: str | None                      # link to vendor's pricing page; UI surfaces this
+
+    def push(self, run_id: str, step: int, local_path: Path) -> StorageUri: ...
+    def pull(self, uri: StorageUri, dest: Path) -> None: ...
+    def list_checkpoints(self, run_id: str) -> list[StorageEntry]: ...
+```
+
+A training run can use two stores:
+
+- **scratch store** — frequent checkpoints during training. Defaults to whatever the host's vendor-local store is (e.g., the vendor's own S3-compatible bucket); falls back to the publish store if no vendor-local option is configured.
+- **publish store** — final model destination. HF Hub by default.
+
+Why the split: scratch checkpoints can be hundreds of GiB-writes per run, and egress to a cross-network store can dominate compute cost. Putting scratch on a vendor-local store (where egress is typically free or near-free) avoids that. The publish store gets a single final upload.
+
+**On surfacing cost.** We do NOT predict dollar amounts — vendor pricing drifts and we have no reliable feed for it. The store exposes `pricing_info_url`; the host-config UI shows a "💰 See pricing" link per host so the user reads current rates themselves.
+
+### SSH / subprocess transport + log surfaces
+
+Training launches inside `tmux new-session -d` on the host (SSH transport) or under a managed subprocess (`SubprocessTransport`, workstation case), invoking `python -m lerobot.gui.train_worker`. The GUI server never holds an open pipe to training. Polling is via short-lived reads of `progress.json` and byte-offset tails of `stderr.log` every 5s (TCP reused via `ControlMaster` / `ControlPersist` for SSH).
+
+Three log surfaces, identical across both transports:
 
 - **`progress.json`** — atomically-rewritten snapshot (loss, step, ETA, GPU util)
 - **`events.jsonl`** — append-only audit log of state transitions (connect, fail, retry, lost_contact)
@@ -161,11 +198,11 @@ Three log surfaces:
 
 ### Session survival
 
-The laptop-closes-the-lid case (Persistent / Ephemeral):
+The laptop-closes-the-lid case (any host mode):
 
 - GUI server pauses, polls stop
-- Training on the host keeps running (tmux detached from SSH)
-- Auto-push-to-Hub from inside the training script keeps running
+- Training on the host keeps running (tmux detached / subprocess unaffected)
+- Auto-push from inside the training script keeps running
 - Laptop wakes → polls resume → card shows current step
 
 Browser-close in Ephemeral mode is the same property: training continues via the SSH key (no provider token needed); on resume, the GUI re-fetches tokens from the helper.
@@ -181,7 +218,7 @@ Browser-close in Ephemeral mode is the same property: training continues via the
 
 ### Recovery from preemption
 
-Primary mechanism: **periodic checkpoint to host disk + async background upload to HF Hub**. The grace window from `SIGTERM → SIGKILL` is too short for big models (~7 GB at typical bandwidth) to flush on signal, so the most-recent Hub checkpoint is what survives.
+Primary mechanism: **periodic checkpoint to host disk + async background upload to the scratch store**. The grace window from `SIGTERM → SIGKILL` is too short for big models (~7 GB at typical bandwidth) to flush on signal, so the most-recent uploaded checkpoint is what survives.
 
 Cadence: every ~60–180s of training time for preemptible hosts (vs ~10 min default for on-demand). Tunable per recipe.
 
@@ -194,50 +231,57 @@ When the backend is shared (lab LAN), creds must be per-user, must not leak betw
 ~/.nebius/  ~/.cache/huggingface/   ◄── lerobot-auth-helper (127.0.0.1:39847)
                                                 ▲
                                                 │ GET /tokens (Origin + X-Helper-Token)
-                                            Browser ─── X-Nebius-Auth / X-HF-Auth ──► GUI backend
-                                                                                     (request-scope, no storage)
+                                            Browser ─── X-<Vendor>-Auth / X-HF-Auth ──► GUI backend
+                                                                                       (request-scope, no storage)
 ```
 
-**Local-host mode** (GUI binds `127.0.0.1`): helper auto-launched as a child of the GUI server with auto-pairing. No setup beyond `huggingface-cli login`.
+**Workstation case** (GUI binds `127.0.0.1`): helper auto-launched as a child of the GUI server with auto-pairing. No setup beyond `huggingface-cli login`. The user runs ONE command total: `lerobot-gui`.
 
-**Shared-backend mode** (LAN): each user runs the helper on their own laptop; pastes the helper's pairing token into GUI Settings once. After that, tokens rotate transparently.
+**Shared-LAN case**: GUI server runs only `lerobot-gui` — no second service. Each user runs `lerobot auth-helper start --origin <gui-url>` ONCE on their own laptop; pairing token pasted into GUI Settings once. After that, tokens rotate transparently.
 
 **Security properties:**
 
 - Long-lived creds stay on the user's laptop; backend has zero credential persistence
 - Helper bound to `127.0.0.1` only; rejects requests missing matching `Origin` AND `X-Helper-Token`
-- Compromised backend worst case: ≤12h Nebius tokens for currently-connected users; no refresh creds, no long-lived secrets
+- Compromised backend worst case: short-lived provider tokens (typically ≤12h) for currently-connected users; no refresh creds, no long-lived secrets
 
 **HF caveat.** `~/.cache/huggingface/token` is non-expiring. Subprocess isolation (Hub Transfers already uses `hub_worker.py`, a separate process) confines it to that subprocess's RAM. Users wanting tighter scope: switch to a fine-grained HF token with explicit expiry on huggingface.co — no code change needed.
 
 ### Cost discipline
 
-**Disks bill from creation to deletion, regardless of VM state.** A stopped VM stops the per-second compute charge; the attached disk continues at $/GiB/month. A 640 GB SSD costs ~$2/day just sitting there.
+Vendor-neutral properties to defend against:
+
+**Disks bill from creation to deletion, regardless of VM state.** A stopped VM stops compute; the attached disk continues at $/GiB/month. A 640 GB SSD costs ~$2/day just sitting there on most clouds.
 
 Three structural defenses baked into Ephemeral mode:
 
-1. **Inline-managed boot disk only.** Disk lifecycle is cascaded with the VM; no standalone disks unless the user opts in.
-2. **Disk-size warning.** Nebius's web-form default is ~1 TB; we warn above 256 GiB (most LeRobot training fits in <100 GB).
+1. **Inline-managed boot disk only.** Disk lifecycle cascades with the VM; no standalone disks unless the user opts in.
+2. **Disk-size warning.** Many vendor web forms default to enormous disks (1 TB+); we warn above 256 GiB. Most LeRobot training fits in <100 GB.
 3. **Hard server-side TTL.** Set at spawn via the vendor's scheduled-delete API; the VM dies even if the GUI server dies.
 
-Order-of-magnitude reference (Nebius eu-north1, mid-2026):
+Egress for checkpoints is the other big variable; see `CheckpointStore` above for the scratch/publish split that lets users put scratch on intra-vendor storage when available.
 
-| Resource              | Cost                 | Practical meaning                              |
-| --------------------- | -------------------- | ---------------------------------------------- |
-| Network SSD           | ~$0.10 / GiB / month | 100 GB disk ≈ $10/month regardless of VM state |
-| L40S preemptible      | ~$0.90 / GPU-hour    | $0.075 for a 5-min smoke; $22 for a 24-hr run  |
-| H100 preemptible      | ~$2.13 / GPU-hour    | $0.18 for a 5-min smoke; $51 for a 24-hr run   |
-| Public IPv4 (dynamic) | ~$0.01 / hour        | Negligible alone, accumulates if left orphaned |
-
-For Persistent hosts the GUI can't enforce these defenses; the user owns the VM. Rule of thumb: for occasional training, delete VM + disk between sessions — re-cloud-init costs ~3 minutes vs $5–10/week in idle-disk fees.
+For Persistent hosts the GUI can't enforce these defenses; the user owns the VM. Rule of thumb: for occasional training, delete VM + disk between sessions — re-cloud-init takes a few minutes vs continuous disk billing.
 
 ---
 
 ## What we don't try to do
 
 - **Pod provisioning outside the HostProvider protocol.** Ephemeral mode goes through a vetted vendor SDK with hard TTL, spend cap, and destroy-verification. The GUI does NOT embed vendor consoles or manage payment methods.
-- **Multi-GPU / multi-node training.** Out of scope for v1.
-- **Image-everywhere for local dev.** Local mode uses the bash-subprocess path against the dev's venv; the docker image is for remote hosts.
+- **Multi-GPU / multi-node training.** Out of scope for v1. `gpu_count` is in the schema so the UI can grow into it later.
 - **Browser-coupled providers** (Colab, Kaggle interactive). They kill on user-side idle regardless of GPU activity; no design from our side defeats that.
 - **Vendor marketplaces with quality variance** (Vast.ai). Power users can still use them through the Persistent SSH path; we just don't market them as managed integrations.
 - **In-GUI credential entry.** No "paste your API key" forms. Credentials live in the user's local CLI state; the helper bridges browser ↔ local state.
+- **Concrete cost predictions.** No "this run will cost $X" claims. The GUI surfaces a pricing-page link per host and store; vendor pricing changes too often for us to be accurate.
+
+---
+
+## Future enhancements (parked — must not be blocked by v1)
+
+- **Auto-discovery of the user's machine** via the auth helper's `/system-info` endpoint. Would add the user's laptop as a candidate Persistent host if reachable via SSH from the GUI server. Architectural hook: a `HostDiscoverer` interface; today's only impl reads `nvidia-smi` on the GUI server.
+- **mDNS-based LAN host advertisement.** Each opted-in GPU server runs a tiny advert daemon; clients see them on the LAN. Same `HostDiscoverer` interface. Passive advertisement (opt-in by the host owner) is the right pattern; active port-scanning would be an antipattern.
+- **Helper install-script / auto-start unit.** v1: each user runs `lerobot auth-helper start` on their laptop. v2: one-time install creates the launch-agent / systemd-user unit so it auto-starts at login.
+- **HF OAuth in browser.** Right answer if HF's long-lived-token model becomes a hard problem. Helper architecture doesn't change — only the HF endpoint inside it.
+- **Multi-GPU support.** `gpu_count` field already present.
+- **Post-run billing reconciliation.** When vendor billing APIs are available (Nebius's `nebius billing`, AWS Cost Explorer, etc.), surface estimated vs actual cost after a run completes.
+- **Additional `CheckpointStore` implementations.** S3, GCS, local NAS over rsync. HF Hub is the v1 default + publish target.
