@@ -32,7 +32,7 @@ A **training host** is any of the above. Trained models land in the existing **M
   Training host
 ```
 
-- **Browser** — the user's interface. Holds no credentials directly; pulls short-lived tokens from the local credential helper on demand and forwards them to the GUI server in request headers.
+- **Browser** — the user's interface. Holds short-lived tokens in localStorage (user-pasted in v1; auto-fetched from a local helper in v2) and forwards them to the GUI server in vendor-specific request headers.
 - **GUI server** — orchestrates training and owns model storage. Discovers a local GPU at startup; holds host profiles + run state + the canonical checkpoint store; talks to providers. Never holds long-lived credentials.
 - **Training host** — where the training process runs. The GUI server's own box (subprocess transport) or any machine reachable by SSH (SSH transport). Writes checkpoints to local disk; does NOT talk to external destinations.
 - **External destinations** — places the user can publish models to (HF Hub today; S3, GCS, NAS later). Pushed from the GUI server only, never from the training host. Push is a user-initiated Models-tab action in v1; auto-push per run is a future enhancement.
@@ -57,7 +57,7 @@ provider id, vendor's resource id, a transport (SSH or subprocess), an optional 
 
 - **Start / stop.** Not every vendor supports stop; a stopped VM still bills its disk. Every off-switch is destroy.
 - **SSH command execution and log tailing.** Vendor-agnostic; live in the transport layer above the provider.
-- **Auth flow.** Handled by the credential helper (below); credentials injected per-request as a provider constructor arg.
+- **Auth flow.** See Authentication below; credentials injected per-request as a provider constructor arg from the request's headers.
 - **Cost reporting.** v1 doesn't surface running cost. Users read the vendor's pricing page (linked in the host config UI).
 
 The Persistent provider is a degenerate implementation: spawn raises (the host already exists), destroy is a no-op. The auto-registered workstation host has subprocess transport; user-added hosts have SSH transport.
@@ -175,31 +175,38 @@ Architectural property to preserve in v1: the manifest + pull mechanism makes ad
 
 ### Authentication
 
-When the GUI backend is shared (LAN deployment), credentials must be per-user, must not leak between users, and must not persist on the backend.
+User credentials are per-user, must not leak between users, must not persist on the backend. v1 achieves this with a manual paste flow; v2 eliminates the friction with a local credential helper. The principle and the security boundary are the same in both versions; only the token-source mechanism changes.
 
-**The model:**
+**v1 paste-token model:**
 
-- Long-lived credentials live on the user's laptop in the standard CLI tool locations (vendor profile directory, HF cache).
-- A small helper daemon on the user's laptop mints short-lived tokens on demand. The helper is vendor-agnostic; what varies is what each vendor's local CLI does to produce the token:
-  - **OAuth-capable vendors** (HF Hub, GCP, Azure, GitHub) — the user runs the vendor's `… login` once; the CLI handles the OAuth flow and stores refresh credentials locally. The helper invokes `… print-access-token` (or reads the cached token for HF) to surface a fresh access token.
-  - **Service-account-key vendors** (Nebius, RunPod, Lambda) — the user runs the vendor's `… profile create` to install a long-lived service-account key locally; the CLI exchanges that key for a short-lived IAM token via the vendor's OAuth 2.0 token-exchange endpoint (RFC 8693). The helper invokes the exchange.
-- The browser fetches fresh tokens from the helper on demand (loopback only, origin-checked, plus a pairing token). It includes them in vendor-specific headers on every request to the GUI server.
-- The GUI server reads token headers per request, uses the token in scope (constructs a provider for spawn/destroy, or invokes the HF client for a Push-to-HF action), discards.
+- Long-lived credentials live on the user's laptop (vendor CLI profile, HF account on huggingface.co).
+- The user pastes a short-lived token into the GUI's Settings page, per vendor:
+  - **HF token** — obtained from huggingface.co Settings → Access Tokens, or `huggingface-cli whoami --print-token`. Long-lived, paste once per device.
+  - **Vendor IAM token** (e.g., Nebius) — obtained via the vendor's CLI: `nebius iam get-access-token --duration=12h`. Short-lived, paste again when it expires.
+- The browser stores tokens in localStorage. On each request to the GUI server, it includes them in vendor-specific headers (`X-Nebius-Authorization`, `X-HF-Authorization`).
+- The GUI server reads the headers per request, uses the token in scope (constructs a provider for spawn/destroy, or invokes the HF client for a Push-to-HF action), discards.
 
-The OAuth vs service-account distinction is opaque to the GUI server; the helper exposes one interface (`GET /tokens` → short-lived bearer tokens) regardless of how the underlying vendor CLI obtained them.
+**Workstation case** (GUI binds the loopback interface): same paste flow. The user can optionally bypass it via a "use my local CLI auth" toggle that has the GUI server read `~/.cache/huggingface/token` and the vendor SDK's default profile directly — a convenience for single-user-on-own-machine that the LAN case can't safely use.
 
-**Workstation case** (GUI binds the loopback interface): the helper is auto-launched as a child of the GUI server with auto-pairing. The GUI server runs only its own process; nothing else to manage.
+**Shared-LAN case**: each user does the paste flow with their own creds. Backend never sees another user's tokens.
 
-**Shared-LAN case**: the GUI server runs only its own process — no second service. Each user runs the helper once on their own laptop. The pairing token is pasted into GUI Settings once; from then on, tokens rotate transparently.
+**UX softening for the daily Nebius re-paste:**
+
+- Settings shows the current token's expiry as a wall-clock time.
+- 30-min-before-expiry banner reminds the user.
+- "Refresh Nebius token" button copies the exact CLI command to the clipboard.
+- On 401-from-vendor mid-request, the GUI prompts re-paste without losing page state.
 
 **Security properties:**
 
-- Long-lived creds stay on the user's laptop; backend has zero credential persistence.
-- Helper bound to loopback only; rejects requests missing matching Origin and pairing token.
-- Compromised backend worst case: short-lived tokens (typically ≤12h) for currently-connected users; no refresh creds, no long-lived secrets.
-- **Training pods never receive HF tokens or other external credentials.** Pulled checkpoints flow over the existing SSH/subprocess channel; external pushes happen from the GUI server with the user's token only when they click Push.
+- Long-lived creds (HF account, Nebius service-account key) stay on the user's laptop or in their HF Settings; backend has zero credential persistence.
+- Per-user isolation in LAN: each user's browser holds its own localStorage; backend never mixes them.
+- Compromised backend worst case: short-lived tokens (typically ≤12h for vendor IAM, plus any HF token currently in flight) for currently-connected users. No refresh creds, no long-lived secrets.
+- **Training pods receive only the HF token** (env var at spawn time, scoped to that run) for dataset download. No vendor cloud credentials ever reach the pod.
 
-**HF caveat.** The HF token is non-expiring. Push actions invoke an HF subprocess (the existing Hub Transfers worker pattern); the token lives in that subprocess's RAM and is GC'd with it. Users wanting tighter scope can switch to a fine-grained HF token with explicit expiry — no code change needed.
+**HF caveat.** The HF token has no enforced expiry. Push actions invoke an HF subprocess (the existing Hub Transfers worker pattern); the token lives in that subprocess's RAM and is GC'd with it. We recommend fine-grained tokens with explicit expiry on huggingface.co for stronger isolation; the paste flow accepts either.
+
+**v2: credential helper.** A small daemon on each user's laptop mints tokens on demand and the browser fetches them transparently — eliminating the manual paste and the daily Nebius re-paste. The architecture doesn't change: same request headers, same backend behavior; only the token source shifts from manual paste to local helper. (See Future enhancements.)
 
 ### Cost discipline
 
@@ -293,10 +300,11 @@ The pod does receive the user's HF token as an env var at spawn time (for datase
 
 ## Future enhancements (parked — must not be blocked by v1)
 
-- **Auto-discovery of the user's machine** via the auth helper's system-info endpoint. Would add the user's laptop as a candidate Persistent host if reachable via SSH from the GUI server.
+- **Credential helper on each user's laptop** to eliminate the manual token paste and the daily Nebius re-paste. A small loopback daemon that mints vendor tokens by shelling out to the user's existing vendor CLI; browser fetches transparently with Origin + pairing-token checks. Same request headers as v1, same backend behavior — only the token source shifts from manual paste to auto-mint. The biggest UX win after v1 lands.
+- **Auto-discovery of the user's machine** (depends on the helper above) via its system-info endpoint. Would add the user's laptop as a candidate Persistent host if reachable via SSH from the GUI server.
 - **mDNS-based LAN host advertisement.** Each opted-in GPU server runs a tiny advert daemon; clients see them on the LAN. Passive advertisement (opt-in by the host owner) is the right pattern; active port-scanning would be an antipattern.
-- **Helper install-script / auto-start unit.** v1: each user runs the helper on their laptop. v2: one-time install creates a launch-agent / systemd-user unit so it auto-starts at login.
-- **HF OAuth in browser.** Right answer if HF's long-lived-token model becomes a hard problem.
+- **Helper auto-start unit** (depends on the helper above). One-time install creates a launch-agent / systemd-user unit so it auto-starts at login.
+- **HF OAuth in browser.** Right answer if even the one-time HF token paste becomes unwanted friction.
 - **Multi-GPU support.** `gpu_count` field already present.
 - **Post-run billing reconciliation.** When vendor billing APIs are available, surface estimated vs actual cost after a run completes.
 - **Auto-push to external destination per run / per recipe.** v1: user clicks Push in the Models tab. v2: a "publish on completion" toggle in the run config so successful runs are pushed without extra clicks.
@@ -310,10 +318,12 @@ The pod does receive the user's HF token as an env var at spawn time (for datase
 
 ## Setup reference
 
-Commands needed per deployment shape. The GUI server never runs more than `lerobot-gui`.
+Commands needed per deployment shape. The GUI server only ever runs `lerobot-gui`.
 
-| Deployment                                  | On the GUI server | On each user's laptop                                                                                                                                  |
-| ------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Workstation** (GUI + GPU on same machine) | `lerobot-gui`     | same machine — nothing extra (auth helper is a child of `lerobot-gui`); user already ran `huggingface-cli login` to get HF token in the standard cache |
-| **Shared LAN — Persistent hosts only**      | `lerobot-gui`     | `huggingface-cli login`; `lerobot auth-helper start --origin <gui-url>`; paste pairing token into Settings once                                        |
-| **Shared LAN — with Ephemeral cloud**       | `lerobot-gui`     | as above, plus `<vendor> profile create` once per cloud account                                                                                        |
+| Deployment                                  | On the GUI server                          | On each user's laptop / per browser                                                                                                                                                                                  |
+| ------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Workstation** (GUI + GPU on same machine) | `lerobot-gui`                              | Toggle "use my local CLI auth" in Settings (one-time convenience for single-user-on-own-machine). Otherwise paste HF + vendor tokens as below.                                                                       |
+| **Shared LAN — Persistent hosts only**      | `lerobot-gui`                              | Paste HF token into Settings once (from huggingface.co Settings → Access Tokens).                                                                                                                                    |
+| **Shared LAN — with Ephemeral cloud**       | `lerobot-gui` + `uv sync --extra <vendor>` | As above. Plus install the vendor CLI (`nebius` etc.), run `<vendor> profile create` once. Then `nebius iam get-access-token --duration=12h` → paste into Settings → re-paste every ~12h (clipboard button assists). |
+
+v2 with the credential helper eliminates the paste flow entirely (browser auto-fetches fresh tokens from a local helper daemon).
