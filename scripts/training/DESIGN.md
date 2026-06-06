@@ -180,9 +180,13 @@ When the GUI backend is shared (LAN deployment), credentials must be per-user, m
 **The model:**
 
 - Long-lived credentials live on the user's laptop in the standard CLI tool locations (vendor profile directory, HF cache).
-- A small helper daemon on the user's laptop mints short-lived tokens on demand — for vendors with IAM via long-lived service-account keys, by shelling out to the vendor CLI; for HF, by reading the cached token.
+- A small helper daemon on the user's laptop mints short-lived tokens on demand. The helper is vendor-agnostic; what varies is what each vendor's local CLI does to produce the token:
+  - **OAuth-capable vendors** (HF Hub, GCP, Azure, GitHub) — the user runs the vendor's `… login` once; the CLI handles the OAuth flow and stores refresh credentials locally. The helper invokes `… print-access-token` (or reads the cached token for HF) to surface a fresh access token.
+  - **Service-account-key vendors** (Nebius, RunPod, Lambda) — the user runs the vendor's `… profile create` to install a long-lived service-account key locally; the CLI exchanges that key for a short-lived IAM token via the vendor's OAuth 2.0 token-exchange endpoint (RFC 8693). The helper invokes the exchange.
 - The browser fetches fresh tokens from the helper on demand (loopback only, origin-checked, plus a pairing token). It includes them in vendor-specific headers on every request to the GUI server.
 - The GUI server reads token headers per request, uses the token in scope (constructs a provider for spawn/destroy, or invokes the HF client for a Push-to-HF action), discards.
+
+The OAuth vs service-account distinction is opaque to the GUI server; the helper exposes one interface (`GET /tokens` → short-lived bearer tokens) regardless of how the underlying vendor CLI obtained them.
 
 **Workstation case** (GUI binds the loopback interface): the helper is auto-launched as a child of the GUI server with auto-pairing. The GUI server runs only its own process; nothing else to manage.
 
@@ -212,6 +216,24 @@ Three structural defenses baked into Ephemeral mode:
 Egress for checkpoints is determined by the pod-to-GUI-server hop (see Checkpoints). The cost on the pod side is the same whether checkpoints go to the GUI server or to HF Hub directly. Pushing from the GUI server to HF is on the GUI server's network, which is typically free or not the bottleneck.
 
 For Persistent hosts the GUI cannot enforce these defenses; the user owns the VM. Rule of thumb: for occasional training, delete VM + disk between sessions.
+
+### Dependencies
+
+Each provider implementation declares its runtime dependencies (vendor CLI, optional Python SDK). LeRobot does NOT bundle vendor CLIs — they're installed out of band per the vendor's docs.
+
+**Where each piece needs to be installed:**
+
+| Component     | What's needed                                                 | Why                                                                     |
+| ------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| User's laptop | Vendor CLI for any provider they want to use (e.g., `nebius`) | The auth helper shells out to it to mint short-lived tokens             |
+| GUI server    | Same vendor CLI for each enabled provider                     | The provider's `spawn` / `destroy` / `verify_destroyed` shell out to it |
+| Both          | `huggingface-cli`                                             | Ships with `huggingface-hub`, already a LeRobot Python dependency       |
+
+**Self-check at startup.** The GUI server detects which vendor CLIs are present and which providers are therefore usable. Providers without their CLI installed are disabled in the UI with a clear error pointing at the vendor's install instructions. Other providers stay enabled; the user is never blocked from the modes that work.
+
+**Why not bundle vendor CLIs?** They're Go / Rust binaries with their own update cycles, signing, and provenance. Bundling would create supply-chain and version-drift problems. The "system-installed CLI + we shell out" pattern is what every cloud SDK does (kubectl, terraform, helm; the cloud vendors' own SDKs).
+
+**Future enhancement: drop the GUI-server CLI requirement.** Provider implementations could call vendor REST/gRPC APIs directly instead of shelling out. The CLI on the user's laptop is still needed for auth; the GUI server could become CLI-free if each provider talks directly to the vendor's API. Reduces install friction for the GUI-server admin; some code complexity in exchange. Worth it once 2+ vendors are integrated.
 
 ---
 
