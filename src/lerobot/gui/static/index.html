@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=39">
+    <link rel="stylesheet" href="/static/style.css?v=40">
 </head>
 <body>
     <div class="tab-bar">
@@ -172,11 +172,20 @@
                     </div>
                     <div id="model-sources-container"></div>
                 </div>
+                <div class="sidebar-section" id="training-section">
+                    <div class="section-label">
+                        <span>Training</span>
+                        <button class="btn-small" onclick="trainingShowStartForm()" id="training-start-btn" title="Start a new training run">+</button>
+                    </div>
+                    <div id="training-hosts-info" style="font-size: 11px; color: var(--text-secondary, #666); padding: 4px 8px;">Loading hosts…</div>
+                    <div id="training-runs-list"></div>
+                </div>
             </div>
             <div class="sidebar-resize-handle"></div>
             <div class="main" id="model-main">
                 <div class="empty-state" id="model-empty">Select a training run to inspect</div>
                 <div class="model-detail" id="model-detail" style="display:none;"></div>
+                <div id="training-detail" style="display:none; padding: 16px;"></div>
             </div>
         </div>
     </div>
@@ -485,6 +494,7 @@
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=45"></script>
     <script src="/static/model.js?v=3"></script>
+    <script src="/static/training.js?v=1"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>

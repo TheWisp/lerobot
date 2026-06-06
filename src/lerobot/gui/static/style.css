@@ -1230,3 +1230,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     0%, 100% { background: rgba(79, 195, 247, 0.25) !important; }
     50%      { background: rgba(79, 195, 247, 0.55) !important; }
 }
+
+/* ── Training panel ──────────────────────────────────────────────────────── */
+.training-state-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.training-state-pending    { background: #4a4a4a; color: #ccc; }
+.training-state-running    { background: #2a4a5a; color: #80ccff; }
+.training-state-completing { background: #5a4a2a; color: #f0c040; }
+.training-state-completed  { background: #2a5a2a; color: #80f080; }
+.training-state-failed     { background: #5a2a2a; color: #f08080; }
+.training-state-aborted    { background: #4a4a4a; color: #aaa; }
+.training-run-row:hover { background: var(--hover-bg, #f8f9fb); }
