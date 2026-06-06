@@ -68,10 +68,12 @@ The training process writes periodic checkpoints to the host's local disk **and*
 
 Cadence is set by the training recipe (`save_steps` or equivalent); the GUI does not impose one. The cadence the user picks shapes the recovery story — tighter for preemptible hosts, looser for on-demand.
 
+Each manifest line includes a `sha256` checksum of the checkpoint file. The GUI server verifies after pull; a mismatch surfaces in the UI with a retry option (catches partial writes, network corruption, disk faults).
+
 How "bringing the files back" works, by transport:
 
 - **Subprocess transport** (workstation): the files are already on the GUI server's disk. No copy. The GUI server opens them in place; the manifest still drives indexing into the Models tab.
-- **SSH transport** (Persistent / Ephemeral): the GUI server SCPs the named files back to `~/.cache/lerobot/runs/<run_id>/<step>/` over the existing SSH connection. The host's local copy is cleaned up after a successful pull.
+- **SSH transport** (Persistent / Ephemeral): the GUI server SCPs the named files back to `~/.cache/lerobot/runs/<run_id>/<step>/` over the existing SSH connection. The host's local copy is left in place — for Ephemeral hosts it's discarded with the VM; for Persistent hosts the user manages their own cleanup as they normally would.
 
 **This means:**
 
@@ -80,9 +82,18 @@ How "bringing the files back" works, by transport:
 - **The Models tab is the canonical surface.** A pulled checkpoint appears there immediately — before any external upload.
 - **External publication is a separate Models-tab action** (v1: user-initiated; auto-push is a future enhancement).
 
-**Trade-off.** For Ephemeral pods in the cloud with the GUI server on a LAN box, pod→GUI may be slower than a hypothetical direct pod→HF push (LAN bandwidth, intercontinental latency). Pod-side cost is the same; the difference is wall-clock to durability.
+**Trade-off.** The pull-based design is simpler than the alternative (pod pushes to a central artifact store): no per-store credentials on the pod, one credential boundary, no artifact-store infrastructure. The cost: the GUI server's network and disk are the bottleneck. Acceptable at our scale. At 10+ concurrent runs with very large models, a push-to-shared-store model would be the right rethink — but that day is far off.
 
-**Disk discipline.** The GUI server applies a retention policy per run (default: keep latest N checkpoints, drop older). For large models on disk-constrained LAN boxes, the user can configure the retention count.
+For Ephemeral pods in the cloud with the GUI server on a LAN box, pod→GUI may also be slower than a hypothetical direct pod→external push (LAN bandwidth, intercontinental latency). Pod-side cost is the same; the difference is wall-clock to durability.
+
+**Resume from checkpoint.** The Models tab lets the user pick a checkpoint and start a new run resuming from it:
+
+1. User picks a checkpoint and a host (any of the three modes).
+2. GUI server spawns the host (Ephemeral) or selects an idle one (Persistent / workstation).
+3. Before launching training, the GUI server pushes the chosen checkpoint to the host's local disk (SCP for SSH, file copy for subprocess).
+4. The training worker reads a standard `--resume_from_checkpoint <path>` argument and continues from that step.
+
+The new run gets its own run id; the resumed-from checkpoint is recorded in the run metadata so the lineage is queryable.
 
 ### Transport, log surfaces
 
@@ -126,7 +137,17 @@ A run is unhealthy when the process is dead (crashed) OR the progress timestamp 
 
 Why not Wandb-style HTTP heartbeats from the training script? Those require the pod to reach the GUI server, which often fails (NAT, firewall, no inbound on the lab box). Our setup is the inverse — the GUI server reaches the pod — so we use the channel we already have. The combination of process probe + atomic progress file gives the same coverage without the extra reachability requirement.
 
-**On completion:** the GUI calls `provider.destroy()` with the most recently cached provider token. If that token has expired and no one is connected, the run is marked "awaiting destroy" and destroyed on the next browser session.
+**Completion signal.** The worker writes a final line to `events.jsonl` before exiting:
+
+- `{type: "completed_naturally", exit_code: 0, final_step: N}` — recipe's step limit reached
+- `{type: "aborted_by_user", final_step: N}` — user clicked Stop
+- `{type: "crashed", exit_code: ..., error: "..."}` — unexpected exit
+
+The GUI reads this — not "process is gone" — as the canonical completion signal. Distinguishing the three cases lets the UI label the outcome correctly and lets Ephemeral destroy proceed with the right framing.
+
+**User-initiated stop.** The Stop button sends SIGTERM to the training process; the worker has a brief window to write its final `events.jsonl` line and exit cleanly. The host is then destroyed (Ephemeral) or freed (Persistent). The most recent checkpoint — already pulled to the GUI server — is the saved model; no special "save before stop" handshake is needed. This intentionally treats user-initiated stop as "the checkpoint mechanism already did the work" rather than introducing a separate save-and-stop path.
+
+**Auto-destroy on completion:** the GUI calls `provider.destroy()` with the most recently cached provider token. If the token has expired and no one is connected, the run is marked "awaiting destroy" and destroyed on the next browser session.
 
 **Backstop for forgotten Ephemeral pods:** spawn configures a vendor-side scheduled delete (default 24h, extended on healthy progress) so a VM eventually dies even if the GUI server permanently disappears. Not a user-facing config — an implementation safety net. Vendor billing alerts are the final safety net.
 
@@ -138,8 +159,19 @@ Multiple ways to accidentally start the same training twice — double-click on 
 - **Per-host single-active-run lock.** Each host profile carries an atomic active-run pointer. A Start request that targets a host while it's busy is refused with "Host has an active run." v1's one-GPU-per-host model makes this exactly one slot.
 - **Server-side state machine.** Run state transitions (`queued → spawning → running → completing → done`) are gated; you cannot transition `running → queued`, so a stale duplicate cannot accidentally re-run.
 - **Tmux / subprocess session naming on the pod.** The session name embeds the run id. If the spawn path somehow raced, the second `tmux new-session` would fail rather than launch a parallel process.
+- **On-pod lock file** as a final assertion. Spawn writes a `lock.json` on the host with the run id and spawning GUI-server identifier; a second spawn finds it and refuses with an assert. Catches the rare case where the server-side lock was lost (GUI server restarted mid-spawn, etc.).
 
 Can you legitimately run multiple trainings on the same Persistent host? Yes — but you'd register the host twice as separate logical hosts (e.g., "lab-server / gpu0" and "lab-server / gpu1"), each pinned to one GPU. v1 doesn't surface this; v2 multi-GPU adds the slot abstraction explicitly. Until then, one run per host.
+
+### Robustness (v2 enhancement, noted now to avoid corner-painting)
+
+The GUI server is the checkpoint store; if its disk fills, pulls would fail. v1 relies on the user provisioning enough disk for their typical run × retention count. v2 should add:
+
+- **Pre-flight check.** Refuse a new run if free disk on the GUI server can't hold at least one expected checkpoint (estimated from model parameter count × dtype size + optimizer-state multiplier — open to a simpler heuristic).
+- **During-run back-pressure.** When free disk drops below a threshold: surface in the UI, tighten retention to keep only the latest checkpoint, but **do not** destroy the Ephemeral host (data preservation > tidy cleanup).
+- **Worst-case escalation.** If pulls would fail, pause new pulls and alert the user. The training continues on the host; the user has a window to free disk on the GUI server before checkpoints are lost.
+
+Architectural property to preserve in v1: the manifest + pull mechanism makes adding back-pressure later a local change, not a refactor.
 
 ### Authentication
 
@@ -204,6 +236,8 @@ For Persistent hosts the GUI cannot enforce these defenses; the user owns the VM
 - **Multi-GPU support.** `gpu_count` field already present.
 - **Post-run billing reconciliation.** When vendor billing APIs are available, surface estimated vs actual cost after a run completes.
 - **Auto-push to external destination per run / per recipe.** v1: user clicks Push in the Models tab. v2: a "publish on completion" toggle in the run config so successful runs are pushed without extra clicks.
+- **Native experiment tracking visualization.** v1 relies on the training recipe's own W&B / TensorBoard integration; output streams as part of `stderr.log` and is visible in the UI's log panel (the W&B run URL is one click away). v2 could surface loss curves, hyperparameter diffs, and cross-run comparison natively, or deep-link to the user's W&B project.
+- **GUI-server disk pre-flight + adaptive retention under pressure** (see Robustness).
 - **Additional external push destinations from the Models tab** — S3, GCS, vendor-local object stores, local NAS over rsync. Same pattern: pushed from the GUI server using user-supplied credentials.
 - **Direct pod-to-external streaming option** for very large models where pod→GUI pull is bandwidth-limited. Adds a second code path; only worth doing if the pull-through-GUI model proves a bottleneck.
 - **Multi-GPU host slots.** Register a Persistent host as N logical hosts pinned to GPU 0..N-1; one run per slot.
