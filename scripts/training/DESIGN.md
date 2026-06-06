@@ -77,7 +77,7 @@ How "bringing the files back" works, by transport:
 
 **This means:**
 
-- **The training pod's external credential surface is minimal.** The pod receives the HF token (env var at spawn time, scoped to that run) for dataset download from HF Hub — and nothing else. No vendor cloud credentials, no checkpoint-store credentials, no S3 keys. Pod compromise leaks at most the user's HF token, not their cloud account.
+- **The training pod has zero external credentials.** No HF token, no vendor cloud token, no S3 keys. Dataset is staged to the pod by the GUI server before training starts (see below); the pod runs with `HF_HUB_OFFLINE=1` against local files. Pod compromise leaks nothing externally exploitable.
 - **Pod egress cost is the same.** Bytes leave the pod's network either way; they go to the GUI server instead of an external store. The pod-side cost is identical to a direct-to-HF push.
 - **The Models tab is the canonical surface.** A pulled checkpoint appears there immediately — before any external upload.
 - **External publication is a separate Models-tab action** (v1: user-initiated; auto-push is a future enhancement).
@@ -85,6 +85,8 @@ How "bringing the files back" works, by transport:
 **Trade-off.** The pull-based design is simpler than the alternative (pod pushes to a central artifact store): no per-store credentials on the pod, one credential boundary, no artifact-store infrastructure. The cost: the GUI server's network and disk are the bottleneck. Acceptable at our scale. At 10+ concurrent runs with very large models, a push-to-shared-store model would be the right rethink — but that day is far off.
 
 For Ephemeral pods in the cloud with the GUI server on a LAN box, pod→GUI may also be slower than a hypothetical direct pod→external push (LAN bandwidth, intercontinental latency). Pod-side cost is the same; the difference is wall-clock to durability.
+
+**Dataset staging.** Before a training run starts on a remote host (SSH transport), the GUI server ensures the dataset is in its own local HF cache (downloading from HF Hub via the GUI server's existing HF auth if missed), then SCPs the dataset files to the pod under `/data/<dataset_id>/`. The training script reads from there with `HF_HUB_OFFLINE=1` — no HF API calls from the pod, no HF token on the pod. For subprocess transport (workstation), the pod IS the GUI server, so the local cache works directly with no staging step.
 
 **Resume from checkpoint.** The Models tab lets the user pick a checkpoint and start a new run resuming from it:
 
@@ -175,20 +177,18 @@ Architectural property to preserve in v1: the manifest + pull mechanism makes ad
 
 ### Authentication
 
-User credentials are per-user, must not leak between users, must not persist on the backend. v1 achieves this with a manual paste flow; v2 eliminates the friction with a local credential helper. The principle and the security boundary are the same in both versions; only the token-source mechanism changes.
+v1 scope is narrow: the only new credential the GUI server takes per-user is the **vendor IAM token for Ephemeral mode**. HF auth is left to the existing GUI behavior unchanged; the training pod sees no credentials at all.
 
-**v1 paste-token model:**
+**v1 paste-token model (vendor IAM only):**
 
-- Long-lived credentials live on the user's laptop (vendor CLI profile, HF account on huggingface.co).
-- The user pastes a short-lived token into the GUI's Settings page, per vendor:
-  - **HF token** — obtained from huggingface.co Settings → Access Tokens, or `huggingface-cli whoami --print-token`. Long-lived, paste once per device.
-  - **Vendor IAM token** (e.g., Nebius) — obtained via the vendor's CLI: `nebius iam get-access-token --duration=12h`. Short-lived, paste again when it expires.
-- The browser stores tokens in localStorage. On each request to the GUI server, it includes them in vendor-specific headers (`X-Nebius-Authorization`, `X-HF-Authorization`).
-- The GUI server reads the headers per request, uses the token in scope (constructs a provider for spawn/destroy, or invokes the HF client for a Push-to-HF action), discards.
+- Long-lived vendor credentials live on the user's laptop (vendor CLI profile).
+- The user pastes a short-lived vendor IAM token into the GUI's Settings page: obtained via the vendor's CLI (e.g., `nebius iam get-access-token --duration=12h`). Short-lived, paste again when it expires.
+- The browser stores it in localStorage and includes it in a vendor-specific header (`X-Nebius-Authorization`) on each request to the GUI server.
+- The GUI server reads the header per request, uses the token in scope (constructs a provider for spawn/destroy), discards. No persistence.
 
-**Workstation case** (GUI binds the loopback interface): same paste flow. The user can optionally bypass it via a "use my local CLI auth" toggle that has the GUI server read `~/.cache/huggingface/token` and the vendor SDK's default profile directly — a convenience for single-user-on-own-machine that the LAN case can't safely use.
+**Workstation case**: the user can optionally bypass the paste via a "use my local CLI auth" toggle that has the vendor SDK read its default profile directly — a convenience for single-user-on-own-machine.
 
-**Shared-LAN case**: each user does the paste flow with their own creds. Backend never sees another user's tokens.
+**Shared-LAN case**: each user pastes their own vendor IAM token. Backend never sees another user's tokens.
 
 **UX softening for the daily Nebius re-paste:**
 
@@ -197,16 +197,18 @@ User credentials are per-user, must not leak between users, must not persist on 
 - "Refresh Nebius token" button copies the exact CLI command to the clipboard.
 - On 401-from-vendor mid-request, the GUI prompts re-paste without losing page state.
 
+**HF in v1 — inherited, unchanged.** The GUI server already reads `~/.cache/huggingface/token` for its existing Hub features (Hub Transfers, model push, etc.). The training pipeline reuses this for any HF access it needs (mainly: ensuring the chosen dataset is in the GUI server's local cache before staging it to the pod — see Dataset staging in Checkpoints). The pod itself receives **no** HF token; it runs with `HF_HUB_OFFLINE=1` against the staged dataset files.
+
+This means the LAN-deployment shared-HF-identity limitation present in today's GUI is inherited: all users on a shared lab server see one HF identity. **Not a regression — same as today.** v2 fixes per-user HF auth (paste or helper) properly.
+
 **Security properties:**
 
-- Long-lived creds (HF account, Nebius service-account key) stay on the user's laptop or in their HF Settings; backend has zero credential persistence.
-- Per-user isolation in LAN: each user's browser holds its own localStorage; backend never mixes them.
-- Compromised backend worst case: short-lived tokens (typically ≤12h for vendor IAM, plus any HF token currently in flight) for currently-connected users. No refresh creds, no long-lived secrets.
-- **Training pods receive only the HF token** (env var at spawn time, scoped to that run) for dataset download. No vendor cloud credentials ever reach the pod.
+- Vendor cloud credentials never on backend; backend has zero credential persistence for them.
+- Per-user vendor isolation in LAN: each user's browser holds its own localStorage; backend never mixes them.
+- Compromised backend worst case: short-lived vendor tokens (typically ≤12h) for currently-connected users. No refresh creds, no long-lived vendor secrets.
+- **Training pods receive no external credentials.** No HF token, no vendor cloud token. Pod compromise leaks nothing externally exploitable.
 
-**HF caveat.** The HF token has no enforced expiry. Push actions invoke an HF subprocess (the existing Hub Transfers worker pattern); the token lives in that subprocess's RAM and is GC'd with it. We recommend fine-grained tokens with explicit expiry on huggingface.co for stronger isolation; the paste flow accepts either.
-
-**v2: credential helper.** A small daemon on each user's laptop mints tokens on demand and the browser fetches them transparently — eliminating the manual paste and the daily Nebius re-paste. The architecture doesn't change: same request headers, same backend behavior; only the token source shifts from manual paste to local helper. (See Future enhancements.)
+**v2: credential helper + per-user HF auth.** A small daemon on each user's laptop mints tokens on demand (eliminating the manual paste and the daily Nebius re-paste), AND a parallel per-user HF auth flow replaces the inherited workstation-mode assumption. The architecture doesn't change for vendor auth; HF auth becomes per-user. (See Future enhancements.)
 
 ### Cost discipline
 
@@ -282,7 +284,7 @@ The training Docker image contains:
 
 What it does NOT contain: any vendor cloud CLI or SDK (no Nebius, no RunPod, no AWS, no GCP). The same image runs on a workstation, a lab box, or any cloud vendor's VM. This is a consequence of the pull-based checkpoint design — the pod doesn't talk to cloud APIs directly.
 
-The pod does receive the user's HF token as an env var at spawn time (for dataset download from HF Hub; see Checkpoints). That's the only external credential the pod sees; no vendor cloud credentials ever reach it.
+The pod receives no external credentials. Dataset is staged in by the GUI server (SCP); the pod runs with `HF_HUB_OFFLINE=1`. See Checkpoints → Dataset staging.
 
 ---
 
@@ -300,7 +302,8 @@ The pod does receive the user's HF token as an env var at spawn time (for datase
 
 ## Future enhancements (parked — must not be blocked by v1)
 
-- **Credential helper on each user's laptop** to eliminate the manual token paste and the daily Nebius re-paste. A small loopback daemon that mints vendor tokens by shelling out to the user's existing vendor CLI; browser fetches transparently with Origin + pairing-token checks. Same request headers as v1, same backend behavior — only the token source shifts from manual paste to auto-mint. The biggest UX win after v1 lands.
+- **Per-user HF auth in the GUI server.** v1 inherits the existing GUI's workstation-mode assumption (one shared HF identity per GUI server). v2 fixes this with either a paste flow (parallel to v1 vendor paste) or via the credential helper below.
+- **Credential helper on each user's laptop** to eliminate the manual token paste and the daily Nebius re-paste. A small loopback daemon that mints vendor tokens (and an HF token, replacing the v2 paste) by shelling out to the user's existing vendor CLI / reading the HF cache; browser fetches transparently with Origin + pairing-token checks. Same request headers as v1, same backend behavior — only the token source shifts from manual paste to auto-mint. The biggest UX win after v1 lands.
 - **Auto-discovery of the user's machine** (depends on the helper above) via its system-info endpoint. Would add the user's laptop as a candidate Persistent host if reachable via SSH from the GUI server.
 - **mDNS-based LAN host advertisement.** Each opted-in GPU server runs a tiny advert daemon; clients see them on the LAN. Passive advertisement (opt-in by the host owner) is the right pattern; active port-scanning would be an antipattern.
 - **Helper auto-start unit** (depends on the helper above). One-time install creates a launch-agent / systemd-user unit so it auto-starts at login.
@@ -320,10 +323,10 @@ The pod does receive the user's HF token as an env var at spawn time (for datase
 
 Commands needed per deployment shape. The GUI server only ever runs `lerobot-gui`.
 
-| Deployment                                  | On the GUI server                          | On each user's laptop / per browser                                                                                                                                                                                  |
-| ------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Workstation** (GUI + GPU on same machine) | `lerobot-gui`                              | Toggle "use my local CLI auth" in Settings (one-time convenience for single-user-on-own-machine). Otherwise paste HF + vendor tokens as below.                                                                       |
-| **Shared LAN — Persistent hosts only**      | `lerobot-gui`                              | Paste HF token into Settings once (from huggingface.co Settings → Access Tokens).                                                                                                                                    |
-| **Shared LAN — with Ephemeral cloud**       | `lerobot-gui` + `uv sync --extra <vendor>` | As above. Plus install the vendor CLI (`nebius` etc.), run `<vendor> profile create` once. Then `nebius iam get-access-token --duration=12h` → paste into Settings → re-paste every ~12h (clipboard button assists). |
+| Deployment                                  | On the GUI server                          | On each user's laptop / per browser                                                                                                                                                                   |
+| ------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Workstation** (GUI + GPU on same machine) | `lerobot-gui`                              | Nothing for local training. For Ephemeral cloud: toggle "use my local CLI auth" in Settings (single-user-on-own-machine convenience) or follow the Ephemeral row below.                               |
+| **Shared LAN — Persistent hosts only**      | `lerobot-gui`                              | Nothing — training auth path is HF-free in v1.                                                                                                                                                        |
+| **Shared LAN — with Ephemeral cloud**       | `lerobot-gui` + `uv sync --extra <vendor>` | Install the vendor CLI (`nebius` etc.); run `<vendor> profile create` once; then `nebius iam get-access-token --duration=12h` → paste into Settings → re-paste every ~12h (clipboard button assists). |
 
-v2 with the credential helper eliminates the paste flow entirely (browser auto-fetches fresh tokens from a local helper daemon).
+HF auth follows the existing GUI's behavior in v1 (GUI server uses its own `~/.cache/huggingface/token`; LAN deployments share that one identity — same as today's GUI). Per-user HF and the no-paste vendor flow both land in v2.
