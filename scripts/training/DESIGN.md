@@ -1,6 +1,6 @@
 # Model training — architecture
 
-End-to-end design for taking a user from "I want to train a policy" to "trained model in a checkpoint store", driven from the LeRobot GUI.
+End-to-end design for taking a user from "I want to train a policy" to "trained model in the Models tab (and optionally on Hugging Face)", driven from the LeRobot GUI.
 
 ---
 
@@ -14,7 +14,7 @@ End-to-end design for taking a user from "I want to train a policy" to "trained 
 
 "Persistent" vs "Ephemeral" is about lifecycle ownership, orthogonal to spot/preemptible pricing. An Ephemeral host typically uses a preemptible instance underneath.
 
-A **training host** is any of the above. A **checkpoint store** is where checkpoints land, configured separately from the host (see Architecture).
+A **training host** is any of the above. Trained models land in the existing **Models tab**, and from there the user can publish them to external destinations (Hugging Face Hub today).
 
 ---
 
@@ -26,16 +26,16 @@ A **training host** is any of the above. A **checkpoint store** is where checkpo
   Browser
     │ HTTP/WS
     ▼
-  GUI server
+  GUI server  ──HTTPS──►  External destinations (HF Hub, …)
     │ SSH or subprocess
     ▼
-  Training host  ──HTTPS──►  Checkpoint store
+  Training host
 ```
 
 - **Browser** — the user's interface. Holds no credentials directly; pulls short-lived tokens from the local credential helper on demand and forwards them to the GUI server in request headers.
-- **GUI server** — orchestrates training. Discovers a local GPU at startup, holds host profiles + run state, talks to providers. Never holds long-lived credentials.
-- **Training host** — where the training process runs. The GUI server's own box (subprocess transport) or any machine reachable by SSH (SSH transport). The choice of transport is the only thing that distinguishes the workstation case from a remote case.
-- **Checkpoint store** — where checkpoints land. The training process on the host uploads directly to the store; the GUI server doesn't shuttle bytes through itself.
+- **GUI server** — orchestrates training and owns model storage. Discovers a local GPU at startup; holds host profiles + run state + the canonical checkpoint store; talks to providers. Never holds long-lived credentials.
+- **Training host** — where the training process runs. The GUI server's own box (subprocess transport) or any machine reachable by SSH (SSH transport). Writes checkpoints to local disk; does NOT talk to external destinations.
+- **External destinations** — places the user can publish models to (HF Hub today; S3, GCS, NAS later). Pushed from the GUI server only, never from the training host, never automatically without user opt-in.
 
 ### HostProvider
 
@@ -62,31 +62,22 @@ provider id, vendor's resource id, a transport (SSH or subprocess), an optional 
 
 The Persistent provider is a degenerate implementation: spawn raises (the host already exists), destroy is a no-op. The auto-registered workstation host has subprocess transport; user-added hosts have SSH transport.
 
-### CheckpointStore
+### Checkpoints
 
-Where the trained model lands. Each implementation handles one storage destination; the training process on the host uploads to the store using credentials passed through env vars at spawn time.
+The training process writes periodic checkpoints to the host's local disk. The GUI server pulls each new checkpoint back over the existing transport (SCP for SSH, direct file copy for subprocess) into its own storage at `~/.cache/lerobot/runs/<run_id>/<step>/`. The host's local copy is cleaned up after a successful pull.
 
-**What it provides:**
+This means:
 
-- **push** — upload a local checkpoint, returning a stable URI (a Hub URL, an S3 key, a NAS path).
-- **pull** — fetch a stored checkpoint to a local path (used on resume from a prior run's checkpoint).
-- **list_checkpoints** — enumerate checkpoints for a given run id; the UI uses this to show what's been uploaded.
-- **pricing_info_url** — a link to the vendor's pricing page (egress / storage). The UI surfaces this; we don't claim to know prices that drift.
+- **The training pod doesn't need external credentials.** No HF token, no S3 keys, no per-vendor auth on the pod. The pod only writes to its local disk; the GUI server reads back over the SSH/subprocess channel it already has.
+- **Pod egress cost is the same.** Bytes still leave the pod's network; they go to the GUI server instead of HF Hub. The pod-side egress is identical to a direct-to-HF push.
+- **The Models tab is the canonical surface.** A pulled checkpoint appears there immediately — before any external upload.
+- **External publication is a separate Models-tab action.** The user clicks "Push to Hugging Face" on a model row; the GUI server uses the user's HF token (from the helper) to push. Can be set to automatic per run or per recipe.
 
-**Adding and configuring a store:**
+For workstation deployment, training writes directly to the GUI server's disk (subprocess transport) — there's no pull step; the checkpoint is already in the right place.
 
-Stores are configured in a Stores section of GUI Settings, parallel to host profiles. Each store type has its own setup:
+**Trade-off.** For Ephemeral pods in the cloud with the GUI server on a LAN box, the pod→GUI pull may be slower than a hypothetical direct pod→HF push (LAN bandwidth, intercontinental latency). The cost on the pod side is the same either way; the difference is wall-clock to durability. Acceptable for v1; future enhancement options include direct pod→external streaming or a vendor-local intermediate.
 
-- **HF Hub** (v1 default): needs the user's HF token (already available via the credential helper). The user picks a target repo or namespace prefix to auto-create per run. No additional setup.
-- _(future)_ **Vendor-local object store** (S3-compatible bucket on the same cloud vendor as the training host): would need the vendor's storage credentials, typically the same auth path as the compute provider.
-- _(future)_ **External S3 / GCS**: needs separate cloud credentials; would extend the helper with a new endpoint.
-- _(future)_ **Local NAS over rsync / SFTP**: needs a target host + path + SSH key.
-
-**Surfacing the result:**
-
-When training completes, the GUI shows the store URI as a clickable link — for HF Hub, a direct link to the repo page; for an S3 bucket, the bucket URL; for a NAS path, the file path. The run history persists the URI so the user can find it later. Resume-from-checkpoint uses the same URI to pull the latest checkpoint onto a new host.
-
-**Scratch vs publish stores** (future): a separate scratch store for frequent in-training checkpoints could be paired with a publish store for the final model — useful when scratch lives on intra-vendor storage (cheap egress) and publish lives on HF Hub (shareable). v1 uses a single store throughout, which is fine for HF Hub (uploads are free under normal quotas).
+**Disk discipline.** GUI server applies a retention policy per run (default: keep latest N checkpoints, drop older). For large models on disk-constrained LAN boxes, the user can configure the retention count or push-and-evict to an external destination automatically.
 
 ### Transport, log surfaces
 
@@ -96,16 +87,18 @@ Training launches in a detached session on the host (tmux for SSH transport, man
 - **events.jsonl** — append-only audit log of state transitions (connect, fail, retry, lost_contact)
 - **stderr.log** — byte-offset incremental tail
 
+The same poll loop that reads these also scans the host's checkpoint directory and SCPs new files.
+
 ### Session survival
 
 What survives what, by deployment shape:
 
-| Event                                          | LAN deployment (GUI server on its own box)                                                                                  | Workstation deployment (GUI server is the user's laptop)                                                                               |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| User closes browser                            | Non-event. GUI server keeps polling; training continues. On reopen the frontend reads current state from the server.        | Non-event by itself; typically coincident with closing the laptop (next row).                                                          |
-| Laptop sleeps                                  | Non-event for the GUI server (different machine).                                                                           | GUI server suspends with the laptop; polling stops. Training subprocess survives or not depending on OS sleep — outside GUI's control. |
-| GUI server restarts                            | Polling pauses. On restart, GUI server reads persisted run state and resumes polling. Training in tmux survives (detached). | Same — GUI picks up where it left off; tmux-based training survives.                                                                   |
-| Training host loses contact (preemption, etc.) | Detected by the poll scheduler; UI marks the run unhealthy. See Health.                                                     | Same.                                                                                                                                  |
+| Event                                          | LAN deployment (GUI server on its own box)                                                                                   | Workstation deployment (GUI server is the user's laptop)                                                                               |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| User closes browser                            | Non-event. GUI server keeps polling and pulling checkpoints; training continues. On reopen the frontend reads current state. | Non-event by itself; typically coincident with closing the laptop (next row).                                                          |
+| Laptop sleeps                                  | Non-event for the GUI server (different machine).                                                                            | GUI server suspends with the laptop; polling stops. Training subprocess survives or not depending on OS sleep — outside GUI's control. |
+| GUI server restarts                            | Polling pauses. On restart, GUI server reads persisted run state and resumes polling. Training in tmux survives (detached).  | Same — GUI picks up where it left off; tmux-based training survives.                                                                   |
+| Training host loses contact (preemption, etc.) | Detected by the poll scheduler; UI marks the run unhealthy. See Health.                                                      | Same.                                                                                                                                  |
 
 ### Connection resilience
 
@@ -113,7 +106,9 @@ The poll scheduler uses exponential backoff (5/10/20/40/60s capped, 10 attempts,
 
 ### Recovery from preemption
 
-The primary mechanism is periodic checkpointing to host disk with async background upload to the store. The grace window between SIGTERM and SIGKILL is too short for big models to flush on signal, so the most recently uploaded checkpoint is what survives. Cadence defaults to every 60–180s of training time for preemptible hosts and ~10 minutes for on-demand; tunable per recipe.
+The primary mechanism is periodic checkpointing to host disk with async background pull by the GUI server. The grace window between SIGTERM and SIGKILL is too short for big models to flush on signal, so the most recently pulled checkpoint is what survives. Cadence defaults to every 60–180s of training time for preemptible hosts and ~10 minutes for on-demand; tunable per recipe.
+
+If the user enabled "auto-push to HF" for the run, the GUI server pushes each pulled checkpoint to HF Hub asynchronously — a third copy, made out of band of training.
 
 ### Health
 
@@ -135,7 +130,7 @@ When the GUI backend is shared (LAN deployment), credentials must be per-user, m
 - Long-lived credentials live on the user's laptop in the standard CLI tool locations (vendor profile directory, HF cache).
 - A small helper daemon on the user's laptop mints short-lived tokens on demand — for vendors with IAM via long-lived service-account keys, by shelling out to the vendor CLI; for HF, by reading the cached token.
 - The browser fetches fresh tokens from the helper on demand (loopback only, origin-checked, plus a pairing token). It includes them in vendor-specific headers on every request to the GUI server.
-- The GUI server reads token headers per request, constructs the provider with credentials in scope, makes the call, discards.
+- The GUI server reads token headers per request, uses the token in scope (constructs a provider for spawn/destroy, or invokes the HF client for a Push-to-HF action), discards.
 
 **Workstation case** (GUI binds the loopback interface): the helper is auto-launched as a child of the GUI server with auto-pairing. The GUI server runs only its own process; nothing else to manage.
 
@@ -146,8 +141,9 @@ When the GUI backend is shared (LAN deployment), credentials must be per-user, m
 - Long-lived creds stay on the user's laptop; backend has zero credential persistence.
 - Helper bound to loopback only; rejects requests missing matching Origin and pairing token.
 - Compromised backend worst case: short-lived tokens (typically ≤12h) for currently-connected users; no refresh creds, no long-lived secrets.
+- **Training pods never receive HF tokens or other external credentials.** Pulled checkpoints flow over the existing SSH/subprocess channel; external pushes happen from the GUI server with the user's token only when they click Push.
 
-**HF caveat.** The HF token is non-expiring. Subprocess isolation (training scripts run as separate processes) confines it to that subprocess's RAM. Users wanting tighter scope can switch to a fine-grained HF token with explicit expiry — no code change needed.
+**HF caveat.** The HF token is non-expiring. Push actions invoke an HF subprocess (the existing Hub Transfers worker pattern); the token lives in that subprocess's RAM and is GC'd with it. Users wanting tighter scope can switch to a fine-grained HF token with explicit expiry — no code change needed.
 
 ### Cost discipline
 
@@ -161,7 +157,7 @@ Three structural defenses baked into Ephemeral mode:
 2. **Disk-size warning.** Many vendor web forms default to enormous boot disks (1 TB+); the GUI warns above 256 GiB. Most LeRobot training fits in <100 GB.
 3. **Auto-destroy on completion + backstop scheduled-delete.** See Health.
 
-Egress for checkpoints is the other big variable; v1 uses HF Hub uploads (free under normal quotas). The future scratch/publish split (see CheckpointStore) would let users put frequent checkpoints on intra-vendor storage when integrating storage destinations with paid egress.
+Egress for checkpoints is determined by the pod-to-GUI-server hop (see Checkpoints). The cost on the pod side is the same whether checkpoints go to the GUI server or to HF Hub directly. Pushing from the GUI server to HF is on the GUI server's network, which is typically free or not the bottleneck.
 
 For Persistent hosts the GUI cannot enforce these defenses; the user owns the VM. Rule of thumb: for occasional training, delete VM + disk between sessions.
 
@@ -174,7 +170,8 @@ For Persistent hosts the GUI cannot enforce these defenses; the user owns the VM
 - **Browser-coupled providers** (Colab, Kaggle interactive). They kill on user-side idle regardless of GPU activity; no design from our side defeats that.
 - **Vendor marketplaces with quality variance** (Vast.ai). Power users can still use them through the Persistent SSH path; we just don't market them as managed integrations.
 - **In-GUI credential entry.** No "paste your API key" forms. Credentials live in the user's local CLI state; the helper bridges browser ↔ local state.
-- **Concrete cost predictions.** No "this run will cost $X" claims. The GUI surfaces pricing-page links per host and store; vendor pricing changes too often for us to be accurate.
+- **Concrete cost predictions.** No "this run will cost $X" claims. The GUI surfaces pricing-page links per host; vendor pricing changes too often for us to be accurate.
+- **Direct pod-to-external-store uploads.** The pod uploads only to the GUI server. Any external destination (HF Hub today) is pushed from the GUI server. Simpler config; one credential boundary, not N.
 
 ---
 
@@ -186,7 +183,8 @@ For Persistent hosts the GUI cannot enforce these defenses; the user owns the VM
 - **HF OAuth in browser.** Right answer if HF's long-lived-token model becomes a hard problem.
 - **Multi-GPU support.** `gpu_count` field already present.
 - **Post-run billing reconciliation.** When vendor billing APIs are available, surface estimated vs actual cost after a run completes.
-- **Additional `CheckpointStore` implementations** (vendor S3, external S3 / GCS, local NAS) with a **scratch-vs-publish split** to avoid egress when integrating paid-egress destinations. HF Hub is the v1 default + publish target.
+- **Additional external push destinations from the Models tab** — S3, GCS, vendor-local object stores, local NAS over rsync. Same pattern: pushed from the GUI server using user-supplied credentials.
+- **Direct pod-to-external streaming option** for very large models where pod→GUI pull is bandwidth-limited. Adds a second code path; only worth doing if the pull-through-GUI model proves a bottleneck.
 
 ---
 
