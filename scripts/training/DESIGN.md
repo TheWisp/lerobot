@@ -221,19 +221,50 @@ For Persistent hosts the GUI cannot enforce these defenses; the user owns the VM
 
 Three places dependencies land, with different rules for each.
 
-**1. User's laptop and GUI server: vendor CLIs (installed out of band).**
+**1. User's laptop: vendor CLI** (installed out of band, one-time per vendor).
 
-| Component     | What's needed                                                 | Why                                                                     |
-| ------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| User's laptop | Vendor CLI for any provider they want to use (e.g., `nebius`) | The auth helper shells out to it to mint short-lived tokens             |
-| GUI server    | Same vendor CLI for each enabled provider                     | The provider's `spawn` / `destroy` / `verify_destroyed` shell out to it |
-| Both          | `huggingface-cli`                                             | Ships with `huggingface-hub`, already a LeRobot Python dependency       |
+The auth helper shells out to the vendor CLI to mint short-lived tokens. The user already has the vendor CLI because they set up their cloud account with it; the helper just leverages what's there.
 
-We do NOT auto-install vendor CLIs. We auto-**detect** them. At startup the GUI server checks which CLIs are present; providers without their CLI installed are disabled in the UI with a clear error pointing at the vendor's install instructions (an "Open install guide" link). Other providers stay fully enabled; the user is never blocked from the modes that work.
+| Vendor       | What the user installs on their laptop                          |
+| ------------ | --------------------------------------------------------------- |
+| Hugging Face | `huggingface-cli` (ships with `huggingface-hub` Python package) |
+| Nebius       | `nebius` CLI (via Nebius's install script)                      |
+| RunPod       | `runpodctl`                                                     |
+| AWS          | `aws` CLI                                                       |
+| GCP          | `gcloud` CLI                                                    |
+| …            | per vendor docs                                                 |
 
-Why no auto-install: vendor CLIs are signed binaries hosted by the vendor, often need sudo, and users have preferred install methods (apt, Homebrew, manual). Programmatically running `curl … | bash` from the GUI is a security smell we don't want LeRobot to be the one doing. The "system-installed CLI + we detect" pattern is what every cloud SDK does (kubectl, terraform, helm, the cloud vendors' own SDKs).
+If a vendor CLI is missing on the laptop, the helper's `/tokens` response for that vendor errors with a clear "install `<vendor>` CLI" message. Other vendors keep working.
 
-**2. Training image: vendor-neutral.**
+**2. GUI server: vendor Python SDKs** (distributed as LeRobot optional extras).
+
+The GUI server's provider implementations call vendor Python SDKs — NOT the vendor CLI. Enable a vendor by installing the corresponding extra:
+
+```
+uv sync --extra nebius                  # or: pip install "lerobot[nebius]"
+uv sync --extra nebius --extra runpod   # multi-vendor admins
+```
+
+In `pyproject.toml`:
+
+```toml
+[project.optional-dependencies]
+nebius = ["nebius>=x.y.z"]
+runpod = ["runpod>=x.y.z"]
+# huggingface-hub is in the base install
+```
+
+This is the **same pattern LeRobot already uses for hardware** (`lerobot[aloha]`, `lerobot[feetech]`, `lerobot[dynamixel]`). Pip-installable, no curl-bash, no system binaries we'd vouch for, standard Python packaging.
+
+At startup the GUI server does a soft import (`try: import nebius`); installed providers are enabled, missing ones are disabled in the UI with a clear message — _"To enable Nebius training, run `uv sync --extra nebius` on the GUI server"_. Other providers stay fully usable; the user is never blocked from the modes that work.
+
+The provider implementation uses the Python SDK with the per-request bearer token from the helper. The SDK doesn't manage its own auth state; we hand it the token.
+
+**Fallback for vendors without a usable Python SDK:** call the vendor REST/gRPC API directly via `httpx`. Same effort either way; most SDKs are thin wrappers around REST. Documented as the implementation option for any provider where the SDK is missing, abandoned, or unwieldy.
+
+Why CLI on the laptop and SDK on the GUI server? Different needs. The laptop already has the CLI from the user's normal account workflow; reusing it avoids a second install. The GUI server needs reliable scripted access under our control, where a pip-installable SDK fits LeRobot's existing extras pattern.
+
+**3. Training image: vendor-neutral.**
 
 The training Docker image contains:
 
@@ -245,10 +276,6 @@ The training Docker image contains:
 What it does NOT contain: any vendor cloud CLI or SDK (no Nebius, no RunPod, no AWS, no GCP). The same image runs on a workstation, a lab box, or any cloud vendor's VM. This is a consequence of the pull-based checkpoint design — the pod doesn't talk to cloud APIs directly.
 
 The pod does receive the user's HF token as an env var at spawn time (for dataset download from HF Hub; see Checkpoints). That's the only external credential the pod sees; no vendor cloud credentials ever reach it.
-
-**3. Future enhancement: drop the GUI-server CLI requirement.**
-
-Provider implementations could call vendor REST/gRPC APIs directly instead of shelling out to the CLI. The CLI on the user's laptop is still needed for auth; the GUI server could become CLI-free if each provider talks directly to the vendor's API. Reduces install friction for the GUI-server admin; some code complexity in exchange. Worth it once 2+ vendors are integrated.
 
 ---
 
