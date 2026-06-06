@@ -77,7 +77,7 @@ How "bringing the files back" works, by transport:
 
 **This means:**
 
-- **The training pod doesn't need external credentials.** No HF token, no S3 keys, no per-vendor auth on the pod.
+- **The training pod's external credential surface is minimal.** The pod receives the HF token (env var at spawn time, scoped to that run) for dataset download from HF Hub — and nothing else. No vendor cloud credentials, no checkpoint-store credentials, no S3 keys. Pod compromise leaks at most the user's HF token, not their cloud account.
 - **Pod egress cost is the same.** Bytes leave the pod's network either way; they go to the GUI server instead of an external store. The pod-side cost is identical to a direct-to-HF push.
 - **The Models tab is the canonical surface.** A pulled checkpoint appears there immediately — before any external upload.
 - **External publication is a separate Models-tab action** (v1: user-initiated; auto-push is a future enhancement).
@@ -219,9 +219,9 @@ For Persistent hosts the GUI cannot enforce these defenses; the user owns the VM
 
 ### Dependencies
 
-Each provider implementation declares its runtime dependencies (vendor CLI, optional Python SDK). LeRobot does NOT bundle vendor CLIs — they're installed out of band per the vendor's docs.
+Three places dependencies land, with different rules for each.
 
-**Where each piece needs to be installed:**
+**1. User's laptop and GUI server: vendor CLIs (installed out of band).**
 
 | Component     | What's needed                                                 | Why                                                                     |
 | ------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------- |
@@ -229,11 +229,26 @@ Each provider implementation declares its runtime dependencies (vendor CLI, opti
 | GUI server    | Same vendor CLI for each enabled provider                     | The provider's `spawn` / `destroy` / `verify_destroyed` shell out to it |
 | Both          | `huggingface-cli`                                             | Ships with `huggingface-hub`, already a LeRobot Python dependency       |
 
-**Self-check at startup.** The GUI server detects which vendor CLIs are present and which providers are therefore usable. Providers without their CLI installed are disabled in the UI with a clear error pointing at the vendor's install instructions. Other providers stay enabled; the user is never blocked from the modes that work.
+We do NOT auto-install vendor CLIs. We auto-**detect** them. At startup the GUI server checks which CLIs are present; providers without their CLI installed are disabled in the UI with a clear error pointing at the vendor's install instructions (an "Open install guide" link). Other providers stay fully enabled; the user is never blocked from the modes that work.
 
-**Why not bundle vendor CLIs?** They're Go / Rust binaries with their own update cycles, signing, and provenance. Bundling would create supply-chain and version-drift problems. The "system-installed CLI + we shell out" pattern is what every cloud SDK does (kubectl, terraform, helm; the cloud vendors' own SDKs).
+Why no auto-install: vendor CLIs are signed binaries hosted by the vendor, often need sudo, and users have preferred install methods (apt, Homebrew, manual). Programmatically running `curl … | bash` from the GUI is a security smell we don't want LeRobot to be the one doing. The "system-installed CLI + we detect" pattern is what every cloud SDK does (kubectl, terraform, helm, the cloud vendors' own SDKs).
 
-**Future enhancement: drop the GUI-server CLI requirement.** Provider implementations could call vendor REST/gRPC APIs directly instead of shelling out. The CLI on the user's laptop is still needed for auth; the GUI server could become CLI-free if each provider talks directly to the vendor's API. Reduces install friction for the GUI-server admin; some code complexity in exchange. Worth it once 2+ vendors are integrated.
+**2. Training image: vendor-neutral.**
+
+The training Docker image contains:
+
+- CUDA base + Python + LeRobot training stack
+- `huggingface_hub` (Python; used for dataset download)
+- `tmux` (detached session for survival)
+- `sshd` (GUI server SSHes in)
+
+What it does NOT contain: any vendor cloud CLI or SDK (no Nebius, no RunPod, no AWS, no GCP). The same image runs on a workstation, a lab box, or any cloud vendor's VM. This is a consequence of the pull-based checkpoint design — the pod doesn't talk to cloud APIs directly.
+
+The pod does receive the user's HF token as an env var at spawn time (for dataset download from HF Hub; see Checkpoints). That's the only external credential the pod sees; no vendor cloud credentials ever reach it.
+
+**3. Future enhancement: drop the GUI-server CLI requirement.**
+
+Provider implementations could call vendor REST/gRPC APIs directly instead of shelling out to the CLI. The CLI on the user's laptop is still needed for auth; the GUI server could become CLI-free if each provider talks directly to the vendor's API. Reduces install friction for the GUI-server admin; some code complexity in exchange. Worth it once 2+ vendors are integrated.
 
 ---
 
