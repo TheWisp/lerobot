@@ -36,6 +36,7 @@ from lerobot.gui.api import (
     playback,
     robot,
     run,
+    training,
 )
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
@@ -241,6 +242,14 @@ app.include_router(models.router)
 app.include_router(bug_reports.router)
 app.include_router(ai_setup.router)
 app.include_router(bridge.router)
+app.include_router(training.router)
+
+# Wire up the training orchestrator with the auto-detected workstation host.
+# Safe at import time: HostRegistry.auto() probes nvidia-smi but tolerates
+# its absence; on a GPU-less server the training endpoints just return an
+# empty hosts list and the dropdown stays empty.
+_training_orch = training.make_default_orchestrator()
+training.init_state(orch=_training_orch, host_registry=_training_orch._hosts)  # noqa: SLF001
 
 # Serve static files (CSS, JS)
 _static_dir = Path(__file__).parent / "static"
