@@ -1,19 +1,30 @@
 // Copyright 2026 The HuggingFace Inc. team. All rights reserved.
 // Licensed under the Apache License, Version 2.0
 //
-// Training panel — minimal frontend for the training API.
-// Lives in the Model tab's sidebar (Training section) + main pane (detail).
+// Training panel — frontend for the training API.
+// Lives in the Model tab (sidebar + main pane).
 //
 // What this drives:
-// - GET /api/training/hosts          → host info display
-// - GET /api/training/runs           → run list + active polling
-// - POST /api/training/runs          → start a run
-// - GET /api/training/runs/{id}      → detail (progress, checkpoints, log)
-// - POST /api/training/runs/{id}/stop → user-initiated stop
+// - GET /api/training/hosts                      → host info display
+// - GET /api/training/runs                       → run list + active polling
+// - POST /api/training/runs                      → start a run
+// - GET /api/training/runs/{id}                  → detail (progress, checkpoints, log)
+// - POST /api/training/runs/{id}/stop            → user-initiated stop
+// - GET /api/datasets/sources + .../datasets     → populate the dataset dropdown
 
 const TRAINING_POLL_MS = 3000;
 let _trainingHosts = [];
+let _trainingDatasets = [];
 let _trainingPollTimer = null;
+
+// View mode: which thing the main pane is showing.
+//   "empty"  — nothing selected (default)
+//   "form"   — start-training form open
+//   "detail" — run detail for _trainingSelectedRunId
+//
+// Tracking mode explicitly fixes the "polling overwrites the start form"
+// bug — refresh logic only redraws the view that matches the current mode.
+let _trainingMode = "empty";
 let _trainingSelectedRunId = null;
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -47,6 +58,33 @@ async function trainingLoadHosts() {
   trainingRenderHostsInfo();
 }
 
+async function trainingLoadDatasets() {
+  // Fan out: list sources → list each source's datasets → flatten.
+  _trainingDatasets = [];
+  try {
+    const sources = await fetch("/api/datasets/sources").then((r) => r.json());
+    const lists = await Promise.all(
+      sources.map(async (s) => {
+        try {
+          const enc = encodeURIComponent(s.path);
+          const ds = await fetch(`/api/datasets/sources/${enc}/datasets`).then((r) => r.json());
+          return ds.map((d) => ({
+            name: d.name,
+            episodes: d.total_episodes,
+            frames: d.total_frames,
+            source: s.path,
+          }));
+        } catch {
+          return [];
+        }
+      })
+    );
+    _trainingDatasets = lists.flat().sort((a, b) => a.name.localeCompare(b.name));
+  } catch (e) {
+    console.error("training: failed to load datasets", e);
+  }
+}
+
 async function trainingRefreshRuns() {
   let runs = [];
   try {
@@ -56,73 +94,86 @@ async function trainingRefreshRuns() {
     console.error("training: failed to load runs", e);
   }
   trainingRenderRunsList(runs);
-  // If a run is selected, refresh its detail too
-  if (_trainingSelectedRunId) {
+  // Only refresh the detail when we're currently SHOWING a detail. Don't
+  // overwrite the start form with a re-render every 3 seconds.
+  if (_trainingMode === "detail" && _trainingSelectedRunId) {
     await trainingRefreshDetail(_trainingSelectedRunId);
   }
 }
 
-// ── Render helpers ────────────────────────────────────────────────────────────
+// ── Sidebar render ────────────────────────────────────────────────────────────
 
 function trainingRenderHostsInfo() {
   const el = document.getElementById("training-hosts-info");
+  const btn = document.getElementById("training-start-btn");
   if (!el) return;
   if (_trainingHosts.length === 0) {
-    el.textContent = "No training hosts detected. Workstation mode needs a GPU.";
-    const btn = document.getElementById("training-start-btn");
-    if (btn) btn.disabled = true;
+    el.textContent = "No training hosts detected.";
+    if (btn) {
+      btn.disabled = true;
+      btn.title = "No training hosts detected (workstation mode needs a GPU on this machine)";
+    }
     return;
   }
   const h = _trainingHosts[0];
   const gpu = h.capabilities?.gpu_name || "GPU";
-  const vram = h.capabilities?.vram_mb ? ` (${(h.capabilities.vram_mb / 1024).toFixed(1)} GB)` : "";
-  el.textContent = `Host: ${h.display_name} — ${gpu}${vram}`;
+  const vram = h.capabilities?.vram_mb ? ` · ${(h.capabilities.vram_mb / 1024).toFixed(1)} GB` : "";
+  el.textContent = `${h.display_name} — ${gpu}${vram}`;
+  if (btn) {
+    btn.disabled = false;
+    btn.title = "Start a new training run";
+  }
 }
 
 function trainingRenderRunsList(runs) {
   const el = document.getElementById("training-runs-list");
   if (!el) return;
   if (runs.length === 0) {
-    el.innerHTML =
-      '<div style="font-size: 11px; color: var(--text-secondary, #666); padding: 8px;">No runs yet. Click + to start.</div>';
+    el.innerHTML = '<div class="training-empty-hint">No runs yet. Click + to start.</div>';
     return;
   }
   el.innerHTML = "";
   for (const r of runs) {
     const row = document.createElement("div");
     row.className = "training-run-row";
-    row.style.cssText =
-      "padding: 6px 8px; cursor: pointer; border-bottom: 1px solid var(--border, #eee); font-size: 12px;";
-    if (r.run_id === _trainingSelectedRunId) {
-      row.style.background = "var(--selected-bg, #f0f4ff)";
+    if (r.run_id === _trainingSelectedRunId && _trainingMode === "detail") {
+      row.classList.add("selected");
     }
     row.innerHTML = `
-      <div style="display: flex; justify-content: space-between; gap: 8px;">
-        <span style="font-weight: 500;">${escapeHtml(r.recipe_name)}</span>
+      <div class="training-run-row-top">
+        <span class="training-run-name">${escapeHtml(r.recipe_name)}</span>
         <span class="training-state-badge training-state-${r.state}">${r.state}</span>
       </div>
-      <div style="font-size: 11px; color: var(--text-secondary, #666); margin-top: 2px;">
-        ${escapeHtml(r.dataset_id)}
-      </div>
+      <div class="training-run-row-sub">${escapeHtml(r.dataset_id)}</div>
     `;
     row.onclick = () => trainingSelectRun(r.run_id);
     el.appendChild(row);
   }
 }
 
+// ── Mode switches ─────────────────────────────────────────────────────────────
+
+function trainingShowMain(mode) {
+  // Hide existing model views; show the training-detail container for any
+  // mode other than "empty".
+  document.getElementById("model-empty").style.display = mode === "empty" ? "" : "none";
+  document.getElementById("model-detail").style.display = "none";
+  document.getElementById("training-detail").style.display = mode === "empty" ? "none" : "block";
+  _trainingMode = mode;
+}
+
 function trainingSelectRun(runId) {
   _trainingSelectedRunId = runId;
-  document.getElementById("model-empty").style.display = "none";
-  document.getElementById("model-detail").style.display = "none";
-  document.getElementById("training-detail").style.display = "block";
+  trainingShowMain("detail");
   trainingRefreshDetail(runId);
-  // Re-render sidebar to update selection highlight
-  trainingRefreshRuns();
+  trainingRefreshRuns(); // re-render sidebar selection highlight
 }
+
+// ── Detail pane ───────────────────────────────────────────────────────────────
 
 async function trainingRefreshDetail(runId) {
   const el = document.getElementById("training-detail");
-  if (!el) return;
+  if (!el || _trainingMode !== "detail") return;
   try {
     const resp = await fetch(`/api/training/runs/${runId}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -131,123 +182,176 @@ async function trainingRefreshDetail(runId) {
     const stopBtn = document.getElementById(`training-stop-${runId}`);
     if (stopBtn) stopBtn.onclick = () => trainingStopRun(runId);
   } catch (e) {
-    el.innerHTML = `<div style="color: var(--error, #d00);">Failed to load run: ${escapeHtml(e.message)}</div>`;
+    el.innerHTML = `<div class="training-error">Failed to load run: ${escapeHtml(e.message)}</div>`;
   }
 }
 
 function trainingRenderDetailHtml(snap) {
   const r = snap.run;
-  const progress = snap.progress;
+  const progress = snap.progress || {};
   const checkpoints = snap.checkpoints || [];
   const isActive = !["completed", "failed", "aborted"].includes(r.state);
 
-  let progressLine = "<em>No progress yet…</em>";
-  if (progress) {
-    const step = progress.step ?? 0;
-    const total = progress.num_steps ?? "?";
-    const loss = progress.loss != null ? progress.loss.toFixed(4) : "—";
-    progressLine = `Step ${step}/${total} · loss ${loss}`;
-  }
+  const step = progress.step ?? 0;
+  const total = progress.num_steps ?? r.args?.num_steps ?? 0;
+  const pct = total > 0 ? Math.min(100, Math.round((step / total) * 100)) : 0;
+  const loss = progress.loss != null ? progress.loss.toFixed(4) : "—";
+  const elapsedSec = r.started_at ? Math.round(Date.now() / 1000 - r.started_at) : 0;
 
-  const elapsed = r.started_at
-    ? Math.round((Date.now() / 1000 - r.started_at))
-    : 0;
-
-  const stopBtnHtml = isActive
-    ? `<button class="btn-small" id="training-stop-${r.run_id}" style="background: var(--btn-danger-bg, #d00); color: white;">Stop</button>`
+  const stopBtn = isActive
+    ? `<button class="btn-small danger" id="training-stop-${r.run_id}">Stop</button>`
     : "";
 
-  const checkpointsHtml = checkpoints.length === 0
-    ? "<em>None yet</em>"
-    : `<ul style="margin: 4px 0; padding-left: 20px;">${checkpoints
-        .map((c) => `<li>step ${c.step} — <code>${escapeHtml(c.path)}</code> <span style="color: #888;">(sha256 ${c.sha256.slice(0, 12)}…)</span></li>`)
-        .join("")}</ul>`;
-
   return `
-    <div style="margin-bottom: 12px;">
-      <h2 style="margin: 0 0 4px;">${escapeHtml(r.recipe_name)}</h2>
-      <div style="color: var(--text-secondary, #666); font-size: 12px;">
-        ${escapeHtml(r.dataset_id)} · host ${escapeHtml(r.host_id)} · run ${escapeHtml(r.run_id)}
-      </div>
+    <div class="training-detail-pane">
+      <header class="training-detail-header">
+        <div>
+          <h2 class="training-detail-title">${escapeHtml(r.recipe_name)}</h2>
+          <div class="training-detail-meta">
+            <span>${escapeHtml(r.dataset_id)}</span>
+            <span class="sep">·</span>
+            <span>host ${escapeHtml(r.host_id)}</span>
+            <span class="sep">·</span>
+            <span class="training-mono">${escapeHtml(r.run_id)}</span>
+          </div>
+        </div>
+        <div class="training-detail-actions">
+          <span class="training-state-badge training-state-${r.state}">${r.state}</span>
+          ${stopBtn}
+        </div>
+      </header>
+
+      <section class="training-card">
+        <div class="training-stats-row">
+          <div class="training-stat"><div class="training-stat-label">Step</div><div class="training-stat-value">${step} / ${total}</div></div>
+          <div class="training-stat"><div class="training-stat-label">Loss</div><div class="training-stat-value">${loss}</div></div>
+          <div class="training-stat"><div class="training-stat-label">Elapsed</div><div class="training-stat-value">${elapsedSec}s</div></div>
+          <div class="training-stat"><div class="training-stat-label">Checkpoints</div><div class="training-stat-value">${checkpoints.length}</div></div>
+        </div>
+        <div class="training-progress-bar"><div class="training-progress-fill" style="width: ${pct}%"></div></div>
+      </section>
+
+      <section class="training-card">
+        <h3 class="training-card-heading">Checkpoints</h3>
+        ${
+          checkpoints.length === 0
+            ? '<div class="training-empty-hint">None yet</div>'
+            : `<ul class="training-checkpoint-list">${checkpoints
+                .map(
+                  (c) => `<li>
+                <span class="training-mono">step ${c.step}</span>
+                <span class="training-mono training-muted">${escapeHtml(c.path)}</span>
+                <span class="training-mono training-muted">${c.sha256.slice(0, 12)}…</span>
+              </li>`
+                )
+                .join("")}</ul>`
+        }
+      </section>
+
+      <section class="training-card">
+        <h3 class="training-card-heading">Log tail</h3>
+        <pre class="training-log">${escapeHtml(snap.stderr_tail || "(no output yet)")}</pre>
+      </section>
+
+      ${r.error ? `<div class="training-error">Error: ${escapeHtml(r.error)}</div>` : ""}
     </div>
-    <div style="margin-bottom: 12px;">
-      <span class="training-state-badge training-state-${r.state}">${r.state}</span>
-      ${stopBtnHtml}
-      <span style="margin-left: 12px; color: var(--text-secondary, #666); font-size: 12px;">
-        ${elapsed > 0 ? `${elapsed}s elapsed` : ""}
-      </span>
-    </div>
-    <div style="margin-bottom: 16px;">
-      <strong>Progress:</strong> ${progressLine}
-    </div>
-    <div style="margin-bottom: 16px;">
-      <strong>Checkpoints (${checkpoints.length}):</strong> ${checkpointsHtml}
-    </div>
-    <div>
-      <strong>Log tail:</strong>
-      <pre style="background: #111; color: #ddd; padding: 8px; font-size: 11px; max-height: 240px; overflow: auto; white-space: pre-wrap;">${escapeHtml(snap.stderr_tail || "(no output yet)")}</pre>
-    </div>
-    ${r.error ? `<div style="color: var(--error, #d00); margin-top: 8px;"><strong>Error:</strong> ${escapeHtml(r.error)}</div>` : ""}
   `;
 }
 
 // ── Start form ────────────────────────────────────────────────────────────────
 
-function trainingShowStartForm() {
-  if (_trainingHosts.length === 0) {
-    alert("No training hosts detected. Workstation mode needs a GPU on this machine.");
-    return;
+async function trainingShowStartForm() {
+  // Button is disabled until hosts load, so this guard mostly catches
+  // programmatic invocations. Keep it cheap and silent — no alert.
+  if (_trainingHosts.length === 0) return;
+  // Clear selected run so polling doesn't try to refresh detail over the form.
+  _trainingSelectedRunId = null;
+  trainingShowMain("form");
+  // Load datasets lazily on first form-open
+  if (_trainingDatasets.length === 0) {
+    document.getElementById("training-detail").innerHTML =
+      '<div class="training-detail-pane"><div class="training-empty-hint">Loading datasets…</div></div>';
+    await trainingLoadDatasets();
   }
-  document.getElementById("model-empty").style.display = "none";
-  document.getElementById("model-detail").style.display = "none";
+  if (_trainingMode === "form") trainingRenderStartForm(); // user might have nav'd away
+  trainingRefreshRuns(); // unselect any previously-highlighted row
+}
+
+function trainingRenderStartForm() {
   const el = document.getElementById("training-detail");
-  el.style.display = "block";
+  if (!el || _trainingMode !== "form") return;
 
   const hostOptions = _trainingHosts
     .map((h) => `<option value="${escapeHtml(h.id)}">${escapeHtml(h.display_name)}</option>`)
     .join("");
 
+  const datasetOptions =
+    _trainingDatasets.length === 0
+      ? `<option value="" disabled>No datasets found — add a source in the Data tab first</option>`
+      : _trainingDatasets
+          .map(
+            (d) =>
+              `<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)} (${d.episodes} ep · ${d.frames} fr)</option>`
+          )
+          .join("");
+
   el.innerHTML = `
-    <h2 style="margin: 0 0 12px;">Start a training run</h2>
-    <form id="training-start-form" onsubmit="trainingSubmitStart(event); return false;">
-      <div style="margin-bottom: 10px;">
-        <label style="display: block; margin-bottom: 4px;">Host</label>
-        <select name="host_id" required>${hostOptions}</select>
-      </div>
-      <div style="margin-bottom: 10px;">
-        <label style="display: block; margin-bottom: 4px;">Recipe name</label>
-        <input type="text" name="recipe_name" value="fake-prototype" required style="width: 100%; max-width: 400px;" />
-      </div>
-      <div style="margin-bottom: 10px;">
-        <label style="display: block; margin-bottom: 4px;">Dataset id</label>
-        <input type="text" name="dataset_id" value="example/dataset" required style="width: 100%; max-width: 400px;" />
-      </div>
-      <div style="margin-bottom: 10px; display: flex; gap: 16px; flex-wrap: wrap;">
-        <label style="display: block;">
-          Num steps
-          <input type="number" name="num_steps" value="100" min="1" max="100000" style="width: 100px;" />
+    <div class="training-detail-pane">
+      <header class="training-detail-header">
+        <h2 class="training-detail-title">Start a training run</h2>
+        <div class="training-detail-actions">
+          <button type="button" class="btn-small secondary" onclick="trainingCancelForm()">Cancel</button>
+        </div>
+      </header>
+
+      <form id="training-start-form" class="training-form" onsubmit="trainingSubmitStart(event); return false;">
+        <label class="training-field">
+          <span class="training-field-label">Host</span>
+          <select name="host_id" required>${hostOptions}</select>
         </label>
-        <label style="display: block;">
-          Save every
-          <input type="number" name="save_every" value="20" min="1" max="100000" style="width: 100px;" />
+
+        <label class="training-field">
+          <span class="training-field-label">Dataset</span>
+          <select name="dataset_id" required ${_trainingDatasets.length === 0 ? "disabled" : ""}>
+            ${datasetOptions}
+          </select>
+          <span class="training-field-hint">Datasets are discovered from sources configured in the Data tab.</span>
         </label>
-        <label style="display: block;">
-          Step seconds
-          <input type="number" name="step_seconds" value="0.1" step="0.01" min="0" max="10" style="width: 100px;" />
+
+        <label class="training-field">
+          <span class="training-field-label">Recipe name</span>
+          <input type="text" name="recipe_name" value="prototype" required />
+          <span class="training-field-hint">Free-form label used in the run list + Models tab.</span>
         </label>
-      </div>
-      <div style="display: flex; gap: 8px; margin-top: 16px;">
-        <button type="submit" class="btn-small" style="background: var(--btn-primary-bg, #006); color: white; padding: 6px 16px;">Start</button>
-        <button type="button" class="btn-small" onclick="trainingHideStartForm()">Cancel</button>
-      </div>
-      <div id="training-start-error" style="color: var(--error, #d00); margin-top: 12px;"></div>
-    </form>
+
+        <div class="training-field-row">
+          <label class="training-field">
+            <span class="training-field-label">Num steps</span>
+            <input type="number" name="num_steps" value="100" min="1" max="100000" required />
+          </label>
+          <label class="training-field">
+            <span class="training-field-label">Save every (steps)</span>
+            <input type="number" name="save_every" value="20" min="1" max="100000" required />
+          </label>
+          <label class="training-field">
+            <span class="training-field-label">Step seconds (fake-train pacing)</span>
+            <input type="number" name="step_seconds" value="0.1" step="0.01" min="0" max="10" required />
+          </label>
+        </div>
+
+        <div class="training-form-actions">
+          <button type="submit" class="btn-small">Start training</button>
+          <button type="button" class="btn-small secondary" onclick="trainingCancelForm()">Cancel</button>
+        </div>
+        <div id="training-start-error" class="training-error" style="display:none;"></div>
+      </form>
+    </div>
   `;
 }
 
-function trainingHideStartForm() {
-  document.getElementById("training-detail").style.display = "none";
-  document.getElementById("model-empty").style.display = "";
+function trainingCancelForm() {
+  trainingShowMain("empty");
+  trainingRefreshRuns();
 }
 
 async function trainingSubmitStart(ev) {
@@ -255,7 +359,6 @@ async function trainingSubmitStart(ev) {
   const form = document.getElementById("training-start-form");
   if (!form) return;
   const fd = new FormData(form);
-  // Idempotency key: random per submit; deflects double-clicks
   const idempotencyKey = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const body = {
     host_id: fd.get("host_id"),
@@ -269,8 +372,7 @@ async function trainingSubmitStart(ev) {
     idempotency_key: idempotencyKey,
   };
   const errEl = document.getElementById("training-start-error");
-  errEl.textContent = "";
-  // Disable submit while in flight
+  errEl.style.display = "none";
   const submitBtn = form.querySelector("button[type=submit]");
   if (submitBtn) submitBtn.disabled = true;
   try {
@@ -284,11 +386,10 @@ async function trainingSubmitStart(ev) {
       throw new Error(detail.detail || `HTTP ${resp.status}`);
     }
     const run = await resp.json();
-    // Show the new run's detail
-    _trainingSelectedRunId = run.run_id;
-    await trainingRefreshRuns();
-    await trainingRefreshDetail(run.run_id);
+    // Switch to detail view of the new run
+    trainingSelectRun(run.run_id);
   } catch (e) {
+    errEl.style.display = "block";
     errEl.textContent = e.message || String(e);
   } finally {
     if (submitBtn) submitBtn.disabled = false;
@@ -305,7 +406,6 @@ async function trainingStopRun(runId) {
       const detail = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }));
       throw new Error(detail.detail || `HTTP ${resp.status}`);
     }
-    // Optimistic refresh
     await trainingRefreshDetail(runId);
     await trainingRefreshRuns();
   } catch (e) {
@@ -328,6 +428,6 @@ function escapeHtml(s) {
 // Expose for the inline onclick handlers
 window.trainingInit = trainingInit;
 window.trainingShowStartForm = trainingShowStartForm;
-window.trainingHideStartForm = trainingHideStartForm;
+window.trainingCancelForm = trainingCancelForm;
 window.trainingSubmitStart = trainingSubmitStart;
 window.trainingStopRun = trainingStopRun;

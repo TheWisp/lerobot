@@ -20,6 +20,25 @@ A **training host** is any of the above. Trained models land in the existing **M
 
 ## Architecture
 
+### Unified execution: training always runs in the image
+
+The training process always runs inside the same Docker image, on every host
+mode — workstation, user-added Persistent, Ephemeral cloud. This is the
+forcing function that keeps the pipeline honest: what runs locally on the
+developer's box is bit-for-bit what runs on a remote pod, with the same
+Python, the same CUDA, the same `lerobot` install. Without this, "works on
+my workstation" silently diverges from "works on Nebius" and surprises
+land at the worst moment.
+
+Operationally that means even subprocess transport is `docker run … training-image`,
+not a bare `python -m`. Optimizations that skip the bytes-on-the-wire steps
+are fine (mount the HF dataset cache instead of staging files; mount the
+checkpoint dir instead of SCPing back) — but the runtime environment is
+identical to a remote pod.
+
+The single image source of truth is `ghcr.io/thewisp/lerobot-training:<tag>`;
+see Dependencies for what it does and does not contain.
+
 ### Components
 
 ```
@@ -34,7 +53,7 @@ A **training host** is any of the above. Trained models land in the existing **M
 
 - **Browser** — the user's interface. Holds short-lived tokens in localStorage (user-pasted in v1; auto-fetched from a local helper in v2) and forwards them to the GUI server in vendor-specific request headers.
 - **GUI server** — orchestrates training and owns model storage. Discovers a local GPU at startup; holds host profiles + run state + the canonical checkpoint store; talks to providers. Never holds long-lived credentials.
-- **Training host** — where the training process runs. The GUI server's own box (subprocess transport) or any machine reachable by SSH (SSH transport). Writes checkpoints to local disk; does NOT talk to external destinations.
+- **Training host** — where the training container runs. Either the GUI server's own box (subprocess transport: `docker run` locally) or any machine reachable by SSH (SSH transport: `docker run` over SSH inside `tmux`). Writes checkpoints to local disk; does NOT talk to external destinations.
 - **External destinations** — places the user can publish models to (HF Hub today; S3, GCS, NAS later). Pushed from the GUI server only, never from the training host. Push is a user-initiated Models-tab action in v1; auto-push per run is a future enhancement.
 
 ### HostProvider
@@ -86,7 +105,7 @@ How "bringing the files back" works, by transport:
 
 For Ephemeral pods in the cloud with the GUI server on a LAN box, pod→GUI may also be slower than a hypothetical direct pod→external push (LAN bandwidth, intercontinental latency). Pod-side cost is the same; the difference is wall-clock to durability.
 
-**Dataset staging.** Before a training run starts on a remote host (SSH transport), the GUI server ensures the dataset is in its own local HF cache (downloading from HF Hub via the GUI server's existing HF auth if missed), then SCPs the dataset files to the pod under `/data/<dataset_id>/`. The training script reads from there with `HF_HUB_OFFLINE=1` — no HF API calls from the pod, no HF token on the pod. For subprocess transport (workstation), the pod IS the GUI server, so the local cache works directly with no staging step.
+**Dataset staging.** Always done in two steps: GUI server ensures the dataset is in its own local HF cache (downloading from HF Hub via the GUI server's existing HF auth if missed), then makes that cache available inside the container with `HF_HUB_OFFLINE=1`. For SSH transport (remote host), the GUI server SCPs the dataset to the pod under `/data/<dataset_id>/` first, then mounts that into the container; for subprocess transport (workstation), the cache directory is mounted directly into the container — no file copy needed. The training script's view of the dataset is identical in both cases (local files + offline mode); only the path to the bytes changes.
 
 **Resume from checkpoint.** The Models tab lets the user pick a checkpoint and start a new run resuming from it:
 
@@ -99,7 +118,7 @@ The new run gets its own run id; the resumed-from checkpoint is recorded in the 
 
 ### Transport, log surfaces
 
-Training launches in a detached session on the host (tmux for SSH transport, managed subprocess for subprocess transport), invoking a worker process. The GUI server never holds an open pipe to training. Polling is via short-lived reads of three log surfaces, identical across both transports:
+Training launches as `docker run … training-image` in a detached session on the host (tmux for SSH transport; managed subprocess for subprocess transport). The container invokes the worker process inside. The GUI server never holds an open pipe to training. Polling is via short-lived reads of three log surfaces, identical across both transports:
 
 - **progress.json** — atomically-rewritten snapshot (loss, step, ETA, GPU util)
 - **events.jsonl** — append-only audit log of state transitions (connect, fail, retry, lost_contact)
@@ -273,18 +292,16 @@ The provider implementation uses the Python SDK with the per-request bearer toke
 
 Why CLI on the laptop and SDK on the GUI server? Different needs. The laptop already has the CLI from the user's normal account workflow; reusing it avoids a second install. The GUI server needs reliable scripted access under our control, where a pip-installable SDK fits LeRobot's existing extras pattern.
 
-**3. Training image: vendor-neutral.**
+**3. Training image: vendor-neutral, runs on every host.**
 
 The training Docker image contains:
 
 - CUDA base + Python + LeRobot training stack
 - `huggingface_hub` (Python; used for dataset download)
-- `tmux` (detached session for survival)
-- `sshd` (GUI server SSHes in)
 
-What it does NOT contain: any vendor cloud CLI or SDK (no Nebius, no RunPod, no AWS, no GCP). The same image runs on a workstation, a lab box, or any cloud vendor's VM. This is a consequence of the pull-based checkpoint design — the pod doesn't talk to cloud APIs directly.
+What it does NOT contain: any vendor cloud CLI or SDK (no Nebius, no RunPod, no AWS, no GCP). Same image runs on a workstation, a lab box, or any cloud vendor's VM — see "Unified execution" above for why this matters. It also doesn't need `tmux` or `sshd` inside; those live on the host (the SSH transport uses tmux on the host to keep the `docker run` detached, then the GUI server SSHes back in for short-lived `cat` reads of the mounted log files).
 
-The pod receives no external credentials. Dataset is staged in by the GUI server (SCP); the pod runs with `HF_HUB_OFFLINE=1`. See Checkpoints → Dataset staging.
+The container receives no external credentials. Dataset cache + checkpoint dir + run dir are mounted in; the worker runs with `HF_HUB_OFFLINE=1` and writes to the run dir. See Checkpoints → Dataset staging.
 
 ---
 

@@ -1247,4 +1247,221 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .training-state-completed  { background: #2a5a2a; color: #80f080; }
 .training-state-failed     { background: #5a2a2a; color: #f08080; }
 .training-state-aborted    { background: #4a4a4a; color: #aaa; }
-.training-run-row:hover { background: var(--hover-bg, #f8f9fb); }
+.training-run-row:hover { background: #1a2640; }
+
+/* ── Training panel — sidebar row + detail pane ───────────────────────────── */
+.training-empty-hint {
+    padding: 10px 12px;
+    color: #888;
+    font-size: 12px;
+}
+.training-run-row {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #1a1a2e;
+}
+.training-run-row.selected { background: #16213e; }
+.training-run-row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+.training-run-name {
+    font-weight: 500;
+    color: #e8e8e8;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.training-run-row-sub {
+    color: #888;
+    font-size: 11px;
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Detail pane */
+.training-detail-pane {
+    padding: 24px;
+    max-width: 1000px;
+    color: #e8e8e8;
+    font-size: 13px;
+}
+.training-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #1a1a2e;
+}
+.training-detail-title {
+    margin: 0 0 6px;
+    font-size: 18px;
+    font-weight: 600;
+}
+.training-detail-meta {
+    color: #888;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.training-detail-meta .sep { color: #555; }
+.training-detail-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Card */
+.training-card {
+    background: #16213e;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+}
+.training-card-heading {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+/* Stats row inside a card */
+.training-stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 12px;
+}
+.training-stat-label {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.training-stat-value {
+    font-size: 18px;
+    font-weight: 600;
+    color: #e8e8e8;
+    margin-top: 2px;
+}
+.training-progress-bar {
+    height: 6px;
+    background: #0f3460;
+    border-radius: 3px;
+    overflow: hidden;
+}
+.training-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4fc3f7, #80f080);
+    transition: width 0.5s ease;
+}
+
+/* Checkpoints list */
+.training-checkpoint-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    font-size: 12px;
+}
+.training-checkpoint-list li {
+    display: grid;
+    grid-template-columns: 80px 1fr 130px;
+    gap: 12px;
+    padding: 4px 0;
+    border-bottom: 1px dashed #1a1a2e;
+    align-items: center;
+}
+.training-checkpoint-list li:last-child { border-bottom: none; }
+
+/* Log */
+.training-log {
+    background: #0a0a1a;
+    color: #ccc;
+    padding: 10px 12px;
+    margin: 0;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    line-height: 1.5;
+    max-height: 280px;
+    overflow: auto;
+    white-space: pre-wrap;
+}
+
+.training-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.training-muted { color: #888; }
+
+.training-error {
+    background: #3a1a1a;
+    color: #f08080;
+    padding: 10px 12px;
+    border-radius: 4px;
+    margin-top: 12px;
+    font-size: 12px;
+}
+
+/* Form */
+.training-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-width: 720px;
+}
+.training-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.training-field-label {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+.training-field-hint {
+    font-size: 11px;
+    color: #666;
+    margin-top: 2px;
+}
+.training-field input,
+.training-field select {
+    background: #0f3460;
+    border: 1px solid #1a3a6a;
+    color: #e8e8e8;
+    padding: 7px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+}
+.training-field input:focus,
+.training-field select:focus {
+    outline: none;
+    border-color: #4fc3f7;
+}
+.training-field input:disabled,
+.training-field select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.training-field-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+}
+.training-form-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
