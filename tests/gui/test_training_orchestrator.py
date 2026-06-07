@@ -72,7 +72,7 @@ def test_start_returns_running_run(orch: Orchestrator) -> None:
         host_id="test-host",
         recipe_name="fake",
         dataset_id="fake/ds",
-        args={"num_steps": 5, "save_every": 10, "step_seconds": 0.05},
+        args={"__recipe__": "__fake__", "num_steps": 5, "save_every": 10, "step_seconds": 0.05},
     )
     run = orch.start(req)
     assert run.state == RunState.RUNNING
@@ -91,7 +91,7 @@ def test_start_idempotency_key_returns_same_run(orch: Orchestrator) -> None:
         host_id="test-host",
         recipe_name="fake",
         dataset_id="fake/ds",
-        args={"num_steps": 5, "save_every": 10, "step_seconds": 0.05},
+        args={"__recipe__": "__fake__", "num_steps": 5, "save_every": 10, "step_seconds": 0.05},
         idempotency_key="abc",
     )
     run1 = orch.start(req1)
@@ -114,7 +114,12 @@ def test_start_refuses_when_host_busy(orch: Orchestrator) -> None:
         host_id="test-host",
         recipe_name="fake",
         dataset_id="fake/ds",
-        args={"num_steps": 100, "save_every": 25, "step_seconds": 0.05},  # ~5s, plenty of time
+        args={
+            "__recipe__": "__fake__",
+            "num_steps": 100,
+            "save_every": 25,
+            "step_seconds": 0.05,
+        },  # ~5s, plenty of time
     )
     run1 = orch.start(req)
     try:
@@ -122,7 +127,7 @@ def test_start_refuses_when_host_busy(orch: Orchestrator) -> None:
             host_id="test-host",
             recipe_name="other",
             dataset_id="other/ds",
-            args={"num_steps": 5, "save_every": 10, "step_seconds": 0.05},
+            args={"__recipe__": "__fake__", "num_steps": 5, "save_every": 10, "step_seconds": 0.05},
         )
         with pytest.raises(HostBusyError, match="busy"):
             orch.start(req2)
@@ -141,7 +146,7 @@ def test_end_to_end_natural_completion(orch: Orchestrator) -> None:
         host_id="test-host",
         recipe_name="fake",
         dataset_id="fake/ds",
-        args={"num_steps": 10, "save_every": 5, "step_seconds": 0.05},
+        args={"__recipe__": "__fake__", "num_steps": 10, "save_every": 5, "step_seconds": 0.05},
     )
     run = orch.start(req)
     snap = _wait_until_state(orch, run.run_id, RunState.COMPLETED)
@@ -170,7 +175,7 @@ def test_stop_aborts_running_run(orch: Orchestrator) -> None:
         host_id="test-host",
         recipe_name="fake",
         dataset_id="fake/ds",
-        args={"num_steps": 1000, "save_every": 100, "step_seconds": 0.05},
+        args={"__recipe__": "__fake__", "num_steps": 1000, "save_every": 100, "step_seconds": 0.05},
     )
     run = orch.start(req)
     # Give the worker a moment to actually start its loop
@@ -190,7 +195,7 @@ def test_stop_idempotent_on_terminal(orch: Orchestrator) -> None:
         host_id="test-host",
         recipe_name="fake",
         dataset_id="fake/ds",
-        args={"num_steps": 3, "save_every": 5, "step_seconds": 0.05},
+        args={"__recipe__": "__fake__", "num_steps": 3, "save_every": 5, "step_seconds": 0.05},
     )
     run = orch.start(req)
     snap = _wait_until_state(orch, run.run_id, RunState.COMPLETED)
@@ -212,7 +217,7 @@ def test_poll_returns_progress_during_run(orch: Orchestrator) -> None:
         host_id="test-host",
         recipe_name="fake",
         dataset_id="fake/ds",
-        args={"num_steps": 200, "save_every": 50, "step_seconds": 0.05},
+        args={"__recipe__": "__fake__", "num_steps": 200, "save_every": 50, "step_seconds": 0.05},
     )
     run = orch.start(req)
     try:
@@ -240,7 +245,7 @@ def test_list_runs_includes_started_run(orch: Orchestrator) -> None:
         host_id="test-host",
         recipe_name="fake",
         dataset_id="fake/ds",
-        args={"num_steps": 3, "save_every": 5, "step_seconds": 0.05},
+        args={"__recipe__": "__fake__", "num_steps": 3, "save_every": 5, "step_seconds": 0.05},
     )
     run = orch.start(req)
     runs = orch.list_runs()
@@ -262,7 +267,7 @@ def test_list_runs_reconciles_completion_without_poll(host: TrainingHost, tmp_pa
         host_id="test-host",
         recipe_name="fake",
         dataset_id="fake/ds",
-        args={"num_steps": 3, "save_every": 5, "step_seconds": 0.05},
+        args={"__recipe__": "__fake__", "num_steps": 3, "save_every": 5, "step_seconds": 0.05},
     )
     run = orch.start(req)
     # Wait for the worker to actually exit (file-based: events.jsonl will have
@@ -289,6 +294,109 @@ def test_list_runs_reconciles_completion_without_poll(host: TrainingHost, tmp_pa
     )
 
 
+def test_orchestrator_appends_to_manifest_from_disk_real_recipe_layout(
+    host: TrainingHost, tmp_path: Path
+) -> None:
+    """When using the real (docker) recipe, lerobot-train doesn't write our
+    checkpoints.jsonl — the orchestrator does, by watching the bind-mounted
+    output dir for new step subdirs. Simulates that layout without invoking
+    docker.
+    """
+    import time as _t
+
+    from lerobot.gui.training_runs import Run, RunPaths, new_run_id
+
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="real-mode",
+        dataset_id="lerobot/pusht",
+        args={"policy.type": "act"},  # NOT __fake__ → docker recipe path
+        state=RunState.PENDING,
+        created_at=_t.time(),
+    )
+    run.session_id = 1  # fake PID
+    run.advance(RunState.RUNNING)
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+    # lerobot-train-shaped layout: <run>/output/checkpoints/000005/pretrained_model/
+    for step in (5, 10):
+        d = paths.root / "output" / "checkpoints" / f"{step:06d}" / "pretrained_model"
+        d.mkdir(parents=True)
+        (d / "model.safetensors").write_bytes(f"fake-{step}".encode())
+    snap = orch.poll(run.run_id)
+    assert len(snap.checkpoints) == 2
+    assert [c.step for c in snap.checkpoints] == [5, 10]
+    assert all(c.path.endswith("model.safetensors") for c in snap.checkpoints)
+    assert all(c.sha256 for c in snap.checkpoints)
+
+
+def test_orchestrator_completed_on_exit_with_checkpoints(host: TrainingHost, tmp_path: Path) -> None:
+    """Real (docker) recipe: process exits cleanly, at least one checkpoint
+    on disk → orchestrator writes completed_naturally and advances to
+    COMPLETED."""
+    import time as _t
+
+    from lerobot.gui.training_runs import Run, RunPaths, new_run_id
+
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="real",
+        dataset_id="lerobot/pusht",
+        args={"policy.type": "act"},
+        state=RunState.PENDING,
+        created_at=_t.time(),
+    )
+    run.session_id = 1  # not alive
+    run.advance(RunState.RUNNING)
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+    d = paths.root / "output" / "checkpoints" / "000005" / "pretrained_model"
+    d.mkdir(parents=True)
+    (d / "model.safetensors").write_bytes(b"x")
+    snap = orch.poll(run.run_id)
+    assert snap.run.state == RunState.COMPLETED
+    assert "completed_naturally" in paths.events_jsonl.read_text()
+
+
+def test_orchestrator_crashed_on_exit_without_checkpoints(host: TrainingHost, tmp_path: Path) -> None:
+    """Real recipe: process exits but no checkpoints → orchestrator writes
+    crashed and advances to FAILED."""
+    import time as _t
+
+    from lerobot.gui.training_runs import Run, RunPaths, new_run_id
+
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="real",
+        dataset_id="lerobot/pusht",
+        args={"policy.type": "act"},
+        state=RunState.PENDING,
+        created_at=_t.time(),
+    )
+    run.session_id = 1  # not alive
+    run.advance(RunState.RUNNING)
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+    snap = orch.poll(run.run_id)
+    assert snap.run.state == RunState.FAILED
+    assert "crashed" in paths.events_jsonl.read_text()
+
+
 def test_list_runs_reconciles_abort_without_poll(host: TrainingHost, tmp_path: Path) -> None:
     """Same regression for the aborted_by_user terminal event."""
     hr = HostRegistry(hosts=[host])
@@ -298,7 +406,7 @@ def test_list_runs_reconciles_abort_without_poll(host: TrainingHost, tmp_path: P
         host_id="test-host",
         recipe_name="fake",
         dataset_id="fake/ds",
-        args={"num_steps": 1000, "save_every": 100, "step_seconds": 0.05},
+        args={"__recipe__": "__fake__", "num_steps": 1000, "save_every": 100, "step_seconds": 0.05},
     )
     run = orch.start(req)
     # Let the worker actually start its loop, then stop

@@ -27,14 +27,19 @@ DESIGN.md § Concurrency:
 
 from __future__ import annotations
 
+import hashlib
 import json
-import sys
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from lerobot.gui.training_hosts import HostRegistry, TrainingHost
+from lerobot.gui.training_recipes import (
+    build_lerobot_train_command,
+    output_subdir_in_run,
+)
 from lerobot.gui.training_runs import (
     TERMINAL_STATES,
     Run,
@@ -278,20 +283,28 @@ class Orchestrator:
         return client.launch(command=command, env=env, workdir=paths.root, log_path=paths.stderr_log)
 
     def _build_command(self, run: Run, paths: RunPaths) -> list[str]:
-        """Compose the runner CLI from a Run's args. Keeps the runner's CLI
-        contract — args dict forwarded as ``--key value`` (kebab-case)."""
-        cmd = [sys.executable, "-m", self._runner_module, "--run-dir", str(paths.root)]
-        for k, v in run.args.items():
-            flag = "--" + k.replace("_", "-")
-            cmd.extend([flag, str(v)])
+        """Compose the worker command via the recipe builder.
+
+        Returns the full argv: for real training, that's the
+        ``docker run … training-image lerobot-train …`` argv; for the fake
+        recipe (``__recipe__=__fake__``), the legacy
+        ``python -m lerobot.gui.training_runner …`` argv.
+        """
+        cmd, _ = build_lerobot_train_command(run, paths)
         return cmd
 
     def _build_env(self, run: Run, paths: RunPaths) -> dict[str, str]:
-        """Env vars passed to the worker. Minimal in v1; HF_TOKEN goes here
-        once we wire HF auth (deferred to v2 per DESIGN.md)."""
+        """Env vars passed to the worker subprocess.
+
+        Recipe-builder env (e.g., HF_HUB_OFFLINE for future scratch-staging)
+        plus a few orchestrator-side breadcrumbs the existing fake runner
+        consults.
+        """
+        _, recipe_env = build_lerobot_train_command(run, paths)
         return {
             "LEROBOT_RUN_ID": run.run_id,
             "LEROBOT_RUN_DIR": str(paths.root),
+            **recipe_env,
         }
 
     def _reconcile_from_events_only(self, run: Run, paths: RunPaths) -> bool:
@@ -319,10 +332,21 @@ class Orchestrator:
         """Update ``run.state`` based on (a) what the worker wrote to
         events.jsonl and (b) whether the process is still alive.
 
-        DESIGN.md § Health "Completion signal" — we read the worker's final
-        events.jsonl line as canonical; falling back to "process gone" only
-        as a crash detection.
+        DESIGN.md § Health "Completion signal" — for the fake-training
+        recipe, the worker writes the terminal event itself. For the real
+        (docker) recipe, the orchestrator writes the terminal event when it
+        detects the process has exited (since lerobot-train doesn't write
+        our events.jsonl format).
+
+        For both recipes, the orchestrator also incrementally appends to
+        ``checkpoints.jsonl`` whenever it sees a new checkpoint directory
+        on disk (via the bind-mounted output dir for docker mode, or in
+        the worker's local dir for the fake mode).
         """
+        # New checkpoints discovered on disk → appended to manifest. Cheap
+        # filesystem scan, idempotent on re-poll.
+        self._sync_checkpoints_manifest(run, paths)
+
         terminal_event = self._read_terminal_event(paths.events_jsonl)
         alive = client.is_alive(run.session_id) if run.session_id is not None else False
 
@@ -339,18 +363,91 @@ class Orchestrator:
                 run.advance(RunState.FAILED)
                 self._runs.save(run)
         elif not alive:
-            # Process gone, no terminal event — treat as crash.
-            run.error = "process exited without writing a completion event"
-            run.advance(RunState.FAILED)
+            # Process gone, no terminal event. For the real-training (docker)
+            # recipe this is the EXPECTED path — lerobot-train doesn't write
+            # our events.jsonl. For the fake recipe, this is a crash.
+            self._write_terminal_event_from_exit(run, paths)
+
+    def _write_terminal_event_from_exit(self, run: Run, paths: RunPaths) -> None:
+        """Process exited without writing a terminal event. Decide whether
+        to call it ``completed_naturally`` or ``crashed`` based on artifacts.
+
+        Heuristic: if at least one checkpoint dir was written, treat as
+        completed; otherwise crashed. This is the right call for the docker
+        recipe (lerobot-train only saves checkpoints on successful step
+        boundaries; if it crashed early, no checkpoints exist).
+
+        Aborted runs (state==COMPLETING after a Stop) → ``aborted_by_user``.
+        """
+        if run.state == RunState.COMPLETING:
+            append_event(paths.events_jsonl, "aborted_by_user")
+            run.advance(RunState.ABORTED)
             self._runs.save(run)
-            append_event(
-                paths.events_jsonl,
-                "crashed",
-                error=run.error,
-                final_step=self._read_progress(paths.progress_json).get("step", 0)
-                if self._read_progress(paths.progress_json)
-                else 0,
-            )
+            return
+
+        ckpt_count = sum(1 for _ in self._iter_checkpoint_dirs(run, paths))
+        progress = self._read_progress(paths.progress_json) or {}
+        final_step = progress.get("step", 0) if isinstance(progress, dict) else 0
+
+        if ckpt_count > 0:
+            append_event(paths.events_jsonl, "completed_naturally", final_step=final_step)
+            run.advance(RunState.COMPLETED)
+        else:
+            run.error = "process exited without writing a checkpoint"
+            append_event(paths.events_jsonl, "crashed", error=run.error, final_step=final_step)
+            run.advance(RunState.FAILED)
+        self._runs.save(run)
+
+    def _sync_checkpoints_manifest(self, run: Run, paths: RunPaths) -> None:
+        """Append newly-discovered checkpoint dirs to ``checkpoints.jsonl``.
+
+        Idempotent — skips dirs already in the manifest. Called on every
+        poll, so the manifest catches up incrementally during a long run.
+        """
+        already_seen_steps = {e.step for e in self._read_manifest(paths.checkpoints_jsonl)}
+        for ckpt_dir, step in self._iter_checkpoint_dirs(run, paths):
+            if step in already_seen_steps:
+                continue
+            model_file = ckpt_dir / "pretrained_model" / "model.safetensors"
+            if not model_file.exists():
+                # Real lerobot-train layout; fake-runner uses checkpoints/<step>/model.safetensors
+                # at the top of the step dir. Fall back to direct model file.
+                candidates = list(ckpt_dir.glob("**/model.safetensors"))
+                if not candidates:
+                    continue
+                model_file = candidates[0]
+            try:
+                digest = _sha256_of(model_file)
+            except OSError:
+                continue
+            rel_path = str(model_file.relative_to(paths.root))
+            line = json.dumps({"step": step, "path": rel_path, "sha256": digest, "ts": time.time()})
+            paths.checkpoints_jsonl.parent.mkdir(parents=True, exist_ok=True)
+            with paths.checkpoints_jsonl.open("a") as f:
+                f.write(line + "\n")
+            already_seen_steps.add(step)
+
+    @staticmethod
+    def _iter_checkpoint_dirs(run: Run, paths: RunPaths):
+        """Yield ``(checkpoint_dir, step_number)`` pairs found on disk.
+
+        Looks in the right place for the recipe:
+
+        - Real (docker): ``paths.root / "output" / "checkpoints" / <NNNNNN>/``
+        - Fake:          ``paths.root / "checkpoints" / <NNNNNN>/``
+        """
+        subdir = output_subdir_in_run(run)
+        ckpts_base = paths.root / subdir / "checkpoints" if subdir else paths.root / "checkpoints"
+        if not ckpts_base.is_dir():
+            return
+        for child in sorted(ckpts_base.iterdir()):
+            if not child.is_dir():
+                continue
+            # Parse step number from the dir name (e.g., "000005" → 5)
+            m = re.fullmatch(r"0*(\d+)", child.name)
+            if not m:
+                continue
+            yield child, int(m.group(1))
 
     @staticmethod
     def _read_progress(progress_path: Path) -> dict[str, Any] | None:
@@ -416,3 +513,18 @@ class Orchestrator:
             if evt.get("type") in terminal:
                 return evt["type"]
         return None
+
+
+# ── Module helpers ────────────────────────────────────────────────────────────
+
+
+def _sha256_of(path: Path, chunk: int = 1 << 20) -> str:
+    """Streaming sha256 hex digest of a file."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            block = f.read(chunk)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()

@@ -58,7 +58,7 @@ def _start_run_payload(**over) -> dict:
         "host_id": "test-host",
         "recipe_name": "fake",
         "dataset_id": "fake/ds",
-        "args": {"num_steps": 5, "save_every": 10, "step_seconds": 0.05},
+        "args": {"__recipe__": "__fake__", "num_steps": 5, "save_every": 10, "step_seconds": 0.05},
     }
     base.update(over)
     return base
@@ -135,7 +135,9 @@ def test_start_run_validation_400(client: TestClient) -> None:
 def test_start_run_host_busy_409(client: TestClient) -> None:
     """Two start requests targeting the same host while the first is running →
     second gets 409."""
-    long_payload = _start_run_payload(args={"num_steps": 1000, "save_every": 100, "step_seconds": 0.05})
+    long_payload = _start_run_payload(
+        args={"__recipe__": "__fake__", "num_steps": 1000, "save_every": 100, "step_seconds": 0.05}
+    )
     r1 = client.post("/api/training/runs", json=long_payload)
     assert r1.status_code == 201
     try:
@@ -180,7 +182,9 @@ def test_get_run_snapshot_after_completion(client: TestClient) -> None:
 def test_get_run_snapshot_with_checkpoints(client: TestClient) -> None:
     r = client.post(
         "/api/training/runs",
-        json=_start_run_payload(args={"num_steps": 10, "save_every": 5, "step_seconds": 0.05}),
+        json=_start_run_payload(
+            args={"__recipe__": "__fake__", "num_steps": 10, "save_every": 5, "step_seconds": 0.05}
+        ),
     ).json()
     body = _wait_until_state(client, r["run_id"], "completed")
     assert len(body["checkpoints"]) == 2
@@ -200,7 +204,9 @@ def test_stop_run_404(client: TestClient) -> None:
 def test_stop_run_aborts(client: TestClient) -> None:
     r = client.post(
         "/api/training/runs",
-        json=_start_run_payload(args={"num_steps": 1000, "save_every": 100, "step_seconds": 0.05}),
+        json=_start_run_payload(
+            args={"__recipe__": "__fake__", "num_steps": 1000, "save_every": 100, "step_seconds": 0.05}
+        ),
     ).json()
     time.sleep(0.3)
     resp = client.post(f"/api/training/runs/{r['run_id']}/stop")
