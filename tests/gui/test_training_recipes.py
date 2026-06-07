@@ -27,9 +27,11 @@ from lerobot.gui.training_recipes import (
     CONTAINER_RUNS_MOUNT,
     DEFAULT_IMAGE,
     FAKE_RECIPE_MARKER,
+    HVLA_FLOW_S1_RECIPE,
     build_lerobot_train_command,
     docker_available,
     is_fake_recipe,
+    is_hvla_flow_s1_recipe,
     output_subdir_in_run,
 )
 from lerobot.gui.training_runs import Run, RunPaths, RunState, new_run_id
@@ -203,3 +205,135 @@ def test_docker_available_truthy_when_docker_on_path() -> None:
 def test_docker_available_false_without_docker(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("lerobot.gui.training_recipes.shutil.which", lambda _: None)
     assert docker_available() is False
+
+
+# ── HVLA flow_matching S1 recipe ──────────────────────────────────────────────
+
+
+def _hvla_run(args: dict | None = None) -> Run:
+    base = {"__recipe__": HVLA_FLOW_S1_RECIPE, "dataset_repo_id": "thewisp/some_data"}
+    if args:
+        base.update(args)
+    return _make_run(base)
+
+
+def test_is_hvla_recipe_detects_marker() -> None:
+    assert is_hvla_flow_s1_recipe(_hvla_run())
+    assert not is_hvla_flow_s1_recipe(_make_run({"policy.type": "act"}))
+    assert not is_hvla_flow_s1_recipe(_make_run({"__recipe__": FAKE_RECIPE_MARKER}))
+
+
+def test_hvla_output_subdir_is_output() -> None:
+    """Both real recipes (lerobot-train, HVLA) write into /runs/output so the
+    Models tab scanner finds checkpoints in the same place."""
+    assert output_subdir_in_run(_hvla_run()) == CONTAINER_OUTPUT_SUBDIR
+
+
+def test_hvla_recipe_entrypoint_and_dashed_cli(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("h1", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _hvla_run({"steps": 200, "batch_size": 8, "chunk_size": 50})
+    cmd = _docker_cmd(run, paths)
+    # Entrypoint module
+    assert "python" in cmd
+    assert "lerobot.policies.hvla.s1.flow_matching.train" in cmd
+    # CLI uses --key VALUE (space-separated), NOT --key=value
+    assert "--dataset-repo-id" in cmd
+    assert "thewisp/some_data" in cmd
+    # Verify positional ordering: flag immediately followed by its value
+    for flag, expected in [
+        ("--dataset-repo-id", "thewisp/some_data"),
+        ("--steps", "200"),
+        ("--batch-size", "8"),
+        ("--chunk-size", "50"),
+    ]:
+        idx = cmd.index(flag)
+        assert cmd[idx + 1] == expected, f"{flag} expected to be followed by {expected}"
+
+
+def test_hvla_recipe_forces_output_dir_into_bind_mount(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("h1", runs_dir=tmp_path)
+    paths.ensure_exists()
+    forced = f"{CONTAINER_RUNS_MOUNT}/{CONTAINER_OUTPUT_SUBDIR}"
+    # User didn't set output_dir → we force one in
+    cmd = _docker_cmd(_hvla_run({"steps": 5}), paths)
+    idx = cmd.index("--output-dir")
+    assert cmd[idx + 1] == forced
+    # User did set output_dir → we silently override (correctness invariant)
+    cmd2 = _docker_cmd(_hvla_run({"steps": 5, "output_dir": "/somewhere/else"}), paths)
+    indices = [i for i, t in enumerate(cmd2) if t == "--output-dir"]
+    assert len(indices) == 1, "should not emit --output-dir twice"
+    assert cmd2[indices[0] + 1] == forced
+    assert "/somewhere/else" not in cmd2
+
+
+def test_hvla_recipe_omits_s2_latent_path_by_default(tmp_path: Path) -> None:
+    """S1-without-S2 is the prototype's scope; we always strip --s2-latent-path."""
+    paths = RunPaths.for_run("h1", runs_dir=tmp_path)
+    paths.ensure_exists()
+    # No s2_latent_path key → no flag
+    cmd = _docker_cmd(_hvla_run({"steps": 5}), paths)
+    assert "--s2-latent-path" not in cmd
+    # User set s2_latent_path → we silently strip (S2 workflow not wired yet)
+    cmd2 = _docker_cmd(_hvla_run({"steps": 5, "s2_latent_path": "/some/path.pt"}), paths)
+    assert "--s2-latent-path" not in cmd2
+    assert "/some/path.pt" not in cmd2
+
+
+def test_hvla_recipe_drops_unknown_keys(tmp_path: Path) -> None:
+    """HVLA argparse rejects unknown flags. The recipe filter drops anything
+    not in HVLA_FLOW_S1_FIELD_TO_FLAG before composing the argv (in particular,
+    lerobot-train-style dotted keys like policy.type should never reach
+    HVLA's CLI)."""
+    paths = RunPaths.for_run("h1", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _hvla_run({"policy.type": "act", "wandb.enable": False, "steps": 5})
+    cmd = _docker_cmd(run, paths)
+    assert "--policy.type" not in cmd
+    assert "--policy-type" not in cmd
+    assert "--wandb.enable" not in cmd
+    assert "act" not in cmd
+
+
+def test_hvla_recipe_does_not_emit_lerobot_train_safety_flags(tmp_path: Path) -> None:
+    """The forced flags from _FORCED_FLAGS (push_to_hub, repo_id, wandb.enable,
+    save_checkpoint) only apply to lerobot-train. HVLA's argparse would error
+    on them."""
+    paths = RunPaths.for_run("h1", runs_dir=tmp_path)
+    paths.ensure_exists()
+    cmd = _docker_cmd(_hvla_run({"steps": 5}), paths)
+    forbidden = [
+        "--policy.push_to_hub=false",
+        "--policy.repo_id",
+        "--wandb.enable=false",
+        "--save_checkpoint=true",
+    ]
+    for tok in forbidden:
+        assert tok not in cmd, f"unexpected lerobot-train flag in HVLA argv: {tok}"
+
+
+def test_hvla_recipe_bind_mounts(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("h1", runs_dir=tmp_path)
+    paths.ensure_exists()
+    cmd = _docker_cmd(_hvla_run({"steps": 5}), paths)
+    hf_host = os.path.expanduser("~/.cache/huggingface")
+    assert f"{hf_host}:{CONTAINER_HF_CACHE}" in cmd
+    assert f"{paths.root}:{CONTAINER_RUNS_MOUNT}" in cmd
+
+
+def test_hvla_recipe_user_and_gpu_passthrough(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("h1", runs_dir=tmp_path)
+    paths.ensure_exists()
+    cmd = _docker_cmd(_hvla_run({"steps": 5}), paths)
+    assert "--gpus" in cmd and "all" in cmd
+    user_idx = cmd.index("--user")
+    assert cmd[user_idx + 1] == f"{os.getuid()}:{os.getgid()}"
+
+
+def test_hvla_recipe_image_override(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("h1", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _hvla_run({"steps": 5, "__image__": "myreg/my-custom:dev"})
+    cmd = _docker_cmd(run, paths)
+    assert "myreg/my-custom:dev" in cmd
+    assert DEFAULT_IMAGE not in cmd

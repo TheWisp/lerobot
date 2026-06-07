@@ -280,9 +280,14 @@ async function trainingShowStartForm() {
 // Policy-specific hyperparameter forms. Defaults copied from lerobot upstream:
 //   ACT:       src/lerobot/policies/act/configuration_act.py
 //   Diffusion: src/lerobot/policies/diffusion/configuration_diffusion.py
-// Revisit when adding a third policy (becomes worth introspecting the
+//   HVLA S1:   src/lerobot/policies/hvla/s1/flow_matching/train.py
+// Revisit when adding a fourth policy (becomes worth introspecting the
 // dataclass via the API rather than hand-writing — see DESIGN.md
 // Future enhancements: policy-config introspection).
+//
+// `recipe` (optional): drives the backend recipe builder. Default is
+// lerobot-train (dotted-key draccus CLI); HVLA uses its own argparse
+// script (dashed-key snake_case CLI, no `policy.type` field).
 const POLICY_FORMS = {
   act: {
     label: "ACT (Action Chunking Transformer)",
@@ -303,6 +308,17 @@ const POLICY_FORMS = {
       { key: "policy.n_action_steps", label: "Action steps", type: "int", default: 8 },
       { key: "policy.num_train_timesteps", label: "Train timesteps", type: "int", default: 100 },
       { key: "policy.num_inference_steps", label: "Inference steps", type: "int", default: 100 },
+    ],
+  },
+  hvla_flow_s1: {
+    label: "HVLA Flow Matching S1 (no S2)",
+    recipe: "hvla_flow_s1",
+    fields: [
+      { key: "chunk_size", label: "Chunk size", type: "int", default: 50 },
+      { key: "num_inference_steps", label: "Inference steps", type: "int", default: 15 },
+      { key: "hidden_dim", label: "Hidden dim", type: "int", default: 768 },
+      { key: "num_decoder_layers", label: "Decoder layers", type: "int", default: 6 },
+      { key: "num_workers", label: "Data workers", type: "int", default: 4 },
     ],
   },
 };
@@ -445,21 +461,26 @@ async function trainingSubmitStart(ev) {
   const datasetId = fd.get("dataset_id");
   const policyType = fd.get("policy_type");
 
-  // Build the dotted-key args dict the recipe builder expects.
-  // - policy.type drives policy selection
-  // - dataset.repo_id is what lerobot-train uses to find the dataset
-  // - policy.<field> + training.<field> entries flow through verbatim
-  const args = {
-    "policy.type": policyType,
-    "dataset.repo_id": datasetId,
-  };
+  // Build the args dict the recipe builder expects. Shape depends on recipe:
+  //   - lerobot-train (default): dotted-key draccus form
+  //     (policy.type / dataset.repo_id / policy.* / training fields)
+  //   - HVLA flow_s1 (recipe marker): flat snake_case form
+  //     (dataset_repo_id / chunk_size / steps / batch_size / ...)
+  //     plus a __recipe__ marker that routes to _build_hvla_flow_s1_command
+  //     on the backend.
+  const policyEntry = POLICY_FORMS[policyType];
+  const recipe = policyEntry?.recipe; // string or undefined
+  const args = recipe
+    ? { __recipe__: recipe, dataset_repo_id: datasetId }
+    : { "policy.type": policyType, "dataset.repo_id": datasetId };
   // Policy-specific fields
-  const policyFields = POLICY_FORMS[policyType]?.fields || [];
+  const policyFields = policyEntry?.fields || [];
   for (const f of policyFields) {
     const v = formValue(fd, form, f);
     if (v !== undefined) args[f.key] = v;
   }
-  // Common training fields
+  // Common training fields (snake_case keys — match HVLA flag names
+  // verbatim; lerobot-train accepts them as top-level dataclass fields).
   for (const f of TRAINING_FIELDS) {
     const v = formValue(fd, form, f);
     if (v !== undefined) args[f.key] = v;

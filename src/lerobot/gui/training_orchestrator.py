@@ -433,7 +433,8 @@ class Orchestrator:
 
         Looks in the right place for the recipe:
 
-        - Real (docker): ``paths.root / "output" / "checkpoints" / <NNNNNN>/``
+        - lerobot-train: ``paths.root / "output" / "checkpoints" / <NNNNNN>/``
+        - HVLA flow_s1:  ``paths.root / "output" / "checkpoints" / checkpoint-<N>/``
         - Fake:          ``paths.root / "checkpoints" / <NNNNNN>/``
         """
         subdir = output_subdir_in_run(run)
@@ -443,8 +444,10 @@ class Orchestrator:
         for child in sorted(ckpts_base.iterdir()):
             if not child.is_dir():
                 continue
-            # Parse step number from the dir name (e.g., "000005" → 5)
-            m = re.fullmatch(r"0*(\d+)", child.name)
+            # Parse step number from the dir name. Two layouts supported:
+            #   "000005"        → lerobot-train (zero-padded)
+            #   "checkpoint-5"  → HVLA flow_matching trainer
+            m = re.fullmatch(r"(?:checkpoint-)?0*(\d+)", child.name)
             if not m:
                 continue
             yield child, int(m.group(1))

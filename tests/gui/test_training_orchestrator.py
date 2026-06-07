@@ -335,6 +335,50 @@ def test_orchestrator_appends_to_manifest_from_disk_real_recipe_layout(
     assert all(c.sha256 for c in snap.checkpoints)
 
 
+def test_orchestrator_appends_to_manifest_from_disk_hvla_recipe_layout(
+    host: TrainingHost, tmp_path: Path
+) -> None:
+    """HVLA flow_matching trainer writes checkpoints as
+    <run>/output/checkpoints/checkpoint-<step>/ — the scanner regex must
+    pick up that pattern in addition to the lerobot-train zero-padded form.
+    """
+    import time as _t
+
+    from lerobot.gui.training_recipes import HVLA_FLOW_S1_RECIPE
+    from lerobot.gui.training_runs import Run, RunPaths, new_run_id
+
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="hvla-test",
+        dataset_id="thewisp/some_data",
+        # HVLA recipe marker → output_subdir_in_run still returns "output",
+        # so checkpoints land in <run>/output/checkpoints/ — same place the
+        # scanner looks for lerobot-train.
+        args={"__recipe__": HVLA_FLOW_S1_RECIPE, "dataset_repo_id": "thewisp/some_data"},
+        state=RunState.PENDING,
+        created_at=_t.time(),
+    )
+    run.session_id = 1  # fake PID (treated as not alive)
+    run.advance(RunState.RUNNING)
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+    # HVLA layout: <run>/output/checkpoints/checkpoint-<step>/pretrained_model/
+    for step in (100, 500):
+        d = paths.root / "output" / "checkpoints" / f"checkpoint-{step}" / "pretrained_model"
+        d.mkdir(parents=True)
+        (d / "model.safetensors").write_bytes(f"fake-{step}".encode())
+    snap = orch.poll(run.run_id)
+    assert len(snap.checkpoints) == 2
+    assert [c.step for c in snap.checkpoints] == [100, 500]
+    assert all(c.path.endswith("model.safetensors") for c in snap.checkpoints)
+    assert all(c.sha256 for c in snap.checkpoints)
+
+
 def test_orchestrator_completed_on_exit_with_checkpoints(host: TrainingHost, tmp_path: Path) -> None:
     """Real (docker) recipe: process exits cleanly, at least one checkpoint
     on disk → orchestrator writes completed_naturally and advances to

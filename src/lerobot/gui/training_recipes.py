@@ -63,6 +63,39 @@ DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto
 # Used by orchestrator unit tests so they don't depend on docker.
 FAKE_RECIPE_MARKER = "__fake__"
 
+# Marker that selects the HVLA Flow Matching S1 training script instead of
+# lerobot-train. HVLA isn't registered with lerobot-train's draccus policy
+# registry — it has its own argparse-based train script with a different CLI
+# shape (dashed --key value rather than dotted --key=value). Set via
+# Run.args["__recipe__"]; the form does this when "HVLA Flow Matching S1"
+# is picked.
+HVLA_FLOW_S1_RECIPE = "hvla_flow_s1"
+
+# Inside-container entrypoint for the HVLA Flow Matching S1 trainer.
+HVLA_FLOW_S1_ENTRYPOINT = ["python", "-u", "-m", "lerobot.policies.hvla.s1.flow_matching.train"]
+
+# HVLA argparse uses dashed-kebab CLI flag names. Map from the form's
+# field key → CLI flag name. (Form keys are clean snake_case so they can
+# be re-used by other recipes; per-recipe translation lives here.)
+HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
+    "dataset_repo_id": "--dataset-repo-id",
+    "output_dir": "--output-dir",
+    "steps": "--steps",
+    "batch_size": "--batch-size",
+    "save_freq": "--save-freq",
+    "num_workers": "--num-workers",
+    "device": "--device",
+    "chunk_size": "--chunk-size",
+    "num_inference_steps": "--num-inference-steps",
+    "rtc_max_delay": "--rtc-max-delay",
+    "rtc_drop_prob": "--rtc-drop-prob",
+    "max_delay": "--max-delay",
+    "resize_images": "--resize-images",
+    "hidden_dim": "--hidden-dim",
+    "num_decoder_layers": "--num-decoder-layers",
+    "s2_latent_path": "--s2-latent-path",  # OMIT to train without S2
+}
+
 # Inside-container paths. The bind-mounts in the docker command line map
 # host paths to these.
 CONTAINER_RUNS_MOUNT = "/runs"
@@ -75,14 +108,24 @@ def is_fake_recipe(run: Run) -> bool:
     return run.args.get("__recipe__") == FAKE_RECIPE_MARKER
 
 
+def is_hvla_flow_s1_recipe(run: Run) -> bool:
+    """Whether this Run uses the HVLA Flow Matching S1 training script
+    instead of lerobot-train."""
+    return run.args.get("__recipe__") == HVLA_FLOW_S1_RECIPE
+
+
 def output_subdir_in_run(run: Run) -> str:
     """Per-run output subdir name relative to the run's root.
 
-    The orchestrator uses this to know where lerobot-train wrote checkpoints
+    The orchestrator uses this to know where the worker wrote checkpoints
     (host-side, via the bind-mount): ``paths.root / output_subdir_in_run(run)``.
 
     Fake recipe writes to ``paths.root`` directly (no subdir) for backwards
     compat with the existing unit tests.
+
+    Real (lerobot-train OR HVLA flow_matching) recipes write to
+    ``paths.root / output / ...`` — both honor ``--output-dir /runs/output``
+    (HVLA uses dashed form, lerobot-train dotted; same result on disk).
     """
     return "" if is_fake_recipe(run) else CONTAINER_OUTPUT_SUBDIR
 
@@ -103,6 +146,8 @@ def build_lerobot_train_command(run: Run, paths: RunPaths) -> tuple[list[str], d
     """
     if is_fake_recipe(run):
         return _build_fake_command(run, paths)
+    if is_hvla_flow_s1_recipe(run):
+        return _build_hvla_flow_s1_command(run, paths)
     return _build_docker_command(run, paths)
 
 
@@ -198,3 +243,81 @@ def _fmt_arg(v: Any) -> str:
     if isinstance(v, (list, tuple)):
         return "[" + ",".join(_fmt_arg(x) for x in v) + "]"
     return str(v)
+
+
+# ── HVLA Flow Matching S1 recipe ──────────────────────────────────────────────
+
+
+def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[str, str]]:
+    """Compose a `docker run … python -m lerobot.policies.hvla.s1.flow_matching.train …`
+    argv for the HVLA Flow Matching S1 training script.
+
+    Differs from the lerobot-train recipe in three ways:
+      1. Different entrypoint inside the container.
+      2. Dashed-kebab argparse CLI (--key value, space-separated), not
+         draccus's --key=value dotted-dataclass form.
+      3. None of lerobot-train's safety flags (--policy.push_to_hub etc.)
+         apply — HVLA's argparse rejects them.
+
+    S2 conditioning: HVLA trains WITHOUT S2 iff ``--s2-latent-path`` is
+    omitted from the CLI. The form leaves it out by default; user can
+    opt in via Run.args["s2_latent_path"]="..." (NOT supported via the
+    form today; would need an upstream extension).
+    """
+    image = run.args.get("__image__") or DEFAULT_IMAGE
+    hf_cache_host = os.path.expanduser("~/.cache/huggingface")
+
+    # Translate the form's flat snake_case args dict → HVLA's dashed CLI flags.
+    train_args: list[str] = []
+    for k, v in run.args.items():
+        if k.startswith("__"):
+            continue
+        flag = HVLA_FLOW_S1_FIELD_TO_FLAG.get(k)
+        if flag is None:
+            # Skip unknown keys — HVLA argparse would error on them. Logged
+            # at the orchestrator level if we ever want to surface a warning.
+            continue
+        # Bool / None / list handling: HVLA argparse expects "true"/"false"
+        # for bools (same as draccus); list args aren't part of the schema.
+        if v is None:
+            continue
+        train_args.extend([flag, _fmt_arg(v)])
+
+    # Forced: output-dir always lives inside the bind-mount (host needs to
+    # read checkpoints back), and we always omit --s2-latent-path so the
+    # S1-without-S2 path is taken — that's the prototype's scope per
+    # DESIGN.md (S2 latents extraction is a separate workflow not wired
+    # to the GUI yet).
+    forced_output_dir = f"{CONTAINER_RUNS_MOUNT}/{CONTAINER_OUTPUT_SUBDIR}"
+    if "--output-dir" not in train_args:
+        train_args.extend(["--output-dir", forced_output_dir])
+    else:
+        # User-provided output-dir — refuse to honor it; we MUST control
+        # the path so checkpoints land where the host's manifest scanner
+        # looks. Replace silently.
+        idx = train_args.index("--output-dir")
+        train_args[idx + 1] = forced_output_dir
+    # Strip any --s2-latent-path the user shoved in via meta marker — until
+    # the GUI properly supports the S2 conditioning workflow, we always
+    # train S1-only.
+    if "--s2-latent-path" in train_args:
+        idx = train_args.index("--s2-latent-path")
+        del train_args[idx : idx + 2]
+
+    docker_argv = [
+        "docker",
+        "run",
+        "--rm",
+        "--gpus",
+        "all",
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "-v",
+        f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
+        "-v",
+        f"{paths.root}:{CONTAINER_RUNS_MOUNT}",
+        image,
+        *HVLA_FLOW_S1_ENTRYPOINT,
+        *train_args,
+    ]
+    return docker_argv, {}
