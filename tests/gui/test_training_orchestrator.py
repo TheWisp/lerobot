@@ -246,3 +246,73 @@ def test_list_runs_includes_started_run(orch: Orchestrator) -> None:
     runs = orch.list_runs()
     assert any(r.run_id == run.run_id for r in runs)
     _wait_until_state(orch, run.run_id, RunState.COMPLETED)
+
+
+def test_list_runs_reconciles_completion_without_poll(host: TrainingHost, tmp_path: Path) -> None:
+    """Regression: list_runs() must reconcile non-terminal runs from
+    events.jsonl so the sidebar reflects completion even for runs the user
+    hasn't clicked on. Previously the list endpoint only read run.json from
+    disk; if no one called poll(run_id), state stayed "running" forever
+    after the worker exited.
+    """
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    req = StartRequest(
+        host_id="test-host",
+        recipe_name="fake",
+        dataset_id="fake/ds",
+        args={"num_steps": 3, "save_every": 5, "step_seconds": 0.05},
+    )
+    run = orch.start(req)
+    # Wait for the worker to actually exit (file-based: events.jsonl will have
+    # the terminal event). Without calling orch.poll(), the in-memory state
+    # is still RUNNING.
+    deadline = time.monotonic() + 30.0
+    paths = (tmp_path / "runs" / run.run_id).resolve()
+    events_path = paths / "events.jsonl"
+    while time.monotonic() < deadline:
+        if events_path.exists():
+            content = events_path.read_text()
+            if "completed_naturally" in content or "crashed" in content:
+                break
+        time.sleep(0.05)
+    assert "completed_naturally" in events_path.read_text()
+
+    # The bug being fixed: previously list_runs would have returned RUNNING
+    # because it only read run.json (no reconciliation). With the fix, the
+    # cheap events-only reconcile runs inline and the state lands at COMPLETED.
+    runs = orch.list_runs()
+    me = next(r for r in runs if r.run_id == run.run_id)
+    assert me.state == RunState.COMPLETED, (
+        f"list_runs() should reconcile non-terminal runs from events.jsonl; got {me.state.value}"
+    )
+
+
+def test_list_runs_reconciles_abort_without_poll(host: TrainingHost, tmp_path: Path) -> None:
+    """Same regression for the aborted_by_user terminal event."""
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    req = StartRequest(
+        host_id="test-host",
+        recipe_name="fake",
+        dataset_id="fake/ds",
+        args={"num_steps": 1000, "save_every": 100, "step_seconds": 0.05},
+    )
+    run = orch.start(req)
+    # Let the worker actually start its loop, then stop
+    time.sleep(0.3)
+    orch.stop(run.run_id)
+    # Wait for the worker to write its aborted_by_user event
+    events_path = tmp_path / "runs" / run.run_id / "events.jsonl"
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if events_path.exists() and "aborted_by_user" in events_path.read_text():
+            break
+        time.sleep(0.05)
+    assert "aborted_by_user" in events_path.read_text()
+    # list_runs should now reconcile COMPLETING → ABORTED
+    runs = orch.list_runs()
+    me = next(r for r in runs if r.run_id == run.run_id)
+    assert me.state == RunState.ABORTED

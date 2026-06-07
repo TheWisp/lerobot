@@ -247,7 +247,22 @@ class Orchestrator:
         return run
 
     def list_runs(self) -> list[Run]:
-        return self._runs.list_all()
+        """List all runs. Cheaply reconciles each non-terminal run from its
+        ``events.jsonl`` so the list view shows up-to-date state even for
+        runs the user hasn't clicked on (no transport calls — just a file
+        read per non-terminal run).
+
+        Full reconciliation including the process-liveness probe still lives
+        in :meth:`poll` for the selected run.
+        """
+        runs = self._runs.list_all()
+        for run in runs:
+            if run.state in TERMINAL_STATES:
+                continue
+            paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
+            if self._reconcile_from_events_only(run, paths):
+                self._runs.save(run)
+        return runs
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
@@ -278,6 +293,27 @@ class Orchestrator:
             "LEROBOT_RUN_ID": run.run_id,
             "LEROBOT_RUN_DIR": str(paths.root),
         }
+
+    def _reconcile_from_events_only(self, run: Run, paths: RunPaths) -> bool:
+        """Cheap reconciliation path: only reads ``events.jsonl``.
+
+        Used by :meth:`list_runs` to keep the sidebar fresh without a
+        per-run transport probe. Returns True iff the state actually changed
+        (so the caller can save).
+
+        Caveat: cannot detect crashes (worker died without writing a
+        terminal event) — that's covered by the full :meth:`_reconcile_state`
+        path on the selected run's poll.
+        """
+        before = run.state
+        terminal_event = self._read_terminal_event(paths.events_jsonl)
+        if terminal_event == "completed_naturally" and run.state != RunState.COMPLETED:
+            run.advance(RunState.COMPLETED)
+        elif terminal_event == "aborted_by_user" and run.state != RunState.ABORTED:
+            run.advance(RunState.ABORTED)
+        elif terminal_event == "crashed" and run.state != RunState.FAILED:
+            run.advance(RunState.FAILED)
+        return run.state != before
 
     def _reconcile_state(self, run: Run, paths: RunPaths, client: TransportClient) -> None:
         """Update ``run.state`` based on (a) what the worker wrote to
