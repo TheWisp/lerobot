@@ -148,3 +148,39 @@ The smoke test passed end-to-end (image pulled → GPU pass-through → 10-step 
 | No way to start/stop/check the Nebius VM from this conversation — VM lifecycle requires the Nebius web console.                                                                                           | Manual via Nebius UI.                                                                                 | Install `nebius` CLI on the dev workstation, OR drive via Terraform from this repo, so an agent (or automated test) can manage VM lifecycle. |
 
 Phase 2 (the SSH backend) reuses all of this — replacing the local `docker run` with `ssh ... 'docker run ...'`, and adding tmux for session survival and a poll loop for status.
+
+## 2026-06-07 verification: workstation docker subprocess transport
+
+Validated the full image-everywhere chain on a fresh RTX 5090 Ubuntu 24.04 workstation (no Docker installed). Steps that worked end-to-end (run as the GUI server's host user, not root):
+
+```bash
+# 1. Prereqs (one-time)
+sudo bash scripts/training/install_prereqs.sh
+newgrp docker  # or log out / in
+
+# 2. Pull the image (per-commit tag; latest only published on main)
+docker pull ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-2808d5e
+
+# 3. Real smoke — 5 steps of ACT on lerobot/pusht, GPU + bind-mounts
+mkdir -p $HOME/.cache/lerobot/smoke_runs  # must be host-user-owned (see gotcha below)
+docker run --rm --gpus all \
+  --user $(id -u):$(id -g) \
+  -v $HOME/.cache/huggingface:/home/user_lerobot/.cache/huggingface \
+  -v $HOME/.cache/lerobot/smoke_runs:/runs \
+  ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-2808d5e \
+  lerobot-train \
+    --policy.type=act --dataset.repo_id=lerobot/pusht \
+    --steps=5 --batch_size=2 --save_freq=5 \
+    --policy.push_to_hub=false --policy.repo_id=local/smoke --wandb.enable=false \
+    --output_dir=/runs/run_$(date +%s)
+```
+
+Confirmed working: `--gpus all` GPU passthrough, lerobot/pusht auto-download, ResNet18 backbone download, ACT policy training (~6 steps/sec on 5090), checkpoint persisted to host at `~/.cache/lerobot/smoke_runs/run_<ts>/checkpoints/000005/pretrained_model/model.safetensors` (~207 MB).
+
+### Additional gotchas surfaced (extend the table above)
+
+| Gap                                                                                                                                                                                                                                                                                               | Workaround used                                                                                         | Fix needed                                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lerobot-train` refuses to start if `--output_dir` already exists (FileExistsError). Combined with docker's bind-mount-auto-creates-dirs behavior, the naïve `mkdir + bind-mount + output_dir=<mount>` flow fails — docker creates the mount dir, then lerobot-train sees it as "already exists". | Bind-mount the parent dir; pass a `--output_dir=<mount>/run_<timestamp>` subdir that doesn't yet exist. | Surface as a setup hint in `run_training.sh` / the orchestrator's recipe builder. The subdir approach is the right pattern long-term anyway (one mount, many runs). |
+| Docker's bind-mount auto-creates the host path as root if it doesn't exist. If the host path is then root-owned, the container's UID-1000 user can't write into it, even with `--user $(id -u):$(id -g)`.                                                                                         | Pre-create the mount target via `mkdir -p` as the host user **before** running docker.                  | The orchestrator's spawn step must ensure the runs-dir parent exists with the right ownership before invoking docker. Document it as a setup invariant.             |
+| The per-branch image tag follows the pattern `<branch-with-slash-replaced-by-dash>-<sha>`, not `:latest`. `:latest` is only published when merged to main.                                                                                                                                        | Use the per-commit tag explicitly (or use `:main-<sha>` once merged).                                   | Document this in the recipe builder + the run-config UI.                                                                                                            |
