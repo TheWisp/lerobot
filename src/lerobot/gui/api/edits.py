@@ -485,93 +485,45 @@ def _validate_merge_compat(source_meta, target_meta) -> list[dict]:
 @router.post("/merge-into/validate")
 async def validate_merge(request: MergeIntoRequest):
     """Check compatibility between source and target datasets for merge."""
-    source_id = request.source_dataset_id
-    target_id = request.target_dataset_id
+    from lerobot.gui.api._edits_core import check_merge_compat
 
-    if source_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Source dataset not found: {source_id}")
-    if target_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Target dataset not found: {target_id}")
-
-    mismatches = _validate_merge_compat(
-        _app_state.datasets[source_id].meta,
-        _app_state.datasets[target_id].meta,
-    )
-    return {"compatible": len(mismatches) == 0, "mismatches": mismatches}
+    try:
+        return check_merge_compat(_app_state, request.source_dataset_id, request.target_dataset_id)
+    except Exception as e:
+        raise _map_core_exception(e) from e
 
 
 @router.post("/merge-into")
 async def merge_into_dataset(request: MergeIntoRequest):
     """Merge all episodes from source dataset into target dataset in-place."""
-
-    source_id = request.source_dataset_id
-    target_id = request.target_dataset_id
-
-    if source_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Source dataset not found: {source_id}")
-    if target_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Target dataset not found: {target_id}")
-    if source_id == target_id:
-        raise HTTPException(status_code=400, detail="Cannot merge a dataset into itself")
-
-    _require_unlocked(source_id)
-    _require_unlocked(target_id)
-
-    target_lock = _app_state.get_lock(target_id)
-    source_lock = _app_state.get_lock(source_id)
-
-    if target_lock.locked() or source_lock.locked():
-        raise HTTPException(status_code=423, detail="One or both datasets are busy")
-
-    async with target_lock, source_lock:
-        return await _merge_into_locked(source_id, target_id, force=request.force)
-
-
-async def _merge_into_locked(source_id: str, target_id: str, *, force: bool = False):
-    """Execute merge while holding both dataset locks."""
-    source_ds = _app_state.datasets[source_id]
-    target_ds = _app_state.datasets[target_id]
-
-    source_eps = source_ds.num_episodes
-    source_frames = source_ds.num_frames
-    target_eps_before = target_ds.num_episodes
-
-    logger.info(
-        f"Merging {source_eps} episodes from {source_id} into {target_id} "
-        f"({target_eps_before} episodes) force={force}"
-    )
+    from lerobot.gui.api._edits_core import merge_dataset_into
 
     try:
-        import asyncio
-
-        from lerobot.datasets.dataset_tools import merge_into
-
-        # `merge_into` copies parquet data + videos — gigabytes for a
-        # full dataset, easily minutes of synchronous I/O. Push it to
-        # the default executor so SSE keepalives + other tabs'
-        # WebSockets / HTTP requests stay responsive during the merge.
-        await asyncio.get_event_loop().run_in_executor(
-            None, lambda: merge_into(target_ds, source_ds, skip_validation=force)
+        result = await merge_dataset_into(
+            _app_state,
+            request.source_dataset_id,
+            request.target_dataset_id,
+            force=request.force,
         )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        logger.exception(f"Merge failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Merge failed: {e}") from e
-
-    # Invalidate caches for the merge target (new episodes added — the
-    # cumulative-sum cache must be dropped so subsequent frame lookups
-    # pick up the grown dataset).
-    from lerobot.gui.api.datasets import _invalidate_episode_start_indices
-    from lerobot.gui.cache_invalidation import invalidate_caches
-
-    invalidate_caches(_app_state, target_id, invalidate_episode_indices=_invalidate_episode_start_indices)
-
-    logger.info(f"Merge complete: {target_ds.num_episodes} episodes, {target_ds.num_frames} frames in target")
-
+        raise _map_core_exception(e) from e
+    # Preserve the legacy "flat" response shape for the GUI's frontend
+    # (it reads `target_episodes` / `target_frames` directly).
     return {
         "status": "ok",
-        "message": f"Merged {source_eps} episodes ({source_frames} frames) into {target_id}",
-        "target_episodes": target_ds.num_episodes,
-        "target_frames": target_ds.num_frames,
+        "message": (
+            f"Merged {result['source_episodes_merged']} episodes "
+            f"({result['source_frames_merged']} frames) into {result['target_id']}"
+        ),
+        "target_episodes": result["target_episodes_after"],
+        "target_frames": result["target_frames_after"],
     }
+
+
+# ``_merge_into_locked`` and ``_validate_merge_compat`` have moved.
+# The locked-merge logic now lives in
+# ``lerobot.gui.api._edits_core.merge_dataset_into`` (FastAPI handler
+# above and the MCP ``merge_into_dataset`` tool both wrap it).
+# ``_validate_merge_compat`` stays in this module — it's used both by
+# the compat-check helper in ``_edits_core`` and (historically) by tests
+# that import it directly.
