@@ -1465,3 +1465,33 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     gap: 8px;
     margin-top: 8px;
 }
+
+/* Training panel — fieldsets + bool field for the C2 form */
+.training-fieldset {
+    border: 1px solid #1a3a6a;
+    border-radius: 6px;
+    padding: 12px 14px 14px;
+    margin: 0;
+}
+.training-fieldset > legend {
+    padding: 0 6px;
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+.training-field-bool {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+}
+.training-field-bool input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: #4fc3f7;
+}
+.training-field-bool .training-field-label {
+    flex: 1;
+}

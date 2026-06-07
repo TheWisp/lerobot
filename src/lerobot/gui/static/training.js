@@ -277,6 +277,44 @@ async function trainingShowStartForm() {
   trainingRefreshRuns(); // unselect any previously-highlighted row
 }
 
+// Policy-specific hyperparameter forms. Defaults copied from lerobot upstream:
+//   ACT:       src/lerobot/policies/act/configuration_act.py
+//   Diffusion: src/lerobot/policies/diffusion/configuration_diffusion.py
+// Revisit when adding a third policy (becomes worth introspecting the
+// dataclass via the API rather than hand-writing — see DESIGN.md
+// Future enhancements: policy-config introspection).
+const POLICY_FORMS = {
+  act: {
+    label: "ACT (Action Chunking Transformer)",
+    fields: [
+      { key: "policy.chunk_size", label: "Chunk size", type: "int", default: 100 },
+      { key: "policy.n_action_steps", label: "Action steps", type: "int", default: 100 },
+      { key: "policy.dim_model", label: "Model dim", type: "int", default: 512 },
+      { key: "policy.n_heads", label: "Attention heads", type: "int", default: 8 },
+      { key: "policy.n_encoder_layers", label: "Encoder layers", type: "int", default: 4 },
+      { key: "policy.n_decoder_layers", label: "Decoder layers", type: "int", default: 1 },
+      { key: "policy.use_vae", label: "Use VAE", type: "bool", default: true },
+    ],
+  },
+  diffusion: {
+    label: "Diffusion Policy",
+    fields: [
+      { key: "policy.horizon", label: "Horizon", type: "int", default: 16 },
+      { key: "policy.n_action_steps", label: "Action steps", type: "int", default: 8 },
+      { key: "policy.num_train_timesteps", label: "Train timesteps", type: "int", default: 100 },
+      { key: "policy.num_inference_steps", label: "Inference steps", type: "int", default: 100 },
+    ],
+  },
+};
+
+// Common training fields shared across all policies. Copied from
+// src/lerobot/configs/train.py defaults.
+const TRAINING_FIELDS = [
+  { key: "steps", label: "Total training steps", type: "int", default: 1000 },
+  { key: "batch_size", label: "Batch size", type: "int", default: 8 },
+  { key: "save_freq", label: "Save every N steps", type: "int", default: 500 },
+];
+
 function trainingRenderStartForm() {
   const el = document.getElementById("training-detail");
   if (!el || _trainingMode !== "form") return;
@@ -294,6 +332,10 @@ function trainingRenderStartForm() {
               `<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)} (${d.episodes} ep · ${d.frames} fr)</option>`
           )
           .join("");
+
+  const policyOptions = Object.entries(POLICY_FORMS)
+    .map(([key, p]) => `<option value="${key}">${escapeHtml(p.label)}</option>`)
+    .join("");
 
   el.innerHTML = `
     <div class="training-detail-pane">
@@ -319,25 +361,30 @@ function trainingRenderStartForm() {
         </label>
 
         <label class="training-field">
-          <span class="training-field-label">Recipe name</span>
-          <input type="text" name="recipe_name" value="prototype" required />
-          <span class="training-field-hint">Free-form label used in the run list + Models tab.</span>
+          <span class="training-field-label">Policy</span>
+          <select name="policy_type" required onchange="trainingRenderPolicyFields(this.value)">
+            ${policyOptions}
+          </select>
+          <span class="training-field-hint">Each policy renders its own hyperparameter form below. Defaults come from upstream lerobot config classes.</span>
         </label>
 
-        <div class="training-field-row">
-          <label class="training-field">
-            <span class="training-field-label">Num steps</span>
-            <input type="number" name="num_steps" value="100" min="1" max="100000" required />
-          </label>
-          <label class="training-field">
-            <span class="training-field-label">Save every (steps)</span>
-            <input type="number" name="save_every" value="20" min="1" max="100000" required />
-          </label>
-          <label class="training-field">
-            <span class="training-field-label">Step seconds (fake-train pacing)</span>
-            <input type="number" name="step_seconds" value="0.1" step="0.01" min="0" max="10" required />
-          </label>
-        </div>
+        <fieldset class="training-fieldset">
+          <legend>Policy hyperparameters</legend>
+          <div id="training-policy-fields"><!-- populated by trainingRenderPolicyFields --></div>
+        </fieldset>
+
+        <fieldset class="training-fieldset">
+          <legend>Training</legend>
+          <div class="training-field-row">
+            ${TRAINING_FIELDS.map((f) => fieldHtml(f)).join("")}
+          </div>
+        </fieldset>
+
+        <label class="training-field">
+          <span class="training-field-label">Run label</span>
+          <input type="text" name="recipe_name" value="" placeholder="(optional — defaults to <policy>-<dataset_basename>)" />
+          <span class="training-field-hint">Free-form label that appears in the run list + Models tab. Leave blank for auto.</span>
+        </label>
 
         <div class="training-form-actions">
           <button type="submit" class="btn-small">Start training</button>
@@ -346,6 +393,39 @@ function trainingRenderStartForm() {
         <div id="training-start-error" class="training-error" style="display:none;"></div>
       </form>
     </div>
+  `;
+  // Render the policy-specific fields for the default-selected policy
+  const defaultPolicy = Object.keys(POLICY_FORMS)[0];
+  trainingRenderPolicyFields(defaultPolicy);
+}
+
+function trainingRenderPolicyFields(policyType) {
+  const container = document.getElementById("training-policy-fields");
+  if (!container) return;
+  const policy = POLICY_FORMS[policyType];
+  if (!policy) {
+    container.innerHTML = '<div class="training-empty-hint">Unknown policy</div>';
+    return;
+  }
+  container.innerHTML = `<div class="training-field-row">${policy.fields.map(fieldHtml).join("")}</div>`;
+}
+
+function fieldHtml(f) {
+  const id = `training-arg-${f.key.replace(/\./g, "-")}`;
+  if (f.type === "bool") {
+    return `
+      <label class="training-field training-field-bool">
+        <span class="training-field-label">${escapeHtml(f.label)}</span>
+        <input id="${id}" type="checkbox" name="${escapeHtml(f.key)}" ${f.default ? "checked" : ""} />
+      </label>
+    `;
+  }
+  const inputAttrs = f.type === "int" ? 'type="number" step="1" min="1"' : 'type="text"';
+  return `
+    <label class="training-field">
+      <span class="training-field-label">${escapeHtml(f.label)}</span>
+      <input id="${id}" ${inputAttrs} name="${escapeHtml(f.key)}" value="${f.default}" required />
+    </label>
   `;
 }
 
@@ -360,15 +440,43 @@ async function trainingSubmitStart(ev) {
   if (!form) return;
   const fd = new FormData(form);
   const idempotencyKey = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  const hostId = fd.get("host_id");
+  const datasetId = fd.get("dataset_id");
+  const policyType = fd.get("policy_type");
+
+  // Build the dotted-key args dict the recipe builder expects.
+  // - policy.type drives policy selection
+  // - dataset.repo_id is what lerobot-train uses to find the dataset
+  // - policy.<field> + training.<field> entries flow through verbatim
+  const args = {
+    "policy.type": policyType,
+    "dataset.repo_id": datasetId,
+  };
+  // Policy-specific fields
+  const policyFields = POLICY_FORMS[policyType]?.fields || [];
+  for (const f of policyFields) {
+    const v = formValue(fd, form, f);
+    if (v !== undefined) args[f.key] = v;
+  }
+  // Common training fields
+  for (const f of TRAINING_FIELDS) {
+    const v = formValue(fd, form, f);
+    if (v !== undefined) args[f.key] = v;
+  }
+
+  // Auto-generate a label if user didn't provide one
+  let recipeName = (fd.get("recipe_name") || "").trim();
+  if (!recipeName) {
+    const dsBasename = datasetId.split("/").slice(-1)[0];
+    recipeName = `${policyType}-${dsBasename}`;
+  }
+
   const body = {
-    host_id: fd.get("host_id"),
-    recipe_name: fd.get("recipe_name"),
-    dataset_id: fd.get("dataset_id"),
-    args: {
-      num_steps: parseInt(fd.get("num_steps") || "100", 10),
-      save_every: parseInt(fd.get("save_every") || "20", 10),
-      step_seconds: parseFloat(fd.get("step_seconds") || "0.1"),
-    },
+    host_id: hostId,
+    recipe_name: recipeName,
+    dataset_id: datasetId,
+    args,
     idempotency_key: idempotencyKey,
   };
   const errEl = document.getElementById("training-start-error");
@@ -425,9 +533,30 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
+function formValue(fd, form, field) {
+  if (field.type === "bool") {
+    // Checkboxes only appear in FormData when checked; explicitly read the
+    // input element to handle the unchecked case as `false`.
+    const el = form.querySelector(`input[name="${field.key}"]`);
+    return el ? !!el.checked : false;
+  }
+  const raw = fd.get(field.key);
+  if (raw == null || raw === "") return undefined;
+  if (field.type === "int") {
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  if (field.type === "float") {
+    const n = parseFloat(raw);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return raw;
+}
+
 // Expose for the inline onclick handlers
 window.trainingInit = trainingInit;
 window.trainingShowStartForm = trainingShowStartForm;
 window.trainingCancelForm = trainingCancelForm;
 window.trainingSubmitStart = trainingSubmitStart;
 window.trainingStopRun = trainingStopRun;
+window.trainingRenderPolicyFields = trainingRenderPolicyFields;
