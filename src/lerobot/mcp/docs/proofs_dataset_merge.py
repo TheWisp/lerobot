@@ -105,6 +105,7 @@ def _cleanup_clones() -> list[Path]:
     removed: list[Path] = []
     for d in home.iterdir():
         if d.is_dir() and d.name == THROWAWAY_TAG:
+            # safe-destruct: clones we just created under a random-suffix tag
             shutil.rmtree(d)
             removed.append(d)
     return removed
@@ -127,7 +128,7 @@ def _open_dataset_via_api(repo_id: str) -> None:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=30.0) as resp:  # noqa: S310 — see above
+        with urllib.request.urlopen(req, timeout=30.0) as resp:  # noqa: S310  # nosec B310 — admin URL
             resp.read()
     except urllib.error.URLError as e:
         raise RuntimeError(f"Failed to open {repo_id!r} in GUI: {e}") from e
@@ -137,12 +138,12 @@ def _close_dataset_via_api(repo_id: str) -> None:
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(  # noqa: S310 — admin URL
+    req = urllib.request.Request(  # noqa: S310  # nosec B310 — admin URL
         f"{GUI_URL}/api/datasets/{repo_id}",
         method="DELETE",
     )
     try:
-        with urllib.request.urlopen(req, timeout=10.0) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=10.0) as resp:  # noqa: S310  # nosec B310
             resp.read()
     except Exception:  # noqa: BLE001 — close is best-effort
         pass
