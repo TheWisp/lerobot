@@ -35,6 +35,11 @@ def set_app_state(state: AppState) -> None:
 
 _DEFAULT_SOURCE = str(Path.cwd() / "outputs")
 _CONVERTED_SOURCE = str(Path.home() / ".cache" / "lerobot" / "converted")
+# GUI-managed training runs (lerobot.gui.training_orchestrator) land under
+# ~/.cache/lerobot/runs/<run_id>/output/checkpoints/<step>/pretrained_model/.
+# Auto-register the dir so trained models appear in the Models tab next
+# to other sources — closes the felt training loop (DESIGN.md C3).
+_GUI_RUNS_SOURCE = str(Path.home() / ".cache" / "lerobot" / "runs")
 
 
 def _read_sources() -> list[dict]:
@@ -44,6 +49,10 @@ def _read_sources() -> list[dict]:
     # Add converted checkpoints source if it exists
     if Path(_CONVERTED_SOURCE).is_dir():
         defaults.append({"path": _CONVERTED_SOURCE, "removable": False, "expanded": True})
+    # GUI-managed training runs (auto-registered so newly-trained models
+    # appear in the Models tab without the user having to add the dir).
+    if Path(_GUI_RUNS_SOURCE).is_dir():
+        defaults.append({"path": _GUI_RUNS_SOURCE, "removable": False, "expanded": True})
 
     if not SOURCES_FILE.exists():
         return defaults
@@ -134,11 +143,33 @@ def _read_checkpoint_meta(ckpt_dir: Path) -> dict | None:
     }
 
 
+def _dir_has_step_subdirs(d: Path) -> bool:
+    """True iff ``d`` exists AND contains at least one numeric-named subdir
+    (a real checkpoint dir like 000005). Filters out empty/placeholder dirs
+    that early code paths may have pre-created.
+    """
+    if not d.is_dir():
+        return False
+    return any(child.is_dir() and child.name.lstrip("0").isdigit() for child in d.iterdir())
+
+
 def _scan_training_run(run_dir: Path) -> dict | None:
-    """Scan a single training run directory for checkpoints."""
+    """Scan a single training run directory for checkpoints.
+
+    Recognizes two layouts (preferring whichever actually has step subdirs):
+      - Standard lerobot-train output: ``<run_dir>/checkpoints/<NNNNNN>/...``
+      - GUI-managed (docker recipe writes here): ``<run_dir>/output/checkpoints/<NNNNNN>/...``
+        The extra ``output/`` level is because the GUI orchestrator bind-mounts
+        the run_dir into the container and lerobot-train writes to a subdir
+        (so the bind-mount target doesn't pre-exist and the FileExistsError
+        validator passes). See scripts/training/README.md "2026-06-07 gotchas".
+    """
     ckpts_dir = run_dir / "checkpoints"
-    if not ckpts_dir.is_dir():
-        return None
+    if not _dir_has_step_subdirs(ckpts_dir):
+        # GUI-managed layout fallback
+        ckpts_dir = run_dir / "output" / "checkpoints"
+        if not _dir_has_step_subdirs(ckpts_dir):
+            return None
 
     # Find checkpoint subdirs (numeric names or 'last')
     checkpoints = []
@@ -284,8 +315,12 @@ def _scan_recursive(base: Path, current: Path, found: list[dict], max_depth: int
     if depth > max_depth:
         return
     try:
-        # Check if this directory is a training run (standard LeRobot format)
-        if (current / "checkpoints").is_dir():
+        # Check if this directory is a training run.
+        # Standard layout: <dir>/checkpoints/<step>/...
+        # GUI-managed (docker recipe): <dir>/output/checkpoints/<step>/...
+        has_standard = _dir_has_step_subdirs(current / "checkpoints")
+        has_gui = _dir_has_step_subdirs(current / "output" / "checkpoints")
+        if has_standard or has_gui:
             run_meta = _scan_training_run(current)
             if run_meta:
                 with contextlib.suppress(ValueError):

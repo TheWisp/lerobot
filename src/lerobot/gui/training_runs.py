@@ -169,8 +169,12 @@ class RunPaths:
         return self.root / "checkpoints"
 
     def ensure_exists(self) -> None:
+        """Create the run dir if missing. Does NOT pre-create
+        ``checkpoints/`` — the worker (fake or real lerobot-train) creates
+        it on first checkpoint write. Pre-creating an empty checkpoints/
+        confuses scanners that use its existence as the "is this a training
+        run?" signal (e.g., the Models tab scanner)."""
         self.root.mkdir(parents=True, exist_ok=True)
-        self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
 
 # ── Registry: load / save / list runs ─────────────────────────────────────────

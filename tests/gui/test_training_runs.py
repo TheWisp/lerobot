@@ -102,11 +102,14 @@ def test_run_paths_for_run_with_dir(tmp_path: Path) -> None:
 
 
 def test_run_paths_ensure_exists_creates(tmp_path: Path) -> None:
+    """ensure_exists creates the run root but NOT checkpoints/ — pre-creating
+    an empty checkpoints/ would confuse scanners that use its existence as
+    the "is this a training run?" signal."""
     p = RunPaths.for_run("xyz", runs_dir=tmp_path)
     assert not p.root.exists()
     p.ensure_exists()
     assert p.root.is_dir()
-    assert p.checkpoints_dir.is_dir()
+    assert not p.checkpoints_dir.exists()
 
 
 # ── RunRegistry ────────────────────────────────────────────────────────────────
