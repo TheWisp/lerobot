@@ -1,0 +1,35 @@
+# Training — TODO
+
+Tracked follow-ups for the training subsystem. Colocated with [`DESIGN.md`](DESIGN.md) so the rationale and the open work live next to each other.
+
+## Recently fixed
+
+- **Form-pane scroll** — picking SmolVLA (38 scalar fields) made the form taller than the viewport with no scrollbar; the bottom of the form (Start / Cancel buttons) was clipped. Root cause: `#training-detail` inherited the parent `.tab-content { overflow: hidden }` and didn't add its own `overflow-y: auto`. Sibling `.model-detail` did this correctly; `#training-detail` was the new container I added and missed the pattern. Fixed by mirroring `.model-detail`'s rule.
+- **Duplicate Cancel button on the form** — `Start a training run` had a Cancel in the header AND a Cancel in the footer next to Start. The header one wasn't aligned to the form (it was in the title row) and was redundant. Removed the header copy; kept the footer one next to Start (standard form-action position).
+
+## Footguns
+
+- **Docker group not picked up by existing shell sessions** — adding the user to the `docker` group with `usermod -aG docker $USER` updates `/etc/group` but does NOT backfill into running sessions (groups are cached at login). Every existing shell needs either `sg docker -c "..."` wrapping for `docker` commands or `newgrp docker` to refresh in-place. The orchestrator's image-prep path (`docker image inspect`, `docker pull`, `docker run`) needs daemon socket access and hits this immediately. Workaround: start the GUI as `sg docker -c "nohup python -m lerobot.gui ... &"` (the `nohup` is required because `sg`'s subshell exits and would otherwise SIGHUP the GUI). Real fix: user logs out + back in once, then `groups` shows `docker` and the wrapper is no longer needed. Documenting only — not worth automating around.
+
+## UX
+
+- **Stats card poll latency on big checkpoints** — `_sync_checkpoints_manifest` hashes new checkpoint files synchronously inside the poll() request thread. A 1 GB Diffusion checkpoint takes ~3.5 s at ~300 MB/s, freezing the run detail pane until the manifest is appended. Fix: defer sha256 to a background worker; the manifest entry appears one poll cycle later but the request returns instantly. Surfaced during the C5 prototyping audit.
+- **Form re-open race after cancel** — `trainingShowStartForm` works reliably on first open but Playwright tests showed it flakily fails to render the policy-fields container on the second open after a cancel. Workaround in the screenshot driver was to dispatch via `evaluate()`; the real fix is whatever's making the second render time out. Surfaced while regenerating screenshots.
+- **`gui_common` field metadata** — the dynamic policy catalog surfaces every scalar field (ACT 23, Diffusion 33, SmolVLA 38). Render time is fine; reader load is not. Support `dataclasses.field(metadata={"gui_common": True})` on config classes so config authors mark which fields surface by default vs. behind an "Advanced" collapse. Lives in the dataclass (where the author already is), not in the GUI codebase.
+- **Surface run dir path in the detail view** — users looking for "where did my model go?" check `~/Documents/lerobot/outputs/` (the upstream `lerobot-train` default) and find nothing. The GUI's runs root is `$LEROBOT_RUNS_DIR` (defaults to `~/.cache/lerobot/runs/`). Add a one-line path string to the run detail view + a paragraph in the README.
+- **Live-source-mount dev mode** — when iterating on `lerobot/` code, the full edit → CI rebuild → GHCR pull loop is ~17–27 min. A `__mount_src__=true` knob in the recipe builder would bind-mount the local `src/lerobot/` into the container, skipping the rebuild for pure-Python changes. Dev-only; never the default.
+
+## Build / deployment
+
+- **BuildKit cache mount for `uv sync`** — the training Dockerfile uses `RUN uv sync --no-cache` which re-downloads PyPI dependencies on every dep-dirty CI build (~9 min). Adding `RUN --mount=type=cache,target=/root/.cache/uv uv sync --extras...` would persist the uv cache between CI runs and drop dep-dirty builds from 9–13 min to 4–6 min. Pull time unchanged. Already supported by `docker/build-push-action@v6` cache infra.
+
+## Observability
+
+- **Real progress parsing** — `progress.json` is only written by the legacy fake-runner. Real `lerobot-train` and HVLA `flow_matching` don't write it, so the detail-view Loss field shows `—` for real runs (Step is derived from the latest checkpoint as a fallback). Parse `step=N loss=X` from the stderr tail and write to `progress.json` from the orchestrator side — same poll cycle that picks up checkpoints.
+
+## Next phases
+
+- **SSH transport** (`SshClient` implementation) — `TransportClient` Protocol expansion already landed (`f969e7602`). Implement each method as `subprocess.run(['ssh', user@host, ...])` / `scp` / `tmux`. Test loopback first (`ssh $USER@127.0.0.1`); then a leased server. See [`DESIGN.md`](DESIGN.md) § Host setup UX for the "Add SSH host" dialog spec.
+- **Ephemeral provider (Nebius)** — vendor SDK as a LeRobot optional extra, paste-token auth in v1, auto-destroy + scheduled-delete backstop, cost-ceiling enforcement. Lands on top of the SSH transport (Ephemeral pods use SshClient once spawned). See [`DESIGN.md`](DESIGN.md) § Cost discipline + § Authentication.
+- **`_drop_run_metadata` via transport** — `delete_run` / `clear_terminal_runs` currently use `pathlib` + `shutil.rmtree` directly. Works for workstation (bind-mount = same disk). For SSH hosts the rmtree needs to route via `client.rmtree(path)` — add to the Protocol and update the helper. Deferred from the abstraction PR (`f969e7602`) because it doesn't gate SSH transport work.
+- **Training MCP tools** — read-only first (`list_hosts`, `list_runs`, `get_run_snapshot`) so AI agents can drive testing without needing browser automation. Write tools (`start_run`, `stop_run`, `delete_run`) come after the read surface stabilises.

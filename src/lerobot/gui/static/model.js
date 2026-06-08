@@ -227,6 +227,13 @@ function renderModelDetail(run, checkpoints, config) {
     const detail = document.getElementById('model-detail');
     if (!detail) return;
 
+    // Model tab's right pane has three sibling containers — #model-empty,
+    // #model-detail, #training-detail. Hiding the first two without also
+    // hiding training-detail leaves the training form/run-detail visible
+    // underneath the model header. Reset training state so its poll loop
+    // won't re-render on top.
+    if (typeof window.trainingLeaveView === 'function') window.trainingLeaveView();
+
     if (empty) empty.style.display = 'none';
     detail.style.display = '';
 

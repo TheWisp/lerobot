@@ -316,6 +316,18 @@ function trainingSelectRun(runId) {
   trainingRefreshRuns(); // re-render sidebar selection highlight
 }
 
+// Called by the Model tab when it shows model-* content. Hides the training
+// pane and resets internal state so the poll loop won't re-render on top of
+// the model view. Symmetric to trainingShowMain() hiding model containers
+// when the user enters training mode.
+function trainingLeaveView() {
+  const td = document.getElementById("training-detail");
+  if (td) td.style.display = "none";
+  _trainingMode = "empty";
+  _trainingSelectedRunId = null;
+  trainingRefreshRuns(); // clear sidebar highlight
+}
+
 // ── Detail pane ───────────────────────────────────────────────────────────────
 
 async function trainingRefreshDetail(runId) {
@@ -325,7 +337,28 @@ async function trainingRefreshDetail(runId) {
     const resp = await fetch(`/api/training/runs/${runId}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const snap = await resp.json();
+    // Preserve user scroll across the 2s full-pane re-render. Two scrolls
+    // to track: the pane itself (form/run-detail height) and the log-tail
+    // <pre> inside it. For the log, "stick to bottom" if the user is
+    // already near the bottom (auto-follow), otherwise restore exact
+    // position. SCROLL_STICKY_PX = 32 absorbs sub-pixel rounding from
+    // browser zoom + lets a near-bottom user re-anchor cleanly.
+    const SCROLL_STICKY_PX = 32;
+    const paneScroll = el.scrollTop;
+    const prevLog = el.querySelector(".training-log");
+    let logScroll = 0;
+    let logStuckToBottom = false;
+    if (prevLog) {
+      logScroll = prevLog.scrollTop;
+      logStuckToBottom =
+        prevLog.scrollHeight - prevLog.scrollTop - prevLog.clientHeight < SCROLL_STICKY_PX;
+    }
     el.innerHTML = trainingRenderDetailHtml(snap);
+    el.scrollTop = paneScroll;
+    const newLog = el.querySelector(".training-log");
+    if (newLog) {
+      newLog.scrollTop = logStuckToBottom ? newLog.scrollHeight : logScroll;
+    }
     const stopBtn = document.getElementById(`training-stop-${runId}`);
     if (stopBtn) stopBtn.onclick = () => trainingStopRun(runId);
     const cloneBtn = document.getElementById(`training-clone-${runId}`);
@@ -636,9 +669,6 @@ function trainingRenderStartForm(prefill) {
     <div class="training-detail-pane">
       <header class="training-detail-header">
         <h2 class="training-detail-title">Start a training run</h2>
-        <div class="training-detail-actions">
-          <button type="button" class="btn-small secondary" onclick="trainingCancelForm()">Cancel</button>
-        </div>
       </header>
 
       <form id="training-start-form" class="training-form" onsubmit="trainingSubmitStart(event); return false;">
@@ -964,6 +994,7 @@ function formValue(fd, form, field) {
 window.trainingInit = trainingInit;
 window.trainingShowStartForm = trainingShowStartForm;
 window.trainingCancelForm = trainingCancelForm;
+window.trainingLeaveView = trainingLeaveView;
 window.trainingSubmitStart = trainingSubmitStart;
 window.trainingStopRun = trainingStopRun;
 window.trainingRenderPolicyFields = trainingRenderPolicyFields;
