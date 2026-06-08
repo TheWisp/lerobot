@@ -130,6 +130,98 @@ $PWD/outputs   ───────────►  /lerobot/outputs
 - **`docker run --init` covers signal handling** for clean cancel + spot preemption.
 - **HF Hub is both source (datasets) and sink (checkpoints)** via the shared host cache.
 
+## Policies in the GUI: what gets shown and how to add one
+
+### How the picker is populated
+
+The Training form's Policy dropdown is **hand-curated**, not auto-introspected. Every policy that the GUI knows how to launch lives in a single dict in [`src/lerobot/gui/static/training.js`](../../src/lerobot/gui/static/training.js):
+
+```js
+const POLICY_FORMS = {
+  act: {
+    label: "ACT (Action Chunking Transformer)",
+    // no `recipe` → defaults to lerobot-train (draccus CLI)
+    fields: [
+      {
+        key: "policy.chunk_size",
+        label: "Chunk size",
+        type: "int",
+        default: 100,
+      },
+      { key: "policy.use_vae", label: "Use VAE", type: "bool", default: true },
+      // ...
+    ],
+  },
+  diffusion: {
+    /* same shape */
+  },
+  hvla_flow_s1: {
+    label: "HVLA Flow Matching S1 (no S2)",
+    recipe: "hvla_flow_s1", // routes to a non-lerobot-train recipe builder
+    fields: [
+      { key: "chunk_size", label: "Chunk size", type: "int", default: 50 },
+      {
+        key: "num_inference_steps",
+        label: "Inference steps",
+        type: "int",
+        default: 15,
+      },
+      // snake_case keys for HVLA's argparse
+    ],
+  },
+};
+```
+
+`Object.entries(POLICY_FORMS)` populates the dropdown. The form generator (`trainingRenderPolicyFields(policyType)`) emits an `<input>` / `<select>` / checkbox per field; the submit handler (`trainingSubmitStart`) collects values into a flat `args` dict that the backend recipe builder turns into argv.
+
+**Why hand-curated?** lerobot's `PreTrainedConfig.ChoiceRegistry` already knows every registered policy and each is an annotated dataclass — auto-introspection is feasible. We're not doing it yet because:
+
+- For 3 policies the hand-curation is ~80 LOC; the generic dataclass-to-form renderer + a backend introspection endpoint would be ~800 LOC.
+- Choosing which fields to expose is a curation decision anyway — most config classes have 30+ fields, only ~6 are useful as form inputs. A renderer that surfaces them all is worse UX than 6 hand-picked ones.
+
+There's a comment in `training.js` flagging **policy #4 as the trigger point** — that's when the hand-curation cost likely crosses the introspection cost.
+
+### Adding a new policy: checklist
+
+Concrete steps, scaled to whether the policy runs under `lerobot-train` or has its own trainer.
+
+**A. If the policy is registered with `lerobot-train` (uses draccus + `PreTrainedConfig`)** — most upstream policies. ACT and Diffusion are this shape.
+
+1. Verify the image installs the policy's extras. If the policy's `pyproject.toml` entry under `[project.optional-dependencies]` lists something the image doesn't already have, add it to the `uv sync --extra ...` line in [`docker/Dockerfile.training`](../../docker/Dockerfile.training). (This is the gap that bit Diffusion until C5 — the form picker exposed it before the image had `diffusers`.)
+2. Add an entry to `POLICY_FORMS` in [`training.js`](../../src/lerobot/gui/static/training.js). Copy defaults verbatim from the policy's `configuration_<policy>.py`. Use dotted keys (`policy.<field>`) — that's the draccus CLI shape.
+3. Bump the cache-buster (`training.js?v=N+1`) in [`index.html`](../../src/lerobot/gui/static/index.html).
+4. Done. The recipe builder forwards every `policy.*` flag verbatim to `lerobot-train`, which finds the policy class via its registry.
+
+**B. If the policy has its own trainer script** (HVLA, anything not draccus-based).
+
+1. Steps 1–3 from A — same image-extras + form entry + cache-buster.
+2. Add `recipe: "<marker>"` to the `POLICY_FORMS` entry so the frontend tags submissions with `__recipe__=<marker>`.
+3. In [`src/lerobot/gui/training/recipes.py`](../../src/lerobot/gui/training/recipes.py), add:
+   - a recipe marker constant (`MY_RECIPE = "my_recipe"`),
+   - an entrypoint list (`MY_ENTRYPOINT = ["python", "-u", "-m", "my.module.train"]`),
+   - a field-to-flag map (`MY_FIELD_TO_FLAG = { "chunk_size": "--chunk-size", ... }`) if the CLI shape differs from draccus's,
+   - a `_build_my_command(run, paths)` function that composes the `docker run` argv,
+   - a routing branch in `build_lerobot_train_command(run, paths)`:
+     ```python
+     if is_my_recipe(run):
+         return _build_my_command(run, paths)
+     ```
+4. If your trainer writes checkpoints under a non-standard layout (HVLA uses `checkpoint-<N>/` instead of `<NNNNNN>/`), extend the regex in `Orchestrator._iter_checkpoint_dirs` — already accepts both today.
+5. If `output_dir` semantics differ (HVLA puts checkpoints directly under `output/checkpoints/`; lerobot-train uses `output/checkpoints/<NNNNNN>/`), revisit `output_subdir_in_run()`.
+
+**For both A and B**: add tests.
+
+- Recipe-builder unit tests in [`tests/gui/training/test_recipes.py`](../../tests/gui/training/test_recipes.py) assert the docker argv shape, that the right flags get forwarded, and that user-supplied flags don't override safety flags (`output_dir`, etc.).
+- A live form-driven smoke ([`scripts/training/screenshots/`](screenshots/) has the working ones) — start a run with `steps=10, save_freq=5`, wait for completion, verify 2 checkpoints land with sha256s matching what the orchestrator wrote.
+
+### How hyperparameters round-trip
+
+1. **Form submit** → `args` dict built from POLICY_FORMS fields + the shared TRAINING_FIELDS (steps/batch_size/save_freq) + `dataset.repo_id` (lerobot-train) or `dataset_repo_id` (HVLA) + `__recipe__` marker if non-default.
+2. **POST `/api/training/runs`** with the args dict.
+3. **Recipe builder** turns args → argv. For lerobot-train: `args["policy.chunk_size"]=100` becomes `--policy.chunk_size=100`. For HVLA: `args["chunk_size"]=50` becomes `--chunk-size 50` (via `HVLA_FLOW_S1_FIELD_TO_FLAG`).
+4. **Orchestrator** spawns `docker run … <image> <entrypoint> <argv>`.
+5. **Detail view's Configuration card** re-reads `run.args` and renders it as a key/value table, so the user can see exactly what was passed and click "Run with same config" to re-launch with edits.
+
 ## Known gaps + workarounds (discovered during 2026-06-04 verification on Nebius preemptible H100)
 
 The smoke test passed end-to-end (image pulled → GPU pass-through → 10-step ACT training → checkpoint persisted to host bind-mount), but every workaround applied during that run is a real gap the deploy story needs to address. Tracked here so the next person doesn't have to rediscover.
