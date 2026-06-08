@@ -28,14 +28,13 @@ DESIGN.md § Concurrency:
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import logging
 import re
 import shutil
-import subprocess
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,10 +50,11 @@ from lerobot.gui.training.runs import (
     RunPaths,
     RunRegistry,
     RunState,
-    append_event,
     new_run_id,
 )
 from lerobot.gui.training.transport import (
+    SubprocessClient,
+    SubprocessTransport,
     TransportClient,
     make_client,
 )
@@ -147,16 +147,20 @@ class Orchestrator:
         run_registry: RunRegistry,
         *,
         runner_module: str = "lerobot.gui.training.runner",
-        image_runner: ImageRunner | None = None,
+        make_client_fn: Callable[[Any], TransportClient] | None = None,
     ) -> None:
         self._hosts = host_registry
         self._runs = run_registry
         # Module name (not file path) so we invoke via `python -m`. Tests can
         # substitute a stub runner module without monkey-patching subprocess.
         self._runner_module = runner_module
-        # Swappable shim for the two docker calls (inspect / pull). Tests
-        # inject a fake; the default talks to the local docker daemon.
-        self._image = image_runner or _DefaultImageRunner()
+        # All host-state ops (file reads, dir listings, image docker calls,
+        # checkpoint sha256s) go through the resolved TransportClient. Tests
+        # inject a fake-transport factory; production uses :func:`make_client`
+        # which picks SubprocessClient or SshClient based on the host's
+        # transport type. See [DESIGN.md § HostProvider] + the
+        # ``TransportClient`` Protocol in ``training/transport.py``.
+        self._make_client_fn = make_client_fn or make_client
         # Background prep threads (image pull + worker spawn). Keyed by run_id;
         # daemon=True so they don't block process shutdown. We keep refs so
         # tests can join them; in production they're fire-and-forget.
@@ -245,16 +249,19 @@ class Orchestrator:
 
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
         host = self._hosts.get(run.host_id)
-        client = make_client(host.transport) if host is not None else None
+        client = self._client_for_host(host, paths)
 
         # Reconcile state with the worker, if it's still in a live state.
-        if run.state in (RunState.RUNNING, RunState.COMPLETING) and client is not None:
+        # We only do the liveness probe when the host is known; otherwise
+        # the run is treated as "we can read what we have, but we can't
+        # check on it." Same semantic as before the refactor.
+        if run.state in (RunState.RUNNING, RunState.COMPLETING) and host is not None:
             self._reconcile_state(run, paths, client)
 
-        progress = self._read_progress(paths.progress_json)
-        checkpoints = self._read_manifest(paths.checkpoints_jsonl)
-        stderr_tail = self._read_stderr_tail(paths.stderr_log, stderr_tail_bytes)
-        events = _read_events(paths.events_jsonl)
+        progress = self._read_progress(client, paths.progress_json)
+        checkpoints = self._read_manifest(client, paths.checkpoints_jsonl)
+        stderr_tail = self._read_stderr_tail(client, paths.stderr_log, stderr_tail_bytes)
+        events = self._read_events(client, paths.events_jsonl)
 
         return RunSnapshot(
             run=run,
@@ -278,6 +285,8 @@ class Orchestrator:
         if run.state == RunState.COMPLETING:
             return run  # idempotent — already stopping
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
+        host = self._hosts.get(run.host_id)
+        client = self._client_for_host(host, paths)
         if run.state == RunState.PENDING:
             # Prep thread is still running (image pull or pre-launch). No
             # worker to SIGTERM. Skip COMPLETING straight to ABORTED — the
@@ -286,20 +295,18 @@ class Orchestrator:
             # already, the spawned worker is --rm so it cleans up on exit.)
             run.advance(RunState.ABORTED)
             self._runs.save(run)
-            append_event(paths.events_jsonl, "aborted_by_user", final_step=0)
+            self._emit_event(client, paths.events_jsonl, "aborted_by_user", final_step=0)
             return run
-        host = self._hosts.get(run.host_id)
         if host is None:
             # Host went away (deleted profile) — best-effort mark aborted.
             run.advance(RunState.ABORTED)
             self._runs.save(run)
             return run
-        client = make_client(host.transport)
         if run.session_id is not None:
             client.stop(run.session_id, force=False)
         run.advance(RunState.COMPLETING)
         self._runs.save(run)
-        append_event(paths.events_jsonl, "stop_requested")
+        self._emit_event(client, paths.events_jsonl, "stop_requested")
         return run
 
     def list_runs(self) -> list[Run]:
@@ -385,6 +392,33 @@ class Orchestrator:
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
+    def _client_for_host(self, host: TrainingHost | None, paths: RunPaths) -> TransportClient:
+        """Resolve a :class:`TransportClient` for ops on a given host.
+
+        Falls back to a local :class:`SubprocessClient` if the host is
+        unknown (e.g. deleted from the registry). That fallback preserves
+        the pre-refactor behavior — for workstation runs the run dir is
+        on the GUI server's filesystem anyway, so local reads still
+        surface the last known state. For SSH-host runs with a deleted
+        profile, we lose remote access but the run.json + locally-synced
+        artefacts remain readable.
+        """
+        if host is not None:
+            return self._make_client_fn(host.transport)
+        return SubprocessClient(SubprocessTransport(workdir=paths.root))
+
+    @staticmethod
+    def _emit_event(client: TransportClient, events_path: Path, type_: str, **fields: Any) -> None:
+        """Append a JSON event line to the host's events.jsonl via the
+        transport. Used by the orchestrator for its own event emits
+        (``started`` / ``image_*`` / ``aborted_by_user`` / ``crashed`` /
+        ``completed_naturally``). The worker still uses the direct-file
+        :func:`runs.append_event` because it runs inside the container
+        with local filesystem access.
+        """
+        line = json.dumps({"type": type_, "ts": time.time(), **fields})
+        client.append_text(events_path, line + "\n")
+
     # ── Image prep + launch (background thread entry point) ───────────────────
 
     def _prepare_and_launch(self, host: TrainingHost, run_id: str, paths: RunPaths) -> None:
@@ -401,11 +435,12 @@ class Orchestrator:
         if run is None:
             logger.error("prepare-and-launch: run %s vanished", run_id)
             return
+        client = self._client_for_host(host, paths)
         try:
             cmd = self._build_command(run, paths)
             image = _extract_image_from_docker_argv(cmd)
             if image is not None:
-                self._ensure_image(image, paths)
+                self._ensure_image(client, image, paths)
         except _ImagePullError as exc:
             # Already emitted image_pull_failed; flip state to FAILED.
             run.error = f"image pull failed: {exc}"
@@ -417,7 +452,7 @@ class Orchestrator:
             run.error = f"prepare failed: {exc!r}"
             run.advance(RunState.FAILED)
             self._runs.save(run)
-            append_event(paths.events_jsonl, "crashed", error=str(exc), final_step=0)
+            self._emit_event(client, paths.events_jsonl, "crashed", error=str(exc), final_step=0)
             return
         # Race check: did the user stop us between image-prep and launch?
         # (stop() on PENDING transitions directly to ABORTED.)
@@ -436,7 +471,7 @@ class Orchestrator:
             run.error = f"launch failed: {exc!r}"
             run.advance(RunState.FAILED)
             self._runs.save(run)
-            append_event(paths.events_jsonl, "crashed", error=str(exc), final_step=0)
+            self._emit_event(client, paths.events_jsonl, "crashed", error=str(exc), final_step=0)
             return
         # Final race check: stop() can land between launch and advance.
         # If so, kill what we just spawned. --rm on docker run cleans up the
@@ -444,17 +479,23 @@ class Orchestrator:
         run_after = self._runs.load(run_id)
         if run_after is None or run_after.state != RunState.PENDING:
             try:
-                make_client(host.transport).stop(session_id, force=True)
+                client.stop(session_id, force=True)
             except Exception:
                 logger.exception("prepare-and-launch: post-launch kill failed (best-effort)")
             return
         run_after.session_id = session_id
         run_after.advance(RunState.RUNNING)
         self._runs.save(run_after)
-        append_event(paths.events_jsonl, "started", session_id=session_id, host_id=host.id)
+        self._emit_event(client, paths.events_jsonl, "started", session_id=session_id, host_id=host.id)
 
-    def _ensure_image(self, image: str, paths: RunPaths) -> None:
-        """Make sure ``image`` is present in the local docker cache.
+    def _ensure_image(self, client: TransportClient, image: str, paths: RunPaths) -> None:
+        """Make sure ``image`` is present in the host's docker cache.
+
+        Uses the transport client's image ops — ``image_inspect`` to check,
+        ``image_pull`` to fetch, ``image_size`` for the post-pull size.
+        For SubprocessClient those shell out to local ``docker``; for
+        SshClient they run ``docker`` over SSH on the remote host. The
+        orchestrator's view is identical either way.
 
         Emits one of:
           - ``image_cache_hit`` — image already local; no pull.
@@ -467,15 +508,16 @@ class Orchestrator:
         Always emits AT LEAST ONE event so the frontend can render a
         deterministic "what's happening" status. Pre: ``paths.root`` exists.
         """
-        if self._image.inspect(image):
-            append_event(paths.events_jsonl, "image_cache_hit", image=image)
+        if client.image_inspect(image):
+            self._emit_event(client, paths.events_jsonl, "image_cache_hit", image=image)
             return
-        append_event(paths.events_jsonl, "image_pull_started", image=image)
+        self._emit_event(client, paths.events_jsonl, "image_pull_started", image=image)
         t0 = time.time()
-        ok, err = self._image.pull(image)
+        ok, err = client.image_pull(image)
         duration_s = time.time() - t0
         if not ok:
-            append_event(
+            self._emit_event(
+                client,
                 paths.events_jsonl,
                 "image_pull_failed",
                 image=image,
@@ -486,8 +528,9 @@ class Orchestrator:
         # Best-effort size after pull (the docker manifest gives the
         # compressed size; the inspect gives the on-disk uncompressed size
         # — the latter is what most people mean by "image size").
-        size_bytes = self._image.image_size(image)
-        append_event(
+        size_bytes = client.image_size(image)
+        self._emit_event(
+            client,
             paths.events_jsonl,
             "image_pulled",
             image=image,
@@ -543,7 +586,9 @@ class Orchestrator:
         path on the selected run's poll.
         """
         before = run.state
-        terminal_event = self._read_terminal_event(paths.events_jsonl)
+        host = self._hosts.get(run.host_id)
+        client = self._client_for_host(host, paths)
+        terminal_event = self._read_terminal_event(client, paths.events_jsonl)
         if terminal_event == "completed_naturally" and run.state != RunState.COMPLETED:
             run.advance(RunState.COMPLETED)
         elif terminal_event == "aborted_by_user" and run.state != RunState.ABORTED:
@@ -569,9 +614,9 @@ class Orchestrator:
         """
         # New checkpoints discovered on disk → appended to manifest. Cheap
         # filesystem scan, idempotent on re-poll.
-        self._sync_checkpoints_manifest(run, paths)
+        self._sync_checkpoints_manifest(client, run, paths)
 
-        terminal_event = self._read_terminal_event(paths.events_jsonl)
+        terminal_event = self._read_terminal_event(client, paths.events_jsonl)
         alive = client.is_alive(run.session_id) if run.session_id is not None else False
 
         if terminal_event == "completed_naturally":
@@ -590,9 +635,9 @@ class Orchestrator:
             # Process gone, no terminal event. For the real-training (docker)
             # recipe this is the EXPECTED path — lerobot-train doesn't write
             # our events.jsonl. For the fake recipe, this is a crash.
-            self._write_terminal_event_from_exit(run, paths)
+            self._write_terminal_event_from_exit(client, run, paths)
 
-    def _write_terminal_event_from_exit(self, run: Run, paths: RunPaths) -> None:
+    def _write_terminal_event_from_exit(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
         """Process exited without writing a terminal event. Decide whether
         to call it ``completed_naturally`` or ``crashed`` based on artifacts.
 
@@ -604,55 +649,65 @@ class Orchestrator:
         Aborted runs (state==COMPLETING after a Stop) → ``aborted_by_user``.
         """
         if run.state == RunState.COMPLETING:
-            append_event(paths.events_jsonl, "aborted_by_user")
+            self._emit_event(client, paths.events_jsonl, "aborted_by_user")
             run.advance(RunState.ABORTED)
             self._runs.save(run)
             return
 
-        ckpt_count = sum(1 for _ in self._iter_checkpoint_dirs(run, paths))
-        progress = self._read_progress(paths.progress_json) or {}
+        ckpt_count = sum(1 for _ in self._iter_checkpoint_dirs(client, run, paths))
+        progress = self._read_progress(client, paths.progress_json) or {}
         final_step = progress.get("step", 0) if isinstance(progress, dict) else 0
 
         if ckpt_count > 0:
-            append_event(paths.events_jsonl, "completed_naturally", final_step=final_step)
+            self._emit_event(client, paths.events_jsonl, "completed_naturally", final_step=final_step)
             run.advance(RunState.COMPLETED)
         else:
             run.error = "process exited without writing a checkpoint"
-            append_event(paths.events_jsonl, "crashed", error=run.error, final_step=final_step)
+            self._emit_event(client, paths.events_jsonl, "crashed", error=run.error, final_step=final_step)
             run.advance(RunState.FAILED)
         self._runs.save(run)
 
-    def _sync_checkpoints_manifest(self, run: Run, paths: RunPaths) -> None:
+    def _sync_checkpoints_manifest(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
         """Append newly-discovered checkpoint dirs to ``checkpoints.jsonl``.
 
         Idempotent — skips dirs already in the manifest. Called on every
         poll, so the manifest catches up incrementally during a long run.
+        Routes every file op via the transport so the same code works for
+        local (subprocess) and remote (ssh) hosts.
         """
-        already_seen_steps = {e.step for e in self._read_manifest(paths.checkpoints_jsonl)}
-        for ckpt_dir, step in self._iter_checkpoint_dirs(run, paths):
+        already_seen_steps = {e.step for e in self._read_manifest(client, paths.checkpoints_jsonl)}
+        for ckpt_dir, step in self._iter_checkpoint_dirs(client, run, paths):
             if step in already_seen_steps:
                 continue
-            model_file = ckpt_dir / "pretrained_model" / "model.safetensors"
-            if not model_file.exists():
-                # Real lerobot-train layout; fake-runner uses checkpoints/<step>/model.safetensors
-                # at the top of the step dir. Fall back to direct model file.
-                candidates = list(ckpt_dir.glob("**/model.safetensors"))
-                if not candidates:
-                    continue
-                model_file = candidates[0]
-            try:
-                digest = _sha256_of(model_file)
-            except OSError:
+            # Locate the model file in the dir. Real lerobot-train layout
+            # is ``<ckpt>/pretrained_model/model.safetensors``; fake-runner
+            # writes ``<ckpt>/model.safetensors`` directly. Try both via
+            # transport-routed listing.
+            model_file: Path | None = None
+            for child in client.list_dir(ckpt_dir):
+                if child.name == "pretrained_model":
+                    # nested layout — model.safetensors lives one level deeper
+                    for grandchild in client.list_dir(child):
+                        if grandchild.name == "model.safetensors":
+                            model_file = grandchild
+                            break
+                    if model_file:
+                        break
+                elif child.name == "model.safetensors":
+                    model_file = child
+                    break
+            if model_file is None:
+                continue
+            digest = client.sha256_of(model_file)
+            if digest is None:
                 continue
             rel_path = str(model_file.relative_to(paths.root))
             line = json.dumps({"step": step, "path": rel_path, "sha256": digest, "ts": time.time()})
-            paths.checkpoints_jsonl.parent.mkdir(parents=True, exist_ok=True)
-            with paths.checkpoints_jsonl.open("a") as f:
-                f.write(line + "\n")
+            client.append_text(paths.checkpoints_jsonl, line + "\n")
             already_seen_steps.add(step)
 
     @staticmethod
-    def _iter_checkpoint_dirs(run: Run, paths: RunPaths):
+    def _iter_checkpoint_dirs(client: TransportClient, run: Run, paths: RunPaths):
         """Yield ``(checkpoint_dir, step_number)`` pairs found on disk.
 
         Looks in the right place for the recipe:
@@ -663,15 +718,11 @@ class Orchestrator:
         """
         subdir = output_subdir_in_run(run)
         ckpts_base = paths.root / subdir / "checkpoints" if subdir else paths.root / "checkpoints"
-        if not ckpts_base.is_dir():
-            return
         # Parse first, then sort by step number — sorting directories by
         # name puts ``checkpoint-10`` before ``checkpoint-5`` (alphabetical)
         # which would write the manifest out of step order.
         pairs: list[tuple[Path, int]] = []
-        for child in ckpts_base.iterdir():
-            if not child.is_dir():
-                continue
+        for child in client.list_dir(ckpts_base):
             # Parse step number from the dir name. Two layouts supported:
             #   "000005"        → lerobot-train (zero-padded)
             #   "checkpoint-5"  → HVLA flow_matching trainer
@@ -683,20 +734,22 @@ class Orchestrator:
         yield from pairs
 
     @staticmethod
-    def _read_progress(progress_path: Path) -> dict[str, Any] | None:
-        if not progress_path.exists():
+    def _read_progress(client: TransportClient, progress_path: Path) -> dict[str, Any] | None:
+        text = client.read_text(progress_path)
+        if text is None:
             return None
         try:
-            return json.loads(progress_path.read_text())
-        except (json.JSONDecodeError, OSError):
+            return json.loads(text)
+        except json.JSONDecodeError:
             return None
 
     @staticmethod
-    def _read_manifest(manifest_path: Path) -> list[CheckpointEntry]:
-        if not manifest_path.exists():
+    def _read_manifest(client: TransportClient, manifest_path: Path) -> list[CheckpointEntry]:
+        text = client.read_text(manifest_path)
+        if text is None:
             return []
         entries: list[CheckpointEntry] = []
-        for line in manifest_path.read_text().splitlines():
+        for line in text.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -715,27 +768,40 @@ class Orchestrator:
         return entries
 
     @staticmethod
-    def _read_stderr_tail(stderr_path: Path, n_bytes: int) -> str:
-        if not stderr_path.exists() or n_bytes <= 0:
+    def _read_stderr_tail(client: TransportClient, stderr_path: Path, n_bytes: int) -> str:
+        if n_bytes <= 0:
             return ""
-        try:
-            size = stderr_path.stat().st_size
-            offset = max(0, size - n_bytes)
-            with stderr_path.open("rb") as f:
-                f.seek(offset)
-                return f.read().decode("utf-8", errors="replace")
-        except OSError:
-            return ""
+        return client.read_tail(stderr_path, n_bytes).decode("utf-8", errors="replace")
 
     @staticmethod
-    def _read_terminal_event(events_path: Path) -> str | None:
+    def _read_events(client: TransportClient, events_path: Path) -> list[dict[str, Any]]:
+        """Read events.jsonl entries in order. Routes via the transport so
+        SSH hosts work without bind-mounting events.jsonl back to the GUI
+        server."""
+        text = client.read_text(events_path)
+        if text is None:
+            return []
+        out: list[dict[str, Any]] = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return out
+
+    @staticmethod
+    def _read_terminal_event(client: TransportClient, events_path: Path) -> str | None:
         """Scan events.jsonl for a terminal event type. Returns the type name
         or None. Terminal events: completed_naturally / aborted_by_user / crashed.
         """
-        if not events_path.exists():
+        text = client.read_text(events_path)
+        if text is None:
             return None
         terminal = {"completed_naturally", "aborted_by_user", "crashed"}
-        for line in events_path.read_text().splitlines():
+        for line in text.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -749,18 +815,6 @@ class Orchestrator:
 
 
 # ── Module helpers ────────────────────────────────────────────────────────────
-
-
-def _sha256_of(path: Path, chunk: int = 1 << 20) -> str:
-    """Streaming sha256 hex digest of a file."""
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            block = f.read(chunk)
-            if not block:
-                break
-            h.update(block)
-    return h.hexdigest()
 
 
 def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
@@ -827,26 +881,6 @@ def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
     return freed, True
 
 
-def _read_events(events_path: Path) -> list[dict[str, Any]]:
-    """Read all events from events.jsonl. Returns [] if the file is missing
-    or every line malformed; otherwise returns valid entries in file order.
-
-    Cheap (file is small — events.jsonl never exceeds a few KB per run).
-    """
-    if not events_path.exists():
-        return []
-    out: list[dict[str, Any]] = []
-    for line in events_path.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
-
-
 # ── Image preparation (pre-pull + cache check) ────────────────────────────────
 
 
@@ -899,79 +933,3 @@ def _extract_image_from_docker_argv(cmd: list[str]) -> str | None:
         # First non-flag positional: this is the image.
         return tok
     return None
-
-
-class ImageRunner:
-    """Shim for the two docker calls C5 needs (``inspect`` and ``pull``).
-
-    The default talks to the local docker daemon via subprocess; tests
-    inject a fake to assert on which calls happen without touching docker.
-    Kept narrow on purpose — the orchestrator should never grow a generic
-    "run docker" surface, and this is the only API it needs.
-    """
-
-    def inspect(self, image: str) -> bool:  # pragma: no cover - abstract
-        """Return True iff ``image`` exists locally."""
-        raise NotImplementedError
-
-    def pull(self, image: str) -> tuple[bool, str]:  # pragma: no cover
-        """Pull ``image``. Returns ``(ok, stderr_tail)``."""
-        raise NotImplementedError
-
-    def image_size(self, image: str) -> int | None:  # pragma: no cover
-        """On-disk size of the image in bytes, or None if unknown."""
-        raise NotImplementedError
-
-
-class _DefaultImageRunner(ImageRunner):
-    """Production impl: shells out to ``docker`` on PATH.
-
-    All three calls are bounded — ``inspect`` is ~50ms cache-hit, much
-    faster on misses (immediate non-zero exit); ``image_size`` is similarly
-    fast; ``pull`` is what we're trying to expose timing for, so it gets
-    no extra timeout beyond what the user's host configures.
-    """
-
-    def inspect(self, image: str) -> bool:
-        try:
-            r = subprocess.run(
-                ["docker", "image", "inspect", image],
-                capture_output=True,
-                timeout=30,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
-        return r.returncode == 0
-
-    def pull(self, image: str) -> tuple[bool, str]:
-        try:
-            r = subprocess.run(
-                ["docker", "pull", image],
-                capture_output=True,
-                text=True,
-                # No timeout — pulls genuinely take 10+ min on slow links.
-            )
-        except FileNotFoundError as exc:
-            return False, f"docker binary not found: {exc}"
-        if r.returncode != 0:
-            # Combined tail — stderr is where pull failures land; include
-            # stdout in case of a "Status: ..." line that helps diagnose.
-            return False, (r.stderr or r.stdout or "")[-1000:]
-        return True, ""
-
-    def image_size(self, image: str) -> int | None:
-        try:
-            r = subprocess.run(
-                ["docker", "image", "inspect", "-f", "{{.Size}}", image],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return None
-        if r.returncode != 0:
-            return None
-        try:
-            return int(r.stdout.strip())
-        except ValueError:
-            return None

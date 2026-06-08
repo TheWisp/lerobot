@@ -29,6 +29,7 @@ operations it needs are intentionally narrow:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import shutil
 import signal
@@ -116,6 +117,57 @@ class TransportClient(Protocol):
         For SubprocessClient, both paths are local; this is just ``shutil.copy``.
         For SshClient (later), this is SCP. ``dst``'s parent is created if missing.
         """
+        ...
+
+    def read_tail(self, path: Path, n_bytes: int) -> bytes:
+        """Return up to the last ``n_bytes`` of ``path``. Empty bytes if
+        the file doesn't exist. Cheap for both transports: subprocess
+        seeks; SSH does ``ssh remote 'tail -c N <path>'``."""
+        ...
+
+    def list_dir(self, path: Path) -> list[Path]:
+        """List immediate children of ``path``. Empty if the dir doesn't
+        exist. Names are returned as full ``Path`` joined to ``path`` (so
+        the caller doesn't have to know the host's separator)."""
+        ...
+
+    def sha256_of(self, path: Path) -> str | None:
+        """Hex digest of ``path``'s sha256. None if the file doesn't
+        exist. Host-side hash so SSH transports don't have to SCP the
+        file just to checksum it."""
+        ...
+
+    def append_text(self, path: Path, text: str) -> None:
+        """Append ``text`` to ``path`` (created if missing, parent dir
+        too). Used by the orchestrator for its own event-emit writes
+        (started / image_* / aborted_by_user / etc.) so they land on the
+        same events.jsonl the worker writes to."""
+        ...
+
+    # ── Image (docker) ops, host-side ──────────────────────────────────────────
+    #
+    # Folded into the TransportClient Protocol so the host abstraction is
+    # complete — there used to be a separate `ImageRunner` shim that only
+    # the orchestrator's image-prep path used, but it had the same shape
+    # as a transport: "do something on the host." The SSH transport will
+    # implement these as ``ssh remote 'docker ...'``; the subprocess
+    # transport shells out locally.
+
+    def image_inspect(self, tag: str) -> bool:
+        """Whether the image is present in this host's docker cache.
+        Cheap (~50 ms). Used as the cache-hit check before pull."""
+        ...
+
+    def image_pull(self, tag: str) -> tuple[bool, str]:
+        """Pull ``tag`` on this host. Returns ``(ok, stderr_tail)``;
+        ``stderr_tail`` is non-empty only on failure. Can be long — the
+        caller already handles this in a background thread (C5)."""
+        ...
+
+    def image_size(self, tag: str) -> int | None:
+        """On-disk size of the image in bytes (post-pull). None if
+        unknown / image absent. Used for the ``image_pulled`` event's
+        ``size_bytes`` field."""
         ...
 
 
@@ -212,6 +264,80 @@ class SubprocessClient:
     def fetch_file(self, src: Path, dst: Path) -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(src, dst)
+
+    def read_tail(self, path: Path, n_bytes: int) -> bytes:
+        assert n_bytes >= 0, f"n_bytes must be non-negative, got {n_bytes}"
+        try:
+            size = path.stat().st_size
+        except FileNotFoundError:
+            return b""
+        with path.open("rb") as f:
+            f.seek(max(0, size - n_bytes))
+            return f.read()
+
+    def list_dir(self, path: Path) -> list[Path]:
+        try:
+            return list(path.iterdir())
+        except FileNotFoundError:
+            return []
+
+    def sha256_of(self, path: Path) -> str | None:
+        if not path.exists():
+            return None
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            while True:
+                block = f.read(1 << 20)
+                if not block:
+                    break
+                h.update(block)
+        return h.hexdigest()
+
+    def append_text(self, path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(text)
+
+    def image_inspect(self, tag: str) -> bool:
+        try:
+            r = subprocess.run(
+                ["docker", "image", "inspect", tag],
+                capture_output=True,
+                timeout=30,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        return r.returncode == 0
+
+    def image_pull(self, tag: str) -> tuple[bool, str]:
+        try:
+            r = subprocess.run(
+                ["docker", "pull", tag],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            return False, f"docker binary not found: {exc}"
+        if r.returncode != 0:
+            return False, (r.stderr or r.stdout or "")[-1000:]
+        return True, ""
+
+    def image_size(self, tag: str) -> int | None:
+        try:
+            r = subprocess.run(
+                ["docker", "image", "inspect", "-f", "{{.Size}}", tag],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+        if r.returncode != 0:
+            return None
+        try:
+            return int(r.stdout.strip())
+        except ValueError:
+            return None
 
 
 # ── Factory ────────────────────────────────────────────────────────────────────

@@ -22,7 +22,6 @@ import pytest
 from lerobot.gui.training.hosts import HostRegistry, TrainingHost
 from lerobot.gui.training.orchestrator import (
     HostBusyError,
-    ImageRunner,
     Orchestrator,
     StartRequest,
     UnknownHostError,
@@ -30,7 +29,7 @@ from lerobot.gui.training.orchestrator import (
     _extract_image_from_docker_argv,
 )
 from lerobot.gui.training.runs import RunRegistry, RunState
-from lerobot.gui.training.transport import SubprocessTransport
+from lerobot.gui.training.transport import SubprocessClient, SubprocessTransport
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -525,26 +524,57 @@ def test_list_runs_reconciles_abort_without_poll(host: TrainingHost, tmp_path: P
 # ── C5: image preparation (pre-pull + events) ─────────────────────────────────
 
 
-class _FakeImageRunner(ImageRunner):
-    """Lets tests script how docker inspect / pull behave for a run."""
+class _FakeTransportClient(SubprocessClient):
+    """Subclass that overrides the docker-image ops for tests, leaving every
+    file/launch op delegating to the real SubprocessClient impl.
 
-    def __init__(self, *, inspect_returns=False, pull_returns=(True, ""), size=42):
+    The image ops used to live on a separate ``ImageRunner`` shim; they're
+    now part of :class:`TransportClient`. Tests inject this via
+    ``Orchestrator(make_client_fn=lambda transport: fake)`` instead of the
+    old ``image_runner=`` kwarg.
+    """
+
+    def __init__(
+        self,
+        transport: SubprocessTransport,
+        *,
+        inspect_returns: bool = False,
+        pull_returns: tuple[bool, str] = (True, ""),
+        size: int = 42,
+    ) -> None:
+        super().__init__(transport)
         self.inspect_returns = inspect_returns
         self.pull_returns = pull_returns
         self.size = size
         self.inspect_calls: list[str] = []
         self.pull_calls: list[str] = []
 
-    def inspect(self, image: str) -> bool:
-        self.inspect_calls.append(image)
+    def image_inspect(self, tag: str) -> bool:
+        self.inspect_calls.append(tag)
         return self.inspect_returns
 
-    def pull(self, image: str) -> tuple[bool, str]:
-        self.pull_calls.append(image)
+    def image_pull(self, tag: str) -> tuple[bool, str]:
+        self.pull_calls.append(tag)
         return self.pull_returns
 
-    def image_size(self, image: str) -> int | None:
+    def image_size(self, tag: str) -> int | None:
         return self.size
+
+
+def _make_orch_with_fake_image(
+    host, tmp_path: Path, **fake_kwargs
+) -> tuple[Orchestrator, _FakeTransportClient]:
+    """Wire up an Orchestrator whose transport-client factory always returns
+    the same fake (so we can inspect docker-op call records after a run)."""
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    fake = _FakeTransportClient(SubprocessTransport(workdir=tmp_path / "workdir"), **fake_kwargs)
+    orch = Orchestrator(
+        host_registry=hr,
+        run_registry=rr,
+        make_client_fn=lambda _transport: fake,
+    )
+    return orch, fake
 
 
 def _events_of(orch: Orchestrator, run_id: str) -> list[dict]:
@@ -602,21 +632,8 @@ def test_extract_image_unknown_flag_returns_none() -> None:
 
 
 def test_image_cache_hit_emits_event_and_skips_pull(host, tmp_path: Path) -> None:
-    """When the image is already local, orchestrator emits
-    ``image_cache_hit`` and never calls ``pull``."""
-    fake = _FakeImageRunner(inspect_returns=True)
-    hr = HostRegistry(hosts=[host])
-    rr = RunRegistry(runs_dir=tmp_path / "runs")
-    orch = Orchestrator(host_registry=hr, run_registry=rr, image_runner=fake)
-    # We need a docker recipe — use the real one without invoking docker.
-    # The fake image runner never calls docker; the orchestrator only spawns
-    # the worker subprocess if the recipe isn't fake. We use the fake
-    # recipe here to keep the test free of docker entirely; the cache-hit
-    # path only fires when _extract_image_from_docker_argv returns
-    # something, so use a probe at the helper level + a separate test
-    # that constructs the docker-shaped argv synthetically.
-    # Plain integration check: with the fake recipe, no docker calls happen
-    # at all.
+    """Fake recipe path: no docker invocation at all → no image_* events."""
+    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
     req = StartRequest(
         host_id="test-host",
         recipe_name="fake-rec",
@@ -634,16 +651,14 @@ def test_image_cache_hit_emits_event_and_skips_pull(host, tmp_path: Path) -> Non
 
 
 def test_ensure_image_cache_hit_emits_only_one_event(host, tmp_path: Path) -> None:
-    """Direct unit-test of _ensure_image with a cache hit."""
-    fake = _FakeImageRunner(inspect_returns=True)
-    hr = HostRegistry(hosts=[host])
-    rr = RunRegistry(runs_dir=tmp_path / "runs")
-    orch = Orchestrator(host_registry=hr, run_registry=rr, image_runner=fake)
+    """Direct unit-test of _ensure_image with a cache hit. Uses the fake
+    transport client so the call lands on its scripted image_inspect."""
+    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
     from lerobot.gui.training.runs import RunPaths
 
     paths = RunPaths.for_run("test", runs_dir=tmp_path / "runs")
     paths.ensure_exists()
-    orch._ensure_image("ghcr.io/foo/img:tag", paths)
+    orch._ensure_image(fake, "ghcr.io/foo/img:tag", paths)
     assert fake.inspect_calls == ["ghcr.io/foo/img:tag"]
     assert fake.pull_calls == []  # never pulled
     import json
@@ -657,15 +672,14 @@ def test_ensure_image_cache_hit_emits_only_one_event(host, tmp_path: Path) -> No
 
 def test_ensure_image_cache_miss_pulls_and_emits_two_events(host, tmp_path: Path) -> None:
     """Cache miss → image_pull_started + image_pulled (with duration_s + size_bytes)."""
-    fake = _FakeImageRunner(inspect_returns=False, pull_returns=(True, ""), size=1234)
-    hr = HostRegistry(hosts=[host])
-    rr = RunRegistry(runs_dir=tmp_path / "runs")
-    orch = Orchestrator(host_registry=hr, run_registry=rr, image_runner=fake)
+    orch, fake = _make_orch_with_fake_image(
+        host, tmp_path, inspect_returns=False, pull_returns=(True, ""), size=1234
+    )
     from lerobot.gui.training.runs import RunPaths
 
     paths = RunPaths.for_run("test", runs_dir=tmp_path / "runs")
     paths.ensure_exists()
-    orch._ensure_image("ghcr.io/foo/img:tag", paths)
+    orch._ensure_image(fake, "ghcr.io/foo/img:tag", paths)
     assert fake.pull_calls == ["ghcr.io/foo/img:tag"]
     import json
 
@@ -683,16 +697,15 @@ def test_ensure_image_pull_failure_emits_pull_failed_and_raises(host, tmp_path: 
     so the orchestrator can flip the run to FAILED."""
     from lerobot.gui.training.orchestrator import _ImagePullError
 
-    fake = _FakeImageRunner(inspect_returns=False, pull_returns=(False, "manifest unknown\n"))
-    hr = HostRegistry(hosts=[host])
-    rr = RunRegistry(runs_dir=tmp_path / "runs")
-    orch = Orchestrator(host_registry=hr, run_registry=rr, image_runner=fake)
+    orch, fake = _make_orch_with_fake_image(
+        host, tmp_path, inspect_returns=False, pull_returns=(False, "manifest unknown\n")
+    )
     from lerobot.gui.training.runs import RunPaths
 
     paths = RunPaths.for_run("test", runs_dir=tmp_path / "runs")
     paths.ensure_exists()
     with pytest.raises(_ImagePullError, match="manifest unknown"):
-        orch._ensure_image("ghcr.io/foo/img:bad", paths)
+        orch._ensure_image(fake, "ghcr.io/foo/img:bad", paths)
     import json
 
     events = [json.loads(line) for line in paths.events_jsonl.read_text().splitlines()]
