@@ -436,18 +436,20 @@ Coverage bar — for every tool, the test file should include:
   Always use the synthetic factory or a clearly-marked throwaway
   (e.g. `thewisp/test_*_do_not_use`).
 
-**4. Add visible proof.** Two complementary artifacts for any tool
-with a user-observable effect:
+**4. Add visible proof.** For any tool with a user-observable effect,
+generate a **transcript log** — a markdown of the call shape + response
+shape, including happy paths AND error cases AND any "confused agent"
+scenario where input semantics could be misread. See
+`mcp/docs/proofs/dataset_edit_transcript.md` (or any of the other
+`*_transcript.md` files) for the format. For tools that change what the
+GUI shows on-screen, also capture a before/after PNG pair (e.g. the
+`feat_*.png` files alongside the transcripts).
 
-- **Screenshot proof** — Playwright drives the running GUI, fires
-  one MCP call, probes the DOM, captures before/after PNGs with a
-  verdict. See `mcp/docs/proofs_dataset_edit.py` /
-  `mcp/docs/proofs_e2e.py`.
-- **Transcript log** — generate a markdown of the call shape +
-  response shape, including happy paths AND error cases AND any
-  "confused agent" scenario where input semantics could be
-  misread. The same proof script can emit both — see
-  `mcp/docs/proofs/dataset_edit_transcript.md` for the format.
+The driver scripts that produced these transcripts/PNGs are
+**not** checked in — they're hardcoded to the author's local host and
+throwaway repos and nobody else can run them. The transcripts and PNGs
+**are** the durable artifacts; treat them as the authoritative record
+of what the tool did at merge time.
 
 Wire-level error response shape (`isError=True, content=[message]`)
 should also be probed at least once during development against the
@@ -490,8 +492,8 @@ A new command type needs **four** matching changes:
    effect happen. **Integrate with renderTree state** (don't just
    mutate DOM directly) so the effect survives re-renders.
 
-Then add a per-feature proof in `mcp/docs/proofs_e2e.py` so the
-visible effect is verified.
+Then capture a before/after PNG pair of the visible effect (alongside
+the transcript) so the bridge behavior is verified.
 
 ### Anti-patterns to avoid
 
@@ -501,8 +503,9 @@ visible effect is verified.
 - **Don't add a tool with no visible effect** if the design claims
   one (the v1 `set_filter` lesson — advertised but had no
   `dataset-search` UI to land on). Either land the GUI surface in the
-  same PR, or don't ship the tool. See `proofs_e2e.py` for the
-  per-feature proof pattern.
+  same PR, or don't ship the tool. The per-feature proof pattern is
+  a before/after PNG pair alongside the transcript (see
+  `mcp/docs/proofs/feat_*.png`).
 - **Don't share state via module globals** between two `build_server`
   instances. `ServerState` is bound to a single instance via closure
   capture; if you find yourself wanting `global state`, refactor to
@@ -525,25 +528,21 @@ visible effect is verified.
   `s.store.delete_tag(...)`. All path-safe (parameterized SQL).
 - **Bounds-checked episode access**: `if not (0 <= episode_id < meta.total_episodes): raise ValueError(...)`. Mirror this in every episode-scoped tool.
 
-### Running the demos
+### Demos
 
-```bash
-# End-to-end (9 calls, captured on video + transcript):
-python src/lerobot/mcp/docs/demo_e2e.py
+The shipped demo artifacts live under `mcp/docs/`:
 
-# Per-feature visible proofs (5 before/after PNGs):
-python src/lerobot/mcp/docs/proofs_e2e.py
-```
+- `demo_e2e.md` / `demo_e2e.gif` / `demo_e2e.mp4` — end-to-end 9-call
+  walkthrough against the GUI.
+- `proofs/*_transcript.md` — per-tool call/response logs (read-tier,
+  dataset edit, hub edit, robots, run).
+- `proofs/feat_*.png` — before/after screenshots for the bridge tools
+  that change what the GUI shows.
 
-Both spin up a Playwright-controlled Chromium tab against a running
-GUI at `http://127.0.0.1:8000`. Start the GUI first
-(`python -m lerobot.gui --host 0.0.0.0 --port 8000`); the demo
-issues an ephemeral token via `TokenStore` and revokes it on exit.
-Outputs land in `mcp/docs/` and `mcp/docs/proofs/`.
-
-Neither is wired into CI — they're one-off snapshots of "what worked
-at this commit," not regression tests. Re-run them after changes that
-touch the surfaces they exercise.
+These are static snapshots of "what worked at this commit," not
+regression tests — the formal coverage is in `tests/mcp/`. When
+adding or changing a tool, re-capture the artifact for that tool
+(transcript or PNG pair) and check it in alongside the code.
 
 ---
 
