@@ -331,3 +331,63 @@ def test_clear_terminal_endpoint(client: TestClient) -> None:
     body2 = resp2.json()
     assert body2["deleted"] == []
     assert body2["models_kept"] == 0
+
+
+# ── /api/training/policies (catalog) ──────────────────────────────────────────
+
+
+def test_list_policies_includes_act_and_hvla(client: TestClient) -> None:
+    """Auto-discovery should pick up every PreTrainedConfig subclass + the
+    manually-registered HVLA recipe."""
+    resp = client.get("/api/training/policies")
+    assert resp.status_code == 200
+    catalog = resp.json()
+    types = [p["type_name"] for p in catalog]
+    # Auto-discovered draccus policies (sampling — full set depends on extras)
+    assert "act" in types
+    assert "diffusion" in types
+    # Manually-registered non-draccus recipe
+    assert "hvla_flow_s1" in types
+
+
+def test_list_policies_act_entry_has_renderable_fields(client: TestClient) -> None:
+    """ACT's draccus config should expose its scalar fields with defaults
+    + recognisable form types."""
+    catalog = client.get("/api/training/policies").json()
+    act = next(p for p in catalog if p["type_name"] == "act")
+    assert act["recipe"] is None  # default lerobot-train
+    assert act["arg_key_prefix"] == "policy."
+    assert act["fields"], "act should have at least one renderable field"
+    field_names = {f["name"] for f in act["fields"]}
+    # Spot-check that the headline ACT fields are present
+    assert "chunk_size" in field_names
+    assert "n_action_steps" in field_names
+    assert "dim_model" in field_names
+    # Every field has a usable form type
+    for f in act["fields"]:
+        assert f["type"] in {"int", "float", "bool", "string", "select"}
+        assert "default" in f
+
+
+def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None:
+    """HVLA's manual entry should declare its recipe marker + bare
+    (no-prefix) arg keys."""
+    catalog = client.get("/api/training/policies").json()
+    hvla = next(p for p in catalog if p["type_name"] == "hvla_flow_s1")
+    assert hvla["recipe"] == "hvla_flow_s1"
+    assert hvla["arg_key_prefix"] == ""
+    field_names = {f["name"] for f in hvla["fields"]}
+    assert {"chunk_size", "num_inference_steps", "hidden_dim"} <= field_names
+
+
+def test_list_policies_skips_complex_fields(client: TestClient) -> None:
+    """Fields the form can't usefully render (list/dict/nested-dataclass)
+    must be dropped from the catalog — otherwise the form would silently
+    fall back to a free-text input that the user can't fill correctly."""
+    catalog = client.get("/api/training/policies").json()
+    act = next(p for p in catalog if p["type_name"] == "act")
+    # ACT's config defines complex-typed fields like
+    # optimizer_lr_backbone_scale, image_features, etc. — none of those
+    # should be in the catalog.
+    for f in act["fields"]:
+        assert f["type"] in {"int", "float", "bool", "string", "select"}

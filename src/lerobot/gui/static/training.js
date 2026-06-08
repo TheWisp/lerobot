@@ -15,6 +15,7 @@
 const TRAINING_POLL_MS = 3000;
 let _trainingHosts = [];
 let _trainingDatasets = [];
+let _trainingPolicyCatalog = []; // populated by trainingLoadPolicies()
 let _trainingPollTimer = null;
 
 // View mode: which thing the main pane is showing.
@@ -56,6 +57,22 @@ async function trainingLoadHosts() {
     console.error("training: failed to load hosts", e);
   }
   trainingRenderHostsInfo();
+}
+
+// Fetch the policy catalog from the backend. Auto-discovered from
+// PreTrainedConfig.get_known_choices() + HVLA's manual entry — see
+// scripts/training/README.md § "Policies in the GUI". Cached for the
+// lifetime of the page; refresh requires a reload (rare event).
+async function trainingLoadPolicies() {
+  if (_trainingPolicyCatalog.length > 0) return; // cached
+  try {
+    const resp = await fetch("/api/training/policies");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    _trainingPolicyCatalog = await resp.json();
+  } catch (e) {
+    _trainingPolicyCatalog = [];
+    console.error("training: failed to load policy catalog", e);
+  }
 }
 
 async function trainingLoadDatasets() {
@@ -464,11 +481,12 @@ async function trainingShowStartForm(prefill) {
   // Clear selected run so polling doesn't try to refresh detail over the form.
   _trainingSelectedRunId = null;
   trainingShowMain("form");
-  // Load datasets lazily on first form-open
-  if (_trainingDatasets.length === 0) {
+  // Load datasets + policy catalog lazily on first form-open. Both are
+  // network-fetched and cheap to cache for the page lifetime.
+  if (_trainingDatasets.length === 0 || _trainingPolicyCatalog.length === 0) {
     document.getElementById("training-detail").innerHTML =
-      '<div class="training-detail-pane"><div class="training-empty-hint">Loading datasets…</div></div>';
-    await trainingLoadDatasets();
+      '<div class="training-detail-pane"><div class="training-empty-hint">Loading datasets + policy catalog…</div></div>';
+    await Promise.all([trainingLoadDatasets(), trainingLoadPolicies()]);
   }
   if (_trainingMode === "form") trainingRenderStartForm(prefill); // user might have nav'd away
   trainingRefreshRuns(); // unselect any previously-highlighted row
@@ -552,51 +570,34 @@ function formatBytes(n) {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-// Policy-specific hyperparameter forms. Defaults copied from lerobot upstream:
-//   ACT:       src/lerobot/policies/act/configuration_act.py
-//   Diffusion: src/lerobot/policies/diffusion/configuration_diffusion.py
-//   HVLA S1:   src/lerobot/policies/hvla/s1/flow_matching/train.py
-// Revisit when adding a fourth policy (becomes worth introspecting the
-// dataclass via the API rather than hand-writing — see DESIGN.md
-// Future enhancements: policy-config introspection).
+// Policy catalog is fetched at form-load from GET /api/training/policies.
+// The backend auto-discovers every PreTrainedConfig subclass (via
+// `@PreTrainedConfig.register_subclass(...)`) plus manually-registered
+// non-draccus recipes (HVLA). Adding a new lerobot-train-registered
+// policy upstream surfaces in this picker with NO frontend code edit.
+// See scripts/training/README.md § "Policies in the GUI" for the data
+// shape + the field-renderable type matrix.
 //
-// `recipe` (optional): drives the backend recipe builder. Default is
-// lerobot-train (dotted-key draccus CLI); HVLA uses its own argparse
-// script (dashed-key snake_case CLI, no `policy.type` field).
-const POLICY_FORMS = {
-  act: {
-    label: "ACT (Action Chunking Transformer)",
-    fields: [
-      { key: "policy.chunk_size", label: "Chunk size", type: "int", default: 100 },
-      { key: "policy.n_action_steps", label: "Action steps", type: "int", default: 100 },
-      { key: "policy.dim_model", label: "Model dim", type: "int", default: 512 },
-      { key: "policy.n_heads", label: "Attention heads", type: "int", default: 8 },
-      { key: "policy.n_encoder_layers", label: "Encoder layers", type: "int", default: 4 },
-      { key: "policy.n_decoder_layers", label: "Decoder layers", type: "int", default: 1 },
-      { key: "policy.use_vae", label: "Use VAE", type: "bool", default: true },
-    ],
-  },
-  diffusion: {
-    label: "Diffusion Policy",
-    fields: [
-      { key: "policy.horizon", label: "Horizon", type: "int", default: 16 },
-      { key: "policy.n_action_steps", label: "Action steps", type: "int", default: 8 },
-      { key: "policy.num_train_timesteps", label: "Train timesteps", type: "int", default: 100 },
-      { key: "policy.num_inference_steps", label: "Inference steps", type: "int", default: 100 },
-    ],
-  },
-  hvla_flow_s1: {
-    label: "HVLA Flow Matching S1 (no S2)",
-    recipe: "hvla_flow_s1",
-    fields: [
-      { key: "chunk_size", label: "Chunk size", type: "int", default: 50 },
-      { key: "num_inference_steps", label: "Inference steps", type: "int", default: 15 },
-      { key: "hidden_dim", label: "Hidden dim", type: "int", default: 768 },
-      { key: "num_decoder_layers", label: "Decoder layers", type: "int", default: 6 },
-      { key: "num_workers", label: "Data workers", type: "int", default: 4 },
-    ],
-  },
-};
+// One adapter helper: each catalog entry is
+// ``{type_name, label, recipe, arg_key_prefix, fields: [{name, label,
+// type, default, choices?, description?}]}``. The frontend prepends
+// ``arg_key_prefix`` (``"policy."`` for draccus recipes, ``""`` for HVLA)
+// to each field's ``name`` when building the args dict that POST
+// /api/training/runs receives.
+
+function trainingPolicyEntry(typeName) {
+  return _trainingPolicyCatalog.find((p) => p.type_name === typeName);
+}
+
+// Field-key the form input uses to back a policy field. The backend
+// returns the bare ``name`` (e.g. ``chunk_size``); the form's input name
+// has to include the args-dict key (``policy.chunk_size`` for draccus,
+// ``chunk_size`` for HVLA) so trainingSubmitStart can read it back via
+// FormData with the right key. Returning the prefixed key here keeps
+// both sides aligned.
+function trainingFormKey(policyEntry, field) {
+  return (policyEntry?.arg_key_prefix || "") + field.name;
+}
 
 // Common training fields shared across all policies. Copied from
 // src/lerobot/configs/train.py defaults.
@@ -624,9 +625,12 @@ function trainingRenderStartForm(prefill) {
           )
           .join("");
 
-  const policyOptions = Object.entries(POLICY_FORMS)
-    .map(([key, p]) => `<option value="${key}">${escapeHtml(p.label)}</option>`)
-    .join("");
+  const policyOptions =
+    _trainingPolicyCatalog.length === 0
+      ? `<option value="" disabled>Loading policies…</option>`
+      : _trainingPolicyCatalog
+          .map((p) => `<option value="${escapeHtml(p.type_name)}">${escapeHtml(p.label)}</option>`)
+          .join("");
 
   el.innerHTML = `
     <div class="training-detail-pane">
@@ -686,21 +690,27 @@ function trainingRenderStartForm(prefill) {
     </div>
   `;
   // Render the policy-specific fields. If we have a prefill, derive the
-  // policy from its args; otherwise fall back to the first POLICY_FORMS
-  // entry (ACT).
-  const initialPolicy = trainingPolicyFromArgs(prefill?.args) || Object.keys(POLICY_FORMS)[0];
+  // policy from its args; otherwise fall back to the first catalog entry.
+  const initialPolicy =
+    trainingPolicyFromArgs(prefill?.args) || _trainingPolicyCatalog[0]?.type_name || "";
   trainingRenderPolicyFields(initialPolicy);
   if (prefill) trainingApplyPrefill(prefill, initialPolicy);
 }
 
-// Map a Run.args dict back to its policy_type key. Mirrors the inverse
-// of trainingSubmitStart's args-construction: lerobot-train recipes
-// carry `policy.type=<key>`; HVLA carries `__recipe__=hvla_flow_s1` and
-// no policy.type at all.
+// Map a Run.args dict back to its policy_type key. Inverse of
+// trainingSubmitStart's args-construction:
+//   - lerobot-train recipes carry `policy.type=<key>`
+//   - non-draccus recipes (e.g. HVLA) carry `__recipe__=<marker>` instead
+//     of `policy.type`. The catalog entry's `recipe` field is the marker
+//     to match.
 function trainingPolicyFromArgs(args) {
   if (!args) return null;
-  if (args["__recipe__"] === "hvla_flow_s1") return "hvla_flow_s1";
   if (typeof args["policy.type"] === "string") return args["policy.type"];
+  const recipeMarker = args["__recipe__"];
+  if (typeof recipeMarker === "string") {
+    const entry = _trainingPolicyCatalog.find((p) => p.recipe === recipeMarker);
+    if (entry) return entry.type_name;
+  }
   return null;
 }
 
@@ -709,7 +719,7 @@ function trainingPolicyFromArgs(args) {
 function trainingApplyPrefill(prefill, policyType) {
   const form = document.getElementById("training-start-form");
   if (!form) return;
-  const policy = POLICY_FORMS[policyType];
+  const policy = trainingPolicyEntry(policyType);
 
   // Dataset dropdown — only set if the option exists (dataset may have
   // been removed since the previous run; let the user notice).
@@ -731,12 +741,16 @@ function trainingApplyPrefill(prefill, policyType) {
     if (labelInput) labelInput.value = prefill.recipe_name;
   }
 
-  // Fill each field by name. Both the shared TRAINING_FIELDS (steps,
-  // batch_size, save_freq) and the policy-specific fields are referenced
-  // by their `key`, which matches the form input's `name` attribute.
+  // Fill each field by its FORM KEY (= arg_key_prefix + field.name).
+  // Catalog fields use bare ``name``; shared TRAINING_FIELDS use ``key``.
+  // The input's HTML name attribute is the form key in both cases.
   const args = prefill.args || {};
-  const allFields = [...TRAINING_FIELDS, ...(policy?.fields || [])];
-  for (const f of allFields) {
+  const catalogFields = (policy?.fields || []).map((f) => ({
+    key: trainingFormKey(policy, f),
+    type: f.type,
+  }));
+  const trainingFields = TRAINING_FIELDS.map((f) => ({ key: f.key, type: f.type }));
+  for (const f of [...trainingFields, ...catalogFields]) {
     if (!(f.key in args)) continue;
     const input = form.querySelector(`[name="${cssEscape(f.key)}"]`);
     if (!input) continue;
@@ -758,29 +772,57 @@ function cssEscape(s) {
 function trainingRenderPolicyFields(policyType) {
   const container = document.getElementById("training-policy-fields");
   if (!container) return;
-  const policy = POLICY_FORMS[policyType];
+  const policy = trainingPolicyEntry(policyType);
   if (!policy) {
     container.innerHTML = '<div class="training-empty-hint">Unknown policy</div>';
     return;
   }
-  container.innerHTML = `<div class="training-field-row">${policy.fields.map(fieldHtml).join("")}</div>`;
+  // Each backend field has bare ``name`` (e.g. ``chunk_size``). The form
+  // input's HTML name attribute must be the args-dict key, so we prepend
+  // ``arg_key_prefix`` here.
+  const fields = policy.fields.map((f) => ({
+    ...f,
+    key: trainingFormKey(policy, f),
+  }));
+  container.innerHTML = `<div class="training-field-row">${fields.map(fieldHtml).join("")}</div>`;
 }
 
 function fieldHtml(f) {
   const id = `training-arg-${f.key.replace(/\./g, "-")}`;
+  const labelText = escapeHtml(f.label);
+  const desc = f.description ? `<span class="training-field-hint">${escapeHtml(f.description)}</span>` : "";
   if (f.type === "bool") {
     return `
       <label class="training-field training-field-bool">
-        <span class="training-field-label">${escapeHtml(f.label)}</span>
+        <span class="training-field-label">${labelText}</span>
         <input id="${id}" type="checkbox" name="${escapeHtml(f.key)}" ${f.default ? "checked" : ""} />
+        ${desc}
       </label>
     `;
   }
-  const inputAttrs = f.type === "int" ? 'type="number" step="1" min="1"' : 'type="text"';
+  if (f.type === "select" && Array.isArray(f.choices)) {
+    const opts = f.choices
+      .map((c) => `<option value="${escapeHtml(c)}"${String(f.default) === c ? " selected" : ""}>${escapeHtml(c)}</option>`)
+      .join("");
+    return `
+      <label class="training-field">
+        <span class="training-field-label">${labelText}</span>
+        <select id="${id}" name="${escapeHtml(f.key)}">${opts}</select>
+        ${desc}
+      </label>
+    `;
+  }
+  // int/float/string — use a number input for numerics so step controls show.
+  let inputAttrs;
+  if (f.type === "int") inputAttrs = 'type="number" step="1"';
+  else if (f.type === "float") inputAttrs = 'type="number" step="any"';
+  else inputAttrs = 'type="text"';
+  const defaultStr = f.default === null || f.default === undefined ? "" : escapeHtml(String(f.default));
   return `
     <label class="training-field">
-      <span class="training-field-label">${escapeHtml(f.label)}</span>
-      <input id="${id}" ${inputAttrs} name="${escapeHtml(f.key)}" value="${f.default}" required />
+      <span class="training-field-label">${labelText}</span>
+      <input id="${id}" ${inputAttrs} name="${escapeHtml(f.key)}" value="${defaultStr}" />
+      ${desc}
     </label>
   `;
 }
@@ -801,23 +843,27 @@ async function trainingSubmitStart(ev) {
   const datasetId = fd.get("dataset_id");
   const policyType = fd.get("policy_type");
 
-  // Build the args dict the recipe builder expects. Shape depends on recipe:
-  //   - lerobot-train (default): dotted-key draccus form
-  //     (policy.type / dataset.repo_id / policy.* / training fields)
-  //   - HVLA flow_s1 (recipe marker): flat snake_case form
-  //     (dataset_repo_id / chunk_size / steps / batch_size / ...)
-  //     plus a __recipe__ marker that routes to _build_hvla_flow_s1_command
-  //     on the backend.
-  const policyEntry = POLICY_FORMS[policyType];
-  const recipe = policyEntry?.recipe; // string or undefined
+  // Build the args dict the recipe builder expects. Shape depends on
+  // the catalog entry:
+  //   - draccus recipes (recipe = null): dotted keys via the
+  //     ``arg_key_prefix`` ("policy."), policy.type carries the chosen
+  //     policy class, dataset.repo_id holds the dataset.
+  //   - non-draccus recipes (HVLA): the ``__recipe__`` marker routes to
+  //     the matching backend builder, ``arg_key_prefix`` is empty so
+  //     keys go in bare, and the dataset key is ``dataset_repo_id``
+  //     (HVLA's argparse name).
+  const policyEntry = trainingPolicyEntry(policyType);
+  const recipe = policyEntry?.recipe || null;
   const args = recipe
     ? { __recipe__: recipe, dataset_repo_id: datasetId }
     : { "policy.type": policyType, "dataset.repo_id": datasetId };
-  // Policy-specific fields
-  const policyFields = policyEntry?.fields || [];
-  for (const f of policyFields) {
-    const v = formValue(fd, form, f);
-    if (v !== undefined) args[f.key] = v;
+
+  // Policy-specific fields (from the catalog). Each backend field has
+  // bare ``name``; the form input's HTML name is the prefixed form key.
+  for (const f of policyEntry?.fields || []) {
+    const formKey = trainingFormKey(policyEntry, f);
+    const v = formValue(fd, form, { ...f, key: formKey });
+    if (v !== undefined) args[formKey] = v;
   }
   // Common training fields (snake_case keys — match HVLA flag names
   // verbatim; lerobot-train accepts them as top-level dataclass fields).
