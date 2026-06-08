@@ -492,6 +492,123 @@ def test_orchestrator_crashed_on_exit_without_checkpoints(host: TrainingHost, tm
     assert "crashed" in paths.events_jsonl.read_text()
 
 
+def test_orchestrator_crashes_on_nonzero_exit_even_with_checkpoints(
+    host: TrainingHost, tmp_path: Path
+) -> None:
+    """Regression for the SmolVLA HF-403 silent-success: lerobot-train wrote
+    both checkpoints, then crashed in push_model_to_hub at end of training.
+    The container exited non-zero, but the old orchestrator counted
+    checkpoints and called it completed. Now: non-zero exit code from the
+    transport wins, regardless of checkpoint count, and the stderr tail is
+    surfaced in run.error so the user can see WHAT crashed."""
+    import time as _t
+
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    class _ExitCodeClient(SubprocessClient):
+        """Real subprocess client EXCEPT exit_code() returns a fixed value
+        so we can simulate the docker container's non-zero exit without
+        actually launching a process. The session_id (1) intentionally
+        isn't in our Popen registry → we override at the exit_code call."""
+
+        def __init__(self, transport: SubprocessTransport, *, fake_exit_code: int) -> None:
+            super().__init__(transport)
+            self._fake_exit_code = fake_exit_code
+
+        def exit_code(self, session_id: int) -> int | None:
+            return self._fake_exit_code
+
+        def is_alive(self, session_id: int) -> bool:
+            return False  # crashed, not alive
+
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    client = _ExitCodeClient(SubprocessTransport(workdir=tmp_path / "workdir"), fake_exit_code=1)
+    orch = Orchestrator(
+        host_registry=hr,
+        run_registry=rr,
+        make_client_fn=lambda _transport: client,
+    )
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="real",
+        dataset_id="lerobot/pusht",
+        args={"policy.type": "smolvla"},
+        state=RunState.PENDING,
+        created_at=_t.time(),
+    )
+    run.session_id = 1
+    run.advance(RunState.RUNNING)
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+    # Two checkpoints on disk — same as the actual SmolVLA HF-403 run.
+    for step in (100, 200):
+        d = paths.root / "output" / "checkpoints" / f"{step:06d}" / "pretrained_model"
+        d.mkdir(parents=True)
+        (d / "model.safetensors").write_bytes(b"x")
+    # Stderr tail with a recognisable HF-403 traceback signature.
+    paths.stderr_log.write_text(
+        "INFO End of training\n"
+        "Traceback (most recent call last):\n"
+        '  File "pretrained.py", line 213, in push_model_to_hub\n'
+        "huggingface_hub.errors.HfHubHTTPError: 403 Forbidden ... "
+        'rights to create a model under the namespace "local"\n'
+    )
+    snap = orch.poll(run.run_id)
+    assert snap.run.state == RunState.FAILED, "non-zero exit must override checkpoint-based completion"
+    assert snap.run.error is not None and "exit code 1" in snap.run.error
+    assert "403 Forbidden" in snap.run.error, "stderr tail should be surfaced in run.error"
+    assert "crashed" in paths.events_jsonl.read_text()
+
+
+def test_orchestrator_final_step_from_max_checkpoint_not_progress_json(
+    host: TrainingHost, tmp_path: Path
+) -> None:
+    """Regression: final_step used to come from progress.json (which real
+    lerobot-train doesn't write), so completed runs reported step 0. Now
+    it's max(checkpoint_steps), which works for both fake (writes progress.json)
+    and real (only checkpoints) recipes."""
+    import json
+    import time as _t
+
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="real",
+        dataset_id="lerobot/pusht",
+        args={"policy.type": "act"},
+        state=RunState.PENDING,
+        created_at=_t.time(),
+    )
+    run.session_id = 1  # not alive, no Popen → exit_code returns None
+    run.advance(RunState.RUNNING)
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+    # Three checkpoints; alphabetical order would put 200 < 50, so the test
+    # also guards against the "last-dir-by-listdir" bug.
+    for step in (50, 100, 200):
+        d = paths.root / "output" / "checkpoints" / f"{step:06d}" / "pretrained_model"
+        d.mkdir(parents=True)
+        (d / "model.safetensors").write_bytes(b"x")
+    # No progress.json — simulates the real lerobot-train run.
+    snap = orch.poll(run.run_id)
+    assert snap.run.state == RunState.COMPLETED
+    events = [json.loads(ln) for ln in paths.events_jsonl.read_text().splitlines() if ln]
+    terminal = [e for e in events if e["type"] == "completed_naturally"]
+    assert len(terminal) == 1
+    assert terminal[0]["final_step"] == 200, (
+        f"final_step should be max checkpoint step (200), got {terminal[0]['final_step']}"
+    )
+
+
 def test_list_runs_reconciles_abort_without_poll(host: TrainingHost, tmp_path: Path) -> None:
     """Same regression for the aborted_by_user terminal event."""
     hr = HostRegistry(hosts=[host])

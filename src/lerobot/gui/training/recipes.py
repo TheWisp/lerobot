@@ -25,19 +25,34 @@ Run.args convention (flat dict, dotted keys):
 Each entry becomes a ``--key=value`` flag on the lerobot-train command line.
 
 Forced flags (these are always emitted, regardless of what's in args; they
-defend against the verified-by-smoke gotchas):
+defend against the verified-by-smoke gotchas). Some are HARD-forced (user
+input is silently dropped — see :data:`_NEVER_USER_OVERRIDE`); the rest let
+the user override.
 
-  --policy.push_to_hub=false       — lerobot-train requires push_to_hub OR
-                                     a valid repo_id; we disable Hub push.
-  --policy.repo_id=local/<run_id>  — required even when push_to_hub=false
-                                     (validate() at end of run checks it).
+  --policy.push_to_hub=false       — HARD-forced. SmolVLA (and any future
+                                     VLM-family policy) defaults
+                                     push_to_hub=True in the dataclass; if
+                                     the form leaks that into args, the
+                                     post-train ``push_model_to_hub`` call
+                                     fires and tries to create a Hub repo
+                                     under whatever ``repo_id`` lerobot-train
+                                     was given — which 403s for any namespace
+                                     the user can't write to. We never want
+                                     a GUI-launched run to push automatically.
   --wandb.enable=false             — no tracking in v1.
   --save_checkpoint=true           — explicit; checkpoints are how we close
                                      the felt loop in C3.
-  --output_dir=/runs/output        — fixed subdir of the bind-mount. Must
-                                     not pre-exist (lerobot-train refuses
-                                     to overwrite). Bind-mount target /runs
-                                     already exists; /runs/output does not.
+  --output_dir=/runs/output        — HARD-forced. Fixed subdir of the
+                                     bind-mount. Must not pre-exist
+                                     (lerobot-train refuses to overwrite).
+                                     Bind-mount target /runs already exists;
+                                     /runs/output does not.
+
+  NOT forced: ``policy.repo_id``. lerobot-train's ``TrainPipelineConfig.
+  validate()`` only requires ``policy.repo_id`` non-None when
+  ``push_to_hub=True``; with push hard-forced false, ``repo_id=None`` is
+  fine and the synthetic ``local/<run_id>`` we used to inject was a
+  footgun (it became the 403'd Hub namespace once the leak above fired).
 
 For backwards-compat, ``Run.args["__recipe__"] == "__fake__"`` returns the
 old python-only fake-training-runner command. Used by the orchestrator's
@@ -56,7 +71,8 @@ from lerobot.gui.training.runs import Run, RunPaths
 # Pinned image tag — bumped explicitly via PR. ``latest`` is only published
 # on main; per-branch builds publish ``<branch>-<sha>``. This default points
 # at the latest verified-by-smoke build. Override per-run via
-# Run.args["__image__"].
+# Run.args["__image__"]. Content-addressing this tag from the source state
+# (Dockerfile + lockfile hash) is a separate follow-up.
 DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-e6bf147"
 
 # Marker that selects the fake-training runner instead of real lerobot-train.
@@ -180,6 +196,22 @@ _FORCED_FLAGS: dict[str, str] = {
     "output_dir": f"{CONTAINER_RUNS_MOUNT}/{CONTAINER_OUTPUT_SUBDIR}",
 }
 
+# Subset of :data:`_FORCED_FLAGS` where a user-supplied value is dropped
+# (the recipe wins, silently). Everything else in _FORCED_FLAGS lets the
+# user override.
+#   output_dir         — must live inside the bind-mount or the host
+#                        can't read the checkpoints.
+#   policy.push_to_hub — used to be overridable, but SmolVLA (and other
+#                        VLM-family policies) default push_to_hub=True
+#                        in the dataclass. The leak path was: dataclass
+#                        default → form pre-fill → user-wins branch →
+#                        argv → lerobot-train tries to create
+#                        local/<run_id> on HF Hub → 403 at end of train.
+#                        Nothing the GUI launches today should push to
+#                        Hub automatically; the user can do it from the
+#                        model detail page after the run completes.
+_NEVER_USER_OVERRIDE: frozenset[str] = frozenset({"output_dir", "policy.push_to_hub"})
+
 
 def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[str, str]]:
     image = run.args.get("__image__") or DEFAULT_IMAGE
@@ -193,10 +225,9 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         if k.startswith("__"):
             continue
         if k in _FORCED_FLAGS:
-            # User explicitly set a flag we'd otherwise force — let them win
-            # for everything EXCEPT output_dir (which has to live inside the
-            # bind-mount or the host can't read the checkpoints).
-            if k == "output_dir":
+            # User explicitly set a flag we'd otherwise force — silently
+            # drop iff in the never-override set; otherwise let user win.
+            if k in _NEVER_USER_OVERRIDE:
                 continue
             train_args.append(f"--{k}={_fmt_arg(v)}")
             seen.add(k)
@@ -205,9 +236,7 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         seen.add(k)
 
     # Forced flags — emit only if user didn't already provide
-    forced = dict(_FORCED_FLAGS)
-    forced["policy.repo_id"] = f"local/{run.run_id}"
-    for k, v in forced.items():
+    for k, v in _FORCED_FLAGS.items():
         if k in seen:
             continue
         train_args.append(f"--{k}={v}")
@@ -218,6 +247,13 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         "--rm",
         "--gpus",
         "all",
+        # Docker defaults /dev/shm to 64 MiB, which the PyTorch DataLoader
+        # blows through immediately for any camera-using policy (one batch
+        # of 4 cameras × 512² × uint8 is ~12 MB per sample). The crash
+        # surfaces as "unable to allocate shared memory(shm) ... Resource
+        # temporarily unavailable" in a worker process. 8g is conservative
+        # for typical ML batches.
+        "--shm-size=8g",
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         "-v",
@@ -310,6 +346,13 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
         "--rm",
         "--gpus",
         "all",
+        # Docker defaults /dev/shm to 64 MiB, which the PyTorch DataLoader
+        # blows through immediately for any camera-using policy (one batch
+        # of 4 cameras × 512² × uint8 is ~12 MB per sample). The crash
+        # surfaces as "unable to allocate shared memory(shm) ... Resource
+        # temporarily unavailable" in a worker process. 8g is conservative
+        # for typical ML batches.
+        "--shm-size=8g",
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         "-v",

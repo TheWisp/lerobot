@@ -93,6 +93,18 @@ class TransportClient(Protocol):
         """Is the launched process still running?"""
         ...
 
+    def exit_code(self, session_id: int) -> int | None:
+        """Process exit status, or None if still running / unknown.
+
+        Returns 0 for clean exit, non-zero for crash. Returns None when
+        the process is still alive OR when we don't know (e.g., the
+        process was launched in a prior GUI server lifetime and the
+        Popen handle is gone). Callers that get None should fall back
+        to artifact-based heuristics (checkpoint count, terminal event,
+        etc.).
+        """
+        ...
+
     def stop(self, session_id: int, *, force: bool = False) -> None:
         """Send SIGTERM (graceful) or SIGKILL (``force=True``). Idempotent —
         no error if the process is already dead."""
@@ -184,6 +196,11 @@ class SubprocessClient:
 
     def __init__(self, transport: SubprocessTransport) -> None:
         self._transport = transport
+        # PID → Popen, populated on launch. Lets exit_code() return the
+        # actual returncode after the process exits, rather than guessing
+        # from artifacts. Bounded by the number of concurrent runs the GUI
+        # spawns in one server lifetime (small); GC'd on server restart.
+        self._popens: dict[int, subprocess.Popen] = {}
 
     @property
     def workdir(self) -> Path:
@@ -214,7 +231,19 @@ class SubprocessClient:
             stdin=subprocess.DEVNULL,
             start_new_session=True,  # detach from GUI server's process group
         )
+        self._popens[proc.pid] = proc
         return proc.pid
+
+    def exit_code(self, session_id: int) -> int | None:
+        # If we have the Popen, .poll() reaps the zombie and sets
+        # returncode. Returns None if still alive.
+        proc = self._popens.get(session_id)
+        if proc is not None:
+            return proc.poll()
+        # No Popen — this process was launched in a prior GUI lifetime,
+        # or by a different client. Can't recover the exit code post-hoc
+        # (it was delivered to whatever process originally reaped it).
+        return None
 
     def is_alive(self, session_id: int) -> bool:
         # Two cases:

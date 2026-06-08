@@ -639,12 +639,20 @@ class Orchestrator:
 
     def _write_terminal_event_from_exit(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
         """Process exited without writing a terminal event. Decide whether
-        to call it ``completed_naturally`` or ``crashed`` based on artifacts.
+        to call it ``completed_naturally`` or ``crashed`` based on exit
+        code first (authoritative when available), then artifacts.
 
-        Heuristic: if at least one checkpoint dir was written, treat as
-        completed; otherwise crashed. This is the right call for the docker
-        recipe (lerobot-train only saves checkpoints on successful step
-        boundaries; if it crashed early, no checkpoints exist).
+        Order of evidence:
+          1. Stop intent (``state==COMPLETING``) → ``aborted_by_user``.
+          2. Exit code from the transport, if known (i.e. the worker is
+             still our subprocess and we have the Popen). Non-zero =>
+             ``crashed`` with stderr tail as error; zero => ``completed``.
+          3. Fallback (post-GUI-restart, no Popen): checkpoint heuristic.
+
+        ``final_step`` is derived from the latest checkpoint (max step
+        across discovered dirs) when present; otherwise progress.json.
+        The previous code trusted progress.json alone, which the real
+        lerobot-train never writes, so completed runs reported step 0.
 
         Aborted runs (state==COMPLETING after a Stop) → ``aborted_by_user``.
         """
@@ -654,11 +662,41 @@ class Orchestrator:
             self._runs.save(run)
             return
 
-        ckpt_count = sum(1 for _ in self._iter_checkpoint_dirs(client, run, paths))
+        ckpt_steps = [step for _, step in self._iter_checkpoint_dirs(client, run, paths)]
+        ckpt_count = len(ckpt_steps)
         progress = self._read_progress(client, paths.progress_json) or {}
-        final_step = progress.get("step", 0) if isinstance(progress, dict) else 0
+        progress_step = progress.get("step", 0) if isinstance(progress, dict) else 0
+        # Latest checkpoint step beats progress.json: lerobot-train doesn't
+        # write progress.json, so for real runs the only signal is the
+        # checkpoint dirs on disk. Fake runner writes progress.json; use
+        # whichever is higher (handles either).
+        final_step = max([progress_step, *ckpt_steps]) if ckpt_steps else progress_step
 
-        if ckpt_count > 0:
+        # Authoritative when we can get it: the inner docker container's
+        # exit code propagates through `docker run` to Popen.returncode.
+        # A crash-after-success (e.g., the HF 403 in push_model_to_hub
+        # AFTER successful training + checkpoints written) returns non-zero
+        # even though checkpoints exist — so don't gate this on ckpt_count.
+        code = None
+        if run.session_id is not None:
+            code = client.exit_code(run.session_id)
+
+        if code is not None and code != 0:
+            stderr_tail = self._read_stderr_tail(client, paths.stderr_log, 4096)
+            run.error = f"exit code {code}\n{stderr_tail}".strip()
+            self._emit_event(
+                client,
+                paths.events_jsonl,
+                "crashed",
+                error=f"exit code {code}",
+                final_step=final_step,
+            )
+            run.advance(RunState.FAILED)
+            self._runs.save(run)
+            return
+
+        if code == 0 or ckpt_count > 0:
+            # Clean exit, or unknown-exit-code-but-has-checkpoints fallback.
             self._emit_event(client, paths.events_jsonl, "completed_naturally", final_step=final_step)
             run.advance(RunState.COMPLETED)
         else:

@@ -125,34 +125,61 @@ def test_docker_recipe_forces_safety_flags(tmp_path: Path) -> None:
     paths = RunPaths.for_run("xyz", runs_dir=tmp_path)
     run = _make_run({"policy.type": "act"})
     cmd = _docker_cmd(run, paths)
-    # All three workflow-identified must-have flags
+    # Forced flags that prevent post-train regressions (push attempts,
+    # silent missed checkpoints, wandb auth prompts).
     assert "--policy.push_to_hub=false" in cmd
-    assert f"--policy.repo_id=local/{run.run_id}" in cmd
     assert "--wandb.enable=false" in cmd
     assert "--save_checkpoint=true" in cmd
     # output_dir locked to /runs/<subdir> (host can read via bind-mount)
     assert f"--output_dir={CONTAINER_RUNS_MOUNT}/{CONTAINER_OUTPUT_SUBDIR}" in cmd
+    # repo_id is intentionally NOT forced — lerobot-train's validate()
+    # only requires it when push_to_hub=true, and we hard-force false.
+    # The old `local/<run_id>` injection was a footgun: when the form
+    # leaked push_to_hub=true via the user-wins branch, lerobot-train
+    # tried to create that fake namespace on HF Hub → 403.
+    assert not any(t.startswith("--policy.repo_id=") for t in cmd), (
+        f"recipe should not inject policy.repo_id; got: {cmd}"
+    )
 
 
-def test_docker_recipe_user_flag_wins_for_non_critical_overrides(tmp_path: Path) -> None:
-    """If the user sets push_to_hub=true explicitly we let them (might want
-    to push to a personal repo). But output_dir is always forced inside the
-    bind-mount — that's a correctness invariant, not a preference."""
+def test_docker_recipe_hard_force_push_to_hub_false_drops_user_input(tmp_path: Path) -> None:
+    """User-submitted policy.push_to_hub=true is silently dropped — the
+    recipe hard-forces false. Reason: any GUI-launched run defaults to
+    NOT pushing to Hub. The user can publish from the model detail page
+    after the run completes. Regression test for the SmolVLA 403."""
     paths = RunPaths.for_run("xyz", runs_dir=tmp_path)
     run = _make_run(
         {
             "policy.type": "act",
-            "policy.push_to_hub": True,  # user wants to push
+            "policy.push_to_hub": True,  # user (or form leak) requests push
             "output_dir": "/somewhere/else",  # user wants different output dir
         }
     )
     cmd = _docker_cmd(run, paths)
-    # User's push_to_hub=true wins
-    assert "--policy.push_to_hub=true" in cmd
-    assert "--policy.push_to_hub=false" not in cmd
-    # But output_dir is always forced (silent override)
+    # User's push_to_hub=true is silently dropped; forced false wins.
+    assert "--policy.push_to_hub=false" in cmd
+    assert "--policy.push_to_hub=true" not in cmd
+    # Same hard-force for output_dir (bind-mount correctness invariant).
     assert f"--output_dir={CONTAINER_RUNS_MOUNT}/{CONTAINER_OUTPUT_SUBDIR}" in cmd
     assert "--output_dir=/somewhere/else" not in cmd
+
+
+def test_docker_recipe_user_flag_wins_for_soft_forced(tmp_path: Path) -> None:
+    """Soft-forced flags (wandb.enable, save_checkpoint) let user override.
+    Only the never-override set (push_to_hub, output_dir) is hard-forced."""
+    paths = RunPaths.for_run("xyz", runs_dir=tmp_path)
+    run = _make_run(
+        {
+            "policy.type": "act",
+            "wandb.enable": True,  # user wants wandb on
+            "save_checkpoint": False,  # user wants no checkpoints
+        }
+    )
+    cmd = _docker_cmd(run, paths)
+    assert "--wandb.enable=true" in cmd
+    assert "--wandb.enable=false" not in cmd
+    assert "--save_checkpoint=false" in cmd
+    assert "--save_checkpoint=true" not in cmd
 
 
 def test_docker_recipe_translates_arg_types(tmp_path: Path) -> None:

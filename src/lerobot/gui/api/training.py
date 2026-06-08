@@ -381,13 +381,23 @@ def _classify_field(annotation: Any) -> tuple[str | None, list[str] | None]:
     return None, None
 
 
+# Fields the recipe builder force-overrides regardless of user input.
+# Surfacing them in the form misleads (the user thinks they can pick a
+# value, but the recipe drops it) and — worse for ``push_to_hub`` — the
+# dataclass default of ``True`` for some policies (SmolVLA, etc.) used
+# to leak through the recipe's "user wins" branch and trigger an HF 403
+# post-training. Always exclude.
+_RECIPE_FORCED_FIELDS = {"push_to_hub", "repo_id", "output_dir"}
+
+
 def _introspect_policy_fields(cls: type) -> list[dict]:
     """Extract a frontend-renderable schema from a dataclass config class.
 
     Skips fields whose type isn't a scalar (int/float/bool/str) or a
     ``Literal[...]``. Skips fields without a default (we can't pre-fill
-    the form and don't want to require them blindly). Sorts: required-ish
-    first, then alphabetical name.
+    the form and don't want to require them blindly). Skips fields the
+    recipe builder force-overrides (see :data:`_RECIPE_FORCED_FIELDS`).
+    Sorts: required-ish first, then alphabetical name.
     """
     try:
         type_hints = typing.get_type_hints(cls)
@@ -396,6 +406,8 @@ def _introspect_policy_fields(cls: type) -> list[dict]:
 
     out: list[dict] = []
     for f in dataclasses.fields(cls):
+        if f.name in _RECIPE_FORCED_FIELDS:
+            continue
         resolved = type_hints.get(f.name, f.type)
         form_kind, choices = _classify_field(resolved)
         if form_kind is None:
