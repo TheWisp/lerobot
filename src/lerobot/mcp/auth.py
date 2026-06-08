@@ -294,7 +294,7 @@ def requires_scope(scope: str):
                 return await fn(*args, **kwargs)
 
             # Surface the required scope on the wrapper so introspection
-            # tools (list_supported_tools) can read it without re-parsing
+            # tools (lerobot_list_tools) can read it without re-parsing
             # the decorator chain.
             async_wrapper._required_scope = scope  # type: ignore[attr-defined]
             return async_wrapper

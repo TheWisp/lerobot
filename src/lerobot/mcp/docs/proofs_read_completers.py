@@ -3,9 +3,9 @@
 Five new read-tier tools, all pure observations against the operator's
 host. The transcript:
 
-  1. Calls ``list_supported_tools`` to dump the current surface
+  1. Calls ``lerobot_list_tools`` to dump the current surface
      (proves the new tools land and have the right scopes).
-  2. Calls ``list_my_scopes`` so the AI can confirm what it's allowed
+  2. Calls ``lerobot_whoami`` so the AI can confirm what it's allowed
      to do under the issued token (read+edit here).
   3. Lightly tags two episodes via ``tag_episode``, then proves the
      reverse-lookup with ``list_tagged_episodes`` (key + value filter).
@@ -139,14 +139,14 @@ async def main() -> None:
                 "operator's dataset files are untouched."
             )
 
-            tx.heading("list_supported_tools — self-describe the surface")
+            tx.heading("lerobot_list_tools — self-describe the surface")
             tx.intent(
                 "Useful for AI clients that don't surface the tool "
                 "list cleanly (raw streamable-http, scripted agents). "
                 "Returns name + one-line description + scope for "
                 "every registered tool."
             )
-            result = await tx.call(session, "list_supported_tools", {})
+            result = await tx.call(session, "lerobot_list_tools", {})
             # Summarise in the transcript rather than dumping all 50.
             structured = result.structuredContent or {}
             tools = structured.get("tools") or []
@@ -155,13 +155,13 @@ async def main() -> None:
             by_scope = Counter(t["scope"] for t in tools)
             tx.note(f"_(Surface size: {len(tools)} tools; by scope: {dict(by_scope)})_")
 
-            tx.heading("list_my_scopes — verify caller privileges")
+            tx.heading("lerobot_whoami — verify caller privileges")
             tx.intent(
                 "Pre-flight before proposing an edit-tier or "
                 "operate-tier action. The agent can fail-fast when "
                 "the token doesn't carry the needed scope."
             )
-            await tx.call(session, "list_my_scopes", {})
+            await tx.call(session, "lerobot_whoami", {})
 
             tx.heading("list_tagged_episodes — reverse-lookup over tags")
             tx.intent(

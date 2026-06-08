@@ -1738,7 +1738,7 @@ def build_server(
 
     @mcp.tool()
     @requires_scope(SCOPE_READ)
-    def list_supported_tools() -> dict[str, Any]:
+    def lerobot_list_tools() -> dict[str, Any]:
         """List every MCP tool the server exposes, with scope + description.
 
         Pure read — no state changes. The list is the live FastMCP
@@ -1770,32 +1770,46 @@ def build_server(
 
     @mcp.tool()
     @requires_scope(SCOPE_READ)
-    def list_my_scopes() -> dict[str, Any]:
-        """Report the scopes attached to the current bearer token.
+    def lerobot_whoami() -> dict[str, Any]:
+        """Report the calling client's identity + scopes on this MCP.
 
         Pure read. Use this to verify what the calling client can do
         before planning a workflow — e.g., decide whether to propose
         an ``edit``-tier dataset cleanup or fall back to a
         ``read``-only analysis.
 
-        Returns ``{"scopes": [...], "all_scopes": [...]}`` —
-        ``scopes`` is what THIS token carries; ``all_scopes`` is the
-        full hierarchy for reference.
+        Returns ``{"client_id": str | None, "scopes": [...],
+        "all_scopes": [...], "logged_in": bool}`` — ``scopes`` is what
+        THIS token carries; ``all_scopes`` is the full hierarchy for
+        reference; ``client_id`` is the token's display name from
+        ``/ai_setup`` (None in stdio mode).
 
         When the server runs without auth (stdio mode), ``scopes``
-        contains every tier — there's no authentication context to
-        narrow it down.
+        contains every tier and ``logged_in`` is False — there's no
+        authentication context to narrow it down.
         """
         from .auth import ALL_SCOPES
 
+        client_id: str | None = None
+        logged_in = False
         try:
             from mcp.server.auth.middleware.auth_context import get_access_token
 
             token = get_access_token()
-            scopes = list(token.scopes) if token is not None else list(ALL_SCOPES)
+            if token is not None:
+                scopes = list(token.scopes)
+                client_id = token.client_id
+                logged_in = True
+            else:
+                scopes = list(ALL_SCOPES)
         except Exception:  # noqa: BLE001 — stdio mode has no auth context
             scopes = list(ALL_SCOPES)
-        return {"scopes": scopes, "all_scopes": list(ALL_SCOPES)}
+        return {
+            "client_id": client_id,
+            "scopes": scopes,
+            "all_scopes": list(ALL_SCOPES),
+            "logged_in": logged_in,
+        }
 
     # Bridge tools (navigate_to / notify_user / highlight_in_viewer / set_filter)
     # are attached unconditionally; whether they actually deliver depends on

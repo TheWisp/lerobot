@@ -265,13 +265,13 @@ class TestHubDiffLocalVsRemote:
             _call(mcp, "hub_diff_local_vs_remote", {"dataset_id": "no/such"})
 
 
-# ── list_supported_tools ──────────────────────────────────────────────────
+# ── lerobot_list_tools ────────────────────────────────────────────────────
 
 
-class TestListSupportedTools:
+class TestLerobotListTools:
     def test_returns_every_registered_tool(self, state_and_dataset):
         mcp, _, _ = state_and_dataset
-        result = _call(mcp, "list_supported_tools", {})
+        result = _call(mcp, "lerobot_list_tools", {})
         names = {t["name"] for t in result["tools"]}
         # Spot-check tools from various tiers + the introspection pair itself
         for expected in (
@@ -279,8 +279,8 @@ class TestListSupportedTools:
             "tag_episode",
             "propose_delete_episode",
             "hub_start_upload",
-            "list_supported_tools",
-            "list_my_scopes",
+            "lerobot_list_tools",
+            "lerobot_whoami",
             "list_tagged_episodes",
             "hub_diff_local_vs_remote",
             "get_feature_series",
@@ -290,7 +290,7 @@ class TestListSupportedTools:
 
     def test_scope_field_reflects_decorator(self, state_and_dataset):
         mcp, _, _ = state_and_dataset
-        result = _call(mcp, "list_supported_tools", {})
+        result = _call(mcp, "lerobot_list_tools", {})
         by_name = {t["name"]: t for t in result["tools"]}
         assert by_name["list_datasets"]["scope"] == "read"
         assert by_name["tag_episode"]["scope"] == "comment"
@@ -298,16 +298,18 @@ class TestListSupportedTools:
         assert by_name["hub_start_upload"]["scope"] == "edit"
 
 
-# ── list_my_scopes ────────────────────────────────────────────────────────
+# ── lerobot_whoami ────────────────────────────────────────────────────────
 
 
-class TestListMyScopes:
+class TestLerobotWhoami:
     def test_stdio_mode_returns_all_scopes(self, state_and_dataset):
         """Without a TokenStore the server runs unauthenticated; the
         introspection tool falls back to reporting every scope.
         """
         mcp, _, _ = state_and_dataset
-        result = _call(mcp, "list_my_scopes", {})
+        result = _call(mcp, "lerobot_whoami", {})
         assert "read" in result["scopes"]
+        assert result["logged_in"] is False
+        assert result["client_id"] is None
         # all_scopes is always the canonical 4-tier list
         assert set(result["all_scopes"]) == {"read", "comment", "edit", "operate"}

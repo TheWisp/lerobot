@@ -2,11 +2,11 @@
 
 Captured live against the unified GUI's MCP at `127.0.0.1:8000/mcp/`. The token carries `read` + `comment` scopes; the only mutations are two sidecar tags written and then deleted by this script. The operator's dataset files are untouched.
 
-## list_supported_tools — self-describe the surface
+## lerobot_list_tools — self-describe the surface
 
 _Intent: Useful for AI clients that don't surface the tool list cleanly (raw streamable-http, scripted agents). Returns name + one-line description + scope for every registered tool._
 
-**→** `list_supported_tools()`
+**→** `lerobot_list_tools()`
 
 **←**
 
@@ -204,6 +204,16 @@ _Intent: Useful for AI clients that don't surface the tool list cleanly (raw str
       "scope": "read"
     },
     {
+      "name": "lerobot_list_tools",
+      "description": "List every MCP tool the server exposes, with scope + description.",
+      "scope": "read"
+    },
+    {
+      "name": "lerobot_whoami",
+      "description": "Report the calling client's identity + scopes on this MCP.",
+      "scope": "read"
+    },
+    {
       "name": "list_datasets",
       "description": "List datasets discoverable under the LeRobot dataset cache.",
       "scope": "read"
@@ -211,11 +221,6 @@ _Intent: Useful for AI clients that don't surface the tool list cleanly (raw str
     {
       "name": "list_episodes",
       "description": "List episodes with per-episode summary fields (paginated).",
-      "scope": "read"
-    },
-    {
-      "name": "list_my_scopes",
-      "description": "Report the scopes attached to the current bearer token.",
       "scope": "read"
     },
     {
@@ -231,11 +236,6 @@ _Intent: Useful for AI clients that don't surface the tool list cleanly (raw str
     {
       "name": "list_robot_profiles",
       "description": "List saved robot profiles.",
-      "scope": "read"
-    },
-    {
-      "name": "list_supported_tools",
-      "description": "List every MCP tool the server exposes, with scope + description.",
       "scope": "read"
     },
     {
@@ -270,18 +270,20 @@ _Intent: Useful for AI clients that don't surface the tool list cleanly (raw str
 
 _(Surface size: 50 tools; by scope: {'comment': 2, 'edit': 18, 'read': 30})_
 
-## list_my_scopes — verify caller privileges
+## lerobot_whoami — verify caller privileges
 
 _Intent: Pre-flight before proposing an edit-tier or operate-tier action. The agent can fail-fast when the token doesn't carry the needed scope._
 
-**→** `list_my_scopes()`
+**→** `lerobot_whoami()`
 
 **←**
 
 ```json
 {
+  "client_id": "proofs_read_completers-221163a8",
   "scopes": ["comment", "read"],
-  "all_scopes": ["read", "comment", "edit", "operate"]
+  "all_scopes": ["read", "comment", "edit", "operate"],
+  "logged_in": true
 }
 ```
 
@@ -289,14 +291,14 @@ _Intent: Pre-flight before proposing an edit-tier or operate-tier action. The ag
 
 _Intent: First confirm there are no tags with our proof key yet (it's randomly suffixed, so almost certainly true)._
 
-**→** `list_tagged_episodes(repo_id='thewisp/test_leader_follower_do_not_use', key='_mcp_proof_tag_0e3edf')`
+**→** `list_tagged_episodes(repo_id='thewisp/test_leader_follower_do_not_use', key='_mcp_proof_tag_24d2e7')`
 
 **←**
 
 ```json
 {
   "repo_id": "thewisp/test_leader_follower_do_not_use",
-  "key": "_mcp_proof_tag_0e3edf",
+  "key": "_mcp_proof_tag_24d2e7",
   "value": null,
   "episodes": [],
   "total": 0
@@ -305,7 +307,7 @@ _Intent: First confirm there are no tags with our proof key yet (it's randomly s
 
 _Intent: Tag episode 0 with our proof key — value 'good'. The tag lives in the operator's sidecar SQLite; we'll delete it before exiting._
 
-**→** `tag_episode(repo_id='thewisp/test_leader_follower_do_not_use', episode_id=0, key='_mcp_proof_tag_0e3edf', value='good')`
+**→** `tag_episode(repo_id='thewisp/test_leader_follower_do_not_use', episode_id=0, key='_mcp_proof_tag_24d2e7', value='good')`
 
 **←**
 
@@ -313,11 +315,11 @@ _Intent: Tag episode 0 with our proof key — value 'good'. The tag lives in the
 {
   "repo_id": "thewisp/test_leader_follower_do_not_use",
   "episode_id": 0,
-  "key": "_mcp_proof_tag_0e3edf",
+  "key": "_mcp_proof_tag_24d2e7",
   "overwrote": false,
   "previous_value": null,
   "tags": {
-    "_mcp_proof_tag_0e3edf": "good",
+    "_mcp_proof_tag_24d2e7": "good",
     "mcp_test": {
       "written_by": "Claude via MCP",
       "purpose": "demonstrate UPSERT",
@@ -329,20 +331,20 @@ _Intent: Tag episode 0 with our proof key — value 'good'. The tag lives in the
 
 _Intent: Now list_tagged_episodes by key — episode 0 should show up with value=good and a set_at timestamp._
 
-**→** `list_tagged_episodes(repo_id='thewisp/test_leader_follower_do_not_use', key='_mcp_proof_tag_0e3edf')`
+**→** `list_tagged_episodes(repo_id='thewisp/test_leader_follower_do_not_use', key='_mcp_proof_tag_24d2e7')`
 
 **←**
 
 ```json
 {
   "repo_id": "thewisp/test_leader_follower_do_not_use",
-  "key": "_mcp_proof_tag_0e3edf",
+  "key": "_mcp_proof_tag_24d2e7",
   "value": null,
   "episodes": [
     {
       "episode_id": 0,
       "value": "good",
-      "set_at": "2026-06-08T16:04:52+00:00"
+      "set_at": "2026-06-08T17:25:39+00:00"
     }
   ],
   "total": 1
@@ -351,20 +353,20 @@ _Intent: Now list_tagged_episodes by key — episode 0 should show up with value
 
 _Intent: Filter further by key + value. Same single result, demonstrating the value filter narrows correctly._
 
-**→** `list_tagged_episodes(repo_id='thewisp/test_leader_follower_do_not_use', key='_mcp_proof_tag_0e3edf', value='good')`
+**→** `list_tagged_episodes(repo_id='thewisp/test_leader_follower_do_not_use', key='_mcp_proof_tag_24d2e7', value='good')`
 
 **←**
 
 ```json
 {
   "repo_id": "thewisp/test_leader_follower_do_not_use",
-  "key": "_mcp_proof_tag_0e3edf",
+  "key": "_mcp_proof_tag_24d2e7",
   "value": "good",
   "episodes": [
     {
       "episode_id": 0,
       "value": "good",
-      "set_at": "2026-06-08T16:04:52+00:00"
+      "set_at": "2026-06-08T17:25:39+00:00"
     }
   ],
   "total": 1
@@ -373,7 +375,7 @@ _Intent: Filter further by key + value. Same single result, demonstrating the va
 
 _Intent: Cleanup — drop the proof tag so the operator's sidecar is back to its prior state._
 
-**→** `delete_episode_tag(repo_id='thewisp/test_leader_follower_do_not_use', episode_id=0, key='_mcp_proof_tag_0e3edf')`
+**→** `delete_episode_tag(repo_id='thewisp/test_leader_follower_do_not_use', episode_id=0, key='_mcp_proof_tag_24d2e7')`
 
 **←**
 
