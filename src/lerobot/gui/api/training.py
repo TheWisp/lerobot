@@ -136,6 +136,9 @@ class RunSnapshotDTO(BaseModel):
     progress: dict[str, Any] | None
     checkpoints: list[CheckpointDTO]
     stderr_tail: str
+    # Raw events.jsonl entries (oldest first). Frontend filters for
+    # image-prep events to render the "Pulling image…" status banner.
+    events: list[dict[str, Any]]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -157,6 +160,7 @@ def _snapshot_to_dto(snap: RunSnapshot) -> RunSnapshotDTO:
             CheckpointDTO(step=c.step, path=c.path, sha256=c.sha256, ts=c.ts) for c in snap.checkpoints
         ],
         stderr_tail=snap.stderr_tail,
+        events=list(snap.events),
     )
 
 

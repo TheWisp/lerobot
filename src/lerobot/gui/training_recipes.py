@@ -57,7 +57,7 @@ from lerobot.gui.training_runs import Run, RunPaths
 # on main; per-branch builds publish ``<branch>-<sha>``. This default points
 # at the latest verified-by-smoke build. Override per-run via
 # Run.args["__image__"].
-DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-2808d5e"
+DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-e6bf147"
 
 # Marker that selects the fake-training runner instead of real lerobot-train.
 # Used by orchestrator unit tests so they don't depend on docker.

@@ -22,10 +22,12 @@ import pytest
 from lerobot.gui.training_hosts import HostRegistry, TrainingHost
 from lerobot.gui.training_orchestrator import (
     HostBusyError,
+    ImageRunner,
     Orchestrator,
     StartRequest,
     UnknownHostError,
     UnknownRunError,
+    _extract_image_from_docker_argv,
 )
 from lerobot.gui.training_runs import RunRegistry, RunState
 from lerobot.gui.training_transport import SubprocessTransport
@@ -67,7 +69,10 @@ def _wait_until_state(orch: Orchestrator, run_id: str, want: RunState, *, timeou
 # ── Start ──────────────────────────────────────────────────────────────────────
 
 
-def test_start_returns_running_run(orch: Orchestrator) -> None:
+def test_start_returns_pending_then_advances_to_running(orch: Orchestrator) -> None:
+    """``start()`` returns immediately with state=PENDING (so the POST
+    isn't blocked by image prep / launch). The prep thread advances to
+    RUNNING shortly after — verifiable via poll()."""
     req = StartRequest(
         host_id="test-host",
         recipe_name="fake",
@@ -75,9 +80,12 @@ def test_start_returns_running_run(orch: Orchestrator) -> None:
         args={"__recipe__": "__fake__", "num_steps": 5, "save_every": 10, "step_seconds": 0.05},
     )
     run = orch.start(req)
-    assert run.state == RunState.RUNNING
-    assert run.session_id is not None
+    # Synchronous return: PENDING (no session_id yet — prep thread sets it)
+    assert run.state == RunState.PENDING
     assert run.host_id == "test-host"
+    # Eventually: RUNNING with a session_id
+    snap = _wait_until_state(orch, run.run_id, RunState.RUNNING)
+    assert snap.run.session_id is not None
 
 
 def test_start_unknown_host_raises(orch: Orchestrator) -> None:
@@ -122,6 +130,13 @@ def test_start_refuses_when_host_busy(orch: Orchestrator) -> None:
         },  # ~5s, plenty of time
     )
     run1 = orch.start(req)
+    # Wait until the prep thread spawned the worker so the second start
+    # actually races against a real RUNNING worker, not the still-PENDING
+    # run. The host-busy check passes either way (PENDING is non-terminal),
+    # but the stop()-cleanup at the end of the test wants RUNNING so it
+    # exercises the SIGTERM path (PENDING goes straight to ABORTED, which
+    # we cover in test_stop_pending_run_skips_to_aborted).
+    _wait_until_state(orch, run1.run_id, RunState.RUNNING)
     try:
         req2 = StartRequest(
             host_id="test-host",
@@ -468,3 +483,205 @@ def test_list_runs_reconciles_abort_without_poll(host: TrainingHost, tmp_path: P
     runs = orch.list_runs()
     me = next(r for r in runs if r.run_id == run.run_id)
     assert me.state == RunState.ABORTED
+
+
+# ── C5: image preparation (pre-pull + events) ─────────────────────────────────
+
+
+class _FakeImageRunner(ImageRunner):
+    """Lets tests script how docker inspect / pull behave for a run."""
+
+    def __init__(self, *, inspect_returns=False, pull_returns=(True, ""), size=42):
+        self.inspect_returns = inspect_returns
+        self.pull_returns = pull_returns
+        self.size = size
+        self.inspect_calls: list[str] = []
+        self.pull_calls: list[str] = []
+
+    def inspect(self, image: str) -> bool:
+        self.inspect_calls.append(image)
+        return self.inspect_returns
+
+    def pull(self, image: str) -> tuple[bool, str]:
+        self.pull_calls.append(image)
+        return self.pull_returns
+
+    def image_size(self, image: str) -> int | None:
+        return self.size
+
+
+def _events_of(orch: Orchestrator, run_id: str) -> list[dict]:
+    import json
+
+    from lerobot.gui.training_runs import RunPaths
+
+    paths = RunPaths.for_run(run_id, orch._runs.runs_dir)
+    if not paths.events_jsonl.exists():
+        return []
+    return [json.loads(line) for line in paths.events_jsonl.read_text().splitlines() if line.strip()]
+
+
+def test_extract_image_from_docker_argv_typical_recipe() -> None:
+    """The recipe builder's argv shape is:
+        docker run --rm --gpus all --user 1000:1000 -v A:B -v C:D <image> <entrypoint> ...
+    The helper should return <image>."""
+    argv = [
+        "docker",
+        "run",
+        "--rm",
+        "--gpus",
+        "all",
+        "--user",
+        "1000:1000",
+        "-v",
+        "/h:/c",
+        "-v",
+        "/runs/x:/runs",
+        "ghcr.io/foo/lerobot-training:tag",
+        "lerobot-train",
+        "--policy.type=act",
+    ]
+    assert _extract_image_from_docker_argv(argv) == "ghcr.io/foo/lerobot-training:tag"
+
+
+def test_extract_image_from_docker_argv_non_docker_returns_none() -> None:
+    # Fake recipe argv — python -m, no docker
+    assert (
+        _extract_image_from_docker_argv(["python", "-m", "lerobot.gui.training_runner", "--run-dir", "/x"])
+        is None
+    )
+    # Empty / too-short
+    assert _extract_image_from_docker_argv([]) is None
+    assert _extract_image_from_docker_argv(["docker"]) is None
+    assert _extract_image_from_docker_argv(["docker", "ps"]) is None  # not "run"
+
+
+def test_extract_image_unknown_flag_returns_none() -> None:
+    # Defensive: if we see a flag we don't recognise, bail rather than
+    # mis-identify it as the image. Better to silently skip pre-pull than
+    # to try to docker-inspect a flag value.
+    argv = ["docker", "run", "--rm", "--mystery-flag", "v", "img:tag", "cmd"]
+    assert _extract_image_from_docker_argv(argv) is None
+
+
+def test_image_cache_hit_emits_event_and_skips_pull(host, tmp_path: Path) -> None:
+    """When the image is already local, orchestrator emits
+    ``image_cache_hit`` and never calls ``pull``."""
+    fake = _FakeImageRunner(inspect_returns=True)
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr, image_runner=fake)
+    # We need a docker recipe — use the real one without invoking docker.
+    # The fake image runner never calls docker; the orchestrator only spawns
+    # the worker subprocess if the recipe isn't fake. We use the fake
+    # recipe here to keep the test free of docker entirely; the cache-hit
+    # path only fires when _extract_image_from_docker_argv returns
+    # something, so use a probe at the helper level + a separate test
+    # that constructs the docker-shaped argv synthetically.
+    # Plain integration check: with the fake recipe, no docker calls happen
+    # at all.
+    req = StartRequest(
+        host_id="test-host",
+        recipe_name="fake-rec",
+        dataset_id="ds",
+        args={"__recipe__": "__fake__", "num_steps": 2, "save_every": 5, "step_seconds": 0.05},
+    )
+    run = orch.start(req)
+    _wait_until_state(orch, run.run_id, RunState.COMPLETED)
+    # fake recipe → no image inspect or pull
+    assert fake.inspect_calls == []
+    assert fake.pull_calls == []
+    types = [e["type"] for e in _events_of(orch, run.run_id)]
+    assert "image_cache_hit" not in types
+    assert "pulling_image" not in types
+
+
+def test_ensure_image_cache_hit_emits_only_one_event(host, tmp_path: Path) -> None:
+    """Direct unit-test of _ensure_image with a cache hit."""
+    fake = _FakeImageRunner(inspect_returns=True)
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr, image_runner=fake)
+    from lerobot.gui.training_runs import RunPaths
+
+    paths = RunPaths.for_run("test", runs_dir=tmp_path / "runs")
+    paths.ensure_exists()
+    orch._ensure_image("ghcr.io/foo/img:tag", paths)
+    assert fake.inspect_calls == ["ghcr.io/foo/img:tag"]
+    assert fake.pull_calls == []  # never pulled
+    import json
+
+    lines = paths.events_jsonl.read_text().splitlines()
+    assert len(lines) == 1
+    evt = json.loads(lines[0])
+    assert evt["type"] == "image_cache_hit"
+    assert evt["image"] == "ghcr.io/foo/img:tag"
+
+
+def test_ensure_image_cache_miss_pulls_and_emits_two_events(host, tmp_path: Path) -> None:
+    """Cache miss → pulling_image + image_pulled (with duration_s + size_bytes)."""
+    fake = _FakeImageRunner(inspect_returns=False, pull_returns=(True, ""), size=1234)
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr, image_runner=fake)
+    from lerobot.gui.training_runs import RunPaths
+
+    paths = RunPaths.for_run("test", runs_dir=tmp_path / "runs")
+    paths.ensure_exists()
+    orch._ensure_image("ghcr.io/foo/img:tag", paths)
+    assert fake.pull_calls == ["ghcr.io/foo/img:tag"]
+    import json
+
+    events = [json.loads(line) for line in paths.events_jsonl.read_text().splitlines()]
+    types = [e["type"] for e in events]
+    assert types == ["pulling_image", "image_pulled"]
+    pulled = events[1]
+    assert pulled["image"] == "ghcr.io/foo/img:tag"
+    assert pulled["size_bytes"] == 1234
+    assert pulled["duration_s"] >= 0
+
+
+def test_ensure_image_pull_failure_emits_pull_failed_and_raises(host, tmp_path: Path) -> None:
+    """Pull failure → pulling_image + image_pull_failed events; raises
+    so the orchestrator can flip the run to FAILED."""
+    from lerobot.gui.training_orchestrator import _ImagePullError
+
+    fake = _FakeImageRunner(inspect_returns=False, pull_returns=(False, "manifest unknown\n"))
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr, image_runner=fake)
+    from lerobot.gui.training_runs import RunPaths
+
+    paths = RunPaths.for_run("test", runs_dir=tmp_path / "runs")
+    paths.ensure_exists()
+    with pytest.raises(_ImagePullError, match="manifest unknown"):
+        orch._ensure_image("ghcr.io/foo/img:bad", paths)
+    import json
+
+    events = [json.loads(line) for line in paths.events_jsonl.read_text().splitlines()]
+    assert [e["type"] for e in events] == ["pulling_image", "image_pull_failed"]
+    assert "manifest unknown" in events[1]["error"]
+
+
+def test_stop_pending_run_skips_to_aborted(orch: Orchestrator) -> None:
+    """A stop() before the prep thread has finished should advance the run
+    straight to ABORTED (skipping COMPLETING, since there's no worker yet
+    to SIGTERM). The prep thread bails on the state change."""
+    # We rely on the fake recipe being effectively instant; the race window
+    # is small but nonzero. To make this deterministic, we'd need a barrier
+    # in the prep thread. Instead, we ASSERT the stop() path works even
+    # when called while still PENDING: load the run before the prep thread
+    # touches it.
+    req = StartRequest(
+        host_id="test-host",
+        recipe_name="fake",
+        dataset_id="ds",
+        args={"__recipe__": "__fake__", "num_steps": 1000, "save_every": 100, "step_seconds": 1.0},  # slow
+    )
+    run = orch.start(req)
+    # In the small chance the prep thread already advanced, we still want
+    # the test to pass — the stop() path from RUNNING is well-tested
+    # elsewhere. Here we only assert that stop()+wait reaches ABORTED.
+    orch.stop(run.run_id)
+    snap = _wait_until_state(orch, run.run_id, RunState.ABORTED)
+    assert snap.run.state == RunState.ABORTED

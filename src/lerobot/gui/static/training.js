@@ -190,6 +190,7 @@ function trainingRenderDetailHtml(snap) {
   const r = snap.run;
   const progress = snap.progress || {};
   const checkpoints = snap.checkpoints || [];
+  const events = snap.events || [];
   const isActive = !["completed", "failed", "aborted"].includes(r.state);
 
   const step = progress.step ?? 0;
@@ -201,6 +202,13 @@ function trainingRenderDetailHtml(snap) {
   const stopBtn = isActive
     ? `<button class="btn-small danger" id="training-stop-${r.run_id}">Stop</button>`
     : "";
+
+  // Image-prep status banner: when state=PENDING (background prep thread is
+  // running), surface the most recent image-* event so the user sees what's
+  // happening rather than a blank pending state. After RUNNING/terminal,
+  // collapse to a one-liner ("Image: cache hit" / "Image: pulled 14.6 GB
+  // in 13.5 min") that explains the silent setup time.
+  const imageBanner = trainingImageStatusHtml(r, events);
 
   return `
     <div class="training-detail-pane">
@@ -220,6 +228,8 @@ function trainingRenderDetailHtml(snap) {
           ${stopBtn}
         </div>
       </header>
+
+      ${imageBanner}
 
       <section class="training-card">
         <div class="training-stats-row">
@@ -275,6 +285,63 @@ async function trainingShowStartForm() {
   }
   if (_trainingMode === "form") trainingRenderStartForm(); // user might have nav'd away
   trainingRefreshRuns(); // unselect any previously-highlighted row
+}
+
+// ── Image-prep status banner ──────────────────────────────────────────────────
+//
+// Reads the events.jsonl-derived `events` list off the snapshot and renders
+// a one-line status describing the most recent image-* event. The
+// orchestrator emits exactly one of these flows per run:
+//
+//   1. cache hit:       image_cache_hit
+//   2. successful pull: pulling_image → image_pulled (with duration_s + size_bytes)
+//   3. failed pull:     pulling_image → image_pull_failed (with error tail)
+//
+// Why surface this: a first-time pull on a fresh host took 13m 34s on the
+// reference workstation. Without this banner the run sits at PENDING with
+// nothing on screen, which is indistinguishable from a hung backend.
+function trainingImageStatusHtml(run, events) {
+  const imageEvents = events.filter((e) => typeof e.type === "string" && e.type.startsWith("image"));
+  if (imageEvents.length === 0) {
+    if (run.state === "pending") {
+      return `<div class="training-image-banner pending">Preparing image…</div>`;
+    }
+    return ""; // running / terminal with no image events — fake recipe path
+  }
+  const last = imageEvents[imageEvents.length - 1];
+  switch (last.type) {
+    case "image_cache_hit":
+      return `<div class="training-image-banner ok">Image: cache hit · <span class="training-mono">${escapeHtml(last.image)}</span></div>`;
+    case "pulling_image": {
+      const sinceMs = last.ts ? Date.now() - last.ts * 1000 : 0;
+      const sinceLabel = sinceMs > 0 ? ` · pulling for ${formatDuration(sinceMs / 1000)}` : "";
+      return `<div class="training-image-banner pulling">Pulling image · <span class="training-mono">${escapeHtml(last.image)}</span>${sinceLabel}</div>`;
+    }
+    case "image_pulled": {
+      const dur = last.duration_s != null ? formatDuration(last.duration_s) : "?";
+      const size = last.size_bytes != null ? ` · ${formatBytes(last.size_bytes)}` : "";
+      return `<div class="training-image-banner ok">Image: pulled in ${dur}${size} · <span class="training-mono">${escapeHtml(last.image)}</span></div>`;
+    }
+    case "image_pull_failed":
+      return `<div class="training-image-banner failed">Image pull failed: <span class="training-mono">${escapeHtml(last.error || "(no error tail)")}</span></div>`;
+    default:
+      return "";
+  }
+}
+
+function formatDuration(seconds) {
+  const s = Math.max(0, seconds);
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  const r = Math.round(s - m * 60);
+  return `${m}m ${r}s`;
+}
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 // Policy-specific hyperparameter forms. Defaults copied from lerobot upstream:

@@ -1284,6 +1284,51 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     text-overflow: ellipsis;
 }
 
+/* Image-prep status banner (between header and stats card) */
+.training-image-banner {
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    margin-bottom: 16px;
+    border: 1px solid transparent;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.training-image-banner.pending {
+    background: #1a1a2e;
+    border-color: #2a2a4a;
+    color: #b0b0c8;
+}
+.training-image-banner.pulling {
+    background: #1a2e1a;
+    border-color: #2a5a2a;
+    color: #b8e8b8;
+}
+.training-image-banner.pulling::before {
+    content: "⤓";
+    font-size: 14px;
+    color: #6aff6a;
+}
+.training-image-banner.ok {
+    background: #14241a;
+    border-color: #2a4a30;
+    color: #88c0a0;
+}
+.training-image-banner.ok::before {
+    content: "✓";
+    color: #6aff8a;
+}
+.training-image-banner.failed {
+    background: #2e1a1a;
+    border-color: #5a2a2a;
+    color: #ff9999;
+}
+.training-image-banner.failed::before {
+    content: "✗";
+    color: #ff6666;
+}
+
 /* Detail pane */
 .training-detail-pane {
     padding: 24px;

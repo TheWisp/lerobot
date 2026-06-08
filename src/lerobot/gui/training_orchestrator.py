@@ -29,7 +29,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
+import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +56,8 @@ from lerobot.gui.training_transport import (
     TransportClient,
     make_client,
 )
+
+logger = logging.getLogger(__name__)
 
 # ── Requests / responses ──────────────────────────────────────────────────────
 
@@ -90,6 +95,7 @@ class RunSnapshot:
     progress: dict[str, Any] | None  # contents of progress.json, or None if not written yet
     checkpoints: list[CheckpointEntry]  # all manifest entries
     stderr_tail: str  # last N bytes of stderr.log (configurable on poll)
+    events: list[dict[str, Any]]  # all events.jsonl entries (oldest first)
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -126,12 +132,20 @@ class Orchestrator:
         run_registry: RunRegistry,
         *,
         runner_module: str = "lerobot.gui.training_runner",
+        image_runner: ImageRunner | None = None,
     ) -> None:
         self._hosts = host_registry
         self._runs = run_registry
         # Module name (not file path) so we invoke via `python -m`. Tests can
         # substitute a stub runner module without monkey-patching subprocess.
         self._runner_module = runner_module
+        # Swappable shim for the two docker calls (inspect / pull). Tests
+        # inject a fake; the default talks to the local docker daemon.
+        self._image = image_runner or _DefaultImageRunner()
+        # Background prep threads (image pull + worker spawn). Keyed by run_id;
+        # daemon=True so they don't block process shutdown. We keep refs so
+        # tests can join them; in production they're fire-and-forget.
+        self._prep_threads: dict[str, threading.Thread] = {}
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -174,21 +188,28 @@ class Orchestrator:
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
         paths.ensure_exists()
 
-        # 5. Launch the worker via the host's transport
-        try:
-            session_id = self._launch_worker(host, run, paths)
-        except Exception as exc:
-            run.error = f"launch failed: {exc!r}"
-            run.advance(RunState.FAILED)
-            self._runs.save(run)
-            append_event(paths.events_jsonl, "crashed", error=str(exc), final_step=0)
-            raise
-
-        # 6. Mark RUNNING
-        run.session_id = session_id
-        run.advance(RunState.RUNNING)
-        self._runs.save(run)
-        append_event(paths.events_jsonl, "started", session_id=session_id, host_id=host.id)
+        # 5. Prepare image + launch worker in a background thread.
+        #
+        # The HTTP request returns immediately with state=PENDING. The
+        # background thread emits ``image_cache_hit`` / ``pulling_image`` /
+        # ``image_pulled`` / ``image_pull_failed`` events into events.jsonl
+        # as it works, and the frontend's existing run-detail poller renders
+        # them as visible status. On success it spawns the worker and
+        # advances to RUNNING; on failure it advances to FAILED.
+        #
+        # Why a thread rather than a synchronous pull: first-time image
+        # pulls measured ~13 min on this workstation's connection. Blocking
+        # the POST that long times out the browser's fetch — and the user
+        # sees nothing in the meantime since the run row only appears
+        # after the response.
+        t = threading.Thread(
+            target=self._prepare_and_launch,
+            args=(host, run.run_id, paths),
+            daemon=True,
+            name=f"prepare-{run.run_id[:8]}",
+        )
+        self._prep_threads[run.run_id] = t
+        t.start()
         return run
 
     def poll(
@@ -218,8 +239,15 @@ class Orchestrator:
         progress = self._read_progress(paths.progress_json)
         checkpoints = self._read_manifest(paths.checkpoints_jsonl)
         stderr_tail = self._read_stderr_tail(paths.stderr_log, stderr_tail_bytes)
+        events = _read_events(paths.events_jsonl)
 
-        return RunSnapshot(run=run, progress=progress, checkpoints=checkpoints, stderr_tail=stderr_tail)
+        return RunSnapshot(
+            run=run,
+            progress=progress,
+            checkpoints=checkpoints,
+            stderr_tail=stderr_tail,
+            events=events,
+        )
 
     def stop(self, run_id: str) -> Run:
         """User-initiated stop — SIGTERM the worker, mark COMPLETING.
@@ -234,6 +262,17 @@ class Orchestrator:
             return run  # idempotent — already stopped
         if run.state == RunState.COMPLETING:
             return run  # idempotent — already stopping
+        paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
+        if run.state == RunState.PENDING:
+            # Prep thread is still running (image pull or pre-launch). No
+            # worker to SIGTERM. Skip COMPLETING straight to ABORTED — the
+            # prep thread will reload run state before launching and bail
+            # if it sees a terminal state. (If it raced past that check
+            # already, the spawned worker is --rm so it cleans up on exit.)
+            run.advance(RunState.ABORTED)
+            self._runs.save(run)
+            append_event(paths.events_jsonl, "aborted_by_user", final_step=0)
+            return run
         host = self._hosts.get(run.host_id)
         if host is None:
             # Host went away (deleted profile) — best-effort mark aborted.
@@ -245,10 +284,7 @@ class Orchestrator:
             client.stop(run.session_id, force=False)
         run.advance(RunState.COMPLETING)
         self._runs.save(run)
-        append_event(
-            RunPaths.for_run(run.run_id, self._runs.runs_dir).events_jsonl,
-            "stop_requested",
-        )
+        append_event(paths.events_jsonl, "stop_requested")
         return run
 
     def list_runs(self) -> list[Run]:
@@ -270,6 +306,116 @@ class Orchestrator:
         return runs
 
     # ── Internals ─────────────────────────────────────────────────────────────
+
+    # ── Image prep + launch (background thread entry point) ───────────────────
+
+    def _prepare_and_launch(self, host: TrainingHost, run_id: str, paths: RunPaths) -> None:
+        """Pre-pull the image if needed, then launch the worker.
+
+        Runs in a daemon thread spawned from :meth:`start`. On success,
+        advances run to RUNNING and emits ``started`` event. On failure,
+        advances to FAILED and emits ``image_pull_failed`` or ``crashed``
+        as appropriate. All errors are caught here — never bubble up;
+        the run state IS the error channel.
+        """
+        # Re-load — start() saved PENDING; we own the lifecycle now.
+        run = self._runs.load(run_id)
+        if run is None:
+            logger.error("prepare-and-launch: run %s vanished", run_id)
+            return
+        try:
+            cmd = self._build_command(run, paths)
+            image = _extract_image_from_docker_argv(cmd)
+            if image is not None:
+                self._ensure_image(image, paths)
+        except _ImagePullError as exc:
+            # Already emitted image_pull_failed; flip state to FAILED.
+            run.error = f"image pull failed: {exc}"
+            run.advance(RunState.FAILED)
+            self._runs.save(run)
+            return
+        except Exception as exc:
+            logger.exception("prepare-and-launch: unexpected error before launch")
+            run.error = f"prepare failed: {exc!r}"
+            run.advance(RunState.FAILED)
+            self._runs.save(run)
+            append_event(paths.events_jsonl, "crashed", error=str(exc), final_step=0)
+            return
+        # Race check: did the user stop us between image-prep and launch?
+        # (stop() on PENDING transitions directly to ABORTED.)
+        run = self._runs.load(run_id)
+        if run is None or run.state != RunState.PENDING:
+            logger.info(
+                "prepare-and-launch: run %s no longer PENDING (state=%s) — skipping launch",
+                run_id,
+                run.state.value if run else "?",
+            )
+            return
+        try:
+            session_id = self._launch_worker(host, run, paths)
+        except Exception as exc:
+            logger.exception("prepare-and-launch: worker launch failed")
+            run.error = f"launch failed: {exc!r}"
+            run.advance(RunState.FAILED)
+            self._runs.save(run)
+            append_event(paths.events_jsonl, "crashed", error=str(exc), final_step=0)
+            return
+        # Final race check: stop() can land between launch and advance.
+        # If so, kill what we just spawned. --rm on docker run cleans up the
+        # container even if we miss this; the kill is best-effort UX.
+        run_after = self._runs.load(run_id)
+        if run_after is None or run_after.state != RunState.PENDING:
+            try:
+                make_client(host.transport).stop(session_id, force=True)
+            except Exception:
+                logger.exception("prepare-and-launch: post-launch kill failed (best-effort)")
+            return
+        run_after.session_id = session_id
+        run_after.advance(RunState.RUNNING)
+        self._runs.save(run_after)
+        append_event(paths.events_jsonl, "started", session_id=session_id, host_id=host.id)
+
+    def _ensure_image(self, image: str, paths: RunPaths) -> None:
+        """Make sure ``image`` is present in the local docker cache.
+
+        Emits one of:
+          - ``image_cache_hit`` — image already local; no pull.
+          - ``pulling_image`` + ``image_pulled`` — pull succeeded; latter
+            carries ``duration_s`` and (when available) ``size_bytes``.
+          - ``pulling_image`` + ``image_pull_failed`` — pull failed;
+            raises :class:`_ImagePullError` so the caller can flip the
+            run state to FAILED.
+
+        Always emits AT LEAST ONE event so the frontend can render a
+        deterministic "what's happening" status. Pre: ``paths.root`` exists.
+        """
+        if self._image.inspect(image):
+            append_event(paths.events_jsonl, "image_cache_hit", image=image)
+            return
+        append_event(paths.events_jsonl, "pulling_image", image=image)
+        t0 = time.time()
+        ok, err = self._image.pull(image)
+        duration_s = time.time() - t0
+        if not ok:
+            append_event(
+                paths.events_jsonl,
+                "image_pull_failed",
+                image=image,
+                duration_s=round(duration_s, 3),
+                error=err[:500],
+            )
+            raise _ImagePullError(err[:200])
+        # Best-effort size after pull (the docker manifest gives the
+        # compressed size; the inspect gives the on-disk uncompressed size
+        # — the latter is what most people mean by "image size").
+        size_bytes = self._image.image_size(image)
+        append_event(
+            paths.events_jsonl,
+            "image_pulled",
+            image=image,
+            duration_s=round(duration_s, 3),
+            size_bytes=size_bytes,
+        )
 
     def _launch_worker(self, host: TrainingHost, run: Run, paths: RunPaths) -> int:
         """Build the worker command + invoke via the host's transport."""
@@ -531,3 +677,153 @@ def _sha256_of(path: Path, chunk: int = 1 << 20) -> str:
                 break
             h.update(block)
     return h.hexdigest()
+
+
+def _read_events(events_path: Path) -> list[dict[str, Any]]:
+    """Read all events from events.jsonl. Returns [] if the file is missing
+    or every line malformed; otherwise returns valid entries in file order.
+
+    Cheap (file is small — events.jsonl never exceeds a few KB per run).
+    """
+    if not events_path.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    for line in events_path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+# ── Image preparation (pre-pull + cache check) ────────────────────────────────
+
+
+class _ImagePullError(RuntimeError):
+    """Raised internally when ``docker pull`` exits non-zero. Caught by
+    :meth:`Orchestrator._prepare_and_launch` to flip the run to FAILED."""
+
+
+def _extract_image_from_docker_argv(cmd: list[str]) -> str | None:
+    """Pick the image tag out of a ``docker run ...`` argv.
+
+    Returns ``None`` if ``cmd`` isn't a docker invocation (e.g., the fake
+    recipe's ``python -m ...``). Recognising the docker recipe shape is
+    cheap; full POSIX-style flag parsing would over-fit a structure we
+    control.
+
+    Convention from :func:`training_recipes.build_lerobot_train_command`:
+    the image is the first positional after the last ``-v`` mount pair, and
+    is followed by the entrypoint (``lerobot-train`` or
+    ``python -u -m ...``). We just look for the first token after a
+    sequence of recognised docker-flag pairs.
+    """
+    if not cmd or cmd[0] != "docker" or len(cmd) < 3 or cmd[1] != "run":
+        return None
+    i = 2
+    # Skip flag pairs and standalone flags until we hit the image.
+    # Recognised: --rm, --gpus all, --user UID:GID, -v X:Y, --network host, etc.
+    while i < len(cmd):
+        tok = cmd[i]
+        if tok == "--rm":
+            i += 1
+            continue
+        if tok in {
+            "--gpus",
+            "--user",
+            "--network",
+            "-v",
+            "--volume",
+            "-e",
+            "--env",
+            "--name",
+            "--ipc",
+            "--shm-size",
+        }:
+            i += 2
+            continue
+        if tok.startswith("-"):
+            # Unknown flag — bail rather than guess pair vs. standalone.
+            return None
+        # First non-flag positional: this is the image.
+        return tok
+    return None
+
+
+class ImageRunner:
+    """Shim for the two docker calls C5 needs (``inspect`` and ``pull``).
+
+    The default talks to the local docker daemon via subprocess; tests
+    inject a fake to assert on which calls happen without touching docker.
+    Kept narrow on purpose — the orchestrator should never grow a generic
+    "run docker" surface, and this is the only API it needs.
+    """
+
+    def inspect(self, image: str) -> bool:  # pragma: no cover - abstract
+        """Return True iff ``image`` exists locally."""
+        raise NotImplementedError
+
+    def pull(self, image: str) -> tuple[bool, str]:  # pragma: no cover
+        """Pull ``image``. Returns ``(ok, stderr_tail)``."""
+        raise NotImplementedError
+
+    def image_size(self, image: str) -> int | None:  # pragma: no cover
+        """On-disk size of the image in bytes, or None if unknown."""
+        raise NotImplementedError
+
+
+class _DefaultImageRunner(ImageRunner):
+    """Production impl: shells out to ``docker`` on PATH.
+
+    All three calls are bounded — ``inspect`` is ~50ms cache-hit, much
+    faster on misses (immediate non-zero exit); ``image_size`` is similarly
+    fast; ``pull`` is what we're trying to expose timing for, so it gets
+    no extra timeout beyond what the user's host configures.
+    """
+
+    def inspect(self, image: str) -> bool:
+        try:
+            r = subprocess.run(
+                ["docker", "image", "inspect", image],
+                capture_output=True,
+                timeout=30,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        return r.returncode == 0
+
+    def pull(self, image: str) -> tuple[bool, str]:
+        try:
+            r = subprocess.run(
+                ["docker", "pull", image],
+                capture_output=True,
+                text=True,
+                # No timeout — pulls genuinely take 10+ min on slow links.
+            )
+        except FileNotFoundError as exc:
+            return False, f"docker binary not found: {exc}"
+        if r.returncode != 0:
+            # Combined tail — stderr is where pull failures land; include
+            # stdout in case of a "Status: ..." line that helps diagnose.
+            return False, (r.stderr or r.stdout or "")[-1000:]
+        return True, ""
+
+    def image_size(self, image: str) -> int | None:
+        try:
+            r = subprocess.run(
+                ["docker", "image", "inspect", "-f", "{{.Size}}", image],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+        if r.returncode != 0:
+            return None
+        try:
+            return int(r.stdout.strip())
+        except ValueError:
+            return None
