@@ -73,12 +73,15 @@ COPY --chown=user_lerobot:user_lerobot setup.py pyproject.toml uv.lock README.md
 COPY --chown=user_lerobot:user_lerobot src/ src/
 
 # Training-relevant extras only: dataset + training (wandb + accelerate)
-# + pusht (smoke-test dataset has env deps). We deliberately skip:
+# + pusht (smoke-test dataset has env deps) + the policy extras that the
+# GUI form picker exposes today (diffusion → diffusers; hvla → transformers
+# + scikit-learn — needed once the no-S2 happy path grows the S2 latent
+# code path). ACT has no extra so isn't listed. We deliberately skip:
 #   - hardware/feetech/dynamixel/intelrealsense — no robot on the pod
 #   - libero/metaworld — heavy, infrequently used
 #   - dev/test — not needed in deployment image
 # Saves ~3 GB vs --extra all and avoids needing cmake to compile mujoco bindings.
-RUN uv sync --locked --extra dataset --extra training --extra pusht --no-cache
+RUN uv sync --locked --extra dataset --extra training --extra pusht --extra diffusion --extra hvla --no-cache
 
 # Triton ptxas binary needs +x for some torch.compile paths
 RUN chmod +x /lerobot/.venv/lib/python${PYTHON_VERSION}/site-packages/triton/backends/nvidia/bin/ptxas || true
