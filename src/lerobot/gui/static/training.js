@@ -240,11 +240,27 @@ function trainingRenderDetailHtml(snap) {
   const events = snap.events || [];
   const isActive = !["completed", "failed", "aborted"].includes(r.state);
 
-  const step = progress.step ?? 0;
-  const total = progress.num_steps ?? r.args?.num_steps ?? 0;
+  // progress.json is only written by the legacy fake-training runner;
+  // real lerobot-train / HVLA flow_matching don't write it (mid-run loss
+  // parsing from stderr is future work — C6). When progress is missing,
+  // fall back to what we DO know: the highest checkpoint step we've
+  // surfaced (cheap, accurate to ±save_freq), and the configured
+  // target step count from the run's args.
+  //
+  // Take the max-by-step, not the last entry: the orchestrator's
+  // checkpoint scanner sorts directories alphabetically, which for HVLA's
+  // ``checkpoint-N/`` naming puts ``checkpoint-10`` before ``checkpoint-5``
+  // and writes the manifest out of step order.
+  const lastCkptStep = checkpoints.length ? Math.max(...checkpoints.map((c) => c.step)) : 0;
+  const step = progress.step ?? lastCkptStep;
+  const total =
+    progress.num_steps ?? r.args?.num_steps ?? r.args?.steps ?? 0;
   const pct = total > 0 ? Math.min(100, Math.round((step / total) * 100)) : 0;
   const loss = progress.loss != null ? progress.loss.toFixed(4) : "—";
-  const elapsedSec = r.started_at ? Math.round(Date.now() / 1000 - r.started_at) : 0;
+  // For terminal runs, freeze the elapsed clock at finished_at instead of
+  // ticking forever against Date.now().
+  const elapsedEnd = r.finished_at ?? Date.now() / 1000;
+  const elapsedSec = r.started_at ? Math.max(0, Math.round(elapsedEnd - r.started_at)) : 0;
 
   const stopBtn = isActive
     ? `<button class="btn-small danger" id="training-stop-${r.run_id}">Stop</button>`

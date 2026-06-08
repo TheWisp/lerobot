@@ -587,7 +587,11 @@ class Orchestrator:
         ckpts_base = paths.root / subdir / "checkpoints" if subdir else paths.root / "checkpoints"
         if not ckpts_base.is_dir():
             return
-        for child in sorted(ckpts_base.iterdir()):
+        # Parse first, then sort by step number — sorting directories by
+        # name puts ``checkpoint-10`` before ``checkpoint-5`` (alphabetical)
+        # which would write the manifest out of step order.
+        pairs: list[tuple[Path, int]] = []
+        for child in ckpts_base.iterdir():
             if not child.is_dir():
                 continue
             # Parse step number from the dir name. Two layouts supported:
@@ -596,7 +600,9 @@ class Orchestrator:
             m = re.fullmatch(r"(?:checkpoint-)?0*(\d+)", child.name)
             if not m:
                 continue
-            yield child, int(m.group(1))
+            pairs.append((child, int(m.group(1))))
+        pairs.sort(key=lambda p: p[1])
+        yield from pairs
 
     @staticmethod
     def _read_progress(progress_path: Path) -> dict[str, Any] | None:

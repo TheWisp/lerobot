@@ -394,6 +394,43 @@ def test_orchestrator_appends_to_manifest_from_disk_hvla_recipe_layout(
     assert all(c.sha256 for c in snap.checkpoints)
 
 
+def test_orchestrator_sorts_checkpoints_by_step_not_dir_name(host: TrainingHost, tmp_path: Path) -> None:
+    """``checkpoint-10`` sorts before ``checkpoint-5`` alphabetically.
+    The scanner must sort by parsed step number, not by raw directory name,
+    so the manifest comes out in step order regardless of zero-padding."""
+    import time as _t
+
+    from lerobot.gui.training.recipes import HVLA_FLOW_S1_RECIPE
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="sort-test",
+        dataset_id="thewisp/some_data",
+        args={"__recipe__": HVLA_FLOW_S1_RECIPE, "dataset_repo_id": "thewisp/some_data"},
+        state=RunState.PENDING,
+        created_at=_t.time(),
+    )
+    run.session_id = 1
+    run.advance(RunState.RUNNING)
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+    # Use steps that ARE in the wrong order alphabetically: 5 + 10 + 100
+    # ("checkpoint-10" < "checkpoint-100" < "checkpoint-5" by string sort).
+    for step in (5, 10, 100):
+        d = paths.root / "output" / "checkpoints" / f"checkpoint-{step}" / "pretrained_model"
+        d.mkdir(parents=True)
+        (d / "model.safetensors").write_bytes(f"fake-{step}".encode())
+    snap = orch.poll(run.run_id)
+    # Manifest entries must be in step order.
+    assert [c.step for c in snap.checkpoints] == [5, 10, 100]
+
+
 def test_orchestrator_completed_on_exit_with_checkpoints(host: TrainingHost, tmp_path: Path) -> None:
     """Real (docker) recipe: process exits cleanly, at least one checkpoint
     on disk → orchestrator writes completed_naturally and advances to
