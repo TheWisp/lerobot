@@ -1105,25 +1105,47 @@ def build_server(
         ``{"job_id", "status": "started"}`` immediately; poll
         ``hub_job_progress`` for completion.
 
+        **Incomplete-local-state guard.** Before spawning the worker,
+        ``hub_jobs.check_upload_completeness`` compares the local files
+        against the remote repo's siblings. If anything is present on
+        the remote but missing locally — or there's an HF
+        ``.incomplete`` resume marker — the call returns
+        ``{"status": "conflict", "detail": {"code":
+        "incomplete_local_state", "missing_locally": [...],
+        "incomplete_locally": [...]}}`` instead of starting the upload.
+        The check is mechanical (file-presence comparison), but the
+        intent is to catch the half-downloaded-then-immediately-
+        re-uploaded footgun, where the local copy is a worse-than-
+        remote partial. The case never fires on a fresh upload (no
+        remote repo to compare against).
+
+        Recommended agent flow on this conflict:
+
+        1. Surface ``missing_locally`` / ``incomplete_locally`` to the
+           operator — they're real file paths.
+        2. Default recovery: call ``hub_start_download`` to finish the
+           partial copy, then retry the upload (no force flag needed).
+        3. Only set ``confirm_force=True`` if the operator explicitly
+           opts in — e.g., they intentionally stripped large files
+           locally and want Hub to mirror the new (smaller) state.
+
         Args:
             dataset_id: Local dataset to upload (must be opened in the
                 GUI's AppState).
             hub_repo_id: Override the remote repo name. Defaults to
                 ``dataset.repo_id`` (the local id is usually the
                 desired remote name too).
-            confirm_force: Bypass the completeness check that warns
-                when the local copy is missing files present on the
-                remote. Only set this after the AI has read the
-                ``incomplete_local_state`` conflict detail and decided
-                it's safe to override.
+            confirm_force: Bypass the completeness check. See the
+                recommended flow above — almost never the right first
+                response to the conflict.
 
         Returns ``{"job_id", "status": "started"}`` on success, or
-        ``{"status": "conflict", "detail": {...}}`` for the recoverable
-        ``incomplete_local_state`` conflict (retry with
-        ``confirm_force=True``).
+        ``{"status": "conflict", "detail": {...}}`` for the
+        ``incomplete_local_state`` conflict and for active-transfer
+        collisions on the same dataset.
 
-        Raises on missing dataset, not-logged-in, or active-transfer
-        collision (one transfer per dataset at a time).
+        Raises on missing dataset, not-logged-in, or other
+        non-recoverable errors.
         """
         from fastapi import HTTPException as _HTTPException
 
