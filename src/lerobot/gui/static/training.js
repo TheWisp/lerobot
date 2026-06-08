@@ -147,8 +147,53 @@ function trainingRenderRunsList(runs) {
       <div class="training-run-row-sub">${escapeHtml(r.dataset_id)}</div>
     `;
     row.onclick = () => trainingSelectRun(r.run_id);
+    // Right-click → minimal context menu. We override the browser default
+    // (which would just show "Open / Save / Inspect…") with our own row
+    // of actions. Currently the only action is duplicate; the menu is
+    // structured so we can grow it (Delete / Resume) without touching
+    // the row code.
+    row.oncontextmenu = (ev) => {
+      ev.preventDefault();
+      trainingShowRunContextMenu(r.run_id, ev.clientX, ev.clientY);
+    };
     el.appendChild(row);
   }
+}
+
+// One floating context-menu element shared across rows; created on first
+// use, hidden by default, repositioned on each show.
+function trainingShowRunContextMenu(runId, x, y) {
+  let menu = document.getElementById("training-context-menu");
+  if (!menu) {
+    menu = document.createElement("div");
+    menu.id = "training-context-menu";
+    menu.className = "training-context-menu";
+    document.body.appendChild(menu);
+  }
+  menu.innerHTML = `
+    <div class="training-context-item" data-action="duplicate">
+      <span class="training-context-icon">⎘</span> Run with same config
+    </div>
+  `;
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.style.display = "block";
+
+  const close = () => {
+    menu.style.display = "none";
+    document.removeEventListener("click", close, true);
+    document.removeEventListener("contextmenu", close, true);
+  };
+  menu.querySelector('[data-action="duplicate"]').onclick = (ev) => {
+    ev.stopPropagation();
+    close();
+    trainingDuplicateRun(runId);
+  };
+  // Close on next outside-click / right-click anywhere.
+  setTimeout(() => {
+    document.addEventListener("click", close, true);
+    document.addEventListener("contextmenu", close, true);
+  }, 0);
 }
 
 // ── Mode switches ─────────────────────────────────────────────────────────────
@@ -181,6 +226,8 @@ async function trainingRefreshDetail(runId) {
     el.innerHTML = trainingRenderDetailHtml(snap);
     const stopBtn = document.getElementById(`training-stop-${runId}`);
     if (stopBtn) stopBtn.onclick = () => trainingStopRun(runId);
+    const cloneBtn = document.getElementById(`training-clone-${runId}`);
+    if (cloneBtn) cloneBtn.onclick = () => trainingDuplicateRun(runId);
   } catch (e) {
     el.innerHTML = `<div class="training-error">Failed to load run: ${escapeHtml(e.message)}</div>`;
   }
@@ -202,6 +249,10 @@ function trainingRenderDetailHtml(snap) {
   const stopBtn = isActive
     ? `<button class="btn-small danger" id="training-stop-${r.run_id}">Stop</button>`
     : "";
+  // "Run with same config" is always available — works for in-progress
+  // runs (peek at the config), terminal runs (clone-and-adjust), and
+  // failed runs (fix-and-retry).
+  const cloneBtn = `<button class="btn-small secondary" id="training-clone-${r.run_id}" title="Open the start form pre-filled with this run's settings">Run with same config</button>`;
 
   // Image-prep status banner: when state=PENDING (background prep thread is
   // running), surface the most recent image-* event so the user sees what's
@@ -225,6 +276,7 @@ function trainingRenderDetailHtml(snap) {
         </div>
         <div class="training-detail-actions">
           <span class="training-state-badge training-state-${r.state}">${r.state}</span>
+          ${cloneBtn}
           ${stopBtn}
         </div>
       </header>
@@ -263,14 +315,48 @@ function trainingRenderDetailHtml(snap) {
         <pre class="training-log">${escapeHtml(snap.stderr_tail || "(no output yet)")}</pre>
       </section>
 
+      ${trainingConfigCardHtml(r)}
+
       ${r.error ? `<div class="training-error">Error: ${escapeHtml(r.error)}</div>` : ""}
     </div>
   `;
 }
 
+// Configuration card: the same args dict that started this run, surfaced
+// so the user can read it back and decide whether to clone. Filters out
+// recipe-builder meta keys (the leading-`__` ones) — they don't change
+// behaviour the user controls.
+function trainingConfigCardHtml(r) {
+  const args = r.args || {};
+  const keys = Object.keys(args)
+    .filter((k) => !k.startsWith("__"))
+    .sort();
+  const rows = keys.map((k) => {
+    const v = args[k];
+    const valStr = typeof v === "object" ? JSON.stringify(v) : String(v);
+    return `<tr><td class="training-mono">${escapeHtml(k)}</td><td class="training-mono">${escapeHtml(valStr)}</td></tr>`;
+  });
+  // Recipe + image markers belong with the config but get their own row,
+  // labeled clearly. They're what determined which trainer ran + which
+  // image was used.
+  const recipeMarker = args["__recipe__"] || "lerobot-train";
+  const imageMarker = args["__image__"] || "(default)";
+  return `
+    <section class="training-card">
+      <h3 class="training-card-heading">Configuration</h3>
+      <table class="training-args-table">
+        <tr><th>Recipe</th><td class="training-mono">${escapeHtml(recipeMarker)}</td></tr>
+        <tr><th>Image</th><td class="training-mono">${escapeHtml(imageMarker)}</td></tr>
+        ${rows.join("")}
+      </table>
+      <div class="training-field-hint">Click <strong>Run with same config</strong> above to open the start form pre-filled with these values.</div>
+    </section>
+  `;
+}
+
 // ── Start form ────────────────────────────────────────────────────────────────
 
-async function trainingShowStartForm() {
+async function trainingShowStartForm(prefill) {
   // Button is disabled until hosts load, so this guard mostly catches
   // programmatic invocations. Keep it cheap and silent — no alert.
   if (_trainingHosts.length === 0) return;
@@ -283,8 +369,29 @@ async function trainingShowStartForm() {
       '<div class="training-detail-pane"><div class="training-empty-hint">Loading datasets…</div></div>';
     await trainingLoadDatasets();
   }
-  if (_trainingMode === "form") trainingRenderStartForm(); // user might have nav'd away
+  if (_trainingMode === "form") trainingRenderStartForm(prefill); // user might have nav'd away
   trainingRefreshRuns(); // unselect any previously-highlighted row
+}
+
+// Duplicate an existing run: open the start form pre-filled with that
+// run's policy + dataset + hyperparameters. Used by the per-row context
+// menu and the "Run with same config" button in the detail view.
+async function trainingDuplicateRun(runId) {
+  let snap;
+  try {
+    const resp = await fetch(`/api/training/runs/${runId}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    snap = await resp.json();
+  } catch (e) {
+    alert(`Failed to load run config: ${e.message}`);
+    return;
+  }
+  const r = snap.run;
+  trainingShowStartForm({
+    dataset_id: r.dataset_id,
+    args: r.args || {},
+    recipe_name: r.recipe_name ? `${r.recipe_name} (copy)` : "",
+  });
 }
 
 // ── Image-prep status banner ──────────────────────────────────────────────────
@@ -398,7 +505,7 @@ const TRAINING_FIELDS = [
   { key: "save_freq", label: "Save every N steps", type: "int", default: 500 },
 ];
 
-function trainingRenderStartForm() {
+function trainingRenderStartForm(prefill) {
   const el = document.getElementById("training-detail");
   if (!el || _trainingMode !== "form") return;
 
@@ -477,9 +584,74 @@ function trainingRenderStartForm() {
       </form>
     </div>
   `;
-  // Render the policy-specific fields for the default-selected policy
-  const defaultPolicy = Object.keys(POLICY_FORMS)[0];
-  trainingRenderPolicyFields(defaultPolicy);
+  // Render the policy-specific fields. If we have a prefill, derive the
+  // policy from its args; otherwise fall back to the first POLICY_FORMS
+  // entry (ACT).
+  const initialPolicy = trainingPolicyFromArgs(prefill?.args) || Object.keys(POLICY_FORMS)[0];
+  trainingRenderPolicyFields(initialPolicy);
+  if (prefill) trainingApplyPrefill(prefill, initialPolicy);
+}
+
+// Map a Run.args dict back to its policy_type key. Mirrors the inverse
+// of trainingSubmitStart's args-construction: lerobot-train recipes
+// carry `policy.type=<key>`; HVLA carries `__recipe__=hvla_flow_s1` and
+// no policy.type at all.
+function trainingPolicyFromArgs(args) {
+  if (!args) return null;
+  if (args["__recipe__"] === "hvla_flow_s1") return "hvla_flow_s1";
+  if (typeof args["policy.type"] === "string") return args["policy.type"];
+  return null;
+}
+
+// Populate the form from a previous run's snapshot. Called from
+// trainingDuplicateRun → trainingShowStartForm → trainingRenderStartForm.
+function trainingApplyPrefill(prefill, policyType) {
+  const form = document.getElementById("training-start-form");
+  if (!form) return;
+  const policy = POLICY_FORMS[policyType];
+
+  // Dataset dropdown — only set if the option exists (dataset may have
+  // been removed since the previous run; let the user notice).
+  if (prefill.dataset_id) {
+    const dsSel = form.querySelector("select[name=dataset_id]");
+    if (dsSel && Array.from(dsSel.options).some((o) => o.value === prefill.dataset_id)) {
+      dsSel.value = prefill.dataset_id;
+    }
+  }
+
+  // Policy dropdown (the policy-fields are already rendered for
+  // `policyType` by the caller; just set the select to match)
+  const polSel = form.querySelector("select[name=policy_type]");
+  if (polSel && policy) polSel.value = policyType;
+
+  // Run label (kept verbatim — "(copy)" suffix added by trainingDuplicateRun)
+  if (prefill.recipe_name) {
+    const labelInput = form.querySelector("input[name=recipe_name]");
+    if (labelInput) labelInput.value = prefill.recipe_name;
+  }
+
+  // Fill each field by name. Both the shared TRAINING_FIELDS (steps,
+  // batch_size, save_freq) and the policy-specific fields are referenced
+  // by their `key`, which matches the form input's `name` attribute.
+  const args = prefill.args || {};
+  const allFields = [...TRAINING_FIELDS, ...(policy?.fields || [])];
+  for (const f of allFields) {
+    if (!(f.key in args)) continue;
+    const input = form.querySelector(`[name="${cssEscape(f.key)}"]`);
+    if (!input) continue;
+    if (f.type === "bool") {
+      input.checked = !!args[f.key];
+    } else {
+      input.value = String(args[f.key]);
+    }
+  }
+}
+
+// Minimal CSS.escape() shim — names contain dots (e.g. `policy.chunk_size`)
+// which `querySelector` would otherwise interpret as descendant selectors.
+function cssEscape(s) {
+  if (typeof CSS !== "undefined" && CSS.escape) return CSS.escape(s);
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => "\\" + c);
 }
 
 function trainingRenderPolicyFields(policyType) {
@@ -648,3 +820,4 @@ window.trainingCancelForm = trainingCancelForm;
 window.trainingSubmitStart = trainingSubmitStart;
 window.trainingStopRun = trainingStopRun;
 window.trainingRenderPolicyFields = trainingRenderPolicyFields;
+window.trainingDuplicateRun = trainingDuplicateRun;

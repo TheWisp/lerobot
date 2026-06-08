@@ -1260,6 +1260,61 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     overflow-x: hidden;
 }
 
+/* Right-click context menu on a run row. Floating, single-column,
+ * appears at the cursor; dismisses on any outside click. */
+.training-context-menu {
+    position: fixed;
+    display: none;
+    z-index: 9999;
+    min-width: 200px;
+    background: #16213e;
+    border: 1px solid #2a3a5a;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    padding: 4px 0;
+    font-size: 13px;
+    color: #e8e8e8;
+}
+.training-context-item {
+    padding: 8px 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.training-context-item:hover {
+    background: #1a2640;
+}
+.training-context-icon {
+    color: #888;
+    font-size: 14px;
+    width: 16px;
+    text-align: center;
+}
+
+/* Configuration card — args table in the detail view */
+.training-args-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.training-args-table th,
+.training-args-table td {
+    text-align: left;
+    padding: 5px 10px;
+    border-bottom: 1px solid #1a1a2e;
+    vertical-align: top;
+}
+.training-args-table th {
+    color: #888;
+    font-weight: 500;
+    width: 32%;
+}
+.training-args-table td {
+    color: #d0d0d0;
+    word-break: break-all;
+}
+
 .training-empty-hint {
     padding: 10px 12px;
     color: #888;
