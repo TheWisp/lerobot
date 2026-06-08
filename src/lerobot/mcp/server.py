@@ -148,6 +148,22 @@ def _normalize_frame_idx(frame_idx: int, ep_length: int) -> int:
     return frame_idx
 
 
+def _format_http_error(exc: Any) -> str:
+    """Render a FastAPI ``HTTPException`` as a clean message for an MCP error.
+
+    ``HTTPException.detail`` is often a plain string but can be a dict
+    (the conflict tools surface structured detail). For MCP, a single
+    one-line message reads better than a Python-repr of a dict — we
+    flatten ``{"message": "..."}`` if present, else ``str()`` the detail.
+    """
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict):
+        if "message" in detail:
+            return str(detail["message"])
+        return str(detail)
+    return str(detail if detail is not None else exc)
+
+
 def _tensor_to_image(frame: torch.Tensor) -> Image:
     """Encode a single decoded frame (C,H,W float[0,1] or uint8) as a PNG Image."""
     if frame.ndim == 4:
@@ -1064,6 +1080,128 @@ def build_server(
             target_repo_id,
             force=force,
         )
+
+    # ── Edit-tier: Hub — start upload / download / cancel job ──────────────
+    # The actual transfers run in spawned worker subprocesses; these
+    # tools kick off the worker, the AI polls progress via hub_job_progress
+    # (read-tier) or hub_list_jobs. Wrappers around the existing FastAPI
+    # handlers; same cross-private-import pattern as the Robots edit
+    # tools — the underlying handlers (`hub_upload`, `hub_download`,
+    # `hub_progress_cancel`) are well-tested and AppState-coupled, so we
+    # call them directly rather than refactor further.
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def hub_start_upload(
+        dataset_id: str,
+        hub_repo_id: str | None = None,
+        confirm_force: bool = False,
+    ) -> dict[str, Any]:
+        """Start uploading a local dataset to Hugging Face Hub.
+
+        Spawns a background worker that pushes through the full PR
+        pipeline (create_pull_request → upload_large_folder →
+        super_squash_history → merge_pull_request). Returns
+        ``{"job_id", "status": "started"}`` immediately; poll
+        ``hub_job_progress`` for completion.
+
+        Args:
+            dataset_id: Local dataset to upload (must be opened in the
+                GUI's AppState).
+            hub_repo_id: Override the remote repo name. Defaults to
+                ``dataset.repo_id`` (the local id is usually the
+                desired remote name too).
+            confirm_force: Bypass the completeness check that warns
+                when the local copy is missing files present on the
+                remote. Only set this after the AI has read the
+                ``incomplete_local_state`` conflict detail and decided
+                it's safe to override.
+
+        Returns ``{"job_id", "status": "started"}`` on success, or
+        ``{"status": "conflict", "detail": {...}}`` for the recoverable
+        ``incomplete_local_state`` conflict (retry with
+        ``confirm_force=True``).
+
+        Raises on missing dataset, not-logged-in, or active-transfer
+        collision (one transfer per dataset at a time).
+        """
+        from fastapi import HTTPException as _HTTPException
+
+        from lerobot.gui.api.datasets import HubUploadRequest, hub_upload
+
+        request = HubUploadRequest(repo_id=hub_repo_id, confirm_force=confirm_force)
+        try:
+            return await hub_upload(dataset_id, request)
+        except _HTTPException as e:
+            # Surface the recoverable `incomplete_local_state` conflict
+            # as a structured dict so the AI can read detail.code and
+            # retry with confirm_force=True. Other 409s (active job in
+            # flight) also surface as conflicts.
+            if e.status_code == 409 and isinstance(e.detail, dict):
+                return {"status": "conflict", "detail": e.detail}
+            raise ValueError(_format_http_error(e)) from e
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def hub_start_download(
+        dataset_id: str,
+        hub_repo_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Start downloading a dataset from Hugging Face Hub into the local copy.
+
+        Uses ``snapshot_download`` which writes directly into
+        ``dataset.root``; HF's etag-skip + ``.incomplete``-resume
+        primitives handle resumability transparently — re-running an
+        interrupted download picks up where it left off.
+
+        Args:
+            dataset_id: Local dataset id whose root the download lands
+                in (must be opened in the GUI's AppState).
+            hub_repo_id: Override the remote repo name. Defaults to
+                ``dataset.repo_id``.
+
+        Returns ``{"job_id", "status": "started"}``; poll
+        ``hub_job_progress`` for completion. Raises on missing dataset,
+        not-logged-in, or active-transfer collision.
+        """
+        from fastapi import HTTPException as _HTTPException
+
+        from lerobot.gui.api.datasets import HubDownloadRequest, hub_download
+
+        request = HubDownloadRequest(repo_id=hub_repo_id)
+        try:
+            return await hub_download(dataset_id, request)
+        except _HTTPException as e:
+            if e.status_code == 409 and isinstance(e.detail, dict):
+                return {"status": "conflict", "detail": e.detail}
+            raise ValueError(_format_http_error(e)) from e
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def hub_cancel_job(job_id: str) -> dict[str, Any]:
+        """Cancel an in-flight Hub transfer by sending SIGTERM to its worker.
+
+        Idempotent — calling on an already-terminal job is a no-op
+        (status was synthesized to ``failed`` if the worker was gone).
+
+        Args:
+            job_id: From ``hub_list_jobs`` or the response of
+                ``hub_start_upload`` / ``hub_start_download``.
+
+        Returns ``{"status": "cancel_requested", "job_id"}``. The actual
+        cancellation is asynchronous — poll ``hub_job_progress`` to see
+        the worker exit and the job's status flip to ``cancelled``.
+
+        Raises if the job_id is unknown.
+        """
+        from fastapi import HTTPException as _HTTPException
+
+        from lerobot.gui.api.datasets import hub_progress_cancel
+
+        try:
+            return await hub_progress_cancel(job_id)
+        except _HTTPException as e:
+            raise ValueError(_format_http_error(e)) from e
 
     # ── Edit-tier: Robots — profile CRUD + port assignment ─────────────────
     # File CRUD on the operator's ~/.config/lerobot/{robots,teleops}/*.json
