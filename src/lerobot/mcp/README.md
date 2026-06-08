@@ -257,6 +257,8 @@ stores it as `comment`. The migration is invisible to callers.
 | Dataset     | `list_datasets`, `get_dataset_info`, `list_episodes`, `get_episode_summary`, `get_frame`, `get_episode_tags`, `list_pending_edits` | `read`    |
 | Dataset     | `tag_episode`, `delete_episode_tag`                                                                                                | `comment` |
 | Dataset     | `propose_set_feature`, `propose_delete_episode`, `propose_trim_episode`, `discard_pending_edits`, `apply_pending_edits`            | `edit`    |
+| Dataset     | `validate_dataset_merge`                                                                                                           | `read`    |
+| Dataset     | `merge_into_dataset`                                                                                                               | `edit`    |
 | Hub         | `hub_auth_status`, `hub_repo_info`, `hub_list_jobs`, `hub_job_progress`                                                            | `read`    |
 | Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                       | `read`    |
 | Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `get_teleop_profile`, `list_ports`, `get_all_port_assignments` | `read`    |
@@ -273,7 +275,7 @@ may shift slightly on landing.
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
 | Bridge / UI | `set_filter` (waits for a filter UI to land — see `gui/TODO.md`)                                                                                                 | `read`    |
 | Dataset     | `get_feature_series`, `list_tagged_episodes`                                                                                                                     | `read`    |
-| Dataset     | `delete_dataset`, `merge_into_dataset`, `vacuum_sidecar`, `drop_sidecar_database`                                                                                | `edit`    |
+| Dataset     | `delete_dataset` (no GUI feature yet, deferred)                                                                                                                  | `edit`    |
 | Hub         | `hub_diff_local_vs_remote`                                                                                                                                       | `read`    |
 | Hub         | `hub_start_upload`, `hub_start_download`, `hub_cancel_job`                                                                                                       | `edit`    |
 | Models      | `list_model_sources`, `list_models_in_source`, `list_run_checkpoints`, `get_run_config`                                                                          | `read`    |

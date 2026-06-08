@@ -987,6 +987,84 @@ def build_server(
         assignments = _collect_all_port_assignments()
         return {"assignments": assignments, "total": len(assignments)}
 
+    # ── Edit-tier: Dataset merge ───────────────────────────────────────────
+    # Merge all episodes of one opened dataset into another. The source
+    # is read-only; the target's parquet + videos grow in place. The
+    # GUI's existing "Merge into…" action calls the same shared core.
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    async def validate_dataset_merge(source_repo_id: str, target_repo_id: str) -> dict[str, Any]:
+        """Check whether two opened datasets are schema-compatible for merge.
+
+        Pure read — no disk writes, no locks taken. Lets the AI sanity
+        check before proposing the actual merge. Compares fps,
+        robot_type, and feature schemas (per-feature dtype / shape /
+        names).
+
+        Args:
+            source_repo_id: Dataset to copy episodes FROM.
+            target_repo_id: Dataset to merge episodes INTO (will grow).
+
+        Returns ``{"compatible": bool, "mismatches": [...]}``.
+        ``mismatches`` is empty when compatible; otherwise each entry
+        names the conflicting ``field`` (``fps`` / ``robot_type`` /
+        ``features``) plus the source vs. target values.
+
+        Raises if either dataset isn't opened in the GUI.
+        """
+        from lerobot.gui.api._edits_core import check_merge_compat
+
+        return check_merge_compat(_require_app_state(), source_repo_id, target_repo_id)
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    async def merge_into_dataset(
+        source_repo_id: str,
+        target_repo_id: str,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Merge all episodes from ``source_repo_id`` INTO ``target_repo_id``.
+
+        Disk-mutating: copies the source's parquet rows and video files
+        into the target's directory tree and grows the target's
+        metadata. Source is untouched on disk. Takes both dataset
+        locks for the duration — concurrent edits / saves on either
+        side serialize cleanly.
+
+        Outcome transparency: the response carries before/after counts
+        on the target so the caller can see exactly how much grew.
+
+        Args:
+            source_repo_id: Dataset to copy episodes FROM (read-only).
+            target_repo_id: Dataset to merge episodes INTO (grows).
+            force: If True, skip schema validation in
+                ``dataset_tools.merge_into`` — only set this when you
+                know the schemas are compatible despite the validator's
+                complaints (e.g., a known-safe shape mismatch that
+                ``validate_dataset_merge`` already reported). Default
+                False.
+
+        Returns:
+            ``{"status", "source_id", "target_id",
+            "source_episodes_merged", "source_frames_merged",
+            "target_episodes_before", "target_episodes_after",
+            "target_frames_before", "target_frames_after",
+            "force_used"}``.
+
+        Raises if either dataset isn't opened, if ``source_repo_id ==
+        target_repo_id``, if either is busy, or if the schemas mismatch
+        and ``force=False``.
+        """
+        from lerobot.gui.api._edits_core import merge_dataset_into
+
+        return await merge_dataset_into(
+            _require_app_state(),
+            source_repo_id,
+            target_repo_id,
+            force=force,
+        )
+
     # ── Edit-tier: Robots — profile CRUD + port assignment ─────────────────
     # File CRUD on the operator's ~/.config/lerobot/{robots,teleops}/*.json
     # profile files. Strictly file operations: no motor connections, no

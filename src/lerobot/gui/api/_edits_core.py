@@ -265,6 +265,127 @@ def discard_pending(app_state: AppState, dataset_id: str | None = None) -> dict[
     }
 
 
+# ── Merge dataset-into-dataset helpers ────────────────────────────────────
+
+
+def check_merge_compat(app_state: AppState, source_id: str, target_id: str) -> dict[str, Any]:
+    """Compare schemas of two opened datasets; return a structured compat report.
+
+    Pure read — no disk writes, no locks taken. Used by both the FastAPI
+    ``/api/edits/merge-into/validate`` endpoint and the MCP
+    ``validate_dataset_merge`` tool. Returns ``{"compatible": bool,
+    "mismatches": [...]}`` where each mismatch dict names the field and
+    carries the conflicting values.
+
+    Raises ``DatasetNotFoundError`` if either id isn't opened in the GUI.
+    """
+    if source_id not in app_state.datasets:
+        raise DatasetNotFoundError(f"Source dataset not found: {source_id}")
+    if target_id not in app_state.datasets:
+        raise DatasetNotFoundError(f"Target dataset not found: {target_id}")
+
+    # Local import to avoid pulling FastAPI handlers into _edits_core.
+    from lerobot.gui.api.edits import _validate_merge_compat
+
+    mismatches = _validate_merge_compat(
+        app_state.datasets[source_id].meta,
+        app_state.datasets[target_id].meta,
+    )
+    return {"compatible": len(mismatches) == 0, "mismatches": mismatches}
+
+
+async def merge_dataset_into(
+    app_state: AppState,
+    source_id: str,
+    target_id: str,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Merge ``source_id``'s episodes into ``target_id`` (canonical write).
+
+    Source is read-only; target's parquet + videos grow in place. Both
+    dataset locks are acquired for the duration of the merge so concurrent
+    edits / saves on either side can't race. The underlying
+    ``dataset_tools.merge_into`` runs synchronously and can take minutes
+    for large datasets; it's pushed onto the default executor so the
+    event loop stays responsive.
+
+    Outcome transparency: the response carries before/after counts on the
+    target so the caller can see exactly how much grew. ``source_*``
+    values describe what was copied.
+
+    Raises:
+        DatasetNotFoundError: source or target not opened in the GUI.
+        EditValidationError: source == target (cannot self-merge) or
+            ``merge_into`` raised ``ValueError`` (schema mismatch and
+            ``force=False``).
+        DatasetBusyError: source or target lock already held.
+    """
+    import asyncio
+
+    if source_id not in app_state.datasets:
+        raise DatasetNotFoundError(f"Source dataset not found: {source_id}")
+    if target_id not in app_state.datasets:
+        raise DatasetNotFoundError(f"Target dataset not found: {target_id}")
+    if source_id == target_id:
+        raise EditValidationError("Cannot merge a dataset into itself")
+
+    _require_unlocked(app_state, source_id)
+    _require_unlocked(app_state, target_id)
+
+    target_lock = app_state.get_lock(target_id)
+    source_lock = app_state.get_lock(source_id)
+    if target_lock.locked() or source_lock.locked():
+        raise DatasetBusyError("One or both datasets are busy")
+
+    source_ds = app_state.datasets[source_id]
+    target_ds = app_state.datasets[target_id]
+    source_eps = source_ds.num_episodes
+    source_frames = source_ds.num_frames
+    target_eps_before = target_ds.num_episodes
+    target_frames_before = target_ds.num_frames
+
+    logger.info(
+        f"Merging {source_eps} episodes from {source_id} into {target_id} "
+        f"({target_eps_before} episodes) force={force}"
+    )
+
+    async with target_lock, source_lock:
+        try:
+            from lerobot.datasets.dataset_tools import merge_into
+
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: merge_into(target_ds, source_ds, skip_validation=force)
+            )
+        except ValueError as e:
+            raise EditValidationError(str(e)) from e
+
+        # Invalidate target caches: new episodes added, the cumulative-sum
+        # cache must be dropped so subsequent frame lookups pick up growth.
+        from lerobot.gui.api.datasets import _invalidate_episode_start_indices
+        from lerobot.gui.cache_invalidation import invalidate_caches
+
+        invalidate_caches(app_state, target_id, invalidate_episode_indices=_invalidate_episode_start_indices)
+
+    logger.info(
+        f"Merge complete: {target_ds.num_episodes} episodes, "
+        f"{target_ds.num_frames} frames in target {target_id}"
+    )
+
+    return {
+        "status": "ok",
+        "source_id": source_id,
+        "target_id": target_id,
+        "source_episodes_merged": source_eps,
+        "source_frames_merged": source_frames,
+        "target_episodes_before": target_eps_before,
+        "target_episodes_after": target_ds.num_episodes,
+        "target_frames_before": target_frames_before,
+        "target_frames_after": target_ds.num_frames,
+        "force_used": force,
+    }
+
+
 # ── Feature-set helpers (heavier — validation + overlap resolution) ───────
 
 
