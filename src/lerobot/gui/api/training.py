@@ -33,6 +33,7 @@ from lerobot.gui.training.hosts import HostRegistry
 from lerobot.gui.training.orchestrator import (
     HostBusyError,
     Orchestrator,
+    RunNotTerminalError,
     RunSnapshot,
     StartRequest,
     UnknownHostError,
@@ -243,3 +244,52 @@ def stop_run(run_id: str) -> RunDTO:
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return _run_to_dto(run)
+
+
+class DeleteRunResponse(BaseModel):
+    run_id: str
+    # Metadata-only delete; ``kept_model`` says whether the checkpoint
+    # directory survived (= Models tab still has the artefact).
+    metadata_bytes_freed: int
+    kept_model: bool
+
+
+class ClearTerminalResponse(BaseModel):
+    deleted: list[str]
+    metadata_bytes_freed: int
+    models_kept: int
+
+
+@router.delete("/runs/{run_id}", response_model=DeleteRunResponse)
+def delete_run(run_id: str) -> DeleteRunResponse:
+    """Drop a terminal-state run from training history.
+
+    Metadata-only delete: removes the run row from the Training list but
+    keeps ``output/checkpoints/`` so the trained model continues to show
+    up in the Models tab. If the run produced no model (failed pull,
+    aborted before first save), the whole dir is removed.
+
+    Returns 409 if the run is still active (caller must Stop first).
+    Returns 404 if the run id is unknown.
+    """
+    orch, _ = get_state()
+    try:
+        result = orch.delete_run(run_id)
+    except UnknownRunError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except RunNotTerminalError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return DeleteRunResponse(**result)
+
+
+@router.post("/runs/clear", response_model=ClearTerminalResponse)
+def clear_terminal_runs() -> ClearTerminalResponse:
+    """Drop every terminal-state run from training history in one shot.
+
+    Metadata-only per row (see :func:`delete_run`). Active runs are
+    skipped. Idempotent: a second call after the first returns
+    ``deleted=[]``.
+    """
+    orch, _ = get_state()
+    result = orch.clear_terminal_runs()
+    return ClearTerminalResponse(**result)

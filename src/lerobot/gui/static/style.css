@@ -1285,6 +1285,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .training-context-item:hover {
     background: #1a2640;
 }
+.training-context-item-danger {
+    color: #ff9999;
+}
+.training-context-item-danger:hover {
+    background: #2e1a1a;
+}
 .training-context-icon {
     color: #888;
     font-size: 14px;

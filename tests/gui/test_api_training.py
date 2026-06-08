@@ -266,3 +266,68 @@ def test_run_dto_does_not_leak_idempotency_key(client: TestClient) -> None:
     ).json()
     assert "idempotency_key" not in r
     _wait_until_state(client, r["run_id"], "completed")
+
+
+# ── DELETE + clear endpoints (housekeeping) ───────────────────────────────────
+
+
+def test_delete_run_404_on_unknown(client: TestClient) -> None:
+    resp = client.delete("/api/training/runs/does-not-exist")
+    assert resp.status_code == 404
+
+
+def test_delete_completed_run_returns_kept_model_true(client: TestClient) -> None:
+    """Delete a completed run with a model: response says
+    ``kept_model: true``, subsequent GET 404s."""
+    payload = _start_run_payload(
+        args={"__recipe__": "__fake__", "num_steps": 10, "save_every": 5, "step_seconds": 0.05}
+    )
+    r = client.post("/api/training/runs", json=payload).json()
+    _wait_until_state(client, r["run_id"], "completed")
+    resp = client.delete(f"/api/training/runs/{r['run_id']}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["run_id"] == r["run_id"]
+    assert body["metadata_bytes_freed"] >= 0
+    assert body["kept_model"] is True  # fake-runner produced 2 checkpoints
+    # Subsequent GET returns 404 (gone from history)
+    assert client.get(f"/api/training/runs/{r['run_id']}").status_code == 404
+
+
+def test_delete_active_run_409(client: TestClient) -> None:
+    """Can't delete a running run; must Stop first."""
+    payload = _start_run_payload()
+    payload["args"] = {
+        "__recipe__": "__fake__",
+        "num_steps": 1000,
+        "save_every": 100,
+        "step_seconds": 1.0,
+    }
+    r = client.post("/api/training/runs", json=payload).json()
+    _wait_until_state(client, r["run_id"], "running")
+    resp = client.delete(f"/api/training/runs/{r['run_id']}")
+    assert resp.status_code == 409
+    assert "stop it first" in resp.json()["detail"]
+    # Cleanup
+    client.post(f"/api/training/runs/{r['run_id']}/stop")
+    _wait_until_state(client, r["run_id"], "aborted")
+
+
+def test_clear_terminal_endpoint(client: TestClient) -> None:
+    """POST /api/training/runs/clear returns deleted list + metadata_bytes
+    + models_kept."""
+    payload = _start_run_payload(
+        args={"__recipe__": "__fake__", "num_steps": 10, "save_every": 5, "step_seconds": 0.05}
+    )
+    r = client.post("/api/training/runs", json=payload).json()
+    _wait_until_state(client, r["run_id"], "completed")
+    resp = client.post("/api/training/runs/clear")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert r["run_id"] in body["deleted"]
+    assert body["models_kept"] == 1  # the fake run produced a checkpoint
+    # Idempotent: second call has nothing to delete
+    resp2 = client.post("/api/training/runs/clear")
+    body2 = resp2.json()
+    assert body2["deleted"] == []
+    assert body2["models_kept"] == 0

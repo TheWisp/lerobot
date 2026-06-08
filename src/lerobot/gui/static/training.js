@@ -154,15 +154,18 @@ function trainingRenderRunsList(runs) {
     // the row code.
     row.oncontextmenu = (ev) => {
       ev.preventDefault();
-      trainingShowRunContextMenu(r.run_id, ev.clientX, ev.clientY);
+      trainingShowRunContextMenu(r, ev.clientX, ev.clientY);
     };
     el.appendChild(row);
   }
 }
 
+const TERMINAL_STATES = new Set(["completed", "failed", "aborted"]);
+
 // One floating context-menu element shared across rows; created on first
-// use, hidden by default, repositioned on each show.
-function trainingShowRunContextMenu(runId, x, y) {
+// use, hidden by default, repositioned on each show. "Delete this run" is
+// only rendered for terminal runs — active runs need a Stop first.
+function trainingShowRunContextMenu(run, x, y) {
   let menu = document.getElementById("training-context-menu");
   if (!menu) {
     menu = document.createElement("div");
@@ -170,10 +173,19 @@ function trainingShowRunContextMenu(runId, x, y) {
     menu.className = "training-context-menu";
     document.body.appendChild(menu);
   }
+  const isTerminal = TERMINAL_STATES.has(run.state);
+  const deleteItem = isTerminal
+    ? `
+      <div class="training-context-item training-context-item-danger" data-action="delete">
+        <span class="training-context-icon">🗑</span> Delete this run
+      </div>
+    `
+    : "";
   menu.innerHTML = `
     <div class="training-context-item" data-action="duplicate">
       <span class="training-context-icon">⎘</span> Run with same config
     </div>
+    ${deleteItem}
   `;
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
@@ -187,13 +199,86 @@ function trainingShowRunContextMenu(runId, x, y) {
   menu.querySelector('[data-action="duplicate"]').onclick = (ev) => {
     ev.stopPropagation();
     close();
-    trainingDuplicateRun(runId);
+    trainingDuplicateRun(run.run_id);
   };
+  const del = menu.querySelector('[data-action="delete"]');
+  if (del) {
+    del.onclick = (ev) => {
+      ev.stopPropagation();
+      close();
+      trainingDeleteRun(run.run_id, run.recipe_name);
+    };
+  }
   // Close on next outside-click / right-click anywhere.
   setTimeout(() => {
     document.addEventListener("click", close, true);
     document.addEventListener("contextmenu", close, true);
   }, 0);
+}
+
+async function trainingDeleteRun(runId, label) {
+  const ok = window.confirm(
+    `Drop run "${label}" from training history? ` +
+      `The trained model (if any) stays in the Models tab — only the run record disappears.`,
+  );
+  if (!ok) return;
+  try {
+    const resp = await fetch(`/api/training/runs/${runId}`, { method: "DELETE" });
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }));
+      throw new Error(detail.detail || `HTTP ${resp.status}`);
+    }
+    const body = await resp.json();
+    console.log(
+      `training: dropped ${runId} from history ` +
+        `(${body.metadata_bytes_freed} bytes metadata freed, kept_model=${body.kept_model})`,
+    );
+    // If the deleted run is the currently-selected detail, fall back to empty.
+    if (_trainingSelectedRunId === runId) {
+      trainingShowMain("empty");
+      _trainingSelectedRunId = null;
+    }
+    trainingRefreshRuns();
+  } catch (e) {
+    alert(`Failed to delete run: ${e.message}`);
+  }
+}
+
+async function trainingClearCompleted() {
+  // Count terminal runs first so the confirm dialog has a real number.
+  let runs = [];
+  try {
+    runs = await fetch("/api/training/runs").then((r) => r.json());
+  } catch (_) {
+    /* fall through with empty list */
+  }
+  const terminal = runs.filter((r) => TERMINAL_STATES.has(r.state));
+  if (terminal.length === 0) {
+    alert("No completed runs to clear.");
+    return;
+  }
+  const ok = window.confirm(
+    `Drop ${terminal.length} completed/failed/aborted run(s) from training history? ` +
+      `Trained models (if any) stay in the Models tab — only the run records disappear.`,
+  );
+  if (!ok) return;
+  try {
+    const resp = await fetch("/api/training/runs/clear", { method: "POST" });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const body = await resp.json();
+    console.log(
+      `training: cleared ${body.deleted.length} runs ` +
+        `(${body.metadata_bytes_freed} bytes metadata freed, ${body.models_kept} models kept)`,
+    );
+    // If the selected run was in the cleared set, fall back to empty.
+    if (_trainingSelectedRunId && body.deleted.includes(_trainingSelectedRunId)) {
+      trainingShowMain("empty");
+      _trainingSelectedRunId = null;
+    }
+    trainingRefreshRuns();
+  } catch (e) {
+    alert(`Failed to clear runs: ${e.message}`);
+  }
 }
 
 // ── Mode switches ─────────────────────────────────────────────────────────────
@@ -837,3 +922,5 @@ window.trainingSubmitStart = trainingSubmitStart;
 window.trainingStopRun = trainingStopRun;
 window.trainingRenderPolicyFields = trainingRenderPolicyFields;
 window.trainingDuplicateRun = trainingDuplicateRun;
+window.trainingDeleteRun = trainingDeleteRun;
+window.trainingClearCompleted = trainingClearCompleted;

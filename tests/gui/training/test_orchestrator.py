@@ -722,3 +722,224 @@ def test_stop_pending_run_skips_to_aborted(orch: Orchestrator) -> None:
     orch.stop(run.run_id)
     snap = _wait_until_state(orch, run.run_id, RunState.ABORTED)
     assert snap.run.state == RunState.ABORTED
+
+
+# ── Delete + clear (housekeeping) ─────────────────────────────────────────────
+
+
+def test_delete_run_with_model_preserves_checkpoints(orch: Orchestrator) -> None:
+    """REGRESSION: dropping a run from history must NOT delete the trained
+    model checkpoints. Models tab continues to surface the artefact;
+    Training tab no longer lists the run."""
+    from lerobot.gui.training.runs import RunPaths
+
+    req = StartRequest(
+        host_id="test-host",
+        recipe_name="fake",
+        dataset_id="fake/ds",
+        args={"__recipe__": "__fake__", "num_steps": 10, "save_every": 5, "step_seconds": 0.05},
+    )
+    run = orch.start(req)
+    _wait_until_state(orch, run.run_id, RunState.COMPLETED)
+    paths = RunPaths.for_run(run.run_id, orch._runs.runs_dir)
+    # Sanity: model files were actually produced
+    ckpt_files = list(paths.checkpoints_dir.rglob("*.safetensors"))
+    assert ckpt_files, "fake-runner should have written checkpoints"
+    ckpt_paths_before = {p: p.stat().st_size for p in ckpt_files}
+
+    result = orch.delete_run(run.run_id)
+    # Metadata gone
+    assert not paths.run_json.exists()
+    assert not paths.events_jsonl.exists()
+    assert not paths.checkpoints_jsonl.exists()
+    assert not paths.stderr_log.exists()
+    # Checkpoints survived — EXACT same paths + sizes
+    assert paths.checkpoints_dir.is_dir()
+    for p, sz in ckpt_paths_before.items():
+        assert p.exists(), f"{p} should have survived delete_run"
+        assert p.stat().st_size == sz, f"{p} content changed"
+    # Returned shape
+    assert result["run_id"] == run.run_id
+    assert result["kept_model"] is True
+    assert result["metadata_bytes_freed"] > 0  # at least stderr.log + run.json
+    # Gone from list_runs
+    assert all(r.run_id != run.run_id for r in orch.list_runs())
+
+
+def test_delete_failed_no_checkpoint_run_nukes_dir(orch: Orchestrator) -> None:
+    """A run that never wrote a model (e.g. failed pull, aborted before
+    first save) has nothing to preserve — the whole dir goes."""
+    import time as _t
+
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="hand-crafted-fail",
+        dataset_id="ds",
+        args={"__recipe__": "__fake__"},
+        state=RunState.PENDING,
+        created_at=_t.time(),
+    )
+    run.advance(RunState.FAILED)
+    orch._runs.save(run)
+    paths = RunPaths.for_run(run.run_id, orch._runs.runs_dir)
+    paths.ensure_exists()
+    (paths.root / "stderr.log").write_text("crashed without producing a checkpoint")
+
+    result = orch.delete_run(run.run_id)
+    # No model = full nuke
+    assert not paths.root.exists()
+    assert result["kept_model"] is False
+    assert result["metadata_bytes_freed"] >= len("crashed without producing a checkpoint")
+
+
+def test_delete_run_keeps_checkpoints_under_real_layout(orch: Orchestrator) -> None:
+    """REGRESSION: the real docker recipe writes checkpoints under
+    ``<run>/output/checkpoints/<step>/...``, not directly under
+    ``<run>/checkpoints/``. The metadata-drop helper has to look in the
+    right place — otherwise it 'thinks' there's no model and nukes
+    everything."""
+    import time as _t
+
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    # Hand-build a run that mirrors what `_build_docker_command` would leave on
+    # disk: terminal state, real output/ layout with a model file.
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="real-layout",
+        dataset_id="lerobot/pusht",
+        args={"policy.type": "act", "dataset.repo_id": "lerobot/pusht"},
+        state=RunState.PENDING,
+        created_at=_t.time(),
+    )
+    run.advance(RunState.RUNNING)
+    run.advance(RunState.COMPLETED)
+    orch._runs.save(run)
+    paths = RunPaths.for_run(run.run_id, orch._runs.runs_dir)
+    paths.ensure_exists()
+    # Write the real-recipe layout
+    pretrained = paths.root / "output" / "checkpoints" / "000010" / "pretrained_model"
+    pretrained.mkdir(parents=True)
+    model_file = pretrained / "model.safetensors"
+    model_file.write_bytes(b"fake-act-model" * 1000)
+    expected_size = model_file.stat().st_size
+    paths.stderr_log.write_text("trained")
+
+    result = orch.delete_run(run.run_id)
+    assert result["kept_model"] is True
+    assert model_file.exists()
+    assert model_file.stat().st_size == expected_size
+    # Metadata gone
+    assert not paths.run_json.exists()
+    assert not paths.stderr_log.exists()
+
+
+def test_delete_running_run_refuses(orch: Orchestrator) -> None:
+    """Trying to delete a still-running run raises RunNotTerminalError.
+    Caller must Stop first."""
+    from lerobot.gui.training.orchestrator import RunNotTerminalError
+
+    req = StartRequest(
+        host_id="test-host",
+        recipe_name="fake",
+        dataset_id="fake/ds",
+        args={"__recipe__": "__fake__", "num_steps": 1000, "save_every": 100, "step_seconds": 1.0},
+    )
+    run = orch.start(req)
+    _wait_until_state(orch, run.run_id, RunState.RUNNING)
+    try:
+        with pytest.raises(RunNotTerminalError, match="stop it first"):
+            orch.delete_run(run.run_id)
+    finally:
+        orch.stop(run.run_id)
+        _wait_until_state(orch, run.run_id, RunState.ABORTED)
+
+
+def test_delete_unknown_raises(orch: Orchestrator) -> None:
+    with pytest.raises(UnknownRunError):
+        orch.delete_run("nope")
+
+
+def test_clear_terminal_removes_only_finished_runs(orch: Orchestrator, tmp_path: Path) -> None:
+    """clear_terminal_runs() should drop every terminal run from history,
+    PRESERVING checkpoints on rows that produced them and skipping active
+    rows entirely. ``models_kept`` counts the survivors."""
+    import time as _t
+
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    # Set up: 1 terminal-WITH-model + 1 terminal-NO-model + 1 active. The
+    # WITH-model row should keep its checkpoint after clear; the NO-model
+    # row gets fully nuked; the active row is untouched.
+    paths_to_check = {}
+    with_model_run_id = None
+    no_model_run_id = None
+    for label, target_state, write_model in [
+        ("done-with-model", RunState.COMPLETED, True),
+        ("oops-no-model", RunState.ABORTED, False),
+    ]:
+        r = Run(
+            run_id=new_run_id(),
+            host_id="some-other-host",  # avoid the host lock with the active run below
+            recipe_name=label,
+            dataset_id="ds",
+            args={},
+            state=RunState.PENDING,
+            created_at=_t.time(),
+        )
+        r.advance(RunState.RUNNING)
+        r.advance(target_state)
+        orch._runs.save(r)
+        p = RunPaths.for_run(r.run_id, orch._runs.runs_dir)
+        p.ensure_exists()
+        (p.root / "stderr.log").write_text("x" * 1000)  # metadata
+        if write_model:
+            pretrained = p.root / "output" / "checkpoints" / "000005" / "pretrained_model"
+            pretrained.mkdir(parents=True)
+            (pretrained / "model.safetensors").write_bytes(b"M" * 4096)
+            with_model_run_id = r.run_id
+        else:
+            no_model_run_id = r.run_id
+        paths_to_check[r.run_id] = (p, target_state, write_model)
+    # And a real-active run
+    req = StartRequest(
+        host_id="test-host",
+        recipe_name="active",
+        dataset_id="ds",
+        args={"__recipe__": "__fake__", "num_steps": 1000, "save_every": 100, "step_seconds": 1.0},
+    )
+    active = orch.start(req)
+    _wait_until_state(orch, active.run_id, RunState.RUNNING)
+    active_paths = RunPaths.for_run(active.run_id, orch._runs.runs_dir)
+    try:
+        result = orch.clear_terminal_runs()
+        assert set(result["deleted"]) == set(paths_to_check)
+        # Exactly one model was preserved (the WITH-model row)
+        assert result["models_kept"] == 1
+        # bytes_freed counts metadata only — the model bytes stay on disk
+        assert result["metadata_bytes_freed"] >= 1000  # at least one stderr.log
+        # WITH-model row: dir survives + model intact, but metadata gone
+        wp = paths_to_check[with_model_run_id][0]
+        assert wp.root.is_dir()
+        assert not wp.stderr_log.exists()
+        model_file = wp.root / "output" / "checkpoints" / "000005" / "pretrained_model" / "model.safetensors"
+        assert model_file.exists()
+        assert model_file.stat().st_size == 4096
+        # NO-model row: whole dir gone
+        np = paths_to_check[no_model_run_id][0]
+        assert not np.root.exists()
+        # Active dir intact
+        assert active_paths.root.is_dir()
+    finally:
+        orch.stop(active.run_id)
+        _wait_until_state(orch, active.run_id, RunState.ABORTED)
+
+
+def test_clear_terminal_empty_is_noop(orch: Orchestrator) -> None:
+    """No terminal runs → deleted=[], all counters zero. Idempotent."""
+    result = orch.clear_terminal_runs()
+    assert result == {"deleted": [], "metadata_bytes_freed": 0, "models_kept": 0}

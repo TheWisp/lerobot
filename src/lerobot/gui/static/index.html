@@ -176,6 +176,7 @@
                     <div class="section-label">
                         <span>Training</span>
                         <button class="btn-small" onclick="trainingShowStartForm()" id="training-start-btn" title="Loading hosts…" disabled>+</button>
+                        <button class="btn-small secondary" onclick="trainingClearCompleted()" id="training-clear-btn" title="Delete all completed/failed/aborted runs from disk">Clear ✓</button>
                     </div>
                     <div id="training-hosts-info" style="font-size: 11px; color: var(--text-secondary, #666); padding: 4px 8px;">Loading hosts…</div>
                     <div id="training-runs-list"></div>
@@ -494,7 +495,7 @@
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=45"></script>
     <script src="/static/model.js?v=3"></script>
-    <script src="/static/training.js?v=8"></script>
+    <script src="/static/training.js?v=10"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>

@@ -27,10 +27,12 @@ DESIGN.md § Concurrency:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -116,6 +118,19 @@ class UnknownHostError(KeyError):
 
 class UnknownRunError(KeyError):
     """The requested run id doesn't exist."""
+
+
+class RunNotTerminalError(RuntimeError):
+    """A delete request hit a run that's still pending / running / completing.
+
+    Refuses to delete an active run because:
+      - the prep thread or worker subprocess is writing to files we'd
+        rmtree out from under them
+      - the per-host single-active-run lock would silently un-lock
+      - the user's most likely intent was "stop and forget", not "kill
+        and delete"; surfacing this as an error makes the two-step
+        explicit (stop, then delete).
+    """
 
 
 class Orchestrator:
@@ -304,6 +319,69 @@ class Orchestrator:
             if self._reconcile_from_events_only(run, paths):
                 self._runs.save(run)
         return runs
+
+    def delete_run(self, run_id: str) -> dict[str, Any]:
+        """Drop a run from the training history.
+
+        Removes the run's metadata files (run.json, events.jsonl,
+        checkpoints.jsonl, stderr.log, progress.json) so the row stops
+        showing up in the Training list. **Preserves
+        ``output/checkpoints/`` intact** — dropping a run from history is
+        NOT throwing away the model the run produced. The trained
+        checkpoint continues to surface in the Models tab; disk cleanup
+        of the model itself is a separate Models-tab action.
+
+        If the run produced no checkpoints (failed pull, aborted before
+        first save), the whole dir is removed — nothing to preserve.
+
+        Returns ``{"run_id": str, "metadata_bytes_freed": int,
+        "kept_model": bool}``.
+
+        Refuses with :class:`RunNotTerminalError` if the run is still in a
+        pending / running / completing state — stop it first. Refuses
+        with :class:`UnknownRunError` if the run id is unknown.
+        """
+        run = self._runs.load(run_id)
+        if run is None:
+            raise UnknownRunError(f"unknown run id: {run_id!r}")
+        if run.state not in TERMINAL_STATES:
+            raise RunNotTerminalError(
+                f"run {run_id!r} is in state {run.state.value!r}; stop it first, then delete"
+            )
+        paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
+        bytes_freed, kept_model = _drop_run_metadata(paths)
+        return {
+            "run_id": run_id,
+            "metadata_bytes_freed": bytes_freed,
+            "kept_model": kept_model,
+        }
+
+    def clear_terminal_runs(self) -> dict[str, Any]:
+        """Bulk-drop every terminal-state run from training history.
+
+        Per-row semantics match :meth:`delete_run`: keeps checkpoints,
+        removes only metadata. Returns ``{"deleted": [run_ids],
+        "metadata_bytes_freed": int, "models_kept": int}`` —
+        ``models_kept`` counts the rows whose ``output/checkpoints/``
+        survived (and thus stay visible in the Models tab). Idempotent.
+        """
+        deleted: list[str] = []
+        bytes_freed = 0
+        models_kept = 0
+        for run in self._runs.list_all():
+            if run.state not in TERMINAL_STATES:
+                continue
+            paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
+            b, kept = _drop_run_metadata(paths)
+            bytes_freed += b
+            if kept:
+                models_kept += 1
+            deleted.append(run.run_id)
+        return {
+            "deleted": deleted,
+            "metadata_bytes_freed": bytes_freed,
+            "models_kept": models_kept,
+        }
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
@@ -683,6 +761,70 @@ def _sha256_of(path: Path, chunk: int = 1 << 20) -> str:
                 break
             h.update(block)
     return h.hexdigest()
+
+
+def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
+    """Remove a run's metadata files (run.json, events.jsonl,
+    checkpoints.jsonl, stderr.log, progress.json) but PRESERVE the
+    ``output/checkpoints/`` subtree if it exists. That subtree is the
+    trained model artefact; the Models tab continues to surface it after
+    the run is dropped from history.
+
+    If no model was ever written (no ``output/`` or it's empty of
+    safetensors), the run dir is wholly removed — there's nothing to
+    preserve.
+
+    Returns ``(bytes_freed_metadata, kept_model)``. ``bytes_freed_metadata``
+    counts only what we actually deleted (tens to hundreds of KB for the
+    metadata case; full dir size for the no-model case). ``kept_model`` is
+    True iff the model artefacts remain on disk.
+
+    Idempotent: a second call on a run that's already been dropped (no
+    metadata files present, only checkpoints) returns ``(0, True)``.
+    """
+    if not paths.root.exists():
+        return 0, False
+    metadata_files = [
+        paths.run_json,
+        paths.events_jsonl,
+        paths.checkpoints_jsonl,
+        paths.stderr_log,
+        paths.progress_json,
+    ]
+    # Has-model probe — look for ANY .safetensors anywhere under
+    # output/checkpoints/. If none, this is a no-model run (failed early
+    # or aborted before the first save) and the whole dir is dead weight.
+    ckpt_dir = (
+        paths.checkpoints_dir
+        if not (paths.root / "output").exists()
+        else paths.root / "output" / "checkpoints"
+    )
+    has_model = ckpt_dir.is_dir() and any(ckpt_dir.rglob("*.safetensors"))
+
+    if not has_model:
+        # Nothing worth preserving. Tally + nuke. Note: callers gate this
+        # behind a TERMINAL state check, so no worker is writing.
+        total = 0
+        for p in paths.root.rglob("*"):
+            try:
+                if p.is_file() and not p.is_symlink():
+                    total += p.stat().st_size
+            except OSError:
+                continue
+        # safe-destruct: orchestrator-owned <runs_dir>/<run_id>/ in terminal state with no model artefact
+        shutil.rmtree(paths.root, ignore_errors=False)
+        return total, False
+
+    # Has a model → drop ONLY the metadata files. Checkpoints stay.
+    freed = 0
+    for f in metadata_files:
+        if f.exists() and f.is_file():
+            with contextlib.suppress(OSError):
+                freed += f.stat().st_size
+            with contextlib.suppress(OSError):
+                # safe-destruct: orchestrator-owned metadata file in terminal-state run dir
+                f.unlink()
+    return freed, True
 
 
 def _read_events(events_path: Path) -> list[dict[str, Any]]:
