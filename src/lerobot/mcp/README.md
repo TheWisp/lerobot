@@ -251,20 +251,18 @@ stores it as `comment`. The migration is invisible to callers.
 
 ### Shipped today
 
-| Domain      | Tool                                                                                                                               | Scope     |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| Bridge / UI | `navigate_to`, `notify_user`, `highlight_in_viewer`                                                                                | `read`    |
-| Dataset     | `list_datasets`, `get_dataset_info`, `list_episodes`, `get_episode_summary`, `get_frame`, `get_episode_tags`, `list_pending_edits` | `read`    |
-| Dataset     | `tag_episode`, `delete_episode_tag`                                                                                                | `comment` |
-| Dataset     | `propose_set_feature`, `propose_delete_episode`, `propose_trim_episode`, `discard_pending_edits`, `apply_pending_edits`            | `edit`    |
-| Dataset     | `validate_dataset_merge`                                                                                                           | `read`    |
-| Dataset     | `merge_into_dataset`                                                                                                               | `edit`    |
-| Hub         | `hub_auth_status`, `hub_repo_info`, `hub_list_jobs`, `hub_job_progress`                                                            | `read`    |
-| Hub         | `hub_start_upload`, `hub_start_download`, `hub_cancel_job`                                                                         | `edit`    |
-| Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                       | `read`    |
-| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `get_teleop_profile`, `list_ports`, `get_all_port_assignments` | `read`    |
-| Robots      | `create/update/rename/delete_robot_profile`, `create/update/rename/delete_teleop_profile`, `assign_port_to_arm`                    | `edit`    |
-| Introspect  | `list_my_scopes`                                                                                                                   | `read`    |
+| Domain      | Tool                                                                                                                                                                                                       | Scope     |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Bridge / UI | `navigate_to`, `notify_user`, `highlight_in_viewer`                                                                                                                                                        | `read`    |
+| Dataset     | `list_datasets`, `get_dataset_info`, `list_episodes`, `get_episode_summary`, `get_frame`, `get_episode_tags`, `list_pending_edits`, `list_tagged_episodes`, `get_feature_series`, `validate_dataset_merge` | `read`    |
+| Dataset     | `tag_episode`, `delete_episode_tag`                                                                                                                                                                        | `comment` |
+| Dataset     | `propose_set_feature`, `propose_delete_episode`, `propose_trim_episode`, `discard_pending_edits`, `apply_pending_edits`, `merge_into_dataset`                                                              | `edit`    |
+| Hub         | `hub_auth_status`, `hub_repo_info`, `hub_list_jobs`, `hub_job_progress`, `hub_diff_local_vs_remote`                                                                                                        | `read`    |
+| Hub         | `hub_start_upload`, `hub_start_download`, `hub_cancel_job`                                                                                                                                                 | `edit`    |
+| Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                                                                                               | `read`    |
+| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `get_teleop_profile`, `list_ports`, `get_all_port_assignments`                                                                         | `read`    |
+| Robots      | `create/update/rename/delete_robot_profile`, `create/update/rename/delete_teleop_profile`, `assign_port_to_arm`                                                                                            | `edit`    |
+| Introspect  | `lerobot_whoami`, `lerobot_list_tools`                                                                                                                                                                     | `read`    |
 
 ### Designed but not yet shipped
 
@@ -275,16 +273,13 @@ may shift slightly on landing.
 | Domain      | Tool                                                                                                                                                             | Scope     |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
 | Bridge / UI | `set_filter` (waits for a filter UI to land — see `gui/TODO.md`)                                                                                                 | `read`    |
-| Dataset     | `get_feature_series`, `list_tagged_episodes`                                                                                                                     | `read`    |
 | Dataset     | `delete_dataset` (no GUI feature yet, deferred)                                                                                                                  | `edit`    |
-| Hub         | `hub_diff_local_vs_remote`                                                                                                                                       | `read`    |
 | Models      | `list_model_sources`, `list_models_in_source`, `list_run_checkpoints`, `get_run_config`                                                                          | `read`    |
 | Models      | `add_model_source`, `remove_model_source`                                                                                                                        | `edit`    |
 | Models      | `load_debug_model`, `unload_debug_model`, `get_debug_status`                                                                                                     | `operate` |
 | Robots      | `identify_arm`, `detect_cameras_into_profile`, `start/finish/cancel_rest_recording`, `move_to_rest_position`, `record/replay/delete_trajectory`, `recover_robot` | `operate` |
-| Run         | `update_rlt_config`                                                                                                                                              | `edit`    |
+| Run         | `update_rlt_config` (parked — PR #27, narrow scope)                                                                                                              | `edit`    |
 | Run         | `start_teleoperate`, `start_record`, `start_replay`, `start_hvla`, `stop_current_run`                                                                            | `operate` |
-| Introspect  | `list_supported_tools`                                                                                                                                           | `read`    |
 
 Design conventions worth flagging:
 
