@@ -191,7 +191,7 @@ class Orchestrator:
         # 5. Prepare image + launch worker in a background thread.
         #
         # The HTTP request returns immediately with state=PENDING. The
-        # background thread emits ``image_cache_hit`` / ``pulling_image`` /
+        # background thread emits ``image_cache_hit`` / ``image_pull_started`` /
         # ``image_pulled`` / ``image_pull_failed`` events into events.jsonl
         # as it works, and the frontend's existing run-detail poller renders
         # them as visible status. On success it spawns the worker and
@@ -380,9 +380,9 @@ class Orchestrator:
 
         Emits one of:
           - ``image_cache_hit`` — image already local; no pull.
-          - ``pulling_image`` + ``image_pulled`` — pull succeeded; latter
+          - ``image_pull_started`` + ``image_pulled`` — pull succeeded; latter
             carries ``duration_s`` and (when available) ``size_bytes``.
-          - ``pulling_image`` + ``image_pull_failed`` — pull failed;
+          - ``image_pull_started`` + ``image_pull_failed`` — pull failed;
             raises :class:`_ImagePullError` so the caller can flip the
             run state to FAILED.
 
@@ -392,7 +392,7 @@ class Orchestrator:
         if self._image.inspect(image):
             append_event(paths.events_jsonl, "image_cache_hit", image=image)
             return
-        append_event(paths.events_jsonl, "pulling_image", image=image)
+        append_event(paths.events_jsonl, "image_pull_started", image=image)
         t0 = time.time()
         ok, err = self._image.pull(image)
         duration_s = time.time() - t0

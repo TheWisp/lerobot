@@ -294,8 +294,8 @@ async function trainingShowStartForm() {
 // orchestrator emits exactly one of these flows per run:
 //
 //   1. cache hit:       image_cache_hit
-//   2. successful pull: pulling_image → image_pulled (with duration_s + size_bytes)
-//   3. failed pull:     pulling_image → image_pull_failed (with error tail)
+//   2. successful pull: image_pull_started → image_pulled (with duration_s + size_bytes)
+//   3. failed pull:     image_pull_started → image_pull_failed (with error tail)
 //
 // Why surface this: a first-time pull on a fresh host took 13m 34s on the
 // reference workstation. Without this banner the run sits at PENDING with
@@ -312,7 +312,7 @@ function trainingImageStatusHtml(run, events) {
   switch (last.type) {
     case "image_cache_hit":
       return `<div class="training-image-banner ok">Image: cache hit · <span class="training-mono">${escapeHtml(last.image)}</span></div>`;
-    case "pulling_image": {
+    case "image_pull_started": {
       const sinceMs = last.ts ? Date.now() - last.ts * 1000 : 0;
       const sinceLabel = sinceMs > 0 ? ` · pulling for ${formatDuration(sinceMs / 1000)}` : "";
       return `<div class="training-image-banner pulling">Pulling image · <span class="training-mono">${escapeHtml(last.image)}</span>${sinceLabel}</div>`;

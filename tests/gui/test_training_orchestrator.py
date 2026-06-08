@@ -593,7 +593,7 @@ def test_image_cache_hit_emits_event_and_skips_pull(host, tmp_path: Path) -> Non
     assert fake.pull_calls == []
     types = [e["type"] for e in _events_of(orch, run.run_id)]
     assert "image_cache_hit" not in types
-    assert "pulling_image" not in types
+    assert "image_pull_started" not in types
 
 
 def test_ensure_image_cache_hit_emits_only_one_event(host, tmp_path: Path) -> None:
@@ -619,7 +619,7 @@ def test_ensure_image_cache_hit_emits_only_one_event(host, tmp_path: Path) -> No
 
 
 def test_ensure_image_cache_miss_pulls_and_emits_two_events(host, tmp_path: Path) -> None:
-    """Cache miss → pulling_image + image_pulled (with duration_s + size_bytes)."""
+    """Cache miss → image_pull_started + image_pulled (with duration_s + size_bytes)."""
     fake = _FakeImageRunner(inspect_returns=False, pull_returns=(True, ""), size=1234)
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
@@ -634,7 +634,7 @@ def test_ensure_image_cache_miss_pulls_and_emits_two_events(host, tmp_path: Path
 
     events = [json.loads(line) for line in paths.events_jsonl.read_text().splitlines()]
     types = [e["type"] for e in events]
-    assert types == ["pulling_image", "image_pulled"]
+    assert types == ["image_pull_started", "image_pulled"]
     pulled = events[1]
     assert pulled["image"] == "ghcr.io/foo/img:tag"
     assert pulled["size_bytes"] == 1234
@@ -642,7 +642,7 @@ def test_ensure_image_cache_miss_pulls_and_emits_two_events(host, tmp_path: Path
 
 
 def test_ensure_image_pull_failure_emits_pull_failed_and_raises(host, tmp_path: Path) -> None:
-    """Pull failure → pulling_image + image_pull_failed events; raises
+    """Pull failure → image_pull_started + image_pull_failed events; raises
     so the orchestrator can flip the run to FAILED."""
     from lerobot.gui.training_orchestrator import _ImagePullError
 
@@ -659,7 +659,7 @@ def test_ensure_image_pull_failure_emits_pull_failed_and_raises(host, tmp_path: 
     import json
 
     events = [json.loads(line) for line in paths.events_jsonl.read_text().splitlines()]
-    assert [e["type"] for e in events] == ["pulling_image", "image_pull_failed"]
+    assert [e["type"] for e in events] == ["image_pull_started", "image_pull_failed"]
     assert "manifest unknown" in events[1]["error"]
 
 
