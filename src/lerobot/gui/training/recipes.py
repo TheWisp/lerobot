@@ -51,7 +51,7 @@ import shutil
 import sys
 from typing import Any
 
-from lerobot.gui.training_runs import Run, RunPaths
+from lerobot.gui.training.runs import Run, RunPaths
 
 # Pinned image tag — bumped explicitly via PR. ``latest`` is only published
 # on main; per-branch builds publish ``<branch>-<sha>``. This default points
@@ -138,7 +138,7 @@ def build_lerobot_train_command(run: Run, paths: RunPaths) -> tuple[list[str], d
     all the forced flags above.
 
     For the fake recipe (``__recipe__=__fake__``): returns the legacy
-    ``python -m lerobot.gui.training_runner`` argv.
+    ``python -m lerobot.gui.training.runner`` argv.
 
     Pre: ``paths.root`` exists (created by RunPaths.ensure_exists()).
     Post: returned argv is ready for ``subprocess.Popen``; env dict should
@@ -161,7 +161,7 @@ def docker_available() -> bool:
 
 
 def _build_fake_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[str, str]]:
-    cmd = [sys.executable, "-m", "lerobot.gui.training_runner", "--run-dir", str(paths.root)]
+    cmd = [sys.executable, "-m", "lerobot.gui.training.runner", "--run-dir", str(paths.root)]
     for k, v in run.args.items():
         if k.startswith("__"):
             continue  # skip meta markers

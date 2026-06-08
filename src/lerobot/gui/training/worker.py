@@ -7,7 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 """Subprocess worker that owns one remote-SSH training run end-to-end.
 
-Spawned by the GUI server via `python -m lerobot.gui.training_worker`,
+Spawned by the GUI server via `python -m lerobot.gui.training.worker`,
 never directly by the user. Reads its config from
 ``LEROBOT_TRAIN_WORKER_CONFIG`` (a JSON blob) at startup and writes
 progress + events + log files the server polls.
@@ -62,7 +62,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from lerobot.gui.training_jobs import (
+from lerobot.gui.training.jobs import (
     PROGRESS_WRITE_INTERVAL_S,
     HostProfile,
     PollScheduler,
@@ -557,7 +557,7 @@ def _load_config() -> tuple[TrainingJobConfig, TrainingJobPaths, HostProfile]:
     paths.ensure_dir()
     # Load host profile by name. The GUI server is the source of truth
     # for these; the worker only reads them.
-    from lerobot.gui.training_jobs import HOSTS_DIR
+    from lerobot.gui.training.jobs import HOSTS_DIR
 
     host_path = HOSTS_DIR / f"{cfg.host_name}.json"
     if not host_path.exists():

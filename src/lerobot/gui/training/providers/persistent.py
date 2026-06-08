@@ -31,8 +31,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from lerobot.gui.training_jobs import HostProfile
-from lerobot.gui.training_providers.protocol import (
+from lerobot.gui.training.jobs import HostProfile
+from lerobot.gui.training.providers.protocol import (
     CostSnapshot,
     HostHandle,
     SpawnSpec,

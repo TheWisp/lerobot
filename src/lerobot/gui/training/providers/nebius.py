@@ -34,7 +34,7 @@ Defensive defaults (lessons from the 2026-06-05 disk-billing bill):
 
 from __future__ import annotations
 
-from lerobot.gui.training_providers.protocol import (
+from lerobot.gui.training.providers.protocol import (
     CostSnapshot,
     GpuKind,
     HostHandle,

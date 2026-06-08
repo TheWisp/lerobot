@@ -22,10 +22,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lerobot.gui.api import training as training_api
-from lerobot.gui.training_hosts import HostRegistry, TrainingHost
-from lerobot.gui.training_orchestrator import Orchestrator
-from lerobot.gui.training_runs import RunRegistry
-from lerobot.gui.training_transport import SubprocessTransport
+from lerobot.gui.training.hosts import HostRegistry, TrainingHost
+from lerobot.gui.training.orchestrator import Orchestrator
+from lerobot.gui.training.runs import RunRegistry
+from lerobot.gui.training.transport import SubprocessTransport
 
 
 @pytest.fixture
@@ -107,15 +107,21 @@ def test_list_runs_empty(client: TestClient) -> None:
 
 
 def test_start_run_201(client: TestClient) -> None:
+    """POST returns immediately with state=pending (C5 background prep
+    thread does image pull + worker launch; advances to running on
+    completion). The state machine + session_id show up on subsequent
+    polls — we wait until completed to assert the full lifecycle ran."""
     resp = client.post("/api/training/runs", json=_start_run_payload())
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["state"] == "running"
+    assert body["state"] == "pending"
     assert body["host_id"] == "test-host"
     assert body["recipe_name"] == "fake"
-    assert body["session_id"] is not None
-    # Let the run complete to keep state clean for subsequent fixtures
-    _wait_until_state(client, body["run_id"], "completed")
+    # session_id is set by the prep thread once it spawns the worker
+    assert body["session_id"] is None
+    # Drive through to completion so subsequent fixtures see a clean slate.
+    final = _wait_until_state(client, body["run_id"], "completed")
+    assert final["run"]["session_id"] is not None
 
 
 def test_start_run_unknown_host_404(client: TestClient) -> None:

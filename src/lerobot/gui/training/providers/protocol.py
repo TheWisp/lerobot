@@ -22,7 +22,7 @@ What is deliberately NOT in the protocol:
     stops; it destroys. Stopped-but-not-destroyed VMs cause the disk-
     billing-surprise the whole design is meant to prevent.
   - ssh_run() / ssh_tail() — vendor-agnostic. SshConnection + the polling
-    loop in :mod:`lerobot.gui.training_worker` live above the protocol.
+    loop in :mod:`lerobot.gui.training.worker` live above the protocol.
   - Auth flow — each provider reads its own credential source (e.g.
     `~/.nebius/`, RunPod env var, AWS profile). The GUI's API-key UI
     is a separate concern from the protocol.

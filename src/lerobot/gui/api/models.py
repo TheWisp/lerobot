@@ -35,7 +35,7 @@ def set_app_state(state: AppState) -> None:
 
 _DEFAULT_SOURCE = str(Path.cwd() / "outputs")
 _CONVERTED_SOURCE = str(Path.home() / ".cache" / "lerobot" / "converted")
-# GUI-managed training runs (lerobot.gui.training_orchestrator) land under
+# GUI-managed training runs (lerobot.gui.training.orchestrator) land under
 # ~/.cache/lerobot/runs/<run_id>/output/checkpoints/<step>/pretrained_model/.
 # Auto-register the dir so trained models appear in the Models tab next
 # to other sources — closes the felt training loop (DESIGN.md C3).

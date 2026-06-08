@@ -29,8 +29,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from lerobot.gui.training_hosts import HostRegistry
-from lerobot.gui.training_orchestrator import (
+from lerobot.gui.training.hosts import HostRegistry
+from lerobot.gui.training.orchestrator import (
     HostBusyError,
     Orchestrator,
     RunSnapshot,
@@ -38,7 +38,7 @@ from lerobot.gui.training_orchestrator import (
     UnknownHostError,
     UnknownRunError,
 )
-from lerobot.gui.training_runs import RUNS_DIR, RunRegistry
+from lerobot.gui.training.runs import RUNS_DIR, RunRegistry
 
 router = APIRouter(prefix="/api/training", tags=["training"])
 

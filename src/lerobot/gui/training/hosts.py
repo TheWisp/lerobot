@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from lerobot.gui.training_transport import HostTransport, SubprocessTransport
+from lerobot.gui.training.transport import HostTransport, SubprocessTransport
 
 # Stable id for the auto-registered workstation host. The "this-server" string
 # is the host_id the UI shows in dropdowns and the orchestrator looks up.

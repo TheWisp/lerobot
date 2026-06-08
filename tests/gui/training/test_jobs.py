@@ -5,7 +5,7 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
-"""Tests for src/lerobot/gui/training_jobs.py.
+"""Tests for src/lerobot/gui/training/jobs.py.
 
 Covers the types boundary between server + worker: TrainingJobConfig
 roundtrip, paths derivation, PollScheduler backoff (the resilience-
@@ -24,7 +24,7 @@ import time
 
 import pytest
 
-from lerobot.gui import training_jobs as tj
+from lerobot.gui.training import jobs as tj
 
 # ── TrainingJobConfig ───────────────────────────────────────────────────────
 

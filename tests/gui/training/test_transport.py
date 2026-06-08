@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from lerobot.gui.training_transport import (
+from lerobot.gui.training.transport import (
     SshTransport,
     SubprocessClient,
     SubprocessTransport,

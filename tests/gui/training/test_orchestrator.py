@@ -7,7 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 """End-to-end orchestrator tests using the real subprocess training runner.
 
-These tests actually invoke `python -m lerobot.gui.training_runner` (the
+These tests actually invoke `python -m lerobot.gui.training.runner` (the
 fake-training stub) and verify the orchestrator drives it through the full
 state machine, reads its outputs, and reconciles state.
 """
@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from lerobot.gui.training_hosts import HostRegistry, TrainingHost
-from lerobot.gui.training_orchestrator import (
+from lerobot.gui.training.hosts import HostRegistry, TrainingHost
+from lerobot.gui.training.orchestrator import (
     HostBusyError,
     ImageRunner,
     Orchestrator,
@@ -29,8 +29,8 @@ from lerobot.gui.training_orchestrator import (
     UnknownRunError,
     _extract_image_from_docker_argv,
 )
-from lerobot.gui.training_runs import RunRegistry, RunState
-from lerobot.gui.training_transport import SubprocessTransport
+from lerobot.gui.training.runs import RunRegistry, RunState
+from lerobot.gui.training.transport import SubprocessTransport
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -319,7 +319,7 @@ def test_orchestrator_appends_to_manifest_from_disk_real_recipe_layout(
     """
     import time as _t
 
-    from lerobot.gui.training_runs import Run, RunPaths, new_run_id
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
 
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
@@ -359,8 +359,8 @@ def test_orchestrator_appends_to_manifest_from_disk_hvla_recipe_layout(
     """
     import time as _t
 
-    from lerobot.gui.training_recipes import HVLA_FLOW_S1_RECIPE
-    from lerobot.gui.training_runs import Run, RunPaths, new_run_id
+    from lerobot.gui.training.recipes import HVLA_FLOW_S1_RECIPE
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
 
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
@@ -400,7 +400,7 @@ def test_orchestrator_completed_on_exit_with_checkpoints(host: TrainingHost, tmp
     COMPLETED."""
     import time as _t
 
-    from lerobot.gui.training_runs import Run, RunPaths, new_run_id
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
 
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
@@ -432,7 +432,7 @@ def test_orchestrator_crashed_on_exit_without_checkpoints(host: TrainingHost, tm
     crashed and advances to FAILED."""
     import time as _t
 
-    from lerobot.gui.training_runs import Run, RunPaths, new_run_id
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
 
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
@@ -513,7 +513,7 @@ class _FakeImageRunner(ImageRunner):
 def _events_of(orch: Orchestrator, run_id: str) -> list[dict]:
     import json
 
-    from lerobot.gui.training_runs import RunPaths
+    from lerobot.gui.training.runs import RunPaths
 
     paths = RunPaths.for_run(run_id, orch._runs.runs_dir)
     if not paths.events_jsonl.exists():
@@ -547,7 +547,7 @@ def test_extract_image_from_docker_argv_typical_recipe() -> None:
 def test_extract_image_from_docker_argv_non_docker_returns_none() -> None:
     # Fake recipe argv — python -m, no docker
     assert (
-        _extract_image_from_docker_argv(["python", "-m", "lerobot.gui.training_runner", "--run-dir", "/x"])
+        _extract_image_from_docker_argv(["python", "-m", "lerobot.gui.training.runner", "--run-dir", "/x"])
         is None
     )
     # Empty / too-short
@@ -602,7 +602,7 @@ def test_ensure_image_cache_hit_emits_only_one_event(host, tmp_path: Path) -> No
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
     orch = Orchestrator(host_registry=hr, run_registry=rr, image_runner=fake)
-    from lerobot.gui.training_runs import RunPaths
+    from lerobot.gui.training.runs import RunPaths
 
     paths = RunPaths.for_run("test", runs_dir=tmp_path / "runs")
     paths.ensure_exists()
@@ -624,7 +624,7 @@ def test_ensure_image_cache_miss_pulls_and_emits_two_events(host, tmp_path: Path
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
     orch = Orchestrator(host_registry=hr, run_registry=rr, image_runner=fake)
-    from lerobot.gui.training_runs import RunPaths
+    from lerobot.gui.training.runs import RunPaths
 
     paths = RunPaths.for_run("test", runs_dir=tmp_path / "runs")
     paths.ensure_exists()
@@ -644,13 +644,13 @@ def test_ensure_image_cache_miss_pulls_and_emits_two_events(host, tmp_path: Path
 def test_ensure_image_pull_failure_emits_pull_failed_and_raises(host, tmp_path: Path) -> None:
     """Pull failure → image_pull_started + image_pull_failed events; raises
     so the orchestrator can flip the run to FAILED."""
-    from lerobot.gui.training_orchestrator import _ImagePullError
+    from lerobot.gui.training.orchestrator import _ImagePullError
 
     fake = _FakeImageRunner(inspect_returns=False, pull_returns=(False, "manifest unknown\n"))
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
     orch = Orchestrator(host_registry=hr, run_registry=rr, image_runner=fake)
-    from lerobot.gui.training_runs import RunPaths
+    from lerobot.gui.training.runs import RunPaths
 
     paths = RunPaths.for_run("test", runs_dir=tmp_path / "runs")
     paths.ensure_exists()

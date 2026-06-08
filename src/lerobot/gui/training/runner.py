@@ -24,7 +24,7 @@ training-step callback to write progress + manifest.
 
 Invocation (orchestrator does this):
 
-    python -m lerobot.gui.training_runner \\
+    python -m lerobot.gui.training.runner \\
         --run-dir <path>             \\
         --num-steps 200              \\
         --save-every 50              \\

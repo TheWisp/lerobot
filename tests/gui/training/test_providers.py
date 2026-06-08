@@ -5,7 +5,7 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
-"""Tests for src/lerobot/gui/training_providers/.
+"""Tests for src/lerobot/gui/training/providers/.
 
 Covers:
   - Protocol conformance via runtime_checkable
@@ -22,19 +22,19 @@ import time
 
 import pytest
 
-from lerobot.gui.training_jobs import HostProfile
-from lerobot.gui.training_providers import (
+from lerobot.gui.training.jobs import HostProfile
+from lerobot.gui.training.providers import (
     NebiusProvider,
     PersistentSshProvider,
     get_provider,
     list_providers,
 )
-from lerobot.gui.training_providers.nebius import (
+from lerobot.gui.training.providers.nebius import (
     NEBIUS_DISK_WARN_GIB,
     NEBIUS_GPU_HOURLY_USD,
     NEBIUS_SSD_MONTHLY_USD_PER_GIB,
 )
-from lerobot.gui.training_providers.protocol import (
+from lerobot.gui.training.providers.protocol import (
     CostSnapshot,
     HostHandle,
     HostProvider,

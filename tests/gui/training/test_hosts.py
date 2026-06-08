@@ -14,29 +14,29 @@ from unittest.mock import patch
 
 import pytest
 
-from lerobot.gui.training_hosts import (
+from lerobot.gui.training.hosts import (
     WORKSTATION_HOST_ID,
     HostRegistry,
     TrainingHost,
     _detect_nvidia_gpu,
     workstation_host,
 )
-from lerobot.gui.training_transport import SshTransport, SubprocessTransport
+from lerobot.gui.training.transport import SshTransport, SubprocessTransport
 
 # ── GPU detection ─────────────────────────────────────────────────────────────
 
 
 def test_detect_nvidia_gpu_no_nvidia_smi_returns_none() -> None:
     """When nvidia-smi isn't on PATH, detection returns None."""
-    with patch("lerobot.gui.training_hosts.shutil.which", return_value=None):
+    with patch("lerobot.gui.training.hosts.shutil.which", return_value=None):
         assert _detect_nvidia_gpu() is None
 
 
 def test_detect_nvidia_gpu_parses_output() -> None:
     """A typical nvidia-smi output gives us gpu_name + vram_mb."""
     fake_output = "NVIDIA GeForce RTX 5090, 32768\n"
-    with patch("lerobot.gui.training_hosts.shutil.which", return_value="/usr/bin/nvidia-smi"):
-        with patch("lerobot.gui.training_hosts.subprocess.check_output", return_value=fake_output):
+    with patch("lerobot.gui.training.hosts.shutil.which", return_value="/usr/bin/nvidia-smi"):
+        with patch("lerobot.gui.training.hosts.subprocess.check_output", return_value=fake_output):
             caps = _detect_nvidia_gpu()
     assert caps is not None
     assert caps["gpu_name"] == "NVIDIA GeForce RTX 5090"
@@ -46,8 +46,8 @@ def test_detect_nvidia_gpu_parses_output() -> None:
 
 def test_detect_nvidia_gpu_multi_gpu_counts() -> None:
     fake_output = "NVIDIA A100, 40960\nNVIDIA A100, 40960\n"
-    with patch("lerobot.gui.training_hosts.shutil.which", return_value="/usr/bin/nvidia-smi"):
-        with patch("lerobot.gui.training_hosts.subprocess.check_output", return_value=fake_output):
+    with patch("lerobot.gui.training.hosts.shutil.which", return_value="/usr/bin/nvidia-smi"):
+        with patch("lerobot.gui.training.hosts.subprocess.check_output", return_value=fake_output):
             caps = _detect_nvidia_gpu()
     assert caps is not None
     assert caps["gpu_count_detected"] == 2
@@ -56,9 +56,9 @@ def test_detect_nvidia_gpu_multi_gpu_counts() -> None:
 def test_detect_nvidia_gpu_subprocess_failure_returns_none() -> None:
     import subprocess
 
-    with patch("lerobot.gui.training_hosts.shutil.which", return_value="/usr/bin/nvidia-smi"):
+    with patch("lerobot.gui.training.hosts.shutil.which", return_value="/usr/bin/nvidia-smi"):
         with patch(
-            "lerobot.gui.training_hosts.subprocess.check_output",
+            "lerobot.gui.training.hosts.subprocess.check_output",
             side_effect=subprocess.CalledProcessError(1, "nvidia-smi"),
         ):
             assert _detect_nvidia_gpu() is None
@@ -66,8 +66,8 @@ def test_detect_nvidia_gpu_subprocess_failure_returns_none() -> None:
 
 def test_detect_nvidia_gpu_malformed_memory_falls_back() -> None:
     fake_output = "Some GPU, not-a-number\n"
-    with patch("lerobot.gui.training_hosts.shutil.which", return_value="/usr/bin/nvidia-smi"):
-        with patch("lerobot.gui.training_hosts.subprocess.check_output", return_value=fake_output):
+    with patch("lerobot.gui.training.hosts.shutil.which", return_value="/usr/bin/nvidia-smi"):
+        with patch("lerobot.gui.training.hosts.subprocess.check_output", return_value=fake_output):
             caps = _detect_nvidia_gpu()
     assert caps is not None
     assert caps["vram_mb"] == 0
@@ -77,13 +77,13 @@ def test_detect_nvidia_gpu_malformed_memory_falls_back() -> None:
 
 
 def test_workstation_host_none_when_no_gpu() -> None:
-    with patch("lerobot.gui.training_hosts._detect_nvidia_gpu", return_value=None):
+    with patch("lerobot.gui.training.hosts._detect_nvidia_gpu", return_value=None):
         assert workstation_host() is None
 
 
 def test_workstation_host_returns_host_when_gpu_present(tmp_path: Path) -> None:
     fake_caps = {"gpu_name": "Test GPU", "vram_mb": 16384, "gpu_count_detected": 1}
-    with patch("lerobot.gui.training_hosts._detect_nvidia_gpu", return_value=fake_caps):
+    with patch("lerobot.gui.training.hosts._detect_nvidia_gpu", return_value=fake_caps):
         h = workstation_host(workdir=tmp_path)
     assert h is not None
     assert h.id == WORKSTATION_HOST_ID
@@ -125,7 +125,7 @@ def test_registry_add_appends() -> None:
 
 def test_registry_auto_with_gpu_present(tmp_path: Path) -> None:
     fake_caps = {"gpu_name": "G", "vram_mb": 1024, "gpu_count_detected": 1}
-    with patch("lerobot.gui.training_hosts._detect_nvidia_gpu", return_value=fake_caps):
+    with patch("lerobot.gui.training.hosts._detect_nvidia_gpu", return_value=fake_caps):
         reg = HostRegistry.auto(workdir=tmp_path)
     hosts = reg.list_hosts()
     assert len(hosts) == 1
@@ -133,7 +133,7 @@ def test_registry_auto_with_gpu_present(tmp_path: Path) -> None:
 
 
 def test_registry_auto_no_gpu_empty(tmp_path: Path) -> None:
-    with patch("lerobot.gui.training_hosts._detect_nvidia_gpu", return_value=None):
+    with patch("lerobot.gui.training.hosts._detect_nvidia_gpu", return_value=None):
         reg = HostRegistry.auto(workdir=tmp_path)
     assert reg.list_hosts() == []
 

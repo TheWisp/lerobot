@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from lerobot.gui.training_recipes import (
+from lerobot.gui.training.recipes import (
     CONTAINER_HF_CACHE,
     CONTAINER_OUTPUT_SUBDIR,
     CONTAINER_RUNS_MOUNT,
@@ -34,7 +34,7 @@ from lerobot.gui.training_recipes import (
     is_hvla_flow_s1_recipe,
     output_subdir_in_run,
 )
-from lerobot.gui.training_runs import Run, RunPaths, RunState, new_run_id
+from lerobot.gui.training.runs import Run, RunPaths, RunState, new_run_id
 
 
 def _make_run(args: dict) -> Run:
@@ -72,7 +72,7 @@ def test_fake_recipe_emits_python_runner_argv(tmp_path: Path) -> None:
     run = _make_run({"__recipe__": FAKE_RECIPE_MARKER, "num_steps": 5, "save_every": 2})
     cmd, env = build_lerobot_train_command(run, paths)
     # Skips meta marker; emits the rest as kebab-cased --flag value
-    assert cmd[1:4] == ["-m", "lerobot.gui.training_runner", "--run-dir"]
+    assert cmd[1:4] == ["-m", "lerobot.gui.training.runner", "--run-dir"]
     assert "--num-steps" in cmd
     assert "5" in cmd
     assert "--save-every" in cmd
@@ -203,7 +203,7 @@ def test_docker_available_truthy_when_docker_on_path() -> None:
 
 
 def test_docker_available_false_without_docker(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("lerobot.gui.training_recipes.shutil.which", lambda _: None)
+    monkeypatch.setattr("lerobot.gui.training.recipes.shutil.which", lambda _: None)
     assert docker_available() is False
 
 

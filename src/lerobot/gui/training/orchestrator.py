@@ -38,12 +38,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from lerobot.gui.training_hosts import HostRegistry, TrainingHost
-from lerobot.gui.training_recipes import (
+from lerobot.gui.training.hosts import HostRegistry, TrainingHost
+from lerobot.gui.training.recipes import (
     build_lerobot_train_command,
     output_subdir_in_run,
 )
-from lerobot.gui.training_runs import (
+from lerobot.gui.training.runs import (
     TERMINAL_STATES,
     Run,
     RunPaths,
@@ -52,7 +52,7 @@ from lerobot.gui.training_runs import (
     append_event,
     new_run_id,
 )
-from lerobot.gui.training_transport import (
+from lerobot.gui.training.transport import (
     TransportClient,
     make_client,
 )
@@ -131,7 +131,7 @@ class Orchestrator:
         host_registry: HostRegistry,
         run_registry: RunRegistry,
         *,
-        runner_module: str = "lerobot.gui.training_runner",
+        runner_module: str = "lerobot.gui.training.runner",
         image_runner: ImageRunner | None = None,
     ) -> None:
         self._hosts = host_registry
@@ -434,7 +434,7 @@ class Orchestrator:
         Returns the full argv: for real training, that's the
         ``docker run … training-image lerobot-train …`` argv; for the fake
         recipe (``__recipe__=__fake__``), the legacy
-        ``python -m lerobot.gui.training_runner …`` argv.
+        ``python -m lerobot.gui.training.runner …`` argv.
         """
         cmd, _ = build_lerobot_train_command(run, paths)
         return cmd

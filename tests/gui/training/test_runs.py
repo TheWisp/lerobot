@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from lerobot.gui.training_runs import (
+from lerobot.gui.training.runs import (
     TERMINAL_STATES,
     Run,
     RunPaths,

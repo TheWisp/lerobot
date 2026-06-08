@@ -13,7 +13,7 @@ Mirrors the architectural shape of :mod:`lerobot.gui.hub_jobs`:
   worker (via ``LEROBOT_TRAIN_WORKER_CONFIG`` env var). Frozen +
   JSON-roundtripped.
 * :class:`TrainingJobPaths` — per-job file locations under
-  ``~/.cache/lerobot/gui/training_jobs``. Both sides derive the same paths
+  ``~/.cache/lerobot/gui/training/jobs``. Both sides derive the same paths
   from the same ``job_id``.
 * :class:`TrainingJobState` — server-side in-memory mirror, populated by
   merging the worker's ``progress.json`` with server bookkeeping.
@@ -25,7 +25,7 @@ Mirrors the architectural shape of :mod:`lerobot.gui.hub_jobs`:
 * :func:`classify_ssh_error` — buckets a Python exception into one of the
   five error classes the UI surfaces (transient / permanent / etc.).
 
-No transfer logic here; see :mod:`lerobot.gui.training_worker`.
+No transfer logic here; see :mod:`lerobot.gui.training.worker`.
 """
 
 from __future__ import annotations
