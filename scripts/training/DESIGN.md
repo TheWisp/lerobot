@@ -39,6 +39,42 @@ identical to a remote pod.
 The single image source of truth is `ghcr.io/thewisp/lerobot-training:<tag>`;
 see Dependencies for what it does and does not contain.
 
+### Local-first preparation: do anything that doesn't need the GPU before opening a pod
+
+Every step the orchestrator can do on the GUI server's box (or any machine
+that is already running) MUST happen before it asks a provider to spawn a
+billable VM. The billing clock starts when the provider returns "VM ready"
+— everything before that is free. Code that does prep work on the VM is
+quietly burning user money on GPU idle time.
+
+Concrete prep, in order:
+
+1. **Image readiness.** Pull / build the training image on the GUI server's
+   box. Cache hit: no-op. Cache miss: pay the 10–13 min `docker pull` on a
+   non-billable machine. Then transfer the cached image to the VM via
+   `docker save | ssh … docker load`, a regional registry mirror, or a
+   provider-specific pre-baked VM template. Whichever transport is fastest,
+   it should run AFTER the workstation pull, not in parallel with idle GPU
+   time on the pod. The workstation case already enforces this via C5
+   (pre-pull + `image_*` events); the ephemeral case must follow the same
+   shape.
+2. **Dataset reachability.** Verify the dataset repo exists and the user has
+   pull access (HF Hub HEAD request), so a 404 on a typo doesn't surface
+   inside the pod after 20 minutes of provisioning + image transfer.
+3. **Recipe validation.** Dry-run the recipe builder: would `lerobot-train`
+   (or the target script) accept this argv? Catch unknown flags, missing
+   required fields, and obvious type mismatches locally — not after the
+   VM has been billing for a minute and just emitted an `ImportError`.
+4. **Run artefacts staged.** Allocate `run_id`, create the run dir, write
+   `run.json` as PENDING. The GUI shows the run immediately; if any of the
+   prep fails the run lands in FAILED without ever touching a billable host.
+
+Only once 1–4 succeed does the orchestrator call `provider.spawn(...)`.
+
+Workstation hosts see this as better UX (no blind window). Ephemeral hosts
+see this as money — the difference between "GPU idle for 10 minutes during
+pull" and "GPU starts training within seconds of becoming reachable."
+
 ### Components
 
 ```
@@ -235,11 +271,14 @@ Vendor-neutral properties to defend against:
 
 **Disks bill from creation to deletion, regardless of VM state.** A stopped VM stops compute; the attached disk continues at $/GiB/month. A large attached disk left running can cost more than the GPU did.
 
-Three structural defenses baked into Ephemeral mode:
+**GPUs bill from "VM ready" regardless of whether they're doing GPU work.** A pod sitting at 0 % utilization waiting on `docker pull`, `pip install`, or a dataset fetch is still racking up the GPU-hour rate. On the reference workstation, a cold image pull measured 10–13 min — that's $5–15 of A100-grade GPU time the user pays for nothing if it happens on the pod.
+
+Four structural defenses baked into Ephemeral mode:
 
 1. **Inline-managed boot disk only.** Disk lifecycle cascades with the VM; no standalone disks unless the user opts in.
 2. **Disk-size warning.** Many vendor web forms default to enormous boot disks (1 TB+); the GUI warns above 256 GiB. Most LeRobot training fits in <100 GB.
-3. **Auto-destroy on completion + backstop scheduled-delete.** See Health.
+3. **Local-first preparation.** All non-GPU work happens on the GUI server's box _before_ spawning the pod — image pull, dataset reachability, recipe validation, run artefact creation. See "Local-first preparation" above for the ordering.
+4. **Auto-destroy on completion + backstop scheduled-delete.** See Health.
 
 Egress for checkpoints is determined by the pod-to-GUI-server hop (see Checkpoints). The cost on the pod side is the same whether checkpoints go to the GUI server or to HF Hub directly. Pushing from the GUI server to HF is on the GUI server's network, which is typically free or not the bottleneck.
 
