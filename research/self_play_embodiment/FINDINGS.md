@@ -115,6 +115,35 @@ It can only make existing directions more linearly accessible. Two reasons that 
   so reaching's embodiment/IK is solved by proprio; vision only supplies the _target_ (a perception
   task). There is little room for an embodiment feature to help.
 
+## Update (2026-06-10) — Gate A/B + V-JEPA 2.1: first positive signal
+
+Two follow-up levers, same harness.
+
+**Objective (Gate B): inverse dynamics, not forward Δz.** Three e-objectives on the same bottleneck `f(z)`:
+`free` g(f(z_t))→Δz · `ac` g(f(z_t),a_t)→Δz (forward, = original e_ac) · `invdyn` h(f(z_t),f(z_{t+1}))→a_t (predict the action).
+Forward Δz is _distracted_ (encodes appearance variance, much action-irrelevant) — why `e_ac` was a lossy
+reweight. Inverse dynamics is _targeted_: to name the action, `f` must keep the controllable/embodiment
+directions and can ignore uncontrollable distractors (classic inverse-model property, cf. ICM/poke).
+
+**DINOv2 substrate (Gate A), 4 seeds — the first non-null.** At **200 demos** `c_invdyn` is the best learned
+condition: finalErr **0.29±0.03** vs a 0.39±0.11, e_ac 0.42, noise 0.54, e_free 0.62; SR@0.2
+`c_invdyn−a`=**+0.18±0.09**, `−noise`=**+0.28±0.11** (~2σ). Ordering `invdyn>ac>free` as predicted.
+**Narrow:** plain `a` overtakes by 500 demos, all converge by 1000. A real but modest low-data-only
+demo-efficiency gain — the _objective_ drives it (forward `e_ac` on the same legible substrate stayed meh).
+
+**V-JEPA 2.1 substrate — the article's dense-feature claim holds on our frames.** Obtained via torch.hub
+(`vjepa2_1_vit_base_384`; needs `timm`; restore the weight URL off the dead `localhost:8300` mirror).
+Single-frame 2D path, 24×24 tokens. **Patch-PCA dramatically cleaner than V-JEPA2's mush** (arm/table/bg
+segmented — `figures/vj21_pca.png`). But mean-pool decode only marginally better: gripper **0.83** (vs 0.78),
+joints **0.20** (still floor — non-visual in any substrate). 2.1's gain lives in the _dense tokens_ that
+mean-pooling discards; inverse-dyn pretext-val is best on 2.1 (0.66 vs DINOv2 0.72). A combined
+2.1 × all-objectives injection sweep (demos 50–500, 4 seeds) is the current run.
+
+**Takeaways:** (1) the **objective** (inverse dynamics) is a bigger lever than architecture (Fork-1/2) or
+bottleneck size; (2) the effect is **real but small and low-data-only**; (3) `bothprop`=1.0 means reaching is
+proprio-solved, capping how much _any_ vision-embodiment feature can help — a **contact/manipulation** task is
+likely needed for a large effect; (4) to exploit V-JEPA 2.1, go **spatial/patch-based**, not mean-pool.
+
 ## Next steps (ranked) — see also the design memory
 
 1. **Substrate swap → DINOv2 (then DINOv3 when access clears), re-run the _same_ injection test.**
@@ -137,10 +166,12 @@ It can only make existing directions more linearly accessible. Two reasons that 
 - `scripts/sp_goals_play.py` · `sp_train_e.py` · `sp_run2.py` · `sp_agg.py` — the v2 Cartesian experiment + aggregation
 - `scripts/sp_jointprobe.py · sp_mlpprobe.py · sp_cartprobe.py · sp_shiftcheck.py` — the diagnostics behind finding #1 and the goal-shift fix
 - `scripts/sp_viz.py · sp_dinoviz.py · sp_embviz.py` — occlusion / DINO patch-PCA / latent-quality visualizations
+- `scripts/sp_dino_encode.py · sp_train_e_dino.py · sp_run3.py · sp_agg_dino.py` — Gate A/B: substrate-parametrized (`SUBSTRATE=dino|vj21`) encode / 3-objective e-training / injection sweep / aggregate
+- `scripts/vj21_legibility.py · vj21_probe.py` — V-JEPA 2.1 bring-up + legibility (decode + patch-PCA)
 - `scripts/sp_run.py · sp_check.py · sp_goals.py` — v1 joint-reach (the floored version)
 - `scripts/exploration/` — G1/G2/G3-era probes & data collection (`collect_world.py`, `g3_lite.py`, `probe_*`)
-- `figures/` — `sp_curve2.png` (SR vs demos, 4 seeds), `sp_dino_pca.png`, `sp_emb_pca.png`, `sp_latent_viz.png`
-- `results/` — `sp_results2_s{0..3}.npz` (per-seed final errors)
+- `figures/` — `sp_curve2.png` (SR vs demos, 4 seeds), `sp_dino_pca.png`, `sp_emb_pca.png`, `sp_latent_viz.png`, `vj21_pca.png` (2.1 patch-PCA)
+- `results/` — `sp_results2_s{0..3}.npz` (V-JEPA2), `sp_dino_results_s{0..3}.npz` (DINOv2 incl. `c_invdyn`); V-JEPA 2.1 results land when the running sweep finishes
 
 **Scratch caveat:** scripts hardcode `/tmp/selfplay_probe/` and depend on local data buffers
 (`world_buffer.npz` ~153 MB, `feat_cache.npz` ~766 MB) that are **not** committed (size). They are the
