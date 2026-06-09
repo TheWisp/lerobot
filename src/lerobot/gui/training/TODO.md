@@ -22,6 +22,22 @@ Tracked follow-ups for the training subsystem. Colocated with [`DESIGN.md`](DESI
 - **Surface run dir path in the detail view** — users looking for "where did my model go?" check `~/Documents/lerobot/outputs/` (the upstream `lerobot-train` default) and find nothing. The GUI's runs root is `$LEROBOT_RUNS_DIR` (defaults to `~/.cache/lerobot/runs/`). Add a one-line path string to the run detail view + a paragraph in the README.
 - **Live-source-mount dev mode** — when iterating on `lerobot/` code, the full edit → CI rebuild → GHCR pull loop is ~17–27 min. A `__mount_src__=true` knob in the recipe builder would bind-mount the local `src/lerobot/` into the container, skipping the rebuild for pure-Python changes. Dev-only; never the default.
 
+- **Per-checkpoint picker on the Run tab** — today the policy-checkpoint dropdown (`#run-policy-checkpoint`) and debug-model dropdown (`#run-teleop-debug-model`) expose **only one option per run** — the latest (`is_last`) checkpoint, via `default_policy_path`. To support workflows like "did training regress at step 45k? test step 40k instead" or "eval each checkpoint, pick the best", surface every checkpoint in the picker.
+  - Server side: already shipped. `GET /api/models/sources/{path}/models` returns each run with a full `checkpoints[]` list; each entry has `policy_path`, `step`, `is_last`, `has_training_state`, `model_size_bytes`, `num_parameters`. Same for `GET /api/models/run/{path}/checkpoints`. No new endpoint needed.
+  - UI shape (pick one):
+    - Option A — nested `<optgroup>` per run inside the existing `<select>`: run name = optgroup label, one option per checkpoint with step + size + is_last marker.
+    - Option B — two-level picker: run dropdown + checkpoint dropdown that appears after pick. Cleaner for many runs / many checkpoints, costs one extra click for the common case.
+  - Default selection: the `is_last` checkpoint (behavior identical to today).
+  - Each option's `value` must remain the server-emitted `c.policy_path` (never client-concatenated — that's the bug this whole layer of work fixed).
+  - Each option must carry `data-policy-type="${m.policy_type}"` AND `data-run-path="${m.path}"` so `_onPolicyCheckpointChange` / `_prefillPolicyFields` continue to work without regex-stripping anything.
+  - HVLA policies: confirm `_prefillPolicyFields` still resolves the right run when a non-last checkpoint is picked (it keys off run path, not checkpoint path — should be unaffected, but cover with a manual test).
+  - Flat checkpoints (converted S2 VLM): `num_checkpoints == 1`, no sub-picker needed — keep collapsed as a single option in the optgroup.
+  - RLT entries (`default_policy_path == null`): already filtered out of this picker (`_modelCheckpointOptions` skips entries with no `default_policy_path`) and surfaced separately in the HVLA RLT field. The new picker must continue to skip them.
+  - Tests to add: extend `tests/hvla/test_checkpoint_format.py::TestGUIScanner` with a multi-checkpoint run fixture asserting every entry has a usable `policy_path` and exactly one has `is_last=True`.
+  - Out of scope until landed: per-checkpoint "delete" / "compare two checkpoints" / step-range filter. Track separately when surfaced.
+
+- **`_dir_has_step_subdirs` rejects `checkpoint-<N>` naming (pre-existing)** — HVLA's `train.py` writes `checkpoints/checkpoint-<N>/...` but the GUI scanner's `_dir_has_step_subdirs` only accepts names where `lstrip("0").isdigit()` is True, which excludes the `checkpoint-` prefix. Result: HVLA runs that use the upstream naming are invisible in the Model tab. `tests/hvla/test_checkpoint_format.py::test_scanner_finds_hvla` has been failing on `main` for at least the current branch's lifetime. Fix is one extra regex match in `_dir_has_step_subdirs`. Tracked but not blocking the prototype.
+
 ## Build / deployment
 
 - **BuildKit cache mount for `uv sync`** — the training Dockerfile uses `RUN uv sync --no-cache` which re-downloads PyPI dependencies on every dep-dirty CI build (~9 min). Adding `RUN --mount=type=cache,target=/root/.cache/uv uv sync --extras...` would persist the uv cache between CI runs and drop dep-dirty builds from 9–13 min to 4–6 min. Pull time unchanged. Already supported by `docker/build-push-action@v6` cache infra.

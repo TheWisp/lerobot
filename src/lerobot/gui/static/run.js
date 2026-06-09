@@ -580,7 +580,16 @@ function _onInterventionDatasetChange() {
 // ---- Model / checkpoint option helpers ----
 
 function _modelCheckpointOptions() {
-    // Build options from the Model tab's cached scan data
+    // Build options from the Model tab's cached scan data. The server
+    // emits `default_policy_path` per run (api/models.py:_scan_training_run)
+    // and `policy_path` per checkpoint (api/models.py:_read_checkpoint_meta);
+    // we use those directly — DO NOT reconstruct the path from `m.path`.
+    // Why: the layout under `m.path` differs between vanilla lerobot-train
+    // (`<run>/checkpoints/<step>/pretrained_model`) and the GUI-managed
+    // docker recipe (`<run>/output/checkpoints/<step>/pretrained_model`),
+    // and the flat HVLA-S2-VLM layout has no `pretrained_model/` subdir
+    // at all. Server-side synthesis handles all three; client-side
+    // reconstruction used to silently break for the latter two.
     const data = (typeof modelSourceData !== 'undefined') ? modelSourceData : {};
     const entries = Object.values(data).flat();
     if (!entries.length) {
@@ -588,12 +597,14 @@ function _modelCheckpointOptions() {
     }
     let html = '<option value="" disabled selected>Select checkpoint</option>';
     for (const m of entries) {
-        // Standard checkpoints: path/checkpoints/last/pretrained_model
-        // Flat checkpoints (converted S2 etc.): path directly contains model.safetensors
-        const isFlat = m.num_checkpoints === 1 && m.current_step == null;
-        const ckptPath = isFlat ? m.path : m.path + '/checkpoints/last/pretrained_model';
+        // Defensive: an entry with no usable policy path (RLT, future
+        // variants) is skipped rather than serialized as `value="undefined"`.
+        if (!m.default_policy_path) continue;
         const stepText = m.current_step != null ? ` (step ${m.current_step.toLocaleString()})` : '';
-        html += `<option value="${_esc(ckptPath)}" data-policy-type="${_esc(m.policy_type)}" title="${_esc(m.path)}">${_esc(m.name)} — ${_esc(m.policy_type)}${stepText}</option>`;
+        // `data-run-path` lets _onPolicyCheckpointChange recover the run
+        // dir without regex-stripping the policy path (which would fail
+        // for flat layouts where policy_path === run path).
+        html += `<option value="${_esc(m.default_policy_path)}" data-policy-type="${_esc(m.policy_type)}" data-run-path="${_esc(m.path)}" title="${_esc(m.path)}">${_esc(m.name)} — ${_esc(m.policy_type)}${stepText}</option>`;
     }
     return html;
 }
@@ -842,8 +853,13 @@ async function _refreshRltCheckpoints() {
 function _onPolicyCheckpointChange() {
     const sel = document.getElementById('run-policy-checkpoint');
     if (!sel?.value) return;
-    // Extract the run path from the checkpoint path (strip /checkpoints/last/pretrained_model)
-    const runPath = sel.value.replace(/\/checkpoints\/last\/pretrained_model$/, '');
+    // Recover the run dir from the option's dataset (stashed by
+    // _modelCheckpointOptions). Falls through to sel.value for flat
+    // layouts where policy_path IS the run path. The old regex-strip
+    // assumed `<run>/checkpoints/last/pretrained_model`, which broke
+    // for both the docker recipe (extra `output/` segment) and flat
+    // checkpoints (no `pretrained_model/` suffix at all).
+    const runPath = sel.selectedOptions[0]?.dataset.runPath || sel.value;
     if (typeof _prefillPolicyFields === 'function') {
         _prefillPolicyFields(runPath);
     }

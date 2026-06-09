@@ -409,14 +409,31 @@ async function openModelFolder(path) {
 }
 
 function testModelOnRobot(runPath) {
-    const ckptPath = runPath + '/checkpoints/last/pretrained_model';
+    // Resolve the policy path via the server-emitted default_policy_path
+    // on the matching modelSourceData entry — the layout-aware string.
+    // Reconstructing it client-side (the old `runPath + '/checkpoints/...'`
+    // form) silently broke for the docker recipe (`<run>/output/...`)
+    // and for flat HVLA-S2-VLM layouts.
+    const findEntry = () => {
+        const data = (typeof modelSourceData !== 'undefined') ? modelSourceData : {};
+        for (const arr of Object.values(data)) {
+            const hit = arr.find(m => m.path === runPath);
+            if (hit) return hit;
+        }
+        return null;
+    };
+
     // Switch to Run tab → Policy workflow
     switchTab('run');
     selectWorkflow('policy');
-    // Pre-select the checkpoint and fill fields once the selector is populated
+    // Pre-select the checkpoint once both the selector + the cached
+    // modelSourceData entry are available.
     const trySelect = () => {
         const sel = document.getElementById('run-policy-checkpoint');
         if (!sel) return false;
+        const entry = findEntry();
+        if (!entry?.default_policy_path) return false;
+        const ckptPath = entry.default_policy_path;
         for (const opt of sel.options) {
             if (opt.value === ckptPath) {
                 sel.value = ckptPath;

@@ -247,6 +247,102 @@ class TestGUIScanner:
         assert result["num_checkpoints"] == 1
         assert result["current_step"] == 100
 
+    def test_scanner_emits_policy_path_standard(self, small_config, tmp_path):
+        """Per-checkpoint policy_path points at <ckpt>/pretrained_model, and
+        the run's default_policy_path points at the resolved last
+        checkpoint's policy_path (NOT the literal `last` symlink — symlinks
+        rot when run dirs move). Regression: stops the GUI from
+        string-concatenating `/checkpoints/last/pretrained_model` and
+        silently breaking on the docker recipe's `<run>/output/...` layout.
+
+        Uses the numeric directory naming the GUI scanner accepts
+        (``_dir_has_step_subdirs`` filters non-numeric names — that's why
+        the legacy ``checkpoint-<N>`` HVLA convention is invisible to the
+        scanner today; tracked separately).
+        """
+        import safetensors.torch as sft
+
+        from lerobot.gui.api.models import _scan_training_run
+
+        ckpt_dir = tmp_path / "checkpoints" / "000100"
+        pretrained = ckpt_dir / "pretrained_model"
+        pretrained.mkdir(parents=True)
+        (ckpt_dir / "training_state").mkdir()
+        policy = FlowMatchingS1Policy(small_config)
+        sft.save_file(dict(policy.state_dict()), str(pretrained / "model.safetensors"))
+        (pretrained / "config.json").write_text(json.dumps({"type": "hvla_flow_s1"}))
+        (ckpt_dir / "training_state" / "training_step.json").write_text(json.dumps({"step": 100}))
+        (tmp_path / "checkpoints" / "last").symlink_to("000100")
+
+        result = _scan_training_run(tmp_path)
+        assert result is not None
+        # Per-checkpoint policy_path points at the pretrained_model subdir.
+        assert result["checkpoints"][0]["policy_path"] == str(pretrained)
+        # Run-level default = the is_last checkpoint's policy_path (resolved
+        # to 000100/pretrained_model, not <root>/checkpoints/last/...).
+        assert result["default_policy_path"] == str(pretrained)
+        assert result["default_policy_path"] == result["checkpoints"][0]["policy_path"]
+
+    def test_scanner_emits_policy_path_docker_layout(self, small_config, tmp_path):
+        """GUI-managed docker recipe writes checkpoints under
+        `<run>/output/checkpoints/` (extra `output/` segment because the
+        bind-mount target `/runs` always pre-exists and lerobot-train
+        refuses to overwrite an existing output_dir). policy_path /
+        default_policy_path must reflect that nested layout — this is
+        the exact form that broke the "Test on robot" button before the
+        server-emits-the-path fix.
+        """
+        import safetensors.torch as sft
+
+        from lerobot.gui.api.models import _scan_training_run
+
+        ckpt_dir = tmp_path / "output" / "checkpoints" / "000050000"
+        pretrained = ckpt_dir / "pretrained_model"
+        pretrained.mkdir(parents=True)
+        (ckpt_dir / "training_state").mkdir()
+        policy = FlowMatchingS1Policy(small_config)
+        sft.save_file(dict(policy.state_dict()), str(pretrained / "model.safetensors"))
+        (pretrained / "config.json").write_text(json.dumps({"type": "smolvla"}))
+        (ckpt_dir / "training_state" / "training_step.json").write_text(json.dumps({"step": 50000}))
+        (tmp_path / "output" / "checkpoints" / "last").symlink_to("000050000")
+
+        result = _scan_training_run(tmp_path)
+        assert result is not None
+        # The policy path must include the `output/` segment — not the
+        # legacy `<run>/checkpoints/...` form the JS used to reconstruct.
+        assert "output/checkpoints" in result["default_policy_path"]
+        assert result["default_policy_path"] == str(pretrained)
+
+    def test_scanner_emits_policy_path_flat(self, tmp_path):
+        """Flat layout (converted HVLA S2 VLM etc.): no nested
+        pretrained_model/ subdir; weights live at the top level of the
+        checkpoint dir. policy_path == path so the frontend can treat
+        flat + standard layouts uniformly (no client-side heuristic)."""
+        import safetensors.torch as sft
+        import torch
+
+        from lerobot.gui.api.models import _read_flat_checkpoint
+
+        sft.save_file({"w": torch.zeros(1)}, str(tmp_path / "model.safetensors"))
+        (tmp_path / "config.json").write_text(json.dumps({"type": "hvla_s2_vlm"}))
+
+        result = _read_flat_checkpoint(tmp_path)
+        assert result is not None
+        assert result["default_policy_path"] == str(tmp_path)
+        assert result["checkpoints"][0]["policy_path"] == str(tmp_path)
+
+    def test_scanner_skips_corrupt_checkpoint(self, tmp_path):
+        """A run dir whose only checkpoint is missing pretrained_model/config.json
+        must not surface as a phantom run. Pins the fail-fast invariant so a
+        future refactor that synthesizes policy_path outside
+        `_read_checkpoint_meta` can't accidentally emit a non-existent path."""
+        from lerobot.gui.api.models import _scan_training_run
+
+        # Numeric subdir exists (so _dir_has_step_subdirs returns True) but
+        # has no pretrained_model/ inside.
+        (tmp_path / "checkpoints" / "000010").mkdir(parents=True)
+        assert _scan_training_run(tmp_path) is None
+
 
 class TestMigratedCheckpointLoads:
     """Test that the actually migrated v7 checkpoint loads correctly (integration test)."""
