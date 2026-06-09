@@ -1,0 +1,10 @@
+{
+  "clip_T": 16,
+  "n_samples": 1200,
+  "hidden": 1408,
+  "vjepa_meanR2": 0.302,
+  "vjepa_R2_min": -0.251,
+  "vjepa_R2_max": 0.772,
+  "pixelPCA_meanR2": 0.239,
+  "verdict": "PASS"
+}
