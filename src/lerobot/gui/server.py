@@ -95,6 +95,23 @@ async def startup_event():
     if n:
         logger.info("Swept %d stale obs-stream shm segment(s) from a previous run", n)
 
+    # Policy registry health probe: import every registered policy's modeling
+    # module in a background thread; warn for any that fail. Surfaces
+    # "env missing deps for policy X" at startup instead of mid-run (e.g.
+    # 4 hours later when the user clicks "Test on robot"). Backgrounded
+    # because cold-importing 18 policy modules — each pulling transformers /
+    # diffusers / etc. — takes several seconds; the GUI mustn't block on it.
+    import threading
+
+    from lerobot.policies.factory import log_policy_registry_health
+
+    threading.Thread(
+        target=log_policy_registry_health,
+        args=("GUI server's lerobot environment",),
+        daemon=True,
+        name="policy-health-probe",
+    ).start()
+
     # If _mount_mcp() attached an MCP instance, enter its session-manager's
     # async context here. Starlette doesn't forward lifespan events to apps
     # mounted via app.mount(), so the streamable-http transport's task group

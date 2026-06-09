@@ -72,18 +72,22 @@ RUN uv venv --python python${PYTHON_VERSION}
 COPY --chown=user_lerobot:user_lerobot setup.py pyproject.toml uv.lock README.md MANIFEST.in ./
 COPY --chown=user_lerobot:user_lerobot src/ src/
 
-# Training-relevant extras only: dataset + training (wandb + accelerate)
-# + pusht (smoke-test dataset has env deps) + the policy extras that the
-# GUI form picker exposes today (diffusion → diffusers; hvla → transformers
-# + scikit-learn — needed once the no-S2 happy path grows the S2 latent
-# code path; smolvla → transformers + num2words + accelerate, the VLM
-# processor refuses to instantiate without num2words). ACT has no extra
-# so isn't listed. We deliberately skip:
+# Training-relevant extras: dataset + training (wandb + accelerate) +
+# pusht (smoke-test dataset has env deps) + the single `policies-all`
+# meta-extra (defined in pyproject.toml) that enumerates EVERY policy's
+# runtime deps. Using `policies-all` instead of a hand-curated per-policy
+# list is the structural fix for the recurring "deps in wrong env" bug
+# (e.g. SmolVLA crashing on missing num2words because no one remembered
+# to add `--extra smolvla` here). Adding a new policy means extending
+# pyproject.toml's `policies-all`; this Dockerfile rebuilds automatically.
+# The `policies-all`-vs-`all` split keeps the image lean — `all` would
+# pull hardware/aloha/libero/metaworld/etc. (~3 GB) the pod doesn't need.
+# Skipped extras (deliberate):
 #   - hardware/feetech/dynamixel/intelrealsense — no robot on the pod
-#   - libero/metaworld — heavy, infrequently used
+#   - libero/metaworld — heavy, infrequently used, needs cmake (mujoco)
 #   - dev/test — not needed in deployment image
-# Saves ~3 GB vs --extra all and avoids needing cmake to compile mujoco bindings.
-RUN uv sync --locked --extra dataset --extra training --extra pusht --extra diffusion --extra hvla --extra smolvla --no-cache
+#   - groot — needs flash-attn with special install instructions
+RUN uv sync --locked --extra dataset --extra training --extra pusht --extra policies-all --no-cache
 
 # Triton ptxas binary needs +x for some torch.compile paths
 RUN chmod +x /lerobot/.venv/lib/python${PYTHON_VERSION}/site-packages/triton/backends/nvidia/bin/ptxas || true

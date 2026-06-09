@@ -12,6 +12,28 @@ Tracked follow-ups for the training subsystem. Colocated with [`DESIGN.md`](DESI
 
 - **Docker group not picked up by existing shell sessions** — adding the user to the `docker` group with `usermod -aG docker $USER` updates `/etc/group` but does NOT backfill into running sessions (groups are cached at login). Every existing shell needs either `sg docker -c "..."` wrapping for `docker` commands or `newgrp docker` to refresh in-place. The orchestrator's image-prep path (`docker image inspect`, `docker pull`, `docker run`) needs daemon socket access and hits this immediately. Workaround: start the GUI as `sg docker -c "nohup python -m lerobot.gui ... &"` (the `nohup` is required because `sg`'s subshell exits and would otherwise SIGHUP the GUI). Real fix: user logs out + back in once, then `groups` shows `docker` and the wrapper is no longer needed. Documenting only — not worth automating around.
 
+- **`api/run.py` resolves `lerobot-record` via PATH, not absolute path** — when the GUI server is started without activating the conda env (e.g. `sg docker -c "python -m lerobot.gui ..."` with explicit Python path), the subprocess inherits the parent shell's PATH. If that PATH has `/home/feit/miniforge3/bin` (base env) before `/home/feit/miniforge3/envs/lerobot/bin`, then `lerobot-record` resolves to the BASE env's binary — which on this workstation points at a different lerobot checkout and is missing the `feetech` extra. Result: ImportError on `scservo_sdk` after the policy loads cleanly. Workaround: prepend `PATH=/home/feit/miniforge3/envs/lerobot/bin:$PATH` on GUI startup. Real fix: change every `args = ["lerobot-record", ...]` (and the analogous `lerobot-eval`, `lerobot-replay` spawns) in `gui/api/run.py` to `args = [sys.executable, "-m", "lerobot.scripts.lerobot_record", ...]`. Then the subprocess uses the SAME Python as the GUI server — no PATH dependency. ~5 line change per spawn site; should cover all GUI-launched lerobot CLI invocations.
+
+- **`wall_x` codebase dir vs `wallx` extra name (cosmetic; deferred rename)** — historical naming mismatch. `tests/policies/test_registry_symmetry.py` papers over it via `DIR_TO_EXTRA_OVERRIDES`. The clean fix is renaming the extra `wallx` → `wall_x` with a back-compat alias (`wallx = ["lerobot[wall_x]"]`). Touches pyproject.toml, `policies-all`, and any user install docs that say `pip install lerobot[wallx]`. Defer until the next pyproject sweep.
+
+- **Surface policy health warnings in the GUI itself, not just the log** — `gui/server.py` startup now runs `log_policy_registry_health` in a background thread and writes warnings to the log. The next layer of UX: `gui/api/training.py:list_policies` (a) records `_policy_load_failures` from `_ensure_policy_configs_loaded` instead of silently dropping them, (b) merges that with `check_policy_registry_health()` results, (c) returns a `warnings: list[{policy, missing_module, install_hint}]` field on the policies endpoint, and (d) frontend renders an unobtrusive banner above the policy picker: "N policies hidden — missing deps. [Show details]". Bigger UX change than the current commit; structural pieces (probe + install hint) are already in place.
+
+- **Dynamic CI test under `--extra all`** — extend `tests/policies/` with a parametrized test that asserts `get_policy_class(name)` succeeds for every `PreTrainedConfig.get_known_choices()` entry. Gate to `full_tests.yml` / `latest_deps_tests.yml` (which already do `uv sync --extra all`). The current static `test_registry_symmetry.py` catches "policy exists without an extra"; the dynamic version catches "extra exists but doesn't actually list the right deps". Both run, defense in depth.
+
+- **Update the user's `uv sync` curated extras list** — the conda-env-setup memory at `/home/feit/.claude/projects/-home-feit-Documents-lerobot/memory/MEMORY.md` lists the curated `--extra` set. As of this commit the recommended invocation is:
+
+  ```bash
+  uv sync --locked \
+    --extra policies-all \
+    --extra dataset --extra training --extra viz \
+    --extra hardware --extra feetech --extra dynamixel --extra gamepad \
+    --extra kinematics --extra intelrealsense \
+    --extra gui --extra dev --extra test \
+    --python /home/feit/miniforge3/envs/lerobot/bin/python --active
+  ```
+
+  Key change: `--extra policies-all` replaces the ad-hoc enumeration of `hvla` + `hilserl` (and the implicitly-missing `smolvla`/`pi`/`xvla`/etc.). The host env now provably has every policy importable, with the same one-liner that the Docker training image uses.
+
 - **Dockerfile edits invisible until CI rebuilds + DEFAULT_IMAGE bumps** — the orchestrator's `_ensure_image` is pull-only; it does `docker image inspect` then `docker pull`, never `docker build`. So a `docker/Dockerfile.training` edit (e.g. adding `--extra smolvla` to fix the num2words crash) has zero effect on runs until: (1) the branch is pushed, (2) CI builds the new tag (~9-17 min), and (3) `DEFAULT_IMAGE` in `recipes.py` is manually bumped to the new short-sha. THREE manual steps on a Dockerfile one-liner. Hot-fix retag is the get-unstuck workaround: `printf 'FROM <current-image>\nRUN cd /lerobot && uv pip install <missing-dep>==<version>\n' | sg docker -c 'docker build -t <current-image> -'` — builds a thin layer on top of the cached image and reuses the same tag. ~10 seconds. Throwaway state (only on the workstation; overwritten next CI rebuild). Permanent fix is the env-vs-source split described in [`DESIGN.md`](DESIGN.md) § Image tag derivation + live source mount — once landed, dep changes still need a rebuild but the orchestrator detects the mismatch and either builds locally (workstation) or says "push branch" (ephemeral).
 
 ## UX
