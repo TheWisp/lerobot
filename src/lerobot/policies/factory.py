@@ -104,7 +104,7 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
     try:
         return _get_policy_class_impl(name)
     except ImportError as e:
-        extra = _POLICY_NAME_TO_EXTRA.get(name, name)
+        extra = _POLICY_NAME_TO_EXTRA.get(name, _POLICY_FALLBACK_EXTRA)
         # Re-raise as ImportError so callers can branch on the type;
         # the install hint goes into the message so it surfaces in any
         # generic stderr capture (including the GUI's log tail).
@@ -674,33 +674,40 @@ def _make_processors_from_policy_config(
 
 # ── Registry health probe ──────────────────────────────────────────────────────
 
-# Maps registered policy name → the pyproject.toml extra that owns its deps.
-# Used to print actionable "install with: uv pip install 'lerobot[<extra>]'"
-# hints in :func:`check_policy_registry_health` when a registered policy's
-# modeling module fails to import (typical cause: env missing a transitive
-# dep like `num2words` for SmolVLA). The map deliberately uses the EXTRA
-# name (pyproject convention) not the codebase dir name — see the
-# `wall_x` vs `wallx` discrepancy. Add new policies here when their
-# modeling module gains a non-base import.
+# Maps registered policy name → the upstream pyproject.toml extra that owns
+# its deps. Used to print actionable "install with: uv pip install
+# 'lerobot[<extra>]'" hints in :func:`check_policy_registry_health` when a
+# policy's modeling module fails to import (typical cause: env missing a
+# transitive dep like `num2words` for SmolVLA). Only policies that have a
+# dedicated upstream extra are listed; others (act, sac, tdmpc, vqbet, rtc,
+# reward_classifier) fall back to ``all`` — those are policies without
+# special deps today, so an ImportError on them most likely means a base
+# dep is missing, which ``[all]`` covers. The map deliberately uses the
+# EXTRA name (pyproject convention) not the codebase dir name — see the
+# `wall_x` (dir) vs `wallx` (extra) discrepancy.
 _POLICY_NAME_TO_EXTRA: dict[str, str] = {
-    "tdmpc": "tdmpc",
     "diffusion": "diffusion",
-    "act": "act",
-    "act_vlm": "act_vlm",
+    "act_vlm": "all",  # no dedicated extra upstream; act_vlm needs transformers
     "multi_task_dit": "multi_task_dit",
-    "vqbet": "vqbet",
     "pi0": "pi",
     "pi0_fast": "pi",
     "pi05": "pi",
-    "sac": "sac",  # or `hilserl` for the full RL env stack
-    "reward_classifier": "sac",
     "smolvla": "smolvla",
     "sarm": "sarm",
     "groot": "groot",
     "xvla": "xvla",
     "wall_x": "wallx",
-    "rtc": "rtc",
+    "hilserl": "hilserl",
+    # Fall-throughs (any policy not listed defaults to `all`):
+    #   tdmpc, act, vqbet, sac, reward_classifier, rtc — no dedicated extra
+    #   in upstream pyproject.toml today; if one of these surfaces an
+    #   ImportError, the hint suggests `all` which covers everything.
 }
+
+# Fallback extra suggested when a policy isn't in :data:`_POLICY_NAME_TO_EXTRA`.
+# `all` is the kitchen sink — installs every policy's deps plus hardware
+# and benchmarks. Better than suggesting a non-existent extra.
+_POLICY_FALLBACK_EXTRA = "all"
 
 
 def check_policy_registry_health() -> dict[str, str | None]:
@@ -741,7 +748,7 @@ def check_policy_registry_health() -> dict[str, str | None]:
             get_policy_class(name)
             health[name] = None
         except ImportError as e:
-            extra = _POLICY_NAME_TO_EXTRA.get(name, name)
+            extra = _POLICY_NAME_TO_EXTRA.get(name, _POLICY_FALLBACK_EXTRA)
             health[name] = (
                 f"{e}; install with: uv pip install 'lerobot[{extra}]' (or pip install 'lerobot[{extra}]')"
             )

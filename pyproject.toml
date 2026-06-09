@@ -176,19 +176,6 @@ phone = ["hebi-py>=2.8.0,<2.12.0", "teleop>=0.1.0,<0.2.0", "fastapi<1.0", "lerob
 quest-vr = ["aiohttp>=3.9,<4.0", "lerobot[pink-dep]"]
 
 # Policies
-# Stub extras (empty list) for policies that need no deps beyond base.
-# Declared so the registry-symmetry test (tests/policies/test_registry_symmetry.py)
-# can assert every `src/lerobot/policies/<name>/` dir maps to an extra, AND
-# so `policies-all` (below) has a complete enumeration to reference. Empty
-# extras are valid in PEP 621 and serve as the canonical install handle —
-# e.g. `pip install 'lerobot[act]'` is a no-op today but stays a stable
-# alias if ACT ever grows a dep.
-act = []
-act_vlm = ["lerobot[transformers-dep]"]
-rtc = []
-sac = []
-tdmpc = []
-vqbet = []
 diffusion = ["lerobot[diffusers-dep]"]
 wallx = [
     "lerobot[transformers-dep]",
@@ -267,34 +254,6 @@ pusht = ["lerobot[dataset]", "gym-pusht>=0.1.5,<0.2.0", "pymunk>=6.6.0,<7.0.0"] 
 libero = ["lerobot[dataset]", "lerobot[transformers-dep]", "hf-libero>=0.1.3,<0.2.0; sys_platform == 'linux'", "lerobot[scipy-dep]"]
 metaworld = ["lerobot[dataset]", "metaworld==3.0.0", "lerobot[scipy-dep]"]
 
-# Every policy-runtime extra in one place. The single source of truth for
-# "every environment that loads a lerobot policy at runtime needs these
-# deps". Used by docker/Dockerfile.training (training pods) and by the
-# host conda env (lerobot-record, lerobot-eval). Adding a new policy means
-# (1) declare its extra above, (2) reference it here. The registry-symmetry
-# test (tests/policies/test_registry_symmetry.py) fails CI if step 2 is
-# missed.
-#
-# `groot` is intentionally excluded — flash-attn requires special install
-# instructions (per the `all`-extra comment below). Add explicitly when needed.
-policies-all = [
-    "lerobot[act]",
-    "lerobot[act_vlm]",
-    "lerobot[diffusion]",
-    "lerobot[hilserl]",        # gates SAC policy + RL env
-    "lerobot[hvla]",
-    "lerobot[multi_task_dit]",
-    "lerobot[pi]",             # covers pi0, pi05, pi0_fast, pi_gemma
-    "lerobot[rtc]",
-    "lerobot[sac]",
-    "lerobot[sarm]",
-    "lerobot[smolvla]",
-    "lerobot[tdmpc]",
-    "lerobot[vqbet]",
-    "lerobot[wallx]",          # codebase dir is wall_x/; extra name is wallx (see TODO)
-    "lerobot[xvla]",
-]
-
 # All
 all = [
     # Feature-scoped extras
@@ -318,9 +277,15 @@ all = [
     "lerobot[reachy2]",
     "lerobot[kinematics]",
     "lerobot[intelrealsense]",
-    # Every policy (single source of truth — see `policies-all` above).
-    "lerobot[policies-all]",
+    "lerobot[diffusion]",
+    "lerobot[multi_task_dit]",
+    "lerobot[wallx]",
+    "lerobot[pi]",
+    "lerobot[smolvla]",
     # "lerobot[groot]", TODO(Steven): Gr00t requires specific installation instructions for flash-attn
+    "lerobot[xvla]",
+    "lerobot[hilserl]",
+    "lerobot[hvla]",
     "lerobot[gui]",
     "lerobot[mcp]",
     "lerobot[async]",
@@ -333,8 +298,47 @@ all = [
     "lerobot[quest-vr]",
     "lerobot[libero]; sys_platform == 'linux'",
     "lerobot[metaworld]",
+    "lerobot[sarm]",
     "lerobot[peft]",
     # "lerobot[unitree_g1]", TODO: Unitree requires specific installation instructions for unitree_sdk2
+]
+
+# ─── Fork-only (TheWisp/lerobot) ──────────────────────────────────────────────
+# Single curated extras list for the training Docker image built by this
+# fork's CI (.github/workflows/docker_publish_fork_training.yml →
+# docker/Dockerfile.training). Centralises "what the training pod needs"
+# so the Dockerfile is just `uv sync --extra training-image` (one consumer,
+# one contract). Adding a new policy that the GUI form picker exposes
+# means appending one `lerobot[<extra>]` line below; the next CI image
+# build picks it up automatically.
+#
+# Deliberately a SEPARATE extra (not piggybacking on `all` or modifying
+# upstream `all`) so this is a single contained addition that's easy to
+# keep separate when rebasing on upstream. The Dockerfile then verifies
+# the image at build time by importing every registered policy — see
+# `lerobot.policies.factory.check_policy_registry_health()`.
+#
+# Skipped from this list:
+#   - hardware/feetech/dynamixel/intelrealsense — no robot on the pod
+#   - libero/metaworld — heavy, infrequently used, need cmake (mujoco)
+#   - dev/test/notebook — not needed in a deployment image
+#   - groot — needs flash-attn with platform-specific install
+training-image = [
+    "lerobot[dataset]",
+    "lerobot[training]",
+    "lerobot[pusht]",
+    # Every policy the GUI form picker exposes today (transitively pulls
+    # transformers/diffusers/num2words/accelerate/etc. — the deps that
+    # previously had to be enumerated --extra-by-extra in the Dockerfile).
+    "lerobot[diffusion]",
+    "lerobot[hvla]",
+    "lerobot[hilserl]",      # gates SAC policy + RL env
+    "lerobot[multi_task_dit]",
+    "lerobot[pi]",           # covers pi0, pi05, pi0_fast
+    "lerobot[sarm]",
+    "lerobot[smolvla]",
+    "lerobot[wallx]",
+    "lerobot[xvla]",
 ]
 
 [project.scripts]
