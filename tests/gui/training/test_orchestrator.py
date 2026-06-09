@@ -609,6 +609,56 @@ def test_orchestrator_final_step_from_max_checkpoint_not_progress_json(
     )
 
 
+def test_list_runs_reconciles_real_recipe_completion_without_poll(host: TrainingHost, tmp_path: Path) -> None:
+    """Regression for the SmolVLA 50k case: a real-recipe run that finished
+    while the user wasn't looking stayed marked RUNNING in the sidebar
+    indefinitely (4 hours, in the observed case) because nothing writes
+    the terminal event until someone polls the detail. Fix: the sidebar
+    reconcile path now probes ``is_alive`` and escalates to the full
+    reconcile when a RUNNING run's process is gone."""
+    import time as _t
+
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="real",
+        dataset_id="lerobot/pusht",
+        args={"policy.type": "smolvla"},
+        state=RunState.PENDING,
+        created_at=_t.time(),
+    )
+    # Simulate: prep ran, worker launched, run advanced to RUNNING, then the
+    # docker container exited cleanly (5 checkpoints written), but nobody
+    # polled detail. session_id=1 is not in our Popen registry → exit_code
+    # returns None, is_alive returns False (no such PID). The full reconcile
+    # should fire from the list_runs path and flip state to COMPLETED based
+    # on the checkpoint artifacts.
+    run.session_id = 1
+    run.advance(RunState.RUNNING)
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+    for step in (10000, 20000, 30000, 40000, 50000):
+        d = paths.root / "output" / "checkpoints" / f"{step:06d}" / "pretrained_model"
+        d.mkdir(parents=True)
+        (d / "model.safetensors").write_bytes(b"x")
+    # list_runs (NOT poll on this specific run) — the cheap path used by
+    # the sidebar. Must now detect process-gone + escalate to full reconcile.
+    runs = orch.list_runs()
+    target = next(r for r in runs if r.run_id == run.run_id)
+    assert target.state == RunState.COMPLETED, (
+        f"sidebar reconcile should flip dead RUNNING runs to COMPLETED; got {target.state}"
+    )
+    # And the terminal event landed
+    events = paths.events_jsonl.read_text()
+    assert "completed_naturally" in events
+
+
 def test_list_runs_reconciles_abort_without_poll(host: TrainingHost, tmp_path: Path) -> None:
     """Same regression for the aborted_by_user terminal event."""
     hr = HostRegistry(hosts=[host])

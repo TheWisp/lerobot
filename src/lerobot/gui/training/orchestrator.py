@@ -575,15 +575,26 @@ class Orchestrator:
         }
 
     def _reconcile_from_events_only(self, run: Run, paths: RunPaths) -> bool:
-        """Cheap reconciliation path: only reads ``events.jsonl``.
+        """Cheap reconciliation path used by :meth:`list_runs` to keep the
+        sidebar fresh without holding state on the orchestrator side.
 
-        Used by :meth:`list_runs` to keep the sidebar fresh without a
-        per-run transport probe. Returns True iff the state actually changed
-        (so the caller can save).
+        Returns True iff the state actually changed (so the caller can save).
 
-        Caveat: cannot detect crashes (worker died without writing a
-        terminal event) — that's covered by the full :meth:`_reconcile_state`
-        path on the selected run's poll.
+        Two layers:
+          1. If a terminal event has already been written to ``events.jsonl``
+             (by the worker for fake recipes, or by a prior full reconcile
+             for real recipes), advance the run state to match.
+          2. If we still think the run is RUNNING/PENDING and the worker
+             process is gone, escalate to the full :meth:`_reconcile_state`
+             so that the terminal event gets written from the process exit
+             code + checkpoint artifacts. Without this, a real-recipe run
+             that completed while the user wasn't looking stays marked
+             RUNNING in the sidebar indefinitely — the orchestrator only
+             learns about the exit when the user opens the run's detail.
+
+        The ``is_alive`` probe is the same shape as the one in the full
+        reconcile path, so the cost is one extra ``waitpid(WNOHANG)`` /
+        ``kill -0`` per active run per list_runs call. Cheap.
         """
         before = run.state
         host = self._hosts.get(run.host_id)
@@ -595,6 +606,17 @@ class Orchestrator:
             run.advance(RunState.ABORTED)
         elif terminal_event == "crashed" and run.state != RunState.FAILED:
             run.advance(RunState.FAILED)
+        elif (
+            run.state in (RunState.RUNNING, RunState.COMPLETING)
+            and run.session_id is not None
+            and not client.is_alive(run.session_id)
+        ):
+            # Process died without writing a terminal event. Don't let the
+            # sidebar lie — escalate to the full reconcile, which writes the
+            # terminal event from exit code + checkpoints. Skipping for
+            # PENDING because the prep thread owns that lifecycle and a
+            # false "not alive" during prep (PID not yet set) would race.
+            self._reconcile_state(run, paths, client)
         return run.state != before
 
     def _reconcile_state(self, run: Run, paths: RunPaths, client: TransportClient) -> None:
