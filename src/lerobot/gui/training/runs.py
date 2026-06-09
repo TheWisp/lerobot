@@ -100,7 +100,11 @@ class Run:
     created_at: float  # unix timestamp
     started_at: float | None = None
     finished_at: float | None = None
-    session_id: int | None = None  # PID for subprocess transport; tmux name for SSH
+    # Opaque to the orchestrator — only the client that launched the run
+    # knows how to interpret it. SubprocessClient: stringified PID.
+    # SshClient: ``<tmux-session-name>|<remote-workdir>``. Persisted as
+    # a JSON string; clients parse on use.
+    session_id: str | None = None
     idempotency_key: str | None = None  # client-supplied, defends against double-clicks
     error: str | None = None  # short reason for FAILED state
 

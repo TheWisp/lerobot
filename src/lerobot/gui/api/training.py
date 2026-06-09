@@ -127,7 +127,7 @@ class RunDTO(BaseModel):
     created_at: float
     started_at: float | None
     finished_at: float | None
-    session_id: int | None
+    session_id: str | None
     error: str | None
 
 

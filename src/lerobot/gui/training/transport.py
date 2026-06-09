@@ -78,7 +78,7 @@ class TransportClient(Protocol):
         env: dict[str, str],
         workdir: Path,
         log_path: Path,
-    ) -> int:
+    ) -> str:
         """Start a detached process running ``command``. Returns a session id.
 
         Pre: ``workdir`` exists or can be created. ``log_path``'s parent
@@ -86,14 +86,20 @@ class TransportClient(Protocol):
         Post: returned process is detached from the caller's process group
         (survives the GUI server restarting). stdout + stderr are merged
         and written to ``log_path``.
+
+        The session id is **opaque to the orchestrator** — only the client
+        that launched it knows how to interpret it. SubprocessClient returns
+        the stringified PID; SshClient returns ``<tmux-name>|<workdir>`` so
+        that ``exit_code`` can recover the path to the exit-code file
+        without an extra parameter. Persistence layer treats it as opaque.
         """
         ...
 
-    def is_alive(self, session_id: int) -> bool:
+    def is_alive(self, session_id: str) -> bool:
         """Is the launched process still running?"""
         ...
 
-    def exit_code(self, session_id: int) -> int | None:
+    def exit_code(self, session_id: str) -> int | None:
         """Process exit status, or None if still running / unknown.
 
         Returns 0 for clean exit, non-zero for crash. Returns None when
@@ -105,7 +111,7 @@ class TransportClient(Protocol):
         """
         ...
 
-    def stop(self, session_id: int, *, force: bool = False) -> None:
+    def stop(self, session_id: str, *, force: bool = False) -> None:
         """Send SIGTERM (graceful) or SIGKILL (``force=True``). Idempotent —
         no error if the process is already dead."""
         ...
@@ -212,7 +218,7 @@ class SubprocessClient:
         env: dict[str, str],
         workdir: Path,
         log_path: Path,
-    ) -> int:
+    ) -> str:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         workdir.mkdir(parents=True, exist_ok=True)
         # Merge our env on top of the GUI server's environment (the worker
@@ -232,12 +238,22 @@ class SubprocessClient:
             start_new_session=True,  # detach from GUI server's process group
         )
         self._popens[proc.pid] = proc
-        return proc.pid
+        # Protocol session_id is `str`; we use the stringified PID. The
+        # internal _popens key stays an int (it's what subprocess.Popen
+        # uses natively). _to_pid() handles the round-trip.
+        return str(proc.pid)
 
-    def exit_code(self, session_id: int) -> int | None:
+    @staticmethod
+    def _to_pid(session_id: str) -> int:
+        """Parse the stringified PID. Raises ValueError on malformed input
+        — that's the right fail-fast: SubprocessClient should never see a
+        session_id from any other transport."""
+        return int(session_id)
+
+    def exit_code(self, session_id: str) -> int | None:
         # If we have the Popen, .poll() reaps the zombie and sets
         # returncode. Returns None if still alive.
-        proc = self._popens.get(session_id)
+        proc = self._popens.get(self._to_pid(session_id))
         if proc is not None:
             return proc.poll()
         # No Popen — this process was launched in a prior GUI lifetime,
@@ -245,7 +261,8 @@ class SubprocessClient:
         # (it was delivered to whatever process originally reaped it).
         return None
 
-    def is_alive(self, session_id: int) -> bool:
+    def is_alive(self, session_id: str) -> bool:
+        pid = self._to_pid(session_id)
         # Two cases:
         # (1) The process is still our direct child (we launched it, haven't
         #     restarted). waitpid(WNOHANG) reaps zombies and returns (pid, _);
@@ -255,24 +272,25 @@ class SubprocessClient:
         #     (reparented to init). waitpid raises ChildProcessError; we fall
         #     back to kill(pid, 0).
         try:
-            reaped, _ = os.waitpid(session_id, os.WNOHANG)
+            reaped, _ = os.waitpid(pid, os.WNOHANG)
             # waitpid returns (pid, status) if reaped (process is dead),
             # (0, 0) if our child is still running.
-            return reaped != session_id
+            return reaped != pid
         except ChildProcessError:
             pass  # not our child; fall through to signal probe
         try:
-            os.kill(session_id, 0)
+            os.kill(pid, 0)
             return True
         except (ProcessLookupError, PermissionError):
             return False
 
-    def stop(self, session_id: int, *, force: bool = False) -> None:
+    def stop(self, session_id: str, *, force: bool = False) -> None:
+        pid = self._to_pid(session_id)
         sig = signal.SIGKILL if force else signal.SIGTERM
         # Signal the whole process group so detached children are caught,
         # not just the leader. Idempotent — already-dead PID is a no-op.
         with contextlib.suppress(ProcessLookupError):
-            os.killpg(os.getpgid(session_id), sig)
+            os.killpg(os.getpgid(pid), sig)
 
     def read_text(self, path: Path) -> str | None:
         try:
@@ -377,13 +395,15 @@ def make_client(transport: HostTransport) -> TransportClient:
 
     Pre: ``transport`` is one of the known transport types.
     Post: returns a client ready to drive a training run on that transport.
+
+    ``SshClient`` is lazy-imported so callers that only use the subprocess
+    transport don't pay the SSH module's import cost (shlex / subprocess /
+    paramiko-free but still adds a small import surface).
     """
     if isinstance(transport, SubprocessTransport):
         return SubprocessClient(transport)
     if isinstance(transport, SshTransport):
-        raise NotImplementedError(
-            "SshClient lands in the SSH transport follow-up. "
-            "The subprocess prototype is complete; SSH provider/transport "
-            "are the next phase."
-        )
+        from lerobot.gui.training.ssh_transport import SshClient  # lazy
+
+        return SshClient(transport)
     raise TypeError(f"Unknown transport: {type(transport).__name__}")

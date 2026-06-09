@@ -623,4 +623,5 @@ ignore_errors = false
 addopts = "-m 'not hub_live'"
 markers = [
     "hub_live: Tests that hit the real HuggingFace Hub. Skipped by default; opt in with `pytest -m hub_live`. Require a logged-in HF token + network; tests auto-skip if not logged in. Repos go under the logged-in user's namespace as `_lerobot_hub_live_*` and are deleted on test exit.",
+    "requires_ssh_loopback: Tests that exercise the SshClient transport via ssh-to-127.0.0.1. Need sshd running on :22 + ssh/scp/tmux installed + a working keypair. Auto-skip if any prereq is missing. CI sets up sshd in the workflow; local dev needs `ssh-keygen` + a pubkey in `~/.ssh/authorized_keys` (the fixture handles this automatically).",
 ]

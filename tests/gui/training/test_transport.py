@@ -262,10 +262,16 @@ def test_make_client_subprocess(transport: SubprocessTransport) -> None:
     assert isinstance(client, SubprocessClient)
 
 
-def test_make_client_ssh_not_implemented() -> None:
+def test_make_client_ssh_returns_ssh_client() -> None:
+    """Regression for the SshClient landing: factory now lazily imports
+    and returns SshClient instead of raising. The actual SSH ops are
+    exercised in ``test_ssh_transport.py`` under the
+    ``requires_ssh_loopback`` marker."""
+    from lerobot.gui.training.ssh_transport import SshClient
+
     ssh = SshTransport(host="localhost", key_path="/tmp/k")
-    with pytest.raises(NotImplementedError, match="SshClient"):
-        make_client(ssh)
+    client = make_client(ssh)
+    assert isinstance(client, SshClient)
 
 
 def test_make_client_unknown_type_raises() -> None:
