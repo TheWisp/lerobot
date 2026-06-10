@@ -1,5 +1,5 @@
 import glob, numpy as np
-R=[np.load(f) for f in sorted(glob.glob("/tmp/selfplay_probe/sp_dino_results_s*.npz"))]
+R=[np.load(f) for f in sorted(glob.glob("/tmp/selfplay_probe/sp_%s_results_s*.npz" % __import__("os").environ.get("SUBSTRATE","dino")))]
 demos=R[0]["demos"]; print(f"DINOv2 | seeds {len(R)} | demos {list(demos)}")
 conds=["oracle_xyz","bothprop","a","noise","b_free","c_ac","c_invdyn"]
 lab={"oracle_xyz":"oracle","bothprop":"bothprop","a":"a(z)","noise":"z+rand","b_free":"z+e_free","c_ac":"z+e_ac","c_invdyn":"z+e_invdyn"}

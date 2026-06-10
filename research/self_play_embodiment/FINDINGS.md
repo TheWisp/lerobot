@@ -136,8 +136,22 @@ demo-efficiency gain — the _objective_ drives it (forward `e_ac` on the same l
 Single-frame 2D path, 24×24 tokens. **Patch-PCA dramatically cleaner than V-JEPA2's mush** (arm/table/bg
 segmented — `figures/vj21_pca.png`). But mean-pool decode only marginally better: gripper **0.83** (vs 0.78),
 joints **0.20** (still floor — non-visual in any substrate). 2.1's gain lives in the _dense tokens_ that
-mean-pooling discards; inverse-dyn pretext-val is best on 2.1 (0.66 vs DINOv2 0.72). A combined
-2.1 × all-objectives injection sweep (demos 50–500, 4 seeds) is the current run.
+mean-pooling discards; inverse-dyn pretext-val is best on 2.1 (0.66 vs DINOv2 0.72).
+
+**V-JEPA 2.1 × inverse-dynamics — the clearest injection result (4 seeds, demos 50–500).** At low data the
+inverse-dynamics feature rescues the policy where plain z floors (finalErr, lower=better):
+
+| #demos | a (z only) | z+e_ac (fwd) | **z+e_invdyn** | SR@0.2 `c_invdyn−a` |
+| ------ | ---------- | ------------ | -------------- | ------------------- |
+| 50     | 0.529±0.05 | 0.647        | **0.383±0.08** | +0.09±0.07          |
+| 100    | 0.509±0.11 | 0.488        | **0.309±0.01** | **+0.24±0.10**      |
+| 200    | 0.409±0.11 | 0.347        | **0.235±0.04** | **+0.27±0.21**      |
+| 500    | 0.149      | 0.244        | 0.164          | −0.07±0.08 (converged) |
+
+Ordering `invdyn > ac > free`, bigger + lower-data than DINOv2 (which peaked +0.18 @200). Tight `c_invdyn`
+std (0.01–0.04) = seed-robust. **Still low-data-only** (plain z catches up by 500). This is the
+proof-of-concept: embodiment injection works given a **legible substrate** × the **inverse-dynamics
+objective**. See `figures/sp_inject_curve.png`.
 
 **Takeaways:** (1) the **objective** (inverse dynamics) is a bigger lever than architecture (Fork-1/2) or
 bottleneck size; (2) the effect is **real but small and low-data-only**; (3) `bothprop`=1.0 means reaching is
@@ -170,8 +184,9 @@ likely needed for a large effect; (4) to exploit V-JEPA 2.1, go **spatial/patch-
 - `scripts/vj21_legibility.py · vj21_probe.py` — V-JEPA 2.1 bring-up + legibility (decode + patch-PCA)
 - `scripts/sp_run.py · sp_check.py · sp_goals.py` — v1 joint-reach (the floored version)
 - `scripts/exploration/` — G1/G2/G3-era probes & data collection (`collect_world.py`, `g3_lite.py`, `probe_*`)
-- `figures/` — `sp_curve2.png` (SR vs demos, 4 seeds), `sp_dino_pca.png`, `sp_emb_pca.png`, `sp_latent_viz.png`, `vj21_pca.png` (2.1 patch-PCA)
-- `results/` — `sp_results2_s{0..3}.npz` (V-JEPA2), `sp_dino_results_s{0..3}.npz` (DINOv2 incl. `c_invdyn`); V-JEPA 2.1 results land when the running sweep finishes
+- `scripts/sp_agg_dino.py · sp_plot_inject.py` — substrate-aware aggregate (`SUBSTRATE=dino|vj21`) + the injection comparison figure
+- `figures/` — `sp_curve2.png` (V-JEPA2 SR, 4 seeds), `sp_dino_pca.png`, `sp_emb_pca.png`, `sp_latent_viz.png`, `vj21_pca.png` (2.1 patch-PCA), `sp_inject_curve.png` (DINOv2 vs 2.1 injection)
+- `results/` — `sp_results2_s{0..3}.npz` (V-JEPA2), `sp_dino_results_s{0..3}.npz` (DINOv2), `sp_vj21_results_s{0..3}.npz` (V-JEPA 2.1) — all with `c_invdyn`
 
 **Scratch caveat:** scripts hardcode `/tmp/selfplay_probe/` and depend on local data buffers
 (`world_buffer.npz` ~153 MB, `feat_cache.npz` ~766 MB) that are **not** committed (size). They are the
