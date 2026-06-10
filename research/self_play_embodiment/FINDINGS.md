@@ -210,6 +210,18 @@ User chose the manipulation direction (reaching is proprio-capped: `bothprop`=1.
 Scripts: `sp_manip_inspect/encode/train_e/run.py`, `sp_domain_check{,2}.py`; `sp_lib.Vec.obj_xyz`,
 `VJepa21Encoder.encode_both`. Figure `sp_domain_check.png`.
 
+**In-sim reach-to-peg (matched domain, peg GT) — built, but the TASK isn't vision-necessary.** Fixed a
+global Jacobian from random play (Δgrip≈J·Δjoints, R²=0.93); the GT servo `Δjoints=clip(J⁺·(peg−grip))`
+reaches (SR@0.1=0.88) — sound expert. BC'd it from vision (`sp_reach_jcheck.py`, `sp_reach_insim.py`).
+Result exposed the real blocker: **`proprio_only` reaches** (200 demos: minDist 0.11, SR@0.15=0.96)
+while every spatial-`z` condition floors. Cause: **aloha's peg varies only ~0.02–0.05 m across
+episodes**, so proprio memorizes the near-fixed peg — the task has the *same proprio shortcut* as
+free-space reaching, and the irrelevant 200-d spatial input *hurts* (overfit). **A valid
+vision-necessary manipulation test needs WIDE object randomization** (peg spread ≫ arm precision) +
+re-collected play + a J-expert that generalizes across peg positions — a defined but larger redo.
+Net manipulation status: scaffolding + two diagnoses done; no positive injection result yet (the
+positive result remains the V-JEPA2.1 × inverse-dynamics *reaching* one).
+
 ## Files
 
 - `scripts/sp_lib.py` — env harness (delta control, gripper-xyz metric) + V-JEPA encoder + `EmbEnc` loader
