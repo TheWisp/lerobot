@@ -184,6 +184,32 @@ likely needed for a large effect; (4) to exploit V-JEPA 2.1, go **spatial/patch-
 4. **Bottleneck-size sweep** — low value (the issue is the mechanism, not the hyperparameter), but
    cheap to rule out.
 
+## Manipulation track (2026-06-10) — reach-to-peg attempt, blocked + diagnosed
+
+User chose the manipulation direction (reaching is proprio-capped: `bothprop`=1.0). Goal: a
+**vision-necessary** task — reach the gripper to the peg, whose location is only in the image
+(`proprio_only` must floor). Progress + the wall:
+
+- **Object now legible (spatial):** V-JEPA2.1 mean-pool dilutes the tiny peg/socket (object-xy 0.19),
+  but **8×8 spatial** recovers it: **object-xy 0.71, gripper-xy 0.93** (4×4 was too coarse — 0.36 —
+  because 4×4 over the 24×24 grid averages 36 tokens/cell). Lesson: small objects need a fine grid.
+- **Strong action signal on contact-rich data:** inverse-dynamics val on insertion-scripted demos =
+  **0.22** vs **0.66** on random play — deliberate motion makes the action far more recoverable from
+  the latent pair (promising for `e_invdyn`).
+- **BUT reach-to-peg FLOORS** (BC of scripted demos, eval in-sim): minDist ~0.25–0.32 m, SR≈0, and
+  *worse* with more demos. **Diagnosed:** render-domain is fine (our-sim vs dataset home frames cosine
+  0.002), so the cause is (1) **open-loop BC of scripted absolute trajectories drifting closed-loop**
+  (no self-correction — the HER reaching worked precisely because its label is goal-relative), and
+  (2) the external dataset has **no peg GT**, so no robust "servo-to-peg" label and no way to convey a
+  goal for a novel peg pose. (First-pass "domain gap" reading was a measurement artifact — a
+  gravity-collapsed noop eval frame + wrong reference mean.)
+- **Fix / next:** generate reach demos **in our own sim** (matched render + free peg GT) with a
+  goal-relative / Jacobian-IK servoing label, then re-run the injection conditions. The encode/e/BC/eval
+  scaffolding is built and substrate-agnostic; only the data source changes.
+
+Scripts: `sp_manip_inspect/encode/train_e/run.py`, `sp_domain_check{,2}.py`; `sp_lib.Vec.obj_xyz`,
+`VJepa21Encoder.encode_both`. Figure `sp_domain_check.png`.
+
 ## Files
 
 - `scripts/sp_lib.py` — env harness (delta control, gripper-xyz metric) + V-JEPA encoder + `EmbEnc` loader

@@ -47,6 +47,14 @@ class Vec:
             out[i] = np.concatenate([np.asarray(phys.named.data.xpos[k]) for k in self.GRIP_KEYS])
         return out
 
+    def obj_xyz(self):
+        """(n,6) Cartesian [peg-xyz, socket-xyz] per env (reach-to-object target/metric)."""
+        out = np.zeros((self.n, 6), np.float32)
+        for i in range(self.n):
+            phys = self.vec.envs[i].unwrapped._env._physics
+            out[i] = np.concatenate([np.asarray(phys.named.data.xpos[k]) for k in ("peg", "socket")])
+        return out
+
     def reset(self, seeds):
         seeds = list(map(int, seeds)); assert len(seeds) == self.n
         obs, _ = self.vec.reset(seed=seeds)
@@ -123,6 +131,19 @@ class VJepa21Encoder:
             h = self.enc(x).float()  # (b,576,768)
             out[k:k + len(h)] = h.mean(1).cpu().numpy()
         return out
+
+    @torch.no_grad()
+    def encode_both(self, imgs256, G=8, bs=48):
+        """One forward -> (mean (N,768), spatial GxG max-pool (N,G*G*768)). For live eval."""
+        N = len(imgs256); Mo = np.zeros((N, self.DIM), np.float32); So = np.zeros((N, G * G * self.DIM), np.float32)
+        for k in range(0, N, bs):
+            chunk = np.stack([np.array(Image.fromarray(im).resize((384, 384))) for im in imgs256[k:k + bs]])
+            x = torch.from_numpy(chunk).to(DEV).permute(0, 3, 1, 2)[:, :, None].float() / 255.0
+            x = (x - self.mean) / self.std
+            h = self.enc(x).float(); b, nt, C = h.shape; g = int(round(nt ** 0.5)); hh = h.reshape(b, g, g, C)
+            Mo[k:k + b] = hh.mean((1, 2)).cpu().numpy()
+            So[k:k + b] = hh.reshape(b, G, g // G, G, g // G, C).amax(dim=(2, 4)).reshape(b, -1).cpu().numpy()
+        return Mo, So
 
 # ---------------- embodiment encoder (loaded at eval to compute e_cur live) ----------------
 import torch.nn as nn
