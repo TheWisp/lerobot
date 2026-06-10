@@ -222,6 +222,13 @@ re-collected play + a J-expert that generalizes across peg positions — a defin
 Net manipulation status: scaffolding + two diagnoses done; no positive injection result yet (the
 positive result remains the V-JEPA2.1 × inverse-dynamics *reaching* one).
 
+**Principle validated — pool ALL same-embodiment data for `e` (`sp_pool_e.py`).** `e` is meant to be
+pretrained on all cheap task-agnostic data of the same embodiment; only the policy head uses task
+demos. R-gripper decode (held-out our-sim): random-only 0.907, scripted-only 0.577, **pooled 0.918**.
+Pooling is best + robust (scripted-only transfers poorly alone; pooling rescues it). The reaching
+positive already trained `e` task-agnostically (on random play) — fair; the manip attempts wrongly used
+task-specific `e`. Going forward: one pooled `e`, reused across tasks; task must still be vision-necessary.
+
 ## Files
 
 - `scripts/sp_lib.py` — env harness (delta control, gripper-xyz metric) + V-JEPA encoder + `EmbEnc` loader
