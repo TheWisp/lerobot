@@ -229,6 +229,16 @@ Pooling is best + robust (scripted-only transfers poorly alone; pooling rescues 
 positive already trained `e` task-agnostically (on random play) — fair; the manip attempts wrongly used
 task-specific `e`. Going forward: one pooled `e`, reused across tasks; task must still be vision-necessary.
 
+**Tighten-the-threshold makes reach-to-peg vision-necessary on EXISTING data (no re-randomization).**
+The aloha peg spread is std 2.7×5.6 cm (range 10×20 cm) — *memorizable within a loose 0.1–0.15 m
+threshold*, which is why `proprio_only` "reached." With a **precise expert** (mujoco analytic Jacobian,
+`sp_jac_analytic.py`) and **SR@0.05**: a controller that sees the **true** peg gets SR@0.05=**0.94**,
+one that memorizes the **mean** peg gets **0.06**. So tighten threshold + precise expert ⇒
+vision-necessary, no re-collection. Caveat: `gripper_link` ref has a ~4 cm geometric offset to the peg
+(perfect reach floors at 0.042 m) → measure to the **fingertip** so vision's ~3 cm decode error still
+clears 0.05. Next: regenerate precise analytic-J labels for cached frames (replay configs via
+`mj_forward`, no re-render) + rerun the injection conditions at SR@0.05.
+
 ## Files
 
 - `scripts/sp_lib.py` — env harness (delta control, gripper-xyz metric) + V-JEPA encoder + `EmbEnc` loader
