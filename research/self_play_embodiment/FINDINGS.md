@@ -253,6 +253,36 @@ crack. **Recommendation: consolidate the reaching positive (the solid contributi
 needs either a vision pipeline that pre-decodes the object (give the policy a low-d target) or a
 stronger visuomotor learner — a separate research problem.**
 
+## DECISIVE: ACT validation + Fork-2 is a dead end for competent policies (2026-06-10)
+
+User pushed: "is the network even correct? ACT/diffusion succeed here." Right call — my policy was a
+toy (frozen features → PCA-200 → ~100K-param MLP → single-step MSE delta), nothing like ACT.
+
+**Built a small ACT** (`sp_act.py`): frozen V-JEPA2.1 8×8 patch tokens + proprio → 2-layer Transformer
+encoder → learned action queries → 2-layer decoder → **action chunk + L1** (3.9M params). Differs from
+canonical ACT only by: frozen encoder (intended — testing the substrate), smaller size, no CVAE
+(fine for scripted/unimodal demos), open-loop chunks instead of temporal ensembling.
+
+**Network validated:** small ACT REACHES the peg — SR@0.1 **0.75** @30 demo-eps (minDist 0.085 m) —
+where the toy MLP floored at ~0.28. The earlier failures (and the reaching "positive") were the
+**weak policy**, not the task/substrate.
+
+**Injection on ACT: `e`-token HURTS, consistently** (reach SR@0.1, e=0 vs e=1): 3ep .45/.15, 6ep
+.25/.25, 12ep .50/.10, 30ep **.75/.10**. Not noise (consistent, present even at 30 eps).
+
+**Why — the real result:** `e = f(frozen features)` is a deterministic function of features the ACT
+**already consumes** (the patch tokens) → it adds **zero information** → can only be neutral or harmful
+(harmful here: the ACT leans on the salient token, train/eval drift in it then misleads). The toy-MLP
+"injection helps" was a **weak-policy artifact** — the MLP used a lossy PCA-mean and couldn't extract
+embodiment, so a pre-concentrated `e` helped *it*; a competent extractor (ACT) erases the benefit, as
+information theory requires.
+
+**Conclusion for the whole project:** **Fork-2 (a bottleneck `e`-token around a FROZEN encoder) cannot
+inject embodiment into a competent policy.** The only mechanism that can add information is **Fork-1 —
+train the ENCODER with the embodiment (inverse-dynamics) objective** so the features themselves become
+embodiment-aware. Next experiment: inverse-dynamics encoder-pretraining vs none, measured by ACT
+demo-efficiency (does it cut #demos). Scripts: `sp_act.py`.
+
 ## Files
 
 - `scripts/sp_lib.py` — env harness (delta control, gripper-xyz metric) + V-JEPA encoder + `EmbEnc` loader
