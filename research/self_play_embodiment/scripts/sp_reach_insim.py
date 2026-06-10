@@ -7,9 +7,9 @@ Data: world_buffer (random play, peg GT) + vj21 mean/spatial + e_cache_vj21.  SR
 import os, time, numpy as np, torch, torch.nn as nn
 from sp_lib import Vec, VJepa21Encoder, load_emb, delta_command
 OUT = "/tmp/selfplay_probe"; dev = "cuda"
-KZ, DMAX, H, NG = 200, 0.10, 130, 24
+KZ, DMAX, H, NG = 200, 0.05, 220, 24
 DEMOS = [int(x) for x in os.environ.get("DEMOS", "50,200,1000").split(",")]
-EPS = [0.05, 0.10, 0.15]; SEED = int(os.environ.get("SEED", "0"))
+EPS = [0.05, 0.06, 0.10]; SEED = int(os.environ.get("SEED", "0"))
 torch.manual_seed(SEED); np.random.seed(SEED)
 def log(m): print(m, flush=True)
 wb = np.load(OUT + "/world_buffer.npz", allow_pickle=True)
@@ -23,8 +23,7 @@ dj, dg = [], []
 for s, e in ep:
     dj.append(states[s + 1:e].astype(np.float64) - states[s:e - 1]); dg.append(Rg[s + 1:e] - Rg[s:e - 1])
 dj = np.concatenate(dj); dg = np.concatenate(dg)
-B, *_ = np.linalg.lstsq(dj, dg, rcond=None); Jpinv = np.linalg.pinv(B.T)  # (14,3)
-LAB = np.clip((peg - Rg) @ Jpinv.T, -DMAX, DMAX).astype(np.float32)  # expert Δjoint toward peg
+LAB = np.load(OUT + "/reach_labels.npz")["LAB"].astype(np.float32)  # PRECISE analytic-J labels (grasp-center)
 # spatial PCA (GPU)
 Sg = torch.tensor(S, device=dev); smean = Sg.mean(0); _, _, Vv = torch.pca_lowrank(Sg - smean, q=KZ, niter=5); Vv = Vv[:, :KZ].contiguous()
 ZC = ((Sg - smean) @ Vv).cpu().numpy(); del Sg; torch.cuda.empty_cache()
@@ -71,6 +70,14 @@ enc = VJepa21Encoder(); F_FREE, F_INV = load_emb(OUT + "/f_vj21_free.pt"), load_
 def emb(m, f): return f(torch.tensor(m, device=dev)).cpu().numpy()
 def spatial_pca(Sb): t = torch.tensor(Sb, device=dev); return ((t - smean) @ Vv).cpu().numpy()
 VEC = Vec(NG)
+import mujoco
+_lf = VEC.vec.envs[0].unwrapped._env._physics.model.body("vx300s_right/left_finger_link").id
+_rf = VEC.vec.envs[0].unwrapped._env._physics.model.body("vx300s_right/right_finger_link").id
+def grasp_center():
+    out = np.zeros((NG, 3))
+    for i in range(NG):
+        p = VEC.vec.envs[i].unwrapped._env._physics; out[i] = (np.asarray(p.data.xpos[_lf]) + np.asarray(p.data.xpos[_rf])) / 2
+    return out
 def rollout(name, pol):
     img, prop = VEC.reset(range(40000, 40000 + NG)); best = np.full(NG, 1e9)
     for t in range(H):
@@ -78,7 +85,7 @@ def rollout(name, pol):
         P = dict(pr=prop, zc=spatial_pca(Sn), nz=np.random.randn(NG, 64).astype(np.float32),
                  ef=emb(Mn, F_FREE), ei=emb(Mn, F_INV), pg=VEC.obj_xyz()[:, :3])
         (img, prop), _, _ = VEC.step(delta_command(prop, pol.predict(feats(name, P)), dmax=DMAX))
-        best = np.minimum(best, np.linalg.norm(VEC.gripper_xyz()[:, 3:] - VEC.obj_xyz()[:, :3], axis=1))
+        best = np.minimum(best, np.linalg.norm(grasp_center() - VEC.obj_xyz()[:, :3], axis=1))
     return best
 def row(tag, b): return f"  {tag:13s} minDist {b.mean():.3f}m | " + " ".join(f"SR@{e}={float((b<e).mean()):.2f}" for e in EPS)
 conds = ["proprio_only", "a", "noise", "b_free", "c_invdyn", "oracle"]
