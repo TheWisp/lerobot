@@ -337,3 +337,31 @@ ACT #demos sweep). Sim-first per plan; real (HVLA-S1) only after sim works.
 **Scratch caveat:** scripts hardcode `/tmp/selfplay_probe/` and depend on local data buffers
 (`world_buffer.npz` ~153 MB, `feat_cache.npz` ~766 MB) that are **not** committed (size). They are the
 method-of-record, not turnkey. Conda python: `/home/feit/miniforge3/envs/lerobot/bin/python`.
+
+## PROJECT CONCLUSION (2026-06-10) — Fork-1 injects the BODY but evicts the OBJECT; injecting embodiment into a vision encoder is misdirected
+
+Ran Fork-1 properly (DynaMo: inverse + forward + stop-grad, fine-tune DINOv2 top-2 blocks), on POOLED
+self-play (random play + scripted insertion), with both a mean and a spatial (per-token forward) objective.
+
+- **ACT demo-efficiency, frozen vs pooled-adapted (mean objective):** adapted WORSE at every demo level
+  (SR@0.1 frozen 0.15/0.45/0.50/0.60 vs adapted 0.00/0.25/0.40/0.50). Not a win — a consistent loss.
+- **Spatial gate (the right metric — 8x8 patch decode, frozen vs spatial-adapted):**
+  gripper-xyz 0.91→**0.95** (body UP) but peg-xy 0.38→**−0.38** (object DESTROYED).
+- **Mechanism (textbook inverse-dynamics failure; ICM / Levine-Stone-Zhang / exo-noise):** the objective
+  keeps action-coupled features (the arm) and discards the rest. The peg is static until grasped, so
+  neither inverse (arm-dominated) nor forward (peg static within episode) needs to encode the peg's
+  across-episode position → it's dropped. Pooling/insertion data didn't save it (peg still mostly static
+  per frame).
+
+**Ties back to Finding #1 (vision encodes the WORLD, proprio the SELF):** the project tried to inject
+embodiment (the self/body) into a vision (world) encoder. But the body is proprio's job (bothprop=1.0:
+proprio alone solves reaching), and vision's unique value is the object — which the dynamics objective
+evicts. So dynamics-injection pushes vision toward the self → REDUNDANT where the body matters (proprio
+has it) and DESTRUCTIVE where the object matters (sheds the peg). That's why Fork-1 hurt reach-to-object
+and frozen vision won.
+
+**Verdict:** Fork-2 = redundant (no added info to a competent policy). Fork-1 = genuinely injects *body*
+embodiment (gripper 0.78→0.95) but it's the wrong thing for a vision encoder (redundant w/ proprio,
+evicts the object). For manipulation, the right combo is the one that already worked: **frozen vision
+(keeps the object) + proprio (the body)**. No free lunch: an object-preserving anchor just pulls back
+toward frozen. Scripts: sp_dynamo_{pooled,spatial}.py, sp_act_fork1.py.
