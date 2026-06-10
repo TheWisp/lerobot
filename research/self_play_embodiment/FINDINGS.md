@@ -239,6 +239,20 @@ vision-necessary, no re-collection. Caveat: `gripper_link` ref has a ~4 cm geome
 clears 0.05. Next: regenerate precise analytic-J labels for cached frames (replay configs via
 `mj_forward`, no re-render) + rerun the injection conditions at SR@0.05.
 
+**Corrected run (precise labels + grasp-center + SR@0.05) — vision branch collapses (the deepest
+blocker).** With precise per-frame analytic-J labels, the task IS learnable from low-dim inputs
+(`proprio_only` reaches ~10 cm by memorizing the mean; `oracle`=proprio+true-peg reaches at 1000
+demos). But **every condition that includes the 200-d spatial `z` floors near home** (~0.28 m) —
+*below* `proprio_only`. The small MLP can't learn an object→action servo from frozen spatial features
+in low data; the high-dim vision input distracts rather than helps, so `a≈noise≈b_free≈c_invdyn` (all
+floored) and `e` can't be evaluated (its host, vision, doesn't work). **Reach-to-object is blocked not
+just by task-validity but by few-shot visuomotor learnability from frozen spatial features.** Contrast:
+the reaching positive worked because the goal was a *mean-pooled* whole-scene latent the MLP could use;
+extracting+servoing a small object from spatial tokens is a harder visuomotor map this setup doesn't
+crack. **Recommendation: consolidate the reaching positive (the solid contribution); reach-to-object
+needs either a vision pipeline that pre-decodes the object (give the policy a low-d target) or a
+stronger visuomotor learner — a separate research problem.**
+
 ## Files
 
 - `scripts/sp_lib.py` — env harness (delta control, gripper-xyz metric) + V-JEPA encoder + `EmbEnc` loader
