@@ -283,6 +283,27 @@ train the ENCODER with the embodiment (inverse-dynamics) objective** so the feat
 embodiment-aware. Next experiment: inverse-dynamics encoder-pretraining vs none, measured by ACT
 demo-efficiency (does it cut #demos). Scripts: `sp_act.py`.
 
+## Literature check before Fork-1 (2026-06-10) — our idea ≈ DynaMo (works), with a recipe fix
+
+Lit review (full digest in git history of this commit) — directly de-risks/reframes Fork-1:
+- **Fork-1 ≈ DynaMo (Cui & Pinto, NeurIPS 2024, arXiv:2409.12192):** encoder trained with **latent
+  inverse + forward dynamics** in-domain → feeds standard imitation heads → beats R3M/MVP/VC-1/ImageNet
+  & from-scratch **at low demos**, across heads. Our real action labels make it strictly easier.
+- **Brandfonbrener et al. NeurIPS 2023 (2305.16985):** inverse-dynamics is the BEST pretraining objective
+  and the margin is **largest at small finetune-data** — predicts our demo-efficiency win.
+- **LAPA (ICLR 2025, 2410.11758):** latent-inverse-dyn pretraining beats GT-action OpenVLA, ~30× cheaper.
+- **RECIPE FIX — pure inverse-dynamics COLLAPSES** (ICM; Levine-Stone-Zhang RLC 2024 "Multistep Inverse Is
+  Not All You Need" 2403.11940; DynaMo's "constant-embedding solution"). Our `e_invdyn` was single-head →
+  at risk. **Must add forward-dynamics/consistency + SimSiam stop-gradient (DynaMo).**
+- **Fork-2 failure is well-grounded:** Hansen ICML 2023 (2212.05749) & Dasari CoRL 2023 (2310.09289) —
+  frozen generic encoder + small head doesn't beat augmented from-scratch; Diffusion Policy (2303.04137
+  Table 5) & OpenVLA (2406.09246) — **finetune encoder > freeze** for BC; no added bottleneck helps.
+  DynaMo wins frozen-downstream only because the encoder was **adapted in-domain** first.
+- **Warnings:** sim↔real R²≈32% (Dasari) → validate Fork-1 on REAL/HVLA-S1, not just aloha sim; and
+  self-play must exercise task-relevant DoF (random play barely touches objects → body-only embodiment).
+- **Plan:** build Fork-1 as DynaMo (inverse+forward+stop-grad encoder adaptation on self-play) → feed
+  ACT/S1 head, no bottleneck → validate in real HVLA-S1 (DINOv2). Read DynaMo + ACDF first.
+
 ## Files
 
 - `scripts/sp_lib.py` — env harness (delta control, gripper-xyz metric) + V-JEPA encoder + `EmbEnc` loader
