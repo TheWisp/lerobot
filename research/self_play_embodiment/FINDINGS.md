@@ -304,6 +304,22 @@ Lit review (full digest in git history of this commit) — directly de-risks/ref
 - **Plan:** build Fork-1 as DynaMo (inverse+forward+stop-grad encoder adaptation on self-play) → feed
   ACT/S1 head, no bottleneck → validate in real HVLA-S1 (DINOv2). Read DynaMo + ACDF first.
 
+## Fork-1 cheap gate PASSES (2026-06-10) — adapting the encoder adds info Fork-2 couldn't
+
+DynaMo-style adaptation of **DINOv2** (fine-tune top-2 blocks, inverse + forward + SimSiam stop-grad,
+on random-play self-play; `sp_dynamo.py`). Gate (held-out eps, R-gripper-xyz decode):
+**frozen 0.78 → adapted 0.90**, no full collapse (eff-rank 18→6.4), L_inv 0.99→0.74. So **Fork-1
+measurably adds embodiment info** (same data/substrate; only the encoder's extraction changed) — the
+clean empirical complement to "Fork-2 (redundant-vision bottleneck) is info-theoretically doomed for a
+competent policy." (Fork-2 *is* saveable only by making the token carry NON-redundant info — privileged
+distillation, or the HVLA-S2-token pattern where the token is a separate system's reasoning, not a
+re-encoding of the policy's own vision.)
+Caveats: rank 18→6.4 = strong concentration on controllable dims (sheds scene/object info — re-tune for
+richer tasks; matches the inverse-dynamics "discards irrelevant-but-controllable" warning). And this is
+a decode PROXY — the ACT uses patch tokens (gripper ~0.93 even frozen), so the real verdict is ACT
+demo-efficiency with adapted vs frozen encoder (next build: save adapted encoder → re-encode patches →
+ACT #demos sweep). Sim-first per plan; real (HVLA-S1) only after sim works.
+
 ## Files
 
 - `scripts/sp_lib.py` — env harness (delta control, gripper-xyz metric) + V-JEPA encoder + `EmbEnc` loader
