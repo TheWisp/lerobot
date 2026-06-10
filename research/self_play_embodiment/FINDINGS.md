@@ -153,6 +153,16 @@ std (0.01–0.04) = seed-robust. **Still low-data-only** (plain z catches up by 
 proof-of-concept: embodiment injection works given a **legible substrate** × the **inverse-dynamics
 objective**. See `figures/sp_inject_curve.png`.
 
+**Why it works (mechanism) — inverse dynamics _distills_, forward _reweights_.** gripper-xyz decode R²
+(V-JEPA 2.1, held-out eps): **`e_invdyn`(64-d) = 0.876 — beats full z(PCA-200) at 0.826** — while
+`e_ac`(64) = 0.623 ≈ random-64 = 0.634 > `e_free` = 0.560. So the inverse-dynamics bottleneck makes the
+embodiment signal _more linearly accessible than z itself_ in 64 dims (a genuine distillation a tiny
+low-data policy can exploit); the forward objective is a lossy reweight (≈ a random sketch), consistent
+with the V-JEPA2 null. `f(z)` adds no Shannon information either way — but the inverse objective concentrates
+the controllable directions, the forward one chases appearance. See `scripts/vj21_invdyn_pca.py` +
+`figures/vj21_invdyn_pca.png` (per-token PCA of z vs f_invdyn vs f_ac; the decode numbers are the solid part —
+per-token is an approximation since `f` is trained on mean-pooled z).
+
 **Takeaways:** (1) the **objective** (inverse dynamics) is a bigger lever than architecture (Fork-1/2) or
 bottleneck size; (2) the effect is **real but small and low-data-only**; (3) `bothprop`=1.0 means reaching is
 proprio-solved, capping how much _any_ vision-embodiment feature can help — a **contact/manipulation** task is
