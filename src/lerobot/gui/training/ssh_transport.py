@@ -13,7 +13,7 @@ binaries. No paramiko / asyncssh dependency — the host has them anyway,
 and the existing ``ControlMaster``/``ControlPersist`` multiplexing is
 sufficient for the GUI's polling cadence (typically << 1 op/sec/run).
 
-Design decisions documented in ``scripts/training/DESIGN.md`` § Transport
+Design decisions documented in ``src/lerobot/gui/training/DESIGN.md`` § Transport
 and re-derived in the implementation workflow ``ssh-client-design``:
 
   1. **Detached worker via tmux**: every ``launch`` wraps the worker in

@@ -139,7 +139,7 @@ class NebiusProvider:
 
     def spawn(self, spec: SpawnSpec) -> HostHandle:
         raise NotImplementedError(
-            "Nebius spawn lands in C2 — see scripts/training/DESIGN.md "
+            "Nebius spawn lands in C2 — see src/lerobot/gui/training/DESIGN.md "
             "§ Phase 6.5 (Ephemeral mode + first managed provider). C1 "
             "lands the protocol + cost math; C2 wires the nebius CLI."
         )

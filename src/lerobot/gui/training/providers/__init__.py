@@ -14,7 +14,7 @@ talks only to the protocol; vendor specifics are contained per-file.
 Adding a new vendor: drop a new file (e.g. ``runpod.py``), register it
 in :func:`get_provider`. No changes to application code.
 
-For the full design see ``scripts/training/DESIGN.md`` § "HostProvider
+For the full design see ``src/lerobot/gui/training/DESIGN.md`` § "HostProvider
 protocol (Phase 2.5)".
 """
 

@@ -7,7 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 """Transport layer for training runs: how the GUI server reaches the training process.
 
-Two transports, matching ``scripts/training/DESIGN.md`` § Components:
+Two transports, matching ``src/lerobot/gui/training/DESIGN.md`` § Components:
 
 - :class:`SubprocessTransport` — training runs as a subprocess of the GUI server
   (workstation case). "Host" is the GUI server's own filesystem; all operations

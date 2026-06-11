@@ -122,7 +122,7 @@ Background Transfers tray + subprocess-worker pipeline landed in PR #15
 
 ## Model Tab
 
-See [docs/model_tab.md](docs/model_tab.md) for the (older) browse/inspect design and [../../../scripts/training/DESIGN.md](../../../scripts/training/DESIGN.md) for the cloud-GPU training pipeline + deployment design (the active workstream as of 2026-06).
+See [docs/model_tab.md](docs/model_tab.md) for the (older) browse/inspect design and [training/DESIGN.md](training/DESIGN.md) for the cloud-GPU training pipeline + deployment design (the active workstream as of 2026-06).
 
 - [ ] Phase 1: Browse & Inspect — source scanning, list/info/config endpoints, source tree, detail panel
 - [ ] Phase 2: Training — subprocess launch/stop/status, training form, terminal output, resume
@@ -131,7 +131,7 @@ See [docs/model_tab.md](docs/model_tab.md) for the (older) browse/inspect design
 
 ### Cloud-GPU training pipeline
 
-Active workstream tracked in [`scripts/training/DESIGN.md`](../../../scripts/training/DESIGN.md). Phased status (Phase 0 + 1 done; Phases 2–6 pending — spawn step, API endpoints, host-profile UI, Model-tab frontend, auto-push-to-Hub, recipes). The bash CLI surface (`scripts/training/{install_prereqs,setup_host,run_training}.sh`) is the working prototype today; Python worker scaffold at `src/lerobot/gui/training_{jobs,worker}.py` is staged for the GUI integration.
+Active workstream tracked in [`training/DESIGN.md`](training/DESIGN.md). Phased status (Phase 0 + 1 done; Phases 2–6 pending — spawn step, API endpoints, host-profile UI, Model-tab frontend, auto-push-to-Hub, recipes). The bash CLI surface (`scripts/training/{install_prereqs,setup_host,run_training}.sh`) is the working prototype today; Python worker scaffold at `src/lerobot/gui/training_{jobs,worker}.py` is staged for the GUI integration.
 
 ## Model Debugger (Single-Frame Inference)
 

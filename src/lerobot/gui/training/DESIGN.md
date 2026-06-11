@@ -150,7 +150,7 @@ This server — NVIDIA GeForce RTX 5090 · 31.8 GB
 
 Recommended first-time flow (documented in the help text under the Host field): (1) `ssh-keygen` + copy pubkey to the remote, (2) verify `ssh <Host>` works in a terminal — also accepts the host's fingerprint into `~/.ssh/known_hosts`, (3) paste the same `<Host>` into our dialog. The `Test` button just confirms what already works.
 
-Saved hosts are persisted to `~/.config/lerobot/training_hosts.json` (alongside the existing robot / teleop profiles) and appear in the Host dropdown of the Start-a-run form. The persisted record contains the Host string and per-host lerobot config (workdir, image_ref), **not credentials**. No image transfer happens at this step — that's deferred to the first run on the host.
+Saved hosts are persisted one JSON per host under `~/.config/lerobot/training_hosts/` (mirroring the robot / teleop profile pattern) and appear in the Host dropdown of the Start-a-run form. The persisted record contains the Host string and per-host lerobot config (workdir, image_ref), **not credentials**. No image transfer happens at this step — that's deferred to the first run on the host.
 
 **Add an Ephemeral cloud host.** Same `+ Add host` button → pick "Ephemeral cloud" → provider + spawn spec. No image transfer, no spawn yet — this is just saving a _profile_; the VM is created when the user starts a run targeting this host.
 
