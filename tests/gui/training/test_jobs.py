@@ -213,6 +213,58 @@ class TestHostProfile:
         hp = tj.HostProfile(name="x", ssh_user="u", ssh_host="h")
         assert hp.kind == "temporary"
 
+    def test_display_name_defaults_to_name(self):
+        hp = tj.HostProfile(name="lab", ssh_user="u", ssh_host="h")
+        assert hp.display_name == "lab"
+
+    def test_display_name_respected_when_provided(self):
+        hp = tj.HostProfile(name="lab", ssh_user="u", ssh_host="h", display_name="Lab GPU")
+        assert hp.display_name == "Lab GPU"
+
+    def test_load_drops_unknown_keys(self, tmp_path):
+        path = tmp_path / "x.json"
+        path.write_text(
+            '{"name":"x","ssh_user":"u","ssh_host":"h","ssh_port":22,'
+            '"future_field":42,"another_unknown":"ignored"}'
+        )
+        loaded = tj.HostProfile.load(path)
+        assert loaded.name == "x"
+        assert loaded.ssh_host == "h"
+
+
+class TestHostProfileLoadAll:
+    def test_load_all_returns_all_profiles(self, tmp_path):
+        for n in ("lab-a", "lab-b", "lab-c"):
+            tj.HostProfile(name=n, ssh_user="u", ssh_host=f"{n}.lan").save(dir_=tmp_path)
+        loaded = tj.HostProfile.load_all(tmp_path)
+        assert sorted(p.name for p in loaded) == ["lab-a", "lab-b", "lab-c"]
+
+    def test_load_all_ignores_non_json(self, tmp_path):
+        tj.HostProfile(name="real", ssh_user="u", ssh_host="h").save(dir_=tmp_path)
+        (tmp_path / "README.md").write_text("not a profile")
+        (tmp_path / "host.json.bak").write_text("not a profile either")
+        loaded = tj.HostProfile.load_all(tmp_path)
+        assert [p.name for p in loaded] == ["real"]
+
+    def test_load_all_handles_missing_dir(self, tmp_path):
+        assert tj.HostProfile.load_all(tmp_path / "does-not-exist") == []
+
+    def test_load_all_skips_unreadable_file(self, tmp_path):
+        tj.HostProfile(name="good", ssh_user="u", ssh_host="h").save(dir_=tmp_path)
+        (tmp_path / "broken.json").write_text("{not valid json")
+        loaded = tj.HostProfile.load_all(tmp_path)
+        assert [p.name for p in loaded] == ["good"]
+
+
+class TestHostProfileDelete:
+    def test_delete_removes_file(self, tmp_path):
+        tj.HostProfile(name="lab", ssh_user="u", ssh_host="h").save(dir_=tmp_path)
+        assert tj.HostProfile.delete("lab", dir_=tmp_path) is True
+        assert not (tmp_path / "lab.json").exists()
+
+    def test_delete_missing_is_idempotent(self, tmp_path):
+        assert tj.HostProfile.delete("nope", dir_=tmp_path) is False
+
 
 # ── atomic_write_json ───────────────────────────────────────────────────────
 

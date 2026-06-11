@@ -34,7 +34,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from lerobot.gui.training.hosts import HostRegistry
+from lerobot.gui.training.hosts import WORKSTATION_HOST_ID, HostRegistry, profile_to_training_host
+from lerobot.gui.training.jobs import HOSTS_DIR, HostProfile
 from lerobot.gui.training.orchestrator import (
     HostBusyError,
     Orchestrator,
@@ -44,6 +45,7 @@ from lerobot.gui.training.orchestrator import (
     UnknownHostError,
     UnknownRunError,
 )
+from lerobot.gui.training.probe import probe_ssh
 from lerobot.gui.training.recipes import HVLA_FLOW_S1_FIELD_TO_FLAG, HVLA_FLOW_S1_RECIPE
 from lerobot.gui.training.runs import RUNS_DIR, RunRegistry
 
@@ -94,7 +96,7 @@ def make_default_orchestrator(runs_dir: Path | None = None) -> Orchestrator:
     (``~/.cache/lerobot/runs``) — tests use a tmp dir.
     """
     runs_dir = runs_dir or RUNS_DIR
-    host_registry = HostRegistry.auto(workdir=runs_dir)
+    host_registry = HostRegistry.auto(workdir=runs_dir, hosts_dir=HOSTS_DIR)
     run_registry = RunRegistry(runs_dir=runs_dir)
     return Orchestrator(host_registry=host_registry, run_registry=run_registry)
 
@@ -107,6 +109,37 @@ class HostInfo(BaseModel):
     display_name: str
     transport_kind: str  # "subprocess" or "ssh"
     capabilities: dict[str, Any]
+
+
+# Body for POST /hosts. The ``host`` field is the raw SSH spec the user
+# typed — alias, ``user@host``, or ``user@host:port``. We parse out the
+# components on the way in so the saved HostProfile has the same shape
+# whether it was added via the dialog or hand-edited under
+# ~/.config/lerobot/training_hosts/.
+class HostProfileBody(BaseModel):
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    host: str = Field(min_length=1, max_length=256)
+    display_name: str | None = None
+    workdir: str = "/workspace/lerobot"
+    image_ref: str | None = None  # falls back to HostProfile dataclass default
+
+
+class HostProbeBody(BaseModel):
+    host: str = Field(min_length=1, max_length=256)
+
+
+class ProbeCheckDTO(BaseModel):
+    name: str
+    ok: bool
+    detail: str
+
+
+class ProbeResultDTO(BaseModel):
+    ok: bool
+    latency_ms: int
+    checks: list[ProbeCheckDTO]
+    error_class: str | None = None
+    message: str | None = None
 
 
 class StartRunBody(BaseModel):
@@ -196,6 +229,111 @@ def list_hosts() -> list[HostInfo]:
         )
         for h in hosts.list_hosts()
     ]
+
+
+def _parse_host_spec(host_spec: str) -> tuple[str, str, int]:
+    """Parse the user-typed host string into ``(user, host, port)``.
+
+    Accepts:
+      - ``alias`` or ``host``            → user="root", port=22
+      - ``user@host``                    → user from prefix
+      - ``host:port`` / ``user@host:port`` → port from suffix
+    """
+    raw = host_spec.strip()
+    user = "root"
+    port = 22
+    if "@" in raw:
+        user, raw = raw.split("@", 1)
+    # Only treat ``:N`` as a port if N is purely numeric — leaves IPv6 + URL-y
+    # things to fall through unchanged (we'd reject those at probe time).
+    if ":" in raw:
+        host_part, _, port_part = raw.rpartition(":")
+        if port_part.isdigit():
+            raw = host_part
+            port = int(port_part)
+    return user, raw, port
+
+
+@router.post("/hosts", response_model=HostInfo, status_code=201)
+def add_host(body: HostProfileBody) -> HostInfo:
+    """Save a new SSH host and register it in the live registry.
+
+    Returns 409 if a host with the same name already exists. Persistence
+    is to ``~/.config/lerobot/training_hosts/<name>.json`` — the user can
+    edit it by hand or remove via DELETE.
+    """
+    _, registry = get_state()
+    if body.name == WORKSTATION_HOST_ID:
+        raise HTTPException(
+            status_code=400, detail=f"name {WORKSTATION_HOST_ID!r} is reserved for the workstation host"
+        )
+    if registry.get(body.name) is not None:
+        raise HTTPException(status_code=409, detail=f"host {body.name!r} already exists")
+
+    user, host, port = _parse_host_spec(body.host)
+    extra: dict[str, Any] = {}
+    if body.image_ref:
+        extra["image_ref"] = body.image_ref
+    profile = HostProfile(
+        name=body.name,
+        ssh_user=user,
+        ssh_host=host,
+        ssh_port=port,
+        kind="permanent",
+        display_name=body.display_name or body.name,
+        workdir=body.workdir,
+        **extra,
+    )
+    profile.save(dir_=HOSTS_DIR)
+    th = profile_to_training_host(profile)
+    registry.add(th)
+    return HostInfo(
+        id=th.id,
+        display_name=th.display_name,
+        transport_kind=_transport_kind(th.transport),
+        capabilities=th.capabilities,
+    )
+
+
+@router.delete("/hosts/{host_id}", status_code=204)
+def delete_host(host_id: str) -> None:
+    """Remove a saved SSH host from the registry + disk.
+
+    Refuses to delete the auto-detected workstation entry (400) and
+    refuses while a run on this host is still active (409). Idempotent
+    on a host that doesn't exist — returns 404 instead so the caller
+    can distinguish "already gone" from "never existed".
+    """
+    orch, registry = get_state()
+    if host_id == WORKSTATION_HOST_ID:
+        raise HTTPException(
+            status_code=400, detail="the workstation host is auto-detected and cannot be removed"
+        )
+    if registry.get(host_id) is None:
+        raise HTTPException(status_code=404, detail=f"unknown host id: {host_id!r}")
+    busy = orch._runs.active_run_on_host(host_id)  # noqa: SLF001 — read-only orchestrator query
+    if busy is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"host {host_id!r} has active run {busy.run_id!r} (state={busy.state.value}); stop it first",
+        )
+    registry.remove(host_id)
+    HostProfile.delete(host_id, dir_=HOSTS_DIR)
+
+
+@router.post("/hosts/probe", response_model=ProbeResultDTO)
+async def probe_host(body: HostProbeBody) -> ProbeResultDTO:
+    """Run a short SSH check against the host string. Stateless — does
+    not save anything. Front-end calls this to power the "Test" button
+    in the Add SSH host dialog before letting the user click Save."""
+    result = await probe_ssh(body.host)
+    return ProbeResultDTO(
+        ok=result.ok,
+        latency_ms=result.latency_ms,
+        checks=[ProbeCheckDTO(name=c.name, ok=c.ok, detail=c.detail) for c in result.checks],
+        error_class=result.error_class,
+        message=result.message,
+    )
 
 
 @router.get("/runs", response_model=list[RunDTO])

@@ -125,17 +125,24 @@ function trainingRenderHostsInfo() {
   const btn = document.getElementById("training-start-btn");
   if (!el) return;
   if (_trainingHosts.length === 0) {
-    el.textContent = "No training hosts detected.";
+    el.innerHTML =
+      '<div style="opacity:0.8;">No training hosts yet. Click + Host to add a remote SSH host, or attach a GPU on this machine.</div>';
     if (btn) {
       btn.disabled = true;
-      btn.title = "No training hosts detected (workstation mode needs a GPU on this machine)";
+      btn.title = "No training hosts yet (workstation mode needs a GPU on this machine, or click + Host)";
     }
     return;
   }
-  const h = _trainingHosts[0];
-  const gpu = h.capabilities?.gpu_name || "GPU";
-  const vram = h.capabilities?.vram_mb ? ` · ${(h.capabilities.vram_mb / 1024).toFixed(1)} GB` : "";
-  el.textContent = `${h.display_name} — ${gpu}${vram}`;
+  const rows = _trainingHosts.map((h) => {
+    const isSsh = h.transport_kind === "ssh";
+    const gpu = h.capabilities?.gpu_name || (isSsh ? "remote SSH" : "GPU");
+    const vram = h.capabilities?.vram_mb ? ` · ${(h.capabilities.vram_mb / 1024).toFixed(1)} GB` : "";
+    const removeBtn = isSsh
+      ? ` <button class="btn-small secondary" style="margin-left:6px; padding:0 6px;" onclick="trainingDeleteHost('${cssEscape(h.id)}', '${cssEscape(h.display_name)}')" title="Remove this SSH host">×</button>`
+      : "";
+    return `<div>${escapeHtml(h.display_name)} — ${escapeHtml(gpu)}${escapeHtml(vram)}${removeBtn}</div>`;
+  });
+  el.innerHTML = rows.join("");
   if (btn) {
     btn.disabled = false;
     btn.title = "Start a new training run";
@@ -992,6 +999,7 @@ function formValue(fd, form, field) {
 
 // Expose for the inline onclick handlers
 window.trainingInit = trainingInit;
+window.trainingLoadHosts = trainingLoadHosts;
 window.trainingShowStartForm = trainingShowStartForm;
 window.trainingCancelForm = trainingCancelForm;
 window.trainingLeaveView = trainingLeaveView;

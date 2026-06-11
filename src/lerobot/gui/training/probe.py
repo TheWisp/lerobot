@@ -1,0 +1,247 @@
+# Copyright 2026 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+"""SSH host probe — the "Test" button in the Add SSH host dialog.
+
+Runs one short SSH command against the host the user typed and reports
+back four checks: SSH reachable, docker present, tmux present, NVIDIA
+GPU visible. The first failing check short-circuits the rest with
+``ok=False, detail="not reached"`` so the dialog always renders a stable
+4-row checklist.
+
+``BatchMode=yes`` forces key auth — no interactive password prompt can
+leak into the GUI server's address space. ``ConnectTimeout=5`` caps the
+TCP/handshake phase; the outer ``asyncio.wait_for`` caps the whole
+operation at 10 s. ``StrictHostKeyChecking=accept-new`` is TOFU: the
+first probe to a new host writes it to ``~/.ssh/known_hosts`` (same
+behavior as ``ssh`` from a terminal); subsequent connects verify it.
+
+This module is the only place that parses ``ssh`` stderr into a UI error
+class — keep error_class strings stable, the frontend's status row keys
+off them.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from dataclasses import dataclass, field
+
+# Caps. The SSH connect timeout (5s) is enforced by `-o ConnectTimeout=5`
+# inside the ssh client; the wallclock cap (10s) is enforced by
+# `asyncio.wait_for` around the whole subprocess so a remote command that
+# blocks post-connect can't hang the API request.
+SSH_CONNECT_TIMEOUT_S = 5
+PROBE_WALLCLOCK_TIMEOUT_S = 10
+
+# Sentinel emitted at end of the remote command — its absence in stdout
+# means the command was killed (timeout) or never ran (auth failure).
+_OK_SENTINEL = "__LEROBOT_PROBE_OK__"
+
+# The remote shell. Each check is independent: failure of one does not
+# short-circuit the rest, so the user sees every gap in one round-trip.
+# ``2>/dev/null`` on nvidia-smi silences "command not found" noise on
+# hosts without the binary. The PATH prepend mirrors SshClient._exec —
+# non-interactive SSH skips ~/.profile, so user-installed binaries under
+# ~/.local/bin (a common tmux install location) would otherwise probe as
+# missing on hosts where training would actually work.
+_REMOTE_CMD = (
+    'export PATH="$HOME/.local/bin:$PATH"; '
+    "command -v docker || echo __NO_DOCKER__; "
+    "command -v tmux || echo __NO_TMUX__; "
+    "nvidia-smi -L 2>/dev/null || echo __NO_NVIDIA__; "
+    f"echo {_OK_SENTINEL}"
+)
+
+
+@dataclass(frozen=True)
+class CheckItem:
+    """One row in the probe results table."""
+
+    name: str  # one of: ssh, docker, tmux, nvidia
+    ok: bool
+    detail: str
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    ok: bool
+    latency_ms: int
+    checks: list[CheckItem] = field(default_factory=list)
+    error_class: str | None = None  # auth / dns / timeout / refused / unknown_host / command_missing / None
+    message: str | None = None
+
+
+def _not_reached(name: str) -> CheckItem:
+    return CheckItem(name=name, ok=False, detail="not reached")
+
+
+def _classify_stderr(stderr: str) -> tuple[str, str]:
+    """Map ssh's stderr to ``(error_class, message)`` for UI display."""
+    s = stderr.lower()
+    if "permission denied" in s or "publickey" in s:
+        return (
+            "auth",
+            "SSH authentication failed — check your ssh-agent / ~/.ssh/config",
+        )
+    if "could not resolve hostname" in s or "name or service not known" in s:
+        return "dns", "Hostname not resolvable"
+    if "connection timed out" in s or "operation timed out" in s:
+        return "timeout", f"Connection timed out after {SSH_CONNECT_TIMEOUT_S}s"
+    if "connection refused" in s:
+        return "refused", "Connection refused — is sshd running on that port?"
+    if "host key verification failed" in s or "remote host identification has changed" in s:
+        return (
+            "unknown_host",
+            "Host key verification failed — run `ssh <host>` once in a terminal first",
+        )
+    if "bad configuration option" in s or "no such file" in s:
+        return "config", "ssh config error — see GUI server stderr for details"
+    # Unmapped — surface the raw last line so the user has something to act on.
+    tail = stderr.strip().splitlines()[-1] if stderr.strip() else "ssh failed with no stderr"
+    return "unknown", tail[:200]
+
+
+async def probe_ssh(
+    host_spec: str,
+    *,
+    connect_timeout_s: int = SSH_CONNECT_TIMEOUT_S,
+    wallclock_timeout_s: int = PROBE_WALLCLOCK_TIMEOUT_S,
+) -> ProbeResult:
+    """Run a short SSH check against ``host_spec``.
+
+    Pre: ``host_spec`` is whatever the user typed in the dialog — a
+    ``~/.ssh/config`` alias, ``user@host``, ``user@host:port``, or bare
+    hostname. Passed verbatim to ``ssh``; we don't parse it.
+    Post: returns a :class:`ProbeResult` whose ``checks`` list always has
+    exactly four entries in order: ssh, docker, tmux, nvidia. The four
+    rows let the UI render a stable checklist instead of a dynamic table.
+    """
+    argv = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={connect_timeout_s}",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        host_spec,
+        _REMOTE_CMD,
+    ]
+
+    t0 = time.monotonic()
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=wallclock_timeout_s)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return ProbeResult(
+                ok=False,
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                checks=[
+                    _not_reached("ssh"),
+                    _not_reached("docker"),
+                    _not_reached("tmux"),
+                    _not_reached("nvidia"),
+                ],
+                error_class="timeout",
+                message=f"Probe timed out after {wallclock_timeout_s}s",
+            )
+        rc = proc.returncode
+        stdout = (stdout_b or b"").decode("utf-8", errors="replace")
+        stderr = (stderr_b or b"").decode("utf-8", errors="replace")
+    except FileNotFoundError:
+        return ProbeResult(
+            ok=False,
+            latency_ms=int((time.monotonic() - t0) * 1000),
+            checks=[
+                _not_reached("ssh"),
+                _not_reached("docker"),
+                _not_reached("tmux"),
+                _not_reached("nvidia"),
+            ],
+            error_class="config",
+            message="ssh binary not found on PATH",
+        )
+
+    latency_ms = int((time.monotonic() - t0) * 1000)
+
+    # SSH itself didn't connect — classify and bail.
+    if rc != 0 or _OK_SENTINEL not in stdout:
+        err_class, msg = _classify_stderr(stderr)
+        return ProbeResult(
+            ok=False,
+            latency_ms=latency_ms,
+            checks=[
+                CheckItem(name="ssh", ok=False, detail=msg),
+                _not_reached("docker"),
+                _not_reached("tmux"),
+                _not_reached("nvidia"),
+            ],
+            error_class=err_class,
+            message=msg,
+        )
+
+    # SSH OK — parse the per-tool lines.
+    out_lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
+    out_lines = out_lines[: out_lines.index(_OK_SENTINEL)] if _OK_SENTINEL in out_lines else out_lines
+
+    docker_path: str | None = None
+    tmux_path: str | None = None
+    nvidia_lines: list[str] = []
+    for ln in out_lines:
+        if ln == "__NO_DOCKER__":
+            docker_path = None
+        elif ln == "__NO_TMUX__":
+            tmux_path = None
+        elif ln == "__NO_NVIDIA__":
+            nvidia_lines = []
+        elif ln.startswith("GPU "):
+            nvidia_lines.append(ln)
+        elif "/" in ln and not ln.startswith("__"):
+            # `command -v` output is the absolute path.
+            if docker_path is None and "docker" in ln:
+                docker_path = ln
+            elif tmux_path is None and "tmux" in ln:
+                tmux_path = ln
+
+    checks = [
+        CheckItem(name="ssh", ok=True, detail=f"connected in {latency_ms} ms"),
+        CheckItem(
+            name="docker",
+            ok=docker_path is not None,
+            detail=docker_path or "not installed or not on PATH",
+        ),
+        CheckItem(
+            name="tmux",
+            ok=tmux_path is not None,
+            detail=tmux_path or "not installed or not on PATH",
+        ),
+        CheckItem(
+            name="nvidia",
+            ok=bool(nvidia_lines),
+            detail=nvidia_lines[0]
+            if nvidia_lines
+            else "no NVIDIA GPU detected (nvidia-smi missing or empty)",
+        ),
+    ]
+    all_ok = all(c.ok for c in checks)
+    return ProbeResult(
+        ok=all_ok,
+        latency_ms=latency_ms,
+        checks=checks,
+        error_class=None if all_ok else "command_missing",
+        message="All checks passed" if all_ok else "SSH ok but the remote host is missing required tools",
+    )

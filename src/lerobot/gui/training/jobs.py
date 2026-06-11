@@ -30,6 +30,7 @@ No transfer logic here; see :mod:`lerobot.gui.training.worker`.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -118,6 +119,7 @@ class HostProfile:
     # keys) — the GUI server never reads or stores key bytes. See
     # DESIGN.md § Host setup UX + § Authentication.
     kind: HostKind = "temporary"
+    display_name: str = ""  # user-facing label; defaults to name in __post_init__
     workdir: str = "/workspace/lerobot"
     image_ref: str = "ghcr.io/thewisp/lerobot-training:latest"
     persistent_volume: str | None = None  # for HF cache survival across pods
@@ -126,9 +128,42 @@ class HostProfile:
     created_at: float = field(default_factory=time.time)
     last_connected_at: float | None = None
 
+    def __post_init__(self) -> None:
+        if not self.display_name:
+            object.__setattr__(self, "display_name", self.name)
+
     @classmethod
     def load(cls, path: Path) -> HostProfile:
-        return cls(**json.loads(path.read_text()))
+        d = json.loads(path.read_text())
+        # Drop unknown keys defensively so old saved files survive schema
+        # additions and new saved files survive schema removals.
+        field_names = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in field_names})
+
+    @classmethod
+    def load_all(cls, dir_: Path = HOSTS_DIR) -> list[HostProfile]:
+        """All saved profiles under ``dir_``. Missing dir → empty list.
+        Files that fail to parse are logged and skipped — one corrupt
+        entry must not break the registry for the rest."""
+        if not dir_.exists():
+            return []
+        out: list[HostProfile] = []
+        for path in sorted(dir_.glob("*.json")):
+            try:
+                out.append(cls.load(path))
+            except Exception as e:
+                logger.warning("skipping unreadable host profile %s: %s", path, e)
+        return out
+
+    @classmethod
+    def delete(cls, name: str, dir_: Path = HOSTS_DIR) -> bool:
+        """Remove ``<dir>/<name>.json``. Returns True if a file was removed,
+        False if it didn't exist (no-op, idempotent)."""
+        path = dir_ / f"{name}.json"
+        if not path.exists():
+            return False
+        path.unlink()  # safe-destruct: host profile removal, user-initiated via the GUI's DELETE endpoint
+        return True
 
     def save(self, dir_: Path = HOSTS_DIR) -> Path:
         dir_.mkdir(parents=True, exist_ok=True)

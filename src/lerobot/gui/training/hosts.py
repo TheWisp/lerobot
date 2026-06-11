@@ -17,13 +17,17 @@ DESIGN.md § Modes table → this file is the registry surface those entries map
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from lerobot.gui.training.transport import HostTransport, SubprocessTransport
+from lerobot.gui.training.jobs import HOSTS_DIR, HostProfile
+from lerobot.gui.training.transport import HostTransport, SshTransport, SubprocessTransport
+
+logger = logging.getLogger(__name__)
 
 # Stable id for the auto-registered workstation host. The "this-server" string
 # is the host_id the UI shows in dropdowns and the orchestrator looks up.
@@ -97,31 +101,56 @@ def workstation_host(workdir: Path | None = None) -> TrainingHost | None:
     )
 
 
+# ── Profile → TrainingHost adapter ────────────────────────────────────────────
+
+
+def profile_to_training_host(profile: HostProfile) -> TrainingHost:
+    """Materialize a saved :class:`HostProfile` as a :class:`TrainingHost`.
+
+    Used at two seams: (1) ``HostRegistry.auto()`` loading saved hosts at
+    GUI startup, and (2) the POST /hosts handler registering a freshly
+    saved profile without a server restart. Both paths converge here so
+    SSH-transport construction is captured in one place.
+    """
+    return TrainingHost(
+        id=profile.name,
+        display_name=profile.display_name or profile.name,
+        transport=SshTransport(host=profile.ssh_host, port=profile.ssh_port, user=profile.ssh_user),
+        capabilities=dict(profile.capabilities),
+    )
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 
 class HostRegistry:
     """In-memory registry of training hosts the GUI knows about.
 
-    v1: just the workstation host (auto-detected). Future: user-added
-    Persistent hosts persisted to ``~/.config/lerobot/training_hosts/``.
-
-    Constructed once at GUI server startup; mutate via :meth:`add` (future).
+    The workstation host is auto-detected at construction time; user-added
+    SSH hosts are loaded from ``~/.config/lerobot/training_hosts/`` on
+    startup and mutated in place via :meth:`add` / :meth:`remove` /
+    :meth:`replace` as the user touches the "Add SSH host" dialog.
     """
 
     def __init__(self, hosts: list[TrainingHost] | None = None) -> None:
         self._hosts: dict[str, TrainingHost] = {h.id: h for h in (hosts or [])}
 
     @classmethod
-    def auto(cls, workdir: Path | None = None) -> HostRegistry:
-        """Build a registry with whatever can be auto-detected.
+    def auto(cls, workdir: Path | None = None, hosts_dir: Path | None = None) -> HostRegistry:
+        """Build a registry from auto-detected workstation + on-disk profiles.
 
-        v1: just the workstation host if a local GPU is present.
+        ``hosts_dir`` defaults to :data:`HOSTS_DIR`. Tests can point this at
+        a tmp dir to avoid touching the user's real config.
         """
         hosts: list[TrainingHost] = []
         ws = workstation_host(workdir=workdir)
         if ws is not None:
             hosts.append(ws)
+        for profile in HostProfile.load_all(hosts_dir or HOSTS_DIR):
+            try:
+                hosts.append(profile_to_training_host(profile))
+            except Exception as e:
+                logger.warning("skipping host profile %s: %s", profile.name, e)
         return cls(hosts)
 
     def list_hosts(self) -> list[TrainingHost]:
@@ -132,4 +161,15 @@ class HostRegistry:
 
     def add(self, host: TrainingHost) -> None:
         assert host.id not in self._hosts, f"host id collision: {host.id!r}"
+        self._hosts[host.id] = host
+
+    def remove(self, host_id: str) -> bool:
+        """Evict a host. Returns True if it was present, False otherwise.
+        The caller is responsible for deleting the on-disk profile."""
+        return self._hosts.pop(host_id, None) is not None
+
+    def replace(self, host_id: str, host: TrainingHost) -> None:
+        """Swap the entry under ``host_id`` for ``host``. The new host's
+        ``id`` need not equal ``host_id`` (e.g., rename via delete + add)."""
+        self._hosts.pop(host_id, None)
         self._hosts[host.id] = host

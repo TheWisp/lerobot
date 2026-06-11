@@ -19,8 +19,10 @@ from lerobot.gui.training.hosts import (
     HostRegistry,
     TrainingHost,
     _detect_nvidia_gpu,
+    profile_to_training_host,
     workstation_host,
 )
+from lerobot.gui.training.jobs import HostProfile
 from lerobot.gui.training.transport import SshTransport, SubprocessTransport
 
 # ── GPU detection ─────────────────────────────────────────────────────────────
@@ -147,3 +149,67 @@ def test_training_host_frozen() -> None:
     h = _ssh_host("a")
     with pytest.raises(dataclasses.FrozenInstanceError):
         h.display_name = "other"  # type: ignore[misc]
+
+
+# ── Mutation: remove / replace ────────────────────────────────────────────────
+
+
+def test_registry_remove_evicts() -> None:
+    reg = HostRegistry(hosts=[_ssh_host("a"), _ssh_host("b")])
+    assert reg.remove("a") is True
+    assert reg.get("a") is None
+    assert {h.id for h in reg.list_hosts()} == {"b"}
+
+
+def test_registry_remove_missing_returns_false() -> None:
+    reg = HostRegistry(hosts=[_ssh_host("a")])
+    assert reg.remove("nope") is False
+    assert reg.get("a") is not None
+
+
+def test_registry_replace_swaps_entry() -> None:
+    reg = HostRegistry(hosts=[_ssh_host("a")])
+    new_a = TrainingHost(id="a", display_name="renamed", transport=SshTransport(host="y"))
+    reg.replace("a", new_a)
+    fetched = reg.get("a")
+    assert fetched is new_a
+    assert fetched.display_name == "renamed"
+
+
+# ── profile_to_training_host adapter ──────────────────────────────────────────
+
+
+def test_profile_to_training_host_builds_ssh_transport() -> None:
+    p = HostProfile(name="lab-h100", ssh_user="feit", ssh_host="10.0.0.5", ssh_port=2222)
+    th = profile_to_training_host(p)
+    assert th.id == "lab-h100"
+    assert th.display_name == "lab-h100"  # falls back to name
+    assert isinstance(th.transport, SshTransport)
+    assert th.transport.host == "10.0.0.5"
+    assert th.transport.port == 2222
+    assert th.transport.user == "feit"
+
+
+def test_profile_to_training_host_respects_display_name() -> None:
+    p = HostProfile(name="lab", ssh_user="u", ssh_host="h", display_name="Lab GPU")
+    th = profile_to_training_host(p)
+    assert th.display_name == "Lab GPU"
+
+
+# ── auto() loads disk profiles ────────────────────────────────────────────────
+
+
+def test_registry_auto_loads_disk_profiles(tmp_path: Path) -> None:
+    HostProfile(name="lab-a", ssh_user="u", ssh_host="a.lan").save(dir_=tmp_path)
+    HostProfile(name="lab-b", ssh_user="u", ssh_host="b.lan").save(dir_=tmp_path)
+    with patch("lerobot.gui.training.hosts._detect_nvidia_gpu", return_value=None):
+        reg = HostRegistry.auto(workdir=tmp_path, hosts_dir=tmp_path)
+    assert {h.id for h in reg.list_hosts()} == {"lab-a", "lab-b"}
+
+
+def test_registry_auto_mixes_workstation_and_disk(tmp_path: Path) -> None:
+    HostProfile(name="lab-h100", ssh_user="u", ssh_host="h").save(dir_=tmp_path)
+    fake_caps = {"gpu_name": "G", "vram_mb": 1024, "gpu_count_detected": 1}
+    with patch("lerobot.gui.training.hosts._detect_nvidia_gpu", return_value=fake_caps):
+        reg = HostRegistry.auto(workdir=tmp_path, hosts_dir=tmp_path)
+    assert {h.id for h in reg.list_hosts()} == {WORKSTATION_HOST_ID, "lab-h100"}
