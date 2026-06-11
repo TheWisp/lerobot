@@ -428,3 +428,32 @@ and (b) stage-1 corpus diversity (scene-determined self-play) — relevant only 
 Figure: `figures/vlajepa_sr_vs_steps_ood.png`. Scripts: `scripts/sp_vj_act.py` (model + stage-1 +
 selftest), `scripts/sp_vj_act_s2.py` (stage-2 + arms), `scripts/sp_ood_eval.py` (graded OOD), queue
 `scripts/sp_queue2.sh`. Logs/ckpts in /tmp/selfplay_probe (scratch).
+
+---
+
+## Bridge chapter (2026-06-10, retro-committed): affordance reframe → wide-scene gate → data quality → bimanual pivot → real-data negatives
+
+Recorded after the fact for completeness; chronologically this precedes the VLA-JEPA chapter.
+
+- **Reframe (user):** embodiment = action→outcome/affordance, NOT proprio (source vs outcome); prior
+  negatives tested in-distribution where VLAs overfit the scene — the bet lives in cross-scene/OOD.
+- **Wide-scene gate PASSED:** peg spawned x∈[0,0.3] y∈[0.35,0.65] (std ~8.7 cm) is reachable (analytic-
+  Jacobian GT SR@0.05=0.95) and localizable (V-JEPA2.1 8×8 decode R²=0.993 on held-out scenes). `sp_wide_check.py`.
+- **Data-quality audit (user spotted the chaos; we measured it):** random/jitter self-play = left-arm
+  flailing |Δ|≈0.084/step + only 8% episodes with object contact → junk for affordance learning.
+  Scripted push (approach-above → descend-onto-peg → push, PUSHZ=0.022 — peg settles to z≈0.01, not its
+  0.05 spawn) = 84–100% contact, left arm still. `sp_data_check.py`, `sp_skill_collect.py`.
+- **Task is BIMANUAL** (AlohaInsertion reward: R-arm grasps peg AND L-arm grasps socket → lift → insert)
+  → single-arm synthetic data misaligned; real same-embodiment datasets exist and match our env exactly
+  (`lerobot/aloha_sim_{insertion,transfer_cube}_{human,scripted}`, 200 eps, 14-dim, top cam, 50 fps).
+  Pivot: unified cache (`sp_build_cache.py` → 56k frames @224 + `sp_vj_features.py` → V-JEPA2.1 64×768/frame;
+  insertion eval eps 40:50 held out of everything).
+- **Real-data in-dist negatives (pre-VLA-JEPA):** (a) encoder-direct forward FT of DINOv2: action-decode
+  flat 0.825→0.816 (no action-baking — verified), proprio +0.015, but ACT open-loop L1 frozen BEATS
+  adapted at every K (`sp_real_forward.py`, `sp_act_openloop.py`); (b) joint (single-stage) WM-aux mini:
+  hurts at K=5–20, neutral K=40 (`sp_vlajepa_mini.py`) — later understood as a structural deviation
+  (paper is two sequential stages) and superseded by the faithful chapter above.
+- **Per-step diagnostics that resolved the twin-gap confusion:** `sp_s1_perstep.py` (z-zero +15→83% with
+  horizon; shuffle-z +33–45% — z alive and sample-specific while aggregate twin-gap read ≈0).
+
+Raw result lines for the VLA-JEPA chapter archived in `results/vlajepa_results.txt`.
