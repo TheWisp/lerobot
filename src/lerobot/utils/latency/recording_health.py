@@ -102,11 +102,19 @@ def summarize(records: list[dict[str, Any]], target_period_ms: float | None) -> 
     for cam in sorted(cam_names):
         stale = [r[f"cam_{cam}_stale_ms"] for r in records if f"cam_{cam}_stale_ms" in r]
         period = [r[f"cam_{cam}_period_ms"] for r in records if f"cam_{cam}_period_ms" in r]
+        # The previous guard `if period else nan` only handled empty lists.
+        # If every period sample is 0 (rare; observed when the policy
+        # blocks the loop for the entire episode budget, e.g. during a
+        # cold torch.compile autotune pass), the median is 0 and the
+        # naive ``1000.0 / 0`` raises ZeroDivisionError. NaN signals
+        # "no useful FPS info" to verdict() / the GUI badge code, which
+        # already treat NaN as missing/unknown.
+        period_p50 = _percentile(period, 50)
         cameras[cam] = {
             "stale_p50": _percentile(stale, 50),
             "stale_p95": _percentile(stale, 95),
-            "period_p50": _percentile(period, 50),
-            "fps_effective": (1000.0 / _percentile(period, 50)) if period else float("nan"),
+            "period_p50": period_p50,
+            "fps_effective": (1000.0 / period_p50) if period_p50 and period_p50 > 0 else float("nan"),
         }
 
     return {
