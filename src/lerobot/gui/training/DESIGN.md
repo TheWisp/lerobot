@@ -121,7 +121,7 @@ TRAINING                                   [ + ]
 This server — NVIDIA GeForce RTX 5090 · 31.8 GB
 ```
 
-**Add an SSH host.** Click `+` → pick "User-added SSH host" → paste the SSH command. The dialog probes the host on click of `Test` before saving — catches missing docker / wrong user / no nvidia-container-toolkit before the user discovers it mid-run.
+**Add an SSH host.** Click `+` → pick "User-added SSH host" → enter the host. The dialog probes on click of `Test` before saving — catches missing docker / wrong user / no nvidia-container-toolkit / unreachable host before the user discovers it mid-run.
 
 ```
 ┌─ Add a training host ────────────────────────────────────────────┐
@@ -130,11 +130,14 @@ This server — NVIDIA GeForce RTX 5090 · 31.8 GB
 │  ○ Ephemeral cloud                                               │
 │                                                                  │
 │  ── Connection ──                                                │
-│  SSH command  [ ssh -i ~/.ssh/lab user@lab-gpu1.example.com   ]  │
+│  Host         [ user@lab-gpu1.example.com                     ]  │
+│      Use a ~/.ssh/config alias (e.g. lab-gpu1) or user@host.     │
+│      We never read your private keys — auth uses your local      │
+│      ssh setup, the same way `ssh <Host>` from a terminal does.  │
 │  Display name [ Lab GPU 1                                     ]  │
 │                                                                  │
 │  ── Probe (runs when you click Test) ──                          │
-│  ✓ ssh handshake reachable                                       │
+│  ✓ ssh handshake (key auth via your ssh setup)                   │
 │  ✓ docker installed, user in docker group                        │
 │  ✓ nvidia-container-toolkit present                              │
 │  ✓ GPU(s) visible: NVIDIA A100 80GB                              │
@@ -143,7 +146,11 @@ This server — NVIDIA GeForce RTX 5090 · 31.8 GB
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-Saved hosts are persisted to `~/.config/lerobot/training_hosts.json` (alongside the existing robot / teleop profiles) and appear in the Host dropdown of the Start-a-run form. No image transfer happens at this step — that's deferred to the first run on the host.
+**Auth is the user's existing SSH setup, not ours.** The GUI server invokes `ssh` from the host it runs on with `BatchMode=yes` (forces key auth — no password prompts can leak through into our address space) and inherits whatever ssh resolution the user already has working: `~/.ssh/config` Host blocks, ssh-agent, default-path keys (`~/.ssh/id_*`). The dialog has **no key field, anywhere** — not for the path, not for the contents, not under an Advanced disclosure. If the user can `ssh <Host>` from a terminal, they can use it here. Same trust posture as VS Code Remote-SSH, JetBrains Gateway, and `gh codespace ssh`. A compromised GUI server cannot exfiltrate the user's SSH keys because their bytes never enter the process.
+
+Recommended first-time flow (documented in the help text under the Host field): (1) `ssh-keygen` + copy pubkey to the remote, (2) verify `ssh <Host>` works in a terminal — also accepts the host's fingerprint into `~/.ssh/known_hosts`, (3) paste the same `<Host>` into our dialog. The `Test` button just confirms what already works.
+
+Saved hosts are persisted to `~/.config/lerobot/training_hosts.json` (alongside the existing robot / teleop profiles) and appear in the Host dropdown of the Start-a-run form. The persisted record contains the Host string and per-host lerobot config (workdir, image_ref), **not credentials**. No image transfer happens at this step — that's deferred to the first run on the host.
 
 **Add an Ephemeral cloud host.** Same `+ Add host` button → pick "Ephemeral cloud" → provider + spawn spec + cost ceiling. No image transfer, no spawn yet — this is just saving a _profile_; the VM is created when the user starts a run targeting this host.
 
@@ -467,7 +474,9 @@ Beyond that one thread, the orchestrator is sync. FastAPI's own thread pool hand
 
 ### Authentication
 
-v1 scope is narrow: the only new credential the GUI server takes per-user is the **vendor IAM token for Ephemeral mode**. HF auth is inherited from the existing GUI unchanged; the training pod sees no credentials at all.
+Two distinct credential surfaces. SSH for persistent hosts uses the user's own SSH setup (no GUI-managed keys at all). The vendor cloud token for Ephemeral mode is the only credential the GUI server takes per-user. The training pod itself sees neither.
+
+**SSH for persistent hosts — user's existing setup, never ours.** The Add-host dialog has zero key fields (see [§ Host setup UX](#host-setup-ux) for the dialog mock and the "Auth is the user's existing SSH setup" paragraph). The GUI server invokes `ssh` locally with `BatchMode=yes`; ssh resolves the key via `~/.ssh/config`, ssh-agent, or default paths exactly as a terminal `ssh <Host>` would. Private key bytes never enter the GUI server's address space, never get persisted, never cross the wire (public-key auth signs locally; only the signature is sent). Same trust posture VS Code Remote-SSH / JetBrains Gateway / `gh codespace ssh` take.
 
 **v1 paste-token model.** The user runs `nebius iam get-access-token --duration=12h` (or equivalent) on their laptop, pastes the token into Settings. Browser stores it in localStorage, sends it in a vendor-specific header (`X-Nebius-Authorization`) per request. The GUI server reads the header per request, uses the token in scope, discards. No persistence. Workstation users can bypass the paste via a "use my local CLI auth" toggle that has the vendor SDK read its default profile.
 
@@ -477,7 +486,7 @@ v1 scope is narrow: the only new credential the GUI server takes per-user is the
 
 **v2: credential helper + per-user HF auth.** A small loopback daemon on each user's laptop mints vendor tokens on demand (eliminating the daily re-paste), and a per-user HF auth flow replaces the inherited workstation-mode assumption. Architecture doesn't change for vendor auth; request shape stays the same.
 
-**Security properties.** Vendor cloud credentials never persisted by the backend. Per-user vendor isolation in LAN. Compromised backend worst case: short-lived (≤12 h) vendor tokens for currently-connected users. Pod compromise: zero external credentials to leak.
+**Security properties.** Vendor cloud credentials never persisted by the backend. SSH private keys never enter the backend at all (resolved by the user's local `ssh` client). Per-user vendor isolation in LAN. Compromised backend worst case: short-lived (≤12 h) vendor tokens for currently-connected users — SSH keys not exposed. Pod compromise: zero external credentials to leak.
 
 ### Cost discipline
 
