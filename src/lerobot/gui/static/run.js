@@ -2271,13 +2271,38 @@ function _niceTickStep(range_ms, targetCount) {
     return nice * base;
 }
 
+// One-time outliers (torch.compile autotune, GC pause, etc.) should NOT
+// stretch the shared Gantt axis. A single 20-second compile spike at
+// step=0 would otherwise squish every normal iteration's bars (10-90 ms)
+// into a sub-pixel sliver against the left edge. Cap any iteration's
+// contribution to the union at this many times the p99 reference. The
+// outlier card itself still renders fine on its own when explicitly
+// selected (the cap is only on the SHARED axis range).
+const _GANTT_OUTLIER_MULTIPLIER = 10;
+// Absolute floor for the cap — when p99 is very small (warming up, few
+// samples), don't let the multiplier shrink the axis below something
+// reasonable for a 30 Hz loop.
+const _GANTT_OUTLIER_FLOOR_MS = 200;
+
 function _computeStableRange(iterations) {
-    // Pessimistic union over ALL representative iterations so switching
-    // between median/p95/max in the dropdown doesn't rescale the axis.
+    // Pessimistic union over the representative iterations so switching
+    // between median/p95/max in the dropdown doesn't rescale the axis —
+    // EXCEPT we cap each iteration's contribution against a reference
+    // derived from p99/p95 so a compile spike can't pollute the axis.
+    const ref = iterations.p99?.loop_dt_ms ?? iterations.p95?.loop_dt_ms ?? 0;
+    const cap = Math.max(_GANTT_OUTLIER_FLOOR_MS, ref * _GANTT_OUTLIER_MULTIPLIER);
+
     let minMs = 0;
     let maxMs = 0;
     for (const rec of Object.values(iterations)) {
         if (!rec) continue;
+        // Skip records whose loop_dt is wildly above the typical iteration
+        // — they're one-time outliers (compile, eviction, GC) and surfacing
+        // them via the shared axis would squish every other bar. Their own
+        // card / dropdown selection still works because _drawGantt uses
+        // whatever range we pass and a single-record render isn't subject
+        // to this filter.
+        if ((rec.loop_dt_ms || 0) > cap) continue;
         if ((rec.loop_dt_ms || 0) > maxMs) maxMs = rec.loop_dt_ms;
         for (const [, [s, e]] of Object.entries(rec.spans || {})) {
             if (s < minMs) minMs = s;
@@ -2330,8 +2355,18 @@ function _renderGantt(scope, iterations, state) {
     // Stable range: compute from all reps, then take the union with the
     // previous render's range (only widen, never shrink). Keeps the axis
     // visually stable even as new outliers stretch the worst case.
+    //
+    // Exception: if the new computed range is MUCH smaller than the cached
+    // one (>= 10x), bust the cache. The cached value was inflated by an
+    // earlier outlier (e.g. a torch.compile spike at step=0 polluting the
+    // axis for the whole session). Without this, one bad iteration locks
+    // a 20-second axis on a 30 Hz loop, making every normal bar render at
+    // < 1 px width.
     const [newMin, newMax] = _computeStableRange(iterations);
-    if (state.ganttRange === null) {
+    const _STALE_CACHE_RATIO = 10;
+    const cachedSpan = state.ganttRange ? state.ganttRange[1] - state.ganttRange[0] : 0;
+    const newSpan = newMax - newMin;
+    if (state.ganttRange === null || (newSpan > 0 && cachedSpan > newSpan * _STALE_CACHE_RATIO)) {
         state.ganttRange = [newMin, newMax];
     } else {
         state.ganttRange = [Math.min(state.ganttRange[0], newMin), Math.max(state.ganttRange[1], newMax)];

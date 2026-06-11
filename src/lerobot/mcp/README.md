@@ -251,20 +251,18 @@ stores it as `comment`. The migration is invisible to callers.
 
 ### Shipped today
 
-| Domain      | Tool                                                                                                                               | Scope     |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| Bridge / UI | `navigate_to`, `notify_user`, `highlight_in_viewer`                                                                                | `read`    |
-| Dataset     | `list_datasets`, `get_dataset_info`, `list_episodes`, `get_episode_summary`, `get_frame`, `get_episode_tags`, `list_pending_edits` | `read`    |
-| Dataset     | `tag_episode`, `delete_episode_tag`                                                                                                | `comment` |
-| Dataset     | `propose_set_feature`, `propose_delete_episode`, `propose_trim_episode`, `discard_pending_edits`, `apply_pending_edits`            | `edit`    |
-| Dataset     | `validate_dataset_merge`                                                                                                           | `read`    |
-| Dataset     | `merge_into_dataset`                                                                                                               | `edit`    |
-| Hub         | `hub_auth_status`, `hub_repo_info`, `hub_list_jobs`, `hub_job_progress`                                                            | `read`    |
-| Hub         | `hub_start_upload`, `hub_start_download`, `hub_cancel_job`                                                                         | `edit`    |
-| Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                       | `read`    |
-| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `get_teleop_profile`, `list_ports`, `get_all_port_assignments` | `read`    |
-| Robots      | `create/update/rename/delete_robot_profile`, `create/update/rename/delete_teleop_profile`, `assign_port_to_arm`                    | `edit`    |
-| Introspect  | `list_my_scopes`                                                                                                                   | `read`    |
+| Domain      | Tool                                                                                                                                                                                                       | Scope     |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Bridge / UI | `navigate_to`, `notify_user`, `highlight_in_viewer`                                                                                                                                                        | `read`    |
+| Dataset     | `list_datasets`, `get_dataset_info`, `list_episodes`, `get_episode_summary`, `get_frame`, `get_episode_tags`, `list_pending_edits`, `list_tagged_episodes`, `get_feature_series`, `validate_dataset_merge` | `read`    |
+| Dataset     | `tag_episode`, `delete_episode_tag`                                                                                                                                                                        | `comment` |
+| Dataset     | `propose_set_feature`, `propose_delete_episode`, `propose_trim_episode`, `discard_pending_edits`, `apply_pending_edits`, `merge_into_dataset`                                                              | `edit`    |
+| Hub         | `hub_auth_status`, `hub_repo_info`, `hub_list_jobs`, `hub_job_progress`, `hub_diff_local_vs_remote`                                                                                                        | `read`    |
+| Hub         | `hub_start_upload`, `hub_start_download`, `hub_cancel_job`                                                                                                                                                 | `edit`    |
+| Run         | `get_run_status`, `get_run_output`, `get_latency_metrics`, `get_rlt_metrics`                                                                                                                               | `read`    |
+| Robots      | `list_robot_profiles`, `get_robot_profile`, `list_teleop_profiles`, `get_teleop_profile`, `list_ports`, `get_all_port_assignments`                                                                         | `read`    |
+| Robots      | `create/update/rename/delete_robot_profile`, `create/update/rename/delete_teleop_profile`, `assign_port_to_arm`                                                                                            | `edit`    |
+| Introspect  | `lerobot_whoami`, `lerobot_list_tools`                                                                                                                                                                     | `read`    |
 
 ### Designed but not yet shipped
 
@@ -275,16 +273,13 @@ may shift slightly on landing.
 | Domain      | Tool                                                                                                                                                             | Scope     |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
 | Bridge / UI | `set_filter` (waits for a filter UI to land — see `gui/TODO.md`)                                                                                                 | `read`    |
-| Dataset     | `get_feature_series`, `list_tagged_episodes`                                                                                                                     | `read`    |
 | Dataset     | `delete_dataset` (no GUI feature yet, deferred)                                                                                                                  | `edit`    |
-| Hub         | `hub_diff_local_vs_remote`                                                                                                                                       | `read`    |
 | Models      | `list_model_sources`, `list_models_in_source`, `list_run_checkpoints`, `get_run_config`                                                                          | `read`    |
 | Models      | `add_model_source`, `remove_model_source`                                                                                                                        | `edit`    |
 | Models      | `load_debug_model`, `unload_debug_model`, `get_debug_status`                                                                                                     | `operate` |
 | Robots      | `identify_arm`, `detect_cameras_into_profile`, `start/finish/cancel_rest_recording`, `move_to_rest_position`, `record/replay/delete_trajectory`, `recover_robot` | `operate` |
-| Run         | `update_rlt_config`                                                                                                                                              | `edit`    |
+| Run         | `update_rlt_config` (parked — PR #27, narrow scope)                                                                                                              | `edit`    |
 | Run         | `start_teleoperate`, `start_record`, `start_replay`, `start_hvla`, `stop_current_run`                                                                            | `operate` |
-| Introspect  | `list_supported_tools`                                                                                                                                           | `read`    |
 
 Design conventions worth flagging:
 
@@ -441,18 +436,20 @@ Coverage bar — for every tool, the test file should include:
   Always use the synthetic factory or a clearly-marked throwaway
   (e.g. `thewisp/test_*_do_not_use`).
 
-**4. Add visible proof.** Two complementary artifacts for any tool
-with a user-observable effect:
+**4. Add visible proof.** For any tool with a user-observable effect,
+generate a **transcript log** — a markdown of the call shape + response
+shape, including happy paths AND error cases AND any "confused agent"
+scenario where input semantics could be misread. See
+`mcp/docs/proofs/dataset_edit_transcript.md` (or any of the other
+`*_transcript.md` files) for the format. For tools that change what the
+GUI shows on-screen, also capture a before/after PNG pair (e.g. the
+`feat_*.png` files alongside the transcripts).
 
-- **Screenshot proof** — Playwright drives the running GUI, fires
-  one MCP call, probes the DOM, captures before/after PNGs with a
-  verdict. See `mcp/docs/proofs_dataset_edit.py` /
-  `mcp/docs/proofs_e2e.py`.
-- **Transcript log** — generate a markdown of the call shape +
-  response shape, including happy paths AND error cases AND any
-  "confused agent" scenario where input semantics could be
-  misread. The same proof script can emit both — see
-  `mcp/docs/proofs/dataset_edit_transcript.md` for the format.
+The driver scripts that produced these transcripts/PNGs are
+**not** checked in — they're hardcoded to the author's local host and
+throwaway repos and nobody else can run them. The transcripts and PNGs
+**are** the durable artifacts; treat them as the authoritative record
+of what the tool did at merge time.
 
 Wire-level error response shape (`isError=True, content=[message]`)
 should also be probed at least once during development against the
@@ -495,8 +492,8 @@ A new command type needs **four** matching changes:
    effect happen. **Integrate with renderTree state** (don't just
    mutate DOM directly) so the effect survives re-renders.
 
-Then add a per-feature proof in `mcp/docs/proofs_e2e.py` so the
-visible effect is verified.
+Then capture a before/after PNG pair of the visible effect (alongside
+the transcript) so the bridge behavior is verified.
 
 ### Anti-patterns to avoid
 
@@ -506,8 +503,9 @@ visible effect is verified.
 - **Don't add a tool with no visible effect** if the design claims
   one (the v1 `set_filter` lesson — advertised but had no
   `dataset-search` UI to land on). Either land the GUI surface in the
-  same PR, or don't ship the tool. See `proofs_e2e.py` for the
-  per-feature proof pattern.
+  same PR, or don't ship the tool. The per-feature proof pattern is
+  a before/after PNG pair alongside the transcript (see
+  `mcp/docs/proofs/feat_*.png`).
 - **Don't share state via module globals** between two `build_server`
   instances. `ServerState` is bound to a single instance via closure
   capture; if you find yourself wanting `global state`, refactor to
@@ -530,25 +528,21 @@ visible effect is verified.
   `s.store.delete_tag(...)`. All path-safe (parameterized SQL).
 - **Bounds-checked episode access**: `if not (0 <= episode_id < meta.total_episodes): raise ValueError(...)`. Mirror this in every episode-scoped tool.
 
-### Running the demos
+### Demos
 
-```bash
-# End-to-end (9 calls, captured on video + transcript):
-python src/lerobot/mcp/docs/demo_e2e.py
+The shipped demo artifacts live under `mcp/docs/`:
 
-# Per-feature visible proofs (5 before/after PNGs):
-python src/lerobot/mcp/docs/proofs_e2e.py
-```
+- `demo_e2e.md` / `demo_e2e.gif` / `demo_e2e.mp4` — end-to-end 9-call
+  walkthrough against the GUI.
+- `proofs/*_transcript.md` — per-tool call/response logs (read-tier,
+  dataset edit, hub edit, robots, run).
+- `proofs/feat_*.png` — before/after screenshots for the bridge tools
+  that change what the GUI shows.
 
-Both spin up a Playwright-controlled Chromium tab against a running
-GUI at `http://127.0.0.1:8000`. Start the GUI first
-(`python -m lerobot.gui --host 0.0.0.0 --port 8000`); the demo
-issues an ephemeral token via `TokenStore` and revokes it on exit.
-Outputs land in `mcp/docs/` and `mcp/docs/proofs/`.
-
-Neither is wired into CI — they're one-off snapshots of "what worked
-at this commit," not regression tests. Re-run them after changes that
-touch the surfaces they exercise.
+These are static snapshots of "what worked at this commit," not
+regression tests — the formal coverage is in `tests/mcp/`. When
+adding or changing a tool, re-capture the artifact for that tool
+(transcript or PNG pair) and check it in alongside the code.
 
 ---
 

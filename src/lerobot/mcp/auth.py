@@ -293,6 +293,10 @@ def requires_scope(scope: str):
                 _check_or_raise(fn.__name__)
                 return await fn(*args, **kwargs)
 
+            # Surface the required scope on the wrapper so introspection
+            # tools (lerobot_list_tools) can read it without re-parsing
+            # the decorator chain.
+            async_wrapper._required_scope = scope  # type: ignore[attr-defined]
             return async_wrapper
 
         @functools.wraps(fn)
@@ -300,6 +304,7 @@ def requires_scope(scope: str):
             _check_or_raise(fn.__name__)
             return fn(*args, **kwargs)
 
+        sync_wrapper._required_scope = scope  # type: ignore[attr-defined]
         return sync_wrapper
 
     return decorator

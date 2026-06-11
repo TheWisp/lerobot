@@ -1205,13 +1205,25 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     # line verdict so headless operators see it in stderr.
                     # Live warnings already fired during recording via
                     # LoopHealthDetector; this is the persistent record.
+                    # Best-effort: catch ANY failure (incl. a
+                    # ZeroDivisionError when the loop was so badly stalled
+                    # that all per-frame periods are zero) so a degenerate
+                    # metric can't abort the actual recording. Symmetric
+                    # with the final-summary call below at line ~1248.
                     if latency_session.enabled and latency_session.aggregator is not None:
-                        _write_episode_health(
-                            latency_session,
-                            dataset,
-                            current_episode_index,
-                            cfg.dataset.fps,
-                        )
+                        try:
+                            _write_episode_health(
+                                latency_session,
+                                dataset,
+                                current_episode_index,
+                                cfg.dataset.fps,
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            logging.warning(
+                                "Could not write episode %d health: %s",
+                                current_episode_index,
+                                e,
+                            )
 
                     # Save intervention episodes AFTER main episode (ensures matching)
                     if intervention_dataset is not None and pending_intervention_episodes:

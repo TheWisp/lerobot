@@ -470,6 +470,101 @@ def build_server(
             raise ValueError(f"episode_id {episode_id} out of range [0, {meta.total_episodes})")
         return {"repo_id": repo_id, "episode_id": episode_id, "tags": s.store.get_tags(repo_id, episode_id)}
 
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def list_tagged_episodes(
+        repo_id: str,
+        key: str | None = None,
+        value: Any = None,
+    ) -> dict[str, Any]:
+        """Reverse lookup over sidecar tags.
+
+        Inverse of ``tag_episode`` / ``get_episode_tags``. Given a dataset,
+        returns all episodes that carry any tag (or a specific
+        ``key`` / ``key=value`` combination). Cheap — reads only the
+        sidecar SQLite, no parquet or video decode.
+
+        Workflow: tag a batch of episodes by analysis result
+        (``outcome=success``, ``gripper_miss=true``), then later get
+        the list of matching episodes back to act on (delete, trim,
+        merge into a curated dataset, ...).
+
+        Args:
+            repo_id: Dataset id.
+            key: If given, only return episodes that have this tag set.
+                If ``None``, return every episode that has ANY tag.
+            value: If both ``key`` AND ``value`` are given, additionally
+                filter to episodes whose ``key`` matches ``value``
+                exactly. Ignored when ``key`` is None.
+
+        Returns ``{"repo_id", "key", "value", "episodes": [...],
+        "total": N}``. Each episode entry is
+        ``{"episode_id"}`` when ``key`` is None, or
+        ``{"episode_id", "value", "set_at"}`` when ``key`` is given.
+        """
+        s = _state()
+        # Validate the dataset exists so a typo doesn't silently return
+        # an empty list — same shape as the other sidecar tools.
+        s.get_meta(repo_id)
+        rows = s.store.list_tagged_episodes(repo_id, key=key)
+        if key is not None and value is not None:
+            rows = [r for r in rows if r.get("value") == value]
+        return {
+            "repo_id": repo_id,
+            "key": key,
+            "value": value,
+            "episodes": rows,
+            "total": len(rows),
+        }
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    async def get_feature_series(
+        repo_id: str,
+        episode_id: int,
+        features: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Per-frame time series of one or more features for one episode.
+
+        Returns the same data the GUI's timeline plots in the Inspector
+        (Run tab → episode → feature row). Powers programmatic episode
+        analysis without round-tripping ``get_frame`` per index.
+
+        Image / video features are rejected — fetch those via
+        ``get_frame`` instead.
+
+        Args:
+            repo_id: Dataset id (must be opened in the GUI's AppState
+                — this tool reads parquet via the dataset object).
+            episode_id: Episode within the dataset.
+            features: List of feature names to return. Omit / pass
+                ``None`` to get every per-frame feature except
+                image / video. Synthetic decoded views (``'task'``,
+                ``'subtask'``) are supported — they return the
+                lookup-decoded string per frame, not the index.
+
+        Returns ``{"repo_id", "episode_index", "length", "series":
+        {name: [v0, v1, ..., v_{N-1}]}}``. Vector-valued features come
+        back as lists of lists (one inner list per frame).
+
+        Raises if the dataset or episode doesn't exist, or if a
+        requested feature is unknown or image/video.
+        """
+        from fastapi import HTTPException as _HTTPException
+
+        from lerobot.gui.api.datasets import get_episode_feature_series
+
+        app_state = _require_app_state()
+        if repo_id not in app_state.datasets:
+            raise ValueError(f"Dataset not opened in GUI: {repo_id}")
+        # The handler accepts a comma-separated string; convert from list.
+        features_arg = ",".join(features) if features else ""
+        try:
+            result = await get_episode_feature_series(repo_id, episode_id, features_arg)
+        except _HTTPException as e:
+            raise ValueError(_format_http_error(e)) from e
+        return {"repo_id": repo_id, **result}
+
     # ── Edit-tier: dataset pending-edit pipeline ───────────────────────────
     # These tools mirror the GUI's PendingEdit model. The AI proposes
     # edits (delete / trim / set-feature), the GUI's existing UI shows
@@ -755,6 +850,51 @@ def build_server(
         from lerobot.gui.api._hub_core import get_repo_info
 
         return get_repo_info(repo_id)
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    async def hub_diff_local_vs_remote(
+        dataset_id: str,
+        hub_repo_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Compare a local dataset against its Hub counterpart by file size + presence.
+
+        Fast — no downloads, just an ``HfApi.dataset_info`` call to fetch
+        the remote sibling list, then a local filesystem walk. Useful as
+        a pre-flight before ``hub_start_upload`` / ``hub_start_download``:
+
+        - ``modified``: files present on both sides but with different sizes
+        - ``local_only``: files only on the local copy
+        - ``remote_only``: files only on the Hub side
+        - ``in_sync``: ``True`` when all three lists are empty
+
+        Excludes ``.cache/`` and ``.lerobot*`` prefixes (transient state
+        that shouldn't be synced).
+
+        Args:
+            dataset_id: Local dataset id (must be opened in the GUI).
+            hub_repo_id: Override the remote repo name. Defaults to
+                ``dataset.repo_id`` (the local id usually IS the
+                desired remote name).
+
+        Returns ``{"status": "ok", "in_sync": bool, "unchanged": int,
+        "modified": [...], "local_only": [...], "remote_only": [...]}``,
+        or ``{"status": "error", "message": "..."}`` when the remote
+        repo can't be reached (missing, private without access, network
+        down). The AI branches on ``status`` rather than parsing error
+        text.
+        """
+        from fastapi import HTTPException as _HTTPException
+
+        from lerobot.gui.api.datasets import hub_diff
+
+        app_state = _require_app_state()
+        if dataset_id not in app_state.datasets:
+            raise ValueError(f"Dataset not opened in GUI: {dataset_id}")
+        try:
+            return await hub_diff(dataset_id, hub_repo_id)
+        except _HTTPException as e:
+            raise ValueError(_format_http_error(e)) from e
 
     @mcp.tool()
     @requires_scope(SCOPE_READ)
@@ -1587,6 +1727,89 @@ def build_server(
             return get_job_progress(_require_app_state(), job_id)
         except HubJobNotFoundError as e:
             raise ValueError(str(e)) from e
+
+    # ── Read-tier: introspection ───────────────────────────────────────────
+    # Self-description of the live MCP surface — what tools exist + what
+    # scope the current caller has. Useful for AI agents driving the
+    # server through raw streamable-http (which doesn't surface the tool
+    # list as elegantly as the Claude Code / Codex IDE plugins do), and
+    # for any agent that wants to verify its own privileges before
+    # planning a multi-step workflow.
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def lerobot_list_tools() -> dict[str, Any]:
+        """List every MCP tool the server exposes, with scope + description.
+
+        Pure read — no state changes. The list is the live FastMCP
+        registry, so it reflects whatever was attached during
+        ``build_server`` (data tools + bridge tools + the introspection
+        pair).
+
+        Returns ``{"tools": [{"name", "description", "scope"}, ...],
+        "total": N}``. ``scope`` is the floor required by
+        ``@requires_scope`` on each tool (``read`` / ``comment`` /
+        ``edit`` / ``operate``); fall-back to ``read`` for tools that
+        skip the decorator (none today, but the field reads cleanly).
+        ``description`` is the one-line summary from the docstring.
+        """
+        tools = []
+        # FastMCP stores the registry in a private dict keyed by tool name.
+        # The supported public read is ``mcp._tool_manager.list_tools()`` but
+        # that's also internal. ``mcp.list_tools()`` is async, which forces
+        # us into a sync-over-async dance — easier to introspect the
+        # registry directly. Keys are stable in practice.
+        registry = getattr(mcp, "_tool_manager", None)
+        tool_dict = getattr(registry, "_tools", {}) if registry is not None else {}
+        for name, tool in tool_dict.items():
+            description = (tool.description or "").strip().split("\n")[0]
+            scope = getattr(tool.fn, "_required_scope", SCOPE_READ)
+            tools.append({"name": name, "description": description, "scope": scope})
+        tools.sort(key=lambda t: (t["scope"], t["name"]))
+        return {"tools": tools, "total": len(tools)}
+
+    @mcp.tool()
+    @requires_scope(SCOPE_READ)
+    def lerobot_whoami() -> dict[str, Any]:
+        """Report the calling client's identity + scopes on this MCP.
+
+        Pure read. Use this to verify what the calling client can do
+        before planning a workflow — e.g., decide whether to propose
+        an ``edit``-tier dataset cleanup or fall back to a
+        ``read``-only analysis.
+
+        Returns ``{"client_id": str | None, "scopes": [...],
+        "all_scopes": [...], "logged_in": bool}`` — ``scopes`` is what
+        THIS token carries; ``all_scopes`` is the full hierarchy for
+        reference; ``client_id`` is the token's display name from
+        ``/ai_setup`` (None in stdio mode).
+
+        When the server runs without auth (stdio mode), ``scopes``
+        contains every tier and ``logged_in`` is False — there's no
+        authentication context to narrow it down.
+        """
+        from .auth import ALL_SCOPES
+
+        client_id: str | None = None
+        logged_in = False
+        try:
+            from mcp.server.auth.middleware.auth_context import get_access_token
+
+            token = get_access_token()
+            if token is not None:
+                scopes = list(token.scopes)
+                client_id = token.client_id
+                logged_in = True
+            else:
+                scopes = list(ALL_SCOPES)
+        except Exception:  # noqa: BLE001 — stdio mode has no auth context
+            scopes = list(ALL_SCOPES)
+        return {
+            "client_id": client_id,
+            "scopes": scopes,
+            "all_scopes": list(ALL_SCOPES),
+            "logged_in": logged_in,
+        }
 
     # Bridge tools (navigate_to / notify_user / highlight_in_viewer / set_filter)
     # are attached unconditionally; whether they actually deliver depends on

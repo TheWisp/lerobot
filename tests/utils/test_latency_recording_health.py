@@ -105,6 +105,53 @@ class TestSummarize:
         # Only 2 stale values → median = 30
         assert out["cameras"]["front"]["stale_p50"] == 30.0
 
+    def test_zero_period_does_not_divide_by_zero(self):
+        """Regression: when the policy blocks the loop for the entire
+        episode (cold torch.compile autotune, network stall, etc.) the
+        cam_*_period_ms samples can degenerate to all-zero. The naive
+        ``1000.0 / median`` then raises ZeroDivisionError and aborts
+        recording at episode boundary. fps_effective must fall back to
+        NaN — same sentinel as the empty-list case — and the function
+        must complete normally for the rest of the stats to land in
+        episodes_health.jsonl."""
+        records = [
+            {
+                "loop_dt_ms": 165049.3,
+                "t": 0.0,
+                "cam_front_stale_ms": 17.0,
+                "cam_front_period_ms": 0.0,
+            },
+            {
+                "loop_dt_ms": 165049.3,
+                "t": 165.0,
+                "cam_front_stale_ms": 33.0,
+                "cam_front_period_ms": 0.0,
+            },
+        ]
+        out = summarize(records, target_period_ms=33.3)
+        # No exception — that's the structural guarantee.
+        assert out["n_records"] == 2
+        assert out["cameras"]["front"]["period_p50"] == 0.0
+        # fps_effective is NaN (the "no useful FPS" sentinel), not inf or 0.
+        import math
+
+        assert math.isnan(out["cameras"]["front"]["fps_effective"])
+        # Other stats still computed normally — the guard is narrow.
+        assert out["cameras"]["front"]["stale_p50"] == 25.0
+
+    def test_single_record_does_not_divide_by_zero(self):
+        """Single-record episode (e.g., the recording terminated after one
+        frame because the compile ate the budget): cam period is 0 by
+        construction (no second sample to diff against). Same NaN guard
+        applies."""
+        records = [
+            {"loop_dt_ms": 60000.0, "t": 0.0, "cam_top_stale_ms": 5.0, "cam_top_period_ms": 0.0},
+        ]
+        out = summarize(records, target_period_ms=33.3)
+        import math
+
+        assert math.isnan(out["cameras"]["top"]["fps_effective"])
+
 
 # ---------------------------------------------------------------------------
 # verdict
