@@ -29,7 +29,6 @@ two. The provider abstractions are no-ops here:
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
 from lerobot.gui.training.jobs import HostProfile
 from lerobot.gui.training.providers.protocol import (
@@ -92,14 +91,12 @@ class PersistentSshProvider:
         Post: returned handle has expires_at_unix = +100 years (never
         expires, since the user owns the VM).
         """
-        ssh_key = profile.ssh_key_path or str(Path.home() / ".ssh" / "id_ed25519")
         return HostHandle(
             provider="persistent",
             provider_resource_id=f"profile:{profile.name}",
             ssh_host=profile.ssh_host,
             ssh_port=profile.ssh_port,
             ssh_user=profile.ssh_user,
-            ssh_key_path=ssh_key,
             persistent_volume_id=profile.persistent_volume,
             region="user-managed",
             # "Never expires" — the user controls the VM, not us. ~100 years

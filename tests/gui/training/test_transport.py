@@ -246,13 +246,13 @@ def test_subprocess_transport_immutable() -> None:
 
 
 def test_ssh_transport_defaults() -> None:
-    t = SshTransport(host="example.com", key_path="/tmp/k")
+    t = SshTransport(host="example.com")
     assert t.port == 22
     assert t.user == "root"
 
 
 def test_ssh_transport_immutable() -> None:
-    t = SshTransport(host="example.com", key_path="/tmp/k")
+    t = SshTransport(host="example.com")
     with pytest.raises(dataclasses.FrozenInstanceError):
         t.host = "other.com"  # type: ignore[misc]
 
@@ -269,7 +269,7 @@ def test_make_client_ssh_returns_ssh_client() -> None:
     ``requires_ssh_loopback`` marker."""
     from lerobot.gui.training.ssh_transport import SshClient
 
-    ssh = SshTransport(host="localhost", key_path="/tmp/k")
+    ssh = SshTransport(host="localhost")
     client = make_client(ssh)
     assert isinstance(client, SshClient)
 

@@ -113,7 +113,10 @@ class HostProfile:
     ssh_user: str
     ssh_host: str
     ssh_port: int = 22
-    ssh_key_path: str | None = None  # ~/.ssh/id_ed25519 if None
+    # No private-key fields by design. Authentication uses the user's
+    # local SSH setup (``~/.ssh/config`` aliases, ssh-agent, default-path
+    # keys) — the GUI server never reads or stores key bytes. See
+    # DESIGN.md § Host setup UX + § Authentication.
     kind: HostKind = "temporary"
     workdir: str = "/workspace/lerobot"
     image_ref: str = "ghcr.io/thewisp/lerobot-training:latest"

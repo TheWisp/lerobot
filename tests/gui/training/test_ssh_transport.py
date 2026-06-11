@@ -47,7 +47,6 @@ def ssh_client(ssh_loopback: dict) -> Iterator[SshClient]:
         host=ssh_loopback["host"],
         port=ssh_loopback["port"],
         user=ssh_loopback["user"],
-        key_path=ssh_loopback["key_path"],
     )
     client = SshClient(t)
     yield client

@@ -81,7 +81,6 @@ def test_end_to_end_natural_completion_over_ssh(ssh_loopback: dict, tmp_path: Pa
         host=ssh_loopback["host"],
         port=ssh_loopback["port"],
         user=ssh_loopback["user"],
-        key_path=ssh_loopback["key_path"],
     )
     host = TrainingHost(
         id="ssh-loopback-host",

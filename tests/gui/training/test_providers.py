@@ -65,7 +65,6 @@ def _example_handle(**overrides) -> HostHandle:
         "ssh_host": "10.0.0.5",
         "ssh_port": 22,
         "ssh_user": "feit",
-        "ssh_key_path": "/home/feit/.ssh/id_ed25519",
         "region": "user-managed",
         "expires_at_unix": int(time.time()) + 3600,
     }
@@ -146,12 +145,15 @@ class TestPersistentProvider:
         assert snap.accrued_usd_estimate == 0.0
 
     def test_handle_from_profile(self):
+        """HostProfile (BYO SSH) → HostHandle, with no private-key fields
+        on either end. Auth is resolved by the user's local SSH setup
+        (~/.ssh/config / agent / default keys); see DESIGN.md §
+        Authentication."""
         profile = HostProfile(
             name="lab-h100",
             ssh_user="feit",
             ssh_host="192.168.1.50",
             ssh_port=22,
-            ssh_key_path="~/.ssh/lab_key",
             persistent_volume="/data",
         )
         handle = PersistentSshProvider.handle_from_profile(profile)
@@ -159,22 +161,10 @@ class TestPersistentProvider:
         assert handle.ssh_host == "192.168.1.50"
         assert handle.ssh_user == "feit"
         assert handle.ssh_port == 22
-        assert handle.ssh_key_path == "~/.ssh/lab_key"
         assert handle.persistent_volume_id == "/data"
         # Persistent hosts effectively never expire (user owns lifecycle).
         # Sanity check: at least 50 years in the future.
         assert handle.expires_at_unix > int(time.time()) + 50 * 365 * 24 * 3600
-
-    def test_handle_from_profile_defaults_ssh_key(self):
-        profile = HostProfile(
-            name="x",
-            ssh_user="u",
-            ssh_host="h",
-            ssh_key_path=None,
-        )
-        handle = PersistentSshProvider.handle_from_profile(profile)
-        # Defaults to ~/.ssh/id_ed25519 — the conventional ed25519 key path.
-        assert handle.ssh_key_path.endswith(".ssh/id_ed25519")
 
 
 # ── NebiusProvider — cost math (the only real logic in C1) ──────────────────

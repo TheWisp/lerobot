@@ -125,15 +125,21 @@ class SshClient:
         ]
 
     def _ssh_argv(self, *remote_argv: str) -> list[str]:
+        # No ``-i <key>`` flag by design. ``ssh`` resolves the identity
+        # from the user's setup: ``~/.ssh/config`` Host blocks, ssh-agent,
+        # then default-path keys. Matches VS Code Remote-SSH /
+        # JetBrains Gateway / ``gh codespace ssh`` — and means GUI
+        # server compromise cannot exfiltrate user SSH keys because
+        # their bytes never enter this process.
         t = self._transport
-        argv = ["ssh", *self._ssh_options(), "-p", str(t.port), "-i", os.path.expanduser(t.key_path)]
+        argv = ["ssh", *self._ssh_options(), "-p", str(t.port)]
         argv.append(f"{t.user}@{t.host}")
         argv.extend(remote_argv)
         return argv
 
     def _scp_argv(self) -> list[str]:
         t = self._transport
-        return ["scp", *self._ssh_options(), "-P", str(t.port), "-i", os.path.expanduser(t.key_path)]
+        return ["scp", *self._ssh_options(), "-P", str(t.port)]
 
     def _exec(
         self,

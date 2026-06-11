@@ -198,7 +198,6 @@ class TestHostProfile:
             ssh_user="root",
             ssh_host="213.45.10.22",
             ssh_port=51234,
-            ssh_key_path="~/.ssh/runpod_key",
             kind="temporary",
             workdir="/workspace/lerobot",
             image_ref="ghcr.io/thewisp/lerobot-training:0.4.0",

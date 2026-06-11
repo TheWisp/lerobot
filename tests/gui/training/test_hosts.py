@@ -97,7 +97,7 @@ def test_workstation_host_returns_host_when_gpu_present(tmp_path: Path) -> None:
 
 
 def _ssh_host(id_: str) -> TrainingHost:
-    return TrainingHost(id=id_, display_name=id_, transport=SshTransport(host="x", key_path="/tmp/k"))
+    return TrainingHost(id=id_, display_name=id_, transport=SshTransport(host="x"))
 
 
 def test_registry_list_and_get() -> None:

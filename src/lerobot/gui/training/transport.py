@@ -55,12 +55,24 @@ class SubprocessTransport:
 
 @dataclass(frozen=True, kw_only=True)
 class SshTransport:
-    """Run training over SSH on a remote host."""
+    """Run training over SSH on a remote host.
+
+    Authentication inherits from the user's existing SSH setup —
+    ``~/.ssh/config`` Host blocks, ssh-agent, and the default-path
+    ``~/.ssh/id_*`` keys. The GUI server never reads or stores private
+    keys; ``ssh`` does its own auth from the host this process runs on.
+    The Host field accepts either a ``~/.ssh/config`` alias or
+    ``user@host`` (or just a hostname with separate ``user`` / ``port``
+    fields here). See :doc:`DESIGN.md § Host setup UX`.
+
+    Same trust posture as VS Code Remote-SSH / JetBrains Gateway /
+    ``gh codespace ssh``: if the user can ``ssh <host>`` from a
+    terminal, they can use it here.
+    """
 
     host: str
     port: int = 22
     user: str = "root"
-    key_path: str
 
 
 HostTransport = SubprocessTransport | SshTransport

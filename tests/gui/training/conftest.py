@@ -7,12 +7,16 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 """Shared fixtures for training-tests, primarily the SSH loopback shim.
 
-The ``ssh_loopback`` fixture establishes a throwaway keypair, appends its
-pubkey to the user's ``~/.ssh/authorized_keys`` (tagged so the teardown
-can grep it out cleanly), and confirms ``ssh user@127.0.0.1 true`` works.
-On any precondition failure it `pytest.skip()`s the test cleanly — CI
-runners without sshd, hosts without tmux/ssh-keygen, etc. all degrade
-gracefully.
+The ``ssh_loopback`` fixture mirrors the production auth model: it
+appends a throwaway keypair to ``~/.ssh/authorized_keys`` (server side)
+AND a ``Host`` block to ``~/.ssh/config`` (client side, pointing at the
+key), then verifies ``ssh <alias>`` works **without ``-i``**. Tests
+then construct :class:`SshTransport` with just the alias — no
+``key_path`` field, matching the design.
+
+On any precondition failure it ``pytest.skip()``s the test cleanly —
+CI runners without sshd, hosts without tmux/ssh-keygen, etc. all
+degrade gracefully.
 
 Tests opt in via ``@pytest.mark.requires_ssh_loopback`` (registered in
 pyproject.toml). The collection hook below pre-filters by checking the
@@ -52,41 +56,21 @@ def _loopback_prereqs_present() -> tuple[bool, str]:
     return True, ""
 
 
-def _can_loopback_with_key(key_path: Path, user: str) -> tuple[bool, str]:
-    """Final go/no-go check — actually attempt a no-op SSH command. The
-    fixture has just added our pubkey, so this confirms the round trip."""
-    try:
-        r = subprocess.run(
-            [
-                "ssh",
-                "-i",
-                str(key_path),
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-                "-o",
-                "ConnectTimeout=3",
-                f"{user}@127.0.0.1",
-                "true",
-            ],
-            capture_output=True,
-            timeout=8.0,
-        )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        return False, f"ssh exec failed: {e}"
-    if r.returncode != 0:
-        return False, f"ssh returned {r.returncode}: {r.stderr.decode('utf-8', 'replace')[:200]}"
-    return True, ""
-
-
 @pytest.fixture(scope="session")
 def ssh_loopback(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict]:
     """Session-scoped SSH loopback environment.
 
-    Yields a dict ``{host, port, user, key_path}`` suitable for passing to
-    :class:`SshTransport`. The pubkey is removed from ``~/.ssh/authorized_keys``
-    on session end (best-effort; survives a Ctrl-C but leaks on SIGKILL).
+    Mirrors the **production auth model**: the GUI server never sees
+    the private key; ``ssh`` resolves the identity from the user's
+    own setup. For tests that means appending a temporary Host block
+    to ``~/.ssh/config`` pointing at our throwaway key, then yielding
+    only the alias — no key_path field, matching the design.
+
+    Yields ``{host: <alias>, port: 22, user: <user>}``. Both the
+    pubkey line in ``~/.ssh/authorized_keys`` and the Host block in
+    ``~/.ssh/config`` are tagged with the test pid so teardown can
+    grep them out cleanly (best-effort; survives Ctrl-C but leaks
+    on SIGKILL).
 
     Skips the test with a precise reason on any setup failure.
     """
@@ -115,31 +99,83 @@ def ssh_loopback(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict]:
 
     ssh_dir = Path.home() / ".ssh"
     ssh_dir.mkdir(mode=0o700, exist_ok=True)
+
+    # Server-side: pubkey in authorized_keys so the test key can log in.
     auth_keys = ssh_dir / "authorized_keys"
-    # The marker tag lets us grep our entry out of the file on teardown
-    # even if other tests / processes have appended their own entries in
-    # the meantime. Includes pid for uniqueness across overlapping runs.
     marker = f"# lerobot-pytest-{os.getpid()}"
-    line = f"{pubkey} {marker}\n"
+    auth_line = f"{pubkey} {marker}\n"
     with auth_keys.open("a") as f:
-        f.write(line)
+        f.write(auth_line)
     auth_keys.chmod(0o600)
 
+    # Client-side: ssh-config Host block so a plain ``ssh <alias>``
+    # resolves to the right key + user + port without anyone passing
+    # ``-i``. This is exactly how a real user would set up a host
+    # under the new design.
+    alias = f"lerobot-pytest-loopback-{os.getpid()}"
+    ssh_config = ssh_dir / "config"
+    config_block = (
+        f"\n# BEGIN {marker}\n"
+        f"Host {alias}\n"
+        f"    HostName 127.0.0.1\n"
+        f"    User {user}\n"
+        f"    Port 22\n"
+        f"    IdentityFile {key_path}\n"
+        f"    IdentitiesOnly yes\n"
+        f"    StrictHostKeyChecking accept-new\n"
+        f"# END {marker}\n"
+    )
+    with ssh_config.open("a") as f:
+        f.write(config_block)
+    ssh_config.chmod(0o600)
+
     try:
-        ok, why = _can_loopback_with_key(key_path, user)
-        if not ok:
-            pytest.skip(f"ssh loopback handshake failed: {why}")
+        # Verify ssh <alias> works without -i, proving the config block
+        # resolves correctly. Same single round trip a real user does
+        # before pasting the alias into the GUI.
+        try:
+            r = subprocess.run(
+                [
+                    "ssh",
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "ConnectTimeout=3",
+                    alias,
+                    "true",
+                ],
+                capture_output=True,
+                timeout=8.0,
+            )
+            if r.returncode != 0:
+                pytest.skip(
+                    f"ssh loopback handshake failed: rc={r.returncode} "
+                    f"stderr={r.stderr.decode('utf-8', 'replace')[:200]}"
+                )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            pytest.skip(f"ssh loopback handshake failed: {e}")
         yield {
-            "host": "127.0.0.1",
+            "host": alias,
             "port": 22,
             "user": user,
-            "key_path": str(key_path),
         }
     finally:
-        # Best-effort cleanup: remove only OUR line, leave everything else.
+        # Strip our entries from both files. Tagged comments make this
+        # robust to other lines appearing between setup and teardown.
         if auth_keys.exists():
             kept = [ln for ln in auth_keys.read_text().splitlines(keepends=True) if marker not in ln]
             auth_keys.write_text("".join(kept))
+        if ssh_config.exists():
+            text = ssh_config.read_text()
+            start = f"# BEGIN {marker}"
+            end = f"# END {marker}"
+            if start in text and end in text:
+                head, _, rest = text.partition(start)
+                _, _, tail = rest.partition(end)
+                # ``head`` ends with the \n before our BEGIN; ``tail``
+                # begins with the \n after our END. Concatenating loses
+                # exactly our block.
+                ssh_config.write_text(head + tail.lstrip("\n"))
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

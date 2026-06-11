@@ -237,8 +237,8 @@ class SshConnection:
             "-p",
             str(self.host.ssh_port),
         ]
-        if self.host.ssh_key_path:
-            argv += ["-i", os.path.expanduser(self.host.ssh_key_path)]
+        # No ``-i <key>``. Identity resolution via ``~/.ssh/config`` /
+        # ssh-agent / default-path keys — see DESIGN.md § Authentication.
         argv.append(f"{self.host.ssh_user}@{self.host.ssh_host}")
         argv.extend(remote)
         return _SshArgvBuilder(argv)

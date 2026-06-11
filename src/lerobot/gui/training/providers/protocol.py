@@ -93,8 +93,15 @@ class HostHandle:
     All vendors converge on this shape — provider-specific identifiers
     are captured in ``provider_resource_id`` (opaque to the SSH layer).
 
-    Pre: ``ssh_host:ssh_port`` reachable from the GUI server. ``ssh_user``
-    can log in with ``ssh_key_path``.
+    Pre: ``ssh_host:ssh_port`` reachable from the GUI server, and
+    ``ssh_user`` can log in via the user's local SSH setup
+    (``~/.ssh/config`` Host blocks, ssh-agent, default-path keys).
+    Ephemeral providers that generated a per-pod key are responsible
+    for surfacing it into the user's setup at spawn time (e.g. a
+    ``Host`` block appended to ``~/.ssh/config`` keyed by
+    ``provider_resource_id``) — the SSH layer never reads a key path
+    directly. See DESIGN.md § Authentication.
+
     Post: ``destroy(handle)`` returns the system to a state where
     ``verify_destroyed(handle)`` returns True.
     """
@@ -104,7 +111,6 @@ class HostHandle:
     ssh_host: str
     ssh_port: int
     ssh_user: str = "root"
-    ssh_key_path: str  # identity key for SSH; provider may have generated it
     # Persistent storage that survives this handle (None for fully-ephemeral).
     # Used so a follow-up Ephemeral spawn can reuse e.g. the HF cache.
     persistent_volume_id: str | None = None
