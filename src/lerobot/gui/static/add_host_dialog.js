@@ -20,10 +20,22 @@
 // for host A and then save host B).
 
 let _addHostLastProbeOk = false;
+// Abort any in-flight probe on close/reopen — otherwise a stale response
+// landing after the dialog was reset could re-enable Save for a host the
+// user has since edited.
+let _addHostProbeAbort = null;
+
+function _abortPendingProbe() {
+    if (_addHostProbeAbort) {
+        _addHostProbeAbort.abort();
+        _addHostProbeAbort = null;
+    }
+}
 
 function openAddHostDialog() {
     const overlay = document.getElementById('add-host-overlay');
     if (!overlay) return;
+    _abortPendingProbe();
     document.getElementById('add-host-name').value = '';
     document.getElementById('add-host-host').value = '';
     document.getElementById('add-host-display-name').value = '';
@@ -38,6 +50,7 @@ function openAddHostDialog() {
 }
 
 function closeAddHostDialog() {
+    _abortPendingProbe();
     const overlay = document.getElementById('add-host-overlay');
     if (overlay) overlay.style.display = 'none';
 }
@@ -91,11 +104,13 @@ async function addHostTest() {
     saveBtn.disabled = true;
     status.textContent = '';
     document.getElementById('add-host-probe-results').innerHTML = '';
+    _addHostProbeAbort = new AbortController();
     try {
         const resp = await fetch('/api/training/hosts/probe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ host }),
+            signal: _addHostProbeAbort.signal,
         });
         if (!resp.ok) {
             const err = await resp.text();
@@ -109,7 +124,9 @@ async function addHostTest() {
             status.textContent = result.message;
         }
     } catch (e) {
-        status.textContent = `Probe failed: ${e.message}`;
+        if (e.name !== 'AbortError') {
+            status.textContent = `Probe failed: ${e.message}`;
+        }
         _addHostLastProbeOk = false;
         saveBtn.disabled = true;
     } finally {
@@ -188,12 +205,19 @@ async function trainingDeleteHost(hostId, displayName) {
 }
 
 // Invalidate the probe whenever any field changes so Save stays in sync.
-['add-host-name', 'add-host-host', 'add-host-display-name'].forEach((id) => {
-    document.addEventListener('DOMContentLoaded', () => {
+// readyState guard: end-of-body scripts run before DOMContentLoaded today,
+// but this also survives the script ever being loaded async/deferred.
+function _attachAddHostInputListeners() {
+    ['add-host-name', 'add-host-host', 'add-host-display-name'].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.addEventListener('input', _addHostInvalidateProbe);
     });
-});
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _attachAddHostInputListeners);
+} else {
+    _attachAddHostInputListeners();
+}
 
 // Esc closes the dialog when it's open.
 document.addEventListener('keydown', (e) => {

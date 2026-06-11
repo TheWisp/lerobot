@@ -244,9 +244,11 @@ def _parse_host_spec(host_spec: str) -> tuple[str, str, int]:
     port = 22
     if "@" in raw:
         user, raw = raw.split("@", 1)
-    # Only treat ``:N`` as a port if N is purely numeric — leaves IPv6 + URL-y
-    # things to fall through unchanged (we'd reject those at probe time).
-    if ":" in raw:
+    # Only treat ``:N`` as a port when there's exactly one colon and N is
+    # numeric. Bare IPv6 ("2001:db8::1") has multiple colons — passing it
+    # through unsplit beats silently misparsing "…:1" as host+port; ssh
+    # itself accepts bare IPv6 as a destination.
+    if raw.count(":") == 1:
         host_part, _, port_part = raw.rpartition(":")
         if port_part.isdigit():
             raw = host_part
@@ -284,9 +286,12 @@ def add_host(body: HostProfileBody) -> HostInfo:
         workdir=body.workdir,
         **extra,
     )
-    profile.save(dir_=HOSTS_DIR)
+    # Register first, persist second: registry.add() is where the collision
+    # assert lives, so a concurrent duplicate POST fails BEFORE the file is
+    # written — no orphaned profile on disk for a GUI restart to resurrect.
     th = profile_to_training_host(profile)
     registry.add(th)
+    profile.save(dir_=HOSTS_DIR)
     return HostInfo(
         id=th.id,
         display_name=th.display_name,
@@ -300,9 +305,9 @@ def delete_host(host_id: str) -> None:
     """Remove a saved SSH host from the registry + disk.
 
     Refuses to delete the auto-detected workstation entry (400) and
-    refuses while a run on this host is still active (409). Idempotent
-    on a host that doesn't exist — returns 404 instead so the caller
-    can distinguish "already gone" from "never existed".
+    refuses while a run on this host is still active (409). Deliberately
+    NOT idempotent: deleting a host that doesn't exist returns 404 so
+    the caller can distinguish "already gone" from "never existed".
     """
     orch, registry = get_state()
     if host_id == WORKSTATION_HOST_ID:

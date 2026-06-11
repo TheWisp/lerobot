@@ -154,6 +154,42 @@ async def test_probe_ssh_binary_missing(monkeypatch):
     assert "ssh" in result.message.lower()
 
 
+@pytest.mark.asyncio
+async def test_probe_basename_match_not_substring(monkeypatch):
+    """Regression: a tmux under /home/docker-admin/... must not count as
+    docker (and vice versa). `command -v` output is matched on the exact
+    basename, not substring-anywhere-in-path."""
+    fake = _FakeProc(
+        stdout_b=(
+            b"__NO_DOCKER__\n/home/docker-admin/.local/bin/tmux\n__NO_NVIDIA__\n__LEROBOT_PROBE_OK__\n"
+        ),
+        returncode=0,
+    )
+    _patch_subprocess(monkeypatch, fake)
+    result = await probe_ssh("user@host")
+    checks = {c.name: c for c in result.checks}
+    assert checks["docker"].ok is False, "path containing 'docker' must not satisfy the docker check"
+    assert checks["tmux"].ok is True
+    assert checks["tmux"].detail == "/home/docker-admin/.local/bin/tmux"
+
+
+@pytest.mark.asyncio
+async def test_probe_argv_has_end_of_options_sentinel(monkeypatch):
+    """Regression: host_spec is user-typed; without `--` before it, a value
+    like '-oProxyCommand=...' would parse as an ssh option."""
+    captured: dict = {}
+
+    async def fake_create(*args, **kwargs):
+        captured["argv"] = list(args)
+        return _FakeProc(stdout_b=b"__LEROBOT_PROBE_OK__\n", returncode=0)
+
+    monkeypatch.setattr(probe_mod.asyncio, "create_subprocess_exec", fake_create)
+    await probe_ssh("-oProxyCommand=evil")
+    argv = captured["argv"]
+    assert "--" in argv
+    assert argv.index("--") == argv.index("-oProxyCommand=evil") - 1
+
+
 def test_remote_cmd_prepends_local_bin_path():
     """Regression: non-interactive SSH skips ~/.profile, so without the
     PATH prepend a tmux under ~/.local/bin probes as missing on hosts

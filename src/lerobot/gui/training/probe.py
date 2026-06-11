@@ -30,6 +30,21 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
+from typing import Literal
+
+# The closed set of probe error classes. The frontend's status row and the
+# tests key off these strings — extend the Literal when adding one so mypy
+# flags any branch that emits an unknown class.
+ProbeErrorClass = Literal[
+    "auth",
+    "dns",
+    "timeout",
+    "refused",
+    "unknown_host",
+    "config",
+    "command_missing",
+    "unknown",
+]
 
 # Caps. The SSH connect timeout (5s) is enforced by `-o ConnectTimeout=5`
 # inside the ssh client; the wallclock cap (10s) is enforced by
@@ -72,7 +87,7 @@ class ProbeResult:
     ok: bool
     latency_ms: int
     checks: list[CheckItem] = field(default_factory=list)
-    error_class: str | None = None  # auth / dns / timeout / refused / unknown_host / command_missing / None
+    error_class: ProbeErrorClass | None = None  # None = all checks passed
     message: str | None = None
 
 
@@ -80,7 +95,7 @@ def _not_reached(name: str) -> CheckItem:
     return CheckItem(name=name, ok=False, detail="not reached")
 
 
-def _classify_stderr(stderr: str) -> tuple[str, str]:
+def _classify_stderr(stderr: str) -> tuple[ProbeErrorClass, str]:
     """Map ssh's stderr to ``(error_class, message)`` for UI display."""
     s = stderr.lower()
     if "permission denied" in s or "publickey" in s:
@@ -129,6 +144,9 @@ async def probe_ssh(
         f"ConnectTimeout={connect_timeout_s}",
         "-o",
         "StrictHostKeyChecking=accept-new",
+        # End-of-options sentinel: host_spec is user-typed; without this a
+        # value like "-oProxyCommand=..." would parse as an ssh option.
+        "--",
         host_spec,
         _REMOTE_CMD,
     ]
@@ -211,10 +229,13 @@ async def probe_ssh(
         elif ln.startswith("GPU "):
             nvidia_lines.append(ln)
         elif "/" in ln and not ln.startswith("__"):
-            # `command -v` output is the absolute path.
-            if docker_path is None and "docker" in ln:
+            # `command -v` output is an absolute path. Match on the exact
+            # basename, not substring — a path like
+            # /home/docker-admin/.local/bin/tmux must not count as docker.
+            basename = ln.rsplit("/", 1)[-1]
+            if docker_path is None and basename == "docker":
                 docker_path = ln
-            elif tmux_path is None and "tmux" in ln:
+            elif tmux_path is None and basename == "tmux":
                 tmux_path = ln
 
     checks = [

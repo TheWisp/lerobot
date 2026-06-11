@@ -114,6 +114,32 @@ def test_post_host_invalid_name_rejected_by_pydantic(client: TestClient):
     assert resp.status_code == 422
 
 
+def test_post_host_bare_ipv6_passes_through_unsplit(client: TestClient, hosts_dir: Path):
+    """Regression: bare IPv6 has multiple colons — must not misparse
+    '…:1' as host + port. The address goes through verbatim (ssh accepts
+    bare IPv6 destinations)."""
+    resp = client.post("/api/training/hosts", json={"name": "v6", "host": "feit@2001:db8::1"})
+    assert resp.status_code == 201
+    profile = HostProfile.load(hosts_dir / "v6.json")
+    assert profile.ssh_host == "2001:db8::1"
+    assert profile.ssh_port == 22
+
+
+def test_post_host_failure_leaves_no_orphan_file(client: TestClient, hosts_dir: Path, monkeypatch):
+    """Regression: registry.add runs BEFORE profile.save, so a collision
+    that slips past the early 409 check (e.g. concurrent POSTs) fails
+    before any file is written — no orphan for a GUI restart to load."""
+    from lerobot.gui.api import training as api_mod
+
+    def boom(profile):
+        raise RuntimeError("simulated registry failure")
+
+    monkeypatch.setattr(api_mod, "profile_to_training_host", boom)
+    with pytest.raises(RuntimeError, match="simulated registry failure"):
+        client.post("/api/training/hosts", json={"name": "orphan", "host": "u@h"})
+    assert not (hosts_dir / "orphan.json").exists()
+
+
 # ── GET /hosts (now lists workstation + saved) ────────────────────────────────
 
 

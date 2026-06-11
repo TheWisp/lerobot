@@ -158,7 +158,12 @@ class HostProfile:
     @classmethod
     def delete(cls, name: str, dir_: Path = HOSTS_DIR) -> bool:
         """Remove ``<dir>/<name>.json``. Returns True if a file was removed,
-        False if it didn't exist (no-op, idempotent)."""
+        False if it didn't exist (no-op, idempotent).
+
+        Pre: ``name`` is a bare profile name, not a path. Callers (the
+        DELETE endpoint) gate on registry membership, but assert here too
+        so no future caller can turn this into a traversal primitive."""
+        assert "/" not in name and "\\" not in name and ".." not in name, f"unsafe profile name: {name!r}"
         path = dir_ / f"{name}.json"
         if not path.exists():
             return False
