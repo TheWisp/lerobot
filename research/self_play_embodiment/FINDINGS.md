@@ -120,16 +120,16 @@ It can only make existing directions more linearly accessible. Two reasons that 
 Two follow-up levers, same harness.
 
 **Objective (Gate B): inverse dynamics, not forward Δz.** Three e-objectives on the same bottleneck `f(z)`:
-`free` g(f(z_t))→Δz · `ac` g(f(z_t),a_t)→Δz (forward, = original e_ac) · `invdyn` h(f(z_t),f(z_{t+1}))→a_t (predict the action).
-Forward Δz is _distracted_ (encodes appearance variance, much action-irrelevant) — why `e_ac` was a lossy
+`free` g(f(z*t))→Δz · `ac` g(f(z_t),a_t)→Δz (forward, = original e_ac) · `invdyn` h(f(z_t),f(z*{t+1}))→a*t (predict the action).
+Forward Δz is \_distracted* (encodes appearance variance, much action-irrelevant) — why `e_ac` was a lossy
 reweight. Inverse dynamics is _targeted_: to name the action, `f` must keep the controllable/embodiment
 directions and can ignore uncontrollable distractors (classic inverse-model property, cf. ICM/poke).
 
 **DINOv2 substrate (Gate A), 4 seeds — the first non-null.** At **200 demos** `c_invdyn` is the best learned
-condition: finalErr **0.29±0.03** vs a 0.39±0.11, e_ac 0.42, noise 0.54, e_free 0.62; SR@0.2
+condition: finalErr **0.29±0.03** vs a 0.39±0.11, e*ac 0.42, noise 0.54, e_free 0.62; SR@0.2
 `c_invdyn−a`=**+0.18±0.09**, `−noise`=**+0.28±0.11** (~2σ). Ordering `invdyn>ac>free` as predicted.
 **Narrow:** plain `a` overtakes by 500 demos, all converge by 1000. A real but modest low-data-only
-demo-efficiency gain — the _objective_ drives it (forward `e_ac` on the same legible substrate stayed meh).
+demo-efficiency gain — the \_objective* drives it (forward `e_ac` on the same legible substrate stayed meh).
 
 **V-JEPA 2.1 substrate — the article's dense-feature claim holds on our frames.** Obtained via torch.hub
 (`vjepa2_1_vit_base_384`; needs `timm`; restore the weight URL off the dead `localhost:8300` mirror).
@@ -141,11 +141,11 @@ mean-pooling discards; inverse-dyn pretext-val is best on 2.1 (0.66 vs DINOv2 0.
 **V-JEPA 2.1 × inverse-dynamics — the clearest injection result (4 seeds, demos 50–500).** At low data the
 inverse-dynamics feature rescues the policy where plain z floors (finalErr, lower=better):
 
-| #demos | a (z only) | z+e_ac (fwd) | **z+e_invdyn** | SR@0.2 `c_invdyn−a` |
-| ------ | ---------- | ------------ | -------------- | ------------------- |
-| 50     | 0.529±0.05 | 0.647        | **0.383±0.08** | +0.09±0.07          |
-| 100    | 0.509±0.11 | 0.488        | **0.309±0.01** | **+0.24±0.10**      |
-| 200    | 0.409±0.11 | 0.347        | **0.235±0.04** | **+0.27±0.21**      |
+| #demos | a (z only) | z+e_ac (fwd) | **z+e_invdyn** | SR@0.2 `c_invdyn−a`    |
+| ------ | ---------- | ------------ | -------------- | ---------------------- |
+| 50     | 0.529±0.05 | 0.647        | **0.383±0.08** | +0.09±0.07             |
+| 100    | 0.509±0.11 | 0.488        | **0.309±0.01** | **+0.24±0.10**         |
+| 200    | 0.409±0.11 | 0.347        | **0.235±0.04** | **+0.27±0.21**         |
 | 500    | 0.149      | 0.244        | 0.164          | −0.07±0.08 (converged) |
 
 Ordering `invdyn > ac > free`, bigger + lower-data than DINOv2 (which peaked +0.18 @200). Tight `c_invdyn`
@@ -197,7 +197,7 @@ User chose the manipulation direction (reaching is proprio-capped: `bothprop`=1.
   **0.22** vs **0.66** on random play — deliberate motion makes the action far more recoverable from
   the latent pair (promising for `e_invdyn`).
 - **BUT reach-to-peg FLOORS** (BC of scripted demos, eval in-sim): minDist ~0.25–0.32 m, SR≈0, and
-  *worse* with more demos. **Diagnosed:** render-domain is fine (our-sim vs dataset home frames cosine
+  _worse_ with more demos. **Diagnosed:** render-domain is fine (our-sim vs dataset home frames cosine
   0.002), so the cause is (1) **open-loop BC of scripted absolute trajectories drifting closed-loop**
   (no self-correction — the HER reaching worked precisely because its label is goal-relative), and
   (2) the external dataset has **no peg GT**, so no robust "servo-to-peg" label and no way to convey a
@@ -215,12 +215,12 @@ global Jacobian from random play (Δgrip≈J·Δjoints, R²=0.93); the GT servo 
 reaches (SR@0.1=0.88) — sound expert. BC'd it from vision (`sp_reach_jcheck.py`, `sp_reach_insim.py`).
 Result exposed the real blocker: **`proprio_only` reaches** (200 demos: minDist 0.11, SR@0.15=0.96)
 while every spatial-`z` condition floors. Cause: **aloha's peg varies only ~0.02–0.05 m across
-episodes**, so proprio memorizes the near-fixed peg — the task has the *same proprio shortcut* as
-free-space reaching, and the irrelevant 200-d spatial input *hurts* (overfit). **A valid
+episodes**, so proprio memorizes the near-fixed peg — the task has the _same proprio shortcut_ as
+free-space reaching, and the irrelevant 200-d spatial input _hurts_ (overfit). **A valid
 vision-necessary manipulation test needs WIDE object randomization** (peg spread ≫ arm precision) +
 re-collected play + a J-expert that generalizes across peg positions — a defined but larger redo.
 Net manipulation status: scaffolding + two diagnoses done; no positive injection result yet (the
-positive result remains the V-JEPA2.1 × inverse-dynamics *reaching* one).
+positive result remains the V-JEPA2.1 × inverse-dynamics _reaching_ one).
 
 **Principle validated — pool ALL same-embodiment data for `e` (`sp_pool_e.py`).** `e` is meant to be
 pretrained on all cheap task-agnostic data of the same embodiment; only the policy head uses task
@@ -230,8 +230,8 @@ positive already trained `e` task-agnostically (on random play) — fair; the ma
 task-specific `e`. Going forward: one pooled `e`, reused across tasks; task must still be vision-necessary.
 
 **Tighten-the-threshold makes reach-to-peg vision-necessary on EXISTING data (no re-randomization).**
-The aloha peg spread is std 2.7×5.6 cm (range 10×20 cm) — *memorizable within a loose 0.1–0.15 m
-threshold*, which is why `proprio_only` "reached." With a **precise expert** (mujoco analytic Jacobian,
+The aloha peg spread is std 2.7×5.6 cm (range 10×20 cm) — _memorizable within a loose 0.1–0.15 m
+threshold_, which is why `proprio_only` "reached." With a **precise expert** (mujoco analytic Jacobian,
 `sp_jac_analytic.py`) and **SR@0.05**: a controller that sees the **true** peg gets SR@0.05=**0.94**,
 one that memorizes the **mean** peg gets **0.06**. So tighten threshold + precise expert ⇒
 vision-necessary, no re-collection. Caveat: `gripper_link` ref has a ~4 cm geometric offset to the peg
@@ -243,11 +243,11 @@ clears 0.05. Next: regenerate precise analytic-J labels for cached frames (repla
 blocker).** With precise per-frame analytic-J labels, the task IS learnable from low-dim inputs
 (`proprio_only` reaches ~10 cm by memorizing the mean; `oracle`=proprio+true-peg reaches at 1000
 demos). But **every condition that includes the 200-d spatial `z` floors near home** (~0.28 m) —
-*below* `proprio_only`. The small MLP can't learn an object→action servo from frozen spatial features
+_below_ `proprio_only`. The small MLP can't learn an object→action servo from frozen spatial features
 in low data; the high-dim vision input distracts rather than helps, so `a≈noise≈b_free≈c_invdyn` (all
 floored) and `e` can't be evaluated (its host, vision, doesn't work). **Reach-to-object is blocked not
 just by task-validity but by few-shot visuomotor learnability from frozen spatial features.** Contrast:
-the reaching positive worked because the goal was a *mean-pooled* whole-scene latent the MLP could use;
+the reaching positive worked because the goal was a _mean-pooled_ whole-scene latent the MLP could use;
 extracting+servoing a small object from spatial tokens is a harder visuomotor map this setup doesn't
 crack. **Recommendation: consolidate the reaching positive (the solid contribution); reach-to-object
 needs either a vision pipeline that pre-decodes the object (give the policy a low-d target) or a
@@ -274,7 +274,7 @@ where the toy MLP floored at ~0.28. The earlier failures (and the reaching "posi
 **already consumes** (the patch tokens) → it adds **zero information** → can only be neutral or harmful
 (harmful here: the ACT leans on the salient token, train/eval drift in it then misleads). The toy-MLP
 "injection helps" was a **weak-policy artifact** — the MLP used a lossy PCA-mean and couldn't extract
-embodiment, so a pre-concentrated `e` helped *it*; a competent extractor (ACT) erases the benefit, as
+embodiment, so a pre-concentrated `e` helped _it_; a competent extractor (ACT) erases the benefit, as
 information theory requires.
 
 **Conclusion for the whole project:** **Fork-2 (a bottleneck `e`-token around a FROZEN encoder) cannot
@@ -286,6 +286,7 @@ demo-efficiency (does it cut #demos). Scripts: `sp_act.py`.
 ## Literature check before Fork-1 (2026-06-10) — our idea ≈ DynaMo (works), with a recipe fix
 
 Lit review (full digest in git history of this commit) — directly de-risks/reframes Fork-1:
+
 - **Fork-1 ≈ DynaMo (Cui & Pinto, NeurIPS 2024, arXiv:2409.12192):** encoder trained with **latent
   inverse + forward dynamics** in-domain → feeds standard imitation heads → beats R3M/MVP/VC-1/ImageNet
   & from-scratch **at low demos**, across heads. Our real action labels make it strictly easier.
@@ -308,10 +309,10 @@ Lit review (full digest in git history of this commit) — directly de-risks/ref
 
 DynaMo-style adaptation of **DINOv2** (fine-tune top-2 blocks, inverse + forward + SimSiam stop-grad,
 on random-play self-play; `sp_dynamo.py`). Gate (held-out eps, R-gripper-xyz decode):
-**frozen 0.78 → adapted 0.90**, no full collapse (eff-rank 18→6.4), L_inv 0.99→0.74. So **Fork-1
+**frozen 0.78 → adapted 0.90**, no full collapse (eff-rank 18→6.4), L*inv 0.99→0.74. So **Fork-1
 measurably adds embodiment info** (same data/substrate; only the encoder's extraction changed) — the
 clean empirical complement to "Fork-2 (redundant-vision bottleneck) is info-theoretically doomed for a
-competent policy." (Fork-2 *is* saveable only by making the token carry NON-redundant info — privileged
+competent policy." (Fork-2 \_is* saveable only by making the token carry NON-redundant info — privileged
 distillation, or the HVLA-S2-token pattern where the token is a separate system's reasoning, not a
 re-encoding of the policy's own vision.)
 Caveats: rank 18→6.4 = strong concentration on controllable dims (sheds scene/object info — re-tune for
@@ -360,8 +361,70 @@ evicts. So dynamics-injection pushes vision toward the self → REDUNDANT where 
 has it) and DESTRUCTIVE where the object matters (sheds the peg). That's why Fork-1 hurt reach-to-object
 and frozen vision won.
 
-**Verdict:** Fork-2 = redundant (no added info to a competent policy). Fork-1 = genuinely injects *body*
+**Verdict:** Fork-2 = redundant (no added info to a competent policy). Fork-1 = genuinely injects _body_
 embodiment (gripper 0.78→0.95) but it's the wrong thing for a vision encoder (redundant w/ proprio,
 evicts the object). For manipulation, the right combo is the one that already worked: **frozen vision
 (keeps the object) + proprio (the body)**. No free lunch: an object-preserving anchor just pulls back
-toward frozen. Scripts: sp_dynamo_{pooled,spatial}.py, sp_act_fork1.py.
+toward frozen. Scripts: sp*dynamo*{pooled,spatial}.py, sp_act_fork1.py.
+
+---
+
+## Chapter: VLA-JEPA mini-repro (ACT student) — the WM-teacher route, tested faithfully (2026-06-10/11)
+
+**Pivot rationale.** After the encoder-direct negatives, the user redirected to the literature-backed
+mechanism: a JEPA world model _teaching_ a policy (VLA-JEPA, arXiv 2602.10098 — Qwen3-VL-2B + frozen
+V-JEPA2 teacher + latent-action world model, WM dropped at inference; LeRobot upstream port exists:
+`feat/vla-jepa-*`, `lerobot/VLA-JEPA-Pretrain`). Full repro infeasible (8×A100, 300K-clip corpus);
+mini-repro = same structure with an ACT student (59M, own ResNet18) + V-JEPA2.1 teacher, aloha sim.
+
+**Method discipline (the lasting contribution).** Per-line paper anchors (`[S3.2 E3]`) + completeness
+table + **executable selftest gate** (10 checks: spatial shapes, z-group & teacher-forcing causality via
+perturbation, leakage, trainability, train/eval path identity, mask equality against upstream's
+`build_action_block_causal_attention_mask` verbatim port, determinism, overfit canary). Training refuses
+to start on FAIL. This caught: missing teacher forcing (E3), ungrouped/non-causal latent tokens (E2),
+**pooled WM targets** (paper+upstream predict per-frame patch grids — an unflagged "DONE" in the v1
+audit), a stage-2 stats leak (few-shot claim using all-80-episode normalization), and a train/eval
+resize mismatch. Independent-implementation diffing > self-review, every time.
+
+**Stage-1 protocol** (paper has none — fixed 50K steps, downstream-only): stop at val-min of
+L_WM/copy-baseline; aliveness via **shuffle-z gap** (swap z across samples). Twin-gap (separately
+trained no-z predictor) RETIRED — it measures redundancy vs the teacher-forced GT context, not whether
+the student learned to anticipate (pooled run: twin-gap ≈0 while shuffle/z-zero showed z alive, +33–45%
+/ +15→83% with horizon). Spatial round: val 5.6→0.42 no overfit upturn, shuffle-gap +41–42% from the
+first checkpoint; ckpt = s1sp_24000, stride 16 (0.32 s/step — stride 6 starved z; our ambiguity lever,
+the paper's comes from corpus diversity).
+
+**Stage-2 results (insertion, K=10 unless noted; proper ACT = CVAE + chunk100 + temporal ensembling —
+earlier "floors" were the toy policy's fault):**
+
+| test                                                                 | result                                                                                                                                            |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fixed 12k, 2 seeds, n=24                                             | ctrl 33.5% > β0.1 23% > β0.5 19% (ordering both seeds)                                                                                            |
+| decomposition (init-only, β=0)                                       | 29% ≈ ctrl — init neutral; aux is the suspect                                                                                                     |
+| **SR-vs-steps to 36k** (fair test per user: peak, not matched steps) | ctrl 33→38→**42%** rising; β0.1 21→21→12; β0.5 17→12→8 — aux arms **decline**; "slower convergence" rejected; β dose-response in peak AND decline |
+| **fresh n=48 re-eval** (same models, new seeds)                      | ctrl 35 / β0.1 31 / β0.5 31 / init 38% — **gaps evaporate**; n=24 inflated the harm (±14 pt swings per model across eval sets)                    |
+| OOD object-layout (f=2×,3× spawn, n=48 paired)                       | **all arms floor (2–6%)** — degradation slope unmeasurable at this policy strength                                                                |
+| transfer_cube K=10                                                   | ctrl 29–33 / β0.1 29 / init 29% — neutral; deficit does not generalize to the dynamic task                                                        |
+| K=3                                                                  | both 4% (floor, undiscriminating)                                                                                                                 |
+| K=25                                                                 | ctrl 67% vs β0.1 62% (within noise; both reach 8% full insertion)                                                                                 |
+
+**Verdict.** At 59M/180-episode scale the WM-teacher mechanism is **neutral-to-mildly-harmful
+in-distribution, neutral cross-task, untestable OOD** (policies too weak off-distribution). The only
+robust harm signal is the within-arm overtraining decline with the aux on (objective conflict compounds);
+the only robust safety signal is that stage-1 _initialization_ costs nothing. Consistent with the paper's
+own fine print: WM adds <1% in-distribution at 2B scale (LIBERO 97.2 vs 96.1); its gains are OOD/robustness
+(LIBERO-Plus +10–18 pts) — a regime our base policies cannot yet reach.
+
+**Methodological lessons (now standing practice).** (1) Fixed-budget comparisons can establish _gains_
+but not _deficits_ — a losing arm may be slower; compare peaks (user's correction). (2) n=24 closed-loop
+SR has ±10 pt σ and ±14 pt cross-set swings — never headline single-set gaps. (3) Self-certification
+fails; executable selftests + upstream diffing catch what re-reading does not.
+
+**Go/no-go on large-model VLA-JEPA: NO-GO for now.** Nothing measured justifies the 2B build as a
+continuation of this line. The exposed levers are (a) base-policy competence (K=25 → 67%/8-pt full
+insertion shows data scaling works; OOD needs a much stronger base before the slope question is posable)
+and (b) stage-1 corpus diversity (scene-determined self-play) — relevant only after (a).
+
+Figure: `figures/vlajepa_sr_vs_steps_ood.png`. Scripts: `scripts/sp_vj_act.py` (model + stage-1 +
+selftest), `scripts/sp_vj_act_s2.py` (stage-2 + arms), `scripts/sp_ood_eval.py` (graded OOD), queue
+`scripts/sp_queue2.sh`. Logs/ckpts in /tmp/selfplay_probe (scratch).
