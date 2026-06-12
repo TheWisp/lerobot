@@ -243,7 +243,11 @@ async def probe_ssh(
         CheckItem(
             name="docker",
             ok=docker_path is not None,
-            detail=docker_path or "not installed — run scripts/training/install_prereqs.sh on the host",
+            detail=docker_path
+            or (
+                "not installed — from the lerobot checkout, run: "
+                f"ssh {host_spec} 'sudo bash -s' < scripts/training/install_prereqs.sh"
+            ),
         ),
         CheckItem(
             name="tmux",
