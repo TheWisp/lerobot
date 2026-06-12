@@ -394,3 +394,15 @@ def test_resolve_host_placeholders_substitutes_all(tmp_path: Path) -> None:
 def test_resolve_host_placeholders_rejects_relative_home() -> None:
     with pytest.raises(AssertionError, match="absolute"):
         resolve_host_placeholders(["x"], uid=1, gid=1, home="relative/home")
+
+
+def test_docker_recipe_sets_inductor_cache_dir(tmp_path: Path) -> None:
+    """Regression (GPU smoke bug #4): torch's inductor cache calls
+    getpass.getuser() at import time — a passwd lookup by uid that
+    KeyErrors when the container runs as a host uid with no /etc/passwd
+    entry in the image (any host whose user isn't uid 1000)."""
+    paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
+    paths.ensure_exists()
+    cmd = _docker_cmd(_make_run({"policy.type": "act"}), paths)
+    e_idx = cmd.index("-e")
+    assert cmd[e_idx + 1] == "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache"

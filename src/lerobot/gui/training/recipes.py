@@ -290,6 +290,14 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         "--shm-size=8g",
         "--user",
         f"{HOST_UID_TOKEN}:{HOST_GID_TOKEN}",
+        # The container runs as the HOST's uid, which usually has no
+        # /etc/passwd entry inside the image (only user_lerobot=1000 does).
+        # torch's inductor cache calls getpass.getuser() AT IMPORT TIME,
+        # which is a passwd lookup by uid → KeyError on any host whose
+        # user isn't uid 1000. Point the cache somewhere world-writable
+        # so the lookup never happens.
+        "-e",
+        "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
@@ -389,6 +397,14 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
         "--shm-size=8g",
         "--user",
         f"{HOST_UID_TOKEN}:{HOST_GID_TOKEN}",
+        # The container runs as the HOST's uid, which usually has no
+        # /etc/passwd entry inside the image (only user_lerobot=1000 does).
+        # torch's inductor cache calls getpass.getuser() AT IMPORT TIME,
+        # which is a passwd lookup by uid → KeyError on any host whose
+        # user isn't uid 1000. Point the cache somewhere world-writable
+        # so the lookup never happens.
+        "-e",
+        "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
