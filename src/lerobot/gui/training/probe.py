@@ -243,12 +243,12 @@ async def probe_ssh(
         CheckItem(
             name="docker",
             ok=docker_path is not None,
-            detail=docker_path or "not installed or not on PATH",
+            detail=docker_path or "not installed — run scripts/training/install_prereqs.sh on the host",
         ),
         CheckItem(
             name="tmux",
             ok=tmux_path is not None,
-            detail=tmux_path or "not installed or not on PATH",
+            detail=tmux_path or "not installed — `sudo apt install tmux` on the host",
         ),
         CheckItem(
             name="nvidia",
@@ -264,5 +264,7 @@ async def probe_ssh(
         latency_ms=latency_ms,
         checks=checks,
         error_class=None if all_ok else "command_missing",
-        message="All checks passed" if all_ok else "SSH ok but the remote host is missing required tools",
+        message="All checks passed"
+        if all_ok
+        else "SSH ok — install the missing tools on the host, then Test again",
     )
