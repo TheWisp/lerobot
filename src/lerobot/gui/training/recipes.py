@@ -143,7 +143,11 @@ def resolve_host_placeholders(command: list[str], uid: int, gid: int, home: str)
     Pre: ``home`` is an absolute path on the target host.
     Post: no ``__LEROBOT_HOST_*__`` token remains in the result.
     """
-    assert home.startswith("/"), f"host home must be absolute, got {home!r}"
+    if not home or not home.startswith("/"):
+        raise ValueError(
+            f"training host reported a non-absolute home directory ({home!r}) — "
+            "check the host's $HOME (e.g. `ssh <host> 'echo $HOME'`)"
+        )
     out = []
     for arg in command:
         arg = arg.replace(HOST_UID_TOKEN, str(uid))
@@ -249,38 +253,20 @@ _FORCED_FLAGS: dict[str, str] = {
 _NEVER_USER_OVERRIDE: frozenset[str] = frozenset({"output_dir", "policy.push_to_hub"})
 
 
-def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[str, str]]:
-    image = run.args.get("__image__") or DEFAULT_IMAGE
+def _docker_argv_base(image: str, paths: RunPaths) -> list[str]:
+    """The docker-run prefix shared by every recipe: GPU passthrough,
+    host-identity placeholders, the arbitrary-uid env overrides, and the
+    two bind mounts. One seam so the GPU-smoke lessons can't drift apart
+    between recipe builders (they were patched in parallel six times
+    before this was extracted).
+
+    Post: ends with the image — callers append their entrypoint + args.
+    """
     # Resolved on the LAUNCHING host at launch time (see the placeholder
     # block above) — never expanduser() here, this code runs on the GUI
     # server while the mount source lives on the training host.
     hf_cache_host = f"{HOST_HOME_TOKEN}/.cache/huggingface"
-
-    # Translate Run.args → lerobot-train --key=value flags
-    train_args: list[str] = []
-    seen: set[str] = set()
-    # User-supplied flags first
-    for k, v in run.args.items():
-        if k.startswith("__"):
-            continue
-        if k in _FORCED_FLAGS:
-            # User explicitly set a flag we'd otherwise force — silently
-            # drop iff in the never-override set; otherwise let user win.
-            if k in _NEVER_USER_OVERRIDE:
-                continue
-            train_args.append(f"--{k}={_fmt_arg(v)}")
-            seen.add(k)
-            continue
-        train_args.append(f"--{k}={_fmt_arg(v)}")
-        seen.add(k)
-
-    # Forced flags — emit only if user didn't already provide
-    for k, v in _FORCED_FLAGS.items():
-        if k in seen:
-            continue
-        train_args.append(f"--{k}={v}")
-
-    docker_argv = [
+    return [
         "docker",
         "run",
         "--rm",
@@ -330,6 +316,38 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         "-v",
         f"{paths.root}:{CONTAINER_RUNS_MOUNT}",
         image,
+    ]
+
+
+def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[str, str]]:
+    image = run.args.get("__image__") or DEFAULT_IMAGE
+
+    # Translate Run.args → lerobot-train --key=value flags
+    train_args: list[str] = []
+    seen: set[str] = set()
+    # User-supplied flags first
+    for k, v in run.args.items():
+        if k.startswith("__"):
+            continue
+        if k in _FORCED_FLAGS:
+            # User explicitly set a flag we'd otherwise force — silently
+            # drop iff in the never-override set; otherwise let user win.
+            if k in _NEVER_USER_OVERRIDE:
+                continue
+            train_args.append(f"--{k}={_fmt_arg(v)}")
+            seen.add(k)
+            continue
+        train_args.append(f"--{k}={_fmt_arg(v)}")
+        seen.add(k)
+
+    # Forced flags — emit only if user didn't already provide
+    for k, v in _FORCED_FLAGS.items():
+        if k in seen:
+            continue
+        train_args.append(f"--{k}={v}")
+
+    docker_argv = [
+        *_docker_argv_base(image, paths),
         "lerobot-train",
         *train_args,
     ]
@@ -370,7 +388,6 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
     form today; would need an upstream extension).
     """
     image = run.args.get("__image__") or DEFAULT_IMAGE
-    hf_cache_host = f"{HOST_HOME_TOKEN}/.cache/huggingface"  # resolved at launch on the host
 
     # Translate the form's flat snake_case args dict → HVLA's dashed CLI flags.
     train_args: list[str] = []
@@ -410,55 +427,7 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
         del train_args[idx : idx + 2]
 
     docker_argv = [
-        "docker",
-        "run",
-        "--rm",
-        "--gpus",
-        "all",
-        # Docker defaults /dev/shm to 64 MiB, which the PyTorch DataLoader
-        # blows through immediately for any camera-using policy (one batch
-        # of 4 cameras × 512² × uint8 is ~12 MB per sample). The crash
-        # surfaces as "unable to allocate shared memory(shm) ... Resource
-        # temporarily unavailable" in a worker process. 8g is conservative
-        # for typical ML batches.
-        "--shm-size=8g",
-        "--user",
-        f"{HOST_UID_TOKEN}:{HOST_GID_TOKEN}",
-        # The container runs as the HOST's uid, which usually has no
-        # /etc/passwd entry inside the image (only user_lerobot=1000 does).
-        # torch's inductor cache calls getpass.getuser() AT IMPORT TIME,
-        # which is a passwd lookup by uid → KeyError on any host whose
-        # user isn't uid 1000. Point the cache somewhere world-writable
-        # so the lookup never happens.
-        "-e",
-        "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache",
-        # The image bakes HF_HOME/HF_LEROBOT_HOME pointing into the image
-        # user's home; override to the world-traversable mount target.
-        # TRITON_CACHE_DIR: same passwd-less-uid class as inductor, fires
-        # on first triton-compiled kernel.
-        "-e",
-        f"HF_HOME={CONTAINER_HF_CACHE}",
-        "-e",
-        f"HF_LEROBOT_HOME={CONTAINER_HF_CACHE}/lerobot",
-        "-e",
-        "TRITON_CACHE_DIR=/tmp/triton-cache",
-        # Closes the whole ~-derived-cache class for arbitrary host uids
-        # (torch hub backbones, matplotlib, any XDG default): the image
-        # user's home isn't writable (or traversable) for uid != 1000.
-        # /tmp is sticky world-writable; libs mkdir what they need. The
-        # one cache that must persist, HF, is explicitly mounted above.
-        "-e",
-        "HOME=/tmp/lerobot-home",
-        # The image also bakes TORCH_HOME into the image user's home, and
-        # torch.hub checks TORCH_HOME before falling back to ~ — so the
-        # HOME redirect alone doesn't cover the backbone-weights cache.
-        "-e",
-        "TORCH_HOME=/tmp/lerobot-home/.cache/torch",
-        "-v",
-        f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
-        "-v",
-        f"{paths.root}:{CONTAINER_RUNS_MOUNT}",
-        image,
+        *_docker_argv_base(image, paths),
         *HVLA_FLOW_S1_ENTRYPOINT,
         *train_args,
     ]

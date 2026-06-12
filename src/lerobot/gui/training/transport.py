@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import logging
 import os
 import shutil
 import signal
@@ -37,6 +38,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+logger = logging.getLogger(__name__)
 
 # ── Transport configurations ───────────────────────────────────────────────────
 
@@ -365,6 +368,12 @@ class SubprocessClient:
         try:
             return list(path.iterdir())
         except FileNotFoundError:
+            return []
+        except OSError as e:
+            # PermissionError / NotADirectoryError mid-poll must not crash
+            # the request thread; an empty listing + a log line matches the
+            # SSH client's behavior (its find 2>/dev/null swallows these).
+            logger.warning("list_dir(%s) failed: %s", path, e)
             return []
 
     def sha256_of(self, path: Path) -> str | None:

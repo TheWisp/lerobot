@@ -234,3 +234,28 @@ def test_remote_cmd_probes_docker_usability():
     user), not just `command -v` (binary presence)."""
     assert "docker info" in probe_mod._REMOTE_CMD
     assert "__DOCKER_UNUSABLE__" in probe_mod._REMOTE_CMD
+
+
+@pytest.mark.asyncio
+async def test_probe_forces_c_locale(monkeypatch):
+    """Regression: _classify_stderr matches English ssh messages; without
+    LC_ALL=C a non-English locale turns every error into 'unknown'."""
+    captured: dict = {}
+
+    async def fake_create(*args, **kwargs):
+        captured["env"] = kwargs.get("env") or {}
+        return _FakeProc(stdout_b=b"__LEROBOT_PROBE_OK__\n", returncode=0)
+
+    monkeypatch.setattr(probe_mod.asyncio, "create_subprocess_exec", fake_create)
+    await probe_ssh("host")
+    assert captured["env"].get("LC_ALL") == "C"
+
+
+@pytest.mark.asyncio
+async def test_probe_classifies_openssh9_timeout_variant(monkeypatch):
+    """OpenSSH 9.x phrases timeouts as 'ssh: connect ... Timeout' rather
+    than the classic 'connection timed out' — both must classify."""
+    fake = _FakeProc(stderr_b=b"ssh: connect to host example.com port 22: Timeout\n", returncode=255)
+    _patch_subprocess(monkeypatch, fake)
+    result = await probe_ssh("example.com")
+    assert result.error_class == "timeout"

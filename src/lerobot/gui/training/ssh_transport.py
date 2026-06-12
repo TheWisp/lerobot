@@ -377,7 +377,10 @@ class SshClient:
             raise RuntimeError(f"host_identity failed: rc={r.returncode} stderr={err}")
         uid_s, gid_s, home = r.stdout.decode().strip().split(" ", 2)
         identity = (int(uid_s), int(gid_s), home)
-        assert home.startswith("/"), f"remote $HOME not absolute: {home!r}"
+        if not home.startswith("/"):
+            raise RuntimeError(
+                f"remote $HOME is not an absolute path ({home!r}) — check the remote shell environment"
+            )
         self._host_identity = identity
         return identity
 

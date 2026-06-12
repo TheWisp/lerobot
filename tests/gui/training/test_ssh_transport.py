@@ -272,3 +272,16 @@ def test_image_inspect_known_returns_true_when_pulled(ssh_client: SshClient) -> 
 
 def test_image_size_unknown_returns_none(ssh_client: SshClient) -> None:
     assert ssh_client.image_size("lerobot-pytest-does-not-exist:never") is None
+
+
+def test_host_identity_rejects_relative_home(ssh_client, monkeypatch):
+    """host_identity must fail loudly (user-facing message) on a remote
+    whose $HOME comes back non-absolute, not assert-crash deep in launch."""
+    import subprocess as sp
+
+    def fake_exec(remote_cmd, **kw):
+        return sp.CompletedProcess(args=[], returncode=0, stdout=b"1001 1001 relative/home\n", stderr=b"")
+
+    monkeypatch.setattr(ssh_client, "_exec", fake_exec)
+    with pytest.raises(RuntimeError, match="not an absolute path"):
+        ssh_client.host_identity()

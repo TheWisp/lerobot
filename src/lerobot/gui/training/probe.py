@@ -28,6 +28,7 @@ off them.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Literal
@@ -111,7 +112,7 @@ def _classify_stderr(stderr: str) -> tuple[ProbeErrorClass, str]:
         )
     if "could not resolve hostname" in s or "name or service not known" in s:
         return "dns", "Hostname not resolvable"
-    if "connection timed out" in s or "operation timed out" in s:
+    if "timed out" in s or "timeout" in s:
         return "timeout", f"Connection timed out after {SSH_CONNECT_TIMEOUT_S}s"
     if "connection refused" in s:
         return "refused", "Connection refused — is sshd running on that port?"
@@ -160,11 +161,15 @@ async def probe_ssh(
     t0 = time.monotonic()
     proc = None
     try:
+        # LC_ALL=C: _classify_stderr matches English ssh messages; on a
+        # non-English locale every error would fall through to "unknown".
+        env = {**os.environ, "LC_ALL": "C"}
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         try:
             stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=wallclock_timeout_s)

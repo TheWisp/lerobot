@@ -770,8 +770,18 @@ class Orchestrator:
         remote-resume is a separate workstream.
 
         Per-file failures log and continue: a partial fetch beats a
-        completed run with zero local artifacts.
+        completed run with zero local artifacts. A whole-fetch failure
+        (e.g. list_dir crash, layout drift) emits ``artifacts_fetch_failed``
+        so the user isn't staring at a silently-checkpoint-less run.
         """
+        try:
+            self._fetch_run_artifacts_inner(client, run, paths)
+        except Exception as e:
+            logger.warning("artifact fetch failed for run %s: %s", run.run_id, e)
+            with contextlib.suppress(Exception):
+                self._emit_event(client, paths.events_jsonl, "artifacts_fetch_failed", error=str(e)[:200])
+
+    def _fetch_run_artifacts_inner(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
         fetched = 0
         for ckpt_dir, _step in self._iter_checkpoint_dirs(client, run, paths):
             # Same nested/flat discovery as _sync_checkpoints_manifest.
@@ -901,7 +911,11 @@ class Orchestrator:
                         ts=float(d["ts"]),
                     )
                 )
-            except (json.JSONDecodeError, KeyError, ValueError):
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                # A malformed line means a half-written append or manifest
+                # corruption — skipping keeps the run usable, but silence
+                # would hide systematic corruption. One log line per bad line.
+                logger.warning("skipping malformed manifest line in %s: %s", manifest_path, e)
                 continue
         return entries
 

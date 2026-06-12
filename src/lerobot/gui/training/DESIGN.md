@@ -253,7 +253,7 @@ The start form — same shape for every host mode, dropdowns swap by host:
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Run state machine — the same five states regardless of host mode:
+Run state machine — the same six states regardless of host mode:
 
 ```mermaid
 stateDiagram-v2

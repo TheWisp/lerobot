@@ -392,8 +392,12 @@ def test_resolve_host_placeholders_substitutes_all(tmp_path: Path) -> None:
 
 
 def test_resolve_host_placeholders_rejects_relative_home() -> None:
-    with pytest.raises(AssertionError, match="absolute"):
+    """ValueError (not assert): the message reaches the run's error field
+    and must tell the user what to check, not dump an assert backtrace."""
+    with pytest.raises(ValueError, match="non-absolute home"):
         resolve_host_placeholders(["x"], uid=1, gid=1, home="relative/home")
+    with pytest.raises(ValueError, match="non-absolute home"):
+        resolve_host_placeholders(["x"], uid=1, gid=1, home="")
 
 
 def test_docker_recipe_sets_inductor_cache_dir(tmp_path: Path) -> None:
