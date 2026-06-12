@@ -15,7 +15,6 @@ is validated end-to-end via the live smoke (see scripts/training/README.md
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 
@@ -27,12 +26,16 @@ from lerobot.gui.training.recipes import (
     CONTAINER_RUNS_MOUNT,
     DEFAULT_IMAGE,
     FAKE_RECIPE_MARKER,
+    HOST_GID_TOKEN,
+    HOST_HOME_TOKEN,
+    HOST_UID_TOKEN,
     HVLA_FLOW_S1_RECIPE,
     build_lerobot_train_command,
     docker_available,
     is_fake_recipe,
     is_hvla_flow_s1_recipe,
     output_subdir_in_run,
+    resolve_host_placeholders,
 )
 from lerobot.gui.training.runs import Run, RunPaths, RunState, new_run_id
 
@@ -100,9 +103,11 @@ def test_docker_recipe_command_shape(tmp_path: Path) -> None:
     assert cmd[0:2] == ["docker", "run"]
     # GPU passthrough
     assert "--gpus" in cmd and "all" in cmd
-    # User UID/GID (whatever the test process is running as)
+    # User UID/GID: host-identity TOKENS at compose time — resolved by the
+    # orchestrator against the LAUNCHING host (remote uids aren't reliably
+    # the GUI server's; first Nebius smoke ran as 1001).
     user_idx = cmd.index("--user")
-    assert cmd[user_idx + 1] == f"{os.getuid()}:{os.getgid()}"
+    assert cmd[user_idx + 1] == f"{HOST_UID_TOKEN}:{HOST_GID_TOKEN}"
     # Image is positional, just before "lerobot-train"
     assert "lerobot-train" in cmd
     train_idx = cmd.index("lerobot-train")
@@ -114,9 +119,8 @@ def test_docker_recipe_bind_mounts(tmp_path: Path) -> None:
     paths.ensure_exists()
     run = _make_run({"policy.type": "act"})
     cmd = _docker_cmd(run, paths)
-    # HF cache mount
-    hf_host = os.path.expanduser("~/.cache/huggingface")
-    assert f"{hf_host}:{CONTAINER_HF_CACHE}" in cmd
+    # HF cache mount source is $HOME-on-the-host, tokenised at compose time
+    assert f"{HOST_HOME_TOKEN}/.cache/huggingface:{CONTAINER_HF_CACHE}" in cmd
     # Run dir mount
     assert f"{paths.root}:{CONTAINER_RUNS_MOUNT}" in cmd
 
@@ -215,6 +219,10 @@ def test_docker_recipe_drops_meta_markers(tmp_path: Path) -> None:
     run = _make_run({"policy.type": "act", "__some_marker__": "x", "__another__": True})
     cmd = _docker_cmd(run, paths)
     for tok in cmd:
+        # Host-identity placeholders are intentional compose-time tokens
+        # (resolved at launch); form meta markers must not leak.
+        if "__LEROBOT_HOST_" in tok:
+            continue
         assert "__" not in tok or tok.endswith(".pyc"), f"unexpected meta token: {tok}"
 
 
@@ -343,8 +351,7 @@ def test_hvla_recipe_bind_mounts(tmp_path: Path) -> None:
     paths = RunPaths.for_run("h1", runs_dir=tmp_path)
     paths.ensure_exists()
     cmd = _docker_cmd(_hvla_run({"steps": 5}), paths)
-    hf_host = os.path.expanduser("~/.cache/huggingface")
-    assert f"{hf_host}:{CONTAINER_HF_CACHE}" in cmd
+    assert f"{HOST_HOME_TOKEN}/.cache/huggingface:{CONTAINER_HF_CACHE}" in cmd
     assert f"{paths.root}:{CONTAINER_RUNS_MOUNT}" in cmd
 
 
@@ -354,7 +361,7 @@ def test_hvla_recipe_user_and_gpu_passthrough(tmp_path: Path) -> None:
     cmd = _docker_cmd(_hvla_run({"steps": 5}), paths)
     assert "--gpus" in cmd and "all" in cmd
     user_idx = cmd.index("--user")
-    assert cmd[user_idx + 1] == f"{os.getuid()}:{os.getgid()}"
+    assert cmd[user_idx + 1] == f"{HOST_UID_TOKEN}:{HOST_GID_TOKEN}"
 
 
 def test_hvla_recipe_image_override(tmp_path: Path) -> None:
@@ -364,3 +371,26 @@ def test_hvla_recipe_image_override(tmp_path: Path) -> None:
     cmd = _docker_cmd(run, paths)
     assert "myreg/my-custom:dev" in cmd
     assert DEFAULT_IMAGE not in cmd
+
+
+# ── Host-placeholder resolution ──────────────────────────────────────────────
+
+
+def test_resolve_host_placeholders_substitutes_all(tmp_path: Path) -> None:
+    """Regression (2026-06-12 GPU smoke): --user was baked with the GUI
+    server's uid at compose time; remote feit was uid 1001 and the
+    container ground PermissionErrors into 1001-owned mounts."""
+    paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run({"policy.type": "act"})
+    cmd = _docker_cmd(run, paths)
+    resolved = resolve_host_placeholders(cmd, uid=1001, gid=1001, home="/home/remoteuser")
+    user_idx = resolved.index("--user")
+    assert resolved[user_idx + 1] == "1001:1001"
+    assert f"/home/remoteuser/.cache/huggingface:{CONTAINER_HF_CACHE}" in resolved
+    assert not any("__LEROBOT_HOST_" in a for a in resolved)
+
+
+def test_resolve_host_placeholders_rejects_relative_home() -> None:
+    with pytest.raises(AssertionError, match="absolute"):
+        resolve_host_placeholders(["x"], uid=1, gid=1, home="relative/home")

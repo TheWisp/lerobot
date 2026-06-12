@@ -174,6 +174,27 @@ class TransportClient(Protocol):
         same events.jsonl the worker writes to."""
         ...
 
+    def host_identity(self) -> tuple[int, int, str]:
+        """``(uid, gid, home)`` of the user commands run as ON THIS HOST.
+
+        Recipes are composed on the GUI server but execute wherever the
+        transport points; host-dependent values in the command (the
+        ``--user`` flag, ``$HOME``-derived mount sources) are emitted as
+        placeholders and resolved through this method at launch time.
+        The GUI server's own uid is NOT a valid substitute — the first
+        remote VM whose user wasn't uid 1000 proved it.
+
+        Post: ``home`` is an absolute path on the target host.
+        """
+        ...
+
+    def ensure_dir(self, path: Path) -> None:
+        """``mkdir -p`` on the host, as the transport's user. Used to
+        pre-create bind-mount sources before ``docker run`` — a missing
+        source is auto-created by the docker daemon AS ROOT, after which
+        a non-root container can never write into it."""
+        ...
+
     # ── Image (docker) ops, host-side ──────────────────────────────────────────
     #
     # Folded into the TransportClient Protocol so the host abstraction is
@@ -356,6 +377,13 @@ class SubprocessClient:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as f:
             f.write(text)
+
+    def host_identity(self) -> tuple[int, int, str]:
+        # Local transport: the GUI server's own identity IS the host truth.
+        return os.getuid(), os.getgid(), str(Path.home())
+
+    def ensure_dir(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
 
     def image_inspect(self, tag: str) -> bool:
         try:

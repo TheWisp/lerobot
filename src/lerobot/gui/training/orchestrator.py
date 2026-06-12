@@ -43,6 +43,7 @@ from lerobot.gui.training.hosts import HostRegistry, TrainingHost
 from lerobot.gui.training.recipes import (
     build_lerobot_train_command,
     output_subdir_in_run,
+    resolve_host_placeholders,
 )
 from lerobot.gui.training.runs import (
     TERMINAL_STATES,
@@ -542,6 +543,16 @@ class Orchestrator:
         """Build the worker command + invoke via the host's transport."""
         client = make_client(host.transport)
         command = self._build_command(run, paths)
+        # Host-identity placeholders (--user uid:gid, $HOME-derived mount
+        # sources) resolve against the LAUNCHING host, not the GUI server —
+        # remote users are not reliably uid 1000 (first Nebius smoke: 1001).
+        uid, gid, home = client.host_identity()
+        command = resolve_host_placeholders(command, uid, gid, home)
+        # Pre-create every bind-mount source as the transport's user. A
+        # missing source is auto-created by dockerd AS ROOT, after which a
+        # non-root container can never write into it (same smoke, bug #1).
+        for src in _bind_mount_sources(command):
+            client.ensure_dir(src)
         env = self._build_env(run, paths)
         # For subprocess transport, workdir is the run dir (worker writes here).
         # For SSH (future), the workdir param becomes the remote per-run dir
@@ -947,6 +958,24 @@ def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
 class _ImagePullError(RuntimeError):
     """Raised internally when ``docker pull`` exits non-zero. Caught by
     :meth:`Orchestrator._prepare_and_launch` to flip the run to FAILED."""
+
+
+def _bind_mount_sources(cmd: list[str]) -> list[Path]:
+    """Host-side source dirs of every ``-v src:dst`` pair in a docker argv.
+
+    Empty for non-docker commands (fake recipe). Used to pre-create mount
+    sources before launch — dockerd auto-creates missing sources as root,
+    which a ``--user``-constrained container can then never write into.
+    """
+    if not cmd or cmd[0] != "docker":
+        return []
+    out: list[Path] = []
+    for i, arg in enumerate(cmd):
+        if arg == "-v" and i + 1 < len(cmd):
+            src = cmd[i + 1].split(":", 1)[0]
+            if src.startswith("/"):
+                out.append(Path(src))
+    return out
 
 
 def _extract_image_from_docker_argv(cmd: list[str]) -> str | None:

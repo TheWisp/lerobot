@@ -128,7 +128,8 @@ def test_registry_add_appends() -> None:
 def test_registry_auto_with_gpu_present(tmp_path: Path) -> None:
     fake_caps = {"gpu_name": "G", "vram_mb": 1024, "gpu_count_detected": 1}
     with patch("lerobot.gui.training.hosts._detect_nvidia_gpu", return_value=fake_caps):
-        reg = HostRegistry.auto(workdir=tmp_path)
+        # hosts_dir=tmp_path: never read the developer's real saved hosts
+        reg = HostRegistry.auto(workdir=tmp_path, hosts_dir=tmp_path)
     hosts = reg.list_hosts()
     assert len(hosts) == 1
     assert hosts[0].id == WORKSTATION_HOST_ID
@@ -136,7 +137,7 @@ def test_registry_auto_with_gpu_present(tmp_path: Path) -> None:
 
 def test_registry_auto_no_gpu_empty(tmp_path: Path) -> None:
     with patch("lerobot.gui.training.hosts._detect_nvidia_gpu", return_value=None):
-        reg = HostRegistry.auto(workdir=tmp_path)
+        reg = HostRegistry.auto(workdir=tmp_path, hosts_dir=tmp_path)
     assert reg.list_hosts() == []
 
 

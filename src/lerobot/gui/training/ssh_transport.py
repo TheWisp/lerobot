@@ -351,6 +351,32 @@ class SshClient:
             err = r.stderr.decode("utf-8", errors="replace")[-200:]
             raise RuntimeError(f"append_text({path}) failed: rc={r.returncode} stderr={err}")
 
+    def host_identity(self) -> tuple[int, int, str]:
+        """``(uid, gid, home)`` of the REMOTE user — queried once over
+        SSH and cached for the client's lifetime (a user's uid/home don't
+        change mid-session). This is the launch-time truth the recipe
+        placeholders resolve against; the GUI server's own uid is
+        irrelevant here (remote users are not reliably uid 1000)."""
+        cached = getattr(self, "_host_identity", None)
+        if cached is not None:
+            return cached
+        r = self._exec('echo "$(id -u) $(id -g) $HOME"')
+        if r.returncode != 0:
+            err = r.stderr.decode("utf-8", errors="replace")[-200:]
+            raise RuntimeError(f"host_identity failed: rc={r.returncode} stderr={err}")
+        uid_s, gid_s, home = r.stdout.decode().strip().split(" ", 2)
+        identity = (int(uid_s), int(gid_s), home)
+        assert home.startswith("/"), f"remote $HOME not absolute: {home!r}"
+        self._host_identity = identity
+        return identity
+
+    def ensure_dir(self, path: Path) -> None:
+        assert path.is_absolute()
+        r = self._exec(f"mkdir -p {shlex.quote(str(path))}")
+        if r.returncode != 0:
+            err = r.stderr.decode("utf-8", errors="replace")[-200:]
+            raise RuntimeError(f"ensure_dir({path}) failed: rc={r.returncode} stderr={err}")
+
     # ── Docker ops ────────────────────────────────────────────────────────
 
     def image_inspect(self, tag: str) -> bool:

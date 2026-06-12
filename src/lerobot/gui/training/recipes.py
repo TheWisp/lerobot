@@ -61,7 +61,6 @@ existing unit tests to keep them fast (no docker dependency).
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 from typing import Any
@@ -117,6 +116,38 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
 CONTAINER_RUNS_MOUNT = "/runs"
 CONTAINER_OUTPUT_SUBDIR = "output"  # /runs/output — lerobot-train writes here
 CONTAINER_HF_CACHE = "/home/user_lerobot/.cache/huggingface"
+
+# ── Host-identity placeholders ───────────────────────────────────────────────
+#
+# Recipes are composed on the GUI server but EXECUTE on whichever host the
+# transport points at. Anything host-dependent (uid/gid for --user, $HOME
+# for the HF-cache bind mount) must therefore not be resolved at compose
+# time — the GUI server's uid was baked into --user once, and the first
+# remote VM whose user wasn't uid 1000 ground the container's writes into
+# somebody else's directories. The recipe emits these tokens instead; the
+# orchestrator substitutes them via TransportClient.host_identity() at
+# launch time, on the launching host's truth.
+HOST_UID_TOKEN = "__LEROBOT_HOST_UID__"  # nosec B105 — substitution token, not a secret
+HOST_GID_TOKEN = "__LEROBOT_HOST_GID__"  # nosec B105 — substitution token, not a secret
+HOST_HOME_TOKEN = "__LEROBOT_HOST_HOME__"  # nosec B105 — substitution token, not a secret
+
+
+def resolve_host_placeholders(command: list[str], uid: int, gid: int, home: str) -> list[str]:
+    """Substitute the host-identity tokens in a composed argv.
+
+    Pre: ``home`` is an absolute path on the target host.
+    Post: no ``__LEROBOT_HOST_*__`` token remains in the result.
+    """
+    assert home.startswith("/"), f"host home must be absolute, got {home!r}"
+    out = []
+    for arg in command:
+        arg = arg.replace(HOST_UID_TOKEN, str(uid))
+        arg = arg.replace(HOST_GID_TOKEN, str(gid))
+        arg = arg.replace(HOST_HOME_TOKEN, home)
+        out.append(arg)
+    for arg in out:
+        assert "__LEROBOT_HOST_" not in arg, f"unresolved host placeholder in {arg!r}"
+    return out
 
 
 def is_fake_recipe(run: Run) -> bool:
@@ -215,7 +246,10 @@ _NEVER_USER_OVERRIDE: frozenset[str] = frozenset({"output_dir", "policy.push_to_
 
 def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[str, str]]:
     image = run.args.get("__image__") or DEFAULT_IMAGE
-    hf_cache_host = os.path.expanduser("~/.cache/huggingface")
+    # Resolved on the LAUNCHING host at launch time (see the placeholder
+    # block above) — never expanduser() here, this code runs on the GUI
+    # server while the mount source lives on the training host.
+    hf_cache_host = f"{HOST_HOME_TOKEN}/.cache/huggingface"
 
     # Translate Run.args → lerobot-train --key=value flags
     train_args: list[str] = []
@@ -255,7 +289,7 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         # for typical ML batches.
         "--shm-size=8g",
         "--user",
-        f"{os.getuid()}:{os.getgid()}",
+        f"{HOST_UID_TOKEN}:{HOST_GID_TOKEN}",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
@@ -301,7 +335,7 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
     form today; would need an upstream extension).
     """
     image = run.args.get("__image__") or DEFAULT_IMAGE
-    hf_cache_host = os.path.expanduser("~/.cache/huggingface")
+    hf_cache_host = f"{HOST_HOME_TOKEN}/.cache/huggingface"  # resolved at launch on the host
 
     # Translate the form's flat snake_case args dict → HVLA's dashed CLI flags.
     train_args: list[str] = []
@@ -354,7 +388,7 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
         # for typical ML batches.
         "--shm-size=8g",
         "--user",
-        f"{os.getuid()}:{os.getgid()}",
+        f"{HOST_UID_TOKEN}:{HOST_GID_TOKEN}",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
