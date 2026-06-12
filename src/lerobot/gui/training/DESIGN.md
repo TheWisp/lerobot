@@ -286,7 +286,7 @@ Spawn spec (vendor-neutral): GPU class, GPU count (v1: 1), preemptibility, boot 
 
 Deliberately omitted: start/stop (a stopped VM still bills its disk; every off-switch is destroy), SSH command execution + log tailing (vendor-agnostic; live in the transport above), auth flow (per-request token injection — see Authentication), cost reporting (vendor pricing pages link out from the host config UI).
 
-The Persistent provider is degenerate: `spawn` raises (host already exists), `destroy` is a no-op. The auto-registered workstation host has subprocess transport; user-added Persistent hosts and Ephemeral hosts have SSH transport.
+The Persistent provider is degenerate: every lifecycle method (`spawn` / `destroy` / `verify_destroyed`) raises — the user owns the VM, the GUI never creates or destroys it; only the cost methods answer (with zeros). The auto-registered workstation host has subprocess transport; user-added Persistent hosts and Ephemeral hosts have SSH transport.
 
 ### TransportClient — one seam for every host operation
 

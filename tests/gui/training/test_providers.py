@@ -133,12 +133,20 @@ class TestPersistentProvider:
         with pytest.raises(NotImplementedError, match="Persistent hosts are added"):
             PersistentSshProvider().spawn(_example_spec())
 
-    def test_destroy_is_no_op(self):
-        # User owns the VM; we never touch it.
-        PersistentSshProvider().destroy(_example_handle())  # no exception
+    def test_destroy_raises(self):
+        """User owns the VM; the GUI never destroys it. Raising (instead
+        of a silent no-op) means a caller that reaches for destroy() on
+        the wrong host type fails loudly rather than believing resources
+        were freed."""
+        with pytest.raises(NotImplementedError, match="user-owned"):
+            PersistentSshProvider().destroy(_example_handle())
 
-    def test_verify_destroyed_always_true(self):
-        assert PersistentSshProvider().verify_destroyed(_example_handle()) is True
+    def test_verify_destroyed_raises(self):
+        """Same fail-fast rationale as destroy(): a vacuous True would
+        let a buggy teardown sweep report all-clean on a host type it
+        should never have been asked about."""
+        with pytest.raises(NotImplementedError, match="user-owned"):
+            PersistentSshProvider().verify_destroyed(_example_handle())
 
     def test_current_cost_is_zero(self):
         snap = PersistentSshProvider().current_cost(_example_handle())

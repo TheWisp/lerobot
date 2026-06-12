@@ -15,15 +15,21 @@ Why is this a HostProvider at all, instead of a special case?
 Because the rest of the training stack (training_worker, API endpoints,
 frontend) talks only to HostProvider. Making the BYO-SSH path implement
 the same protocol means there's one code path through the system, not
-two. The provider abstractions are no-ops here:
+two. The lifecycle methods are deliberately fail-fast, not no-ops:
 
   - spawn() raises NotImplementedError — Persistent hosts are added by
     the user via the "Add training host" dialog, not spawned by the GUI.
     The GUI obtains a HostHandle by reading the saved HostProfile, NOT
     by calling spawn().
-  - destroy() is a no-op — the user owns the VM lifecycle.
-  - verify_destroyed() always returns True — nothing for us to verify.
+  - destroy() / verify_destroyed() raise NotImplementedError — the user
+    owns the VM lifecycle; the GUI never touches it. Raising (instead of
+    a silent no-op + vacuous True) means a caller that reaches for these
+    on the wrong host type fails loudly rather than believing resources
+    were freed. The C2 teardown sweep iterates GUI-spawned handles only,
+    so no legitimate caller ever lands here.
   - cost is zero — the user pays the vendor directly; we don't see it.
+    (current_cost IS legitimately called: the UI shows a cost column for
+    every host, and $0 is the honest answer for BYO.)
 """
 
 from __future__ import annotations
@@ -66,12 +72,19 @@ class PersistentSshProvider:
         )
 
     def destroy(self, handle: HostHandle) -> None:
-        # User owns the VM lifecycle. We don't touch their VM.
-        return
+        raise NotImplementedError(
+            "Persistent hosts are user-owned; the GUI never destroys them. "
+            "Remove the host via DELETE /api/training/hosts/<id> instead. "
+            "If you reached this from a teardown sweep, the sweep should "
+            "iterate GUI-spawned (ephemeral) handles only."
+        )
 
     def verify_destroyed(self, handle: HostHandle) -> bool:
-        # By definition we haven't created anything billable.
-        return True
+        raise NotImplementedError(
+            "Persistent hosts are user-owned; there is nothing the GUI "
+            "created to verify. A caller asking this question has the "
+            "wrong host type."
+        )
 
     def current_cost(self, handle: HostHandle) -> CostSnapshot:
         return CostSnapshot(

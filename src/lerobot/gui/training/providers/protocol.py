@@ -32,8 +32,9 @@ What is deliberately NOT in the protocol:
     disconnected, 10 → lost contact). Providers don't emit events.
 
 Vendor-agnostic Persistent mode (BYO SSH) implements this protocol as a
-degenerate provider: spawn is "not supported" (the user provided the
-SSH endpoint by hand); destroy is a no-op (the user owns the VM).
+degenerate provider: every lifecycle method (spawn / destroy /
+verify_destroyed) raises — the user provided the SSH endpoint by hand
+and owns the VM. Only the cost methods answer (with zeros).
 """
 
 from __future__ import annotations
