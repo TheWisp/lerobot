@@ -424,3 +424,5 @@ def test_docker_recipe_hf_mount_outside_image_home(tmp_path: Path) -> None:
     # bug #6: torchvision backbone download wanted ~/.cache/torch — HOME
     # itself must point at writable tmp for arbitrary host uids.
     assert "HOME=/tmp/lerobot-home" in cmd
+    # the image bakes TORCH_HOME; torch.hub consults it before ~
+    assert "TORCH_HOME=/tmp/lerobot-home/.cache/torch" in cmd

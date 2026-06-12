@@ -320,6 +320,11 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         # one cache that must persist, HF, is explicitly mounted above.
         "-e",
         "HOME=/tmp/lerobot-home",
+        # The image also bakes TORCH_HOME into the image user's home, and
+        # torch.hub checks TORCH_HOME before falling back to ~ — so the
+        # HOME redirect alone doesn't cover the backbone-weights cache.
+        "-e",
+        "TORCH_HOME=/tmp/lerobot-home/.cache/torch",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
@@ -444,6 +449,11 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
         # one cache that must persist, HF, is explicitly mounted above.
         "-e",
         "HOME=/tmp/lerobot-home",
+        # The image also bakes TORCH_HOME into the image user's home, and
+        # torch.hub checks TORCH_HOME before falling back to ~ — so the
+        # HOME redirect alone doesn't cover the backbone-weights cache.
+        "-e",
+        "TORCH_HOME=/tmp/lerobot-home/.cache/torch",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
