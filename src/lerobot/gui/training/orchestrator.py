@@ -261,6 +261,19 @@ class Orchestrator:
 
         progress = self._read_progress(client, paths.progress_json)
         checkpoints = self._read_manifest(client, paths.checkpoints_jsonl)
+
+        # Completed-but-artifacts-elsewhere: a run that finished while the
+        # GUI was down (or before the fetch feature existed) has a manifest
+        # but no local model files. Guarded by a cheap local check so a
+        # fully-localized run costs nothing per poll; only attempted while
+        # the host is still registered.
+        if (
+            run.state == RunState.COMPLETED
+            and host is not None
+            and checkpoints
+            and not (paths.root / checkpoints[-1].path).exists()
+        ):
+            self._fetch_run_artifacts(client, run, paths)
         stderr_tail = self._read_stderr_tail(client, paths.stderr_log, stderr_tail_bytes)
         events = self._read_events(client, paths.events_jsonl)
 
