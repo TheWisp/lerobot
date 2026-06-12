@@ -421,3 +421,6 @@ def test_docker_recipe_hf_mount_outside_image_home(tmp_path: Path) -> None:
     assert f"HF_HOME={CONTAINER_HF_CACHE}" in cmd
     assert f"HF_LEROBOT_HOME={CONTAINER_HF_CACHE}/lerobot" in cmd
     assert "TRITON_CACHE_DIR=/tmp/triton-cache" in cmd
+    # bug #6: torchvision backbone download wanted ~/.cache/torch — HOME
+    # itself must point at writable tmp for arbitrary host uids.
+    assert "HOME=/tmp/lerobot-home" in cmd

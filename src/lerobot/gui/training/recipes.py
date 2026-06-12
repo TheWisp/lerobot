@@ -313,6 +313,13 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         f"HF_LEROBOT_HOME={CONTAINER_HF_CACHE}/lerobot",
         "-e",
         "TRITON_CACHE_DIR=/tmp/triton-cache",
+        # Closes the whole ~-derived-cache class for arbitrary host uids
+        # (torch hub backbones, matplotlib, any XDG default): the image
+        # user's home isn't writable (or traversable) for uid != 1000.
+        # /tmp is sticky world-writable; libs mkdir what they need. The
+        # one cache that must persist, HF, is explicitly mounted above.
+        "-e",
+        "HOME=/tmp/lerobot-home",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
@@ -430,6 +437,13 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
         f"HF_LEROBOT_HOME={CONTAINER_HF_CACHE}/lerobot",
         "-e",
         "TRITON_CACHE_DIR=/tmp/triton-cache",
+        # Closes the whole ~-derived-cache class for arbitrary host uids
+        # (torch hub backbones, matplotlib, any XDG default): the image
+        # user's home isn't writable (or traversable) for uid != 1000.
+        # /tmp is sticky world-writable; libs mkdir what they need. The
+        # one cache that must persist, HF, is explicitly mounted above.
+        "-e",
+        "HOME=/tmp/lerobot-home",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
