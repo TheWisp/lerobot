@@ -4,7 +4,8 @@
 # 24.04, and the Nebius `ubuntu24.04-cuda13.0` image. Idempotent — re-running
 # is safe.
 #
-# Run via:  sudo bash scripts/training/install_prereqs.sh
+# Run on the host:      sudo bash scripts/training/install_prereqs.sh
+# Or from the GUI box:  ssh <host> 'sudo bash -s' < scripts/training/install_prereqs.sh
 #
 # After install:
 #   - Log out and back in (so the docker group takes effect for your user), OR
@@ -12,9 +13,20 @@
 #
 # Non-interactive runs (over SSH, in CI, agent-driven): all gpg operations
 # use `--batch --yes` and read keyrings from temp files, so we never block
-# on /dev/tty.
+# on /dev/tty. DEBIAN_FRONTEND=noninteractive suppresses debconf prompts.
+#
+# The whole body lives in main(){} and is invoked with stdin redirected to
+# /dev/null. This is what makes the `ssh ... 'sudo bash -s' < script` form
+# safe: `bash -s` reads the script from stdin INCREMENTALLY, so any child
+# that reads stdin (apt/debconf/needrestart) would otherwise swallow the
+# remaining script text and silently skip the rest of the install. The
+# function is parsed in full before anything executes; children see EOF.
 
 set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+
+main() {
 
 if [[ ${EUID} -ne 0 ]]; then
     echo "This script needs root. Re-run with: sudo bash $0" >&2
@@ -152,3 +164,8 @@ log ""
 log "Done. Next steps:"
 log "  1. If you weren't already in the docker group, log out and back in now."
 log "  2. Then run:  bash scripts/training/setup_host.sh"
+
+}
+
+# Stdin → /dev/null: children can't eat the script stream (see header).
+main "$@" </dev/null
