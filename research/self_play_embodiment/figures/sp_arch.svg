@@ -4,7 +4,6 @@
 <rect width="1400" height="800" fill="#ffffff"/>
 <text x="700" y="44" font-size="23" font-weight="700" fill="#111" text-anchor="middle">Self-play–fed World-Model Teaching</text>
 <text x="700" y="66" font-size="13.5" fill="#555" text-anchor="middle">VLA-JEPA recipe · ACT student · what trains when, and what ships</text>
-
 <text x="152" y="106" font-size="15" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#111" text-anchor="middle">Video Corpus</text>
 <rect x="42" y="122" rx="12" width="220" height="196" fill="#F6F0DD" stroke="#C9B78A" stroke-width="1.6"/>
 <text x="152" y="146" font-size="12.5" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#222" text-anchor="middle">Demonstrations</text>
@@ -13,7 +12,6 @@
 <text x="101" y="262" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#444" text-anchor="middle">insertion</text>
 <text x="203" y="262" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#444" text-anchor="middle">transfer-cube</text>
 <text x="152" y="290" font-size="11" fill="#555" text-anchor="middle">2 tasks · 180 episodes · frames only</text>
-
 <rect x="42" y="338" rx="12" width="220" height="216" fill="#F6F0DD" stroke="#C9B78A" stroke-width="1.6"/>
 <text x="152" y="362" font-size="12.5" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#222" text-anchor="middle">Self-Play</text>
 <g transform="rotate(-5 152 440)"><rect x="86" y="380" width="96" height="96" fill="#fff" stroke="#aaa"/><image x="89" y="383" width="90" height="90" href="data:image/png;base64,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"/></g>
@@ -22,48 +20,55 @@
 <text x="152" y="512" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#444" text-anchor="middle">×1,000 wide-random layouts</text>
 <text x="152" y="532" font-size="11" fill="#555" text-anchor="middle">scripted push+reach · 84–100% contact</text>
 <text x="152" y="548" font-size="11" fill="#555" text-anchor="middle">frames only — actions never used</text>
-
 <path d="M276,150 L290,150 L290,520 L276,520" fill="none" stroke="#1f2937" stroke-width="1.8"/>
-<line x1="290" y1="335" x2="318" y2="335" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
-
+<line x1="290" y1="380" x2="330" y2="380" stroke="#1f2937" stroke-width="1.8"/>
+<line x1="330" y1="380" x2="342" y2="380" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
 <rect x="322" y="122" rx="16" width="500" height="478" fill="#BCD0DA" stroke="#7FA1B0" stroke-width="1.6"/>
 <text x="342" y="150" font-size="14" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#16323d">Stage 1 · World-Model Pre-Training</text>
 <text x="342" y="168" font-size="11" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#3d5a66">video only — no actions, no task labels</text>
-<rect x="342" y="186" rx="12" width="220" height="158" fill="#fff" stroke="#46606c" stroke-width="1.3"/>
-<text x="452" y="210" font-size="12.5" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#111" text-anchor="middle">ACT Student (59M)</text>
-<path d="M363,222 L405,222 L412,244 L356,244 Z" fill="#D9E6EC" stroke="#7FA1B0" stroke-width="1"/><path d="M431,222 L473,222 L480,244 L424,244 Z" fill="#D9E6EC" stroke="#7FA1B0" stroke-width="1"/><path d="M499,222 L541,222 L548,244 L492,244 Z" fill="#D9E6EC" stroke="#7FA1B0" stroke-width="1"/>
-<text x="452" y="262" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#555" text-anchor="middle">ResNet-18 → encoder ×4</text>
-<rect x="368" y="274" rx="8" width="168" height="28" fill="#CDDCC0" stroke="#8FAE7C" stroke-width="1.3"/>
-<text x="452" y="293" font-size="10.5" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#2f4522" text-anchor="middle">24 ⟨latent⟩ tokens → z</text>
-<text x="452" y="330" font-size="10" font-style="italic" fill="#666" text-anchor="middle">sees only the current frame t₀</text>
-<rect x="592" y="244" rx="6" width="34" height="34" fill="#CDDCC0" stroke="#8FAE7C" stroke-width="1.5"/>
-<text x="609" y="266" font-size="13" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#2f4522" text-anchor="middle">z</text>
+<!-- student: internal bottom-up pipeline, pi0-style -->
+<rect x="342" y="186" rx="12" width="220" height="226" fill="#fff" stroke="#46606c" stroke-width="1.3"/>
+<text x="452" y="208" font-size="12.5" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#111" text-anchor="middle">ACT Student (59M)</text>
+<rect x="372" y="220" rx="3.5" width="24" height="24" fill="#CDDCC0" stroke="#8FAE7C" stroke-width="1"/><rect x="400" y="220" rx="3.5" width="24" height="24" fill="#CDDCC0" stroke="#8FAE7C" stroke-width="1"/><rect x="428" y="220" rx="3.5" width="24" height="24" fill="#CDDCC0" stroke="#8FAE7C" stroke-width="1"/><rect x="456" y="220" rx="3.5" width="24" height="24" fill="#CDDCC0" stroke="#8FAE7C" stroke-width="1"/><rect x="484" y="220" rx="3.5" width="24" height="24" fill="#CDDCC0" stroke="#8FAE7C" stroke-width="1"/><rect x="512" y="220" rx="3.5" width="24" height="24" fill="#CDDCC0" stroke="#8FAE7C" stroke-width="1"/>
+<text x="452" y="260" font-size="9.5" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#3d5230" text-anchor="middle">24 ⟨latent⟩ tokens → z</text>
+<rect x="372" y="270" rx="7" width="160" height="24" fill="#EFF4F6" stroke="#46606c" stroke-width="1.1"/>
+<text x="452" y="286" font-size="10.5" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#111" text-anchor="middle">encoder ×4</text>
+<rect x="372" y="306" rx="3.5" width="24" height="24" fill="#D9E6EC" stroke="#7FA1B0" stroke-width="1"/><rect x="400" y="306" rx="3.5" width="24" height="24" fill="#D9E6EC" stroke="#7FA1B0" stroke-width="1"/><rect x="428" y="306" rx="3.5" width="24" height="24" fill="#D9E6EC" stroke="#7FA1B0" stroke-width="1"/><rect x="456" y="306" rx="3.5" width="24" height="24" fill="#D9E6EC" stroke="#7FA1B0" stroke-width="1"/><rect x="484" y="306" rx="3.5" width="24" height="24" fill="#D9E6EC" stroke="#7FA1B0" stroke-width="1"/><rect x="512" y="306" rx="3.5" width="24" height="24" fill="#D9E6EC" stroke="#7FA1B0" stroke-width="1"/>
+<text x="452" y="346" font-size="9.5" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#3d5a66" text-anchor="middle">image tokens</text>
+<path d="M392,384 L512,384 L482,358 L422,358 Z" fill="#D9E6EC" stroke="#7FA1B0" stroke-width="1.2"/>
+<text x="452" y="376" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#16323d" text-anchor="middle">ResNet-18</text>
+<text x="452" y="402" font-size="9.5" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#555" text-anchor="middle">frame t₀ + proprio</text>
+<line x1="452" y1="358" x2="452" y2="336" stroke="#1f2937" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="452" y1="306" x2="452" y2="296" stroke="#1f2937" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="452" y1="268" x2="452" y2="250" stroke="#1f2937" stroke-width="1.4" marker-end="url(#a)"/>
+<rect x="592" y="216" rx="6" width="34" height="34" fill="#CDDCC0" stroke="#8FAE7C" stroke-width="1.5"/>
+<text x="609" y="238" font-size="13" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#2f4522" text-anchor="middle">z</text>
 <rect x="652" y="186" rx="12" width="150" height="158" fill="#fff" stroke="#46606c" stroke-width="1.3" stroke-dasharray="7 5"/>
 <text x="727" y="212" font-size="12" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#111" text-anchor="middle">World-Model</text>
 <text x="727" y="228" font-size="12" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#111" text-anchor="middle">Predictor (14M)</text>
 <text x="727" y="254" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#555" text-anchor="middle">teacher-forced</text>
 <text x="727" y="270" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#555" text-anchor="middle">block-causal</text>
 <text x="727" y="296" font-size="10" font-style="italic" fill="#777" text-anchor="middle">training only</text>
-<line x1="562" y1="261" x2="592" y2="261" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
-<line x1="626" y1="261" x2="652" y2="261" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
+<line x1="562" y1="233" x2="592" y2="233" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
+<line x1="626" y1="233" x2="652" y2="233" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
 <line x1="652" y1="318" x2="570" y2="318" stroke="#b91c1c" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#r)"/>
-<text x="575" y="362" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#b91c1c">∇L_WM only</text>
-<text x="575" y="376" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#b91c1c">through z</text>
-<rect x="342" y="430" rx="12" width="284" height="84" fill="#E3EDF1" stroke="#46606c" stroke-width="1.3"/>
-<text x="484" y="456" font-size="12" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#16323d" text-anchor="middle">V-JEPA 2.1 Teacher (86M) · frozen</text>
-<text x="484" y="478" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#3d5a66" text-anchor="middle">frames t₀…t₈ → latents</text>
-<text x="484" y="494" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#3d5a66" text-anchor="middle">precomputed · no gradients</text>
-<rect x="652" y="430" rx="10" width="150" height="84" fill="#fff" stroke="#b91c1c" stroke-width="1.3" stroke-dasharray="7 5"/>
-<text x="727" y="462" font-size="12" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#b91c1c" text-anchor="middle">L_WM</text>
-<text x="727" y="484" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#b91c1c" text-anchor="middle">‖ŝ − s‖² · t₁…₈</text>
-<line x1="600" y1="430" x2="600" y2="396" stroke="#1f2937" stroke-width="1.8"/>
-<line x1="600" y1="396" x2="700" y2="396" stroke="#1f2937" stroke-width="1.8"/>
-<line x1="700" y1="396" x2="700" y2="344" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
-<text x="650" y="412" font-size="9.5" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#333" text-anchor="middle">context s₀…₇</text>
-<line x1="626" y1="472" x2="652" y2="472" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
-<line x1="754" y1="344" x2="754" y2="430" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
-<text x="766" y="392" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#333">ŝ₁…₈</text>
-
+<text x="582" y="306" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#b91c1c">∇L_WM only</text>
+<text x="582" y="296" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#b91c1c"> </text>
+<text x="582" y="334" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#b91c1c">through z</text>
+<rect x="342" y="446" rx="12" width="284" height="84" fill="#E3EDF1" stroke="#46606c" stroke-width="1.3"/>
+<text x="484" y="472" font-size="12" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#16323d" text-anchor="middle">V-JEPA 2.1 Teacher (86M) · frozen</text>
+<text x="484" y="494" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#3d5a66" text-anchor="middle">frames t₀…t₈ → latents</text>
+<text x="484" y="510" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#3d5a66" text-anchor="middle">precomputed · no gradients</text>
+<rect x="652" y="446" rx="10" width="150" height="84" fill="#fff" stroke="#b91c1c" stroke-width="1.3" stroke-dasharray="7 5"/>
+<text x="727" y="478" font-size="12" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#b91c1c" text-anchor="middle">L_WM</text>
+<text x="727" y="500" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#b91c1c" text-anchor="middle">‖ŝ − s‖² · t₁…₈</text>
+<line x1="600" y1="446" x2="600" y2="424" stroke="#1f2937" stroke-width="1.8"/>
+<line x1="600" y1="424" x2="700" y2="424" stroke="#1f2937" stroke-width="1.8"/>
+<line x1="700" y1="424" x2="700" y2="344" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
+<text x="652" y="440" font-size="9.5" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#333" text-anchor="middle">context s₀…₇</text>
+<line x1="626" y1="488" x2="652" y2="488" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
+<line x1="754" y1="344" x2="754" y2="446" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
+<text x="766" y="400" font-size="10" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#333">ŝ₁…₈</text>
 <line x1="822" y1="360" x2="852" y2="360" stroke="#1f2937" stroke-width="2.2" marker-end="url(#a)"/>
 <rect x="856" y="122" rx="16" width="250" height="478" fill="#BCD0DA" stroke="#7FA1B0" stroke-width="1.6"/>
 <text x="876" y="150" font-size="14" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#16323d">Stage 2 · Action</text>
@@ -84,7 +89,6 @@
 <line x1="981" y1="250" x2="981" y2="282" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
 <line x1="981" y1="340" x2="981" y2="372" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
 <line x1="981" y1="430" x2="981" y2="462" stroke="#1f2937" stroke-width="1.8" marker-end="url(#a)"/>
-
 <line x1="1106" y1="360" x2="1136" y2="360" stroke="#1f2937" stroke-width="2.2" marker-end="url(#a)"/>
 <text x="1247" y="106" font-size="15" font-weight="700" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#111" text-anchor="middle">Deployment</text>
 <text x="1247" y="148" font-size="11.5" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" fill="#111" text-anchor="middle">runs as <tspan fill="#C2410C" font-weight="700">plain ACT</tspan> — zero overhead</text>
