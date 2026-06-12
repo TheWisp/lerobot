@@ -115,7 +115,12 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
 # host paths to these.
 CONTAINER_RUNS_MOUNT = "/runs"
 CONTAINER_OUTPUT_SUBDIR = "output"  # /runs/output — lerobot-train writes here
-CONTAINER_HF_CACHE = "/home/user_lerobot/.cache/huggingface"
+# Mounted at container root, NOT inside the image user's home: the path
+# walk to a target under /home/user_lerobot crosses image-baked dirs owned
+# by uid 1000 with no world-x, so any other host uid gets EACCES before it
+# even reaches the mount (GPU smoke bug #5). "/" is root-owned 755 —
+# traversable by every uid.
+CONTAINER_HF_CACHE = "/hf-cache"
 
 # ── Host-identity placeholders ───────────────────────────────────────────────
 #
@@ -298,6 +303,16 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         # so the lookup never happens.
         "-e",
         "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache",
+        # The image bakes HF_HOME/HF_LEROBOT_HOME pointing into the image
+        # user's home; override to the world-traversable mount target.
+        # TRITON_CACHE_DIR: same passwd-less-uid class as inductor, fires
+        # on first triton-compiled kernel.
+        "-e",
+        f"HF_HOME={CONTAINER_HF_CACHE}",
+        "-e",
+        f"HF_LEROBOT_HOME={CONTAINER_HF_CACHE}/lerobot",
+        "-e",
+        "TRITON_CACHE_DIR=/tmp/triton-cache",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
@@ -405,6 +420,16 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
         # so the lookup never happens.
         "-e",
         "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache",
+        # The image bakes HF_HOME/HF_LEROBOT_HOME pointing into the image
+        # user's home; override to the world-traversable mount target.
+        # TRITON_CACHE_DIR: same passwd-less-uid class as inductor, fires
+        # on first triton-compiled kernel.
+        "-e",
+        f"HF_HOME={CONTAINER_HF_CACHE}",
+        "-e",
+        f"HF_LEROBOT_HOME={CONTAINER_HF_CACHE}/lerobot",
+        "-e",
+        "TRITON_CACHE_DIR=/tmp/triton-cache",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",

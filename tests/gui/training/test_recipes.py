@@ -406,3 +406,18 @@ def test_docker_recipe_sets_inductor_cache_dir(tmp_path: Path) -> None:
     cmd = _docker_cmd(_make_run({"policy.type": "act"}), paths)
     e_idx = cmd.index("-e")
     assert cmd[e_idx + 1] == "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache"
+
+
+def test_docker_recipe_hf_mount_outside_image_home(tmp_path: Path) -> None:
+    """Regression (GPU smoke bug #5): mounting under /home/user_lerobot
+    requires traversing image-baked dirs owned by uid 1000 — any other
+    host uid gets EACCES before reaching the mount. Target must live at
+    container root, with HF env overriding the image's baked paths."""
+    paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
+    paths.ensure_exists()
+    cmd = _docker_cmd(_make_run({"policy.type": "act"}), paths)
+    assert CONTAINER_HF_CACHE == "/hf-cache"
+    assert not CONTAINER_HF_CACHE.startswith("/home/")
+    assert f"HF_HOME={CONTAINER_HF_CACHE}" in cmd
+    assert f"HF_LEROBOT_HOME={CONTAINER_HF_CACHE}/lerobot" in cmd
+    assert "TRITON_CACHE_DIR=/tmp/triton-cache" in cmd
