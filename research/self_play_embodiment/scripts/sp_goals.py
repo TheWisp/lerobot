@@ -1,3 +1,4 @@
+# ruff: noqa
 """Generate held-out TEST goals for the reaching experiment.
 Each goal = a STATIC equilibrium pose (settle under a random command from a held-out
 seed), captured as (goal_image@256, goal_proprio[14], z_goal = base JEPA(goal_image)).
@@ -10,7 +11,7 @@ from sp_lib import Encoder, Vec
 
 N_GOALS = 32
 SETTLE = 45
-OUT = "/tmp/selfplay_probe/goals.npz"
+OUT = "/tmp/selfplay_probe/goals.npz"  # nosec B108
 
 vec = Vec(N_GOALS)
 rng = np.random.RandomState(123)

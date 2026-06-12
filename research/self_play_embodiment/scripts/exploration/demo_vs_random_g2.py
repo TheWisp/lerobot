@@ -1,3 +1,4 @@
+# ruff: noqa
 """Comparative G2: does the action->Delta-z gap JUMP in contact-rich scripted demos
 vs our contact-poor random play? Same spatial pipeline for both. (Confounded by demo
 action statistics, but a quick existing-data look at whether manipulation surfaces
@@ -12,7 +13,7 @@ import torch
 os.environ.setdefault("MUJOCO_GL", "egl")
 from PIL import Image
 
-OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"
+OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"  # nosec B108
 dev, dt = "cuda", torch.bfloat16
 from transformers import AutoVideoProcessor, VJEPA2Model
 

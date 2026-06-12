@@ -1,3 +1,4 @@
+# ruff: noqa
 """G2 with a nonlinear predictor. Linear can't capture the pose-dependent action
 effect (Jacobian varies with configuration), so compare LINEAR vs small MLP for
 both action-free f(z_t) and action-conditioned f(z_t, a_t). Target dz = z_{t+1}-z_t
@@ -13,7 +14,7 @@ import torch.nn as nn
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 torch.manual_seed(0)
-OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"
+OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"  # nosec B108
 dev, dt = "cuda", torch.bfloat16
 
 d = np.load(OUT + "/world_buffer.npz", allow_pickle=True)

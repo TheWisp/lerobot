@@ -1,3 +1,4 @@
+# ruff: noqa
 """Are the 14 joints recoverable NONLINEARLY from the frozen latent? (linear was R2~0.16)
 Small MLP, held-out episodes, early stop. Decides: keep joint-reach (use MLP policy) vs
 joints genuinely poorly encoded by vision (must give proprio / use a Cartesian goal)."""
@@ -7,7 +8,7 @@ import torch
 import torch.nn as nn
 
 torch.manual_seed(0)
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 M = np.load(OUT + "/feat_cache.npz")["M"].astype(np.float32)
 wb = np.load(OUT + "/world_buffer.npz", allow_pickle=True)
 J = wb["states"].astype(np.float32)

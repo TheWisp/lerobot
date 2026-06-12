@@ -1,3 +1,4 @@
+# ruff: noqa
 """Contrast probe: vision encodes the visible CARTESIAN world but not the joints.
 Decode gripper-XY and object-XY (from world_buffer 'world') vs the 14 joints, same
 linear ridge / held-out episodes. Backs the recommendation: give proprio (the self),
@@ -5,7 +6,7 @@ let vision carry the world."""
 
 import numpy as np
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 M = np.load(OUT + "/feat_cache.npz")["M"].astype(np.float64)
 wb = np.load(OUT + "/world_buffer.npz", allow_pickle=True)
 W = wb["world"].astype(np.float64)

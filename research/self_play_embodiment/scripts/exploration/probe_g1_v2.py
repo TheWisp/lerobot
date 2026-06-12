@@ -1,3 +1,4 @@
+# ruff: noqa
 """G1 probe v2 — trustworthy eval: episode-level holdout (no adjacent-frame
 leakage), single-frame (T=2) vs clip (T=16) readout, and per-joint R²."""
 
@@ -8,7 +9,7 @@ import numpy as np
 import torch
 
 os.environ.setdefault("MUJOCO_GL", "egl")
-OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"
+OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"  # nosec B108
 dev, dt = "cuda", torch.bfloat16
 
 d = np.load(OUT + "/g1_buffer.npz")

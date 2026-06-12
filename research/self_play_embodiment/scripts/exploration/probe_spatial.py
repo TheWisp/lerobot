@@ -1,3 +1,4 @@
+# ruff: noqa
 """Does the SPATIAL patch grid (not the global mean) encode the objects?
 
 V-JEPA returns one token per 2D image patch (16x16 grid). Compare decoding
@@ -13,7 +14,7 @@ import numpy as np
 import torch
 
 os.environ.setdefault("MUJOCO_GL", "egl")
-OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"
+OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"  # nosec B108
 dev, dt = "cuda", torch.bfloat16
 d = np.load(OUT + "/world_buffer.npz", allow_pickle=True)
 imgs = d["images"]

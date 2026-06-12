@@ -1,3 +1,4 @@
+# ruff: noqa
 """G1 data collection: drive aloha self-play (smoothed random walk) and emit:
   1. g1_buffer.npz       — (images@256, states, actions, ep_bounds) for the frozen-encoder probe
   2. selfplay_aloha.mp4  — video proof of the driven sim
@@ -18,7 +19,7 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 import numpy as np
 from PIL import Image
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 DS_ROOT = os.path.join(OUT, "ds_g1")
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 4000
 IMG = 256

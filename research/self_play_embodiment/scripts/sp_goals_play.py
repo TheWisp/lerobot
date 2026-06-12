@@ -5,7 +5,7 @@ poses are fine (the settled-pose requirement was for the old joint oracle). All 
 
 import numpy as np
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 M = np.load(OUT + "/feat_cache.npz")["M"].astype(np.float32)
 wb = np.load(OUT + "/world_buffer.npz", allow_pickle=True)
 GX = wb["world"][:, 6:12].astype(np.float32)

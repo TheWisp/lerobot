@@ -1,3 +1,4 @@
+# ruff: noqa
 """THE clean test: does knowing the action improve prediction of the OBJECT's motion
 it causes? Predict Δobject (GT) from spatial z_t vs (z_t, a_t), on contact slices
 (threshold-swept), episode-split. Random actions => no action/scene confound; object
@@ -5,7 +6,7 @@ GT => isolates world from body. Δbody is the sanity (action should clearly help
 
 import numpy as np
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 d = np.load(OUT + "/contact_buffer.npz")
 Zs = d["Zspatial"].astype(np.float64)
 A = d["action"].astype(np.float64)

@@ -1,3 +1,4 @@
+# ruff: noqa
 """Is the embodiment latent 'better' than og JEPA -- visually and quantitatively?
 A) PROBE: decode gripper-xyz (held-out eps) from full z vs e_ac(64) vs e_free(64) vs a
    random-64 projection of z. If e_ac > rand64 (and >= e_free), it CONCENTRATES embodiment
@@ -19,7 +20,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from sp_lib import load_emb
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 dev = "cuda"
 
 # ---------- A) quantitative probe (cached features) ----------

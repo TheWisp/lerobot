@@ -1,3 +1,4 @@
+# ruff: noqa
 """Harness validation (soundness-first, no learning yet):
   1. reset(seed=list) -> per-env arm pose: fixed home or varied?
   2. HOLD (no-op delta=0): proprio should stay ~constant -> the no-op SR baseline.

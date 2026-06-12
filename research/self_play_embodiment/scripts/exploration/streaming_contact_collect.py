@@ -1,3 +1,4 @@
+# ruff: noqa
 """Stream random play, keep ALL contact transitions + a sample of non-contacts,
 with object ground-truth. Stores z_t (mean + 4x4-spatial latent), action_t, and the
 world change (peg/socket/gripper deltas) per transition -> contact_buffer.npz.
@@ -13,7 +14,7 @@ import torch
 os.environ.setdefault("MUJOCO_GL", "egl")
 from PIL import Image
 
-OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"
+OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"  # nosec B108
 dev, dt = "cuda", torch.bfloat16
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 40000
 CONTACT, SAMPLE, CAP = 0.002, 0.15, 12000

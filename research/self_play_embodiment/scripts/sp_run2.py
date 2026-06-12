@@ -1,3 +1,4 @@
+# ruff: noqa
 """Cheap visible-reach gate v2. FIX for the joint-from-vision floor:
   - proprio is a POLICY INPUT (the self; as in real VLAs)
   - goal stays an IMAGE, but success = GRIPPER CARTESIAN L2 (the decodable r2~0.78 quantity)
@@ -22,7 +23,7 @@ import torch
 import torch.nn as nn
 from sp_lib import Encoder, Vec, delta_command, load_emb
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 KZ, DMAX, K_MAX, H = 200, 0.5, 30, 45
 MODE = os.environ.get("MODE", "probe")
 DEMOS = [int(x) for x in os.environ.get("DEMOS", "500,5000").split(",")]

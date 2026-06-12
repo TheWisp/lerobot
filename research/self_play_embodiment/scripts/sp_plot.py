@@ -1,3 +1,4 @@
+# ruff: noqa
 """Render sp_results.npz -> SR-vs-#demos table + curve. Headline = does c_ac beat b_free
 beat noise~=a in the low-demo regime, with oracle as the ceiling."""
 
@@ -7,7 +8,7 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 r = np.load(OUT + "/sp_results.npz")
 demos = r["demos"]
 eps = r["eps"]

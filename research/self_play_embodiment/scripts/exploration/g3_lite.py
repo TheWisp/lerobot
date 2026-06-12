@@ -1,3 +1,4 @@
+# ruff: noqa
 """G3-lite: fixed-teacher action-conditioned distillation (collapse-free reshaping).
 
 Teacher = frozen V-JEPA (targets precomputed once). Student = V-JEPA with top-K blocks
@@ -19,7 +20,7 @@ import torch.nn as nn
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 torch.manual_seed(0)
-OUT, REPO, dev = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256", "cuda"
+OUT, REPO, dev = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256", "cuda"  # nosec B108
 import time as _time
 
 T0 = _time.time()

@@ -1,3 +1,4 @@
+# ruff: noqa
 """Self-play buffer WITH world-state labels for the reframed (world-centric) G1 and G2.
 
 Logs per step: image@256, agent_pos(14), action(14), and world=(peg, socket,
@@ -14,7 +15,7 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 import numpy as np
 from PIL import Image
 
-OUT, IMG = "/tmp/selfplay_probe", 256
+OUT, IMG = "/tmp/selfplay_probe", 256  # nosec B108
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 
 

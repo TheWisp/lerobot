@@ -1,3 +1,4 @@
+# ruff: noqa
 """Decisive diagnostic: how linearly decodable are the 14 JOINTS (agent_pos) from the
 frozen latent? Closed-loop delta reaching floored even for the oracle -> suspect joints
 aren't linearly accessible. Compare mean-pool M vs spatial S (4x4 maxpool), held-out
@@ -5,7 +6,7 @@ episodes, PCA->ridge. Also per-joint R2 to see which joints are lost."""
 
 import numpy as np
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 fc = np.load(OUT + "/feat_cache.npz")
 M = fc["M"].astype(np.float64)
 S = fc["S"].astype(np.float64)

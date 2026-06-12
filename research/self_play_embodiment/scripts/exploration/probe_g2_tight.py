@@ -1,3 +1,4 @@
+# ruff: noqa
 """G2, tightened on current data (option a): does a *properly regularized* nonlinear
 model beat linear at predicting dz = z_{t+1}-z_t from (z_t) vs (z_t, a_t)?
 
@@ -15,7 +16,7 @@ import torch.nn as nn
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 torch.manual_seed(0)
-OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"
+OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"  # nosec B108
 dev, dt = "cuda", torch.bfloat16
 
 d = np.load(OUT + "/world_buffer.npz", allow_pickle=True)

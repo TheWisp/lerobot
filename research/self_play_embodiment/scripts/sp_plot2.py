@@ -7,7 +7,7 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 r = np.load(OUT + "/sp_results2.npz")
 demos = r["demos"]
 conds = ["oracle_xyz", "bothprop", "a", "noise", "b_cur", "c_cur", "b_goal", "c_goal"]

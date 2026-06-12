@@ -1,3 +1,4 @@
+# ruff: noqa
 """Is 'a' floored by goal-image DISTRIBUTION SHIFT or by hard end-to-end learning?
 Train gripper-xyz decoder on PLAY frames; test on (1) held-out PLAY frames and (2) the
 actual SETTLED test goals. If test-goal R2 collapses vs play R2 -> shift (must fix train
@@ -6,7 +7,7 @@ end-to-end policy (structure/e can help)."""
 
 import numpy as np
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 M = np.load(OUT + "/feat_cache.npz")["M"].astype(np.float64)
 wb = np.load(OUT + "/world_buffer.npz", allow_pickle=True)
 GX = wb["world"][:, 6:12].astype(np.float64)

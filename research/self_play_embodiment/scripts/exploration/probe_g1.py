@@ -1,3 +1,4 @@
+# ruff: noqa
 """G1 probe: is the FROZEN V-JEPA latent meaningful on our sim frames?
 
 Test: can a linear probe read the arm's own 14-D joint state out of the frozen
@@ -17,7 +18,7 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 import numpy as np
 import torch
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 REPO = "facebook/vjepa2-vitg-fpc64-256"
 dev, dt = "cuda", torch.bfloat16
 

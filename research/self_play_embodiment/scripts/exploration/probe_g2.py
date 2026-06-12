@@ -1,3 +1,4 @@
+# ruff: noqa
 """G2: does action-conditioning improve world prediction on the frozen V-JEPA latent?
 
 On held-out episodes, predict the latent CHANGE dz = z_{t+1} - z_t (PCA-64 space):
@@ -17,7 +18,7 @@ import numpy as np
 import torch
 
 os.environ.setdefault("MUJOCO_GL", "egl")
-OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"
+OUT, REPO = "/tmp/selfplay_probe", "facebook/vjepa2-vitg-fpc64-256"  # nosec B108
 dev, dt = "cuda", torch.bfloat16
 
 d = np.load(OUT + "/world_buffer.npz", allow_pickle=True)

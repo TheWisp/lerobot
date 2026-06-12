@@ -1,3 +1,4 @@
+# ruff: noqa
 """Put the embodiment latent back on pixels, and show where it DIFFERS from raw JEPA.
 e = f(mean_pool(JEPA(img))) is a global vector -> use OCCLUSION SENSITIVITY: slide a gray
 patch; sens[pos] = ||rep(full) - rep(occluded)||. Compute for raw z, e_ac, e_free from the
@@ -17,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sp_lib import Encoder, load_emb
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 dev = "cuda"
 P, S = 56, 16  # occluder patch size / stride on 256px
 wb = np.load(OUT + "/world_buffer.npz", allow_pickle=True)

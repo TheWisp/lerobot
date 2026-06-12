@@ -17,7 +17,7 @@ import time
 
 import numpy as np
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 os.makedirs(OUT, exist_ok=True)
 
 

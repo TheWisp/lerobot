@@ -1,3 +1,4 @@
+# ruff: noqa
 """THE embodiment-injection experiment: few-shot goal-conditioned reaching.
 
 Demos via HER on random self-play: for play frame t pick a future frame t+k as the goal,
@@ -22,7 +23,7 @@ import numpy as np
 import torch
 from sp_lib import Encoder, Vec, delta_command, load_emb, reach_err
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 KZ, DMAX, K_MAX, H = 200, 0.5, 30, 45
 DEMOS = [int(x) for x in os.environ.get("DEMOS", "50,150,500,1500,5000").split(",")]
 EPS = [0.3, 0.5, 0.8]

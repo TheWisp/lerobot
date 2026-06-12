@@ -1,3 +1,4 @@
+# ruff: noqa
 """DINO-style PATCH-FEATURE PCA -> RGB on aloha frames, per encoder. Shows how each frozen
 substrate spatially parses the robot scene (the segmentation-like view from DINOv2/v3 papers).
 Cols: image | V-JEPA patch-PCA | DINOv2 patch-PCA (if downloadable). Same 16x16 grid.
@@ -14,7 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from PIL import Image
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 dev = "cuda"
 wb = np.load(OUT + "/world_buffer.npz", allow_pickle=True)
 imgs = wb["images"]

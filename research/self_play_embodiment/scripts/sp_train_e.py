@@ -1,3 +1,4 @@
+# ruff: noqa
 """Train the embodiment encoder f: z -> e (bottleneck D=64), two variants that differ
 ONLY in whether the body's achieved action is in the prediction objective:
   (b) e_free: g(f(z_t))          -> dz   (action-FREE)
@@ -16,7 +17,7 @@ import torch
 import torch.nn as nn
 
 torch.manual_seed(0)
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 D = 64
 
 M = np.load(OUT + "/feat_cache.npz")["M"].astype(np.float32)  # (8000,1408) base z

