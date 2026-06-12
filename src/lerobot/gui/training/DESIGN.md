@@ -6,11 +6,11 @@ End-to-end design for taking a user from "I want to train a policy" to "trained 
 
 ## Modes
 
-| Mode                                         | Who it's for                                                                                                                                        | Lifecycle                                                                       |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| **Workstation** (auto-registered Persistent) | Developer with a GPU on the same machine that runs the GUI server.                                                                                  | User-managed. GUI auto-detects on first start; registered as "This server".     |
-| **User-added Persistent host**               | Developer with a remote SSH-reachable box — lab server, university cluster, leased VM. They paste an SSH command into the GUI dialog.               | User-managed — the GUI never creates or destroys the VM.                        |
-| **Ephemeral cloud host**                     | Developer who wants on-demand cloud GPUs without touching the vendor console. Configures a host profile with GPU class, region hint, and spend cap. | Provider-managed — GUI spawns the VM on training start, destroys on completion. |
+| Mode                                         | Who it's for                                                                                                                                         | Lifecycle                                                                       |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| **Workstation** (auto-registered Persistent) | Developer with a GPU on the same machine that runs the GUI server.                                                                                   | User-managed. GUI auto-detects on first start; registered as "This server".     |
+| **User-added Persistent host**               | Developer with a remote SSH-reachable box — lab server, university cluster, leased VM. They paste an SSH command into the GUI dialog.                | User-managed — the GUI never creates or destroys the VM.                        |
+| **Ephemeral cloud host**                     | Developer who wants on-demand cloud GPUs without touching the vendor console. Configures a host profile with GPU class, region hint, and a hard TTL. | Provider-managed — GUI spawns the VM on training start, destroys on completion. |
 
 "Persistent" vs "Ephemeral" is about lifecycle ownership, orthogonal to spot/preemptible pricing. Trained models land in the existing **Models tab** in all three modes, from which the user publishes to HF Hub (today) or other destinations (later).
 
@@ -152,7 +152,7 @@ Recommended first-time flow (documented in the help text under the Host field): 
 
 Saved hosts are persisted to `~/.config/lerobot/training_hosts.json` (alongside the existing robot / teleop profiles) and appear in the Host dropdown of the Start-a-run form. The persisted record contains the Host string and per-host lerobot config (workdir, image_ref), **not credentials**. No image transfer happens at this step — that's deferred to the first run on the host.
 
-**Add an Ephemeral cloud host.** Same `+ Add host` button → pick "Ephemeral cloud" → provider + spawn spec + cost ceiling. No image transfer, no spawn yet — this is just saving a _profile_; the VM is created when the user starts a run targeting this host.
+**Add an Ephemeral cloud host.** Same `+ Add host` button → pick "Ephemeral cloud" → provider + spawn spec. No image transfer, no spawn yet — this is just saving a _profile_; the VM is created when the user starts a run targeting this host.
 
 ```
 ┌─ Add a training host ────────────────────────────────────────────┐
@@ -169,9 +169,7 @@ Saved hosts are persisted to `~/.config/lerobot/training_hosts.json` (alongside 
 │  GPU class    [ H100 80GB ▾ ]      GPU count [ 1 ]               │
 │  Region hint  [ eu-north1 ▾ ]      Preemptible ☑                 │
 │  Boot disk    [ 100 ] GiB           (warns above 256 GiB)        │
-│                                                                  │
-│  ── Cost guard ──                                                │
-│  Cost ceiling [ $5.00 ] / hour   (spawn refuses above this)      │
+│  Max lifetime [ 24 ] h              (hard auto-destroy)          │
 │                                                                  │
 │  Display name [ Nebius H100 (eu-north)                        ]  │
 │  Pricing reference: <link to vendor's price page>                │
@@ -197,7 +195,7 @@ sequenceDiagram
         O->>O: run.json PENDING
     end
     O-->>B: 201 (state=pending)
-    O->>P: spawn(spec, cost_ceiling)
+    O->>P: spawn(spec)
     P-->>O: host_ready
     rect rgba(220,140,40,0.18)
         Note over V: GPU clock starts here
@@ -284,7 +282,7 @@ One implementation per vendor. Surface:
 - **destroy** — idempotently destroy the VM, attached boot disk, public IP. Skips any standalone persistent volume.
 - **verify_destroyed** — query the vendor to confirm no billable resource identifying this handle remains.
 
-Spawn spec (vendor-neutral): GPU class, GPU count (v1: 1), preemptibility, boot disk size, container image, region hint, cost ceiling above which spawn refuses. Host handle: provider id, vendor's resource id, transport, optional persistent volume id, region.
+Spawn spec (vendor-neutral): GPU class, GPU count (v1: 1), preemptibility, boot disk size, container image, region hint, hard TTL (vendor-side scheduled destroy; required). Host handle: provider id, vendor's resource id, transport, optional persistent volume id, region.
 
 Deliberately omitted: start/stop (a stopped VM still bills its disk; every off-switch is destroy), SSH command execution + log tailing (vendor-agnostic; live in the transport above), auth flow (per-request token injection — see Authentication), cost reporting (vendor pricing pages link out from the host config UI).
 
@@ -526,11 +524,11 @@ Same pattern LeRobot already uses for hardware (`lerobot[aloha]`, `lerobot[feete
 
 ## What we don't try to do
 
-- **Pod provisioning outside the HostProvider protocol.** Ephemeral mode goes through a vetted vendor SDK with spend cap + destroy-verification. The GUI does NOT embed vendor consoles or manage payment methods.
+- **Pod provisioning outside the HostProvider protocol.** Ephemeral mode goes through a vetted vendor SDK with hard TTL + destroy-verification. The GUI does NOT embed vendor consoles or manage payment methods.
 - **Multi-GPU / multi-node training.** Out of scope for v1. `gpu_count` is in the schema so the UI can grow into it later.
 - **Browser-coupled providers** (Colab, Kaggle interactive). They kill on user-side idle regardless of GPU activity.
 - **In-GUI credential entry.** No "paste your API key" forms. Vendor tokens come from the user's local CLI state.
-- **Concrete cost predictions.** No "this run will cost $X" claims. Vendor pricing changes too often to be accurate.
+- **Cost estimation.** No "this run will cost $X" claims, spend caps, or local price tables — vendor pricing changes too often to be accurate. The GUI links to the vendor's pricing page; spend protection is mechanical (hard TTL, disk-size warning, auto-destroy).
 - **Direct pod-to-external-store uploads.** Pod uploads only to the GUI server. External destinations are pushed from the GUI server — one credential boundary, not N.
 
 ---
