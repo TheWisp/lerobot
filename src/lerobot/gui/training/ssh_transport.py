@@ -41,6 +41,7 @@ and re-derived in the implementation workflow ``ssh-client-design``:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import os
 import shlex
@@ -82,12 +83,22 @@ class SshClient:
         self._transport = transport
         # Per-process control socket. ``%C`` template would also work but
         # ssh treats ``%C`` lazily and our tests + tmp-cleanup are tidier
-        # with a fully-resolved path. Naming includes pid + host so two
-        # GUI servers on the same workstation don't collide, and the
-        # path is short enough to satisfy AF_UNIX's 108-char limit even
-        # on hosts with deep $TMPDIR (control sockets use AF_UNIX).
+        # with a fully-resolved path.
+        #
+        # The socket key MUST cover the full connection identity —
+        # user + host + port — not just the host. With a host-only key,
+        # two saved hosts on the same address with different users shared
+        # one authenticated master, and OpenSSH happily executed the
+        # second user's commands over the first user's session (found
+        # live: a 'smoketest@vm' run silently ran as 'feit'). The digest
+        # keeps the identity complete while bounding the path under
+        # AF_UNIX's 108-char limit (control sockets are AF_UNIX); the
+        # host prefix keeps `ls /tmp` human-readable. pid distinguishes
+        # two GUI servers on one workstation.
         base = control_path_dir or Path(tempfile.gettempdir())
-        self._control_path = base / f"lerobot-ssh-cm-{os.getpid()}-{transport.host}"
+        identity = f"{transport.user}@{transport.host}:{transport.port}"
+        digest = hashlib.sha256(identity.encode()).hexdigest()[:8]
+        self._control_path = base / f"lerobot-ssh-cm-{os.getpid()}-{transport.host[:24]}-{digest}"
 
     # ── Properties ────────────────────────────────────────────────────────
 

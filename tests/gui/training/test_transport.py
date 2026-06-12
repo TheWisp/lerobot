@@ -285,3 +285,28 @@ def test_make_client_unknown_type_raises() -> None:
 def test_subprocess_client_workdir_property(tmp_path: Path) -> None:
     client = SubprocessClient(SubprocessTransport(workdir=tmp_path))
     assert client.workdir == tmp_path
+
+
+# ── ControlMaster socket identity (GPU smoke finding #10) ────────────────────
+
+
+def test_ssh_control_path_distinct_per_user_and_port():
+    """Regression: the control socket was keyed by host only, so two saved
+    hosts on the same address with different users shared one
+    authenticated ControlMaster — OpenSSH executed the second user's
+    commands over the FIRST user's session (verified live: a smoketest@vm
+    run silently ran as feit). The socket key must cover the full
+    connection identity."""
+    from lerobot.gui.training.ssh_transport import SshClient
+
+    base = SshClient(SshTransport(host="1.2.3.4", port=22, user="alice"))
+    other_user = SshClient(SshTransport(host="1.2.3.4", port=22, user="bob"))
+    other_port = SshClient(SshTransport(host="1.2.3.4", port=2222, user="alice"))
+    same = SshClient(SshTransport(host="1.2.3.4", port=22, user="alice"))
+
+    assert base._control_path != other_user._control_path
+    assert base._control_path != other_port._control_path
+    assert base._control_path == same._control_path  # same identity still shares (that's the point of CM)
+    # AF_UNIX limit headroom even for long hostnames
+    long = SshClient(SshTransport(host="a" * 64 + ".example.com", port=22, user="someuser"))
+    assert len(str(long._control_path)) < 108
