@@ -342,6 +342,12 @@ class SubprocessClient:
             return b"", offset
 
     def fetch_file(self, src: Path, dst: Path) -> None:
+        # Same path = already local (the orchestrator calls fetch_file
+        # transport-blind to localize run artifacts; on the subprocess
+        # transport they were never anywhere else). shutil.copy would
+        # raise SameFileError.
+        if src == dst:
+            return
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(src, dst)
 

@@ -1123,3 +1123,85 @@ def test_clear_terminal_empty_is_noop(orch: Orchestrator) -> None:
     """No terminal runs → deleted=[], all counters zero. Idempotent."""
     result = orch.clear_terminal_runs()
     assert result == {"deleted": [], "metadata_bytes_freed": 0, "models_kept": 0}
+
+
+# ── Artifact localization (GPU smoke finding #7) ─────────────────────────────
+
+
+class _SplitTreeClient(SubprocessClient):
+    """Emulates SSH: the orchestrator addresses everything by LOCAL path
+    shape, but the bytes live in a separate "remote" tree. list_dir
+    reflects the remote tree (returned as local-shaped paths); fetch_file
+    copies remote bytes to the local destination."""
+
+    def __init__(self, transport, local_root: Path, remote_root: Path):
+        super().__init__(transport)
+        self.local_root = local_root
+        self.remote_root = remote_root
+        self.fetched: list[Path] = []
+
+    def _to_remote(self, p: Path) -> Path:
+        return self.remote_root / p.relative_to(self.local_root)
+
+    def list_dir(self, path: Path) -> list[Path]:
+        remote = self._to_remote(path)
+        if not remote.exists():
+            return []
+        return [path / c.name for c in remote.iterdir()]
+
+    def fetch_file(self, src: Path, dst: Path) -> None:
+        self.fetched.append(dst)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(self._to_remote(src).read_bytes())
+
+    def append_text(self, path: Path, text: str) -> None:
+        remote = self._to_remote(path)
+        remote.parent.mkdir(parents=True, exist_ok=True)
+        with remote.open("a") as f:
+            f.write(text)
+
+
+def test_fetch_run_artifacts_localizes_checkpoint_files(orch: Orchestrator, tmp_path: Path) -> None:
+    """A completed run's pretrained_model files must land in the local run
+    dir. Found by the first remote-GPU smoke: SSH runs completed with a
+    checkpoint manifest but zero local artifacts — the Models tab had
+    nothing to load."""
+    from lerobot.gui.training.runs import Run, RunPaths
+
+    run = Run(
+        run_id="fetchme",
+        host_id="test-host",
+        recipe_name="r",
+        dataset_id="d",
+        args={},
+        state=RunState.COMPLETED,
+        created_at=time.time(),
+    )
+    local_runs = tmp_path / "runs"
+    remote_runs = tmp_path / "remote"
+    paths = RunPaths.for_run("fetchme", runs_dir=local_runs)
+    paths.ensure_exists()
+
+    # Remote tree: one checkpoint with pretrained_model + training_state.
+    r_ckpt = remote_runs / "fetchme" / "output" / "checkpoints" / "000400"
+    (r_ckpt / "pretrained_model").mkdir(parents=True)
+    (r_ckpt / "pretrained_model" / "model.safetensors").write_bytes(b"weights")
+    (r_ckpt / "pretrained_model" / "config.json").write_text("{}")
+    (r_ckpt / "training_state").mkdir()
+    (r_ckpt / "training_state" / "optim.bin").write_bytes(b"opt")
+
+    client = _SplitTreeClient(
+        SubprocessTransport(workdir=tmp_path / "wd"), local_root=local_runs, remote_root=remote_runs
+    )
+    orch._fetch_run_artifacts(client, run, paths)
+
+    pm = paths.root / "output" / "checkpoints" / "000400" / "pretrained_model"
+    assert (pm / "model.safetensors").read_bytes() == b"weights"
+    assert (pm / "config.json").exists()
+    # training_state deliberately not fetched (remote-resume is separate work)
+    assert not (paths.root / "output" / "checkpoints" / "000400" / "training_state").exists()
+
+    # Idempotent: second call fetches nothing new.
+    before = list(client.fetched)
+    orch._fetch_run_artifacts(client, run, paths)
+    assert client.fetched == before

@@ -656,6 +656,10 @@ class Orchestrator:
             if run.state != RunState.COMPLETED:
                 run.advance(RunState.COMPLETED)
                 self._runs.save(run)
+            # Idempotent (skips files already local) — also covers the
+            # GUI-restarted-after-completion case where the terminal event
+            # exists but artifacts were never localized.
+            self._fetch_run_artifacts(client, run, paths)
         elif terminal_event == "aborted_by_user":
             if run.state != RunState.ABORTED:
                 run.advance(RunState.ABORTED)
@@ -732,11 +736,61 @@ class Orchestrator:
             # Clean exit, or unknown-exit-code-but-has-checkpoints fallback.
             self._emit_event(client, paths.events_jsonl, "completed_naturally", final_step=final_step)
             run.advance(RunState.COMPLETED)
+            self._fetch_run_artifacts(client, run, paths)
         else:
             run.error = "process exited without writing a checkpoint"
             self._emit_event(client, paths.events_jsonl, "crashed", error=run.error, final_step=final_step)
             run.advance(RunState.FAILED)
         self._runs.save(run)
+
+    def _fetch_run_artifacts(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
+        """Localize the run's checkpoint files onto the GUI server.
+
+        On SSH hosts the checkpoints live on the remote; without this, a
+        completed run shows a manifest but the Models tab has nothing to
+        load (found by the first remote-GPU smoke). Fetches, per
+        checkpoint dir, the model file + its siblings (config.json,
+        train_config.json — the pretrained_model dir is flat). Skips
+        files that already exist locally, so re-reconciles are cheap and
+        the subprocess transport (same path, fetch_file no-ops) is
+        unaffected. training_state is deliberately NOT fetched —
+        remote-resume is a separate workstream.
+
+        Per-file failures log and continue: a partial fetch beats a
+        completed run with zero local artifacts.
+        """
+        fetched = 0
+        for ckpt_dir, _step in self._iter_checkpoint_dirs(client, run, paths):
+            # Same nested/flat discovery as _sync_checkpoints_manifest.
+            src_dir: Path | None = None
+            for child in client.list_dir(ckpt_dir):
+                if child.name == "pretrained_model":
+                    src_dir = child
+                    break
+                if child.name == "model.safetensors":
+                    src_dir = ckpt_dir
+                    break
+            if src_dir is None:
+                continue
+            for src in client.list_dir(src_dir):
+                if src.name == "training_state":
+                    continue
+                dst = paths.root / src.relative_to(paths.root) if src.is_relative_to(paths.root) else None
+                if dst is None:
+                    # Remote layout mirrors the local run dir by construction
+                    # (same RunPaths on both sides); a path outside it means
+                    # the layout drifted — log loudly rather than guess.
+                    logger.warning("artifact outside run dir, not fetching: %s", src)
+                    continue
+                if dst.exists():
+                    continue
+                try:
+                    client.fetch_file(src, dst)
+                    fetched += 1
+                except Exception as e:
+                    logger.warning("artifact fetch failed for %s: %s", src, e)
+        if fetched:
+            self._emit_event(client, paths.events_jsonl, "artifacts_fetched", count=fetched)
 
     def _sync_checkpoints_manifest(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
         """Append newly-discovered checkpoint dirs to ``checkpoints.jsonl``.
