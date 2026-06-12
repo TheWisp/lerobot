@@ -457,3 +457,62 @@ Recorded after the fact for completeness; chronologically this precedes the VLA-
   horizon; shuffle-z +33–45% — z alive and sample-specific while aggregate twin-gap read ≈0).
 
 Raw result lines for the VLA-JEPA chapter archived in `results/vlajepa_results.txt`.
+
+---
+
+## Chapter: E1/E2/E4 — self-play video in the WM corpus: the first replicated POSITIVE (2026-06-11/12)
+
+**Setup recap.** After the no-go on large-model VLA-JEPA, the within-bet lever was corpus diversity:
+self-play enters as VIDEO ONLY (WM labels = the future itself — cannot be muddled; actions stored but
+unused). E1: 1000 bimanual wide-layout episodes (peg AND socket wide-spawned every episode; right-arm
+peg-push / left-arm socket-push / both-reach; contact validated 84–100% per arm, mode-1 mirror measured
+84%/7.3 cm before use). Stage-1 stopping switched from fixed budget to a PLATEAU RULE (same rule per arm,
+never same steps — corpus sizes differ 6.5×): stop when held-out val L_WM/copy gains <0.3% across 3 evals.
+
+**E2 — representation gate (held-out WIDE scenes, 30 self-play eps excluded from all training):**
+
+| stage-1 corpus  | narrow val/copy | narrow shuf-gap | WIDE val/copy          | WIDE shuf-gap |
+| --------------- | --------------- | --------------- | ---------------------- | ------------- |
+| demos only      | 0.423           | +41.6%          | 2.04 (worse than copy) | +1.3% (dead)  |
+| demos+self-play | 0.433           | +40.6%          | **0.574**              | **+36.2%**    |
+
+Self-play costs nothing in-distribution and makes the module's anticipation TRANSFER to unseen wide
+layouts. (Both arms stopped by the plateau rule at their own optima: 30k/30.4ep vs 36k/21.8ep.)
+
+**E4 — policy-level verdict (K=25 demos, β=0.1, peak protocol, OOD ladder n=96/seed × 3 training seeds):**
+
+SR≥1 pooled (per-seed in results/):
+
+| arm                      | f=1      | f=1.25   | f=1.5    | f=2      |
+| ------------------------ | -------- | -------- | -------- | -------- |
+| control                  | 54.0     | 43.0     | 26.3     | 19.7     |
+| WM (demos)               | 59.3     | 35.3     | 24.7     | 19.3     |
+| **WM (demos+self-play)** | **68.3** | **46.7** | **30.7** | **21.7** |
+
+- **In-distribution: +14.3 pts over control (≈3.5σ, n=288; per-seed +15/+15/+13 — replicates).** The
+  first policy-level effect in this project that clears the noise bar. Mean-reward 1.49 vs 1.26.
+- **OOD: ahead at every widening level** (+3.7/+4.4/+2.0 pts; wmDS ≥ ctrl in 11/12 seed×f cells,
+  sign-test p≈0.003; mean-reward ahead 9/12). HONEST framing: the pre-registered "flatter relative
+  slope" did NOT hold — relative decay is similar; the win is a HIGHER LEVEL throughout plus a small
+  consistent absolute OOD edge.
+- **Demos-only WM confirms the corpus is the active ingredient:** +5.3 in-dist (ns), OOD neutral-to-
+  negative (f=1.25: −7.7). Identical mechanism, no diversity → no benefit. E2→E4 chain is coherent:
+  representation transfer (gate) converted into policy gains only for the corpus that had it.
+
+**Failure taxonomy (user video-read of 10 replayed episodes, then quantified at n=96×4f×3 seeds):**
+reach SURVIVES displacement — min|gripper↔object| degrades only ~1–1.5 cm from f=1→f=2 (8.7→9.7 cm,
+R0-failures barely worse) while SR collapses 54→20%. The OOD bottleneck is GRASP/INSERT EXECUTION, not
+approach. (Refutes the earlier action-manifold-lock-in hypothesis.) Secondary mode: late-episode
+instability past the demo-length tail (time-OOD). Implication: scripted push self-play cannot fix the
+remaining bottleneck (it cannot grasp); next levers are grasp-diverse demos or grasp-capable play.
+
+**Verdict.** The original bet — cheap same-embodiment self-play → embodiment module → more
+data-efficient, more robust VLA — is **partially validated at mini scale**: +14 pts demo-efficiency
+in-distribution and a small consistent absolute OOD edge, with the corpus (not the mechanism alone)
+as the causal ingredient. This is the evidence basis that was missing for scaling; the known limit is
+that the residual OOD failure (grasp execution) lives outside what WM-teaching can supply.
+
+Figure: `figures/e4_ood_ladder_3seeds.png`. Scripts: `scripts/sp_e1_collect.py`, `scripts/sp_e1_feats.py`,
+updated `scripts/sp_vj_act.py` (corpus switch + plateau rule + S10 tol), `scripts/sp_vj_act_s2.py`
+(per-eval ckpt saves), `scripts/sp_ood_eval.py` (reach metrics), `scripts/sp_fail_videos.py` (replay
+inspection -> GUI dataset). Raw lines: `results/e2_e4_results.txt`.

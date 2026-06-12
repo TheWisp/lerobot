@@ -6,17 +6,12 @@ override path so the protocol is identical across f). Same 48 env seeds for ever
 Verdict statistic across arms = degradation slope SR(f) — paper claims JEPA degrades less.
 Usage: sp_ood_eval.py <s2_models/TAG.pt> <f> <n> [tag]"""
 
-import os
-import sys
-
-import mujoco
-import numpy as np
-import torch
+import os, sys, numpy as np, torch, mujoco
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 sys.path.insert(0, "/tmp/selfplay_probe")  # nosec B108
+from sp_vj_act import ACTJepa, resize224, CHUNK
 from sp_lib import Vec, _walk
-from sp_vj_act import CHUNK, ACTJepa, resize224
 
 dev = "cuda"
 MODEL = sys.argv[1]
@@ -62,6 +57,22 @@ for i in range(N):
     p.data.qpos[sadr + 2] = 0.05
     p.data.qpos[sadr + 3 : sadr + 7] = [1, 0, 0, 0]
     mujoco.mj_forward(p.model.ptr, p.data.ptr)
+rlf = ph0.model.body("vx300s_right/left_finger_link").id
+rrf = ph0.model.body("vx300s_right/right_finger_link").id
+llf = ph0.model.body("vx300s_left/left_finger_link").id
+lrf = ph0.model.body("vx300s_left/right_finger_link").id
+
+
+def reach_dists():
+    dp = np.zeros(N)
+    dsoc = np.zeros(N)
+    for i in range(N):
+        p = vec.vec.envs[i].unwrapped._env._physics
+        gr = (np.asarray(p.data.xpos[rlf]) + np.asarray(p.data.xpos[rrf])) / 2
+        gl = (np.asarray(p.data.xpos[llf]) + np.asarray(p.data.xpos[lrf])) / 2
+        dp[i] = np.linalg.norm(gr - np.asarray(p.named.data.xpos["peg"]))
+        dsoc[i] = np.linalg.norm(gl - np.asarray(p.named.data.xpos["socket"]))
+    return dp, dsoc
 
 
 def get(obs):
@@ -71,6 +82,8 @@ def get(obs):
 
 # re-render after override: take obs from a zero-ish settle step? No-op step renders the new layout.
 img, prop = get(obs)
+minp = np.full(N, 1e9)
+mins = np.full(N, 1e9)
 m_te = 0.01
 preds = np.full((T_EVAL, N, CHUNK, 14), np.nan, np.float32)
 maxr = np.zeros(N)
@@ -92,8 +105,18 @@ for t in range(T_EVAL):
         wsum += w
     obs, r, term, trunc, info = vec.vec.step(np.clip((acts / wsum).astype(np.float32), -1, 1))
     maxr = np.maximum(maxr, np.asarray(r, float))
+    dp_, ds_ = reach_dists()
+    minp = np.minimum(minp, dp_)
+    mins = np.minimum(mins, ds_)
     img, prop = get(obs)
 hist = [int((np.round(maxr) == k).sum()) for k in range(5)]
+r0 = maxr < 1
+reach_line = (
+    f"reach: min|grR-peg| {minp.mean() * 100:.1f}cm (R0-only {minp[r0].mean() * 100:.1f}cm) | min|grL-soc| {mins.mean() * 100:.1f}cm (R0-only {mins[r0].mean() * 100:.1f}cm)"
+    if r0.any()
+    else f"reach: min|grR-peg| {minp.mean() * 100:.1f}cm | min|grL-soc| {mins.mean() * 100:.1f}cm"
+)
+print(f"[OODreach {TAG} f={F}] {reach_line}", flush=True)
 print(
     f"[OOD {TAG} f={F}] n={N}: mean {maxr.mean():.2f} | SR>=1 {(maxr >= 1).mean() * 100:.0f}% | SR>=2 {(maxr >= 2).mean() * 100:.0f}% | SR>=3 {(maxr >= 3).mean() * 100:.0f}% | hist {hist}",
     flush=True,

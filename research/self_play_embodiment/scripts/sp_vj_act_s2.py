@@ -8,20 +8,15 @@ stats = stage-1 ckpt provenance (its allowed corpus). (C) eval images via the SA
 cache. Banner prints all provenance. beta default 0.1 (upstream world_model_loss_weight).
 Usage: sp_vj_act_s2.py <ckpt|''> <K> <iters> <beta> <n_eval> <tag> [seed]"""
 
-import os
-import sys
-import time
-
-import numpy as np
-import torch
+import os, sys, time, numpy as np, torch
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 sys.path.insert(0, "/tmp/selfplay_probe")  # nosec B108
+from sp_vj_act import ACTJepa, Predictor, resize224, NLAT, T, STRIDE, CHUNK, NTOK
 from sp_lib import Vec, _walk
-from sp_vj_act import CHUNK, NLAT, NTOK, STRIDE, ACTJepa, Predictor, T, resize224
 
 C = "/tmp/selfplay_probe/cache"  # nosec B108
-dev = "cuda"
+dev = "cuda"  # nosec B108
 CKPT = sys.argv[1] if len(sys.argv) > 1 else ""
 K = int(sys.argv[2]) if len(sys.argv) > 2 else 10
 ITERS = int(sys.argv[3]) if len(sys.argv) > 3 else 12000
@@ -169,6 +164,12 @@ for it in range(ITERS):
         print(f"  it {it}: L1 {l1.item():.4f} KL {kl.item():.4f} ({time.time() - t0:.0f}s)", flush=True)
     if (it + 1) in EVAL_AT and (it + 1) < ITERS:
         model.eval()
+        os.makedirs("/tmp/selfplay_probe/s2_models", exist_ok=True)  # nosec B108
+        _sd = {k: (v.half() if v.is_floating_point() else v) for k, v in model.state_dict().items()}
+        torch.save(
+            {"model": _sd, "smu": smu, "ssd": ssd, "amu": amu, "asd": asd, "task": TASK},
+            f"/tmp/selfplay_probe/s2_models/{TAG}@{it + 1}.pt",  # nosec B108
+        )  # nosec B108
         closed_eval(it + 1)
         model.train()
 model.eval()
@@ -178,6 +179,6 @@ sd = {k: (v.half() if v.is_floating_point() else v) for k, v in model.state_dict
 torch.save(
     {"model": sd, "smu": smu, "ssd": ssd, "amu": amu, "asd": asd, "task": TASK},
     f"/tmp/selfplay_probe/s2_models/{TAG}.pt",  # nosec B108
-)
+)  # nosec B108
 print(f"[saved] s2_models/{TAG}.pt", flush=True)
 closed_eval(ITERS)
