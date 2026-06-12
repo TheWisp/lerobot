@@ -516,3 +516,32 @@ Figure: `figures/e4_ood_ladder_3seeds.png`. Scripts: `scripts/sp_e1_collect.py`,
 updated `scripts/sp_vj_act.py` (corpus switch + plateau rule + S10 tol), `scripts/sp_vj_act_s2.py`
 (per-eval ckpt saves), `scripts/sp_ood_eval.py` (reach metrics), `scripts/sp_fail_videos.py` (replay
 inspection -> GUI dataset). Raw lines: `results/e2_e4_results.txt`.
+
+---
+
+## E5 — self-play-ONLY corpus: the ablation that completes the story (2026-06-12)
+
+Stage 1 on self-play video alone (zero demo video; teleop-budget-clean by design), s1sponly_18000
+(plateau-stop on its own wide-val gate; twin diagnostic dropped — dead weight, no gradient path).
+Then K=25 ×3 seeds, peak protocol, full OOD ladders n=96 — identical to E4.
+
+**Representation gates (double dissociation):** narrow (demo scenes) DEAD (1.31/copy, shuf −0.8%) ·
+WIDE alive (0.560, +34.1%) — the exact mirror of the demos-only corpus. Anticipation is corpus-shaped;
+the union corpus holds both capabilities with zero interference.
+
+**Policy verdict (grasp rate, f=1, n=288 pooled):** ctrl 54.0 · wmD 59.3 · **wmDS 68.3** · **wmSP 47.7**
+(per-seed 49/50/44 — at-or-below control; its n=24 checkpoint evals had read 62/62/58, another ±13-pt
+small-n swing). OOD: wmSP below control at f=1.25/1.5, converged at the f=2 floor. Ladder: wmSP matches
+control on insert (9.7 vs 9.4%) and trails on align.
+
+**CONCLUSION (the 4-arm story):** WM teaching pays only when the corpus contains BOTH the target
+behavior (demo video: grasp/insert dynamics) AND diversity (wide self-play): union 68.3 ≫ each-alone
+(59.3 / 47.7) vs ctrl 54.0. The sponly trunk is behavior-blind (gates) and its policy init is no better
+than ImageNet for learning insertion from 25 demos — wide-layout anticipation alone does not transfer
+to in-distribution manipulation. Consequences: (1) the "teleop budget = exactly K" accounting FAILS —
+demo VIDEO is load-bearing, so wmDS truly consumes 180 teleop episodes as video; (2) the sharpest open
+question is whether cheap GRASP-CAPABLE play (even failed grasps) can replace demo video's behavioral
+content; (3) any K-sweep should run ctrl vs wmDS (union), not wmSP.
+
+Scripts: sp_e5_queue.sh, corpus switch in sp_vj_act.py (sponly/notwin). Raw lines appended to
+results/e2_e4_results.txt. Figures regenerated 4-arm: e4_rung_ladder.png, e4_ood_ladder_3seeds.png.

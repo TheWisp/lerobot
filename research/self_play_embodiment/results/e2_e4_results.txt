@@ -184,3 +184,57 @@
 [RESULT e4s3_wmDS@12000] K=25 beta=0.1 seed=3: mean 1.71 | SR>=1 62% | SR>=3 42% | SR=4 21% | hist [9, 4, 1, 5, 5]
 [RESULT e4s3_wmDS@24000] K=25 beta=0.1 seed=3: mean 1.00 | SR>=1 42% | SR>=3 25% | SR=4 0% | hist [14, 2, 2, 6, 0]
 [RESULT e4s3_wmDS@36000] K=25 beta=0.1 seed=3: mean 1.00 | SR>=1 42% | SR>=3 25% | SR=4 4% | hist [14, 3, 1, 5, 1]
+[OODreach e5_wmSP_s1_pk f=1.0] reach: min|grR-peg| 9.4cm (R0-only 10.2cm) | min|grL-soc| 8.8cm (R0-only 10.4cm)
+[OOD e5_wmSP_s1_pk f=1.0] n=96: mean 1.12 | SR>=1 49% | SR>=2 31% | SR>=3 23% | hist [49, 17, 8, 13, 9]
+[OODreach e5_wmSP_s1_pk f=1.25] reach: min|grR-peg| 9.8cm (R0-only 10.4cm) | min|grL-soc| 8.9cm (R0-only 9.3cm)
+[OOD e5_wmSP_s1_pk f=1.25] n=96: mean 0.65 | SR>=1 33% | SR>=2 17% | SR>=3 10% | hist [64, 16, 6, 6, 4]
+[OODreach e5_wmSP_s1_pk f=1.5] reach: min|grR-peg| 10.6cm (R0-only 11.1cm) | min|grL-soc| 9.7cm (R0-only 10.2cm)
+[OOD e5_wmSP_s1_pk f=1.5] n=96: mean 0.33 | SR>=1 20% | SR>=2 7% | SR>=3 5% | hist [77, 12, 2, 4, 1]
+[OODreach e5_wmSP_s1_pk f=2.0] reach: min|grR-peg| 10.9cm (R0-only 11.4cm) | min|grL-soc| 10.1cm (R0-only 10.6cm)
+[OOD e5_wmSP_s1_pk f=2.0] n=96: mean 0.33 | SR>=1 20% | SR>=2 7% | SR>=3 4% | hist [77, 12, 3, 2, 2]
+[OODreach e5_wmSP_s2_pk f=1.0] reach: min|grR-peg| 9.4cm (R0-only 9.8cm) | min|grL-soc| 8.8cm (R0-only 9.9cm)
+[OOD e5_wmSP_s2_pk f=1.0] n=96: mean 1.03 | SR>=1 50% | SR>=2 27% | SR>=3 17% | hist [48, 22, 10, 7, 9]
+[OODreach e5_wmSP_s2_pk f=1.25] reach: min|grR-peg| 10.1cm (R0-only 11.0cm) | min|grL-soc| 8.8cm (R0-only 9.5cm)
+[OOD e5_wmSP_s2_pk f=1.25] n=96: mean 0.73 | SR>=1 39% | SR>=2 22% | SR>=3 9% | hist [59, 16, 12, 6, 3]
+[OODreach e5_wmSP_s2_pk f=1.5] reach: min|grR-peg| 10.8cm (R0-only 11.2cm) | min|grL-soc| 9.8cm (R0-only 10.1cm)
+[OOD e5_wmSP_s2_pk f=1.5] n=96: mean 0.27 | SR>=1 16% | SR>=2 5% | SR>=3 4% | hist [81, 10, 1, 2, 2]
+[OODreach e5_wmSP_s2_pk f=2.0] reach: min|grR-peg| 10.7cm (R0-only 11.1cm) | min|grL-soc| 9.9cm (R0-only 10.4cm)
+[OOD e5_wmSP_s2_pk f=2.0] n=96: mean 0.39 | SR>=1 21% | SR>=2 10% | SR>=3 4% | hist [76, 10, 6, 1, 3]
+[OODreach e5_wmSP_s3_pk f=1.0] reach: min|grR-peg| 9.4cm (R0-only 10.0cm) | min|grL-soc| 8.6cm (R0-only 9.4cm)
+[OOD e5_wmSP_s3_pk f=1.0] n=96: mean 1.05 | SR>=1 44% | SR>=2 30% | SR>=3 21% | hist [54, 13, 9, 10, 10]
+[OODreach e5_wmSP_s3_pk f=1.25] reach: min|grR-peg| 9.9cm (R0-only 10.5cm) | min|grL-soc| 9.0cm (R0-only 9.5cm)
+[OOD e5_wmSP_s3_pk f=1.25] n=96: mean 0.61 | SR>=1 31% | SR>=2 17% | SR>=3 12% | hist [66, 14, 4, 11, 1]
+[OODreach e5_wmSP_s3_pk f=1.5] reach: min|grR-peg| 10.6cm (R0-only 11.1cm) | min|grL-soc| 9.9cm (R0-only 10.4cm)
+[OOD e5_wmSP_s3_pk f=1.5] n=96: mean 0.32 | SR>=1 20% | SR>=2 7% | SR>=3 4% | hist [77, 12, 3, 3, 1]
+[OODreach e5_wmSP_s3_pk f=2.0] reach: min|grR-peg| 10.8cm (R0-only 11.4cm) | min|grL-soc| 10.0cm (R0-only 10.6cm)
+[OOD e5_wmSP_s3_pk f=2.0] n=96: mean 0.34 | SR>=1 22% | SR>=2 7% | SR>=3 4% | hist [75, 14, 3, 3, 1]
+[RESULT e5_wmSP_s2@12000] K=25 beta=0.1 seed=2: mean 1.33 | SR>=1 62% | SR>=3 21% | SR=4 12% | hist [9, 6, 4, 2, 3]
+[RESULT e5_wmSP_s2@24000] K=25 beta=0.1 seed=2: mean 1.12 | SR>=1 58% | SR>=3 17% | SR=4 4% | hist [10, 6, 4, 3, 1]
+[trained] (4031s) — closed-loop eval (WM dropped)
+[saved] s2_models/e5_wmSP_s2.pt
+[RESULT e5_wmSP_s2@36000] K=25 beta=0.1 seed=2: mean 1.00 | SR>=1 54% | SR>=3 12% | SR=4 0% | hist [11, 5, 5, 3, 0]
+[RESULT e5_wmSP_s3@12000] K=25 beta=0.1 seed=3: mean 1.21 | SR>=1 54% | SR>=3 21% | SR=4 8% | hist [11, 4, 4, 3, 2]
+[RESULT e5_wmSP_s3@24000] K=25 beta=0.1 seed=3: mean 1.17 | SR>=1 58% | SR>=3 21% | SR=4 4% | hist [10, 6, 3, 4, 1]
+[trained] (4027s) — closed-loop eval (WM dropped)
+[saved] s2_models/e5_wmSP_s3.pt
+[RESULT e5_wmSP_s3@36000] K=25 beta=0.1 seed=3: mean 1.25 | SR>=1 58% | SR>=3 25% | SR=4 0% | hist [10, 4, 4, 6, 0]
+[RESULT e5_wmSP_s1@12000] K=25 beta=0.1 seed=1: mean 1.42 | SR>=1 62% | SR>=3 25% | SR=4 17% | hist [9, 6, 3, 2, 4]
+[RESULT e5_wmSP_s1@24000] K=25 beta=0.1 seed=1: mean 1.08 | SR>=1 54% | SR>=3 17% | SR=4 4% | hist [11, 5, 4, 3, 1]
+[trained] (4032s) — closed-loop eval (WM dropped)
+[saved] s2_models/e5_wmSP_s1.pt
+[RESULT e5_wmSP_s1@36000] K=25 beta=0.1 seed=1: mean 1.00 | SR>=1 50% | SR>=3 12% | SR=4 4% | hist [12, 4, 5, 2, 1]
+[     0|  0.0ep] narrow val/copy 5.794 shuf-gap +0.0% | WIDE val/copy 8.060 shuf-gap -0.0% (3s)
+[  2000|  3.0ep] narrow val/copy 1.258 shuf-gap -0.5% | WIDE val/copy 0.705 shuf-gap +19.5% (216s)
+[  4000|  6.0ep] narrow val/copy 1.263 shuf-gap -1.2% | WIDE val/copy 0.620 shuf-gap +24.9% (418s)
+[  6000|  9.0ep] narrow val/copy 1.299 shuf-gap -1.5% | WIDE val/copy 0.589 shuf-gap +28.9% (621s)
+[  8000| 12.0ep] narrow val/copy 1.292 shuf-gap -1.2% | WIDE val/copy 0.575 shuf-gap +28.0% (824s)
+[ 10000| 15.0ep] narrow val/copy 1.276 shuf-gap -1.4% | WIDE val/copy 0.568 shuf-gap +28.6% (1026s)
+[ 12000| 18.0ep] narrow val/copy 1.299 shuf-gap -1.2% | WIDE val/copy 0.564 shuf-gap +31.6% (1229s)
+[ 14000| 21.0ep] narrow val/copy 1.281 shuf-gap -1.1% | WIDE val/copy 0.561 shuf-gap +30.3% (1431s)
+[ 16000| 24.0ep] narrow val/copy 1.296 shuf-gap -0.9% | WIDE val/copy 0.560 shuf-gap +32.4% (1633s)
+[ 18000| 27.0ep] narrow val/copy 1.284 shuf-gap -1.0% | WIDE val/copy 0.554 shuf-gap +30.9% (1835s)
+[ 20000| 30.0ep] narrow val/copy 1.289 shuf-gap -1.1% | WIDE val/copy 0.558 shuf-gap +31.8% (2037s)
+[ 22000| 33.0ep] narrow val/copy 1.307 shuf-gap -1.0% | WIDE val/copy 0.560 shuf-gap +33.1% (2240s)
+[ 24000| 36.0ep] narrow val/copy 1.308 shuf-gap -0.8% | WIDE val/copy 0.560 shuf-gap +34.1% (2443s)
+[plateau-stop corpus=sponly] no >0.3% val gain over 3 evals; stop at 24000 (best @ 18000)
+[done corpus=sponly] best narrow val abs 0.5541 @ 18000

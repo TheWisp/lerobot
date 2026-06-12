@@ -285,7 +285,12 @@ if __name__ == "__main__":
         sys.exit(0 if selftest() else 1)
     ITERS = int(sys.argv[1]) if len(sys.argv) > 1 else 26000
     EVAL_EVERY = int(sys.argv[2]) if len(sys.argv) > 2 else 2000
-    CORPUS = sys.argv[3] if len(sys.argv) > 3 else "demo"  # "demo" | "demosp" (E2: +self-play VIDEO)
+    CORPUS = (
+        sys.argv[3] if len(sys.argv) > 3 else "demo"
+    )  # "demo" | "demosp" | "sponly" (E5: zero demo video)
+    USETWIN = (
+        "notwin" not in sys.argv
+    )  # twin = dead diagnostic weight; drop for speed (no grad path to student)
     assert selftest(), "selftest FAILED — refusing to train"
     m_ = np.load(C + "/meta.npz")
     N = int(m_["N"])
@@ -338,7 +343,10 @@ if __name__ == "__main__":
         idx = [
             (fr[j], tuple(fr[j + STRIDE * k] for k in range(1, T + 1))) for j in range(len(fr) - STRIDE * T)
         ]
-        (an_va if e in val_eps else an_tr).extend(idx)
+        if e in val_eps:
+            an_va.extend(idx)
+        elif CORPUS != "sponly":
+            an_tr.extend(idx)  # sponly: ZERO demo video in training (teleop budget = K)
     for e in sp_eps:
         fr = np.where(ep_sp == e)[0]
         fr = fr[np.argsort(fp_sp[fr])] + N
@@ -347,7 +355,7 @@ if __name__ == "__main__":
         ]
         if e in spval:
             an_wv.extend(idx)
-        elif CORPUS == "demosp":
+        elif CORPUS in ("demosp", "sponly"):
             an_tr.extend(idx)
     rng = np.random.RandomState(0)
     an_va = [an_va[i] for i in rng.choice(len(an_va), 600, replace=False)]
@@ -369,7 +377,7 @@ if __name__ == "__main__":
 
     model = ACTJepa().to(dev)
     pred = Predictor(True).to(dev)
-    twin = Predictor(False).to(dev)
+    twin = Predictor(False).to(dev) if USETWIN else None
     print(
         f"=== BANNER E2 corpus={CORPUS} ===\n student {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M | "
         f"train anchors {len(A_tr)} (sp in train: {CORPUS == 'demosp'}) | narrow-val {len(A_va)} | WIDE-val {len(A_wv)} (30 held-out sp eps)"
@@ -382,7 +390,8 @@ if __name__ == "__main__":
         return S, torch.stack([feats(f_idx[:, j]) for j in range(T)], 1)
 
     opt = torch.optim.AdamW(
-        list(model.parameters()) + list(pred.parameters()) + list(twin.parameters()), 1e-4
+        list(model.parameters()) + list(pred.parameters()) + (list(twin.parameters()) if USETWIN else []),
+        1e-4,
     )
     imn = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(dev)
     isd = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(dev)
@@ -417,7 +426,6 @@ if __name__ == "__main__":
         if it % EVAL_EVERY == 0:
             model.eval()
             pred.eval()
-            twin.eval()
             vm, vs, cb = gate(A_va, F_va)
             wm_, ws, wcb = gate(A_wv, F_wv)
             ep_seen = it * 32 / max(1, len(A_tr))
@@ -441,12 +449,14 @@ if __name__ == "__main__":
                 },
                 f"{OUT}/s1{CORPUS}_{it}.pt",
             )
-            since_best = 0 if vm < best[0] * IMPR else since_best + 1
-            if vm < best[0]:
-                best = (vm, it)
+            vstop = (
+                (wm_ / wcb) if CORPUS == "sponly" else (vm / cb)
+            )  # plateau on the corpus's own in-dist gate
+            since_best = 0 if vstop < best[0] * IMPR else since_best + 1
+            if vstop < best[0]:
+                best = (vstop, it)
             model.train()
             pred.train()
-            twin.train()
             if it >= MINIT and since_best >= PATIENCE:
                 print(
                     f"[plateau-stop corpus={CORPUS}] no >0.3% val gain over {PATIENCE} evals; stop at {it} (best @ {best[1]})",
@@ -461,8 +471,9 @@ if __name__ == "__main__":
         z = mem[:, -NLAT:]
         S, tgt = sseq_tgt(ab, F_tr[bi])
         loss_m = ((pred(S, z) - tgt) ** 2).mean()
-        loss_t = ((twin(S, None) - tgt) ** 2).mean()
-        (loss_m + loss_t).backward()
+        if USETWIN:
+            loss_m = loss_m + ((twin(S, None) - tgt) ** 2).mean()
+        loss_m.backward()
         opt.step()
         opt.zero_grad()
     print(f"[done corpus={CORPUS}] best narrow val abs {best[0]:.4f} @ {best[1]}", flush=True)
