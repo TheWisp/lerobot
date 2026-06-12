@@ -9,11 +9,11 @@
 
 Covers:
   - Protocol conformance via runtime_checkable
-  - PersistentSshProvider degenerate behavior (no-op destroy, no-op cost,
-    spawn raises, handle_from_profile constructs the right HostHandle)
-  - NebiusProvider cost-math correctness (the table-driven part is the
-    only real logic in C1; spawn/destroy stubbed for C2)
-  - Registry: get_provider / list_providers
+  - PersistentSshProvider degenerate behavior (every lifecycle method
+    raises; handle_from_profile constructs the right HostHandle)
+  - NebiusProvider SKU tables + defensive defaults (spawn/destroy
+    stubbed for C2). No cost math by design — see DESIGN.md § What we
+    don't try to do.
 """
 
 from __future__ import annotations
@@ -29,13 +29,8 @@ from lerobot.gui.training.providers import (
     get_provider,
     list_providers,
 )
-from lerobot.gui.training.providers.nebius import (
-    NEBIUS_DISK_WARN_GIB,
-    NEBIUS_GPU_HOURLY_USD,
-    NEBIUS_SSD_MONTHLY_USD_PER_GIB,
-)
+from lerobot.gui.training.providers.nebius import NEBIUS_DISK_WARN_GIB
 from lerobot.gui.training.providers.protocol import (
-    CostSnapshot,
     HostHandle,
     HostProvider,
     SpawnSpec,
@@ -52,7 +47,6 @@ def _example_spec(**overrides) -> SpawnSpec:
         "disk_gib": 100,
         "image": "ghcr.io/thewisp/lerobot-training:latest",
         "ttl_seconds": 24 * 3600,
-        "estimated_cost_ceiling_usd": 25.0,
     }
     defaults.update(overrides)
     return SpawnSpec(**defaults)
@@ -122,12 +116,6 @@ class TestRegistry:
 
 
 class TestPersistentProvider:
-    def test_cost_is_zero(self):
-        snap = PersistentSshProvider().estimate_cost(_example_spec())
-        assert snap.compute_hourly_usd == 0.0
-        assert snap.storage_monthly_usd_per_gib == 0.0
-        assert snap.accrued_usd_estimate == 0.0
-
     def test_spawn_raises_not_implemented(self):
         # Persistent hosts are added by the user, not spawned by the GUI.
         with pytest.raises(NotImplementedError, match="Persistent hosts are added"):
@@ -147,10 +135,6 @@ class TestPersistentProvider:
         should never have been asked about."""
         with pytest.raises(NotImplementedError, match="user-owned"):
             PersistentSshProvider().verify_destroyed(_example_handle())
-
-    def test_current_cost_is_zero(self):
-        snap = PersistentSshProvider().current_cost(_example_handle())
-        assert snap.accrued_usd_estimate == 0.0
 
     def test_handle_from_profile(self):
         """HostProfile (BYO SSH) → HostHandle, with no private-key fields
@@ -173,56 +157,6 @@ class TestPersistentProvider:
         # Persistent hosts effectively never expire (user owns lifecycle).
         # Sanity check: at least 50 years in the future.
         assert handle.expires_at_unix > int(time.time()) + 50 * 365 * 24 * 3600
-
-
-# ── NebiusProvider — cost math (the only real logic in C1) ──────────────────
-
-
-class TestNebiusCostMath:
-    def test_preemptible_l40s_24h(self):
-        """1 × L40S preemptible × 24h + 100 GiB disk × 24h.
-
-        L40S preemptible = $0.90/hr; 24h = $21.60.
-        Disk = $0.10/GiB/month × 100 GiB × (24/730)h = $0.329.
-        Total = $21.93.
-        """
-        spec = _example_spec(gpu="L40S", preemptible=True, ttl_seconds=24 * 3600)
-        snap = NebiusProvider().estimate_cost(spec)
-        assert snap.compute_hourly_usd == 0.90
-        assert snap.storage_monthly_usd_per_gib == 0.10
-        # Compute + storage, within rounding error
-        expected = 0.90 * 24 + 0.10 * 100 * (24 / 730)
-        assert abs(snap.accrued_usd_estimate - expected) < 0.01
-
-    def test_on_demand_more_expensive_than_preemptible(self):
-        spec_preempt = _example_spec(preemptible=True)
-        spec_ondemand = _example_spec(preemptible=False)
-        cost_p = NebiusProvider().estimate_cost(spec_preempt).accrued_usd_estimate
-        cost_o = NebiusProvider().estimate_cost(spec_ondemand).accrued_usd_estimate
-        assert cost_o > cost_p
-
-    def test_h100_is_more_expensive_than_l40s(self):
-        cost_l40s = NebiusProvider().estimate_cost(_example_spec(gpu="L40S")).accrued_usd_estimate
-        cost_h100 = NebiusProvider().estimate_cost(_example_spec(gpu="H100")).accrued_usd_estimate
-        assert cost_h100 > cost_l40s
-
-    def test_multi_gpu_scales_compute(self):
-        cost_1 = NebiusProvider().estimate_cost(_example_spec(gpu="L40S", gpu_count=1)).accrued_usd_estimate
-        cost_4 = NebiusProvider().estimate_cost(_example_spec(gpu="L40S", gpu_count=4)).accrued_usd_estimate
-        # Storage is the same → compute portion quadruples
-        # cost = compute * 4 + storage = (cost_1 - storage) * 4 + storage
-        # so cost_4 should be between 3x and 4x cost_1
-        assert 3.0 < cost_4 / cost_1 < 4.5
-
-    def test_longer_ttl_scales_cost_linearly(self):
-        cost_1h = NebiusProvider().estimate_cost(_example_spec(ttl_seconds=3600)).accrued_usd_estimate
-        cost_24h = NebiusProvider().estimate_cost(_example_spec(ttl_seconds=24 * 3600)).accrued_usd_estimate
-        # Both compute AND storage scale linearly with time, so ratio ≈ 24.
-        assert 23.0 < cost_24h / cost_1h < 25.0
-
-    def test_unsupported_gpu_raises(self):
-        with pytest.raises(ValueError, match="doesn't offer GPU kind"):
-            NebiusProvider().estimate_cost(_example_spec(gpu="RTX_4090"))
 
 
 # ── NebiusProvider — defensive helpers (the lessons from the bill) ──────────
@@ -276,42 +210,3 @@ class TestNebiusStubbedLifecycle:
     def test_verify_destroyed_raises_notimplemented(self):
         with pytest.raises(NotImplementedError, match="lands in C2"):
             NebiusProvider().verify_destroyed(_example_handle(provider="nebius"))
-
-    def test_current_cost_raises_notimplemented(self):
-        with pytest.raises(NotImplementedError, match="lands in C2"):
-            NebiusProvider().current_cost(_example_handle(provider="nebius"))
-
-
-# ── Pricing table invariants ────────────────────────────────────────────────
-
-
-class TestPricingTableInvariants:
-    """Catch typos when refreshing prices."""
-
-    def test_preemptible_always_cheaper_than_on_demand(self):
-        for gpu, (preempt, ondemand) in NEBIUS_GPU_HOURLY_USD.items():
-            assert preempt < ondemand, f"{gpu}: preempt ${preempt} should be less than on-demand ${ondemand}"
-
-    def test_all_prices_positive(self):
-        for gpu, (preempt, ondemand) in NEBIUS_GPU_HOURLY_USD.items():
-            assert preempt > 0, f"{gpu}: preemptible price not positive"
-            assert ondemand > 0, f"{gpu}: on-demand price not positive"
-
-    def test_ssd_price_set(self):
-        assert NEBIUS_SSD_MONTHLY_USD_PER_GIB > 0
-
-
-# ── CostSnapshot smoke ──────────────────────────────────────────────────────
-
-
-class TestCostSnapshot:
-    def test_is_frozen(self):
-        import dataclasses
-
-        snap = CostSnapshot(
-            compute_hourly_usd=1.0,
-            storage_monthly_usd_per_gib=0.10,
-            accrued_usd_estimate=10.0,
-        )
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            snap.compute_hourly_usd = 2.0  # type: ignore[misc] — frozen invariant

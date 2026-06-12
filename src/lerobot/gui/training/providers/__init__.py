@@ -23,7 +23,6 @@ from __future__ import annotations
 from lerobot.gui.training.providers.nebius import NebiusProvider
 from lerobot.gui.training.providers.persistent import PersistentSshProvider
 from lerobot.gui.training.providers.protocol import (
-    CostSnapshot,
     HostHandle,
     HostProvider,
     ProviderId,
@@ -31,7 +30,6 @@ from lerobot.gui.training.providers.protocol import (
 )
 
 __all__ = [
-    "CostSnapshot",
     "HostHandle",
     "HostProvider",
     "ProviderId",

@@ -27,9 +27,6 @@ two. The lifecycle methods are deliberately fail-fast, not no-ops:
     on the wrong host type fails loudly rather than believing resources
     were freed. The C2 teardown sweep iterates GUI-spawned handles only,
     so no legitimate caller ever lands here.
-  - cost is zero — the user pays the vendor directly; we don't see it.
-    (current_cost IS legitimately called: the UI shows a cost column for
-    every host, and $0 is the honest answer for BYO.)
 """
 
 from __future__ import annotations
@@ -38,7 +35,6 @@ import time
 
 from lerobot.gui.training.jobs import HostProfile
 from lerobot.gui.training.providers.protocol import (
-    CostSnapshot,
     HostHandle,
     SpawnSpec,
 )
@@ -55,14 +51,6 @@ class PersistentSshProvider:
 
     id = "persistent"
     display_name = "BYO SSH"
-
-    def estimate_cost(self, spec: SpawnSpec) -> CostSnapshot:
-        # User pays the vendor directly. The GUI has no visibility.
-        return CostSnapshot(
-            compute_hourly_usd=0.0,
-            storage_monthly_usd_per_gib=0.0,
-            accrued_usd_estimate=0.0,
-        )
 
     def spawn(self, spec: SpawnSpec) -> HostHandle:
         raise NotImplementedError(
@@ -84,13 +72,6 @@ class PersistentSshProvider:
             "Persistent hosts are user-owned; there is nothing the GUI "
             "created to verify. A caller asking this question has the "
             "wrong host type."
-        )
-
-    def current_cost(self, handle: HostHandle) -> CostSnapshot:
-        return CostSnapshot(
-            compute_hourly_usd=0.0,
-            storage_monthly_usd_per_gib=0.0,
-            accrued_usd_estimate=0.0,
         )
 
     # ── Persistent-mode-specific helper ───────────────────────────────────

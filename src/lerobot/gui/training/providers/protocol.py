@@ -9,11 +9,9 @@
 
 The protocol is intentionally narrow:
 
-  - estimate_cost(spec) → CostSnapshot          (pure, no side effects)
   - spawn(spec)         → HostHandle             (creates VM, waits for SSH)
   - destroy(handle)     → None                   (destroys VM + disk + IP)
   - verify_destroyed(handle) → bool              (idempotency check)
-  - current_cost(handle) → CostSnapshot          (accrued $ since spawn)
 
 What is deliberately NOT in the protocol:
 
@@ -30,11 +28,14 @@ What is deliberately NOT in the protocol:
     doc's "Recovery from preemption" section). Providers don't move files.
   - Preemption events — handled by :class:`PollScheduler` (3 fails →
     disconnected, 10 → lost contact). Providers don't emit events.
+  - Cost estimation — no price tables, no dollar ceilings. Vendor prices
+    drift and there's no catalog API to validate against; the UI links
+    to the vendor's pricing page instead. Spend protection is mechanical:
+    the spawn spec's hard TTL + the provider's disk-size warning.
 
 Vendor-agnostic Persistent mode (BYO SSH) implements this protocol as a
-degenerate provider: every lifecycle method (spawn / destroy /
-verify_destroyed) raises — the user provided the SSH endpoint by hand
-and owns the VM. Only the cost methods answer (with zeros).
+degenerate provider: every method raises — the user provided the SSH
+endpoint by hand and owns the VM.
 """
 
 from __future__ import annotations
@@ -67,9 +68,7 @@ GpuKind = Literal[
 class SpawnSpec:
     """What the user asked for. Vendor-neutral.
 
-    Pre: ``ttl_seconds`` > 0. ``estimated_cost_ceiling_usd`` > 0. The
-    estimator must agree (within the spec's ceiling) before spawn is
-    called — provider rejects spec otherwise.
+    Pre: ``ttl_seconds`` > 0.
     """
 
     gpu: GpuKind
@@ -82,9 +81,6 @@ class SpawnSpec:
     # (e.g., Nebius scheduled-delete async op; RunPod --terminate-after)
     # so a runaway VM dies even if our GUI server is gone.
     ttl_seconds: int
-    # Refuse to spawn above this. Computed cost = compute_hourly *
-    # (ttl_seconds / 3600) + storage_monthly * disk_gib * (ttl_seconds / 730h).
-    estimated_cost_ceiling_usd: float
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -121,22 +117,6 @@ class HostHandle:
     expires_at_unix: int
 
 
-@dataclass(frozen=True, kw_only=True)
-class CostSnapshot:
-    """Cost numbers for UI display + spend-cap guard.
-
-    Pre: rates are non-negative.
-    """
-
-    compute_hourly_usd: float
-    storage_monthly_usd_per_gib: float
-    # Accrued cost since spawn. For estimate_cost() (pre-spawn), this is
-    # the projected total at TTL. For current_cost(handle), this is the
-    # rate × elapsed wall-clock since spawn (best-effort; provider may
-    # have a more accurate billing API).
-    accrued_usd_estimate: float
-
-
 @runtime_checkable
 class HostProvider(Protocol):
     """Vendor adapter. Implementations live one-per-file in this package.
@@ -148,20 +128,13 @@ class HostProvider(Protocol):
     id: ProviderId
     display_name: str
 
-    def estimate_cost(self, spec: SpawnSpec) -> CostSnapshot:
-        """Pure function. No API call. Caller uses this to reject expensive
-        specs before any side effect."""
-        ...
-
     def spawn(self, spec: SpawnSpec) -> HostHandle:
         """Provision the VM, attach disk, allocate public IP, wait until
         SSH is reachable. The provider MUST configure server-side TTL so
         the VM dies even if we lose control of it.
 
-        Pre: ``estimate_cost(spec).accrued_usd_estimate <=
-              spec.estimated_cost_ceiling_usd``.
-        Post: returned handle's ssh_host:ssh_port accepts SSH with the
-        returned ssh_key_path.
+        Post: returned handle's ssh_host:ssh_port accepts SSH via the
+        user's local SSH setup.
         """
         ...
 
@@ -179,12 +152,5 @@ class HostProvider(Protocol):
         Returns True iff nothing identifying this handle remains billable.
         Automates the "always check Compute → Disks after teardown"
         hygiene rule.
-        """
-        ...
-
-    def current_cost(self, handle: HostHandle) -> CostSnapshot:
-        """Best-effort cost-since-spawn for UI display.
-
-        May estimate locally if the provider's billing API is async.
         """
         ...
