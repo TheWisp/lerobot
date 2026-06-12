@@ -208,3 +208,29 @@ async def test_probe_records_latency(monkeypatch):
     result = await probe_ssh("host")
     assert result.latency_ms >= 0
     assert result.latency_ms < 5000
+
+
+@pytest.mark.asyncio
+async def test_probe_docker_unusable_distinct_from_missing(monkeypatch):
+    """Regression (GPU smoke finding #1, verified live): a docker binary on
+    PATH with no docker-group membership passed `command -v` and probed
+    green, while every actual docker call failed on the socket. The remote
+    command now probes `docker info` as the user and emits a distinct
+    sentinel; the row must be red with the group-membership hint."""
+    fake = _FakeProc(
+        stdout_b=b"__DOCKER_UNUSABLE__\n/usr/bin/tmux\nGPU 0: NVIDIA L40S\n__LEROBOT_PROBE_OK__\n",
+        returncode=0,
+    )
+    _patch_subprocess(monkeypatch, fake)
+    result = await probe_ssh("user@host")
+    checks = {c.name: c for c in result.checks}
+    assert checks["docker"].ok is False
+    assert "docker group" in checks["docker"].detail
+    assert result.ok is False
+
+
+def test_remote_cmd_probes_docker_usability():
+    """The remote command must run `docker info` (socket access as the ssh
+    user), not just `command -v` (binary presence)."""
+    assert "docker info" in probe_mod._REMOTE_CMD
+    assert "__DOCKER_UNUSABLE__" in probe_mod._REMOTE_CMD

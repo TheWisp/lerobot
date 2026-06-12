@@ -66,7 +66,13 @@ _OK_SENTINEL = "__LEROBOT_PROBE_OK__"
 # missing on hosts where training would actually work.
 _REMOTE_CMD = (
     'export PATH="$HOME/.local/bin:$PATH"; '
-    "command -v docker || echo __NO_DOCKER__; "
+    # docker: presence is not usability — a binary on PATH with no docker-
+    # group membership passes `command -v` but every actual `docker` call
+    # fails on the socket (verified live on a fresh Nebius VM). Probe the
+    # daemon as this user; distinguish "not installed" from "not usable".
+    "if command -v docker >/dev/null 2>&1; then "
+    "docker info >/dev/null 2>&1 && command -v docker || echo __DOCKER_UNUSABLE__; "
+    "else echo __NO_DOCKER__; fi; "
     "command -v tmux || echo __NO_TMUX__; "
     "nvidia-smi -L 2>/dev/null || echo __NO_NVIDIA__; "
     f"echo {_OK_SENTINEL}"
@@ -217,11 +223,14 @@ async def probe_ssh(
     out_lines = out_lines[: out_lines.index(_OK_SENTINEL)] if _OK_SENTINEL in out_lines else out_lines
 
     docker_path: str | None = None
+    docker_unusable = False
     tmux_path: str | None = None
     nvidia_lines: list[str] = []
     for ln in out_lines:
         if ln == "__NO_DOCKER__":
             docker_path = None
+        elif ln == "__DOCKER_UNUSABLE__":
+            docker_unusable = True
         elif ln == "__NO_TMUX__":
             tmux_path = None
         elif ln == "__NO_NVIDIA__":
@@ -238,16 +247,25 @@ async def probe_ssh(
             elif tmux_path is None and basename == "tmux":
                 tmux_path = ln
 
+    if docker_unusable:
+        docker_detail = (
+            "installed but not usable by this user — add yourself to the "
+            "docker group (install_prereqs.sh does this), then reconnect"
+        )
+    elif docker_path:
+        docker_detail = docker_path
+    else:
+        docker_detail = (
+            "not installed — from the lerobot checkout, run: "
+            f"ssh {host_spec} 'sudo bash -s' < scripts/training/install_prereqs.sh"
+        )
+
     checks = [
         CheckItem(name="ssh", ok=True, detail=f"connected in {latency_ms} ms"),
         CheckItem(
             name="docker",
-            ok=docker_path is not None,
-            detail=docker_path
-            or (
-                "not installed — from the lerobot checkout, run: "
-                f"ssh {host_spec} 'sudo bash -s' < scripts/training/install_prereqs.sh"
-            ),
+            ok=docker_path is not None and not docker_unusable,
+            detail=docker_detail,
         ),
         CheckItem(
             name="tmux",
