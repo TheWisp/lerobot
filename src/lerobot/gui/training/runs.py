@@ -117,6 +117,11 @@ class Run:
     def from_json(cls, raw: str) -> Run:
         d = json.loads(raw)
         d["state"] = RunState(d["state"])
+        # Legacy records (pre-SSH transport) persisted session_id as the
+        # raw subprocess PID (int). The Protocol widened it to str; coerce
+        # on load so old run history doesn't poison list_runs().
+        if isinstance(d.get("session_id"), int):
+            d["session_id"] = str(d["session_id"])
         return cls(**d)
 
     def advance(self, to: RunState) -> None:

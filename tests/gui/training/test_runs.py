@@ -51,6 +51,20 @@ def test_run_to_from_json_roundtrip() -> None:
     assert re.args == {"num_steps": 100}
 
 
+def test_run_from_json_coerces_legacy_int_session_id() -> None:
+    """Regression (found by the 2026-06-12 GPU smoke): pre-SSH run.json
+    files persisted session_id as the raw subprocess PID (int). After the
+    Protocol widened session_id to str, one legacy record made every
+    list_runs() call 500 on DTO validation. from_json coerces on load."""
+    import json as _json
+
+    r = _make_run()
+    d = _json.loads(r.to_json())
+    d["session_id"] = 1230680  # legacy int PID
+    re = Run.from_json(_json.dumps(d))
+    assert re.session_id == "1230680"
+
+
 def test_run_advance_pending_to_running_sets_started_at() -> None:
     r = _make_run()
     assert r.started_at is None
