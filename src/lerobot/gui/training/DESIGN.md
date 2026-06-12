@@ -284,9 +284,7 @@ One implementation per vendor. Surface:
 
 Spawn spec (vendor-neutral): GPU class, GPU count (v1: 1), preemptibility, boot disk size, container image, region hint, hard TTL (vendor-side scheduled destroy; required). Host handle: provider id, vendor's resource id, transport, optional persistent volume id, region.
 
-Deliberately omitted: start/stop (a stopped VM still bills its disk; every off-switch is destroy), SSH command execution + log tailing (vendor-agnostic; live in the transport above), auth flow (per-request token injection — see Authentication), vendor billing-API reconciliation (actual spend lives on the vendor's console; pricing pages link out from the host config UI).
-
-What the provider DOES answer about cost — locally, with no vendor API call: `estimate_cost(spec)`, a pure function over a hand-maintained rate table (`hourly_rate × gpu_count × ttl_hours + disk_$/GiB-month × disk_gib × ttl/730h`), used to refuse `spawn` above the spec's cost ceiling and to show the projected total in the Ephemeral host form; and `current_cost(handle)`, best-effort rate × elapsed for UI display. Rate-table invariants (preemptible < on-demand, prices > 0) are pinned by tests so a typo during a price refresh fails CI. The Persistent provider answers zeros — the user pays the vendor directly.
+Deliberately omitted: start/stop (a stopped VM still bills its disk; every off-switch is destroy), SSH command execution + log tailing (vendor-agnostic; live in the transport above), auth flow (per-request token injection — see Authentication), cost reporting (vendor pricing pages link out from the host config UI).
 
 The Persistent provider is degenerate: every lifecycle method (`spawn` / `destroy` / `verify_destroyed`) raises — the user owns the VM, the GUI never creates or destroys it; only the cost methods answer (with zeros). The auto-registered workstation host has subprocess transport; user-added Persistent hosts and Ephemeral hosts have SSH transport.
 
