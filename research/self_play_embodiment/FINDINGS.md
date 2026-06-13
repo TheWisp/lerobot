@@ -545,3 +545,15 @@ content; (3) any K-sweep should run ctrl vs wmDS (union), not wmSP.
 
 Scripts: sp_e5_queue.sh, corpus switch in sp_vj_act.py (sponly/notwin). Raw lines appended to
 results/e2_e4_results.txt. Figures regenerated 4-arm: e4_rung_ladder.png, e4_ood_ladder_3seeds.png.
+
+### E5b — correction of the SP-only row (2026-06-13)
+
+User challenged the "underperforms control" claim → verification trio found: (a) results bit-reproducible;
+(b) **checkpoint-selection confound real** — the SP-only arm's stage-1 stopping had to use a different gate
+(its corpus contains no demo scenes), and the wide-val pick (18k) was bad: full 3-seed rerun from the 24k
+checkpoint lifts f=1 n=288 from 47.7 → **50.3%** (57/49/45) ≈ control (54.0); ladder ≈ control throughout
+(insert 10.4 vs 9.4). (c) **structural mechanism audited**: sp episodes (150 frames) vs the 128-frame WM
+window leave ~22 anchors/ep, all t₀ at episode start — the SP-only trunk only ever practiced anticipation
+from the home pose (sp = 32% of union anchors, so the union never felt this). CORRECTED CLAIM: self-play-
+only ≈ control ("doesn't help", not "hurts"); union (68.3) unchanged and decisive. Protocol notes: eval-set
+independence requires varying the SPAWN RNG (env seeds alone barely matter); next sp collection: H≥300.
