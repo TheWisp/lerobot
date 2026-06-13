@@ -8,9 +8,13 @@ Goal: SR-vs-#demos curves to (a) find the demo-reduction ratio read **horizontal
 whether either arm plateaus below ceiling, (c) pick the substrate whose curve sits in a measurable
 mid-range (not floored, not saturated at K-min).
 
-- Eval harness: `use_async_envs=True`, **n_envs=32** (measured plateau ~1500 env-steps/s, 5× over
-  sync; N>=48 OOMs — each worker is a full mujoco+EGL ctx). Debug the N=16/transient EGL
-  worker-startup `RuntimeError` (retry/backoff on ctx creation).
+- Eval harness: **keep SYNC for the in-dist K-sweep.** Decision (2026-06-13): once OOD is dropped the
+  K-sweep is TRAINING-bound (~25 min/cell train vs ~3 min/cell eval), so async (a measured 5× on eval:
+  ~1500 vs ~290 env-steps/s at n_envs=32) saves only ~10-15% of total here and isn't worth its cost.
+  Cost = a worker-side spawn-override wrapper: even in-dist eval uses the qpos override path for
+  protocol parity, which breaks under subprocess envs; LeRobot async per-env reset-options threading
+  is unverified. **Build + validate async (vs sync SR) when we next do OOD-heavy runs**, where eval
+  dominates and the 5× is real. (n_envs=32 is the plateau; N>=48 OOMs — full mujoco+EGL ctx/worker.)
 - **Drop OOD** (f=1 only) — data-efficiency is in-distribution; removes the x4 factor.
 - **Success-terminate + cap 300 steps** (reward is max-over-episode; metric-neutral, ~1.6x).
 - **Leave render at 480x640** — resolution is ~2% of step cost (measured 0.79 vs 0.73 ms), NOT a lever.
