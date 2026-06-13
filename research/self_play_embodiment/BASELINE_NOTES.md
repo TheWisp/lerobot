@@ -50,7 +50,7 @@ maintainer`; `v1.x` → path errors). There is a dataset converter `convert_data
 
 ## Eval methodology (now standing practice)
 
-- **Fixed seed = deterministic starting conditions.** `lerobot-eval --eval.seed=1000` → per-episode seeds
+- **Fixed seed = deterministic starting conditions.** `lerobot-eval --seed=1000` → per-episode seeds
   1000,1001,… → `sample_insertion_pose(seed)` → exact spawn poses. Default is already 1000.
 - **The original 20.6% eval set = seeds 1000…1499 (500 eps), n_obs=1, NO temporal ensemble, NO image
   transforms** (`train_config.json`: `image_transforms.enable=false`). We match it by default.
@@ -69,6 +69,15 @@ maintainer`; `v1.x` → path errors). There is a dataset converter `convert_data
 The insertion repo's `eval_info.json` actually contains the TRANSFER-cube eval (pc_success 83.0, video
 paths `act_aloha_transfer/080000`). So the published per-episode insertion rewards aren't recoverable
 from it; only the README's 20.6% and the seed scheme are trustworthy.
+
+## Transfer-cube repro CONFIRMS sim-version-drift diagnosis (2026-06-13)
+
+Migrated the published transfer-cube ckpt, evaled in our env (seed 1000, n=500): **82.8%** vs their
+**83.0%** — essentially EXACT (0.2 pt). Contrast insertion (17.2 vs 20.6, -3.4 pt). Same pipeline/seed/
+migration. So our eval is SOUND (nails the coarse task), and insertion's gap is genuine sim-version
+sensitivity: tiny mujoco/render/contact changes flip borderline _insertions_ (sub-mm) but never flip a
+coarse _handover_. Precision tasks are the canary for version drift; coarse tasks are immune. Nothing to
+fix on our side. (Note: seed flag is `--seed=1000`, top-level, NOT `--eval.seed`.)
 
 ## Task reference
 
