@@ -52,3 +52,7 @@ mid-range (not floored, not saturated at K-min).
 - Grasp-capable play (can cheap/failed grasp attempts replace demo video's behavioral content?).
 - True GPU-bound eval (MJX/Madrona batched sim) — only if eval becomes the dominant recurring cost.
 - Real-world self-play (safety stack: torque/current/temp caps, walled arena, GUI Recover, watchdog).
+
+## Summary/figures polish (later)
+
+- **Draw uncertainty range on the vertical bars** in the summary PDF (reward-ladder grouped bars): show 95% binomial CI whiskers per bar (n per cell), so the reader sees the error range, not just point heights. (The E4 ladder fig has CIs; ensure the final summary's bars carry them consistently across all arms/rungs.)
