@@ -18,6 +18,8 @@ Covers:
 
 from __future__ import annotations
 
+import json
+import subprocess
 import time
 
 import pytest
@@ -179,7 +181,8 @@ class TestNebiusDefensiveDefaults:
         assert warning is not None
 
     def test_platform_lookup(self):
-        assert NebiusProvider.platform_for("L40S") == "gpu-l40s-a"
+        # L40S is the VERIFIED value (from the GPU-smoke Terraform).
+        assert NebiusProvider.platform_for("L40S") == "gpu-l40s-d"
         assert NebiusProvider.platform_for("H100") == "gpu-h100-sxm5"
 
     def test_platform_lookup_unsupported_raises(self):
@@ -187,26 +190,194 @@ class TestNebiusDefensiveDefaults:
             NebiusProvider.platform_for("RTX_4090")
 
     def test_preset_lookup(self):
-        assert NebiusProvider.preset_for("L40S") == "1gpu-8vcpu-32gb"
+        assert NebiusProvider.preset_for("L40S") == "1gpu-16vcpu-96gb"
         assert NebiusProvider.preset_for("H100") == "1gpu-16vcpu-200gb"
 
 
-# ── NebiusProvider — lifecycle methods stubbed for C2 ──────────────────────
+# ── NebiusProvider — lifecycle via an injected fake CLI ─────────────────────
+#
+# No live `nebius` binary here, so the provider runs against a fake runner
+# returning canned JSON — same pattern as SshClient's fake subprocess. These
+# pin control flow + parsing + the structural argv invariants; the byte-exact
+# CLI flags are marked VERIFY in the impl and confirmed at the live smoke.
 
 
-class TestNebiusStubbedLifecycle:
-    """C1 lands cost math; spawn/destroy land in C2. These tests pin that
-    the stubs explicitly raise (vs. silently returning None) so a caller
-    that wires this up before C2 lands fails loudly."""
+class _FakeCli:
+    """Scriptable nebius CLI: maps subcommand (argv[:3]) → CompletedProcess,
+    records every call. Sequence-aware for `instance get` so a spawn can go
+    PROVISIONING → RUNNING across polls."""
 
-    def test_spawn_raises_notimplemented(self):
-        with pytest.raises(NotImplementedError, match="lands in C2"):
-            NebiusProvider().spawn(_example_spec())
+    def __init__(self):
+        self.calls: list[list[str]] = []
+        self._get_sequence: list[subprocess.CompletedProcess] = []
+        self._responses: dict[tuple[str, ...], subprocess.CompletedProcess] = {}
 
-    def test_destroy_raises_notimplemented(self):
-        with pytest.raises(NotImplementedError, match="lands in C2"):
-            NebiusProvider().destroy(_example_handle(provider="nebius"))
+    def set(self, key: tuple[str, ...], stdout="", returncode=0, stderr=""):
+        self._responses[key] = subprocess.CompletedProcess([], returncode, stdout, stderr)
 
-    def test_verify_destroyed_raises_notimplemented(self):
-        with pytest.raises(NotImplementedError, match="lands in C2"):
-            NebiusProvider().verify_destroyed(_example_handle(provider="nebius"))
+    def set_get_sequence(self, procs):
+        self._get_sequence = list(procs)
+
+    def __call__(self, argv, timeout):
+        self.calls.append(argv)
+        verb = tuple(argv[:3])
+        if verb == ("compute", "instance", "get") and self._get_sequence:
+            return self._get_sequence.pop(0)
+        if verb in self._responses:
+            return self._responses[verb]
+        # Distinguish create vs scheduled-delete (both are instance/delete or
+        # instance/create); default OK for anything unscripted.
+        return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+
+def _ok(stdout, returncode=0, stderr=""):
+    return subprocess.CompletedProcess([], returncode, stdout, stderr)
+
+
+def _running_json(ip="195.242.29.74", region="eu-north1"):
+    return json.dumps(
+        {
+            "metadata": {"id": "computeinstance-abc", "region": region},
+            "status": {
+                "state": "RUNNING",
+                "network_interfaces": [{"public_ip_address": {"address": ip}}],
+            },
+        }
+    )
+
+
+def _nebius(**kw):
+    kw.setdefault("ssh_public_key", "ssh-ed25519 AAAAFAKEKEY test@host")
+    kw.setdefault("poll_interval_s", 0)
+    kw.setdefault("sleep", lambda _s: None)
+    return NebiusProvider(**kw)
+
+
+class TestNebiusSpawn:
+    def test_spawn_happy_path_returns_handle(self):
+        cli = _FakeCli()
+        cli.set(
+            ("compute", "instance", "create"), stdout=json.dumps({"metadata": {"id": "computeinstance-abc"}})
+        )
+        cli.set_get_sequence(
+            [
+                _ok(
+                    json.dumps(
+                        {
+                            "metadata": {"id": "computeinstance-abc"},
+                            "status": {"state": "PROVISIONING", "network_interfaces": []},
+                        }
+                    )
+                ),
+                _ok(_running_json()),
+            ]
+        )
+        handle = _nebius(run_cli=cli).spawn(_example_spec(ttl_seconds=3600))
+        assert handle.provider == "nebius"
+        assert handle.provider_resource_id == "computeinstance-abc"
+        assert handle.ssh_host == "195.242.29.74"
+        assert handle.ssh_user == "lerobot"
+        assert handle.region == "eu-north1"
+
+    def test_spawn_schedules_ttl_before_polling(self):
+        """The hard-TTL delete must be scheduled BEFORE the readiness poll —
+        a VM that never comes up must still self-destruct."""
+        cli = _FakeCli()
+        cli.set(("compute", "instance", "create"), stdout=json.dumps({"metadata": {"id": "i-1"}}))
+        cli.set_get_sequence([_ok(_running_json())])
+        _nebius(run_cli=cli).spawn(_example_spec(ttl_seconds=3600))
+        verbs = [tuple(c[:3]) for c in cli.calls]
+        sched_idx = next(i for i, c in enumerate(cli.calls) if "--after-seconds" in c)
+        first_get_idx = verbs.index(("compute", "instance", "get"))
+        assert sched_idx < first_get_idx
+
+    def test_spawn_ttl_value_propagates(self):
+        cli = _FakeCli()
+        cli.set(("compute", "instance", "create"), stdout=json.dumps({"metadata": {"id": "i-1"}}))
+        cli.set_get_sequence([_ok(_running_json())])
+        _nebius(run_cli=cli).spawn(_example_spec(ttl_seconds=7200))
+        sched = next(c for c in cli.calls if "--after-seconds" in c)
+        assert sched[sched.index("--after-seconds") + 1] == "7200"
+
+    def test_spawn_create_argv_has_verified_sku(self):
+        cli = _FakeCli()
+        cli.set(("compute", "instance", "create"), stdout=json.dumps({"metadata": {"id": "i-1"}}))
+        cli.set_get_sequence([_ok(_running_json())])
+        _nebius(run_cli=cli).spawn(_example_spec(gpu="L40S", disk_gib=50))
+        create = next(c for c in cli.calls if tuple(c[:3]) == ("compute", "instance", "create"))
+        assert "gpu-l40s-d" in create
+        assert "1gpu-16vcpu-96gb" in create
+        assert str(50 * (1024**3)) in create  # disk bytes
+        # cloud-init carries the pubkey
+        ud = create[create.index("--user-data") + 1]
+        assert "ssh-ed25519 AAAAFAKEKEY" in ud
+
+    def test_spawn_rejects_nonpositive_ttl(self):
+        with pytest.raises(ValueError, match="ttl_seconds"):
+            _nebius().spawn(_example_spec(ttl_seconds=0))
+
+    def test_spawn_create_failure_raises(self):
+        cli = _FakeCli()
+        cli.set(("compute", "instance", "create"), returncode=1, stderr="quota exceeded")
+        with pytest.raises(Exception, match="create failed"):
+            _nebius(run_cli=cli).spawn(_example_spec())
+
+    def test_spawn_times_out_when_never_ready(self):
+        cli = _FakeCli()
+        cli.set(("compute", "instance", "create"), stdout=json.dumps({"metadata": {"id": "i-1"}}))
+        # Always PROVISIONING, never RUNNING.
+        provisioning = _ok(
+            json.dumps(
+                {"metadata": {"id": "i-1"}, "status": {"state": "PROVISIONING", "network_interfaces": []}}
+            )
+        )
+        cli.set(("compute", "instance", "get"), stdout=provisioning.stdout)
+        clock = iter([0.0, 0.0, 100.0, 700.0])  # last exceeds the 600s default
+        prov = _nebius(run_cli=cli, clock=lambda: next(clock))
+        with pytest.raises(Exception, match="not reachable"):
+            prov.spawn(_example_spec())
+
+
+class TestNebiusDestroyVerify:
+    def test_destroy_idempotent_on_not_found(self):
+        cli = _FakeCli()
+        cli.set(("compute", "instance", "delete"), returncode=1, stderr="instance not found")
+        _nebius(run_cli=cli).destroy(_example_handle(provider="nebius"))  # no raise
+
+    def test_destroy_real_failure_raises(self):
+        cli = _FakeCli()
+        cli.set(("compute", "instance", "delete"), returncode=1, stderr="permission denied")
+        with pytest.raises(Exception, match="delete failed"):
+            _nebius(run_cli=cli).destroy(_example_handle(provider="nebius"))
+
+    def test_verify_destroyed_true_on_not_found(self):
+        cli = _FakeCli()
+        cli.set(("compute", "instance", "get"), returncode=1, stderr="instance does not exist")
+        assert _nebius(run_cli=cli).verify_destroyed(_example_handle(provider="nebius")) is True
+
+    def test_verify_destroyed_false_when_still_running(self):
+        cli = _FakeCli()
+        cli.set(("compute", "instance", "get"), stdout=_running_json())
+        assert _nebius(run_cli=cli).verify_destroyed(_example_handle(provider="nebius")) is False
+
+    def test_verify_destroyed_true_when_deleting(self):
+        cli = _FakeCli()
+        cli.set(("compute", "instance", "get"), stdout=json.dumps({"status": {"state": "DELETING"}}))
+        assert _nebius(run_cli=cli).verify_destroyed(_example_handle(provider="nebius")) is True
+
+
+class TestNebiusCloudInit:
+    def test_cloud_init_grants_key_and_sudo(self):
+        from lerobot.gui.training.providers.nebius import build_cloud_init
+
+        doc = build_cloud_init("lerobot", "ssh-ed25519 AAAAKEY u@h")
+        assert doc.startswith("#cloud-config")
+        assert "name: lerobot" in doc
+        assert "NOPASSWD:ALL" in doc
+        assert "ssh-ed25519 AAAAKEY u@h" in doc
+
+    def test_cloud_init_rejects_key_path(self):
+        from lerobot.gui.training.providers.nebius import build_cloud_init
+
+        with pytest.raises(AssertionError, match="not a path"):
+            build_cloud_init("lerobot", "/home/u/.ssh/id_ed25519.pub")
