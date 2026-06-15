@@ -5,53 +5,49 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
-"""Nebius Compute provider — Ephemeral VM lifecycle via the ``nebius`` CLI.
+"""Nebius Compute provider — Ephemeral VM lifecycle via the Nebius Python SDK.
 
-Implements :class:`HostProvider` end-to-end through an INJECTABLE command
-runner (``run_cli``), mirroring how :class:`SshClient` was built: the
-control flow, SKU resolution, cloud-init document, JSON→HostHandle
-parsing, readiness polling, and destroy/verify logic are all unit-tested
-against a fake runner. The default runner shells out to the real
-``nebius`` CLI.
+Uses the official ``nebius`` SDK (``from nebius.sdk import SDK``;
+``InstanceServiceClient``), an OPTIONAL GUI-server dependency
+(``lerobot[nebius]``) — NOT part of the training image. The SDK is async;
+this provider exposes the synchronous :class:`HostProvider` interface and
+drives the SDK with ``asyncio.run`` from the orchestrator's prep thread.
 
-VERIFICATION STATUS (2026-06-15): the exact ``nebius`` subcommand argv
-(marked ``# VERIFY`` below) is NOT yet confirmed against a live CLI —
-this environment has no ``nebius`` binary, terraform, or SDK. The argv
-builders are isolated so they can be corrected from one place once the
-tooling is available; tests assert their STRUCTURE (platform/preset/disk
-present, names match) rather than byte-exact strings. Grounded data: the
-L40S SKU + cloud-init shape + boot-disk fields come from the known-good
-Terraform spec that provisioned the GPU-smoke VM (2026-06-12), so they
-are real, not guessed. See PR description + TODO.md for the live-smoke
-plan.
+The async ``InstanceServiceClient`` is INJECTABLE (``instance_service``)
+so tests run against a fake service with no network/credentials — the
+real SDK message construction is exercised in tests (it builds fine on
+protobuf 6.x, which the GUI server already pins via wandb/grpcio-tools).
 
-No cost estimation by design — vendor prices drift and there is no
-price-catalog API to validate against. The dialog links to Nebius's
-pricing page; spend protection is mechanical (hard TTL, disk-size
-warning, auto-destroy). See DESIGN.md § What we don't try to do.
+Grounding: the SKU table, image family, boot-disk + network-interface
+shapes, and cloud-init come from the Terraform that provisioned the
+GPU-smoke VM (2026-06-12) and were validated against the live SDK message
+builders (2026-06-15). Account-scoped inputs — ``project_id`` (the
+instance parent) and ``subnet_id`` — are required and read from
+``NEBIUS_PROJECT_ID`` / ``NEBIUS_SUBNET_ID`` when not passed explicitly.
 
-Auth: inherits from ``~/.nebius/`` (the user's existing ``nebius`` CLI
-profile) — same pattern as kubectl / gh / aws CLI inheritance. The GUI
-never prompts for vendor credentials.
+Auth: the default SDK reads ``NEBIUS_IAM_TOKEN`` (or a service-account key
+/ CLI config) — the GUI never prompts for vendor credentials, same as the
+kubectl / gh / aws CLI inheritance pattern.
 
-Defensive defaults (lessons from the 2026-06-05 disk-billing bill):
-
-  - Inline-managed boot disk only (cascade-delete with the VM). Never a
-    standalone disk; those survive VM-delete and accrue silent charges.
-  - Warn on ``disk_gib > 256`` — most LeRobot training fits in <100 GB.
-  - Hard TTL: schedule a server-side delete at ``spawn + ttl_seconds`` so
-    the VM dies even if our GUI server does. REQUIRED by the protocol.
+TTL caveat (see ``_HARD_TTL_NOTE``): the compute proto exposes no native
+scheduled-delete, so the hard TTL is enforced two ways — a cloud-init
+``poweroff`` timer on the VM itself (caps *compute* billing even if the
+GUI server is gone) plus orchestrator-driven ``destroy`` on every terminal
+run state (frees the *disk*). ``verify_destroyed`` is the backstop that
+catches a leak. A true vendor-side scheduled-delete is a follow-up if the
+SDK gains one.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
-import subprocess
+import os
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from pathlib import Path
+from typing import Any
 
 from lerobot.gui.training.providers.protocol import (
     GpuKind,
@@ -60,11 +56,6 @@ from lerobot.gui.training.providers.protocol import (
 )
 
 logger = logging.getLogger(__name__)
-
-# A command runner: takes the nebius subcommand argv (WITHOUT the leading
-# "nebius") + a timeout, returns the completed process (text mode). Injected
-# so tests drive the provider with canned CLI output and no real network.
-CliRunner = Callable[[list[str], float], "subprocess.CompletedProcess[str]"]
 
 # ── SKU mapping ─────────────────────────────────────────────────────────────
 
@@ -100,7 +91,14 @@ NEBIUS_IMAGE_FAMILY = "ubuntu24.04-cuda13.0-serverless"
 # what bit us; warn well below that.
 NEBIUS_DISK_WARN_GIB = 256
 
-GIB = 1024**3
+# Disk block size matching the verified Terraform spec.
+NEBIUS_DISK_BLOCK_SIZE_BYTES = 4096
+
+_HARD_TTL_NOTE = (
+    "Nebius's compute API exposes no native scheduled-delete; the hard TTL "
+    "is enforced by a cloud-init poweroff timer (caps compute) + "
+    "orchestrator destroy on terminal (frees disk)."
+)
 
 
 # ── Provider ────────────────────────────────────────────────────────────────
@@ -109,9 +107,9 @@ GIB = 1024**3
 class NebiusProvider:
     """Nebius Compute provider — Ephemeral VM lifecycle.
 
-    Pre: a working ``nebius`` CLI on PATH with an authenticated
-    ``~/.nebius/`` profile (only when the DEFAULT runner is used; tests
-    inject their own).
+    Pre (default runner): ``lerobot[nebius]`` installed, an authenticated
+    SDK credential source (``NEBIUS_IAM_TOKEN`` / SA key / CLI config),
+    and ``project_id`` + ``subnet_id`` from the constructor or env.
     """
 
     id = "nebius"
@@ -120,37 +118,52 @@ class NebiusProvider:
     def __init__(
         self,
         *,
-        run_cli: CliRunner | None = None,
+        instance_service: Any | None = None,
+        sdk: Any | None = None,
+        project_id: str | None = None,
+        subnet_id: str | None = None,
         ssh_public_key: str | None = None,
         ssh_user: str = "lerobot",
+        image_family: str = NEBIUS_IMAGE_FAMILY,
         poll_interval_s: float = 10.0,
-        ready_timeout_s: float = 600.0,
+        ready_timeout_s: float = 900.0,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self._run_cli = run_cli or _default_run_cli
-        self._ssh_user = ssh_user
-        # Resolved lazily so construction never touches the filesystem in
-        # tests that inject a key; a missing key only matters at spawn time.
+        # instance_service: an injected async client (tests). When None it's
+        # built lazily from the SDK on first use — so construction never
+        # imports the optional SDK or touches credentials.
+        self._instance_service = instance_service
+        self._sdk = sdk
+        self._project_id = project_id or os.environ.get("NEBIUS_PROJECT_ID")
+        self._subnet_id = subnet_id or os.environ.get("NEBIUS_SUBNET_ID")
         self._ssh_public_key = ssh_public_key
+        self._ssh_user = ssh_user
+        self._image_family = image_family
         self._poll_interval_s = poll_interval_s
         self._ready_timeout_s = ready_timeout_s
         self._sleep = sleep
         self._clock = clock
 
-    # ── Lifecycle ───────────────────────────────────────────────────────
+    # ── Lifecycle (sync interface; async SDK underneath) ────────────────
 
     def spawn(self, spec: SpawnSpec) -> HostHandle:
-        """Provision a VM, attach an inline boot disk + static public IP,
-        schedule the hard-TTL delete, and poll until SSH is reachable.
+        """Provision a VM with an inline boot disk + static public IP, wait
+        until SSH is reachable, and return the handle.
 
-        Pre: ``spec.ttl_seconds > 0``; the GpuKind is in the SKU tables.
+        Pre: ``spec.ttl_seconds > 0``; the GpuKind is in the SKU tables;
+        ``project_id`` + ``subnet_id`` are configured.
         Post: returned handle's ``ssh_host:ssh_port`` accepts SSH via the
-        user's local key, and a server-side delete is scheduled at
-        ``spawn + ttl_seconds`` regardless of what happens to this process.
+        user's local key, and the VM carries a cloud-init poweroff timer at
+        ``spawn + ttl_seconds`` (compute backstop; see ``_HARD_TTL_NOTE``).
         """
         if spec.ttl_seconds <= 0:
             raise ValueError(f"spec.ttl_seconds must be > 0, got {spec.ttl_seconds}")
+        if not self._project_id:
+            raise NebiusConfigError("project_id (or NEBIUS_PROJECT_ID) is required to spawn")
+        if not self._subnet_id:
+            raise NebiusConfigError("subnet_id (or NEBIUS_SUBNET_ID) is required to spawn")
+
         platform = self.platform_for(spec.gpu)
         preset = self.preset_for(spec.gpu)
         warning = self.disk_warning(spec.disk_gib)
@@ -159,126 +172,149 @@ class NebiusProvider:
 
         name = _instance_name()
         pubkey = self._resolve_pubkey()
-        user_data = build_cloud_init(self._ssh_user, pubkey)
+        user_data = build_cloud_init(self._ssh_user, pubkey, ttl_seconds=spec.ttl_seconds)
         spawned_at = self._clock()
+        expires_at = int(spawned_at + spec.ttl_seconds)
 
-        # VERIFY: exact `nebius compute instance create` argv.
-        create_argv = _create_argv(
-            name=name,
-            platform=platform,
-            preset=preset,
-            disk_gib=spec.disk_gib,
-            user_data=user_data,
-            region_hint=spec.region_hint,
+        request = self._build_create_request(
+            name=name, platform=platform, preset=preset, spec=spec, user_data=user_data
         )
-        proc = self._run_cli(create_argv, 300.0)
-        if proc.returncode != 0:
-            raise NebiusCliError("create", proc)
-        resource_id = _parse_instance_id(proc.stdout)
-
-        # Hard TTL FIRST, before the (potentially long) readiness poll —
-        # a VM that never becomes reachable must still self-destruct.
-        # VERIFY: exact scheduled-delete argv.
-        self._schedule_ttl_delete(resource_id, spec.ttl_seconds)
+        resource_id = self._run(self._acreate(request))
+        logger.info("nebius spawn: created instance %s (%s); %s", resource_id, name, _HARD_TTL_NOTE)
 
         deadline = spawned_at + self._ready_timeout_s
-        handle = self._poll_until_ready(
-            resource_id=resource_id,
-            spec=spec,
-            expires_at_unix=int(spawned_at + spec.ttl_seconds),
-            deadline=deadline,
+        return self._poll_until_ready(
+            resource_id=resource_id, spec=spec, expires_at_unix=expires_at, deadline=deadline
         )
-        logger.info("nebius spawn: %s ready at %s:%d", resource_id, handle.ssh_host, handle.ssh_port)
-        return handle
 
     def destroy(self, handle: HostHandle) -> None:
-        """Idempotent delete of the VM + inline boot disk + public IP.
+        """Idempotent delete of the VM (cascades the inline boot disk + IP).
 
-        Does not touch ``handle.persistent_volume_id`` (lifecycled
-        separately). A delete of an already-gone instance is treated as
-        success — destroy is the cleanup path and must never wedge.
+        A delete of an already-gone instance is treated as success —
+        destroy is the cleanup path and must never wedge.
         """
-        # VERIFY: exact delete argv.
-        argv = ["compute", "instance", "delete", "--id", handle.provider_resource_id]
-        proc = self._run_cli(argv, 120.0)
-        if proc.returncode != 0 and not _looks_like_not_found(proc):
-            raise NebiusCliError("delete", proc)
+        try:
+            self._run(self._adelete(handle.provider_resource_id))
+        except Exception as e:  # noqa: BLE001 — classify not-found as success
+            if _is_not_found(e):
+                return
+            raise
 
     def verify_destroyed(self, handle: HostHandle) -> bool:
         """True iff no billable resource for this handle remains.
 
-        Re-gets the instance; not-found (or a DELETED/DELETING status) is
-        success. Any live status is a failed teardown.
+        Re-gets the instance; not-found (or DELETING) is success. Any live
+        state — or an error that prevents confirmation — reports False so
+        the caller keeps looking rather than assuming clean.
         """
-        # VERIFY: exact get argv.
-        argv = ["compute", "instance", "get", "--id", handle.provider_resource_id, "--format", "json"]
-        proc = self._run_cli(argv, 60.0)
-        if _looks_like_not_found(proc):
-            return True
-        if proc.returncode != 0:
-            # Can't confirm — conservatively report NOT destroyed so the
-            # caller (and the user) keep looking rather than assume clean.
-            logger.warning("nebius verify_destroyed: get failed: %s", proc.stderr[:200])
-            return False
         try:
-            status = (json.loads(proc.stdout).get("status") or {}).get("state", "")
-        except (json.JSONDecodeError, AttributeError):
+            state = self._run(self._aget_state(handle.provider_resource_id))
+        except Exception as e:  # noqa: BLE001
+            if _is_not_found(e):
+                return True
+            logger.warning("nebius verify_destroyed: get failed: %s", e)
             return False
-        return str(status).upper() in {"DELETED", "DELETING"}
+        return state in {"DELETING", "DELETED", "UNSPECIFIED"}
+
+    # ── Async SDK calls (overridable seams; tests inject the service) ────
+
+    async def _acreate(self, request: Any) -> str:
+        service = self._service()
+        op = await service.create(request)
+        await op.wait()
+        if not getattr(op, "successful", lambda: True)():
+            raise NebiusSpawnError(f"create operation failed: {getattr(op, 'status', None)}")
+        return op.resource_id
+
+    async def _aget(self, resource_id: str) -> Any:
+        service = self._service()
+        get_req = _get_request(resource_id)
+        return await service.get(get_req)
+
+    async def _aget_state(self, resource_id: str) -> str:
+        instance = await self._aget(resource_id)
+        return _state_name(instance)
+
+    async def _adelete(self, resource_id: str) -> None:
+        service = self._service()
+        op = await service.delete(_delete_request(resource_id))
+        await op.wait()
 
     # ── Internals ───────────────────────────────────────────────────────
 
-    def _schedule_ttl_delete(self, resource_id: str, ttl_seconds: int) -> None:
-        # VERIFY: Nebius's server-side scheduled-delete mechanism. The
-        # protocol REQUIRES the VM self-destruct even if the GUI server is
-        # gone, so this must be a vendor-side schedule, not a local timer.
-        argv = [
-            "compute",
-            "instance",
-            "delete",
-            "--id",
-            resource_id,
-            "--after-seconds",
-            str(ttl_seconds),
-        ]
-        proc = self._run_cli(argv, 60.0)
-        if proc.returncode != 0:
-            raise NebiusCliError("schedule-delete", proc)
-
     def _poll_until_ready(
-        self,
-        *,
-        resource_id: str,
-        spec: SpawnSpec,
-        expires_at_unix: int,
-        deadline: float,
+        self, *, resource_id: str, spec: SpawnSpec, expires_at_unix: int, deadline: float
     ) -> HostHandle:
-        """Poll ``instance get`` until the VM is RUNNING with a public IP,
-        then return the handle. Raises on timeout."""
         last_state = "?"
         while True:
-            # VERIFY: exact get argv.
-            argv = ["compute", "instance", "get", "--id", resource_id, "--format", "json"]
-            proc = self._run_cli(argv, 60.0)
-            if proc.returncode == 0:
-                info = _parse_instance_info(proc.stdout)
-                last_state = info.state
-                if info.state.upper() == "RUNNING" and info.public_ip:
+            try:
+                instance = self._run(self._aget(resource_id))
+                last_state = _state_name(instance)
+                ip = _public_ip(instance)
+                if last_state == "RUNNING" and ip:
                     return HostHandle(
                         provider="nebius",
                         provider_resource_id=resource_id,
-                        ssh_host=info.public_ip,
+                        ssh_host=ip,
                         ssh_port=22,
                         ssh_user=self._ssh_user,
-                        region=info.region or (spec.region_hint or "unknown"),
+                        region=_region(instance) or (spec.region_hint or "unknown"),
                         expires_at_unix=expires_at_unix,
                     )
+            except Exception as e:  # noqa: BLE001 — transient get errors during boot are expected
+                logger.debug("nebius poll: get(%s) failed (transient?): %s", resource_id, e)
             if self._clock() >= deadline:
                 raise NebiusSpawnTimeoutError(
                     f"instance {resource_id} not reachable within "
                     f"{self._ready_timeout_s:.0f}s (last state={last_state!r})"
                 )
             self._sleep(self._poll_interval_s)
+
+    def _build_create_request(
+        self, *, name: str, platform: str, preset: str, spec: SpawnSpec, user_data: str
+    ) -> Any:
+        sym = _sdk_symbols()
+        return sym.CreateInstanceRequest(
+            metadata=sym.ResourceMetadata(parent_id=self._project_id, name=name),
+            spec=sym.InstanceSpec(
+                resources=sym.ResourcesSpec(platform=platform, preset=preset),
+                boot_disk=sym.AttachedDiskSpec(
+                    attach_mode=sym.AttachedDiskSpec.AttachMode.READ_WRITE,
+                    device_id="boot-disk",
+                    managed_disk=sym.ManagedDisk(
+                        name=f"{name}-boot",
+                        spec=sym.DiskSpec(
+                            size_gibibytes=spec.disk_gib,
+                            block_size_bytes=NEBIUS_DISK_BLOCK_SIZE_BYTES,
+                            type=sym.DiskSpec.DiskType.NETWORK_SSD,
+                            source_image_family=sym.SourceImageFamily(image_family=self._image_family),
+                        ),
+                    ),
+                ),
+                network_interfaces=[
+                    sym.NetworkInterfaceSpec(
+                        subnet_id=self._subnet_id,
+                        public_ip_address=sym.PublicIPAddress(static=True),
+                    )
+                ],
+                cloud_init_user_data=user_data,
+            ),
+        )
+
+    def _service(self) -> Any:
+        if self._instance_service is not None:
+            return self._instance_service
+        sym = _sdk_symbols()
+        if self._sdk is None:
+            self._sdk = sym.SDK()
+        self._instance_service = sym.InstanceServiceClient(self._sdk)
+        return self._instance_service
+
+    @staticmethod
+    def _run(coro: Coroutine[Any, Any, Any]) -> Any:
+        # Provider methods are called from the orchestrator's prep daemon
+        # thread, which has no running loop — asyncio.run is safe here.
+        return asyncio.run(coro)
 
     def _resolve_pubkey(self) -> str:
         if self._ssh_public_key:
@@ -292,15 +328,10 @@ class NebiusProvider:
             "`ssh-keygen` so the spawned VM can authorize your login"
         )
 
-    # ── SKU + warning helpers (pure; exposed for UI + tests) ─────────────
+    # ── Pure helpers (UI + tests) ────────────────────────────────────────
 
     @staticmethod
     def disk_warning(disk_gib: int) -> str | None:
-        """Warning string if ``disk_gib`` is unusually large, else None.
-
-        Disks bill continuously create-to-delete regardless of VM state —
-        the structural lesson from the bill investigation.
-        """
         if disk_gib > NEBIUS_DISK_WARN_GIB:
             return (
                 f"Boot disk is {disk_gib} GiB (warning at >{NEBIUS_DISK_WARN_GIB}). "
@@ -311,7 +342,6 @@ class NebiusProvider:
 
     @staticmethod
     def platform_for(gpu: GpuKind) -> str:
-        """SKU lookup for the nebius CLI's --platform flag."""
         if gpu not in NEBIUS_GPU_PLATFORMS:
             raise ValueError(
                 f"Nebius has no platform mapping for GPU kind {gpu!r}. "
@@ -321,7 +351,6 @@ class NebiusProvider:
 
     @staticmethod
     def preset_for(gpu: GpuKind) -> str:
-        """SKU lookup for the nebius CLI's --preset flag (matching the platform)."""
         if gpu not in NEBIUS_DEFAULT_PRESET:
             raise ValueError(
                 f"Nebius has no default preset for GPU kind {gpu!r}. "
@@ -333,28 +362,134 @@ class NebiusProvider:
 # ── Errors ──────────────────────────────────────────────────────────────────
 
 
-class NebiusCliError(RuntimeError):
-    """A ``nebius`` CLI invocation returned non-zero."""
+class NebiusConfigError(RuntimeError):
+    """Missing required configuration (project/subnet/credentials)."""
 
-    def __init__(self, op: str, proc: subprocess.CompletedProcess[str]) -> None:
-        tail = (proc.stderr or proc.stdout or "").strip()[-300:]
-        super().__init__(f"nebius {op} failed (rc={proc.returncode}): {tail}")
+
+class NebiusSpawnError(RuntimeError):
+    """Spawn failed or produced output we couldn't interpret."""
 
 
 class NebiusSpawnTimeoutError(RuntimeError):
     """The VM did not become SSH-reachable within the readiness window."""
 
 
-# ── Pure helpers (fully testable, no CLI) ────────────────────────────────────
+# ── SDK glue (lazy import; the SDK is an optional extra) ─────────────────────
 
 
-class _InstanceInfo:
-    __slots__ = ("state", "public_ip", "region")
+class _SdkSymbols:
+    """Lazily-imported handle to the SDK classes the provider needs.
 
-    def __init__(self, state: str, public_ip: str | None, region: str | None) -> None:
-        self.state = state
-        self.public_ip = public_ip
-        self.region = region
+    Imported on first use, not at module import, so the registry can import
+    ``NebiusProvider`` on a GUI server that didn't install ``lerobot[nebius]``
+    — only an actual spawn/destroy requires the SDK present.
+    """
+
+    __slots__ = (
+        "SDK",
+        "InstanceServiceClient",
+        "CreateInstanceRequest",
+        "GetInstanceRequest",
+        "DeleteInstanceRequest",
+        "InstanceSpec",
+        "ResourcesSpec",
+        "AttachedDiskSpec",
+        "ManagedDisk",
+        "DiskSpec",
+        "SourceImageFamily",
+        "NetworkInterfaceSpec",
+        "PublicIPAddress",
+        "InstanceStatus",
+        "ResourceMetadata",
+    )
+
+    def __init__(self) -> None:
+        try:
+            from nebius.api.nebius.common.v1 import ResourceMetadata
+            from nebius.api.nebius.compute.v1 import (
+                AttachedDiskSpec,
+                CreateInstanceRequest,
+                DeleteInstanceRequest,
+                DiskSpec,
+                GetInstanceRequest,
+                InstanceServiceClient,
+                InstanceSpec,
+                InstanceStatus,
+                ManagedDisk,
+                NetworkInterfaceSpec,
+                PublicIPAddress,
+                ResourcesSpec,
+                SourceImageFamily,
+            )
+            from nebius.sdk import SDK
+        except ImportError as e:
+            raise NebiusConfigError(
+                "the Nebius SDK is not installed — `uv sync --extra nebius` "
+                "(or `pip install 'nebius>=0.3,<0.4'`) on the GUI server"
+            ) from e
+        self.SDK = SDK
+        self.InstanceServiceClient = InstanceServiceClient
+        self.CreateInstanceRequest = CreateInstanceRequest
+        self.GetInstanceRequest = GetInstanceRequest
+        self.DeleteInstanceRequest = DeleteInstanceRequest
+        self.InstanceSpec = InstanceSpec
+        self.ResourcesSpec = ResourcesSpec
+        self.AttachedDiskSpec = AttachedDiskSpec
+        self.ManagedDisk = ManagedDisk
+        self.DiskSpec = DiskSpec
+        self.SourceImageFamily = SourceImageFamily
+        self.NetworkInterfaceSpec = NetworkInterfaceSpec
+        self.PublicIPAddress = PublicIPAddress
+        self.InstanceStatus = InstanceStatus
+        self.ResourceMetadata = ResourceMetadata
+
+
+_SYMS: _SdkSymbols | None = None
+
+
+def _sdk_symbols() -> _SdkSymbols:
+    global _SYMS
+    if _SYMS is None:
+        _SYMS = _SdkSymbols()
+    return _SYMS
+
+
+def _get_request(resource_id: str) -> Any:
+    return _sdk_symbols().GetInstanceRequest(id=resource_id)
+
+
+def _delete_request(resource_id: str) -> Any:
+    return _sdk_symbols().DeleteInstanceRequest(id=resource_id)
+
+
+def _state_name(instance: Any) -> str:
+    """Instance.status.state enum → its NAME (e.g. 'RUNNING'). Robust to the
+    enum being an IntEnum or already a string."""
+    state = instance.status.state
+    name = getattr(state, "name", None)
+    return str(name if name is not None else state).upper()
+
+
+def _public_ip(instance: Any) -> str | None:
+    for nic in instance.status.network_interfaces or []:
+        pub = getattr(nic, "public_ip_address", None)
+        addr = getattr(pub, "address", None) if pub is not None else None
+        if addr:
+            return str(addr)
+    return None
+
+
+def _region(instance: Any) -> str | None:
+    meta = getattr(instance, "metadata", None)
+    return getattr(meta, "parent_id", None) if meta is not None else None
+
+
+def _is_not_found(exc: Exception) -> bool:
+    blob = str(exc).lower()
+    return "not found" in blob or "notfound" in blob or "does not exist" in blob
+
+
+# ── Pure helpers (no SDK) ────────────────────────────────────────────────────
 
 
 def _instance_name() -> str:
@@ -363,15 +498,21 @@ def _instance_name() -> str:
     return f"lerobot-eph-{uuid.uuid4().hex[:10]}"
 
 
-def build_cloud_init(ssh_user: str, ssh_public_key: str) -> str:
-    """cloud-init user-data granting ``ssh_user`` key-only login + NOPASSWD
-    sudo. Shape mirrors the known-good GPU-smoke Terraform user_data.
+def build_cloud_init(ssh_user: str, ssh_public_key: str, *, ttl_seconds: int) -> str:
+    """cloud-init user-data: create ``ssh_user`` with key-only login +
+    NOPASSWD sudo, and arm a one-shot ``poweroff`` ``ttl_seconds`` from boot
+    as the hard-TTL compute backstop (see ``_HARD_TTL_NOTE``).
 
-    Pre: ``ssh_public_key`` is a single OpenSSH public-key line.
+    Pre: ``ssh_public_key`` is a single OpenSSH public-key line; ttl > 0.
     """
     assert ssh_public_key and not ssh_public_key.startswith("/"), (
         f"expected public-key contents, not a path: {ssh_public_key!r}"
     )
+    assert ttl_seconds > 0, ttl_seconds
+    # `shutdown -P +<minutes>` powers off (halts compute billing) even if the
+    # GUI server is gone. Disk teardown is the orchestrator's destroy() job;
+    # verify_destroyed catches any leak. Minimum 1 minute.
+    ttl_minutes = max(1, ttl_seconds // 60)
     return (
         "#cloud-config\n"
         "users:\n"
@@ -380,93 +521,6 @@ def build_cloud_init(ssh_user: str, ssh_public_key: str) -> str:
         "    shell: /bin/bash\n"
         "    ssh_authorized_keys:\n"
         f"      - {ssh_public_key}\n"
-    )
-
-
-def _create_argv(
-    *,
-    name: str,
-    platform: str,
-    preset: str,
-    disk_gib: int,
-    user_data: str,
-    region_hint: str | None,
-) -> list[str]:
-    # VERIFY: byte-exact flags against the real `nebius compute instance
-    # create`. Structure is grounded in the Terraform resource: platform +
-    # preset, an INLINE NETWORK_SSD boot disk from the cuda image family,
-    # a static public IP, and cloud-init user-data. Tests assert the
-    # structural invariants, not the exact strings.
-    argv = [
-        "compute",
-        "instance",
-        "create",
-        "--name",
-        name,
-        "--platform",
-        platform,
-        "--preset",
-        preset,
-        "--boot-disk-type",
-        "NETWORK_SSD",
-        "--boot-disk-size-bytes",
-        str(disk_gib * GIB),
-        "--boot-disk-image-family",
-        NEBIUS_IMAGE_FAMILY,
-        "--public-ip-static",
-        "--user-data",
-        user_data,
-        "--format",
-        "json",
-    ]
-    if region_hint:
-        argv += ["--region", region_hint]
-    return argv
-
-
-def _parse_instance_id(stdout: str) -> str:
-    """Pull the instance id out of `instance create --format json` output."""
-    try:
-        d = json.loads(stdout)
-    except json.JSONDecodeError as e:
-        raise NebiusSpawnError(f"could not parse instance-create JSON: {e}") from e
-    # Nebius wraps the resource under metadata.id (VERIFY against real output).
-    rid = (d.get("metadata") or {}).get("id") or d.get("id")
-    if not rid:
-        raise NebiusSpawnError(f"instance-create JSON had no id: {stdout[:200]}")
-    return str(rid)
-
-
-def _parse_instance_info(stdout: str) -> _InstanceInfo:
-    """Extract (state, public_ip, region) from `instance get --format json`."""
-    d = json.loads(stdout)
-    status = d.get("status") or {}
-    state = str(status.get("state", "") or "")
-    region = (d.get("metadata") or {}).get("region") or status.get("region")
-    public_ip = None
-    # VERIFY shape: status.network_interfaces[].public_ip_address.address
-    for nic in status.get("network_interfaces") or []:
-        addr = (nic.get("public_ip_address") or {}).get("address")
-        if addr:
-            public_ip = str(addr)
-            break
-    return _InstanceInfo(state=state, public_ip=public_ip, region=region)
-
-
-def _looks_like_not_found(proc: subprocess.CompletedProcess[str]) -> bool:
-    blob = ((proc.stderr or "") + (proc.stdout or "")).lower()
-    return "not found" in blob or "notfound" in blob or "does not exist" in blob
-
-
-class NebiusSpawnError(RuntimeError):
-    """Spawn produced output we couldn't interpret."""
-
-
-def _default_run_cli(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
-    """Default runner: shell out to the real ``nebius`` CLI."""
-    return subprocess.run(
-        ["nebius", *argv],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
+        "runcmd:\n"
+        f"  - shutdown -P +{ttl_minutes}\n"
     )

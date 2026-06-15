@@ -18,8 +18,6 @@ Covers:
 
 from __future__ import annotations
 
-import json
-import subprocess
 import time
 
 import pytest
@@ -194,190 +192,215 @@ class TestNebiusDefensiveDefaults:
         assert NebiusProvider.preset_for("H100") == "1gpu-16vcpu-200gb"
 
 
-# ── NebiusProvider — lifecycle via an injected fake CLI ─────────────────────
+# ── NebiusProvider — lifecycle via an injected fake SDK service ─────────────
 #
-# No live `nebius` binary here, so the provider runs against a fake runner
-# returning canned JSON — same pattern as SshClient's fake subprocess. These
-# pin control flow + parsing + the structural argv invariants; the byte-exact
-# CLI flags are marked VERIFY in the impl and confirmed at the live smoke.
+# No credentials/network here, so the provider runs against a fake async
+# InstanceServiceClient. The CreateInstanceRequest is built with the REAL
+# SDK message classes (so these tests exercise actual message construction)
+# — hence importorskip("nebius"). Same loopback-first spirit as SshClient;
+# the live spawn→train→destroy smoke is run on the user's Nebius account.
+
+nebius_sdk = pytest.importorskip("nebius.api.nebius.compute.v1")
 
 
-class _FakeCli:
-    """Scriptable nebius CLI: maps subcommand (argv[:3]) → CompletedProcess,
-    records every call. Sequence-aware for `instance get` so a spawn can go
-    PROVISIONING → RUNNING across polls."""
+class _FakeOp:
+    def __init__(self, resource_id="computeinstance-abc", ok=True):
+        self._rid = resource_id
+        self._ok = ok
 
-    def __init__(self):
-        self.calls: list[list[str]] = []
-        self._get_sequence: list[subprocess.CompletedProcess] = []
-        self._responses: dict[tuple[str, ...], subprocess.CompletedProcess] = {}
+    async def wait(self):
+        return None
 
-    def set(self, key: tuple[str, ...], stdout="", returncode=0, stderr=""):
-        self._responses[key] = subprocess.CompletedProcess([], returncode, stdout, stderr)
+    def successful(self):
+        return self._ok
 
-    def set_get_sequence(self, procs):
-        self._get_sequence = list(procs)
+    @property
+    def resource_id(self):
+        return self._rid
 
-    def __call__(self, argv, timeout):
-        self.calls.append(argv)
-        verb = tuple(argv[:3])
-        if verb == ("compute", "instance", "get") and self._get_sequence:
+
+class _FakeState:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakePubIP:
+    def __init__(self, address):
+        self.address = address
+
+
+class _FakeNic:
+    def __init__(self, address):
+        self.public_ip_address = _FakePubIP(address)
+
+
+class _FakeStatus:
+    def __init__(self, state, ip):
+        self.state = _FakeState(state)
+        self.network_interfaces = [_FakeNic(ip)] if ip else []
+
+
+class _FakeMeta:
+    def __init__(self, parent_id):
+        self.parent_id = parent_id
+
+
+class _FakeInstance:
+    def __init__(self, state, ip, parent_id="eu-north1"):
+        self.status = _FakeStatus(state, ip)
+        self.metadata = _FakeMeta(parent_id)
+
+
+class _FakeService:
+    """Async InstanceServiceClient stand-in. Records the requests it's
+    handed and replays a scripted sequence of `get` instances so a spawn
+    can progress CREATING → RUNNING. ``create``/``delete`` can be made to
+    raise to exercise error paths."""
+
+    def __init__(self, get_sequence=None, create_exc=None, get_exc=None, delete_exc=None):
+        self.created: list = []
+        self.deleted: list = []
+        self.gotten: list = []
+        self._get_sequence = list(get_sequence or [])
+        self._create_exc = create_exc
+        self._get_exc = get_exc
+        self._delete_exc = delete_exc
+
+    async def create(self, request):
+        self.created.append(request)
+        if self._create_exc:
+            raise self._create_exc
+        return _FakeOp()
+
+    async def get(self, request):
+        self.gotten.append(request)
+        if self._get_exc:
+            raise self._get_exc
+        if self._get_sequence:
             return self._get_sequence.pop(0)
-        if verb in self._responses:
-            return self._responses[verb]
-        # Distinguish create vs scheduled-delete (both are instance/delete or
-        # instance/create); default OK for anything unscripted.
-        return subprocess.CompletedProcess(argv, 0, "{}", "")
+        raise AssertionError("unexpected extra get() call")
+
+    async def delete(self, request):
+        self.deleted.append(request)
+        if self._delete_exc:
+            raise self._delete_exc
+        return _FakeOp()
 
 
-def _ok(stdout, returncode=0, stderr=""):
-    return subprocess.CompletedProcess([], returncode, stdout, stderr)
-
-
-def _running_json(ip="195.242.29.74", region="eu-north1"):
-    return json.dumps(
-        {
-            "metadata": {"id": "computeinstance-abc", "region": region},
-            "status": {
-                "state": "RUNNING",
-                "network_interfaces": [{"public_ip_address": {"address": ip}}],
-            },
-        }
-    )
-
-
-def _nebius(**kw):
+def _nebius(service=None, **kw):
     kw.setdefault("ssh_public_key", "ssh-ed25519 AAAAFAKEKEY test@host")
+    kw.setdefault("project_id", "project-TEST")
+    kw.setdefault("subnet_id", "vpcsubnet-TEST")
     kw.setdefault("poll_interval_s", 0)
     kw.setdefault("sleep", lambda _s: None)
-    return NebiusProvider(**kw)
+    return NebiusProvider(instance_service=service, **kw)
 
 
 class TestNebiusSpawn:
     def test_spawn_happy_path_returns_handle(self):
-        cli = _FakeCli()
-        cli.set(
-            ("compute", "instance", "create"), stdout=json.dumps({"metadata": {"id": "computeinstance-abc"}})
-        )
-        cli.set_get_sequence(
-            [
-                _ok(
-                    json.dumps(
-                        {
-                            "metadata": {"id": "computeinstance-abc"},
-                            "status": {"state": "PROVISIONING", "network_interfaces": []},
-                        }
-                    )
-                ),
-                _ok(_running_json()),
+        svc = _FakeService(
+            get_sequence=[
+                _FakeInstance("CREATING", None),
+                _FakeInstance("RUNNING", "195.242.29.74"),
             ]
         )
-        handle = _nebius(run_cli=cli).spawn(_example_spec(ttl_seconds=3600))
+        handle = _nebius(svc).spawn(_example_spec(ttl_seconds=3600))
         assert handle.provider == "nebius"
         assert handle.provider_resource_id == "computeinstance-abc"
         assert handle.ssh_host == "195.242.29.74"
         assert handle.ssh_user == "lerobot"
-        assert handle.region == "eu-north1"
+        assert handle.expires_at_unix > 0
 
-    def test_spawn_schedules_ttl_before_polling(self):
-        """The hard-TTL delete must be scheduled BEFORE the readiness poll —
-        a VM that never comes up must still self-destruct."""
-        cli = _FakeCli()
-        cli.set(("compute", "instance", "create"), stdout=json.dumps({"metadata": {"id": "i-1"}}))
-        cli.set_get_sequence([_ok(_running_json())])
-        _nebius(run_cli=cli).spawn(_example_spec(ttl_seconds=3600))
-        verbs = [tuple(c[:3]) for c in cli.calls]
-        sched_idx = next(i for i, c in enumerate(cli.calls) if "--after-seconds" in c)
-        first_get_idx = verbs.index(("compute", "instance", "get"))
-        assert sched_idx < first_get_idx
+    def test_spawn_builds_request_with_verified_sku(self):
+        """Exercises REAL SDK message construction: platform/preset/disk/
+        cloud-init must land on the CreateInstanceRequest."""
+        svc = _FakeService(get_sequence=[_FakeInstance("RUNNING", "1.2.3.4")])
+        _nebius(svc).spawn(_example_spec(gpu="L40S", disk_gib=50, ttl_seconds=3600))
+        req = svc.created[0]
+        assert req.spec.resources.platform == "gpu-l40s-d"
+        assert req.spec.resources.preset == "1gpu-16vcpu-96gb"
+        assert req.spec.boot_disk.managed_disk.spec.size_gibibytes == 50
+        assert req.metadata.parent_id == "project-TEST"
+        assert req.spec.network_interfaces[0].subnet_id == "vpcsubnet-TEST"
+        assert "ssh-ed25519 AAAAFAKEKEY" in req.spec.cloud_init_user_data
 
-    def test_spawn_ttl_value_propagates(self):
-        cli = _FakeCli()
-        cli.set(("compute", "instance", "create"), stdout=json.dumps({"metadata": {"id": "i-1"}}))
-        cli.set_get_sequence([_ok(_running_json())])
-        _nebius(run_cli=cli).spawn(_example_spec(ttl_seconds=7200))
-        sched = next(c for c in cli.calls if "--after-seconds" in c)
-        assert sched[sched.index("--after-seconds") + 1] == "7200"
-
-    def test_spawn_create_argv_has_verified_sku(self):
-        cli = _FakeCli()
-        cli.set(("compute", "instance", "create"), stdout=json.dumps({"metadata": {"id": "i-1"}}))
-        cli.set_get_sequence([_ok(_running_json())])
-        _nebius(run_cli=cli).spawn(_example_spec(gpu="L40S", disk_gib=50))
-        create = next(c for c in cli.calls if tuple(c[:3]) == ("compute", "instance", "create"))
-        assert "gpu-l40s-d" in create
-        assert "1gpu-16vcpu-96gb" in create
-        assert str(50 * (1024**3)) in create  # disk bytes
-        # cloud-init carries the pubkey
-        ud = create[create.index("--user-data") + 1]
-        assert "ssh-ed25519 AAAAFAKEKEY" in ud
+    def test_spawn_cloud_init_arms_ttl_poweroff(self):
+        svc = _FakeService(get_sequence=[_FakeInstance("RUNNING", "1.2.3.4")])
+        _nebius(svc).spawn(_example_spec(ttl_seconds=2 * 3600))
+        ud = svc.created[0].spec.cloud_init_user_data
+        assert "shutdown -P +120" in ud  # 2h → 120 min
 
     def test_spawn_rejects_nonpositive_ttl(self):
         with pytest.raises(ValueError, match="ttl_seconds"):
-            _nebius().spawn(_example_spec(ttl_seconds=0))
+            _nebius(_FakeService()).spawn(_example_spec(ttl_seconds=0))
+
+    def test_spawn_requires_project_and_subnet(self):
+        from lerobot.gui.training.providers.nebius import NebiusConfigError
+
+        with pytest.raises(NebiusConfigError, match="project_id"):
+            _nebius(_FakeService(), project_id=None).spawn(_example_spec())
+        with pytest.raises(NebiusConfigError, match="subnet_id"):
+            _nebius(_FakeService(), subnet_id=None).spawn(_example_spec())
 
     def test_spawn_create_failure_raises(self):
-        cli = _FakeCli()
-        cli.set(("compute", "instance", "create"), returncode=1, stderr="quota exceeded")
-        with pytest.raises(Exception, match="create failed"):
-            _nebius(run_cli=cli).spawn(_example_spec())
+        svc = _FakeService(create_exc=RuntimeError("quota exceeded"))
+        with pytest.raises(RuntimeError, match="quota exceeded"):
+            _nebius(svc).spawn(_example_spec())
 
     def test_spawn_times_out_when_never_ready(self):
-        cli = _FakeCli()
-        cli.set(("compute", "instance", "create"), stdout=json.dumps({"metadata": {"id": "i-1"}}))
-        # Always PROVISIONING, never RUNNING.
-        provisioning = _ok(
-            json.dumps(
-                {"metadata": {"id": "i-1"}, "status": {"state": "PROVISIONING", "network_interfaces": []}}
-            )
-        )
-        cli.set(("compute", "instance", "get"), stdout=provisioning.stdout)
-        clock = iter([0.0, 0.0, 100.0, 700.0])  # last exceeds the 600s default
-        prov = _nebius(run_cli=cli, clock=lambda: next(clock))
+        svc = _FakeService(get_sequence=[_FakeInstance("CREATING", None) for _ in range(50)])
+        clock = iter([0.0, 0.0, 100.0, 1000.0])  # last exceeds the 900s default
         with pytest.raises(Exception, match="not reachable"):
-            prov.spawn(_example_spec())
+            _nebius(svc, clock=lambda: next(clock)).spawn(_example_spec())
 
 
 class TestNebiusDestroyVerify:
+    def test_destroy_issues_delete(self):
+        svc = _FakeService()
+        _nebius(svc).destroy(_example_handle(provider="nebius", provider_resource_id="i-9"))
+        assert svc.deleted[0].id == "i-9"
+
     def test_destroy_idempotent_on_not_found(self):
-        cli = _FakeCli()
-        cli.set(("compute", "instance", "delete"), returncode=1, stderr="instance not found")
-        _nebius(run_cli=cli).destroy(_example_handle(provider="nebius"))  # no raise
+        svc = _FakeService(delete_exc=RuntimeError("instance not found"))
+        _nebius(svc).destroy(_example_handle(provider="nebius"))  # no raise
 
     def test_destroy_real_failure_raises(self):
-        cli = _FakeCli()
-        cli.set(("compute", "instance", "delete"), returncode=1, stderr="permission denied")
-        with pytest.raises(Exception, match="delete failed"):
-            _nebius(run_cli=cli).destroy(_example_handle(provider="nebius"))
+        svc = _FakeService(delete_exc=RuntimeError("permission denied"))
+        with pytest.raises(RuntimeError, match="permission denied"):
+            _nebius(svc).destroy(_example_handle(provider="nebius"))
 
     def test_verify_destroyed_true_on_not_found(self):
-        cli = _FakeCli()
-        cli.set(("compute", "instance", "get"), returncode=1, stderr="instance does not exist")
-        assert _nebius(run_cli=cli).verify_destroyed(_example_handle(provider="nebius")) is True
+        svc = _FakeService(get_exc=RuntimeError("instance does not exist"))
+        assert _nebius(svc).verify_destroyed(_example_handle(provider="nebius")) is True
 
     def test_verify_destroyed_false_when_still_running(self):
-        cli = _FakeCli()
-        cli.set(("compute", "instance", "get"), stdout=_running_json())
-        assert _nebius(run_cli=cli).verify_destroyed(_example_handle(provider="nebius")) is False
+        svc = _FakeService(get_sequence=[_FakeInstance("RUNNING", "1.2.3.4")])
+        assert _nebius(svc).verify_destroyed(_example_handle(provider="nebius")) is False
 
     def test_verify_destroyed_true_when_deleting(self):
-        cli = _FakeCli()
-        cli.set(("compute", "instance", "get"), stdout=json.dumps({"status": {"state": "DELETING"}}))
-        assert _nebius(run_cli=cli).verify_destroyed(_example_handle(provider="nebius")) is True
+        svc = _FakeService(get_sequence=[_FakeInstance("DELETING", None)])
+        assert _nebius(svc).verify_destroyed(_example_handle(provider="nebius")) is True
+
+    def test_verify_destroyed_false_on_unknown_error(self):
+        """Conservative: an error we can't classify as not-found reports
+        NOT destroyed, so the user keeps looking."""
+        svc = _FakeService(get_exc=RuntimeError("transient API 503"))
+        assert _nebius(svc).verify_destroyed(_example_handle(provider="nebius")) is False
 
 
 class TestNebiusCloudInit:
-    def test_cloud_init_grants_key_and_sudo(self):
+    def test_cloud_init_grants_key_sudo_and_ttl(self):
         from lerobot.gui.training.providers.nebius import build_cloud_init
 
-        doc = build_cloud_init("lerobot", "ssh-ed25519 AAAAKEY u@h")
+        doc = build_cloud_init("lerobot", "ssh-ed25519 AAAAKEY u@h", ttl_seconds=3600)
         assert doc.startswith("#cloud-config")
         assert "name: lerobot" in doc
         assert "NOPASSWD:ALL" in doc
         assert "ssh-ed25519 AAAAKEY u@h" in doc
+        assert "shutdown -P +60" in doc
 
     def test_cloud_init_rejects_key_path(self):
         from lerobot.gui.training.providers.nebius import build_cloud_init
 
         with pytest.raises(AssertionError, match="not a path"):
-            build_cloud_init("lerobot", "/home/u/.ssh/id_ed25519.pub")
+            build_cloud_init("lerobot", "/home/u/.ssh/id_ed25519.pub", ttl_seconds=3600)
