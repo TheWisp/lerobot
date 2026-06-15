@@ -80,3 +80,69 @@ possible if needed.)
 - 3-corpus stage-1 ablation (demos-only / +SP / SP-only) incl. demos-only "dead" negative control.
 - All-224 rerun if resolution gap suspected.
 - Stage-2 aux WM loss (β·L_WM, prototype E9) — current stage-2 is transfer-only.
+
+---
+
+# CONSOLIDATION (Jun 15, paused) — corrected findings + disciplined plan
+
+## Hard knowns (verified this session)
+
+- **Control K-sweep, TransferCube, full success (pc_success=rung4), n=200 seed1000 480px 100k steps:**
+  K5=21.0 · K10=29.0 · K25=52.5 · K50=73.0.
+- **TransferCube K=50 rung-rates (from eval max_rewards):**
+  | rung | control | WM-full | WM-bbonly |
+  |---|---|---|---|
+  | >=1 grasp | 99.0 | 83.0 | 88.5 |
+  | >=2 lift | 81.0 | 69.0 | 75.5 |
+  | =4 full | 73.0 | 54.5 | 61.0 |
+  WM regresses at EVERY rung incl. grasp. KEY: TransferCube grasp is **saturated** (control 99%) -> no
+  perception headroom for WM to help; remaining difficulty (rung3->4) is precision, not perception.
+- **Prototype, INSERTION, grasp rung (rung>=1), pooled across spawn scales (the real prototype Result):**
+  | corpus | in-dist | 1.25x | 1.5x | 2x |
+  |---|---|---|---|---|
+  | control (no WM) | 54.0 | 43.0 | 26.3 | 19.7 |
+  | WM demos-only | 59.3 | 35.3 | 24.7 | 19.3 |
+  | WM demos+self-play | **68.3** | **46.7** | **30.7** | **21.7** |
+  | WM self-play-only | 47.7 | 34.3 | 18.7 | 21.0 |
+  -> WM(demos+SP) BEATS control on the grasp rung WITH headroom (control only 54%), and holds an OOD edge.
+- **Stage-1 representation gate passes in both** (current: val/copy 0.446, shuffle-z +43%; prototype Result 1
+  similar). Good anticipation features are NOT the issue.
+- **WM is NOT undertrained** at 100k: train-loss converges same as control, reaches slightly LOWER train loss
+  (0.038 vs 0.042) yet evals worse -> mild overfit / worse generalization, not too-few-steps.
+
+## Corrected interpretation
+
+- Earlier WRONG claim "WM never won downstream" — RETRACTED. Prototype WM(demos+SP) won the insertion grasp
+  rung (68.3 vs 54.0). The signal is real, on a **perception-bottlenecked rung WITH headroom**.
+- TransferCube full-success was the WRONG vehicle: grasp saturated (99%), remaining difficulty = precision.
+- So the WM benefit shows up where perception is the bottleneck AND there's headroom (hard-task grasp / OOD).
+
+## Divergences prototype -> current LeRobot graft (the confounds)
+
+1. stage-2 aux loss beta\*L_WM DROPPED (current transfer-only). Prototype HAD it — but note prototype's win
+   was with aux on; not a proven silver bullet.
+2. decoder depth 1 (LeRobot default) vs 6 (prototype).
+3. resolution: stage-1 224 -> stage-2/eval 480 (49->300 tokens). Prototype 224 everywhere.
+4. latents transferred vs co-trained from scratch.
+5. VAE latent as encoder-token (LeRobot) vs decoder-memory (prototype).
+6. control = strong LeRobot ACT (73%) vs weak custom ACT (54%).
+7. metric: full pc_success vs grasp-rung-rate + OOD scales.
+8. task: TransferCube (current) vs insertion (prototype).
+
+## DISCIPLINED PLAN (one change at a time, FROM the working prototype)
+
+Start at the known-good prototype (ACTJepa, insertion + peg/socket SP, WM>control on grasp rung). Change ONE
+variable at a time toward the LeRobot graft; after each change re-run the SAME tests (stage-1 representation
+gate AND stage-2 grasp-rung comparison at a sensible high K, incl. OOD scales). Lock each variable before the
+next.
+
+- [ ] CHANGE 1: task insertion->TransferCube AND swap peg/socket SP -> cube SP (~same #frames). Everything
+      else = prototype. Does WM still beat control at some rung/K? (find a sensible K.)
+- [ ] CHANGE 2..n: then swap remaining variables one at a time (corpus mix, decoder depth, resolution, aux
+      loss, transfer-vs-cotrain, finally LeRobot ACT itself).
+
+## Caveat / cleanup debt
+
+- Prototype training cache `cache_sp` (insertion+peg/socket imgs+vjepa feats, 35GB) was DELETED during the
+  storage cleanup. Re-running the prototype requires rebuilding its cache. Prototype scripts (sp_vj_act.py,
+  sp_vj_act_s2.py, sp_build_cache.py) live in /tmp/selfplay_probe (ephemeral) — back up before use.
