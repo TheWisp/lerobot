@@ -405,3 +405,23 @@ class TestNebiusCloudInit:
 
         with pytest.raises(AssertionError, match="not a path"):
             build_cloud_init("lerobot", "/home/u/.ssh/id_ed25519.pub", ttl_seconds=3600)
+
+
+class TestNebiusAuthError:
+    def test_missing_credential_raises_instructive_auth_error(self, monkeypatch):
+        """No token + no ambient creds → a NebiusAuthError whose message
+        tells the user how to log in (not a raw SDK NoTokenInEnvError)."""
+        from lerobot.gui.training.providers.nebius import NebiusAuthError
+
+        monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+        # No instance_service injected → real SDK() build, which fails
+        # credential resolution with no token/profile.
+        prov = NebiusProvider(
+            project_id="project-x", subnet_id="vpcsubnet-y",
+            ssh_public_key="ssh-ed25519 AAAA t@h",
+        )
+        with pytest.raises(NebiusAuthError) as ei:
+            prov.spawn(_example_spec(ttl_seconds=3600))
+        msg = str(ei.value)
+        assert "nebius iam get-access-token" in msg
+        assert "set IAM token" in msg

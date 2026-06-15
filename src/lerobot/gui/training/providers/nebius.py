@@ -196,7 +196,14 @@ class NebiusProvider:
         request = self._build_create_request(
             name=name, platform=platform, preset=preset, spec=spec, user_data=user_data
         )
-        resource_id = self._run(self._acreate(request))
+        try:
+            resource_id = self._run(self._acreate(request))
+        except NebiusAuthError:
+            raise
+        except Exception as e:  # noqa: BLE001 — a bad/expired token fails at the RPC, not at SDK build
+            if _looks_like_auth_error(e):
+                raise NebiusAuthError(_AUTH_HINT) from e
+            raise
         logger.info("nebius spawn: created instance %s (%s); %s", resource_id, name, _HARD_TTL_NOTE)
 
         deadline = spawned_at + self._ready_timeout_s
@@ -323,14 +330,17 @@ class NebiusProvider:
             return self._instance_service
         sym = _sdk_symbols()
         if self._sdk is None:
-            if self._iam_token:
-                # Per-user token from the request header → scoped SDK.
-                from nebius.aio.token.static import Bearer
+            try:
+                if self._iam_token:
+                    # Per-user token from the request header → scoped SDK.
+                    from nebius.aio.token.static import Bearer
 
-                self._sdk = sym.SDK(credentials=Bearer(self._iam_token))
-            else:
-                # Ambient credentials (NEBIUS_IAM_TOKEN env / ~/.nebius/).
-                self._sdk = sym.SDK()
+                    self._sdk = sym.SDK(credentials=Bearer(self._iam_token))
+                else:
+                    # Ambient credentials (NEBIUS_IAM_TOKEN env / ~/.nebius/).
+                    self._sdk = sym.SDK()
+            except Exception as e:  # noqa: BLE001 — rewrap any cred-resolution failure
+                raise NebiusAuthError(_AUTH_HINT) from e
         self._instance_service = sym.InstanceServiceClient(self._sdk)
         return self._instance_service
 
@@ -388,6 +398,21 @@ class NebiusProvider:
 
 class NebiusConfigError(RuntimeError):
     """Missing required configuration (project/subnet/credentials)."""
+
+
+# Instruction shown verbatim to the user (run detail) when no usable Nebius
+# credential is available — the "you're not logged in" path.
+_AUTH_HINT = (
+    "Not logged in to Nebius. Get a token on your machine with "
+    "`nebius iam get-access-token --duration=12h`, then paste it via the "
+    "'set IAM token' link in the Add-host dialog (or set NEBIUS_IAM_TOKEN "
+    "on the GUI server). Tokens expire (~12h) — re-paste if this recurs."
+)
+
+
+class NebiusAuthError(RuntimeError):
+    """No usable Nebius credential (missing/expired token). Carries the
+    user-facing instruction so the run's error tells them how to fix it."""
 
 
 class NebiusSpawnError(RuntimeError):
@@ -511,6 +536,11 @@ def _region(instance: Any) -> str | None:
 def _is_not_found(exc: Exception) -> bool:
     blob = str(exc).lower()
     return "not found" in blob or "notfound" in blob or "does not exist" in blob
+
+
+def _looks_like_auth_error(exc: Exception) -> bool:
+    blob = (type(exc).__name__ + " " + str(exc)).lower()
+    return any(k in blob for k in ("token", "unauthenticated", "unauthorized", "permission", "credential", "401", "403"))
 
 
 # ── Pure helpers (no SDK) ────────────────────────────────────────────────────
