@@ -56,3 +56,8 @@ mid-range (not floored, not saturated at K-min).
 ## Summary/figures polish (later)
 
 - **Draw uncertainty range on the vertical bars** in the summary PDF (reward-ladder grouped bars): show 95% binomial CI whiskers per bar (n per cell), so the reader sees the error range, not just point heights. (The E4 ladder fig has CIs; ensure the final summary's bars carry them consistently across all arms/rungs.)
+
+## Optional follow-ups (LeRobot ACT WM graft, Jun 15)
+
+- [ ] Wide-scene (OOD) representation gate: hold out WIDE self-play episodes for the val/copy + shuffle-z gate (current gate uses random in-distribution held-out from the union corpus). Passed in-distribution: val/copy 0.494, shuffle-z +35% @12k.
+- [ ] 3-corpus stage-1 ablation (demos-only / demos+SP / SP-only) to reproduce prototype Result 1 incl. the "demos-only = dead (2.04, +1.3%)" negative control. Current run uses the union corpus only.
