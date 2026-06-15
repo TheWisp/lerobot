@@ -448,7 +448,7 @@
                 Use a <code style="color:var(--text-primary, #ccc);">~/.ssh/config</code> alias (e.g. <code style="color:var(--text-primary, #ccc);">lab-gpu1</code>) or <code style="color:var(--text-primary, #ccc);">user@host</code>. Auth uses your local SSH setup — the GUI server never reads your private keys.
             </p>
             <p id="add-host-help-ephemeral" style="display:none; margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
-                A Nebius VM is spawned when a run starts and destroyed when it ends. Auth uses your <code style="color:var(--text-primary, #ccc);">NEBIUS_IAM_TOKEN</code> + project/subnet env. <strong>You pay the vendor directly</strong> — know the rates: <a href="https://docs.nebius.com/compute/resources/pricing" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">pricing ↗</a>
+                A Nebius VM is spawned when a run starts and destroyed when it ends. Auth uses your <code style="color:var(--text-primary, #ccc);">NEBIUS_IAM_TOKEN</code> + project/subnet env. <strong>You pay the vendor directly</strong> — know the rates: <a href="https://docs.nebius.com/compute/resources/pricing" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">pricing ↗</a> · <a href="#" onclick="trainingSetNebiusToken(); return false;" style="color:var(--accent,#0e639c);">set IAM token</a>
             </p>
             <div style="margin-bottom:10px;">
                 <label for="add-host-name" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Name <span style="color:var(--text-secondary,#666);">(used as the host id; a–z, 0–9, _ -)</span></label>

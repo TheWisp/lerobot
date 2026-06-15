@@ -14,6 +14,30 @@
 
 const TRAINING_POLL_MS = 3000;
 let _trainingHosts = [];
+
+// ── Nebius per-user IAM token (LAN multi-user auth) ─────────────────────────
+// The token is obtained by the user on their own machine
+// (`nebius iam get-access-token --duration=12h`) and pasted here. It lives
+// ONLY in this browser's localStorage and is sent per-request in the
+// X-Nebius-Authorization header; the GUI server uses it transiently for
+// spawn/destroy and never persists it. See DESIGN.md § Authentication.
+const NEBIUS_TOKEN_KEY = "lerobot_nebius_token";
+function getNebiusToken() {
+  try { return (localStorage.getItem(NEBIUS_TOKEN_KEY) || "").trim(); } catch { return ""; }
+}
+function trainingSetNebiusToken() {
+  const v = window.prompt(
+    "Paste your Nebius IAM token.\n\nGet one on your machine:\n  nebius iam get-access-token --duration=12h\n\nStored only in this browser; sent per-request; never persisted by the server.",
+    getNebiusToken(),
+  );
+  if (v === null) return getNebiusToken();  // cancelled
+  try { localStorage.setItem(NEBIUS_TOKEN_KEY, v.trim()); } catch { /* ignore */ }
+  return v.trim();
+}
+function _trainingAuthHeaders() {
+  const t = getNebiusToken();
+  return t ? { "X-Nebius-Authorization": t } : {};
+}
 let _trainingDatasets = [];
 let _trainingPolicyCatalog = []; // populated by trainingLoadPolicies()
 let _trainingPollTimer = null;
@@ -134,13 +158,15 @@ function trainingRenderHostsInfo() {
     return;
   }
   const rows = _trainingHosts.map((h) => {
-    const isSsh = h.transport_kind === "ssh";
-    const gpu = h.capabilities?.gpu_name || (isSsh ? "remote SSH" : "GPU");
+    const removable = h.transport_kind !== "subprocess";  // anything but the local workstation
+    const isEph = h.transport_kind === "ephemeral";
+    const gpu = h.capabilities?.gpu_name || (isEph ? "cloud" : h.transport_kind === "ssh" ? "remote SSH" : "GPU");
     const vram = h.capabilities?.vram_mb ? ` · ${(h.capabilities.vram_mb / 1024).toFixed(1)} GB` : "";
-    const removeBtn = isSsh
-      ? ` <button class="btn-small secondary" style="margin-left:6px; padding:0 6px;" onclick="trainingDeleteHost('${cssEscape(h.id)}', '${cssEscape(h.display_name)}')" title="Remove this SSH host">×</button>`
+    const tag = isEph ? ' <span style="opacity:0.6;">(ephemeral)</span>' : "";
+    const removeBtn = removable
+      ? ` <button class="btn-small secondary" style="margin-left:6px; padding:0 6px;" onclick="trainingDeleteHost('${cssEscape(h.id)}', '${cssEscape(h.display_name)}')" title="Remove this host">×</button>`
       : "";
-    return `<div>${escapeHtml(h.display_name)} — ${escapeHtml(gpu)}${escapeHtml(vram)}${removeBtn}</div>`;
+    return `<div>${escapeHtml(h.display_name)} — ${escapeHtml(gpu)}${escapeHtml(vram)}${tag}${removeBtn}</div>`;
   });
   el.innerHTML = rows.join("");
   if (btn) {
@@ -341,7 +367,7 @@ async function trainingRefreshDetail(runId) {
   const el = document.getElementById("training-detail");
   if (!el || _trainingMode !== "detail") return;
   try {
-    const resp = await fetch(`/api/training/runs/${runId}`);
+    const resp = await fetch(`/api/training/runs/${runId}`, { headers: _trainingAuthHeaders() });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const snap = await resp.json();
     // Preserve user scroll across the 2s full-pane re-render. Two scrolls
@@ -637,7 +663,7 @@ async function trainingShowStartForm(prefill) {
 async function trainingDuplicateRun(runId) {
   let snap;
   try {
-    const resp = await fetch(`/api/training/runs/${runId}`);
+    const resp = await fetch(`/api/training/runs/${runId}`, { headers: _trainingAuthHeaders() });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     snap = await resp.json();
   } catch (e) {
@@ -1022,6 +1048,12 @@ async function trainingSubmitStart(ev) {
     args,
     idempotency_key: idempotencyKey,
   };
+  // Ephemeral hosts spawn a vendor VM — make sure we have the user's token
+  // before starting (prompt once; stored in this browser only).
+  const startHost = _trainingHosts.find((h) => h.id === hostId);
+  if (startHost && startHost.transport_kind === "ephemeral" && !getNebiusToken()) {
+    trainingSetNebiusToken();
+  }
   const errEl = document.getElementById("training-start-error");
   errEl.style.display = "none";
   const submitBtn = form.querySelector("button[type=submit]");
@@ -1029,7 +1061,7 @@ async function trainingSubmitStart(ev) {
   try {
     const resp = await fetch("/api/training/runs", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ..._trainingAuthHeaders() },
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
@@ -1052,7 +1084,7 @@ async function trainingSubmitStart(ev) {
 async function trainingStopRun(runId) {
   if (!confirm("Stop this training run?")) return;
   try {
-    const resp = await fetch(`/api/training/runs/${runId}/stop`, { method: "POST" });
+    const resp = await fetch(`/api/training/runs/${runId}/stop`, { method: "POST", headers: _trainingAuthHeaders() });
     if (!resp.ok) {
       const detail = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }));
       throw new Error(detail.detail || `HTTP ${resp.status}`);
@@ -1104,6 +1136,7 @@ window.trainingCancelForm = trainingCancelForm;
 window.trainingLeaveView = trainingLeaveView;
 window.trainingSubmitStart = trainingSubmitStart;
 window.trainingStopRun = trainingStopRun;
+window.trainingSetNebiusToken = trainingSetNebiusToken;
 window.trainingRenderPolicyFields = trainingRenderPolicyFields;
 window.trainingDuplicateRun = trainingDuplicateRun;
 window.trainingDeleteRun = trainingDeleteRun;

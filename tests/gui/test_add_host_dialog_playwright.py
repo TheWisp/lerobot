@@ -259,7 +259,7 @@ def test_delete_host_from_sidebar(page, tmp_path):
         timeout=5_000,
     )
     pg.on("dialog", lambda d: d.accept())  # confirm() the removal
-    pg.click("#training-hosts-info button[title='Remove this SSH host']")
+    pg.click("#training-hosts-info button[title='Remove this host']")
     pg.wait_for_function(
         "!document.getElementById('training-hosts-info').textContent.includes('Doomed Host')",
         timeout=5_000,
