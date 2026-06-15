@@ -111,8 +111,11 @@ class HostProfile:
     """
 
     name: str
-    ssh_user: str
-    ssh_host: str
+    # SSH coordinates — present for workstation/persistent (user-added SSH)
+    # hosts; empty for Ephemeral hosts, whose VM (and thus endpoint) doesn't
+    # exist until a run spawns it.
+    ssh_user: str = ""
+    ssh_host: str = ""
     ssh_port: int = 22
     # No private-key fields by design. Authentication uses the user's
     # local SSH setup (``~/.ssh/config`` aliases, ssh-agent, default-path
@@ -123,6 +126,16 @@ class HostProfile:
     workdir: str = "/workspace/lerobot"
     image_ref: str = "ghcr.io/thewisp/lerobot-training:latest"
     persistent_volume: str | None = None  # for HF cache survival across pods
+    # ── Ephemeral (provider-spawned) fields ──────────────────────────────
+    # Set iff this is an Ephemeral cloud host. ``provider_id`` selects the
+    # HostProvider; the rest describe the SpawnSpec the orchestrator hands it.
+    provider_id: str | None = None
+    gpu: str = "L40S"
+    gpu_count: int = 1
+    disk_gib: int = 100
+    preemptible: bool = True
+    region_hint: str | None = None
+    ttl_hours: int = 24  # hard-TTL runaway backstop (see DESIGN.md § Cost discipline)
     # Capabilities discovered at host-profile-setup time. Mostly informational.
     capabilities: dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
@@ -131,6 +144,10 @@ class HostProfile:
     def __post_init__(self) -> None:
         if not self.display_name:
             object.__setattr__(self, "display_name", self.name)
+
+    @property
+    def is_ephemeral(self) -> bool:
+        return self.provider_id is not None
 
     @classmethod
     def load(cls, path: Path) -> HostProfile:

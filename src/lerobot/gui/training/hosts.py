@@ -121,9 +121,34 @@ def profile_to_training_host(profile: HostProfile) -> TrainingHost:
 
     Used at two seams: (1) ``HostRegistry.auto()`` loading saved hosts at
     GUI startup, and (2) the POST /hosts handler registering a freshly
-    saved profile without a server restart. Both paths converge here so
-    SSH-transport construction is captured in one place.
+    saved profile without a server restart. Both paths converge here.
+
+    Ephemeral profiles produce a transport-less host carrying a
+    :class:`SpawnSpec`; the orchestrator spawns the VM (and builds the SSH
+    transport from the returned handle) when a run starts.
     """
+    if profile.is_ephemeral:
+        # Local import: SpawnSpec lives under providers, which pulls the
+        # optional SDK lazily — keep hosts.py import-light for non-cloud users.
+        from lerobot.gui.training.providers.protocol import SpawnSpec
+
+        spec = SpawnSpec(
+            gpu=profile.gpu,
+            gpu_count=profile.gpu_count,
+            preemptible=profile.preemptible,
+            disk_gib=profile.disk_gib,
+            image=profile.image_ref,
+            region_hint=profile.region_hint,
+            ttl_seconds=profile.ttl_hours * 3600,
+        )
+        return TrainingHost(
+            id=profile.name,
+            display_name=profile.display_name or profile.name,
+            transport=None,
+            capabilities=dict(profile.capabilities),
+            provider_id=profile.provider_id,
+            spawn_spec=spec,
+        )
     return TrainingHost(
         id=profile.name,
         display_name=profile.display_name or profile.name,

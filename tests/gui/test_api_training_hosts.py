@@ -236,3 +236,55 @@ def test_probe_endpoint_does_not_write_anything(client: TestClient, hosts_dir: P
     client.post("/api/training/hosts/probe", json={"host": "u@h"})
     # Probe is stateless — no profile file is created.
     assert not hosts_dir.exists() or list(hosts_dir.iterdir()) == []
+
+
+# ── POST /hosts — Ephemeral cloud host (provider_id branch) ──────────────────
+
+
+def test_post_ephemeral_host_persists_spawn_spec(client: TestClient, hosts_dir: Path):
+    resp = client.post(
+        "/api/training/hosts",
+        json={
+            "name": "nebius-l40s",
+            "provider_id": "nebius",
+            "gpu": "L40S",
+            "disk_gib": 100,
+            "ttl_hours": 12,
+            "display_name": "Nebius L40S",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    info = resp.json()
+    assert info["id"] == "nebius-l40s"
+    assert info["transport_kind"] == "ephemeral"
+    assert info["capabilities"]["provider_id"] == "nebius"
+    assert info["capabilities"]["gpu_name"] == "L40S"
+    assert info["capabilities"]["ttl_hours"] == 12
+    # Persisted profile carries the spawn spec, no SSH endpoint.
+    profile = HostProfile.load(hosts_dir / "nebius-l40s.json")
+    assert profile.is_ephemeral
+    assert profile.provider_id == "nebius"
+    assert profile.gpu == "L40S"
+    assert profile.ttl_hours == 12
+    assert profile.ssh_host == ""
+
+
+def test_post_ephemeral_host_materializes_ephemeral_training_host(client: TestClient):
+    client.post(
+        "/api/training/hosts",
+        json={"name": "neb", "provider_id": "nebius", "gpu": "L40S"},
+    )
+    _, registry = training_api.get_state()
+    th = registry.get("neb")
+    assert th is not None
+    assert th.is_ephemeral
+    assert th.transport is None
+    assert th.provider_id == "nebius"
+    assert th.spawn_spec.gpu == "L40S"
+    assert th.spawn_spec.ttl_seconds == 24 * 3600  # default 24h
+
+
+def test_post_persistent_host_still_requires_host(client: TestClient):
+    resp = client.post("/api/training/hosts", json={"name": "no-endpoint"})
+    assert resp.status_code == 422
+    assert "host is required" in resp.json()["detail"]

@@ -118,10 +118,20 @@ class HostInfo(BaseModel):
 # ~/.config/lerobot/training_hosts/.
 class HostProfileBody(BaseModel):
     name: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
-    host: str = Field(min_length=1, max_length=256)
+    # SSH host string ("user@host[:port]" or ~/.ssh/config alias). Required
+    # for a persistent SSH host; omitted for an Ephemeral cloud host.
+    host: str | None = Field(default=None, max_length=256)
     display_name: str | None = None
     workdir: str = "/workspace/lerobot"
     image_ref: str | None = None  # falls back to HostProfile dataclass default
+    # ── Ephemeral cloud host (set provider_id to select this path) ────────
+    provider_id: str | None = None
+    gpu: str = "L40S"
+    gpu_count: int = Field(default=1, ge=1)
+    disk_gib: int = Field(default=100, ge=1)
+    preemptible: bool = True
+    region_hint: str | None = None
+    ttl_hours: int = Field(default=24, ge=1)
 
 
 class HostProbeBody(BaseModel):
@@ -210,12 +220,35 @@ def _snapshot_to_dto(snap: RunSnapshot) -> RunSnapshotDTO:
 
 
 def _transport_kind(transport: Any) -> str:
+    if transport is None:
+        return "ephemeral"  # transport-less host = provider-spawned VM
     cls = transport.__class__.__name__
     if cls == "SubprocessTransport":
         return "subprocess"
     if cls == "SshTransport":
         return "ssh"
     return cls
+
+
+def _host_info(h: Any) -> HostInfo:
+    """Build the HostInfo DTO from a TrainingHost, surfacing the spawn spec
+    (provider + GPU) for Ephemeral hosts so the UI can show what it'll spawn."""
+    caps = dict(h.capabilities)
+    if getattr(h, "is_ephemeral", False):
+        spec = h.spawn_spec
+        caps = {
+            **caps,
+            "provider_id": h.provider_id,
+            "gpu_name": spec.gpu,
+            "gpu_count_detected": spec.gpu_count,
+            "ttl_hours": spec.ttl_seconds // 3600,
+        }
+    return HostInfo(
+        id=h.id,
+        display_name=h.display_name,
+        transport_kind=_transport_kind(h.transport),
+        capabilities=caps,
+    )
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -225,15 +258,7 @@ def _transport_kind(transport: Any) -> str:
 def list_hosts() -> list[HostInfo]:
     """List all training hosts. v1: workstation host if a GPU is auto-detected."""
     _, hosts = get_state()
-    return [
-        HostInfo(
-            id=h.id,
-            display_name=h.display_name,
-            transport_kind=_transport_kind(h.transport),
-            capabilities=h.capabilities,
-        )
-        for h in hosts.list_hosts()
-    ]
+    return [_host_info(h) for h in hosts.list_hosts()]
 
 
 def _parse_host_spec(host_spec: str) -> tuple[str, str, int]:
@@ -277,32 +302,47 @@ def add_host(body: HostProfileBody) -> HostInfo:
     if registry.get(body.name) is not None:
         raise HTTPException(status_code=409, detail=f"host {body.name!r} already exists")
 
-    user, host, port = _parse_host_spec(body.host)
     extra: dict[str, Any] = {}
     if body.image_ref:
         extra["image_ref"] = body.image_ref
-    profile = HostProfile(
-        name=body.name,
-        ssh_user=user,
-        ssh_host=host,
-        ssh_port=port,
-        kind="permanent",
-        display_name=body.display_name or body.name,
-        workdir=body.workdir,
-        **extra,
-    )
+    if body.provider_id is not None:
+        # Ephemeral cloud host: no SSH endpoint yet — the VM is spawned on
+        # first run. Persist the spawn spec instead.
+        profile = HostProfile(
+            name=body.name,
+            kind="temporary",
+            display_name=body.display_name or body.name,
+            workdir=body.workdir,
+            provider_id=body.provider_id,
+            gpu=body.gpu,
+            gpu_count=body.gpu_count,
+            disk_gib=body.disk_gib,
+            preemptible=body.preemptible,
+            region_hint=body.region_hint,
+            ttl_hours=body.ttl_hours,
+            **extra,
+        )
+    else:
+        if not body.host:
+            raise HTTPException(status_code=422, detail="host is required for a persistent SSH host")
+        user, host, port = _parse_host_spec(body.host)
+        profile = HostProfile(
+            name=body.name,
+            ssh_user=user,
+            ssh_host=host,
+            ssh_port=port,
+            kind="permanent",
+            display_name=body.display_name or body.name,
+            workdir=body.workdir,
+            **extra,
+        )
     # Register first, persist second: registry.add() is where the collision
     # assert lives, so a concurrent duplicate POST fails BEFORE the file is
     # written — no orphaned profile on disk for a GUI restart to resurrect.
     th = profile_to_training_host(profile)
     registry.add(th)
     profile.save(dir_=HOSTS_DIR)
-    return HostInfo(
-        id=th.id,
-        display_name=th.display_name,
-        transport_kind=_transport_kind(th.transport),
-        capabilities=th.capabilities,
-    )
+    return _host_info(th)
 
 
 @router.delete("/hosts/{host_id}", status_code=204)

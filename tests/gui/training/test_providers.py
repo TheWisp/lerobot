@@ -18,6 +18,7 @@ Covers:
 
 from __future__ import annotations
 
+import getpass
 import time
 
 import pytest
@@ -308,7 +309,7 @@ class TestNebiusSpawn:
         assert handle.provider == "nebius"
         assert handle.provider_resource_id == "computeinstance-abc"
         assert handle.ssh_host == "195.242.29.74"
-        assert handle.ssh_user == "lerobot"
+        assert handle.ssh_user == getpass.getuser()  # Fix A: matches GUI server user (#11 workaround)
         assert handle.expires_at_unix > 0
 
     def test_spawn_builds_request_with_verified_sku(self):

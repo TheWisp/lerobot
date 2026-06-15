@@ -41,6 +41,7 @@ SDK gains one.
 from __future__ import annotations
 
 import asyncio
+import getpass
 import logging
 import os
 import time
@@ -123,7 +124,7 @@ class NebiusProvider:
         project_id: str | None = None,
         subnet_id: str | None = None,
         ssh_public_key: str | None = None,
-        ssh_user: str = "lerobot",
+        ssh_user: str | None = None,
         image_family: str = NEBIUS_IMAGE_FAMILY,
         poll_interval_s: float = 10.0,
         ready_timeout_s: float = 900.0,
@@ -138,7 +139,15 @@ class NebiusProvider:
         self._project_id = project_id or os.environ.get("NEBIUS_PROJECT_ID")
         self._subnet_id = subnet_id or os.environ.get("NEBIUS_SUBNET_ID")
         self._ssh_public_key = ssh_public_key
-        self._ssh_user = ssh_user
+        # Fix A (workaround for #11 — remote-workdir mapping): the spawned
+        # VM's user defaults to the GUI server's OWN username, so the remote
+        # $HOME matches the local run-dir path the orchestrator reuses as the
+        # remote workdir + docker mount source. Without this, an ephemeral VM
+        # whose user is e.g. "lerobot" can't create /home/<gui-user>/.cache/…
+        # and every run fails at launch. Proper fix is the local↔remote path
+        # split tracked in TODO.md ("Remote workdir mapping (#11)"); once that
+        # lands, this can revert to a fixed "lerobot".
+        self._ssh_user = ssh_user or getpass.getuser()
         self._image_family = image_family
         self._poll_interval_s = poll_interval_s
         self._ready_timeout_s = ready_timeout_s
