@@ -61,3 +61,11 @@ mid-range (not floored, not saturated at K-min).
 
 - [ ] Wide-scene (OOD) representation gate: hold out WIDE self-play episodes for the val/copy + shuffle-z gate (current gate uses random in-distribution held-out from the union corpus). Passed in-distribution: val/copy 0.494, shuffle-z +35% @12k.
 - [ ] 3-corpus stage-1 ablation (demos-only / demos+SP / SP-only) to reproduce prototype Result 1 incl. the "demos-only = dead (2.04, +1.3%)" negative control. Current run uses the union corpus only.
+
+## Persist when proven (WM graft)
+
+- [ ] If the WM K-sweep proves the demo-reduction effect, push the stage-1 cache + artifacts to HF so they
+      don't live only in /tmp: V-JEPA teacher features `cache_wm/vj_feats.f16` (the expensive-to-recompute
+      part), `meta.npz` (the deterministic 504-ep subset), and `wm_act_model.pt` (stage-1 ckpt). Also move
+      the experiment scripts (stage1_wm_proper.py, stage2_wm_train.py, build_wm_cache.py, compute_copy_baseline.py)
+      into research/self_play_embodiment/ (de-hardcode /tmp paths). Interim backup: ~/wm_graft_backup/.
