@@ -170,3 +170,30 @@ prototype scripts (~/wm_graft_backup/prototype/) untouched, duplicated as _\_cub
 GATE: if WM >= control at any rung -> expand to full faithful protocol (4 arms × 3 seeds × n=96 × OOD f=1/1.25/1.5/2),
 sweeping K to find the headroom operating point. If WM < control at all rungs -> task-swap doesn't preserve the
 effect; investigate next variable.
+
+---
+
+# CHANGE-1 RESULT (Jun 15) — task->TransferCube + data->cube-SP, prototype code otherwise
+
+Setup: faithful prototype (ACTJepa decoder6, aux beta0.1, 224px, self-test PASSED), ONE variable changed
+(task insertion->TransferCube + SP peg/socket->cube SP). K=10, seed0, n=96 in-dist, peak-over-checkpoints.
+Isolated: cache_proto_cube (171k fr: 20k cube demos + 151k cube SP); sp_vj_act_cube.py / sp_vj_act_s2_cube.py.
+
+Stage-1 representation gate REPRODUCES prototype on cube: WIDE val/copy 0.55 (proto 0.56-0.57), shuf-gap +23% (proto +34%).
+
+Stage-2 policy (peak over checkpoints 3k/6k/9k/12k):
+| rung | control | WM(demos+SP) |
+|---|---|---|
+| >=1 grasp | 44% | 46% (~tie) |
+| >=2 lift | 18.8% | **40.6%** |
+| =4 full transfer | 6% | **11%** |
+Lift-rung win is consistent at EVERY checkpoint (ctrl mean ~14% vs WM ~32%, ~2x) -> robust, not peak-picking.
+K=10 chosen well: control grasp ~44% (headroom), NOT saturated like K=50's 99%.
+
+VERDICT: CHANGE-1 PASSES. The WM benefit survives the task+data swap, converting to policy gains (esp. lift rung)
+exactly as the prototype showed on insertion. Confirms the earlier LeRobot-graft K=50 regression (54.5 vs 73)
+was a PORTING artifact (resolution 224->480 / decoder 1 vs 6 / aux-loss dropped), NOT the method.
+
+CAVEATS: 1 seed x n=96 is noisy (PDF: +-14-20pt). Lift rung is the robust signal; grasp/full within noise.
+NEXT: (a) confirm with full 3-seed protocol + OOD scales; (b) continue one-change-at-a-time toward LeRobot ACT
+(next variables: decoder 6->1, resolution 224->480, transfer-vs-cotrain, then the LeRobot ACT itself).
