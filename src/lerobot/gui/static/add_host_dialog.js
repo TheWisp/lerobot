@@ -41,12 +41,34 @@ function openAddHostDialog() {
     document.getElementById('add-host-display-name').value = '';
     document.getElementById('add-host-probe-results').innerHTML = '';
     document.getElementById('add-host-status').textContent = '';
-    document.getElementById('add-host-test-btn').disabled = false;
     document.getElementById('add-host-test-btn').textContent = 'Test';
-    document.getElementById('add-host-save-btn').disabled = true;
+    document.getElementById('add-host-type').value = 'ssh';
     _addHostLastProbeOk = false;
+    addHostTypeChanged();  // sets per-type field visibility + button state
     overlay.style.display = 'flex';
     document.getElementById('add-host-name').focus();
+}
+
+function _addHostType() {
+    const el = document.getElementById('add-host-type');
+    return el ? el.value : 'ssh';
+}
+
+// Toggle the SSH vs Ephemeral sections + button affordances. Ephemeral has
+// no endpoint to probe before the VM exists, so its Test button is hidden
+// and Save is enabled immediately; SSH keeps the probe-gates-Save flow.
+function addHostTypeChanged() {
+    const type = _addHostType();
+    const isEph = type === 'ephemeral';
+    document.getElementById('add-host-ssh-fields').style.display = isEph ? 'none' : 'block';
+    document.getElementById('add-host-ephemeral-fields').style.display = isEph ? 'grid' : 'none';
+    document.getElementById('add-host-help-ssh').style.display = isEph ? 'none' : 'block';
+    document.getElementById('add-host-help-ephemeral').style.display = isEph ? 'block' : 'none';
+    document.getElementById('add-host-test-btn').style.display = isEph ? 'none' : 'inline-block';
+    document.getElementById('add-host-probe-results').innerHTML = '';
+    document.getElementById('add-host-status').textContent = '';
+    // SSH: Save waits for a green probe. Ephemeral: nothing to verify yet.
+    document.getElementById('add-host-save-btn').disabled = isEph ? false : !_addHostLastProbeOk;
 }
 
 function closeAddHostDialog() {
@@ -56,7 +78,9 @@ function closeAddHostDialog() {
 }
 
 function _addHostInvalidateProbe() {
-    // Editing a field after a green probe shouldn't leave Save clickable.
+    // Ephemeral hosts have no probe gate — editing a field must not disable
+    // Save. Only the SSH flow re-arms the probe requirement.
+    if (_addHostType() === 'ephemeral') return;
     _addHostLastProbeOk = false;
     document.getElementById('add-host-save-btn').disabled = true;
     document.getElementById('add-host-probe-results').innerHTML = '';
@@ -137,18 +161,34 @@ async function addHostTest() {
 
 async function addHostSubmit() {
     const name = document.getElementById('add-host-name').value.trim();
-    const host = document.getElementById('add-host-host').value.trim();
     const displayName = document.getElementById('add-host-display-name').value.trim();
     const status = document.getElementById('add-host-status');
     const saveBtn = document.getElementById('add-host-save-btn');
+    const type = _addHostType();
 
     if (!name) { status.textContent = 'Name is required.'; return; }
     if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
         status.textContent = 'Name must contain only letters, digits, _ and -.'; return;
     }
-    if (!host) { status.textContent = 'Host is required.'; return; }
-    if (!_addHostLastProbeOk) {
-        status.textContent = 'Run Test first; Save is enabled after a green probe.'; return;
+
+    let payload;
+    if (type === 'ephemeral') {
+        payload = {
+            name,
+            display_name: displayName || null,
+            provider_id: 'nebius',
+            gpu: document.getElementById('add-host-gpu').value,
+            disk_gib: parseInt(document.getElementById('add-host-disk').value, 10) || 100,
+            ttl_hours: parseInt(document.getElementById('add-host-ttl').value, 10) || 24,
+            preemptible: document.getElementById('add-host-preemptible').checked,
+        };
+    } else {
+        const host = document.getElementById('add-host-host').value.trim();
+        if (!host) { status.textContent = 'Host is required.'; return; }
+        if (!_addHostLastProbeOk) {
+            status.textContent = 'Run Test first; Save is enabled after a green probe.'; return;
+        }
+        payload = { name, host, display_name: displayName || null };
     }
 
     saveBtn.disabled = true;
@@ -157,11 +197,7 @@ async function addHostSubmit() {
         const resp = await fetch('/api/training/hosts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                name,
-                host,
-                display_name: displayName || null,
-            }),
+            body: JSON.stringify(payload),
         });
         if (!resp.ok) {
             const err = await resp.text();
@@ -229,5 +265,6 @@ document.addEventListener('keydown', (e) => {
 window.trainingShowAddHostDialog = openAddHostDialog;
 window.closeAddHostDialog = closeAddHostDialog;
 window.addHostTest = addHostTest;
+window.addHostTypeChanged = addHostTypeChanged;
 window.addHostSubmit = addHostSubmit;
 window.trainingDeleteHost = trainingDeleteHost;

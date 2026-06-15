@@ -265,3 +265,35 @@ def test_delete_host_from_sidebar(page, tmp_path):
         timeout=5_000,
     )
     assert not (tmp_path / "training_hosts" / "doomed.json").exists()
+
+
+def test_ephemeral_host_form_toggles_and_saves(page, tmp_path):
+    """Selecting 'Ephemeral cloud' hides the SSH host/Test affordances,
+    shows the GPU/disk/TTL fields, and Save (no probe gate) creates a
+    transport-less ephemeral host."""
+    pg, _ = page
+    pg.click("#training-add-host-btn")
+    pg.select_option("#add-host-type", value="ephemeral")
+    # SSH host field + Test button hidden; ephemeral fields shown; Save live.
+    assert not pg.is_visible("#add-host-ssh-fields")
+    assert not pg.is_visible("#add-host-test-btn")
+    assert pg.is_visible("#add-host-ephemeral-fields")
+    assert not pg.is_disabled("#add-host-save-btn")
+
+    pg.fill("#add-host-name", "neb-l40s")
+    pg.select_option("#add-host-gpu", value="L40S")
+    pg.fill("#add-host-ttl", "12")
+    pg.click("#add-host-save-btn")
+    pg.wait_for_selector("#add-host-overlay", state="hidden", timeout=5_000)
+    pg.wait_for_function(
+        "document.getElementById('training-hosts-info').textContent.includes('neb-l40s')",
+        timeout=5_000,
+    )
+    # Persisted as an ephemeral profile (no SSH endpoint).
+    import json as _json
+
+    prof = _json.loads((tmp_path / "training_hosts" / "neb-l40s.json").read_text())
+    assert prof["provider_id"] == "nebius"
+    assert prof["gpu"] == "L40S"
+    assert prof["ttl_hours"] == 12
+    assert prof["ssh_host"] == ""

@@ -436,17 +436,50 @@
     <!-- Add SSH host modal -->
     <div id="add-host-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
         <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:460px; max-width:580px;">
-            <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Add SSH host</h3>
-            <p style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
+            <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Add training host</h3>
+            <div style="margin-bottom:10px;">
+                <label for="add-host-type" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Type</label>
+                <select id="add-host-type" onchange="addHostTypeChanged()" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                    <option value="ssh">Persistent SSH host (you manage the VM)</option>
+                    <option value="ephemeral">Ephemeral cloud (Nebius — spawned per run)</option>
+                </select>
+            </div>
+            <p id="add-host-help-ssh" style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
                 Use a <code style="color:var(--text-primary, #ccc);">~/.ssh/config</code> alias (e.g. <code style="color:var(--text-primary, #ccc);">lab-gpu1</code>) or <code style="color:var(--text-primary, #ccc);">user@host</code>. Auth uses your local SSH setup — the GUI server never reads your private keys.
+            </p>
+            <p id="add-host-help-ephemeral" style="display:none; margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
+                A Nebius VM is spawned when a run starts and destroyed when it ends. Auth uses your <code style="color:var(--text-primary, #ccc);">NEBIUS_IAM_TOKEN</code> + project/subnet env. <strong>You pay the vendor directly</strong> — know the rates: <a href="https://docs.nebius.com/compute/resources/pricing" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">pricing ↗</a>
             </p>
             <div style="margin-bottom:10px;">
                 <label for="add-host-name" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Name <span style="color:var(--text-secondary,#666);">(used as the host id; a–z, 0–9, _ -)</span></label>
                 <input id="add-host-name" type="text" placeholder="lab-h100" pattern="[a-zA-Z0-9_-]+" maxlength="64" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
             </div>
-            <div style="margin-bottom:10px;">
+            <div id="add-host-ssh-fields" style="margin-bottom:10px;">
                 <label for="add-host-host" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Host</label>
                 <input id="add-host-host" type="text" placeholder="user@lab-gpu1.example.com" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+            </div>
+            <div id="add-host-ephemeral-fields" style="display:none; margin-bottom:10px; grid-template-columns:1fr 1fr; gap:8px;">
+                <div>
+                    <label for="add-host-gpu" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">GPU</label>
+                    <select id="add-host-gpu" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                        <option value="L40S">L40S</option>
+                        <option value="H100">H100</option>
+                        <option value="H200">H200</option>
+                        <option value="L4">L4</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="add-host-disk" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Boot disk (GiB)</label>
+                    <input id="add-host-disk" type="number" value="100" min="1" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                </div>
+                <div>
+                    <label for="add-host-ttl" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Max lifetime (h) <span style="color:var(--text-secondary,#666);">(runaway cap)</span></label>
+                    <input id="add-host-ttl" type="number" value="24" min="1" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                </div>
+                <div style="display:flex; align-items:center; gap:6px; padding-top:18px;">
+                    <input id="add-host-preemptible" type="checkbox" checked>
+                    <label for="add-host-preemptible" style="font-size:11px; color:var(--text-secondary, #999);">Preemptible (spot)</label>
+                </div>
             </div>
             <div style="margin-bottom:10px;">
                 <label for="add-host-display-name" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Display name <span style="color:var(--text-secondary,#666);">(optional)</span></label>
@@ -528,7 +561,7 @@
     <script src="/static/run.js?v=45"></script>
     <script src="/static/model.js?v=5"></script>
     <script src="/static/training.js?v=20"></script>
-    <script src="/static/add_host_dialog.js?v=1"></script>
+    <script src="/static/add_host_dialog.js?v=2"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
