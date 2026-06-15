@@ -48,16 +48,23 @@ _PROVIDERS: dict[str, type] = {
 }
 
 
-def get_provider(provider_id: str) -> HostProvider:
+def get_provider(provider_id: str, *, iam_token: str | None = None) -> HostProvider:
     """Resolve a vendor id to an instantiated HostProvider.
 
+    ``iam_token`` is the caller's per-user vendor token (forwarded from the
+    request header for LAN multi-user). Providers that take one use it to
+    scope SDK calls to that user; those that don't (persistent) ignore it.
+    None → the provider falls back to ambient credentials.
+
     Pre: ``provider_id`` is one of the registered providers.
-    Post: returns a fresh provider instance suitable for one spawn/destroy
-    cycle. Stateless — safe to call repeatedly.
+    Post: a fresh provider instance for one spawn/destroy cycle.
     """
     if provider_id not in _PROVIDERS:
         raise ValueError(f"unknown provider id: {provider_id!r}. Registered providers: {sorted(_PROVIDERS)}")
-    return _PROVIDERS[provider_id]()
+    cls = _PROVIDERS[provider_id]
+    if cls is NebiusProvider:
+        return cls(iam_token=iam_token)
+    return cls()
 
 
 def list_providers() -> list[str]:

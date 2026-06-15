@@ -31,7 +31,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from lerobot.gui.training.hosts import WORKSTATION_HOST_ID, HostRegistry, profile_to_training_host
@@ -394,11 +394,15 @@ def list_runs() -> list[RunDTO]:
 
 
 @router.post("/runs", response_model=RunDTO, status_code=201)
-def start_run(body: StartRunBody) -> RunDTO:
+def start_run(body: StartRunBody, x_nebius_authorization: str | None = Header(default=None)) -> RunDTO:
     """Start a training run.
 
     Returns 409 if the target host already has an active run.
     Returns 404 if the host id isn't registered.
+
+    The ``X-Nebius-Authorization`` header (the caller's per-user IAM token)
+    is forwarded to the orchestrator for Ephemeral hosts and held in memory
+    only — never persisted or logged. Ignored for non-cloud hosts.
     """
     orch, _ = get_state()
     try:
@@ -409,6 +413,7 @@ def start_run(body: StartRunBody) -> RunDTO:
                 dataset_id=body.dataset_id,
                 args=body.args,
                 idempotency_key=body.idempotency_key,
+                vendor_token=x_nebius_authorization,
             )
         )
     except UnknownHostError as e:
@@ -419,22 +424,26 @@ def start_run(body: StartRunBody) -> RunDTO:
 
 
 @router.get("/runs/{run_id}", response_model=RunSnapshotDTO)
-def get_run(run_id: str) -> RunSnapshotDTO:
-    """Snapshot one run: state, progress.json, checkpoints manifest, stderr tail."""
+def get_run(run_id: str, x_nebius_authorization: str | None = Header(default=None)) -> RunSnapshotDTO:
+    """Snapshot one run: state, progress.json, checkpoints manifest, stderr tail.
+
+    Forwards the per-user vendor token so a background ephemeral destroy
+    driven by this poll (or after a GUI restart) can authenticate.
+    """
     orch, _ = get_state()
     try:
-        snap = orch.poll(run_id)
+        snap = orch.poll(run_id, vendor_token=x_nebius_authorization)
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return _snapshot_to_dto(snap)
 
 
 @router.post("/runs/{run_id}/stop", response_model=RunDTO)
-def stop_run(run_id: str) -> RunDTO:
+def stop_run(run_id: str, x_nebius_authorization: str | None = Header(default=None)) -> RunDTO:
     """User-initiated stop. Idempotent on already-terminal runs."""
     orch, _ = get_state()
     try:
-        run = orch.stop(run_id)
+        run = orch.stop(run_id, vendor_token=x_nebius_authorization)
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return _run_to_dto(run)

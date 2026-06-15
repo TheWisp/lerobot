@@ -121,6 +121,7 @@ class NebiusProvider:
         *,
         instance_service: Any | None = None,
         sdk: Any | None = None,
+        iam_token: str | None = None,
         project_id: str | None = None,
         subnet_id: str | None = None,
         ssh_public_key: str | None = None,
@@ -136,6 +137,13 @@ class NebiusProvider:
         # imports the optional SDK or touches credentials.
         self._instance_service = instance_service
         self._sdk = sdk
+        # Per-user IAM token (LAN multi-user): the caller's Nebius token,
+        # forwarded from the request header and used to build the SDK for
+        # THIS user's calls — never persisted, never logged, never sent to
+        # the pod. When None the SDK falls back to ambient credentials
+        # (NEBIUS_IAM_TOKEN env / ~/.nebius/ CLI profile) — the single-user
+        # workstation path.
+        self._iam_token = iam_token
         self._project_id = project_id or os.environ.get("NEBIUS_PROJECT_ID")
         self._subnet_id = subnet_id or os.environ.get("NEBIUS_SUBNET_ID")
         self._ssh_public_key = ssh_public_key
@@ -315,7 +323,14 @@ class NebiusProvider:
             return self._instance_service
         sym = _sdk_symbols()
         if self._sdk is None:
-            self._sdk = sym.SDK()
+            if self._iam_token:
+                # Per-user token from the request header → scoped SDK.
+                from nebius.aio.token.static import Bearer
+
+                self._sdk = sym.SDK(credentials=Bearer(self._iam_token))
+            else:
+                # Ambient credentials (NEBIUS_IAM_TOKEN env / ~/.nebius/).
+                self._sdk = sym.SDK()
         self._instance_service = sym.InstanceServiceClient(self._sdk)
         return self._instance_service
 
