@@ -69,6 +69,11 @@ function addHostTypeChanged() {
     document.getElementById('add-host-status').textContent = '';
     // SSH: Save waits for a green probe. Ephemeral: nothing to verify yet.
     document.getElementById('add-host-save-btn').disabled = isEph ? false : !_addHostLastProbeOk;
+    // Ephemeral hosts need the server-held Nebius connection — surface its
+    // current status inline so the user knows whether spawning will work.
+    if (isEph && typeof trainingFetchNebiusConnection === 'function') {
+        trainingFetchNebiusConnection().then(() => trainingRefreshNebiusConnStatusLine());
+    }
 }
 
 function closeAddHostDialog() {

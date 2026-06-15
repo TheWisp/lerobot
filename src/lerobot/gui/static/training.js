@@ -15,28 +15,98 @@
 const TRAINING_POLL_MS = 3000;
 let _trainingHosts = [];
 
-// ── Nebius per-user IAM token (LAN multi-user auth) ─────────────────────────
-// The token is obtained by the user on their own machine
-// (`nebius iam get-access-token --duration=12h`) and pasted here. It lives
-// ONLY in this browser's localStorage and is sent per-request in the
-// X-Nebius-Authorization header; the GUI server uses it transiently for
-// spawn/destroy and never persists it. See DESIGN.md § Authentication.
-const NEBIUS_TOKEN_KEY = "lerobot_nebius_token";
-function getNebiusToken() {
-  try { return (localStorage.getItem(NEBIUS_TOKEN_KEY) || "").trim(); } catch { return ""; }
+// ── Nebius connection (server-held service-account credential) ──────────────
+// One service-account key for the whole GUI server, configured once via the
+// Nebius-connection modal. The server stores the key (0600) and uses it for
+// every ephemeral spawn/teardown; the browser only sees non-secret status.
+// Shared by anyone who can reach the server — same trust model as the
+// server's HF token / SSH key. See DESIGN.md § Authentication.
+let _nebiusConnStatus = null;  // last fetched status, or null until loaded
+async function trainingFetchNebiusConnection() {
+  try {
+    const resp = await fetch("/api/training/nebius/connection");
+    _nebiusConnStatus = resp.ok ? await resp.json() : null;
+  } catch { _nebiusConnStatus = null; }
+  return _nebiusConnStatus;
 }
-function trainingSetNebiusToken() {
-  const v = window.prompt(
-    "Paste your Nebius IAM token.\n\nGet one on your machine:\n  nebius iam get-access-token --duration=12h\n\nStored only in this browser; sent per-request; never persisted by the server.",
-    getNebiusToken(),
-  );
-  if (v === null) return getNebiusToken();  // cancelled
-  try { localStorage.setItem(NEBIUS_TOKEN_KEY, v.trim()); } catch { /* ignore */ }
-  return v.trim();
+function _nebiusConnSummary(st) {
+  if (!st) return "Status unknown.";
+  if (st.configured) {
+    const sa = st.service_account_id ? ` (${st.service_account_id})` : "";
+    return `✓ Connected${sa} · project ${st.project_id} · subnet ${st.subnet_id}`;
+  }
+  if (st.has_key) return "⚠ Key present but project/subnet missing.";
+  return "✗ Not connected — paste a service-account key to enable cloud spawning.";
 }
-function _trainingAuthHeaders() {
-  const t = getNebiusToken();
-  return t ? { "X-Nebius-Authorization": t } : {};
+function trainingOpenNebiusConnection() {
+  const overlay = document.getElementById("nebius-conn-overlay");
+  if (!overlay) return;
+  document.getElementById("nebius-conn-status").textContent = "";
+  overlay.style.display = "flex";
+  trainingFetchNebiusConnection().then((st) => {
+    document.getElementById("nebius-conn-current").textContent = _nebiusConnSummary(st);
+    // Pre-fill the non-secret ids so a re-save doesn't force re-typing them;
+    // the key field stays empty (never echoed back).
+    if (st) {
+      document.getElementById("nebius-conn-project").value = st.project_id || "";
+      document.getElementById("nebius-conn-subnet").value = st.subnet_id || "";
+    }
+  });
+}
+function trainingCloseNebiusConnection() {
+  const overlay = document.getElementById("nebius-conn-overlay");
+  if (overlay) overlay.style.display = "none";
+  document.getElementById("nebius-conn-key").value = "";  // don't retain pasted secret in the DOM
+}
+async function trainingSaveNebiusConnection() {
+  const statusEl = document.getElementById("nebius-conn-status");
+  const body = {
+    key_json: document.getElementById("nebius-conn-key").value.trim(),
+    project_id: document.getElementById("nebius-conn-project").value.trim(),
+    subnet_id: document.getElementById("nebius-conn-subnet").value.trim(),
+  };
+  if (!body.key_json) { statusEl.textContent = "Paste the service-account key JSON."; return; }
+  statusEl.style.color = "#e5c07b";
+  statusEl.textContent = "Saving…";
+  try {
+    const resp = await fetch("/api/training/nebius/connection", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      statusEl.style.color = "#e06c75";
+      statusEl.textContent = err.detail || `Save failed (${resp.status}).`;
+      return;
+    }
+    _nebiusConnStatus = await resp.json();
+    document.getElementById("nebius-conn-key").value = "";
+    trainingRefreshNebiusConnStatusLine();
+    trainingCloseNebiusConnection();
+    if (typeof showToast === "function") showToast("Nebius connection saved.", "success");
+  } catch (e) {
+    statusEl.style.color = "#e06c75";
+    statusEl.textContent = `Save failed: ${e}`;
+  }
+}
+async function trainingClearNebiusConnection() {
+  if (!window.confirm("Remove the stored Nebius service-account key from this server?")) return;
+  try {
+    await fetch("/api/training/nebius/connection", { method: "DELETE" });
+  } catch { /* ignore */ }
+  await trainingFetchNebiusConnection();
+  document.getElementById("nebius-conn-current").textContent = _nebiusConnSummary(_nebiusConnStatus);
+  document.getElementById("nebius-conn-key").value = "";
+  trainingRefreshNebiusConnStatusLine();
+}
+// Updates the inline status line under the ephemeral Add-host help, if present.
+function trainingRefreshNebiusConnStatusLine() {
+  const el = document.getElementById("add-host-nebius-conn-status");
+  if (!el) return;
+  const st = _nebiusConnStatus;
+  el.textContent = _nebiusConnSummary(st);
+  el.style.color = st && st.configured ? "#98c379" : "#e5c07b";
 }
 let _trainingDatasets = [];
 let _trainingPolicyCatalog = []; // populated by trainingLoadPolicies()
@@ -367,7 +437,7 @@ async function trainingRefreshDetail(runId) {
   const el = document.getElementById("training-detail");
   if (!el || _trainingMode !== "detail") return;
   try {
-    const resp = await fetch(`/api/training/runs/${runId}`, { headers: _trainingAuthHeaders() });
+    const resp = await fetch(`/api/training/runs/${runId}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const snap = await resp.json();
     // Preserve user scroll across the 2s full-pane re-render. Two scrolls
@@ -663,7 +733,7 @@ async function trainingShowStartForm(prefill) {
 async function trainingDuplicateRun(runId) {
   let snap;
   try {
-    const resp = await fetch(`/api/training/runs/${runId}`, { headers: _trainingAuthHeaders() });
+    const resp = await fetch(`/api/training/runs/${runId}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     snap = await resp.json();
   } catch (e) {
@@ -1048,11 +1118,16 @@ async function trainingSubmitStart(ev) {
     args,
     idempotency_key: idempotencyKey,
   };
-  // Ephemeral hosts spawn a vendor VM — make sure we have the user's token
-  // before starting (prompt once; stored in this browser only).
+  // Ephemeral hosts spawn a vendor VM via the server-held Nebius connection.
+  // Warn early (before submit) if it isn't configured, so the user fixes it
+  // here rather than hitting a spawn failure mid-run.
   const startHost = _trainingHosts.find((h) => h.id === hostId);
-  if (startHost && startHost.transport_kind === "ephemeral" && !getNebiusToken()) {
-    trainingSetNebiusToken();
+  if (startHost && startHost.transport_kind === "ephemeral") {
+    const st = await trainingFetchNebiusConnection();
+    if (!st || !st.configured) {
+      trainingOpenNebiusConnection();
+      return;
+    }
   }
   const errEl = document.getElementById("training-start-error");
   errEl.style.display = "none";
@@ -1061,7 +1136,7 @@ async function trainingSubmitStart(ev) {
   try {
     const resp = await fetch("/api/training/runs", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ..._trainingAuthHeaders() },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
@@ -1084,7 +1159,7 @@ async function trainingSubmitStart(ev) {
 async function trainingStopRun(runId) {
   if (!confirm("Stop this training run?")) return;
   try {
-    const resp = await fetch(`/api/training/runs/${runId}/stop`, { method: "POST", headers: _trainingAuthHeaders() });
+    const resp = await fetch(`/api/training/runs/${runId}/stop`, { method: "POST" });
     if (!resp.ok) {
       const detail = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }));
       throw new Error(detail.detail || `HTTP ${resp.status}`);
@@ -1136,7 +1211,10 @@ window.trainingCancelForm = trainingCancelForm;
 window.trainingLeaveView = trainingLeaveView;
 window.trainingSubmitStart = trainingSubmitStart;
 window.trainingStopRun = trainingStopRun;
-window.trainingSetNebiusToken = trainingSetNebiusToken;
+window.trainingOpenNebiusConnection = trainingOpenNebiusConnection;
+window.trainingCloseNebiusConnection = trainingCloseNebiusConnection;
+window.trainingSaveNebiusConnection = trainingSaveNebiusConnection;
+window.trainingClearNebiusConnection = trainingClearNebiusConnection;
 window.trainingRenderPolicyFields = trainingRenderPolicyFields;
 window.trainingDuplicateRun = trainingDuplicateRun;
 window.trainingDeleteRun = trainingDeleteRun;

@@ -448,7 +448,8 @@
                 Use a <code style="color:var(--text-primary, #ccc);">~/.ssh/config</code> alias (e.g. <code style="color:var(--text-primary, #ccc);">lab-gpu1</code>) or <code style="color:var(--text-primary, #ccc);">user@host</code>. Auth uses your local SSH setup — the GUI server never reads your private keys.
             </p>
             <p id="add-host-help-ephemeral" style="display:none; margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
-                A Nebius VM is spawned when a run starts and destroyed when it ends. Auth uses your <code style="color:var(--text-primary, #ccc);">NEBIUS_IAM_TOKEN</code> + project/subnet env. <strong>You pay the vendor directly</strong> — know the rates: <a href="https://docs.nebius.com/compute/resources/pricing" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">pricing ↗</a> · <a href="#" onclick="trainingSetNebiusToken(); return false;" style="color:var(--accent,#0e639c);">set IAM token</a>
+                A Nebius VM is spawned when a run starts and destroyed when it ends. Auth uses the <strong>Nebius connection</strong> configured on this server (a service-account key). <strong>You pay the vendor directly</strong> — know the rates: <a href="https://docs.nebius.com/compute/resources/pricing" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">pricing ↗</a> · <a href="#" onclick="trainingOpenNebiusConnection(); return false;" style="color:var(--accent,#0e639c);">Nebius connection</a>
+                <span id="add-host-nebius-conn-status" style="display:block; margin-top:4px;"></span>
             </p>
             <div style="margin-bottom:10px;">
                 <label for="add-host-name" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Name <span style="color:var(--text-secondary,#666);">(used as the host id; a–z, 0–9, _ -)</span></label>
@@ -491,6 +492,37 @@
                 <button id="add-host-cancel" onclick="closeAddHostDialog()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
                 <button id="add-host-test-btn" onclick="addHostTest()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Test</button>
                 <button id="add-host-save-btn" onclick="addHostSubmit()" disabled style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Nebius connection modal (server-held service-account credential) -->
+    <div id="nebius-conn-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:480px; max-width:600px;">
+            <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Nebius connection</h3>
+            <p style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
+                One service-account credential for this GUI server, used for every ephemeral spawn and teardown. A Nebius <strong>tenant admin</strong> creates the service account and pastes its authorized-key JSON below — service-account keys don't expire, so unattended teardown keeps working. The key is stored on the server (<code style="color:var(--text-primary, #ccc);">~/.config/lerobot/nebius/</code>, mode 0600), never returned to the browser or sent to the training VM. It is shared by anyone who can reach this server — same as the server's HF token and SSH key.
+            </p>
+            <div id="nebius-conn-current" style="font-size:11px; padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px; min-height:18px; color:var(--text-secondary,#999);"></div>
+            <div style="margin-bottom:10px;">
+                <label for="nebius-conn-key" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Service-account authorized-key JSON</label>
+                <textarea id="nebius-conn-key" rows="7" spellcheck="false" placeholder='{ "subject-credentials": { "alg": "RS256", "private-key": "-----BEGIN PRIVATE KEY----- ...", "kid": "publickey-...", "iss": "serviceaccount-...", "sub": "serviceaccount-..." } }' style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:11px; box-sizing:border-box; resize:vertical; font-family:monospace;"></textarea>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px;">
+                <div>
+                    <label for="nebius-conn-project" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Project ID</label>
+                    <input id="nebius-conn-project" type="text" spellcheck="false" placeholder="project-e00..." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                </div>
+                <div>
+                    <label for="nebius-conn-subnet" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Subnet ID</label>
+                    <input id="nebius-conn-subnet" type="text" spellcheck="false" placeholder="vpcsubnet-e00..." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                </div>
+            </div>
+            <div id="nebius-conn-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button onclick="trainingCloseNebiusConnection()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
+                <button id="nebius-conn-clear-btn" onclick="trainingClearNebiusConnection()" style="padding:5px 14px; background:transparent; color:#e06c75; border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Clear</button>
+                <button id="nebius-conn-save-btn" onclick="trainingSaveNebiusConnection()" style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Save</button>
             </div>
         </div>
     </div>
@@ -561,7 +593,7 @@
     <script src="/static/run.js?v=45"></script>
     <script src="/static/model.js?v=5"></script>
     <script src="/static/training.js?v=20"></script>
-    <script src="/static/add_host_dialog.js?v=2"></script>
+    <script src="/static/add_host_dialog.js?v=3"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>

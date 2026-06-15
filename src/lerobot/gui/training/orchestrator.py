@@ -79,11 +79,6 @@ class StartRequest:
     dataset_id: str
     args: dict[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
-    # Per-user vendor (Nebius) IAM token from the request header, for
-    # Ephemeral hosts. Held in memory for the run's lifetime so background
-    # destroy can authenticate; never persisted to run.json / logged / sent
-    # to the pod. None → provider uses ambient credentials.
-    vendor_token: str | None = None
 
 
 @dataclass(frozen=True)
@@ -163,14 +158,13 @@ class Orchestrator:
     ) -> None:
         self._hosts = host_registry
         self._runs = run_registry
-        # Resolve a HostProvider by id (+ optional per-user vendor token) for
-        # Ephemeral spawn/destroy. Tests inject a fake provider (no SDK/
-        # credentials); production uses the registry's :func:`get_provider`.
+        # Resolve a HostProvider by id for Ephemeral spawn/destroy. The Nebius
+        # provider wires in the server-held service-account connection itself
+        # (see :func:`get_provider`), so no per-run credential threading is
+        # needed — background destroy authenticates with the same stored key.
+        # Tests inject a fake provider (no SDK/credentials); production uses
+        # the registry's :func:`get_provider`.
         self._provider_factory = provider_factory or get_provider
-        # Per-run vendor IAM tokens, in memory only (never persisted). Keyed
-        # by run_id; populated from the request header on start/poll/stop so
-        # background destroy can authenticate as the user who launched the run.
-        self._vendor_tokens: dict[str, str] = {}
         # All host-state ops (file reads, dir listings, image docker calls,
         # checkpoint sha256s) go through the resolved TransportClient. Tests
         # inject a fake-transport factory; production uses :func:`make_client`
@@ -221,11 +215,6 @@ class Orchestrator:
             idempotency_key=req.idempotency_key,
         )
         self._runs.save(run)
-        # Cache the per-user vendor token in memory (never persisted) so the
-        # prep-thread spawn + later background destroy authenticate as the
-        # launching user.
-        if req.vendor_token:
-            self._vendor_tokens[run.run_id] = req.vendor_token
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
         paths.ensure_exists()
 
@@ -258,7 +247,6 @@ class Orchestrator:
         run_id: str,
         *,
         stderr_tail_bytes: int = DEFAULT_STDERR_TAIL_BYTES,
-        vendor_token: str | None = None,
     ) -> RunSnapshot:
         """Read the worker's state files and reconcile with the state machine.
 
@@ -266,16 +254,13 @@ class Orchestrator:
         ``events.jsonl`` entry (worker writes it before exit) cross-checked
         against the transport's ``is_alive``.
 
-        ``vendor_token`` (from the request header) refreshes the in-memory
-        token so a background ephemeral destroy triggered by this poll — or
-        after a GUI restart that lost the token — can authenticate as the
-        polling user.
+        Any ephemeral teardown driven by this poll authenticates with the
+        server-held Nebius service-account key (resolved by the provider
+        factory), so no per-request credential is needed.
         """
         run = self._runs.load(run_id)
         if run is None:
             raise UnknownRunError(f"unknown run id: {run_id!r}")
-        if vendor_token:
-            self._vendor_tokens[run_id] = vendor_token
 
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
         host = self._hosts.get(run.host_id)
@@ -328,20 +313,18 @@ class Orchestrator:
             metrics=metrics,
         )
 
-    def stop(self, run_id: str, *, vendor_token: str | None = None) -> Run:
+    def stop(self, run_id: str) -> Run:
         """User-initiated stop — SIGTERM the worker, mark COMPLETING.
 
         The worker writes its final ``aborted_by_user`` event then exits;
         next ``poll()`` reconciles to ABORTED. Idempotent on terminal runs.
 
-        ``vendor_token`` refreshes the in-memory token so an ephemeral
-        teardown driven by this stop can authenticate.
+        Any ephemeral teardown driven by this stop authenticates with the
+        server-held Nebius service-account key.
         """
         run = self._runs.load(run_id)
         if run is None:
             raise UnknownRunError(f"unknown run id: {run_id!r}")
-        if vendor_token:
-            self._vendor_tokens[run_id] = vendor_token
         if run.state in TERMINAL_STATES:
             return run  # idempotent — already stopped
         if run.state == RunState.COMPLETING:
@@ -493,7 +476,7 @@ class Orchestrator:
         if run.state not in TERMINAL_STATES or run.ephemeral_handle is None or run.ephemeral_destroyed:
             return
         handle = _handle_from_dict(run.ephemeral_handle)
-        provider = self._provider_factory(handle.provider, iam_token=self._vendor_tokens.get(run.run_id))
+        provider = self._provider_factory(handle.provider)
         local = SubprocessClient(SubprocessTransport(workdir=paths.root))
         try:
             provider.destroy(handle)
@@ -672,7 +655,7 @@ class Orchestrator:
         """Provision the Ephemeral VM via its provider. Emits spawn events
         on the (local) events.jsonl so the UI can show "provisioning…"."""
         local = SubprocessClient(SubprocessTransport(workdir=paths.root))
-        provider = self._provider_factory(host.provider_id, iam_token=self._vendor_tokens.get(run.run_id))
+        provider = self._provider_factory(host.provider_id)
         self._emit_event(local, paths.events_jsonl, "spawn_started", provider=host.provider_id)
         handle = provider.spawn(host.spawn_spec)
         self._emit_event(

@@ -25,9 +25,16 @@ builders (2026-06-15). Account-scoped inputs — ``project_id`` (the
 instance parent) and ``subnet_id`` — are required and read from
 ``NEBIUS_PROJECT_ID`` / ``NEBIUS_SUBNET_ID`` when not passed explicitly.
 
-Auth: the default SDK reads ``NEBIUS_IAM_TOKEN`` (or a service-account key
-/ CLI config) — the GUI never prompts for vendor credentials, same as the
-kubectl / gh / aws CLI inheritance pattern.
+Auth: a Nebius **service-account** key, configured once on the GUI server
+via the Nebius-connection form (:mod:`lerobot.gui.training.nebius_credentials`).
+The provider is handed that key file's path (``credentials_file``) and
+builds ``SDK(credentials_file_name=...)``. Service-account keys don't expire,
+so unattended teardown past the 12 h personal-token ceiling works. When no
+key file is given the SDK falls back to ambient credentials
+(``NEBIUS_IAM_TOKEN`` env / ``~/.nebius`` CLI profile) — the single-user
+workstation path. The key is server-held and therefore shared by anyone who
+can reach the GUI, exactly like the existing HF token / SSH key (documented
+limitation; see ``DESIGN.md`` § Authentication).
 
 TTL caveat (see ``_HARD_TTL_NOTE``): the compute proto exposes no native
 scheduled-delete, so the hard TTL is enforced two ways — a cloud-init
@@ -121,7 +128,7 @@ class NebiusProvider:
         *,
         instance_service: Any | None = None,
         sdk: Any | None = None,
-        iam_token: str | None = None,
+        credentials_file: str | None = None,
         project_id: str | None = None,
         subnet_id: str | None = None,
         ssh_public_key: str | None = None,
@@ -137,13 +144,13 @@ class NebiusProvider:
         # imports the optional SDK or touches credentials.
         self._instance_service = instance_service
         self._sdk = sdk
-        # Per-user IAM token (LAN multi-user): the caller's Nebius token,
-        # forwarded from the request header and used to build the SDK for
-        # THIS user's calls — never persisted, never logged, never sent to
-        # the pod. When None the SDK falls back to ambient credentials
-        # (NEBIUS_IAM_TOKEN env / ~/.nebius/ CLI profile) — the single-user
-        # workstation path.
-        self._iam_token = iam_token
+        # Path to the server-held service-account key file (the one configured
+        # via the Nebius-connection form). Passed straight to the SDK's
+        # credentials_file_name; never read back to a client, never logged,
+        # never sent to the pod. When None the SDK falls back to ambient
+        # credentials (NEBIUS_IAM_TOKEN env / ~/.nebius/ CLI profile) — the
+        # single-user workstation path.
+        self._credentials_file = credentials_file
         self._project_id = project_id or os.environ.get("NEBIUS_PROJECT_ID")
         self._subnet_id = subnet_id or os.environ.get("NEBIUS_SUBNET_ID")
         self._ssh_public_key = ssh_public_key
@@ -331,11 +338,10 @@ class NebiusProvider:
         sym = _sdk_symbols()
         if self._sdk is None:
             try:
-                if self._iam_token:
-                    # Per-user token from the request header → scoped SDK.
-                    from nebius.aio.token.static import Bearer
-
-                    self._sdk = sym.SDK(credentials=Bearer(self._iam_token))
+                if self._credentials_file:
+                    # Server-held service-account key (configured via the
+                    # Nebius-connection form) → long-lived SDK.
+                    self._sdk = sym.SDK(credentials_file_name=self._credentials_file)
                 else:
                     # Ambient credentials (NEBIUS_IAM_TOKEN env / ~/.nebius/).
                     self._sdk = sym.SDK()
@@ -403,10 +409,11 @@ class NebiusConfigError(RuntimeError):
 # Instruction shown verbatim to the user (run detail) when no usable Nebius
 # credential is available — the "you're not logged in" path.
 _AUTH_HINT = (
-    "Not logged in to Nebius. Get a token on your machine with "
-    "`nebius iam get-access-token --duration=12h`, then paste it via the "
-    "'set IAM token' link in the Add-host dialog (or set NEBIUS_IAM_TOKEN "
-    "on the GUI server). Tokens expire (~12h) — re-paste if this recurs."
+    "Nebius is not connected. A Nebius tenant admin must create a service "
+    "account and paste its authorized-key JSON (plus project + subnet ids) "
+    "in the GUI's 'Nebius connection' form. The key is stored on the GUI "
+    "server and used for every spawn and teardown; service-account keys do "
+    "not expire."
 )
 
 
@@ -540,7 +547,10 @@ def _is_not_found(exc: Exception) -> bool:
 
 def _looks_like_auth_error(exc: Exception) -> bool:
     blob = (type(exc).__name__ + " " + str(exc)).lower()
-    return any(k in blob for k in ("token", "unauthenticated", "unauthorized", "permission", "credential", "401", "403"))
+    return any(
+        k in blob
+        for k in ("token", "unauthenticated", "unauthorized", "permission", "credential", "401", "403")
+    )
 
 
 # ── Pure helpers (no SDK) ────────────────────────────────────────────────────

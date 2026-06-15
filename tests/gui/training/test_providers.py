@@ -414,14 +414,16 @@ class TestNebiusAuthError:
         from lerobot.gui.training.providers.nebius import NebiusAuthError
 
         monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
-        # No instance_service injected → real SDK() build, which fails
-        # credential resolution with no token/profile.
+        # No credentials_file and no instance_service → real SDK() build,
+        # which fails credential resolution with no token/profile.
         prov = NebiusProvider(
-            project_id="project-x", subnet_id="vpcsubnet-y",
+            project_id="project-x",
+            subnet_id="vpcsubnet-y",
             ssh_public_key="ssh-ed25519 AAAA t@h",
         )
         with pytest.raises(NebiusAuthError) as ei:
             prov.spawn(_example_spec(ttl_seconds=3600))
         msg = str(ei.value)
-        assert "nebius iam get-access-token" in msg
-        assert "set IAM token" in msg
+        assert "Nebius is not connected" in msg
+        assert "service account" in msg
+        assert "Nebius connection" in msg

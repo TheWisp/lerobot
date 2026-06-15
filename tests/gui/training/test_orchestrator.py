@@ -1252,7 +1252,7 @@ def _eph_handle():
 def _orch(tmp_path, provider):
     hr = HostRegistry(hosts=[])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
-    return Orchestrator(hr, rr, provider_factory=lambda _pid, iam_token=None: provider)
+    return Orchestrator(hr, rr, provider_factory=lambda _pid: provider)
 
 
 def _terminal_eph_run(rr, state=RunState.COMPLETED):
@@ -1348,7 +1348,7 @@ def test_spawn_failure_marks_run_failed(tmp_path: Path):
     )
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
-    orch = Orchestrator(hr, rr, provider_factory=lambda _pid, iam_token=None: prov)
+    orch = Orchestrator(hr, rr, provider_factory=lambda _pid: prov)
     run = orch.start(
         StartRequest(
             host_id="nebius-l40s",
@@ -1376,34 +1376,34 @@ def test_ephemeral_host_is_ephemeral_flag():
     assert plain.is_ephemeral is False
 
 
-# ── Per-user vendor token threading (LAN multi-user) ─────────────────────────
+# ── Provider factory is credential-free (server-held SA key) ─────────────────
 
 
-def test_teardown_passes_cached_token_to_provider(tmp_path: Path):
-    """The token cached at start (from the request header) must reach the
-    provider factory for background destroy — never read from disk."""
+def test_factory_called_with_provider_id_only_for_teardown(tmp_path: Path):
+    """Background destroy resolves the provider by id alone — no per-run
+    credential is threaded. The Nebius connection (SA key) is wired in by
+    the real :func:`get_provider`, not the orchestrator."""
     seen = {}
 
-    def recording_factory(pid, iam_token=None):
-        seen["token"] = iam_token
+    def recording_factory(pid):
+        seen["pid"] = pid
         return _FakeProvider()
 
     hr = HostRegistry(hosts=[])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
     orch = Orchestrator(hr, rr, provider_factory=recording_factory)
     run = _terminal_eph_run(rr)
-    orch._vendor_tokens[run.run_id] = "tok-abc"  # as start() would have cached
     paths = RunPaths.for_run(run.run_id, rr.runs_dir)
     paths.ensure_exists()
     orch._maybe_teardown_ephemeral(run, paths)
-    assert seen["token"] == "tok-abc"
+    assert seen["pid"] == "nebius"
 
 
-def test_start_caches_vendor_token_and_passes_to_spawn(tmp_path: Path):
+def test_factory_called_with_provider_id_only_for_spawn(tmp_path: Path):
     seen = {}
 
-    def recording_factory(pid, iam_token=None):
-        seen["token"] = iam_token
+    def recording_factory(pid):
+        seen["pid"] = pid
         return _FakeProvider(spawn_exc=RuntimeError("stop here"))  # reach factory, then bail
 
     host = TrainingHost(
@@ -1421,28 +1421,10 @@ def test_start_caches_vendor_token_and_passes_to_spawn(tmp_path: Path):
             recipe_name="r",
             dataset_id="d",
             args={"__recipe__": "__fake__", "num_steps": 1},
-            vendor_token="tok-xyz",
         )
     )
     _wait_until_state(orch, run.run_id, RunState.FAILED)
-    assert seen["token"] == "tok-xyz"
-    # Token lives only in memory, never serialized to run.json.
+    assert seen["pid"] == "nebius"
+    # No vendor credential should ever be serialized to run.json.
     raw = (RunPaths.for_run(run.run_id, rr.runs_dir).run_json).read_text()
-    assert "tok-xyz" not in raw
-
-
-def test_poll_refreshes_token_after_restart(tmp_path: Path):
-    """A token-bearing poll repopulates the in-memory token (lost on GUI
-    restart) so a subsequent ephemeral destroy can authenticate."""
-    hr = HostRegistry(hosts=[])
-    rr = RunRegistry(runs_dir=tmp_path / "runs")
-    orch = Orchestrator(hr, rr, provider_factory=lambda pid, iam_token=None: _FakeProvider())
-    run = _terminal_eph_run(rr, state=RunState.COMPLETED)
-    # Already-destroyed handle → poll routes reads to local (no SSH to a
-    # dead IP); we only care that the token gets refreshed at poll start.
-    run.ephemeral_destroyed = True
-    rr.save(run)
-    RunPaths.for_run(run.run_id, rr.runs_dir).ensure_exists()
-    assert run.run_id not in orch._vendor_tokens
-    orch.poll(run.run_id, vendor_token="tok-refresh")
-    assert orch._vendor_tokens[run.run_id] == "tok-refresh"
+    assert "private-key" not in raw and "subject-credentials" not in raw

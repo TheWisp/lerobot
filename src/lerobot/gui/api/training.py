@@ -31,7 +31,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from lerobot.gui.training.hosts import WORKSTATION_HOST_ID, HostRegistry, profile_to_training_host
@@ -394,15 +394,15 @@ def list_runs() -> list[RunDTO]:
 
 
 @router.post("/runs", response_model=RunDTO, status_code=201)
-def start_run(body: StartRunBody, x_nebius_authorization: str | None = Header(default=None)) -> RunDTO:
+def start_run(body: StartRunBody) -> RunDTO:
     """Start a training run.
 
     Returns 409 if the target host already has an active run.
     Returns 404 if the host id isn't registered.
 
-    The ``X-Nebius-Authorization`` header (the caller's per-user IAM token)
-    is forwarded to the orchestrator for Ephemeral hosts and held in memory
-    only — never persisted or logged. Ignored for non-cloud hosts.
+    Ephemeral (cloud) hosts authenticate via the server-held Nebius
+    service-account connection (see the ``/nebius/connection`` endpoints);
+    no per-request credential is passed.
     """
     orch, _ = get_state()
     try:
@@ -413,7 +413,6 @@ def start_run(body: StartRunBody, x_nebius_authorization: str | None = Header(de
                 dataset_id=body.dataset_id,
                 args=body.args,
                 idempotency_key=body.idempotency_key,
-                vendor_token=x_nebius_authorization,
             )
         )
     except UnknownHostError as e:
@@ -424,26 +423,26 @@ def start_run(body: StartRunBody, x_nebius_authorization: str | None = Header(de
 
 
 @router.get("/runs/{run_id}", response_model=RunSnapshotDTO)
-def get_run(run_id: str, x_nebius_authorization: str | None = Header(default=None)) -> RunSnapshotDTO:
+def get_run(run_id: str) -> RunSnapshotDTO:
     """Snapshot one run: state, progress.json, checkpoints manifest, stderr tail.
 
-    Forwards the per-user vendor token so a background ephemeral destroy
-    driven by this poll (or after a GUI restart) can authenticate.
+    A background ephemeral destroy driven by this poll authenticates with
+    the server-held Nebius service-account key.
     """
     orch, _ = get_state()
     try:
-        snap = orch.poll(run_id, vendor_token=x_nebius_authorization)
+        snap = orch.poll(run_id)
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return _snapshot_to_dto(snap)
 
 
 @router.post("/runs/{run_id}/stop", response_model=RunDTO)
-def stop_run(run_id: str, x_nebius_authorization: str | None = Header(default=None)) -> RunDTO:
+def stop_run(run_id: str) -> RunDTO:
     """User-initiated stop. Idempotent on already-terminal runs."""
     orch, _ = get_state()
     try:
-        run = orch.stop(run_id, vendor_token=x_nebius_authorization)
+        run = orch.stop(run_id)
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return _run_to_dto(run)
@@ -496,6 +495,86 @@ def clear_terminal_runs() -> ClearTerminalResponse:
     orch, _ = get_state()
     result = orch.clear_terminal_runs()
     return ClearTerminalResponse(**result)
+
+
+# ── Nebius connection (server-held service-account credential) ────────────────
+#
+# One Nebius service-account key for the whole GUI server, configured once by
+# whoever operates the deployment (a Nebius tenant admin creates the SA; the
+# operator pastes its authorized-key JSON + project/subnet here). The key is
+# server-held and therefore shared by anyone who can reach the GUI — same trust
+# model as the ambient HF token / SSH key (documented in DESIGN.md). The
+# private key is never returned; status only echoes the SA's own identifiers.
+
+
+class NebiusConnectionDTO(BaseModel):
+    configured: bool
+    has_key: bool
+    service_account_id: str | None = None
+    key_id: str | None = None
+    project_id: str | None = None
+    subnet_id: str | None = None
+
+
+class NebiusConnectionBody(BaseModel):
+    # The full authorized-key JSON from `nebius iam auth-public-key create`
+    # (or the console) — a string, validated server-side before it touches disk.
+    key_json: str = Field(min_length=1)
+    project_id: str = Field(min_length=1)
+    subnet_id: str = Field(min_length=1)
+
+
+def _connection_dto(status: Any) -> NebiusConnectionDTO:
+    return NebiusConnectionDTO(
+        configured=status.configured,
+        has_key=status.has_key,
+        service_account_id=status.service_account_id,
+        key_id=status.key_id,
+        project_id=status.project_id,
+        subnet_id=status.subnet_id,
+    )
+
+
+@router.get("/nebius/connection", response_model=NebiusConnectionDTO)
+def get_nebius_connection() -> NebiusConnectionDTO:
+    """Non-secret status of the server-held Nebius connection.
+
+    Never returns the private key; ``configured`` is True only when the key
+    AND project/subnet are all present.
+    """
+    from lerobot.gui.training.nebius_credentials import NebiusConnectionStore
+
+    return _connection_dto(NebiusConnectionStore().status())
+
+
+@router.put("/nebius/connection", response_model=NebiusConnectionDTO)
+def set_nebius_connection(body: NebiusConnectionBody) -> NebiusConnectionDTO:
+    """Store (or replace) the Nebius service-account key + project/subnet.
+
+    Returns 400 if the pasted key is malformed. The key is written ``0600``
+    and used for every ephemeral spawn/teardown thereafter.
+    """
+    from lerobot.gui.training.nebius_credentials import NebiusConnectionStore, NebiusCredentialError
+
+    try:
+        status = NebiusConnectionStore().set(
+            key_json=body.key_json, project_id=body.project_id, subnet_id=body.subnet_id
+        )
+    except NebiusCredentialError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _connection_dto(status)
+
+
+class ClearNebiusConnectionResponse(BaseModel):
+    cleared: bool
+
+
+@router.delete("/nebius/connection", response_model=ClearNebiusConnectionResponse)
+def clear_nebius_connection() -> ClearNebiusConnectionResponse:
+    """Remove the stored Nebius key + connection. Idempotent."""
+    from lerobot.gui.training.nebius_credentials import NebiusConnectionStore
+
+    return ClearNebiusConnectionResponse(cleared=NebiusConnectionStore().clear())
 
 
 # ── Policy catalog (GET /api/training/policies) ───────────────────────────────

@@ -48,13 +48,16 @@ _PROVIDERS: dict[str, type] = {
 }
 
 
-def get_provider(provider_id: str, *, iam_token: str | None = None) -> HostProvider:
+def get_provider(provider_id: str) -> HostProvider:
     """Resolve a vendor id to an instantiated HostProvider.
 
-    ``iam_token`` is the caller's per-user vendor token (forwarded from the
-    request header for LAN multi-user). Providers that take one use it to
-    scope SDK calls to that user; those that don't (persistent) ignore it.
-    None → the provider falls back to ambient credentials.
+    For Nebius, wires in the server-held service-account connection
+    (key file + project/subnet) from
+    :class:`~lerobot.gui.training.nebius_credentials.NebiusConnectionStore`
+    if one is configured; otherwise the provider falls back to ambient
+    credentials (the single-user workstation path). The key is server-held
+    and shared by anyone who can reach the GUI — same trust model as the
+    existing HF token / SSH key (see ``DESIGN.md`` § Authentication).
 
     Pre: ``provider_id`` is one of the registered providers.
     Post: a fresh provider instance for one spawn/destroy cycle.
@@ -63,7 +66,14 @@ def get_provider(provider_id: str, *, iam_token: str | None = None) -> HostProvi
         raise ValueError(f"unknown provider id: {provider_id!r}. Registered providers: {sorted(_PROVIDERS)}")
     cls = _PROVIDERS[provider_id]
     if cls is NebiusProvider:
-        return cls(iam_token=iam_token)
+        from lerobot.gui.training.nebius_credentials import NebiusConnectionStore
+
+        status = NebiusConnectionStore().status()
+        return cls(
+            credentials_file=str(NebiusConnectionStore().key_path) if status.has_key else None,
+            project_id=status.project_id,
+            subnet_id=status.subnet_id,
+        )
     return cls()
 
 
