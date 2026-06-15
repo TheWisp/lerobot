@@ -42,6 +42,8 @@ from typing import Any
 from lerobot.gui.training.hosts import HostRegistry, TrainingHost
 from lerobot.gui.training.jobs import atomic_write_json
 from lerobot.gui.training.log_parse import ProgressSample, parse_metric_sample, parse_progress
+from lerobot.gui.training.providers import get_provider
+from lerobot.gui.training.providers.protocol import HostHandle
 from lerobot.gui.training.recipes import (
     build_lerobot_train_command,
     output_subdir_in_run,
@@ -56,6 +58,7 @@ from lerobot.gui.training.runs import (
     new_run_id,
 )
 from lerobot.gui.training.transport import (
+    SshTransport,
     SubprocessClient,
     SubprocessTransport,
     TransportClient,
@@ -151,9 +154,14 @@ class Orchestrator:
         run_registry: RunRegistry,
         *,
         make_client_fn: Callable[[Any], TransportClient] | None = None,
+        provider_factory: Callable[[str], Any] | None = None,
     ) -> None:
         self._hosts = host_registry
         self._runs = run_registry
+        # Resolve a HostProvider by id for Ephemeral spawn/destroy. Tests
+        # inject a fake provider (no SDK/credentials); production uses the
+        # registry's :func:`get_provider`.
+        self._provider_factory = provider_factory or get_provider
         # All host-state ops (file reads, dir listings, image docker calls,
         # checkpoint sha256s) go through the resolved TransportClient. Tests
         # inject a fake-transport factory; production uses :func:`make_client`
@@ -249,7 +257,7 @@ class Orchestrator:
 
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
         host = self._hosts.get(run.host_id)
-        client = self._client_for_host(host, paths)
+        client = self._client_for_host(host, paths, run)
 
         # Reconcile state with the worker, if it's still in a live state.
         # We only do the liveness probe when the host is known; otherwise
@@ -283,6 +291,12 @@ class Orchestrator:
         stderr_tail = self._read_stderr_tail(client, paths.stderr_log, stderr_tail_bytes)
         events = self._read_events(client, paths.events_jsonl)
 
+        # Ephemeral teardown LAST — after every remote read above, so the
+        # final log/checkpoint pull happens while the VM is still alive
+        # (artifact localization runs inside _reconcile_state on completion).
+        # No-op unless this run is ephemeral, terminal, and not yet destroyed.
+        self._maybe_teardown_ephemeral(run, paths)
+
         return RunSnapshot(
             run=run,
             progress=progress,
@@ -307,7 +321,7 @@ class Orchestrator:
             return run  # idempotent — already stopping
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
         host = self._hosts.get(run.host_id)
-        client = self._client_for_host(host, paths)
+        client = self._client_for_host(host, paths, run)
         if run.state == RunState.PENDING:
             # Prep thread is still running (image pull or pre-launch). No
             # worker to SIGTERM. Skip COMPLETING straight to ABORTED — the
@@ -317,11 +331,15 @@ class Orchestrator:
             run.advance(RunState.ABORTED)
             self._runs.save(run)
             self._emit_event(client, paths.events_jsonl, "aborted_by_user", final_step=0)
+            # If the prep thread already spawned the VM, tear it down. (A
+            # spawn racing in parallel is covered by the poll-time backstop.)
+            self._maybe_teardown_ephemeral(run, paths)
             return run
         if host is None:
             # Host went away (deleted profile) — best-effort mark aborted.
             run.advance(RunState.ABORTED)
             self._runs.save(run)
+            self._maybe_teardown_ephemeral(run, paths)
             return run
         if run.session_id is not None:
             client.stop(run.session_id, force=False)
@@ -413,20 +431,62 @@ class Orchestrator:
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
-    def _client_for_host(self, host: TrainingHost | None, paths: RunPaths) -> TransportClient:
+    def _client_for_host(
+        self, host: TrainingHost | None, paths: RunPaths, run: Run | None = None
+    ) -> TransportClient:
         """Resolve a :class:`TransportClient` for ops on a given host.
 
-        Falls back to a local :class:`SubprocessClient` if the host is
-        unknown (e.g. deleted from the registry). That fallback preserves
-        the pre-refactor behavior — for workstation runs the run dir is
-        on the GUI server's filesystem anyway, so local reads still
-        surface the last known state. For SSH-host runs with a deleted
-        profile, we lose remote access but the run.json + locally-synced
-        artefacts remain readable.
+        Run-aware: an Ephemeral run carries its spawned VM's coordinates in
+        ``run.ephemeral_handle`` (persisted), so once the VM exists every
+        transport op routes to it over SSH — even after a GUI restart that
+        lost the in-memory handle. Falls back to a local
+        :class:`SubprocessClient` when the host is unknown (deleted profile)
+        or an Ephemeral run hasn't spawned yet, preserving the pre-refactor
+        "read what's local" behavior.
         """
-        if host is not None:
+        if run is not None and run.ephemeral_handle is not None and not run.ephemeral_destroyed:
+            handle = _handle_from_dict(run.ephemeral_handle)
+            transport = SshTransport(host=handle.ssh_host, port=handle.ssh_port, user=handle.ssh_user)
+            return self._make_client_fn(transport)
+        # Destroyed-ephemeral (or unknown host): the VM is gone — read from
+        # whatever was localized rather than hang SSH on a dead IP.
+        if host is not None and host.transport is not None:
             return self._make_client_fn(host.transport)
         return SubprocessClient(SubprocessTransport(workdir=paths.root))
+
+    def _maybe_teardown_ephemeral(self, run: Run, paths: RunPaths) -> None:
+        """Destroy the spawned VM once an Ephemeral run is terminal.
+
+        Idempotent via ``run.ephemeral_destroyed``: a no-op for non-ephemeral
+        runs, already-destroyed runs, and non-terminal runs. Called from the
+        chokepoints where a run becomes terminal (poll reconcile, prep-failure,
+        stop-from-pending) so teardown is prompt; the cloud-init poweroff is
+        only the backstop for "GUI server never ran this again".
+        """
+        if run.state not in TERMINAL_STATES or run.ephemeral_handle is None or run.ephemeral_destroyed:
+            return
+        handle = _handle_from_dict(run.ephemeral_handle)
+        provider = self._provider_factory(handle.provider)
+        local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+        try:
+            provider.destroy(handle)
+            ok = provider.verify_destroyed(handle)
+        except Exception as exc:  # noqa: BLE001 — teardown must never wedge the run
+            logger.exception("ephemeral teardown failed for run %s", run.run_id)
+            self._emit_event(local, paths.events_jsonl, "vm_destroy_failed", error=str(exc)[:200])
+            return
+        run.ephemeral_destroyed = True
+        self._runs.save(run)
+        self._emit_event(
+            local, paths.events_jsonl, "vm_destroyed", resource_id=handle.provider_resource_id, verified=ok
+        )
+        if not ok:
+            logger.warning(
+                "ephemeral teardown: destroy issued but verify_destroyed=False for %s "
+                "(resource %s) — check the Nebius console",
+                run.run_id,
+                handle.provider_resource_id,
+            )
 
     @staticmethod
     def _emit_event(client: TransportClient, events_path: Path, type_: str, **fields: Any) -> None:
@@ -456,7 +516,24 @@ class Orchestrator:
         if run is None:
             logger.error("prepare-and-launch: run %s vanished", run_id)
             return
-        client = self._client_for_host(host, paths)
+        # Ephemeral: provision the VM BEFORE anything else and persist its
+        # handle, so even a crash right after spawn leaves a teardownable
+        # record. Spawn before local image-prep is intentional — the recipe's
+        # mount sources + host identity are resolved against the spawned host.
+        if host.is_ephemeral and run.ephemeral_handle is None:
+            try:
+                handle = self._spawn_ephemeral(host, run, paths)
+            except Exception as exc:
+                logger.exception("prepare-and-launch: ephemeral spawn failed")
+                run.error = f"spawn failed: {exc!r}"
+                run.advance(RunState.FAILED)
+                self._runs.save(run)
+                local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+                self._emit_event(local, paths.events_jsonl, "spawn_failed", error=str(exc)[:300])
+                return
+            run.ephemeral_handle = _handle_to_dict(handle)
+            self._runs.save(run)
+        client = self._client_for_host(host, paths, run)
         try:
             cmd = self._build_command(run, paths)
             image = _extract_image_from_docker_argv(cmd)
@@ -467,6 +544,7 @@ class Orchestrator:
             run.error = f"image pull failed: {exc}"
             run.advance(RunState.FAILED)
             self._runs.save(run)
+            self._maybe_teardown_ephemeral(run, paths)
             return
         except Exception as exc:
             logger.exception("prepare-and-launch: unexpected error before launch")
@@ -474,6 +552,7 @@ class Orchestrator:
             run.advance(RunState.FAILED)
             self._runs.save(run)
             self._emit_event(client, paths.events_jsonl, "crashed", error=str(exc), final_step=0)
+            self._maybe_teardown_ephemeral(run, paths)
             return
         # Race check: did the user stop us between image-prep and launch?
         # (stop() on PENDING transitions directly to ABORTED.)
@@ -493,6 +572,7 @@ class Orchestrator:
             run.advance(RunState.FAILED)
             self._runs.save(run)
             self._emit_event(client, paths.events_jsonl, "crashed", error=str(exc), final_step=0)
+            self._maybe_teardown_ephemeral(run, paths)
             return
         # Final race check: stop() can land between launch and advance.
         # If so, kill what we just spawned. --rm on docker run cleans up the
@@ -503,6 +583,8 @@ class Orchestrator:
                 client.stop(session_id, force=True)
             except Exception:
                 logger.exception("prepare-and-launch: post-launch kill failed (best-effort)")
+            if run_after is not None:
+                self._maybe_teardown_ephemeral(run_after, paths)
             return
         run_after.session_id = session_id
         run_after.advance(RunState.RUNNING)
@@ -559,9 +641,27 @@ class Orchestrator:
             size_bytes=size_bytes,
         )
 
+    def _spawn_ephemeral(self, host: TrainingHost, run: Run, paths: RunPaths) -> HostHandle:
+        """Provision the Ephemeral VM via its provider. Emits spawn events
+        on the (local) events.jsonl so the UI can show "provisioning…"."""
+        local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+        provider = self._provider_factory(host.provider_id)
+        self._emit_event(local, paths.events_jsonl, "spawn_started", provider=host.provider_id)
+        handle = provider.spawn(host.spawn_spec)
+        self._emit_event(
+            local,
+            paths.events_jsonl,
+            "vm_spawned",
+            provider=host.provider_id,
+            resource_id=handle.provider_resource_id,
+            ssh_host=handle.ssh_host,
+            expires_at_unix=handle.expires_at_unix,
+        )
+        return handle
+
     def _launch_worker(self, host: TrainingHost, run: Run, paths: RunPaths) -> int:
-        """Build the worker command + invoke via the host's transport."""
-        client = make_client(host.transport)
+        """Build the worker command + invoke via the run's transport."""
+        client = self._client_for_host(host, paths, run)
         command = self._build_command(run, paths)
         # Host-identity placeholders (--user uid:gid, $HOME-derived mount
         # sources) resolve against the LAUNCHING host, not the GUI server —
@@ -1139,6 +1239,18 @@ def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
 class _ImagePullError(RuntimeError):
     """Raised internally when ``docker pull`` exits non-zero. Caught by
     :meth:`Orchestrator._prepare_and_launch` to flip the run to FAILED."""
+
+
+def _handle_to_dict(handle: HostHandle) -> dict[str, Any]:
+    """Serialize a HostHandle for persistence in run.json."""
+    from dataclasses import asdict
+
+    return asdict(handle)
+
+
+def _handle_from_dict(d: dict[str, Any]) -> HostHandle:
+    """Rebuild a HostHandle from its persisted dict."""
+    return HostHandle(**d)
 
 
 def _bind_mount_sources(cmd: list[str]) -> list[Path]:

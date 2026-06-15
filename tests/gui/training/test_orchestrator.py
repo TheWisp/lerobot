@@ -15,6 +15,7 @@ full state machine, reads its outputs, and reconciles state.
 
 from __future__ import annotations
 
+import dataclasses as _dc
 import time
 from pathlib import Path
 
@@ -29,8 +30,9 @@ from lerobot.gui.training.orchestrator import (
     UnknownRunError,
     _extract_image_from_docker_argv,
 )
-from lerobot.gui.training.runs import RunRegistry, RunState
-from lerobot.gui.training.transport import SubprocessClient, SubprocessTransport
+from lerobot.gui.training.providers.protocol import HostHandle, SpawnSpec
+from lerobot.gui.training.runs import Run, RunPaths, RunRegistry, RunState
+from lerobot.gui.training.transport import SshTransport, SubprocessClient, SubprocessTransport
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -1203,3 +1205,172 @@ def test_fetch_run_artifacts_localizes_checkpoint_files(orch: Orchestrator, tmp_
     before = list(client.fetched)
     orch._fetch_run_artifacts(client, run, paths)
     assert client.fetched == before
+
+
+# ── Ephemeral orchestration (mocked provider; no SDK/creds) ──────────────────
+#
+# The full happy-path spawn->train->destroy is the live Nebius smoke. These
+# pin the orchestration logic the unit layer can prove with a fake provider:
+# spawn persists the handle, teardown fires once on terminal, transport
+# routes to the spawned VM (then to local after destroy), and a spawn
+# failure surfaces as a clean FAILED run.
+
+
+class _FakeProvider:
+    def __init__(self, handle=None, spawn_exc=None, verify=True):
+        self._handle = handle
+        self._spawn_exc = spawn_exc
+        self._verify = verify
+        self.destroyed: list = []
+        self.verified: list = []
+
+    def spawn(self, spec):
+        if self._spawn_exc:
+            raise self._spawn_exc
+        return self._handle
+
+    def destroy(self, handle):
+        self.destroyed.append(handle)
+
+    def verify_destroyed(self, handle):
+        self.verified.append(handle)
+        return self._verify
+
+
+def _eph_handle():
+    return HostHandle(
+        provider="nebius",
+        provider_resource_id="computeinstance-xyz",
+        ssh_host="195.242.0.1",
+        ssh_port=22,
+        ssh_user="lerobot",
+        region="eu-north1",
+        expires_at_unix=int(time.time()) + 3600,
+    )
+
+
+def _orch(tmp_path, provider):
+    hr = HostRegistry(hosts=[])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    return Orchestrator(hr, rr, provider_factory=lambda _pid: provider)
+
+
+def _terminal_eph_run(rr, state=RunState.COMPLETED):
+    run = Run(
+        run_id="ephr",
+        host_id="nebius-l40s",
+        recipe_name="r",
+        dataset_id="d",
+        args={},
+        state=state,
+        created_at=time.time(),
+        ephemeral_handle=_dc.asdict(_eph_handle()),
+    )
+    rr.save(run)
+    return run
+
+
+def test_teardown_destroys_and_verifies_once(tmp_path: Path):
+    prov = _FakeProvider()
+    orch = _orch(tmp_path, prov)
+    run = _terminal_eph_run(orch._runs)
+    paths = RunPaths.for_run(run.run_id, orch._runs.runs_dir)
+    paths.ensure_exists()
+
+    orch._maybe_teardown_ephemeral(run, paths)
+    assert len(prov.destroyed) == 1 and len(prov.verified) == 1
+    assert run.ephemeral_destroyed is True
+
+    # Idempotent: a second call (e.g. next poll) does nothing.
+    orch._maybe_teardown_ephemeral(run, paths)
+    assert len(prov.destroyed) == 1
+
+
+def test_teardown_noop_while_running(tmp_path: Path):
+    prov = _FakeProvider()
+    orch = _orch(tmp_path, prov)
+    run = _terminal_eph_run(orch._runs, state=RunState.RUNNING)
+    paths = RunPaths.for_run(run.run_id, orch._runs.runs_dir)
+    paths.ensure_exists()
+    orch._maybe_teardown_ephemeral(run, paths)
+    assert prov.destroyed == []  # never destroy a live VM
+
+
+def test_teardown_survives_destroy_error(tmp_path: Path):
+    prov = _FakeProvider()
+
+    def boom(_h):
+        raise RuntimeError("nebius 500")
+
+    prov.destroy = boom
+    orch = _orch(tmp_path, prov)
+    run = _terminal_eph_run(orch._runs)
+    paths = RunPaths.for_run(run.run_id, orch._runs.runs_dir)
+    paths.ensure_exists()
+    orch._maybe_teardown_ephemeral(run, paths)  # must not raise
+    assert run.ephemeral_destroyed is False  # not marked done; will retry next poll
+
+
+def test_client_routes_to_spawned_vm_then_local_after_destroy(tmp_path: Path):
+    captured = {}
+
+    def fake_make(transport):
+        captured["transport"] = transport
+        return object()
+
+    hr = HostRegistry(hosts=[])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(hr, rr, make_client_fn=fake_make)
+    paths = RunPaths.for_run("ephr", rr.runs_dir)
+    paths.ensure_exists()
+
+    live = _terminal_eph_run(rr, state=RunState.RUNNING)
+    orch._client_for_host(None, paths, live)
+    assert isinstance(captured["transport"], SshTransport)
+    assert captured["transport"].host == "195.242.0.1"
+    assert captured["transport"].user == "lerobot"
+
+    # After destroy, route to local (the VM is gone — don't SSH a dead IP).
+    captured.clear()
+    live.ephemeral_destroyed = True
+    client = orch._client_for_host(None, paths, live)
+    assert isinstance(client, SubprocessClient)
+    assert "transport" not in captured
+
+
+def test_spawn_failure_marks_run_failed(tmp_path: Path):
+    prov = _FakeProvider(spawn_exc=RuntimeError("quota exceeded"))
+    host = TrainingHost(
+        id="nebius-l40s",
+        display_name="Nebius L40S",
+        provider_id="nebius",
+        spawn_spec=SpawnSpec(gpu="L40S", image="img:latest", ttl_seconds=3600),
+    )
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(hr, rr, provider_factory=lambda _pid: prov)
+    run = orch.start(
+        StartRequest(
+            host_id="nebius-l40s",
+            recipe_name="r",
+            dataset_id="d",
+            args={"__recipe__": "__fake__", "num_steps": 1},
+        )
+    )
+    snap = _wait_until_state(orch, run.run_id, RunState.FAILED)
+    assert snap.run.state == RunState.FAILED
+    assert "spawn failed" in (snap.run.error or "")
+    assert any(e.get("type") == "spawn_failed" for e in snap.events)
+    assert prov.destroyed == []  # nothing to destroy — spawn never returned a handle
+
+
+def test_ephemeral_host_is_ephemeral_flag():
+    host = TrainingHost(
+        id="e",
+        display_name="E",
+        provider_id="nebius",
+        spawn_spec=SpawnSpec(gpu="L40S", image="i", ttl_seconds=60),
+    )
+    assert host.is_ephemeral is True
+    plain = TrainingHost(id="w", display_name="W", transport=SubprocessTransport(workdir=Path("/tmp")))
+    assert plain.is_ephemeral is False

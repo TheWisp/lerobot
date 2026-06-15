@@ -38,15 +38,27 @@ WORKSTATION_HOST_ID = "this-server"
 class TrainingHost:
     """A host where training can run.
 
-    ``transport`` carries the operational shape (subprocess vs SSH). The
-    orchestrator never branches on host *type*; it dispatches via the
-    transport (same code path for all hosts).
+    For workstation + user-added SSH hosts, ``transport`` carries the
+    operational shape (subprocess vs SSH) and is set at registration. For
+    Ephemeral hosts the VM doesn't exist until a run starts, so ``transport``
+    is None and (``provider_id``, ``spawn_spec``) describe how to spawn it;
+    the orchestrator calls the provider, then builds an SSH transport from
+    the returned handle for that run. After spawn the dispatch path is
+    identical to any other SSH host.
     """
 
     id: str
     display_name: str
-    transport: HostTransport
+    transport: HostTransport | None = None
     capabilities: dict[str, Any] = field(default_factory=dict)
+    # Ephemeral hosts only: which provider to spawn with, and the spec to
+    # spawn. Both None for workstation / persistent-SSH hosts.
+    provider_id: str | None = None
+    spawn_spec: Any | None = None  # providers.protocol.SpawnSpec
+
+    @property
+    def is_ephemeral(self) -> bool:
+        return self.provider_id is not None and self.spawn_spec is not None
 
 
 # ── GPU detection ─────────────────────────────────────────────────────────────
