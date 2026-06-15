@@ -146,3 +146,27 @@ next.
 - Prototype training cache `cache_sp` (insertion+peg/socket imgs+vjepa feats, 35GB) was DELETED during the
   storage cleanup. Re-running the prototype requires rebuilding its cache. Prototype scripts (sp_vj_act.py,
   sp_vj_act_s2.py, sp_build_cache.py) live in /tmp/selfplay_probe (ephemeral) — back up before use.
+
+---
+
+# DECISION LOG (Jun 15) — CHANGE-1 first-signal
+
+Verified against selfplay_wm_summary.pdf (authoritative prior result):
+
+- Prototype task = **AlohaInsertion**, K=25, decoder×6, stage-2 loss L1+10·KL+**0.1·L_WM** (aux on), 224px.
+- Result protocol = **3 training seeds × n=96 per cell, peak-over-checkpoints** (per-arm val-plateau).
+  **n=24 was explicitly REJECTED** (±14-pt swings) — it is only the dev default in sp_vj_act_s2.py.
+- Headline metric = **grasp rung (≥1)**, full ladder reported; rung4 (insertion) near-floor 0–20%.
+- Result 2 (insertion, K=25, peak, 3×96): control 54.0 / WM(demos) 59.3 / **WM(demos+SP) 68.3** / WM(SP-only) 50.3 (in-dist grasp).
+- Prototype stage-1 demo video = 2-task (insertion+transfer-cube, 180 eps); SP = 1000 peg/socket.
+
+CHANGE-1 = swap **task→TransferCube** + **SP→cube SP** (~same frames), everything else = prototype.
+Note: TransferCube grasp **saturates** (control ~99% at K=50) -> chose **K=10** to give the grasp rung
+headroom (the prototype used K=25 because insertion grasp had headroom at 54%).
+
+**First-signal run (decided):** K=10, **1 seed**, arms = control vs **WM(cube-demos+cube-SP)**, **in-dist only**,
+n=96, peak-over-checkpoints. ~2.5-3 h. Isolation: cache*proto_cube/, s2_cube*_ outputs, proto_cube_results.txt;
+prototype scripts (~/wm_graft_backup/prototype/) untouched, duplicated as _\_cube.py.
+GATE: if WM >= control at any rung -> expand to full faithful protocol (4 arms × 3 seeds × n=96 × OOD f=1/1.25/1.5/2),
+sweeping K to find the headroom operating point. If WM < control at all rungs -> task-swap doesn't preserve the
+effect; investigate next variable.
