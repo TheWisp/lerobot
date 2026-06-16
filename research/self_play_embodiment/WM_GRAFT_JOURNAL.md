@@ -117,6 +117,39 @@ possible if needed.)
 - TransferCube full-success was the WRONG vehicle: grasp saturated (99%), remaining difficulty = precision.
 - So the WM benefit shows up where perception is the bottleneck AND there's headroom (hard-task grasp / OOD).
 
+## VERDICT OVERTURNED — corrected eval kills the WM win (2026-06-16)
+
+The PDF/insertion result above (and the "corrected interpretation") were measured with a BUGGY eval:
+(1) actions clipped to [-1,1] though env/demos use ~±1.6; (2) fixed 500-step episode > env cap -> autoreset
+2nd episode + stale temporal-ensemble. After fixing the eval (no clip, dynamic per-env episode, freeze-at-done,
+early-stop; gated by eval_audit.py 9 checks, none tautological), we RE-EVALUATED THE EXACT SAME trained models
+(e4/e4s2/e4s3 ctrl & wmDS, K=25, 3 seeds, n=96, peak-over-ckpts) via reeval.py (eval core diffed byte-identical
+to the cube eval):
+
+| insertion grasp SR>=1 | PDF (buggy) | corrected eval              |
+| --------------------- | ----------- | --------------------------- |
+| control               | 54.0        | **71.3** (76/65/73) (+17.3) |
+| WM demos+self-play    | 68.3        | **67.0** (66/68/67) (-1.3)  |
+
+WM barely moved; CONTROL jumped +17pts. The entire PDF "win" was the buggy eval SUPPRESSING CONTROL (the
+trained control policy's eval-time actions clipped/diverged more than WM's). Corrected: control >= WM at EVERY
+rung (mean reward 1.65 vs 1.44; SR=4 12.3 vs 8.3).
+
+Cube K=10, 3 seeds, corrected eval (independent confirmation): control mean 1.43 vs WM 0.86; transfer 27% vs 11%.
+(Seed-0's apparent WM lift-win was a fluke where control collapsed; control = high-variance/high-ceiling,
+WM = low-variance/low-ceiling, i.e. WM behaves as a REGULARIZER that caps performance.)
+
+NET: with a correct eval, WM(demos+SP) ~= or < control on BOTH insertion and cube. No data-efficiency benefit.
+The "self-play world model helps" result does NOT survive a clean eval.
+
+CORRECTION OF MY OWN EARLIER CLAIM: I had said insertion was "largely robust" to the bugs because only ~2.2%
+of DEMO actions exceed ±1. Wrong axis — eval uses the trained POLICY's actions, which clipped enough to cost
+control ~17pts. The bugs materially affected insertion.
+
+Next: visual inspection of rollouts (4 datasets (cube,insert)x(control,wm), recorded via record_eval.py from
+the corrected eval, in the GUI) to understand the behavioral pattern before deciding whether any WM variant/regime
+is worth pursuing.
+
 ## Divergences prototype -> current LeRobot graft (the confounds)
 
 1. stage-2 aux loss beta\*L_WM DROPPED (current transfer-only). Prototype HAD it — but note prototype's win
