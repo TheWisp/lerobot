@@ -22,6 +22,7 @@ frontend can ask the user to confirm an explicit Hub download.
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import patch
 
 import httpx
@@ -64,29 +65,29 @@ class TestCheckLocalDatasetComplete:
     def test_complete_dataset_returns_ok(self, tmp_path, lerobot_dataset_factory):
         """A freshly-built dataset on disk has every data + video file present."""
         ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=3, total_frames=30)
-        is_complete, problems = _check_local_dataset_complete(ds.root)
-        assert is_complete, f"expected complete, got problems: {problems}"
+        kind, problems = _check_local_dataset_complete(ds.root)
+        assert kind == "complete", f"expected complete, got {kind}: {problems}"
         assert problems == []
 
     def test_missing_info_json(self, tmp_path):
         """An empty directory is reported with a clear marker problem."""
-        is_complete, problems = _check_local_dataset_complete(tmp_path / "empty")
-        assert not is_complete
+        kind, problems = _check_local_dataset_complete(tmp_path / "empty")
+        assert kind == "missing_files"
         assert any("meta/info.json is missing" in p for p in problems)
 
     def test_missing_data_parquet(self, tmp_path, lerobot_dataset_factory):
-        """Removing data parquet files is flagged with a count + sample path."""
+        """Removing data parquet files is a missing-files problem (downloadable)."""
         ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=3, total_frames=30)
         # Wipe all data parquet files (keep the directory).
         for p in (ds.root / "data").rglob("*.parquet"):
             p.unlink()
 
-        is_complete, problems = _check_local_dataset_complete(ds.root)
-        assert not is_complete
+        kind, problems = _check_local_dataset_complete(ds.root)
+        assert kind == "missing_files", problems
         assert any("data parquet file(s) missing" in p for p in problems), problems
 
     def test_missing_video_file(self, tmp_path, lerobot_dataset_factory):
-        """Removing a video referenced by metadata is flagged separately."""
+        """Removing a video referenced by metadata is flagged as missing files."""
         ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=3, total_frames=30, use_videos=True)
         videos_dir = ds.root / "videos"
         if not videos_dir.exists() or not list(videos_dir.rglob("*.mp4")):
@@ -95,9 +96,34 @@ class TestCheckLocalDatasetComplete:
         # Drop one mp4 and verify it's surfaced as a missing video.
         next(videos_dir.rglob("*.mp4")).unlink()
 
-        is_complete, problems = _check_local_dataset_complete(ds.root)
-        assert not is_complete
+        kind, problems = _check_local_dataset_complete(ds.root)
+        assert kind == "missing_files", problems
         assert any("video file(s) missing" in p for p in problems), problems
+
+    def test_episode_count_mismatch_is_metadata_inconsistent(self, tmp_path, lerobot_dataset_factory):
+        """info.json claiming more episodes than the metadata table describes is
+        a *metadata* inconsistency, not a missing-files problem.
+
+        This is the real-world ``eval_rollout`` failure shape: ``info.json``'s
+        ``total_episodes`` exceeds ``len(episodes)``, so resolving the "extra"
+        episodes' paths raises ``IndexError``. The check classifies it as
+        ``metadata_inconsistent`` (not ``missing_files``) so the caller states
+        the mismatch faithfully instead of offering a download that wouldn't
+        apply.
+        """
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=3, total_frames=30)
+        info_path = ds.root / "meta" / "info.json"
+        info = json.loads(info_path.read_text())
+        # Claim two episodes that have no row in the metadata table.
+        info["total_episodes"] = 5
+        info["splits"] = {"train": "0:5"}
+        info_path.write_text(json.dumps(info))
+
+        kind, problems = _check_local_dataset_complete(ds.root)
+        assert kind == "metadata_inconsistent", problems
+        assert any("info.json reports 5 episode" in p and "describes 3" in p for p in problems), problems
+        # All files are present — so it must NOT be reported as missing files.
+        assert not any("missing" in p.lower() for p in problems), problems
 
     def test_renamed_folder_with_spaces_still_reports_local_problems(self, tmp_path, lerobot_dataset_factory):
         """Regression: a folder name like ``"my dataset copy"`` used to cause a
@@ -116,8 +142,8 @@ class TestCheckLocalDatasetComplete:
         # Drop a required meta file so the metadata loader can't fully load.
         (renamed / "meta" / "tasks.parquet").unlink()
 
-        is_complete, problems = _check_local_dataset_complete(renamed)
-        assert not is_complete
+        kind, problems = _check_local_dataset_complete(renamed)
+        assert kind == "missing_files"
         # Real diagnosis surfaces, not "Repo id must use alphanumeric…".
         assert any("tasks.parquet is missing" in p for p in problems), problems
         assert not any("alphanumeric" in p.lower() for p in problems), problems
@@ -168,11 +194,44 @@ class TestOpenDatasetIncompleteCache:
                 assert resp.status_code == 409, resp.text
                 detail = resp.json()["detail"]
                 assert detail["code"] == "incomplete_local_cache"
+                # Missing files are recoverable via the Hub, so sync is offered.
+                assert detail["kind"] == "missing_files"
                 assert detail["hub_sync_available"] is True
                 assert detail["local_path"] == str(ds.root)
                 assert detail["repo_id"]  # non-empty
                 assert isinstance(detail["problems"], list) and detail["problems"]
                 assert any("data parquet" in p for p in detail["problems"])
+
+        asyncio.run(run())
+
+    def test_metadata_inconsistent_returns_409_without_hub_sync(
+        self, app_with_state, tmp_path, lerobot_dataset_factory
+    ):
+        """A self-contradictory ``info.json`` (more episodes than the metadata
+        table) must 409 with ``kind == "metadata_inconsistent"`` and
+        ``hub_sync_available == False`` — the frontend keys off both to suppress
+        the misleading 'Download & Open' call-to-action.
+        """
+        app, _state = app_with_state
+        ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=3, total_frames=30)
+        info_path = ds.root / "meta" / "info.json"
+        info = json.loads(info_path.read_text())
+        info["total_episodes"] = 5
+        info["splits"] = {"train": "0:5"}
+        info_path.write_text(json.dumps(info))
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post("/api/datasets", json={"local_path": str(ds.root)})
+                assert resp.status_code == 409, resp.text
+                detail = resp.json()["detail"]
+                assert detail["code"] == "incomplete_local_cache"
+                assert detail["kind"] == "metadata_inconsistent"
+                assert detail["hub_sync_available"] is False
+                assert "inconsistent" in detail["message"].lower()
+                assert any("info.json reports 5 episode" in p for p in detail["problems"])
 
         asyncio.run(run())
 

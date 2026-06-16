@@ -121,23 +121,38 @@ def shutdown_decode_executor() -> None:
     _decode_executor.shutdown(wait=False, cancel_futures=True)
 
 
-def _check_local_dataset_complete(local_path: Path) -> tuple[bool, list[str]]:
-    """Check whether a local dataset directory has all data + video files.
+def _check_local_dataset_complete(local_path: Path) -> tuple[str, list[str]]:
+    """Classify whether a local dataset directory can be opened from disk, and if not, how.
 
     Used to short-circuit ``LeRobotDataset.__init__``'s implicit Hub download
     when the user opens a local path: the editor is local-only and should not
-    silently pull hundreds of MB from the Hub if local files are missing.
+    silently pull hundreds of MB from the Hub if local files are missing or the
+    on-disk metadata is self-inconsistent.
+
+    Two failure modes are distinguished so the caller can offer the right
+    recovery (or none) and never show a misleading download prompt:
+
+      * ``"missing_files"`` — the metadata is internally consistent but some
+        referenced data/video files are absent on disk (e.g. a partial Hub
+        download). Re-downloading from the Hub, when the repo exists, completes
+        the cache.
+      * ``"metadata_inconsistent"`` — the on-disk metadata contradicts itself:
+        ``info.json``'s episode count disagrees with the per-episode metadata
+        table, or an episode's path cannot be resolved. A download does not
+        address this; the inconsistency is surfaced as-is.
 
     Returns:
-        ``(is_complete, problems)``. ``problems`` is a list of human-readable
-        strings; empty when the cache is complete. Never raises.
+        ``(kind, problems)`` where ``kind`` is ``"complete"``,
+        ``"missing_files"``, or ``"metadata_inconsistent"``. ``problems``
+        faithfully lists what's wrong; empty only when ``kind == "complete"``.
+        Never raises.
     """
     from huggingface_hub.errors import HFValidationError
 
     from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 
     if not (local_path / "meta" / "info.json").exists():
-        return False, ["meta/info.json is missing"]
+        return "missing_files", ["meta/info.json is missing"]
 
     # If any meta-side file is missing, `LeRobotDatasetMetadata.__init__` falls
     # through to `_pull_from_repo` → `snapshot_download`, which validates the
@@ -152,7 +167,7 @@ def _check_local_dataset_complete(local_path: Path) -> tuple[bool, list[str]]:
     if not (local_path / "meta" / "episodes").is_dir():
         missing_meta.append("meta/episodes/")
     if missing_meta:
-        return False, [f"{p} is missing" for p in missing_meta]
+        return "missing_files", [f"{p} is missing" for p in missing_meta]
 
     try:
         # Passing root= ensures the metadata loader reads from disk; for a local
@@ -164,17 +179,42 @@ def _check_local_dataset_complete(local_path: Path) -> tuple[bool, list[str]]:
         # already covered the common "info.json present, episodes missing"
         # case; reaching here means a subtler meta-side problem (a partial
         # episodes/ tree, version mismatch, etc.).
-        return False, ["meta/ contents are inconsistent (failed to load on disk)"]
+        return "metadata_inconsistent", ["meta/ contents are inconsistent (failed to load on disk)"]
     except Exception as e:
-        return False, [f"failed to load metadata: {e}"]
+        return "metadata_inconsistent", [f"failed to load metadata: {e}"]
 
     problems: list[str] = []
+    kind = "complete"
+
+    # Metadata self-consistency: `info.json.total_episodes` is the authoritative
+    # count, but the per-episode metadata table (`meta/episodes/`) is what
+    # resolves data/video paths. When they disagree, path resolution for the
+    # "extra" episodes raises IndexError — a self-inconsistency, not a missing
+    # file, and not something a download addresses.
+    n_info = meta.total_episodes
+    n_table = len(meta.episodes) if meta.episodes is not None else 0
+    if n_info != n_table:
+        kind = "metadata_inconsistent"
+        detail = (
+            f" (episodes {n_table}–{n_info - 1} have data but no metadata row)" if n_info > n_table else ""
+        )
+        problems.append(
+            f"info.json reports {n_info} episode(s) but the episode metadata table describes {n_table}{detail}"
+        )
+
+    # Only probe files for episodes the metadata table can actually resolve;
+    # iterating past `n_table` would just re-report the count mismatch above as a
+    # pile of "cannot resolve path" noise.
+    resolvable = min(n_info, n_table)
 
     missing_data: set[str] = set()
-    for ep in range(meta.total_episodes):
+    for ep in range(resolvable):
         try:
             p = local_path / meta.get_data_file_path(ep)
         except Exception as e:
+            # A resolution failure within the resolvable range is a deeper
+            # inconsistency, not a missing file.
+            kind = "metadata_inconsistent"
             problems.append(f"ep {ep}: cannot resolve data path ({e})")
             continue
         if not p.exists():
@@ -185,10 +225,11 @@ def _check_local_dataset_complete(local_path: Path) -> tuple[bool, list[str]]:
 
     missing_videos: set[str] = set()
     for vid_key in meta.video_keys:
-        for ep in range(meta.total_episodes):
+        for ep in range(resolvable):
             try:
                 p = local_path / meta.get_video_file_path(ep, vid_key)
             except Exception as e:
+                kind = "metadata_inconsistent"
                 problems.append(f"ep {ep} {vid_key}: cannot resolve video path ({e})")
                 continue
             if not p.exists():
@@ -197,7 +238,11 @@ def _check_local_dataset_complete(local_path: Path) -> tuple[bool, list[str]]:
         sample = sorted(missing_videos)[0]
         problems.append(f"{len(missing_videos)} video file(s) missing (e.g. {sample})")
 
-    return (len(problems) == 0), problems
+    # Missing files are only the diagnosis when no metadata contradiction was
+    # found first.
+    if problems and kind == "complete":
+        kind = "missing_files"
+    return kind, problems
 
 
 def _get_episode_start_index(dataset_id: str, episode_idx: int) -> int:
@@ -1425,17 +1470,26 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
             # into local_path — same code path the existing /hub/download
             # endpoint uses.
             if not request.confirm_hub_sync:
-                is_complete, problems = _check_local_dataset_complete(local_path)
-                if not is_complete:
+                kind, problems = _check_local_dataset_complete(local_path)
+                if kind != "complete":
+                    # Carry `kind` so the frontend can say what's wrong and only
+                    # offer a Hub download when it's actually a missing-files
+                    # case; a metadata inconsistency isn't a download problem.
+                    hub_sync_available = kind == "missing_files"
                     raise HTTPException(
                         status_code=409,
                         detail={
                             "code": "incomplete_local_cache",
-                            "message": "Local dataset cache is incomplete.",
+                            "kind": kind,
+                            "message": (
+                                "Local dataset cache is incomplete."
+                                if hub_sync_available
+                                else "Local dataset metadata is inconsistent."
+                            ),
                             "problems": problems,
                             "repo_id": repo_id,
                             "local_path": str(local_path),
-                            "hub_sync_available": True,
+                            "hub_sync_available": hub_sync_available,
                         },
                     )
 
