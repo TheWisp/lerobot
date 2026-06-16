@@ -194,8 +194,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
 /* Sidebar sections */
 .sidebar-section { border-bottom: 1px solid #0f3460; }
-.section-label { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+.section-label { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
 .section-label .btn-small { padding: 2px 8px; font-size: 11px; }
+/* Group multiple header actions (e.g. Training's Run/Host/Clear) on the
+   right so they read as one cluster, not spread across the row by the
+   parent's space-between. */
+.section-actions { display: flex; align-items: center; gap: 6px; }
 
 /* Sources section */
 .sources-section { max-height: 50%; overflow-y: auto; }

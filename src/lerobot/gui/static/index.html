@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=43">
+    <link rel="stylesheet" href="/static/style.css?v=44">
 </head>
 <body>
     <div class="tab-bar">
@@ -175,9 +175,11 @@
                 <div class="sidebar-section" id="training-section">
                     <div class="section-label">
                         <span>Training</span>
-                        <button class="btn-small" onclick="trainingShowStartForm()" id="training-start-btn" title="Loading hosts…" disabled>+ Run</button>
-                        <button class="btn-small" onclick="trainingShowAddHostDialog()" id="training-add-host-btn" title="Add a remote SSH host where training can run">+ Host</button>
-                        <button class="btn-small secondary" onclick="trainingClearCompleted()" id="training-clear-btn" title="Delete all completed/failed/aborted runs from disk">Clear ✓</button>
+                        <div class="section-actions">
+                            <button class="btn-small" onclick="trainingShowStartForm()" id="training-start-btn" title="Loading hosts…" disabled>+ Run</button>
+                            <button class="btn-small" onclick="trainingShowAddHostDialog()" id="training-add-host-btn" title="Add a remote SSH host where training can run">+ Host</button>
+                            <button class="btn-small secondary" onclick="trainingClearCompleted()" id="training-clear-btn" title="Delete all completed/failed/aborted runs from disk">Clear ✓</button>
+                        </div>
                     </div>
                     <div id="training-hosts-info" style="font-size: 11px; color: var(--text-secondary, #666); padding: 4px 8px;">Loading hosts…</div>
                     <div id="training-runs-list"></div>
