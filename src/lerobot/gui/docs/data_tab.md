@@ -77,6 +77,24 @@ Design doc for the dataset visualization and editing tab.
 | **Open Local**    | `/path/to/dataset` | Work directly on local files              |
 | **Open from Hub** | `user/repo_id`     | Download to local path, then work locally |
 
+### Opening an incomplete or inconsistent local cache
+
+Opening a local path never silently downloads from the Hub. When a dataset
+can't be opened as-is, the open pre-check classifies _why_ and the dialog states
+it faithfully — it never offers a download that wouldn't help.
+
+| Failure                                                                                           | What the dialog does                                                   |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| **Metadata inconsistent** — `info.json`'s episode count disagrees with the episode-metadata table | States the mismatch; no download (it isn't a missing-files problem)    |
+| **Missing files, repo not on the Hub**                                                            | Lists what's missing; _Download & Open_ is disabled (nothing to fetch) |
+| **Missing files, repo on the Hub**                                                                | Lists what's missing; _Download & Open_ fetches them, then opens       |
+
+![Metadata inconsistent — info.json and the episode table disagree, so no download is offered](images/open_dataset_metadata_inconsistent.png)
+
+![Missing files, repo not on the Hub — Download & Open is disabled](images/open_dataset_missing_files_not_on_hub.png)
+
+![Missing files, repo on the Hub — Download & Open is enabled](images/open_dataset_missing_files_on_hub.png)
+
 ### Reload Semantics
 
 **"Reload" always means re-read from local disk** — never fetches from Hub. Used after applying edits or when an external tool modifies the dataset.
