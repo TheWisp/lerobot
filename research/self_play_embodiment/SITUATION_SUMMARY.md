@@ -136,3 +136,51 @@ The open-loop chain is exhausted (representation good; trained policy good open-
 
 1. **Off-trajectory (recovery-basin) probe** — perturb expert states with action noise and measure how fast each policy's action error grows off-manifold (prediction: world-model steeper). Also a target-free sensitivity version. Open-loop, cheap, decisive for the mechanism.
 2. **Out-of-distribution / closed-loop evaluation** — the regime where any world-model benefit (robustness) would actually appear.
+
+---
+
+# Follow-up 3 (2026-06-17): OOD visual-robustness check — no upside (H2 confirmed)
+
+We ran the visual-OOD sweep (3 training seeds, n=96 paired eval seeds, control vs world-model), perturbing only
+what the camera sees (dynamics fixed; success still from physics). After a canary calibration, the informative
+perturbations were table-color, cube-color, and pixel-noise; camera-pose jitter floored _both_ policies even at
+~0.4 cm (a known fixed-camera brittleness of this policy class) so it was dropped as uninformative. Lighting /
+brightness / contrast / hue moved the policy no more than noise on this flat-shaded sim (consistent with the
+earlier "frozen video features ≈ raw pixels on this scene" caveat).
+
+Result (3-seed mean grasp rate; each arm vs its own in-distribution baseline):
+
+| perturbation (low→high) | control      | world-model      |
+| ----------------------- | ------------ | ---------------- |
+| baseline                | 60           | 34               |
+| table-color             | 63 / 39 / 18 | 33 / 29 / **0**  |
+| cube-color              | 51 / 45 / 51 | 34 / 29 / **20** |
+| pixel-noise             | 55 / 40 / 16 | **69** / 48 / 1  |
+
+**Conclusion: H2 — the world model is not more visually robust; if anything it is more brittle.**
+
+- On structured visual shifts (table/cube color) the world-model policy degrades at least as fast or faster than
+  control and **never closes the ~26-pt in-distribution deficit**; it floors completely on the strongest shifts
+  where control still retains some success.
+- The lone world-model-favorable point — low pixel noise nearly _doubling_ its success (reproducible across all
+  three seeds) — is **chaotic dithering, not graceful robustness**: it is non-monotonic (collapses to ~0 at high
+  noise) and unstable across seeds. It reinforces, rather than contradicts, the narrow-basin picture (a brittle
+  policy kicked onto different trajectories by small input changes).
+
+## Overall conclusion of the investigation
+
+Across every regime we can measure, this configuration (action-free self-play world-model objective on a small
+imitation policy, narrow self-play corpus) shows **no benefit**:
+
+- In-distribution: world-model ≤ control (the original "win" was an evaluation bug).
+- Representation (object position) and action decodability: world-model ≥ control — so perception/representation
+  is **not** the bottleneck.
+- Trained-policy open-loop accuracy: world-model ≥ control — the decoder/routing is fine.
+- Closed-loop and OOD: world-model worse / no more robust — consistent with **covariate shift / a narrow recovery
+  basin** induced by the world-model regularizer (fits the expert manifold tighter but narrower).
+
+The world-model objective produced a _sharper_ representation that is excellent on the expert path and brittle
+off it — the opposite of the data-efficiency / robustness benefit we set out to find. This closes the current
+line. Any future attempt should change the parts that actually diverge from the working literature: an
+**action-conditioned** (not spectator) objective, **coverage-oriented** self-play (not narrow), and a **stronger
+pretrained visual base** — i.e. a substantially different, larger bet, not a tweak to this configuration.
