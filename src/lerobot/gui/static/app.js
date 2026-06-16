@@ -1620,6 +1620,17 @@ let _hubRepoInfoTimer = null;
 function hubUploadDataset(datasetId) { openHubModal(datasetId, 'upload'); }
 function hubDownloadDataset(datasetId) { openHubModal(datasetId, 'download'); }
 
+// Enable/disable the Hub modal's primary button with a *visible* disabled
+// state — the inline accent background overrides the browser's greyed-out
+// styling, so a bare `disabled` looks identical to enabled. Dim + not-allowed
+// cursor make a gated 'Download & Open' read as inert.
+function setHubExecuteEnabled(enabled) {
+    const b = document.getElementById('hub-execute-btn');
+    b.disabled = !enabled;
+    b.style.opacity = enabled ? '1' : '0.5';
+    b.style.cursor = enabled ? 'pointer' : 'not-allowed';
+}
+
 function openHubModal(datasetId, action, ctx) {
     _hubDatasetId = datasetId;
     _hubAction = action;
@@ -1641,6 +1652,14 @@ function openHubModal(datasetId, action, ctx) {
     statusEl.textContent = '';
     repoInfoEl.innerHTML = '<span style="color:var(--text-tertiary,#666)">Loading remote info...</span>';
 
+    // Restore reusable modal chrome: the metadata-inconsistent open-sync state
+    // hides the repo input, remote-info panel, and execute button; the
+    // missing-files state dims the button until the repo is confirmed.
+    document.getElementById('hub-repo-input-row').style.display = '';
+    repoInfoEl.style.display = '';
+    btn.style.display = '';
+    setHubExecuteEnabled(true);
+
     if (action === 'upload') {
         titleEl.textContent = 'Upload to Hub';
         btn.textContent = 'Upload';
@@ -1659,22 +1678,42 @@ function openHubModal(datasetId, action, ctx) {
             `<span style="color:var(--text-tertiary,#666)">${ds.root}</span>`;
     } else if (action === 'open-sync') {
         const { detail } = _hubOpenSyncCtx;
-        titleEl.textContent = 'Open dataset — local cache is incomplete';
-        btn.textContent = 'Download & Open';
-        btn.style.background = 'var(--accent, #0e639c)';
-        repoInput.value = detail.repo_id || '';
         const probs = (detail.problems || []).slice(0, 5)
             .map(p => `<div style="color:var(--text-tertiary,#666); font-size:11px;">• ${p}</div>`).join('');
         const more = (detail.problems || []).length > 5
             ? `<div style="color:var(--text-tertiary,#666); font-size:11px;">• (and ${detail.problems.length - 5} more)</div>`
             : '';
-        localInfoEl.innerHTML =
-            `<strong>Local cache:</strong> incomplete<br>` +
-            `<span style="color:var(--text-tertiary,#666)">${detail.local_path}</span>` +
-            `<div style="margin-top:6px;"><strong>Missing:</strong></div>${probs}${more}` +
-            `<div style="margin-top:8px; color:var(--text-tertiary,#666); font-size:11px;">` +
-            `Clicking <em>Download &amp; Open</em> fetches missing files into the path above, then opens the dataset. ` +
-            `Progress prints to the server terminal — this dialog stays open until done.</div>`;
+
+        if (detail.kind === 'metadata_inconsistent') {
+            // The metadata contradicts itself — not a download problem. State it
+            // faithfully and drop the Hub chrome; only the Cancel button remains.
+            titleEl.textContent = "Couldn't open dataset — metadata is inconsistent";
+            document.getElementById('hub-repo-input-row').style.display = 'none';
+            repoInfoEl.style.display = 'none';
+            btn.style.display = 'none';
+            repoInput.value = '';  // nothing to look up; keeps fetchHubRepoInfo a no-op
+            localInfoEl.innerHTML =
+                `<span style="color:var(--text-tertiary,#666)">${detail.local_path}</span>` +
+                `<div style="margin-top:6px;"><strong>Problem:</strong></div>${probs}${more}` +
+                `<div style="margin-top:8px; color:var(--text-tertiary,#666); font-size:11px;">` +
+                `The dataset's <code>info.json</code> and its episode metadata table disagree, so it can't be ` +
+                `opened. This isn't a missing-files problem — there's nothing to download.</div>`;
+        } else {
+            // Missing files — re-downloadable when a Hub copy exists. Gate the
+            // button until fetchHubRepoInfo() confirms the repo exists.
+            titleEl.textContent = 'Open dataset — local cache is incomplete';
+            btn.textContent = 'Download & Open';
+            btn.style.background = 'var(--accent, #0e639c)';
+            setHubExecuteEnabled(false);  // gated until fetchHubRepoInfo confirms the repo
+            repoInput.value = detail.repo_id || '';
+            localInfoEl.innerHTML =
+                `<strong>Local cache:</strong> incomplete<br>` +
+                `<span style="color:var(--text-tertiary,#666)">${detail.local_path}</span>` +
+                `<div style="margin-top:6px;"><strong>Missing:</strong></div>${probs}${more}` +
+                `<div style="margin-top:8px; color:var(--text-tertiary,#666); font-size:11px;">` +
+                `If this dataset is on the Hub, <em>Download &amp; Open</em> fetches the missing files into the path ` +
+                `above, then opens it. Progress prints to the server terminal — this dialog stays open until done.</div>`;
+        }
     }
 
     document.getElementById('hub-modal-overlay').style.display = 'flex';
@@ -1706,7 +1745,23 @@ function fetchHubRepoInfo() {
                 infoEl.innerHTML = _hubAction === 'upload'
                     ? `<span style="color:#e5c07b">New repo — will be created on upload</span><br><span style="color:var(--text-tertiary,#666)">URL: ${linkHtml}</span>`
                     : '<span style="color:#e06c75">Repo not found on Hub</span>';
+                if (_hubAction === 'open-sync') {
+                    // Not on the Hub → nothing to download. Keep the action
+                    // blocked instead of offering a misleading 'Download & Open'.
+                    setHubExecuteEnabled(false);
+                    document.getElementById('hub-execute-btn').title =
+                        "This repo isn't on the Hub — nothing to download.";
+                    document.getElementById('hub-status').innerHTML =
+                        '<span style="color:#e06c75">Not on the Hub — nothing to download.</span>';
+                }
                 return;
+            }
+            // Repo exists: for open-sync this makes 'Download & Open' a valid
+            // action, so lift the gate set when the modal opened.
+            if (_hubAction === 'open-sync') {
+                setHubExecuteEnabled(true);
+                document.getElementById('hub-execute-btn').title = '';
+                document.getElementById('hub-status').textContent = '';
             }
             const epInfo = data.total_episodes != null
                 ? `${data.total_episodes} episodes, ${data.total_frames?.toLocaleString() || '?'} frames`
