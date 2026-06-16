@@ -77,4 +77,37 @@ position is **present and usable** by the (linear-attention) action head.
 2. Is mechanism #2 (handover-only SP → no table-localization) the dominant cause? Would task-matched SP
    (cube sitting on table, being picked up) change it?
 3. Is there any regime (lower data? harder task where control floors?) where the WM prior actually helps?
-4. Data hygiene: `cube_1k` is locally corrupt (truncated parquet footers, not on Hub) — recover or discard?
+4. Data hygiene: one self-play dataset was locally corrupt (never actually used in training) — recover or discard?
+
+---
+
+# Follow-up (2026-06-16): what changed + current plan
+
+## What changed since the summary above
+
+1. **Read the reference papers.** The closest published method (a vision-language-action model with a JEPA latent world model) and the V-JEPA 2 world-model line differ from our instantiation on three axes: (a) **base policy** — they build on a multi-billion-parameter pretrained vision-language model with an object-grounded vision encoder, whereas ours is a small from-scratch imitation policy; (b) **pretraining data** — they use large, diverse human video plus high-quality expert robot demonstrations, whereas ours is a small, narrow self-play corpus; (c) their reported world-model benefit is mainly **out-of-distribution robustness**, "minimal for in-distribution," yet we evaluated almost entirely in-distribution.
+
+2. **Recovered the project's origin premise.** The original intent is **self-exploration for state _coverage_ (including failures), made embodiment-aware by an _action-conditioned_ dynamics objective** — i.e., the representation should encode "how my actions change the world," not merely "what the scene looks like." We treat that plan as unvalidated, but it sharpened the key distinction below.
+
+3. **Confirmed our world-model objective is _action-free_.** It predicts future scene latents from the current observation alone, with no action input. By the action-conditioned/action-free distinction, this is a **"spectator" objective** — it learns to forecast the scene, not the action→outcome map that control needs.
+
+4. **Ran the object probe — and it REFUTED our working hypothesis** (the most important new fact). The world-model representation encodes the object's position **as well as or better than** the control baseline (held-out R² ≈ 0.93 vs 0.89; ~1.7 cm vs 2.4 cm error), including in the pre-grasp, object-on-table phase (so not explainable by reading the gripper). **Perception is therefore not the bottleneck** — the world-model policy fails to act on the object even though it localizes it accurately. The deficit is **representation → action**, not seeing.
+
+5. **Method corrections.** Replaced an uninformative coarse spatial heatmap with an intuitive predicted-vs-true position overlay; and switched the probe to use the **full (un-pooled) representation** so it preserves the spatial/relational structure the policy actually relies on, rather than averaging it away.
+
+6. **Process & hygiene.** Adopted a human dataset quality-check before any training run (after finding a corrupt, never-used self-play dataset and a corpus-composition surprise).
+
+## Hard facts now (independent of any plan)
+
+- With a corrected evaluation (3 training seeds), the world-model policy is **≤ the control baseline** on both tasks — no data-efficiency gain.
+- The world-model policy is **low-variance / low-ceiling** (behaves like a regularizer); control is high-variance / high-ceiling.
+- The world-model representation **perceives the object at least as well as control** → the failure is **downstream of perception**.
+- Our world-model objective is **action-free (spectator)**.
+
+## Current plan (fact-first)
+
+1. **Action decodability probe** (the cheap, decisive next test): measure whether the _expert action_ is **less** linearly recoverable from the world-model representation than from control's, using the full representation. If so, the representation — though it localizes objects well — is geometrically less _control-relevant_; that is the direct "good spectator, poor controller" evidence and it localizes the failure to the representation rather than the action decoder.
+2. **Out-of-distribution evaluation** (reuses existing models): the one untested regime where a low-variance representation could plausibly help, and where the reference work says the benefit actually lives.
+3. **Decision fork** after (1)+(2): if the representation is control-hostile **and** there is no OOD win, the action-free + narrow-data configuration is a dead end as built → either write up the negative result, or treat the original mechanism (**action-conditioned objective + coverage-oriented self-play**) as a new, larger bet. If instead the representation is controllable, the issue is in how the action stage uses it, not the representation.
+
+**Deliberately not pursuing:** training an additional action decoder (expensive, low-confidence), or tuning in-distribution data scale (the world model already loses there).
