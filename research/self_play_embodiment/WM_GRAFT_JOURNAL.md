@@ -150,6 +150,34 @@ Next: visual inspection of rollouts (4 datasets (cube,insert)x(control,wm), reco
 the corrected eval, in the GUI) to understand the behavioral pattern before deciding whether any WM variant/regime
 is worth pursuing.
 
+## PROBE: object IS encoded — failure is downstream of perception (2026-06-16)
+
+Hypothesis (from rollout videos): the cube WM "ignores the object." **REFUTED by direct measurement.**
+Linear probe (closed-form ridge, held out by seed) of each TRAINED student's pooled representation for the
+sim ground-truth cube xy, frames from a control rollout fed to BOTH encoders:
+
+| feature (cube xy) | ALL R²    | RMSE       | TABLE (pre-grasp) R² | EE xy R² |
+| ----------------- | --------- | ---------- | -------------------- | -------- |
+| raw pixels        | 0.72–0.79 | 3.3 cm     | 0.76                 | 0.995    |
+| control (mem)     | 0.89      | 2.3 cm     | 0.895                | 0.995    |
+| **WM (mem)**      | **0.93**  | **1.7 cm** | **0.935**            | 0.994    |
+
+WM encodes the cube **as well as / better than** control — including the on-table pre-grasp stratum (cube
+independent of arm, so not kinematic leakage). So the WM policy whiffs NOT because it can't see the cube
+(it localizes it to ~1.7 cm) but because it doesn't convert that into action. **The deficit is downstream of
+perception (representation→action), not perception.** Figure: ![probe](probe_object_viz.png)
+
+Consistent with our WM being action-FREE (predictor `forward(S,z)` takes no action — verified): an action-free
+WM learns a strong _spectator_ representation (knows where things are, needed to predict the scene) but not the
+action→outcome map control needs. Good spectator, poor controller.
+
+Next options (fact-driven; "train a fresh action head" is NOT cheap — the LeRobot ACT port already showed that):
+
+- **Action linear-probe** (cheap, no head training): probe features→expert action on demos. If WM encodes
+  position better but action worse than control, that's the direct "good spectator, poor controller" evidence.
+- **OOD eval** (reuses existing models): WM is low-variance; the only untested regime where it might win.
+- Accept the in-dist negative and write up.
+
 ## Divergences prototype -> current LeRobot graft (the confounds)
 
 1. stage-2 aux loss beta\*L_WM DROPPED (current transfer-only). Prototype HAD it — but note prototype's win
