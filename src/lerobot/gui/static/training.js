@@ -680,16 +680,14 @@ function trainingRenderStartForm(prefill) {
 
       <form id="training-start-form" class="training-form" onsubmit="trainingSubmitStart(event); return false;">
         <label class="training-field">
-          <span class="training-field-label">Host</span>
-          <select name="host_id" required>${hostOptions}</select>
+          <span class="training-field-label">Run name</span>
+          <input type="text" name="recipe_name" value="" placeholder="(optional — defaults to <policy>-<dataset_basename>)" />
+          <span class="training-field-hint">Names the trained model. It appears under this name in the run list + Models tab. The output location is managed automatically (under the GUI's runs dir) so the Models tab can find it — it isn't a free path. Leave blank for auto.</span>
         </label>
 
         <label class="training-field">
-          <span class="training-field-label">Dataset</span>
-          <select name="dataset_id" required ${_trainingDatasets.length === 0 ? "disabled" : ""}>
-            ${datasetOptions}
-          </select>
-          <span class="training-field-hint">Datasets are discovered from sources configured in the Data tab.</span>
+          <span class="training-field-label">Host</span>
+          <select name="host_id" required>${hostOptions}</select>
         </label>
 
         <label class="training-field">
@@ -698,6 +696,14 @@ function trainingRenderStartForm(prefill) {
             ${policyOptions}
           </select>
           <span class="training-field-hint">Each policy renders its own hyperparameter form below. Defaults come from upstream lerobot config classes.</span>
+        </label>
+
+        <label class="training-field">
+          <span class="training-field-label">Dataset</span>
+          <select name="dataset_id" required ${_trainingDatasets.length === 0 ? "disabled" : ""}>
+            ${datasetOptions}
+          </select>
+          <span class="training-field-hint">Datasets are discovered from sources configured in the Data tab.</span>
         </label>
 
         <fieldset class="training-fieldset">
@@ -711,12 +717,6 @@ function trainingRenderStartForm(prefill) {
             ${TRAINING_FIELDS.map((f) => fieldHtml(f)).join("")}
           </div>
         </fieldset>
-
-        <label class="training-field">
-          <span class="training-field-label">Run label</span>
-          <input type="text" name="recipe_name" value="" placeholder="(optional — defaults to <policy>-<dataset_basename>)" />
-          <span class="training-field-hint">Free-form label that appears in the run list + Models tab. Leave blank for auto.</span>
-        </label>
 
         <div class="training-form-actions">
           <button type="submit" class="btn-small">Start training</button>
