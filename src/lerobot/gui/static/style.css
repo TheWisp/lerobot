@@ -1547,22 +1547,35 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     gap: 14px;
     max-width: 720px;
 }
+/* Label-left / control-right rows — one field per line, so the form reads
+   as a vertical list (matching the read-only Configuration table) instead
+   of a flat multi-column grid. Label in col 1, control in col 2, help text
+   under the control (col 2, row 2). */
 .training-field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    display: grid;
+    grid-template-columns: minmax(120px, 34%) 1fr;
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 4px;
 }
 .training-field-label {
+    grid-column: 1;
     font-size: 11px;
     color: #888;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-weight: 600;
 }
+.training-field > input,
+.training-field > select,
+.training-field > textarea {
+    grid-column: 2;
+    min-width: 0;
+}
 .training-field-hint {
+    grid-column: 2;
     font-size: 11px;
     color: #666;
-    margin-top: 2px;
 }
 .training-field input,
 .training-field select {
@@ -1585,9 +1598,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     cursor: not-allowed;
 }
 .training-field-row {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
 }
 .training-form-actions {
     display: flex;
@@ -1595,32 +1608,50 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     margin-top: 8px;
 }
 
-/* Training panel — fieldsets + bool field for the C2 form */
-.training-fieldset {
+/* Collapsible section (shrinkable title) — used for the new-run fieldsets
+   AND the run-detail Configuration card, so both read the same way. */
+.training-section {
     border: 1px solid #1a3a6a;
     border-radius: 6px;
-    padding: 12px 14px 14px;
     margin: 0;
 }
-.training-fieldset > legend {
-    padding: 0 6px;
+.training-section > summary {
+    padding: 10px 14px;
     font-size: 11px;
     color: #888;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-weight: 600;
-}
-.training-field-bool {
-    flex-direction: row;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
     align-items: center;
     gap: 8px;
 }
-.training-field-bool input[type="checkbox"] {
+.training-section > summary::-webkit-details-marker {
+    display: none;
+}
+.training-section > summary::before {
+    content: "\25B8"; /* ▸ */
+    font-size: 10px;
+    transition: transform 0.15s ease;
+}
+.training-section[open] > summary::before {
+    transform: rotate(90deg);
+}
+.training-section[open] > summary {
+    border-bottom: 1px solid #1a3a6a;
+}
+.training-section > :not(summary) {
+    margin: 12px 14px;
+}
+
+/* Bool field: checkbox sits in the control column (col 2) next to its label. */
+.training-field-bool > input[type="checkbox"] {
     width: 16px;
     height: 16px;
     margin: 0;
+    justify-self: start;
     accent-color: #4fc3f7;
-}
-.training-field-bool .training-field-label {
-    flex: 1;
 }

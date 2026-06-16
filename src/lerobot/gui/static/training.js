@@ -501,13 +501,15 @@ function trainingConfigCardHtml(r) {
   const imageMarker = args["__image__"] || "(default)";
   return `
     <section class="training-card">
-      <h3 class="training-card-heading">Configuration</h3>
-      <table class="training-args-table">
-        <tr><th>Recipe</th><td class="training-mono">${escapeHtml(recipeMarker)}</td></tr>
-        <tr><th>Image</th><td class="training-mono">${escapeHtml(imageMarker)}</td></tr>
-        ${rows.join("")}
-      </table>
-      <div class="training-field-hint">Click <strong>Run with same config</strong> above to open the start form pre-filled with these values.</div>
+      <details class="training-section" open>
+        <summary class="training-section-summary">Configuration</summary>
+        <table class="training-args-table">
+          <tr><th>Recipe</th><td class="training-mono">${escapeHtml(recipeMarker)}</td></tr>
+          <tr><th>Image</th><td class="training-mono">${escapeHtml(imageMarker)}</td></tr>
+          ${rows.join("")}
+        </table>
+        <div class="training-field-hint">Click <strong>Run with same config</strong> above to open the start form pre-filled with these values.</div>
+      </details>
     </section>
   `;
 }
@@ -706,17 +708,17 @@ function trainingRenderStartForm(prefill) {
           <span class="training-field-hint">Datasets are discovered from sources configured in the Data tab.</span>
         </label>
 
-        <fieldset class="training-fieldset">
-          <legend>Policy hyperparameters</legend>
+        <details class="training-section" open>
+          <summary class="training-section-summary">Policy hyperparameters</summary>
           <div id="training-policy-fields"><!-- populated by trainingRenderPolicyFields --></div>
-        </fieldset>
+        </details>
 
-        <fieldset class="training-fieldset">
-          <legend>Training</legend>
+        <details class="training-section" open>
+          <summary class="training-section-summary">Training</summary>
           <div class="training-field-row">
             ${TRAINING_FIELDS.map((f) => fieldHtml(f)).join("")}
           </div>
-        </fieldset>
+        </details>
 
         <div class="training-form-actions">
           <button type="submit" class="btn-small">Start training</button>
