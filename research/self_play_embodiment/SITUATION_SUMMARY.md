@@ -111,3 +111,28 @@ position is **present and usable** by the (linear-attention) action head.
 3. **Decision fork** after (1)+(2): if the representation is control-hostile **and** there is no OOD win, the action-free + narrow-data configuration is a dead end as built → either write up the negative result, or treat the original mechanism (**action-conditioned objective + coverage-oriented self-play**) as a new, larger bet. If instead the representation is controllable, the issue is in how the action stage uses it, not the representation.
 
 **Deliberately not pursuing:** training an additional action decoder (expensive, low-confidence), or tuning in-distribution data scale (the world model already loses there).
+
+---
+
+# Follow-up 2 (2026-06-16): the representation and the policy are both innocent open-loop
+
+We ran the action-side probes and a falsifiability audit. Three open-loop refutations now point to one mechanism.
+
+## What we found
+
+1. **Action decodability — "control-aliasing" refuted.** A linear probe of the representation for the expert action (controlling for the fact that, in this action space, the action is ~0.98 decodable from proprioception alone — so we isolate the _vision-added_ part). The world-model representation decodes the expert action **better** than control (vision-added R² 0.71 vs 0.63), **including in the contact phase** (0.60 vs 0.48) where aliasing was predicted to bite. The world-model representation is _more_ control-relevant, not less.
+
+2. **Trained-policy open-loop accuracy — "bad routing/decoder" refuted.** Comparing, on held-out expert frames, the best-possible linear use of the representation vs what the _trained_ policy actually outputs: the trained world-model policy is **more accurate open-loop** than control (action MSE 0.0065 vs 0.0102; R² 0.956 vs 0.931; better in both reach and contact). The learned decoder routes the geometry _better_, not worse. (Architectural note: our action decoder cross-attends the full representation, so there was never an input-level bottleneck discarding it.)
+
+3. **The pattern → covariate shift / narrow recovery basin.** The world-model policy is _better_ open-loop (lower expert-imitation error, lower seed variance) yet _worse_ closed-loop. Lower open-loop error + worse closed-loop is the textbook signature of **covariate shift**: the world-model regularizer fits the expert manifold **tighter** but **narrower**, so it imitates beautifully on the expert path and recovers poorly once its own small errors push it off-path. The looser, blurrier control policy recovers more gracefully.
+
+## Probe trustworthiness (falsifiability audit)
+
+To make these (negative) conclusions trustworthy, we audited the probe methodology itself — and it passes: the solver is exactly ridge (matches the closed-form primal); the R² metric is correct; **a label-permutation test makes held-out R² collapse to ~0** (so a probe _can_ fail, and does on shuffled labels — the positive numbers are real signal, not p≫n overfitting); and an episode-split-vs-frame-split check shows no leakage inflation. So the "representation is innocent" result is not a probe artifact.
+
+## Updated plan
+
+The open-loop chain is exhausted (representation good; trained policy good open-loop). The remaining live hypothesis is closed-loop **covariate shift / narrow basin**, testable two ways:
+
+1. **Off-trajectory (recovery-basin) probe** — perturb expert states with action noise and measure how fast each policy's action error grows off-manifold (prediction: world-model steeper). Also a target-free sensitivity version. Open-loop, cheap, decisive for the mechanism.
+2. **Out-of-distribution / closed-loop evaluation** — the regime where any world-model benefit (robustness) would actually appear.
