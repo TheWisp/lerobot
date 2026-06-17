@@ -375,6 +375,84 @@ async function trainingRefreshDetail(runId) {
   }
 }
 
+// Format a metric value compactly: tiny/huge → scientific (1.0e-5), else
+// up to 4 significant decimals trimmed of trailing zeros.
+function trainingFmtMetric(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return "—";
+  if (n !== 0 && (Math.abs(n) < 1e-3 || Math.abs(n) >= 1e5)) return n.toExponential(1);
+  return parseFloat(n.toFixed(4)).toString();
+}
+
+// Seconds → "1h 5m" / "12m 30s" / "45s". Used for ETA + elapsed.
+function trainingFmtDuration(s) {
+  s = Math.max(0, Math.round(Number(s) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+// First Weights & Biases run URL in the log tail, if the run uses wandb.
+function trainingWandbUrl(text) {
+  if (!text) return null;
+  const m = text.match(/https:\/\/wandb\.ai\/[^\s/]+\/[^\s/]+\/runs\/[A-Za-z0-9]+/);
+  return m ? m[0] : null;
+}
+
+// Hand-rolled inline-SVG line chart (no charting dep — our static frontend
+// has no bundler). Plots metric `key` vs step from the series.
+function trainingChartSvg(series, key, label, color) {
+  const pts = series
+    .filter((m) => typeof m[key] === "number" && isFinite(m[key]) && typeof m.step === "number")
+    .map((m) => ({ x: m.step, y: m[key] }));
+  if (pts.length < 2) {
+    return `<div class="training-chart"><div class="training-chart-title">${label}</div><div class="training-empty-hint">collecting…</div></div>`;
+  }
+  const W = 280;
+  const H = 96;
+  const P = 6;
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
+  const xmin = Math.min(...xs);
+  const xmax = Math.max(...xs);
+  const ymin = Math.min(...ys);
+  const ymax = Math.max(...ys);
+  const sx = (x) => (xmax === xmin ? P : P + ((x - xmin) / (xmax - xmin)) * (W - 2 * P));
+  const sy = (y) => (ymax === ymin ? H / 2 : H - P - ((y - ymin) / (ymax - ymin)) * (H - 2 * P));
+  const poly = pts.map((p) => `${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(" ");
+  const cur = pts[pts.length - 1].y;
+  return `
+    <div class="training-chart">
+      <div class="training-chart-title">${label} <span class="training-chart-cur">${trainingFmtMetric(cur)}</span></div>
+      <svg viewBox="0 0 ${W} ${H}" class="training-chart-svg" preserveAspectRatio="none" aria-label="${label} curve">
+        <polyline points="${poly}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <div class="training-chart-axis"><span>${trainingFmtMetric(ymin)}</span><span>step ${xmax}</span><span>${trainingFmtMetric(ymax)}</span></div>
+    </div>`;
+}
+
+// The Metrics card: curated default charts (loss, lr) from the series.
+// grad_norm and other auto-captured keys live in the stat tiles / future
+// metric picker. Shows a friendly placeholder until the first logged step.
+function trainingMetricsCardHtml(series, isActive) {
+  if (!series.length) {
+    return isActive
+      ? '<section class="training-card"><div class="training-empty-hint">Metrics will appear once training logs its first step…</div></section>'
+      : "";
+  }
+  return `
+    <section class="training-card">
+      <h3 class="training-card-heading">Metrics</h3>
+      <div class="training-charts">
+        ${trainingChartSvg(series, "loss", "Loss", "#34d399")}
+        ${trainingChartSvg(series, "lr", "Learning rate", "#fb923c")}
+      </div>
+    </section>`;
+}
+
 function trainingRenderDetailHtml(snap) {
   const r = snap.run;
   const progress = snap.progress || {};
@@ -382,23 +460,31 @@ function trainingRenderDetailHtml(snap) {
   const events = snap.events || [];
   const isActive = !["completed", "failed", "aborted"].includes(r.state);
 
-  // progress.json is only written by the legacy fake-training runner;
-  // real lerobot-train / HVLA flow_matching don't write it (mid-run loss
-  // parsing from stderr is future work — C6). When progress is missing,
-  // fall back to what we DO know: the highest checkpoint step we've
-  // surfaced (cheap, accurate to ±save_freq), and the configured
-  // target step count from the run's args.
+  // Position comes from progress.json (parsed from the tqdm bar by the
+  // orchestrator). The training-signal series (loss/lr/grdn) comes from
+  // metrics.jsonl. progress.total_steps/eta_seconds are the real-run fields;
+  // num_steps/loss are the legacy fake-runner schema — read both so the UI
+  // works during the transition (and degrades to checkpoint-step when no
+  // progress exists at all).
   //
-  // Take the max-by-step, not the last entry: the orchestrator's
-  // checkpoint scanner sorts directories alphabetically, which for HVLA's
-  // ``checkpoint-N/`` naming puts ``checkpoint-10`` before ``checkpoint-5``
-  // and writes the manifest out of step order.
+  // Checkpoint step uses max-by-step, not last entry: the scanner sorts dirs
+  // alphabetically, so HVLA's ``checkpoint-10`` can land before ``checkpoint-5``.
+  const metricsSeries = (snap.metrics || []).filter((m) => typeof m.step === "number");
+  const latest = metricsSeries.length ? metricsSeries[metricsSeries.length - 1] : {};
   const lastCkptStep = checkpoints.length ? Math.max(...checkpoints.map((c) => c.step)) : 0;
-  const step = progress.step ?? lastCkptStep;
-  const total =
-    progress.num_steps ?? r.args?.num_steps ?? r.args?.steps ?? 0;
+  const step = progress.step ?? latest.step ?? lastCkptStep;
+  const total = progress.total_steps ?? progress.num_steps ?? r.args?.num_steps ?? r.args?.steps ?? 0;
   const pct = total > 0 ? Math.min(100, Math.round((step / total) * 100)) : 0;
-  const loss = progress.loss != null ? progress.loss.toFixed(4) : "—";
+  // loss/lr/grad: prefer the parsed metric series; fall back to the fake
+  // runner's progress.loss so legacy/test runs still show a value.
+  const lossVal = latest.loss ?? progress.loss;
+  const loss = lossVal != null ? trainingFmtMetric(lossVal) : "—";
+  const lr = latest.lr != null ? trainingFmtMetric(latest.lr) : "—";
+  const grdn = latest.grdn != null ? trainingFmtMetric(latest.grdn) : "—";
+  const eta = progress.eta_seconds != null ? trainingFmtDuration(progress.eta_seconds) : "—";
+  // Running but no step parsed yet → tqdm hasn't printed its first bar.
+  const warming = isActive && step === 0;
+  const wandbUrl = trainingWandbUrl(snap.stderr_tail);
   // For terminal runs, freeze the elapsed clock at finished_at instead of
   // ticking forever against Date.now().
   const elapsedEnd = r.finished_at ?? Date.now() / 1000;
@@ -443,13 +529,26 @@ function trainingRenderDetailHtml(snap) {
 
       <section class="training-card">
         <div class="training-stats-row">
-          <div class="training-stat"><div class="training-stat-label">Step</div><div class="training-stat-value">${step} / ${total}</div></div>
+          <div class="training-stat"><div class="training-stat-label">Step</div><div class="training-stat-value">${step}${total ? " / " + total : ""}</div></div>
           <div class="training-stat"><div class="training-stat-label">Loss</div><div class="training-stat-value">${loss}</div></div>
-          <div class="training-stat"><div class="training-stat-label">Elapsed</div><div class="training-stat-value">${elapsedSec}s</div></div>
+          <div class="training-stat"><div class="training-stat-label">LR</div><div class="training-stat-value">${lr}</div></div>
+          <div class="training-stat"><div class="training-stat-label">Grad norm</div><div class="training-stat-value">${grdn}</div></div>
+          <div class="training-stat"><div class="training-stat-label">ETA</div><div class="training-stat-value">${eta}</div></div>
+          <div class="training-stat"><div class="training-stat-label">Elapsed</div><div class="training-stat-value">${trainingFmtDuration(elapsedSec)}</div></div>
           <div class="training-stat"><div class="training-stat-label">Checkpoints</div><div class="training-stat-value">${checkpoints.length}</div></div>
         </div>
-        <div class="training-progress-bar"><div class="training-progress-fill" style="width: ${pct}%"></div></div>
+        <div class="training-progress-bar">
+          <div class="training-progress-fill" style="width: ${pct}%"></div>
+          <span class="training-progress-label">${warming ? "warming up…" : pct + "%"}</span>
+        </div>
+        ${
+          wandbUrl
+            ? `<div class="training-field-hint">📊 <a href="${escapeHtml(wandbUrl)}" target="_blank" rel="noopener" style="color:var(--accent,#4fc3f7);">View run in Weights &amp; Biases ↗</a></div>`
+            : ""
+        }
       </section>
+
+      ${trainingMetricsCardHtml(metricsSeries, isActive)}
 
       <section class="training-card">
         <h3 class="training-card-heading">Checkpoints</h3>
