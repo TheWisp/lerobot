@@ -404,13 +404,10 @@ function trainingWandbUrl(text) {
 }
 
 // Curated default metric charts (loss, lr). These reuse the SAME canvas
-// primitive (`_drawSparkline` in run.js) as the RLT + performance panels so
-// the app's charts look and behave consistently. The canvases are drawn
-// post-render by trainingDrawDetailCharts(). grad_norm + other auto-captured
-// keys live in the stat tiles / a future metric picker.
-// TODO (TODO.md): unify all in-app charts into one interactive module
-// (hover/crosshair, zoom, log-scale, smoothing) — none of the current panels
-// have hover yet; lifting the shared primitive uplifts training + RLT + perf.
+// primitive (`drawChart` in charts.js) as the RLT + performance panels so the
+// app's charts look and behave consistently — including hover/crosshair. The
+// canvases are drawn post-render by trainingDrawDetailCharts(). grad_norm +
+// other auto-captured keys live in the stat tiles / a future metric picker.
 const TRAINING_CHART_KEYS = [
   { key: "loss", label: "Loss", color: "#34d399" },
   { key: "lr", label: "Learning rate", color: "#fb923c" },
@@ -435,13 +432,21 @@ function trainingMetricsCardHtml(series, isActive) {
 }
 
 // Draw the metric canvases after the detail HTML is in the DOM (canvas needs
-// layout for its getBoundingClientRect). Uses run.js's shared _drawSparkline.
+// layout for its getBoundingClientRect). Uses the shared drawChart primitive
+// (charts.js); the 'training' sync group gives loss + lr a shared crosshair.
 function trainingDrawDetailCharts(snap) {
-  if (typeof _drawSparkline !== "function") return; // provided by run.js
+  if (typeof drawChart !== "function") return; // provided by charts.js
   const series = (snap.metrics || []).filter((m) => typeof m.step === "number");
+  const latestStep = series.length ? series[series.length - 1].step : 0;
   for (const c of TRAINING_CHART_KEYS) {
     const data = series.map((m) => m[c.key]).filter((v) => typeof v === "number" && isFinite(v));
-    if (data.length) _drawSparkline(`training-chart-${c.key}`, data, c.color);
+    if (data.length) {
+      drawChart(`training-chart-${c.key}`, {
+        series: [{ data, color: c.color, label: c.label }],
+        syncGroup: "training",
+        latestStep,
+      });
+    }
   }
 }
 
