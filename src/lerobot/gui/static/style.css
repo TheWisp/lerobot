@@ -1532,7 +1532,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     float: right;
     color: #e8e8e8;
 }
-.training-chart-svg {
+.training-chart-canvas {
     width: 100%;
     height: 96px;
     display: block;

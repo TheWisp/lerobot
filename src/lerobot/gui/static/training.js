@@ -361,6 +361,7 @@ async function trainingRefreshDetail(runId) {
         prevLog.scrollHeight - prevLog.scrollTop - prevLog.clientHeight < SCROLL_STICKY_PX;
     }
     el.innerHTML = trainingRenderDetailHtml(snap);
+    trainingDrawDetailCharts(snap); // canvas charts need the DOM in place
     el.scrollTop = paneScroll;
     const newLog = el.querySelector(".training-log");
     if (newLog) {
@@ -402,55 +403,46 @@ function trainingWandbUrl(text) {
   return m ? m[0] : null;
 }
 
-// Hand-rolled inline-SVG line chart (no charting dep — our static frontend
-// has no bundler). Plots metric `key` vs step from the series.
-function trainingChartSvg(series, key, label, color) {
-  const pts = series
-    .filter((m) => typeof m[key] === "number" && isFinite(m[key]) && typeof m.step === "number")
-    .map((m) => ({ x: m.step, y: m[key] }));
-  if (pts.length < 2) {
-    return `<div class="training-chart"><div class="training-chart-title">${label}</div><div class="training-empty-hint">collecting…</div></div>`;
-  }
-  const W = 280;
-  const H = 96;
-  const P = 6;
-  const xs = pts.map((p) => p.x);
-  const ys = pts.map((p) => p.y);
-  const xmin = Math.min(...xs);
-  const xmax = Math.max(...xs);
-  const ymin = Math.min(...ys);
-  const ymax = Math.max(...ys);
-  const sx = (x) => (xmax === xmin ? P : P + ((x - xmin) / (xmax - xmin)) * (W - 2 * P));
-  const sy = (y) => (ymax === ymin ? H / 2 : H - P - ((y - ymin) / (ymax - ymin)) * (H - 2 * P));
-  const poly = pts.map((p) => `${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(" ");
-  const cur = pts[pts.length - 1].y;
-  return `
-    <div class="training-chart">
-      <div class="training-chart-title">${label} <span class="training-chart-cur">${trainingFmtMetric(cur)}</span></div>
-      <svg viewBox="0 0 ${W} ${H}" class="training-chart-svg" preserveAspectRatio="none" aria-label="${label} curve">
-        <polyline points="${poly}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
-      </svg>
-      <div class="training-chart-axis"><span>${trainingFmtMetric(ymin)}</span><span>step ${xmax}</span><span>${trainingFmtMetric(ymax)}</span></div>
-    </div>`;
-}
+// Curated default metric charts (loss, lr). These reuse the SAME canvas
+// primitive (`_drawSparkline` in run.js) as the RLT + performance panels so
+// the app's charts look and behave consistently. The canvases are drawn
+// post-render by trainingDrawDetailCharts(). grad_norm + other auto-captured
+// keys live in the stat tiles / a future metric picker.
+// TODO (TODO.md): unify all in-app charts into one interactive module
+// (hover/crosshair, zoom, log-scale, smoothing) — none of the current panels
+// have hover yet; lifting the shared primitive uplifts training + RLT + perf.
+const TRAINING_CHART_KEYS = [
+  { key: "loss", label: "Loss", color: "#34d399" },
+  { key: "lr", label: "Learning rate", color: "#fb923c" },
+];
 
-// The Metrics card: curated default charts (loss, lr) from the series.
-// grad_norm and other auto-captured keys live in the stat tiles / future
-// metric picker. Shows a friendly placeholder until the first logged step.
 function trainingMetricsCardHtml(series, isActive) {
   if (!series.length) {
     return isActive
       ? '<section class="training-card"><div class="training-empty-hint">Metrics will appear once training logs its first step…</div></section>'
       : "";
   }
+  const card = (c) =>
+    `<div class="training-chart">
+       <div class="training-chart-title">${c.label}</div>
+       <canvas id="training-chart-${c.key}" class="training-chart-canvas"></canvas>
+     </div>`;
   return `
     <section class="training-card">
       <h3 class="training-card-heading">Metrics</h3>
-      <div class="training-charts">
-        ${trainingChartSvg(series, "loss", "Loss", "#34d399")}
-        ${trainingChartSvg(series, "lr", "Learning rate", "#fb923c")}
-      </div>
+      <div class="training-charts">${TRAINING_CHART_KEYS.map(card).join("")}</div>
     </section>`;
+}
+
+// Draw the metric canvases after the detail HTML is in the DOM (canvas needs
+// layout for its getBoundingClientRect). Uses run.js's shared _drawSparkline.
+function trainingDrawDetailCharts(snap) {
+  if (typeof _drawSparkline !== "function") return; // provided by run.js
+  const series = (snap.metrics || []).filter((m) => typeof m.step === "number");
+  for (const c of TRAINING_CHART_KEYS) {
+    const data = series.map((m) => m[c.key]).filter((v) => typeof v === "number" && isFinite(v));
+    if (data.length) _drawSparkline(`training-chart-${c.key}`, data, c.color);
+  }
 }
 
 function trainingRenderDetailHtml(snap) {

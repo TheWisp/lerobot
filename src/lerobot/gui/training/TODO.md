@@ -85,7 +85,8 @@ Things that are designed + code-shipped, but not yet seen working in reality. Cr
 
 ## Observability
 
-- **Real progress parsing** — `progress.json` is only written by the legacy fake-runner. Real `lerobot-train` and HVLA `flow_matching` don't write it, so the detail-view Loss field shows `—` for real runs (Step is derived from the latest checkpoint as a fallback). Parse `step=N loss=X` from the stderr tail and write to `progress.json` from the orchestrator side — same poll cycle that picks up checkpoints.
+- ~~**Real progress parsing**~~ — DONE. The orchestrator's poll-path ingest (`log_parse.py` + `Orchestrator._ingest_training_log`) parses the real `lerobot-train` stdout into `progress.json` (position) + `metrics.jsonl` (auto-captured signal series); the dashboard renders tiles + loss/lr charts from it. Position vs metrics are split per DESIGN.md § Polling.
+- **Unify charting into one interactive module** — three places now draw line charts: the training dashboard (`trainingDrawDetailCharts` → `_drawSparkline`), the RLT panels, and the performance/latency panel — all via run.js's `_drawSparkline` / `_drawSparklineMulti` canvas primitives. **None has hover/crosshair, zoom, log-scale, or smoothing.** Lift the shared primitive into one charting module with: hover tooltip (value at step), drag-zoom + reset, optional log-scale (loss/lr), and EMA smoothing — then all three panels gain it at once. This is the "toward professional tooling" step; until then we're at parity with our own panels and deep-link to W&B for richer inspection. Consider whether a tiny vendored lib (uPlot, ~45 KB, canvas, no build) is worth it vs extending the in-house primitive.
 
 ## Next phases
 
