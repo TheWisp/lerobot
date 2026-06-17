@@ -386,46 +386,45 @@ The pull-based design trades GUI-server bandwidth for credential simplicity. At 
 
 ### Polling, logs, and signals
 
-Training launches detached on the host: `tmux` for SSH transport, managed subprocess for subprocess transport. The GUI server never holds an open pipe to training. Polling reads three log surfaces via `TransportClient`, identical across both transports:
+Training launches detached on the host: `tmux` for SSH transport, managed subprocess for subprocess transport. The GUI server never holds an open pipe to training. Polling reads these log surfaces via `TransportClient`, identical across both transports:
 
-- **progress.json** — atomically-rewritten snapshot (loss, step, ETA, GPU util)
-- **events.jsonl** — append-only audit log of state transitions
-- **stderr.log** — byte-offset incremental tail
+- **progress.json** — latest **position** snapshot: `{step, total_steps, eta_seconds, updated_at}`. Overwritten each poll; drives the progress bar, ETA, and the "warming up" pre-first-step state.
+- **metrics.jsonl** — append-only **training-signal** time series: one row per logged step, `{step, ts, <metric bag>}`. Seeds the charts and survives reload.
+- **events.jsonl** — append-only audit log of state transitions.
+- **stderr.log** — byte-offset incremental tail; also the **source** the orchestrator parses into progress + metrics.
 
-The run detail view is the user's window into all three:
+**Progress ≠ metrics (different concerns, maintained similarly).** Position ("how far / how long left" — step, total, ETA) and training signal ("is it learning" — loss, lr, grad_norm, …) have different shapes and cadences, so they live in different files: progress is a latest-wins snapshot refreshed ~1 s from the tqdm bar; metrics is an append-only series at `log_freq` cadence. **Both are produced by parsing the real runner's stdout** — the one signal every backend emits — in the orchestrator's poll path, **not inside the training container** (the image stays vanilla `lerobot-train`). Local/SSH parse `stderr.log`; a future HF-Jobs backend tails `fetch_job_logs` through the same parser. (This replaces the prototype's fake runner, which wrote `progress.json` directly and now lives only in test utilities — see TODO.)
+
+**Metrics: auto-capture, curated display.** The parser pulls _every_ `key:value` numeric field from lerobot's log line into a generic bag (so new / policy-specific metrics are captured with zero code change); `step` routes to progress. The dashboard charts a curated default set (loss, lr, grad_norm) with correct scaling (lr log-scale), and exposes the rest behind a metric picker.
+
+The run detail view is the user's window into all of it:
 
 ```
 ┌─ Model tab — detail ─────────────────────────────────────────────────┐
-│  screenshot-act-pusht           ┌ completed ┐  [ Run with same cfg ] │
-│  lerobot/pusht · this-server · 1c50d1db3                             │
+│  resilience-act-20k             ┌ running ┐  [ Run with same cfg ] [■]│
+│  lerobot/pusht · this-server · f976e065e                            │
 │                                                                      │
 │  ✓ Image: pulled in 10m 54s · 4.68 GB · ghcr.io/.../e6bf147          │
 │                                                                      │
-│  ┌────────┬────────┬─────────┬─────────────┐                         │
-│  │  Step  │  Loss  │ Elapsed │ Checkpoints │                         │
-│  │ 10/10  │   —    │   29s   │      2      │                         │
-│  └────────┴────────┴─────────┴─────────────┘                         │
-│  ████████████████████████████████████████████ 100%                   │
+│  ┌──────────┬───────┬───────┬─────────┬──────────────┐               │
+│  │   Step   │ Loss  │  LR   │ Elapsed │ Checkpoints  │   ETA 12m     │
+│  │ 6.2k/10k │ 0.043 │ 1.0e-5│  4m 12s │      3       │               │
+│  └──────────┴───────┴───────┴─────────┴──────────────┘               │
+│  ███████████████████░░░░░░░░░░░ 62%                                   │
 │                                                                      │
-│  CHECKPOINTS                                                         │
-│   step  5   output/checkpoints/000005/pretrained_model/...   cba5…   │
-│   step 10   output/checkpoints/000010/pretrained_model/...   033a…   │
+│  ┌ Loss ──────────────┐   ┌ Learning rate ─────┐   (curated charts;  │
+│  │ ╲╲▁▂╲▁▁▁__________  │   │ ▔▔▔╲▁▁▁▁▁▁▁▁▁▁▁▁▁  │    + metric picker) │
+│  └────────────────────┘   └────────────────────┘                     │
 │                                                                      │
-│  LOG TAIL                                                            │
-│   INFO: Starting training from step 0 to 10...                       │
-│   INFO: step 10/10 | loss: 0.34 | lr: 1e-5                           │
-│                                                                      │
-│  CONFIGURATION                                                       │
-│   Recipe: lerobot-train       Image: ghcr.io/.../e6bf147             │
-│   dataset.repo_id: lerobot/pusht                                     │
-│   policy.type: act     policy.chunk_size: 100   policy.use_vae: true │
-│   ...                                                                │
+│  ▸ Checkpoints   ▸ Log tail   ▸ Configuration   (collapsible)        │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-The image banner mirrors the `image_*` events from `events.jsonl` — cache hit / pulling for N seconds / pulled in N seconds + size / pull failed with error. The Configuration card replays the run's args dict so "what was this trained with?" is a glance, not an archaeology dig through stderr.
+The image banner mirrors the `image_*` events from `events.jsonl`. The Configuration card replays the run's args dict so "what was this trained with?" is a glance, not an archaeology dig through stderr.
 
 Liveness comes from two independent signals: a process probe (`pgrep` over SSH; `subprocess.poll()` for subprocess) and progress freshness (the `progress.json` timestamp must advance within a rolling window). A run is unhealthy when the process is dead OR the progress timestamp is stale.
+
+**Live updates.** v1 drives the dashboard (tiles + charts) off the existing ~3 s poll — charts append from each snapshot and seed from `metrics.jsonl` on open. A WebSocket push is a later optimization, not a v1 requirement (noted in TODO).
 
 Why not Wandb-style HTTP heartbeats from the training script? Those require the pod to reach the GUI server — often blocked by NAT/firewall. Our setup is the inverse (GUI server reaches the pod), so we use the channel we already have.
 
@@ -540,6 +539,6 @@ Same pattern LeRobot already uses for hardware (`lerobot[aloha]`, `lerobot[feete
 - **Auto-discovery of the user's machine** as a candidate Persistent host (depends on the helper).
 - **Multi-GPU support** — `gpu_count` schema field already present; needs the slot abstraction.
 - **Auto-push on completion** — Models tab gets a "publish on completion" toggle per run/recipe.
-- **Native experiment-tracking surfaces** — v1 relies on the recipe's own W&B/TensorBoard; v2 could surface loss curves natively or deep-link.
+- **Native experiment-tracking surfaces** — v1 surfaces native progress + metric curves in the run detail (see § Polling, logs, and signals) parsed from the real runner's stdout, plus a W&B deep-link when a run uses it. Deeper integration (TensorBoard embedding, multi-run compare) is a later pass.
 - **Additional Models-tab push destinations** — S3, GCS, vendor object stores, NAS over rsync.
 - **GUI-server disk pre-flight + adaptive retention** (see Robustness).
