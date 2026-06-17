@@ -128,3 +128,68 @@ def test_metric_and_progress_are_disjoint_on_their_lines():
     metric = "step:1000 loss:0.04 lr:1e-5"
     assert parse_progress(tqdm) is not None and parse_metric_sample(tqdm) is None
     assert parse_metric_sample(metric) is not None and parse_progress(metric) is None
+
+
+# ── Future-proofing: parse lerobot's OWN MetricsTracker output ───────────────
+#
+# These tests drive the *upstream* formatter (MetricsTracker / AverageMeter /
+# format_big_number) rather than a hand-typed string. If lerobot renames a
+# metric (e.g. ``grdn``), changes a format spec, or swaps the magnitude
+# suffixes, these break — which is exactly the alert we want, because the
+# parser would otherwise silently start dropping fields on a `lerobot` bump.
+
+
+def _train_tracker(initial_step: int):
+    """Build a MetricsTracker exactly as ``lerobot_train.py`` does."""
+    from lerobot.utils.logging_utils import AverageMeter, MetricsTracker
+
+    metrics = {
+        "loss": AverageMeter("loss", ":.3f"),
+        "grad_norm": AverageMeter("grdn", ":.3f"),
+        "lr": AverageMeter("lr", ":0.1e"),
+        "update_s": AverageMeter("updt_s", ":.3f"),
+        "dataloading_s": AverageMeter("data_s", ":.3f"),
+    }
+    # batch_size, num_frames, num_episodes — arbitrary but realistic.
+    return MetricsTracker(8, 50_000, 100, metrics, initial_step=initial_step)
+
+
+def test_parses_real_metricstracker_output():
+    pytest.importorskip("lerobot.utils.logging_utils")
+    # Values chosen to be exact at the trackers' format specs (loss/grdn/_s
+    # are ':.3f', lr is ':0.1e') so the round-trip is lossless — we're testing
+    # the parser, not float-formatting rounding.
+    t = _train_tracker(initial_step=1000)
+    t.loss = 0.034
+    t.grad_norm = 1.234
+    t.lr = 1.0e-5
+    t.update_s = 0.123
+    t.dataloading_s = 0.002
+
+    line = str(t)  # the exact string lerobot logs
+    bag = parse_metric_sample(line)
+    assert bag is not None, f"parser failed on real lerobot line: {line!r}"
+    # Display names are the AverageMeter names, not the dict keys.
+    assert bag["loss"] == pytest.approx(0.034)
+    assert bag["grdn"] == pytest.approx(1.234)
+    assert bag["lr"] == pytest.approx(1.0e-5)
+    assert bag["updt_s"] == pytest.approx(0.123)
+    assert bag["data_s"] == pytest.approx(0.002)
+
+
+def test_parses_real_output_with_big_number_step():
+    # Drive step into the K/M range so the parser is exercised against the
+    # actual format_big_number output (not a hand-written "10K").
+    pytest.importorskip("lerobot.utils.logging_utils")
+    from lerobot.utils.utils import format_big_number
+
+    t = _train_tracker(initial_step=12_500)
+    t.loss = 0.5
+    line = str(t)
+    bag = parse_metric_sample(line)
+    # step is rendered via format_big_number; whatever suffix it uses, the
+    # parser must recover the real magnitude (±1 unit of rounding).
+    assert bag["step"] == pytest.approx(12_500, rel=0.05)
+    # Sanity: confirm the line really did use a magnitude suffix (else this
+    # test isn't proving anything about suffix handling).
+    assert any(c in format_big_number(12_500) for c in "KMBTQ")
