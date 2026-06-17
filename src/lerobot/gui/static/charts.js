@@ -49,6 +49,15 @@ function _chartFmtAgo(ts) {
   return Math.round(ago / 3600) + "h ago";
 }
 
+// Value label: scientific for very small/large magnitudes (a learning rate of
+// 1e-5 must not render as "0.0000"), fixed otherwise.
+function _chartFmtValue(v) {
+  if (v === 0) return "0";
+  const a = Math.abs(v);
+  if (a < 1e-3 || a >= 1e5) return v.toExponential(1);
+  return a < 1 ? v.toFixed(4) : v.toFixed(3);
+}
+
 // Longest series across all charts in a group → shared X axis. Charts are
 // right-aligned: a short series occupies the right portion of the canvas.
 function _chartGroupN(group) {
@@ -81,10 +90,15 @@ function drawChart(canvasId, opts) {
   canvas.height = rect.height * dpr;
   canvas.getContext("2d").scale(dpr, dpr);
 
+  // logY keeps a wide-range series (a loss going 40 → 0.1 would otherwise let
+  // the warm-up spike flatten the whole curve) readable. Range is in log space;
+  // values still display linearly.
+  const logY = !!opts.logY;
+  const proj = (v) => (logY ? Math.log10(Math.max(v, 1e-9)) : v);
   let allVals = [];
   for (const s of series) allVals = allVals.concat(s.data);
-  const min = opts.fixedMin !== undefined ? opts.fixedMin : Math.min(...allVals);
-  const max = opts.fixedMax !== undefined ? opts.fixedMax : Math.max(...allVals);
+  const min = opts.fixedMin !== undefined ? opts.fixedMin : Math.min(...allVals.map(proj));
+  const max = opts.fixedMax !== undefined ? opts.fixedMax : Math.max(...allVals.map(proj));
 
   group.charts[canvasId] = {
     canvas,
@@ -92,6 +106,7 @@ function drawChart(canvasId, opts) {
     series,
     timestamps: opts.timestamps || [],
     percentage: !!opts.percentage,
+    logY,
     min,
     max,
     pad: 4,
@@ -145,7 +160,7 @@ function _renderChart(spec) {
     ctx.stroke();
   }
   // Zero line when the range straddles zero.
-  if (min < 0 && max > 0) {
+  if (!spec.logY && min < 0 && max > 0) {
     const zeroY = pad + (H - 2 * pad) * (1 - (0 - min) / range);
     ctx.strokeStyle = "#333";
     ctx.lineWidth = 0.8;
@@ -155,7 +170,8 @@ function _renderChart(spec) {
     ctx.stroke();
   }
 
-  const toY = (v) => pad + (H - 2 * pad) * (1 - (v - min) / range);
+  const projY = (v) => (spec.logY ? Math.log10(Math.max(v, 1e-9)) : v);
+  const toY = (v) => pad + (H - 2 * pad) * (1 - (projY(v) - min) / range);
   const toXGlobal = (i) => (i / Math.max(N - 1, 1)) * W;
   const globalIdx = (s, localIdx) => N - s.data.length + localIdx;
 
@@ -219,7 +235,7 @@ function _renderChart(spec) {
     const v = s.data[localIdx];
     const pct = s.percentage != null ? s.percentage : spec.percentage;
     ctx.fillStyle = s.color;
-    ctx.fillText(pct ? (v * 100).toFixed(0) + "%" : v.toFixed(4), W - 4, 12 + i * 12);
+    ctx.fillText(pct ? (v * 100).toFixed(0) + "%" : _chartFmtValue(v), W - 4, 12 + i * 12);
   }
 
   // Step / time label (bottom-left) — this chart's own timestamps.

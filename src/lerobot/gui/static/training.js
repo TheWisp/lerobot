@@ -409,7 +409,7 @@ function trainingWandbUrl(text) {
 // canvases are drawn post-render by trainingDrawDetailCharts(). grad_norm +
 // other auto-captured keys live in the stat tiles / a future metric picker.
 const TRAINING_CHART_KEYS = [
-  { key: "loss", label: "Loss", color: "#34d399" },
+  { key: "loss", label: "Loss", color: "#34d399", logY: true }, // spans orders of magnitude
   { key: "lr", label: "Learning rate", color: "#fb923c" },
 ];
 
@@ -445,6 +445,7 @@ function trainingDrawDetailCharts(snap) {
         series: [{ data, color: c.color, label: c.label }],
         syncGroup: "training",
         latestStep,
+        logY: !!c.logY,
       });
     }
   }
