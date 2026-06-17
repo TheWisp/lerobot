@@ -55,11 +55,9 @@ the user override.
   footgun (it became the 403'd Hub namespace once the leak above fired).
 
 ``Run.args["__recipe__"] == "__fake__"`` selects a test-only fake-training
-worker instead of docker, so the orchestrator's unit tests stay fast (no
-docker dependency). The fake worker itself is a TEST FIXTURE
-(``tests/gui/training/fake_runner.py``) — it is NOT shipped here. The test
-harness injects its path via :data:`FAKE_RUNNER_PATH`; production leaves that
-unset, so the fake recipe is unusable outside the tests (by design).
+worker (``tests/gui/training/fake_runner.py``, not shipped here) so the
+orchestrator's unit tests run without docker. Its path is injected via
+:data:`FAKE_RUNNER_PATH`, unset in production.
 """
 
 from __future__ import annotations
@@ -81,11 +79,9 @@ DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto
 # Used by orchestrator unit tests so they don't depend on docker.
 FAKE_RECIPE_MARKER = "__fake__"
 
-# Absolute path to the fake-training worker. The worker is a TEST FIXTURE
-# (``tests/gui/training/fake_runner.py``), not shipped in ``src``; the test
-# harness sets this (autouse fixture in ``tests/gui/conftest.py``). Stays None
-# in production, so requesting the fake recipe there fails loudly rather than
-# silently doing nothing — the fake path is for tests only.
+# Absolute path to the fake-training worker (a test fixture in
+# ``tests/gui/``, set by its autouse fixture). None in production, so the
+# fake recipe is test-only and fails loudly elsewhere.
 FAKE_RUNNER_PATH: str | None = None
 
 # Marker that selects the HVLA Flow Matching S1 training script instead of
@@ -229,12 +225,9 @@ def docker_available() -> bool:
 
 def _build_fake_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[str, str]]:
     assert FAKE_RUNNER_PATH is not None, (
-        "the fake recipe (__recipe__=__fake__) is test-only — set "
-        "recipes.FAKE_RUNNER_PATH to the test fake_runner.py "
-        "(see tests/gui/conftest.py). It is intentionally unset in production."
+        "the fake recipe is test-only; set recipes.FAKE_RUNNER_PATH (tests/gui/conftest.py does this)"
     )
-    # Invoke by absolute file path, not `python -m`: the worker lives under
-    # tests/, which isn't an importable package from the subprocess spawn cwd.
+    # By file path, not `python -m`: tests/ isn't importable from the spawn cwd.
     cmd = [sys.executable, FAKE_RUNNER_PATH, "--run-dir", str(paths.root)]
     for k, v in run.args.items():
         if k.startswith("__"):

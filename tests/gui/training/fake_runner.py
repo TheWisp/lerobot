@@ -7,28 +7,12 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 """Fake training worker — a TEST FIXTURE, not shipped production code.
 
-The real training path is ``docker run … lerobot-train …`` (and the HVLA
-flow_matching variant), composed by ``recipes.build_lerobot_train_command``.
-This stand-in lets the orchestrator's unit tests exercise the full
-start/poll/stop/checkpoint path on CPU, with no docker, GPU, or dataset.
-
-It writes the same structured files a real worker writes (DESIGN.md
-§ Transport, log surfaces):
-
-- ``progress.json`` — atomically rewritten on each step
-- ``events.jsonl`` — append-only state transitions
-- ``checkpoints.jsonl`` — manifest, one line per checkpoint
-- ``stderr.log`` — implicit (whatever this process writes to stderr/stdout)
-
-It sleeps, writes a plausible decaying-loss curve, and periodically writes
-placeholder checkpoint files.
-
-Invocation: the fake recipe (``__recipe__=__fake__``) builds a
-``python <this file> --run-dir … --num-steps … --save-every … --step-seconds …``
-argv. It runs by absolute file path (not ``-m``) because ``tests`` isn't an
-importable package from the worker's spawn cwd; the test harness points
-``recipes.FAKE_RUNNER_PATH`` at this file via the autouse fixture in
-``tests/gui/conftest.py``. The CLI is minimal on purpose.
+Lets the orchestrator's unit tests exercise the full start/poll/stop/checkpoint
+path on CPU (no docker, GPU, or dataset). It sleeps, writes a decaying-loss
+curve, and periodically writes placeholder checkpoints — i.e. the same
+structured files a real worker writes (progress.json, events.jsonl,
+checkpoints.jsonl, stderr). Invoked by the ``__fake__`` recipe via
+``recipes.FAKE_RUNNER_PATH``; see tests/gui/conftest.py.
 """
 
 from __future__ import annotations

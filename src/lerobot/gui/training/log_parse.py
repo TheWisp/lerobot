@@ -38,21 +38,11 @@ from dataclasses import dataclass
 # Groups: current step, total steps, ETA (the time after '<').
 _TQDM_RE = re.compile(r"Training:\s*\d+%[^|]*\|[^|]*\|\s*(\d+)\s*/\s*(\d+)\s*\[(?:[\d:]+)<([\d:?]+)")
 
-# A numeric ``key:value`` token from the metric line. Value is an int/float,
-# optional sign, optional scientific notation, optional magnitude suffix.
-# The suffix set matches lerobot's ``format_big_number`` exactly — K/M/B/T/Q
-# (note: B for billion, not G) — which it applies to step/smpl/ep, e.g.
-# ``step:10K``, ``smpl:1.5M``. Non-numeric values are skipped so timestamps /
-# level words don't leak into the bag.
-#
-# Real lerobot output glues the tqdm bar and the logging prefix onto the same
-# physical line (tqdm holds the line open with ``\r``; ``logging`` appends),
-# e.g. ``Training: 39%|…| 1156/3000 […, 74step/s]INFO … lerobot_train.py:611
-# step:1K … loss:1.6 …``. Two guards keep that noise out of the bag:
-#   * ``(?<!\.)`` — drop ``file.py:611`` (the ``py:611`` token is preceded by
-#     a dot); a real metric key is preceded by whitespace or line start.
-#   * ``(?=\s|$)`` — the value must end the token; rejects ``Training: 39%``
-#     (the ``39`` is followed by ``%``) and the tqdm ``00:17<00:24`` times.
+# A numeric ``key:value`` token. Suffix set matches lerobot's
+# ``format_big_number`` (K/M/B/T/Q — B is billion, e.g. ``step:10K``). The two
+# guards reject noise from the logging prefix + tqdm bar that real output glues
+# onto the metric line: ``(?<!\.)`` drops ``file.py:611``; ``(?=\s|$)`` drops
+# ``Training: 39%`` and tqdm ``00:17`` times.
 _KV_RE = re.compile(
     r"(?<!\.)\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?\d[\d,]*\.?\d*(?:[eE][+-]?\d+)?)([KMBTQ])?(?=\s|$)"
 )
