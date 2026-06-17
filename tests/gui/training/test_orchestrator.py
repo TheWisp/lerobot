@@ -7,9 +7,10 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 """End-to-end orchestrator tests using the real subprocess training runner.
 
-These tests actually invoke `python -m lerobot.gui.training.runner` (the
-fake-training stub) and verify the orchestrator drives it through the full
-state machine, reads its outputs, and reconciles state.
+These tests actually invoke the fake-training worker
+(``tests/gui/training/fake_runner.py``, wired in via the autouse fixture in
+``tests/gui/conftest.py``) and verify the orchestrator drives it through the
+full state machine, reads its outputs, and reconciles state.
 """
 
 from __future__ import annotations
@@ -779,11 +780,8 @@ def test_extract_image_from_docker_argv_typical_recipe() -> None:
 
 
 def test_extract_image_from_docker_argv_non_docker_returns_none() -> None:
-    # Fake recipe argv — python -m, no docker
-    assert (
-        _extract_image_from_docker_argv(["python", "-m", "lerobot.gui.training.runner", "--run-dir", "/x"])
-        is None
-    )
+    # Fake recipe argv — python <script>, no docker
+    assert _extract_image_from_docker_argv(["python", "/path/to/fake_runner.py", "--run-dir", "/x"]) is None
     # Empty / too-short
     assert _extract_image_from_docker_argv([]) is None
     assert _extract_image_from_docker_argv(["docker"]) is None

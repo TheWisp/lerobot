@@ -54,9 +54,12 @@ the user override.
   fine and the synthetic ``local/<run_id>`` we used to inject was a
   footgun (it became the 403'd Hub namespace once the leak above fired).
 
-For backwards-compat, ``Run.args["__recipe__"] == "__fake__"`` returns the
-old python-only fake-training-runner command. Used by the orchestrator's
-existing unit tests to keep them fast (no docker dependency).
+``Run.args["__recipe__"] == "__fake__"`` selects a test-only fake-training
+worker instead of docker, so the orchestrator's unit tests stay fast (no
+docker dependency). The fake worker itself is a TEST FIXTURE
+(``tests/gui/training/fake_runner.py``) — it is NOT shipped here. The test
+harness injects its path via :data:`FAKE_RUNNER_PATH`; production leaves that
+unset, so the fake recipe is unusable outside the tests (by design).
 """
 
 from __future__ import annotations
@@ -77,6 +80,13 @@ DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto
 # Marker that selects the fake-training runner instead of real lerobot-train.
 # Used by orchestrator unit tests so they don't depend on docker.
 FAKE_RECIPE_MARKER = "__fake__"
+
+# Absolute path to the fake-training worker. The worker is a TEST FIXTURE
+# (``tests/gui/training/fake_runner.py``), not shipped in ``src``; the test
+# harness sets this (autouse fixture in ``tests/gui/conftest.py``). Stays None
+# in production, so requesting the fake recipe there fails loudly rather than
+# silently doing nothing — the fake path is for tests only.
+FAKE_RUNNER_PATH: str | None = None
 
 # Marker that selects the HVLA Flow Matching S1 training script instead of
 # lerobot-train. HVLA isn't registered with lerobot-train's draccus policy
@@ -193,8 +203,9 @@ def build_lerobot_train_command(run: Run, paths: RunPaths) -> tuple[list[str], d
     -v HF:HF -v paths.root:/runs IMAGE lerobot-train --key=value ...`` with
     all the forced flags above.
 
-    For the fake recipe (``__recipe__=__fake__``): returns the legacy
-    ``python -m lerobot.gui.training.runner`` argv.
+    For the fake recipe (``__recipe__=__fake__``, test-only): returns a
+    ``python <FAKE_RUNNER_PATH> --run-dir … …`` argv. Requires the test
+    harness to have set :data:`FAKE_RUNNER_PATH` (asserts otherwise).
 
     Pre: ``paths.root`` exists (created by RunPaths.ensure_exists()).
     Post: returned argv is ready for ``subprocess.Popen``; env dict should
@@ -217,7 +228,14 @@ def docker_available() -> bool:
 
 
 def _build_fake_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[str, str]]:
-    cmd = [sys.executable, "-m", "lerobot.gui.training.runner", "--run-dir", str(paths.root)]
+    assert FAKE_RUNNER_PATH is not None, (
+        "the fake recipe (__recipe__=__fake__) is test-only — set "
+        "recipes.FAKE_RUNNER_PATH to the test fake_runner.py "
+        "(see tests/gui/conftest.py). It is intentionally unset in production."
+    )
+    # Invoke by absolute file path, not `python -m`: the worker lives under
+    # tests/, which isn't an importable package from the subprocess spawn cwd.
+    cmd = [sys.executable, FAKE_RUNNER_PATH, "--run-dir", str(paths.root)]
     for k, v in run.args.items():
         if k.startswith("__"):
             continue  # skip meta markers

@@ -150,14 +150,10 @@ class Orchestrator:
         host_registry: HostRegistry,
         run_registry: RunRegistry,
         *,
-        runner_module: str = "lerobot.gui.training.runner",
         make_client_fn: Callable[[Any], TransportClient] | None = None,
     ) -> None:
         self._hosts = host_registry
         self._runs = run_registry
-        # Module name (not file path) so we invoke via `python -m`. Tests can
-        # substitute a stub runner module without monkey-patching subprocess.
-        self._runner_module = runner_module
         # All host-state ops (file reads, dir listings, image docker calls,
         # checkpoint sha256s) go through the resolved TransportClient. Tests
         # inject a fake-transport factory; production uses :func:`make_client`
@@ -588,9 +584,9 @@ class Orchestrator:
         """Compose the worker command via the recipe builder.
 
         Returns the full argv: for real training, that's the
-        ``docker run … training-image lerobot-train …`` argv; for the fake
-        recipe (``__recipe__=__fake__``), the legacy
-        ``python -m lerobot.gui.training.runner …`` argv.
+        ``docker run … training-image lerobot-train …`` argv; for the
+        test-only fake recipe (``__recipe__=__fake__``), a
+        ``python <test fake_runner.py> …`` argv.
         """
         cmd, _ = build_lerobot_train_command(run, paths)
         return cmd
@@ -1160,7 +1156,7 @@ def _extract_image_from_docker_argv(cmd: list[str]) -> str | None:
     """Pick the image tag out of a ``docker run ...`` argv.
 
     Returns ``None`` if ``cmd`` isn't a docker invocation (e.g., the fake
-    recipe's ``python -m ...``). Recognising the docker recipe shape is
+    recipe's ``python <script> ...``). Recognising the docker recipe shape is
     cheap; full POSIX-style flag parsing would over-fit a structure we
     control.
 

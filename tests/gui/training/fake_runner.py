@@ -5,32 +5,30 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
-"""Training worker script — invoked by the orchestrator as a subprocess.
+"""Fake training worker — a TEST FIXTURE, not shipped production code.
 
-This is the process that runs on the training host. It writes the four
-structured files the orchestrator polls (DESIGN.md § Transport, log surfaces):
+The real training path is ``docker run … lerobot-train …`` (and the HVLA
+flow_matching variant), composed by ``recipes.build_lerobot_train_command``.
+This stand-in lets the orchestrator's unit tests exercise the full
+start/poll/stop/checkpoint path on CPU, with no docker, GPU, or dataset.
+
+It writes the same structured files a real worker writes (DESIGN.md
+§ Transport, log surfaces):
 
 - ``progress.json`` — atomically rewritten on each step
 - ``events.jsonl`` — append-only state transitions
 - ``checkpoints.jsonl`` — manifest, one line per checkpoint
 - ``stderr.log`` — implicit (whatever this process writes to stderr/stdout)
 
-For the prototype, this is a "fake training" runner — it sleeps, writes
-plausible progress, periodically writes fake checkpoint files. Lets us
-exercise the full orchestration path without a real GPU + dataset.
+It sleeps, writes a plausible decaying-loss curve, and periodically writes
+placeholder checkpoint files.
 
-P5 replaces this with a real ``lerobot-train`` wrapper that registers a
-training-step callback to write progress + manifest.
-
-Invocation (orchestrator does this):
-
-    python -m lerobot.gui.training.runner \\
-        --run-dir <path>             \\
-        --num-steps 200              \\
-        --save-every 50              \\
-        --step-seconds 0.1
-
-The CLI is minimal on purpose; orchestrator constructs it from a Run's args.
+Invocation: the fake recipe (``__recipe__=__fake__``) builds a
+``python <this file> --run-dir … --num-steps … --save-every … --step-seconds …``
+argv. It runs by absolute file path (not ``-m``) because ``tests`` isn't an
+importable package from the worker's spawn cwd; the test harness points
+``recipes.FAKE_RUNNER_PATH`` at this file via the autouse fixture in
+``tests/gui/conftest.py``. The CLI is minimal on purpose.
 """
 
 from __future__ import annotations

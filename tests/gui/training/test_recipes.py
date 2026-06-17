@@ -74,8 +74,11 @@ def test_fake_recipe_emits_python_runner_argv(tmp_path: Path) -> None:
     paths.ensure_exists()
     run = _make_run({"__recipe__": FAKE_RECIPE_MARKER, "num_steps": 5, "save_every": 2})
     cmd, env = build_lerobot_train_command(run, paths)
-    # Skips meta marker; emits the rest as kebab-cased --flag value
-    assert cmd[1:4] == ["-m", "lerobot.gui.training.runner", "--run-dir"]
+    # Invokes the test fake worker by absolute file path (the autouse fixture
+    # in tests/gui/conftest.py sets recipes.FAKE_RUNNER_PATH); skips the meta
+    # marker; emits the rest as kebab-cased --flag value.
+    assert cmd[1].endswith("fake_runner.py")
+    assert cmd[2] == "--run-dir"
     assert "--num-steps" in cmd
     assert "5" in cmd
     assert "--save-every" in cmd
