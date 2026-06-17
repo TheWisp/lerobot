@@ -2821,7 +2821,7 @@ function _renderLatencyCard(parent, key, title, p50, p95, budget, sparkData, too
         const canvas = card.querySelector('canvas');
         canvas.id = `latency-spark-${key}`;
         // Reuse the same sparkline primitive RLT uses; auto-scale (no fixed range).
-        _drawSparkline(canvas.id, sparkData, '#4fc3f7');
+        drawChart(canvas.id, {series: [{data: sparkData, color: '#4fc3f7'}]});
     }
 }
 
@@ -2986,41 +2986,44 @@ function _updateRLTDashboard(data) {
     const nMax = parseInt(document.getElementById('rlt-stat-history')?.value) || 1000;
     const clip = arr => (arr && arr.length > nMax) ? arr.slice(-nMax) : (arr || []);
 
-    // Success rate (episode-axis, sparkline; not part of the synced-chart group)
+    // Success rate (episode-axis; standalone — not part of the synced group)
     if (series.autonomous_rate_rolling && series.autonomous_rate_rolling.length > 0) {
-        _drawSparkline('rlt-chart-success', series.autonomous_rate_rolling, '#4fc3f7', 0, 1, true);
+        drawChart('rlt-chart-success', {
+            series: [{data: series.autonomous_rate_rolling, color: '#4fc3f7'}],
+            fixedMin: 0, fixedMax: 1, percentage: true,
+        });
     }
 
-    _syncedLatestStep = data.total_updates || 0;
+    const rltStep = data.total_updates || 0;
 
     // Per-grad-update synced charts (Q, critic loss, actor components, update rate).
     // All share the grad_updates timestamps.
     const gradTs = clip(grad.timestamps);
     if (grad.q_values_mean && grad.q_values_mean.length > 0) {
-        _registerSyncedChart('rlt-chart-qvalues', [
+        drawChart('rlt-chart-qvalues', {syncGroup: 'rlt', latestStep: rltStep, timestamps: gradTs, series: [
             {data: clip(grad.q_values_min), color: '#2ecc71', label: 'min',
              bandPair: 'min', bandColor: '#2ecc71', hideLine: true},
             {data: clip(grad.q_values_max), color: '#2ecc71', label: 'max',
              bandPair: 'max', hideLine: true},
             {data: clip(grad.q_values_mean), color: '#2ecc71', label: 'mean'},
-        ], gradTs);
+        ]});
     }
     if (grad.critic_losses && grad.critic_losses.length > 0) {
-        _registerSyncedChart('rlt-chart-critic', [
+        drawChart('rlt-chart-critic', {syncGroup: 'rlt', latestStep: rltStep, timestamps: gradTs, series: [
             {data: clip(grad.critic_losses), color: '#f39c12', label: 'critic'},
-        ], gradTs);
+        ]});
     }
     if ((grad.actor_q_terms && grad.actor_q_terms.length > 0) ||
         (grad.actor_bc_terms && grad.actor_bc_terms.length > 0)) {
-        _registerSyncedChart('rlt-chart-actor-components', [
+        drawChart('rlt-chart-actor-components', {syncGroup: 'rlt', latestStep: rltStep, timestamps: gradTs, series: [
             {data: clip(grad.actor_q_terms), color: '#e06c75', label: 'q'},
             {data: clip(grad.actor_bc_terms), color: '#4fc3f7', label: 'bc'},
-        ], gradTs);
+        ]});
     }
     if (grad.update_rates && grad.update_rates.length > 0) {
-        _registerSyncedChart('rlt-chart-update-rate', [
+        drawChart('rlt-chart-update-rate', {syncGroup: 'rlt', latestStep: rltStep, timestamps: gradTs, series: [
             {data: clip(grad.update_rates), color: '#bd93f9', label: 'rate'},
-        ], gradTs);
+        ]});
     }
 
     // Per-inference chart (actor delta). Its own timestamps — these
@@ -3028,9 +3031,9 @@ function _updateRLTDashboard(data) {
     // query interval, while grad_updates fires only when the buffer
     // has reached the training threshold.
     if (inf.deltas && inf.deltas.length > 0) {
-        _registerSyncedChart('rlt-chart-delta', [
+        drawChart('rlt-chart-delta', {syncGroup: 'rlt', latestStep: rltStep, timestamps: clip(inf.timestamps), series: [
             {data: clip(inf.deltas), color: '#e5c07b', label: 'delta'},
-        ], clip(inf.timestamps));
+        ]});
     }
 }
 
@@ -3218,370 +3221,4 @@ function _sendRLTConfig() {
             });
         } catch (e) { /* ignore */ }
     }, 300);
-}
-
-// Registry of per-step synced charts. When the cursor hovers over any
-// chart, a vertical crosshair appears on all (right-aligned by index),
-// but each chart's hover-time label uses that chart's OWN timestamps —
-// charts can be on different time axes (per-inference vs per-grad-update)
-// and showing one chart's wall-clock time on another would be misleading.
-// Each entry: { canvas, series: [...], timestamps: [...], min, max, pad, W, H }
-const _syncedCharts = {};
-let _syncedLatestStep = 0;   // global step count of the rightmost (newest) data point
-let _hoverIndex = -1;        // -1 = no hover, else index into the chart's longest series
-
-function _fmtTime(ts) {
-    if (!ts) return '';
-    const d = new Date(ts * 1000);
-    return d.toLocaleTimeString();
-}
-
-function _fmtAgo(ts) {
-    if (!ts) return '';
-    const now = Date.now() / 1000;
-    const ago = Math.max(0, now - ts);
-    if (ago < 60) return Math.round(ago) + 's ago';
-    if (ago < 3600) return Math.round(ago / 60) + 'm ago';
-    return Math.round(ago / 3600) + 'h ago';
-}
-
-// Returns the max series length across all synced charts — shared X axis
-function _syncedGlobalN() {
-    let maxN = 1;
-    for (const c of Object.values(_syncedCharts)) {
-        for (const s of c.series) {
-            if (s.data && s.data.length > maxN) maxN = s.data.length;
-        }
-        if (c.timestamps && c.timestamps.length > maxN) maxN = c.timestamps.length;
-    }
-    return maxN;
-}
-
-function _renderSyncedChart(id) {
-    const c = _syncedCharts[id];
-    if (!c) return;
-    const ctx = c.canvas.getContext('2d');
-    const {W, H, pad, min, max, series} = c;
-    const range = (max - min) || 1;
-
-    ctx.clearRect(0, 0, W, H);
-
-    // Grid
-    ctx.strokeStyle = '#1a1a3e'; ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 4; i++) {
-        const y = pad + (H - 2 * pad) * (1 - i / 4);
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    }
-    // Zero line if range crosses zero
-    if (min < 0 && max > 0) {
-        const zeroY = pad + (H - 2 * pad) * (1 - (0 - min) / range);
-        ctx.strokeStyle = '#333'; ctx.lineWidth = 0.8;
-        ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(W, zeroY); ctx.stroke();
-    }
-
-    // Shared global N across all synced charts. Each series is right-aligned:
-    // short series occupy the right portion, long series fill the canvas.
-    const N = _syncedGlobalN();
-    const toY = v => pad + (H - 2 * pad) * (1 - (v - min) / range);
-    // toX for global index (0..N-1)
-    const toXGlobal = i => (i / Math.max(N - 1, 1)) * W;
-    // Right-align a series: convert local data index to global x
-    const globalIdxForSeries = (s, localIdx) => (N - s.data.length) + localIdx;
-
-    // Optional min/max band fill (pair of series with `bandPair` key)
-    const bandMin = series.find(s => s.bandPair === 'min');
-    const bandMax = series.find(s => s.bandPair === 'max');
-    if (bandMin && bandMax && bandMin.data.length > 0 && bandMax.data.length > 0) {
-        ctx.fillStyle = (bandMin.bandColor || bandMin.color) + '33';  // ~20% opacity
-        ctx.beginPath();
-        for (let i = 0; i < bandMax.data.length; i++) {
-            ctx.lineTo(toXGlobal(globalIdxForSeries(bandMax, i)), toY(bandMax.data[i]));
-        }
-        for (let i = bandMin.data.length - 1; i >= 0; i--) {
-            ctx.lineTo(toXGlobal(globalIdxForSeries(bandMin, i)), toY(bandMin.data[i]));
-        }
-        ctx.closePath();
-        ctx.fill();
-    }
-
-    // Series lines
-    for (const s of series) {
-        if (s.data.length === 0) continue;
-        if (s.hideLine) continue;
-        ctx.strokeStyle = s.color; ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        for (let i = 0; i < s.data.length; i++) {
-            const x = toXGlobal(globalIdxForSeries(s, i));
-            const y = toY(s.data[i]);
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-    }
-
-    // Crosshair at global index
-    if (_hoverIndex >= 0 && _hoverIndex < N) {
-        const x = toXGlobal(_hoverIndex);
-        ctx.strokeStyle = '#888'; ctx.lineWidth = 1;
-        ctx.setLineDash([2, 2]);
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-        ctx.setLineDash([]);
-    }
-
-    // Value labels (top-right) — at hover global index if hovering, else last value
-    ctx.font = '10px monospace';
-    ctx.textAlign = 'right';
-    for (let i = 0; i < series.length; i++) {
-        const s = series[i];
-        if (s.data.length === 0) continue;
-        let localIdx;
-        if (_hoverIndex >= 0) {
-            // Convert global index to local: subtract the right-align offset.
-            localIdx = _hoverIndex - (N - s.data.length);
-            if (localIdx < 0 || localIdx >= s.data.length) {
-                // Hover is before this series started — skip
-                ctx.fillStyle = s.color;
-                ctx.fillText('—', W - 4, 12 + i * 12);
-                continue;
-            }
-        } else {
-            localIdx = s.data.length - 1;
-        }
-        const v = s.data[localIdx];
-        const label = s.percentage ? (v * 100).toFixed(0) + '%' : v.toFixed(4);
-        ctx.fillStyle = s.color;
-        ctx.fillText(label, W - 4, 12 + i * 12);
-    }
-
-    // Step/time label (bottom-left) — uses THIS chart's own timestamps
-    // for the wall-clock time. Charts on different groups (e.g. actor
-    // delta = per-inference vs Q values = per-grad-update) tick at
-    // different rates; using a global timestamp series here would
-    // misrepresent the hovered point's time.
-    ctx.fillStyle = '#444';
-    ctx.textAlign = 'left';
-    if (_hoverIndex >= 0) {
-        const globalStep = _syncedLatestStep - (N - 1 - _hoverIndex);
-        const localTs = c.timestamps || [];
-        const tsLocalIdx = _hoverIndex - (N - localTs.length);
-        const ts = tsLocalIdx >= 0 && tsLocalIdx < localTs.length
-            ? localTs[tsLocalIdx] : null;
-        const label = ts
-            ? `step ${globalStep}  ${_fmtTime(ts)} (${_fmtAgo(ts)})`
-            : `step ${globalStep}`;
-        ctx.fillText(label, 4, H - 4);
-    } else {
-        ctx.fillText(N + ' pts', 4, H - 4);
-    }
-}
-
-function _registerSyncedChart(canvasId, seriesList, timestamps) {
-    const canvas = document.getElementById(canvasId);
-    if (!canvas) return;
-    const valid = seriesList.filter(s => s.data && s.data.length > 0);
-    if (valid.length === 0) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    canvas.getContext('2d').scale(dpr, dpr);
-
-    let allVals = [];
-    for (const s of valid) allVals = allVals.concat(s.data);
-    const min = Math.min(...allVals);
-    const max = Math.max(...allVals);
-
-    _syncedCharts[canvasId] = {
-        canvas, series: seriesList, timestamps: timestamps || [],
-        min, max, pad: 4,
-        W: rect.width, H: rect.height,
-    };
-
-    // Attach hover handlers once
-    if (!canvas._syncedAttached) {
-        canvas.addEventListener('mousemove', (e) => {
-            const r = canvas.getBoundingClientRect();
-            const x = e.clientX - r.left;
-            const c = _syncedCharts[canvasId];
-            if (!c) return;
-            // Use GLOBAL N (shared across all synced charts) so hover index
-            // maps consistently regardless of which chart the mouse is on.
-            const N = _syncedGlobalN();
-            _hoverIndex = Math.min(N - 1, Math.max(0, Math.round((x / c.W) * (N - 1))));
-            for (const id of Object.keys(_syncedCharts)) _renderSyncedChart(id);
-        });
-        canvas.addEventListener('mouseleave', () => {
-            _hoverIndex = -1;
-            for (const id of Object.keys(_syncedCharts)) _renderSyncedChart(id);
-        });
-        canvas._syncedAttached = true;
-    }
-
-    _renderSyncedChart(canvasId);
-}
-
-function _drawSparklineMulti(canvasId, seriesList) {
-    // seriesList: [{data, color, label}, ...] — all on shared Y axis computed from combined range
-    const canvas = document.getElementById(canvasId);
-    if (!canvas) return;
-    const validSeries = seriesList.filter(s => s.data && s.data.length > 0);
-    if (validSeries.length === 0) return;
-
-    const ctx = canvas.getContext('2d');
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
-    const W = rect.width, H = rect.height;
-
-    ctx.clearRect(0, 0, W, H);
-
-    let allVals = [];
-    for (const s of validSeries) allVals = allVals.concat(s.data);
-    const min = Math.min(...allVals);
-    const max = Math.max(...allVals);
-    const range = (max - min) || 1;
-    const pad = 4;
-
-    ctx.strokeStyle = '#1a1a3e';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 4; i++) {
-        const y = pad + (H - 2 * pad) * (1 - i / 4);
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    }
-
-    // Zero line if range crosses zero
-    if (min < 0 && max > 0) {
-        const zeroY = pad + (H - 2 * pad) * (1 - (0 - min) / range);
-        ctx.strokeStyle = '#333';
-        ctx.lineWidth = 0.8;
-        ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(W, zeroY); ctx.stroke();
-    }
-
-    for (const s of validSeries) {
-        ctx.strokeStyle = s.color;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        for (let i = 0; i < s.data.length; i++) {
-            const x = (i / Math.max(s.data.length - 1, 1)) * W;
-            const y = pad + (H - 2 * pad) * (1 - (s.data[i] - min) / range);
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-    }
-
-    // Latest values on right
-    ctx.font = '10px monospace';
-    ctx.textAlign = 'right';
-    for (let i = 0; i < validSeries.length; i++) {
-        const s = validSeries[i];
-        ctx.fillStyle = s.color;
-        ctx.fillText(s.data[s.data.length - 1].toFixed(4), W - 4, 12 + i * 12);
-    }
-    // Data point count on left
-    ctx.fillStyle = '#444';
-    ctx.textAlign = 'left';
-    ctx.fillText(validSeries[0].data.length + ' pts', 4, H - 4);
-}
-
-function _drawSparkline(canvasId, data, color, fixedMin, fixedMax, percentage) {
-    const canvas = document.getElementById(canvasId);
-    if (!canvas || data.length === 0) return;
-    const ctx = canvas.getContext('2d');
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
-    const W = rect.width, H = rect.height;
-
-    ctx.clearRect(0, 0, W, H);
-
-    const min = fixedMin !== undefined ? fixedMin : Math.min(...data);
-    const max = fixedMax !== undefined ? fixedMax : Math.max(...data);
-    const range = (max - min) || 1;
-    const pad = 4;
-
-    ctx.strokeStyle = '#1a1a3e';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 4; i++) {
-        const y = pad + (H - 2 * pad) * (1 - i / 4);
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    }
-
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    for (let i = 0; i < data.length; i++) {
-        const x = (i / Math.max(data.length - 1, 1)) * W;
-        const y = pad + (H - 2 * pad) * (1 - (data[i] - min) / range);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    const last = data[data.length - 1];
-    const label = percentage ? (last * 100).toFixed(0) + '%' : last.toFixed(4);
-    ctx.fillStyle = color;
-    ctx.font = '10px monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(label, W - 4, 12);
-    // Show data point count on left (x-axis scale)
-    ctx.fillStyle = '#444';
-    ctx.textAlign = 'left';
-    ctx.fillText(data.length + ' pts', 4, H - 4);
-}
-
-function _drawSparkBand(canvasId, dataMin, dataMax, dataMean, color) {
-    const canvas = document.getElementById(canvasId);
-    if (!canvas || dataMean.length === 0) return;
-    const ctx = canvas.getContext('2d');
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
-    const W = rect.width, H = rect.height;
-    ctx.clearRect(0, 0, W, H);
-
-    const allVals = [...dataMin, ...dataMax];
-    const min = Math.min(...allVals);
-    const max = Math.max(...allVals);
-    const range = (max - min) || 1;
-    const pad = 4;
-    const n = dataMean.length;
-
-    const toY = (v) => pad + (H - 2 * pad) * (1 - (v - min) / range);
-    const toX = (i) => (i / Math.max(n - 1, 1)) * W;
-
-    // Grid
-    ctx.strokeStyle = '#1a1a3e'; ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 4; i++) {
-        const y = pad + (H - 2 * pad) * (1 - i / 4);
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    }
-
-    // Min-max band (filled)
-    ctx.fillStyle = color + '20';  // 12% opacity
-    ctx.beginPath();
-    for (let i = 0; i < n; i++) ctx.lineTo(toX(i), toY(dataMax[i] || 0));
-    for (let i = n - 1; i >= 0; i--) ctx.lineTo(toX(i), toY(dataMin[i] || 0));
-    ctx.closePath();
-    ctx.fill();
-
-    // Mean line
-    ctx.strokeStyle = color; ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    for (let i = 0; i < n; i++) {
-        const x = toX(i), y = toY(dataMean[i]);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // Labels
-    ctx.fillStyle = color; ctx.font = '10px monospace'; ctx.textAlign = 'right';
-    const lastMean = dataMean[n - 1];
-    const lastMax = (dataMax[n - 1] || 0);
-    const lastMin = (dataMin[n - 1] || 0);
-    ctx.fillText(`${lastMin.toFixed(2)}/${lastMean.toFixed(2)}/${lastMax.toFixed(2)}`, W - 4, 12);
 }
