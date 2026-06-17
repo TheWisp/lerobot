@@ -44,7 +44,18 @@ _TQDM_RE = re.compile(r"Training:\s*\d+%[^|]*\|[^|]*\|\s*(\d+)\s*/\s*(\d+)\s*\[(
 # (note: B for billion, not G) — which it applies to step/smpl/ep, e.g.
 # ``step:10K``, ``smpl:1.5M``. Non-numeric values are skipped so timestamps /
 # level words don't leak into the bag.
-_KV_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?\d[\d,]*\.?\d*(?:[eE][+-]?\d+)?)([KMBTQ])?\b")
+#
+# Real lerobot output glues the tqdm bar and the logging prefix onto the same
+# physical line (tqdm holds the line open with ``\r``; ``logging`` appends),
+# e.g. ``Training: 39%|…| 1156/3000 […, 74step/s]INFO … lerobot_train.py:611
+# step:1K … loss:1.6 …``. Two guards keep that noise out of the bag:
+#   * ``(?<!\.)`` — drop ``file.py:611`` (the ``py:611`` token is preceded by
+#     a dot); a real metric key is preceded by whitespace or line start.
+#   * ``(?=\s|$)`` — the value must end the token; rejects ``Training: 39%``
+#     (the ``39`` is followed by ``%``) and the tqdm ``00:17<00:24`` times.
+_KV_RE = re.compile(
+    r"(?<!\.)\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?\d[\d,]*\.?\d*(?:[eE][+-]?\d+)?)([KMBTQ])?(?=\s|$)"
+)
 
 _MAGNITUDE = {"K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12, "Q": 1e15}
 

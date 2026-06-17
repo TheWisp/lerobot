@@ -130,6 +130,28 @@ def test_metric_and_progress_are_disjoint_on_their_lines():
     assert parse_metric_sample(metric) is not None and parse_progress(metric) is None
 
 
+def test_metric_sample_ignores_logging_prefix_and_glued_tqdm_bar():
+    # The shape REAL lerobot emits: tqdm holds the line open with \r and the
+    # logging handler appends the metric record, so the bar, the logging
+    # prefix (LEVEL date time file.py:lineno), and the metrics all land on one
+    # physical line. The parser must pull ONLY the metrics out of that noise —
+    # not "py:611" from the file:lineno, not "Training:39" from the bar.
+    line = (
+        "Training:  39%|███▉      | 1156/3000 [00:17<00:24, 73.83step/s]"
+        "INFO 2026-06-17 11:55:12 lerobot_train.py:611 step:1K smpl:9K ep:75 epch:0.36 "
+        "loss:1.596 grdn:58.077 lr:1.0e-05 updt_s:0.013 data_s:0.000"
+    )
+    bag = parse_metric_sample(line)
+    assert bag is not None
+    assert "py" not in bag, f"logging file.py:lineno leaked: {bag}"
+    assert "Training" not in bag, f"tqdm percent leaked: {bag}"
+    assert bag["loss"] == pytest.approx(1.596)
+    assert bag["grdn"] == pytest.approx(58.077)
+    assert bag["lr"] == pytest.approx(1.0e-5)
+    # Only the real metric keys survive.
+    assert set(bag) == {"step", "smpl", "ep", "epch", "loss", "grdn", "lr", "updt_s", "data_s"}
+
+
 # ── Future-proofing: parse lerobot's OWN MetricsTracker output ───────────────
 #
 # These tests drive the *upstream* formatter (MetricsTracker / AverageMeter /
@@ -231,6 +253,48 @@ def test_ingest_writes_progress_and_metrics(tmp_path):
     assert [s["step"] for s in series] == [100, 250]
     assert series[-1]["loss"] == pytest.approx(0.3)
     assert series[-1]["grdn"] == pytest.approx(1.5)
+
+
+def test_ingest_glued_real_lerobot_lines(tmp_path):
+    """The real lerobot stderr.log interleaves the tqdm bar and the metric log
+    on ONE physical line. Ingest must still capture metrics (an earlier
+    progress-then-continue dropped them all), and stamp each metric with the
+    PRECISE step from the bar — the metric line's own step is coarsely
+    formatted (``format_big_number`` renders 1156 as "1K")."""
+    from lerobot.gui.training.hosts import HostRegistry
+    from lerobot.gui.training.orchestrator import Orchestrator
+    from lerobot.gui.training.runs import RunPaths, RunRegistry
+    from lerobot.gui.training.transport import SubprocessClient, SubprocessTransport
+
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(HostRegistry(hosts=[]), rr)
+    paths = RunPaths.for_run("r1", rr.runs_dir)
+    paths.ensure_exists()
+    # Two glued lines, exactly as captured from a live act/pusht run.
+    paths.stderr_log.write_text(
+        "Training:  39%|###9      | 1156/3000 [00:17<00:24, 73.83step/s]"
+        "INFO 2026-06-17 11:55:12 lerobot_train.py:611 step:1K smpl:9K ep:75 epch:0.36 "
+        "loss:1.596 grdn:58.077 lr:1.0e-05 updt_s:0.013 data_s:0.000\n"
+        "Training:  79%|#######9  | 2378/3000 [00:33<00:08, 73.0step/s]"
+        "INFO 2026-06-17 11:55:29 lerobot_train.py:611 step:2K smpl:19K ep:154 epch:0.74 "
+        "loss:0.421 grdn:12.300 lr:1.0e-05 updt_s:0.013 data_s:0.000\n"
+    )
+    client = SubprocessClient(SubprocessTransport(workdir=paths.root))
+
+    orch._ingest_training_log(client, paths)
+
+    series = orch._read_metrics(paths.metrics_jsonl)
+    assert len(series) == 2, "glued metric lines must not be dropped"
+    # Precise step from the tqdm bar, NOT the coarse "1K"/"2K" (1000/2000).
+    assert [s["step"] for s in series] == [1156, 2378]
+    assert series[0]["loss"] == pytest.approx(1.596)
+    assert series[1]["loss"] == pytest.approx(0.421)
+    # No logging-prefix / bar noise in the series.
+    assert "py" not in series[0] and "Training" not in series[0]
+
+    prog = orch._read_progress(client, paths.progress_json)
+    assert prog["step"] == 2378
+    assert prog["total_steps"] == 3000
 
 
 def test_ingest_is_idempotent_no_duplicate_metrics(tmp_path):

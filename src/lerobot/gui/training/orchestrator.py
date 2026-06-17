@@ -932,12 +932,22 @@ class Orchestrator:
                 seg = seg.strip()
                 if not seg:
                     continue
+                # Both parsers run on every segment — NOT progress-then-continue.
+                # Real lerobot output glues the metric log onto the END of the
+                # tqdm bar line ("…74step/s]INFO … loss:…"), so the same segment
+                # carries both signals; an early continue dropped every metric.
                 p = parse_progress(seg)
                 if p is not None:
                     latest = p
-                    continue
                 m = parse_metric_sample(seg)
                 if m is not None:
+                    # The metric line's own step is coarsely formatted
+                    # (``format_big_number`` → 1156 prints "1K"), useless as a
+                    # series x-axis. Prefer the precise step from the tqdm bar on
+                    # the same line (p), else the latest bar seen.
+                    bar = p or latest
+                    if bar is not None:
+                        m["step"] = float(bar.step)
                     samples.append(m)
 
         if latest is not None:
