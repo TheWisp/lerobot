@@ -179,6 +179,10 @@ class RunSnapshotDTO(BaseModel):
     # Raw events.jsonl entries (oldest first). Frontend filters for
     # image-prep events to render the "Pulling image…" status banner.
     events: list[dict[str, Any]]
+    # Training-signal series parsed from stdout (metrics.jsonl): one row per
+    # logged step, each an auto-captured {key: value} bag (loss/lr/grdn/…).
+    # The dashboard charts these; distinct from `progress` (position).
+    metrics: list[dict[str, float]] = []
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -201,6 +205,7 @@ def _snapshot_to_dto(snap: RunSnapshot) -> RunSnapshotDTO:
         ],
         stderr_tail=snap.stderr_tail,
         events=list(snap.events),
+        metrics=list(snap.metrics),
     )
 
 
