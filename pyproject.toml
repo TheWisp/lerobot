@@ -220,6 +220,8 @@ peft = ["lerobot[transformers-dep]", "lerobot[peft-dep]"]
 gui = [
     "fastapi>=0.115.0,<1.0.0",
     "uvicorn>=0.30.0,<1.0.0",
+    "python-multipart>=0.0.9,<1.0.0",
+    "lerobot[mcp]",  # gui/server.py unconditionally mounts the MCP app
     # `websockets` is needed for uvicorn's WS upgrade path. Used by the
     # bridge channel (gui/api/bridge.py) — without it, /api/bridge/ws
     # returns 404 even though the route is registered.
