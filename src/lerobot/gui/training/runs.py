@@ -174,6 +174,12 @@ class RunPaths:
         return self.root / "stderr.log"
 
     @property
+    def metrics_jsonl(self) -> Path:
+        """Training-signal series parsed from stderr — one JSON row per logged
+        step. Distinct from progress.json (position): see DESIGN.md § Polling."""
+        return self.root / "metrics.jsonl"
+
+    @property
     def checkpoints_dir(self) -> Path:
         return self.root / "checkpoints"
 

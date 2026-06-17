@@ -193,3 +193,82 @@ def test_parses_real_output_with_big_number_step():
     # Sanity: confirm the line really did use a magnitude suffix (else this
     # test isn't proving anything about suffix handling).
     assert any(c in format_big_number(12_500) for c in "KMBTQ")
+
+
+# ── Orchestrator ingest: stderr.log → progress.json + metrics.jsonl ──────────
+
+
+def test_ingest_writes_progress_and_metrics(tmp_path):
+    """End-to-end: a real-shaped stderr.log is parsed into progress.json
+    (position) and metrics.jsonl (series) by the orchestrator's poll-path
+    ingest — the path that makes real runs show data."""
+    from lerobot.gui.training.hosts import HostRegistry
+    from lerobot.gui.training.orchestrator import Orchestrator
+    from lerobot.gui.training.runs import RunPaths, RunRegistry
+    from lerobot.gui.training.transport import SubprocessClient, SubprocessTransport
+
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(HostRegistry(hosts=[]), rr)
+    paths = RunPaths.for_run("r1", rr.runs_dir)
+    paths.ensure_exists()
+    paths.stderr_log.write_text(
+        "INFO starting\n"
+        "Training:   1%| | 100/10000 [00:05<08:15, 20.0step/s]\n"
+        "step:100 smpl:800 loss:0.500 grdn:2.0 lr:1.0e-04\n"
+        "Training:   2%| | 250/10000 [00:12<07:50, 20.0step/s]\n"
+        "step:250 smpl:2K loss:0.300 grdn:1.5 lr:1.0e-04\n"
+    )
+    client = SubprocessClient(SubprocessTransport(workdir=paths.root))
+
+    orch._ingest_training_log(client, paths)
+
+    prog = orch._read_progress(client, paths.progress_json)
+    assert prog["step"] == 250  # freshest (metric line beats earlier tqdm)
+    assert prog["total_steps"] == 10000
+    assert prog["eta_seconds"] == 7 * 60 + 50
+
+    series = orch._read_metrics(paths.metrics_jsonl)
+    assert [s["step"] for s in series] == [100, 250]
+    assert series[-1]["loss"] == pytest.approx(0.3)
+    assert series[-1]["grdn"] == pytest.approx(1.5)
+
+
+def test_ingest_is_idempotent_no_duplicate_metrics(tmp_path):
+    # Re-running ingest on the same (unchanged) log must not duplicate rows —
+    # full reparse + rewrite, so polls and restarts are safe.
+    from lerobot.gui.training.hosts import HostRegistry
+    from lerobot.gui.training.orchestrator import Orchestrator
+    from lerobot.gui.training.runs import RunPaths, RunRegistry
+    from lerobot.gui.training.transport import SubprocessClient, SubprocessTransport
+
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(HostRegistry(hosts=[]), rr)
+    paths = RunPaths.for_run("r1", rr.runs_dir)
+    paths.ensure_exists()
+    paths.stderr_log.write_text("step:100 loss:0.5\nstep:200 loss:0.4\n")
+    client = SubprocessClient(SubprocessTransport(workdir=paths.root))
+
+    orch._ingest_training_log(client, paths)
+    orch._ingest_training_log(client, paths)
+    assert [s["step"] for s in orch._read_metrics(paths.metrics_jsonl)] == [100, 200]
+
+
+def test_ingest_does_not_clobber_externally_written_progress(tmp_path):
+    # The test fake-runner writes progress.json itself and prints nothing
+    # parseable. Ingest must leave that progress.json untouched.
+    from lerobot.gui.training.hosts import HostRegistry
+    from lerobot.gui.training.jobs import atomic_write_json
+    from lerobot.gui.training.orchestrator import Orchestrator
+    from lerobot.gui.training.runs import RunPaths, RunRegistry
+    from lerobot.gui.training.transport import SubprocessClient, SubprocessTransport
+
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(HostRegistry(hosts=[]), rr)
+    paths = RunPaths.for_run("r1", rr.runs_dir)
+    paths.ensure_exists()
+    atomic_write_json(paths.progress_json, {"step": 42, "source": "fake-runner"})
+    paths.stderr_log.write_text("[runner] starting fake training\nsome non-metric output\n")
+    client = SubprocessClient(SubprocessTransport(workdir=paths.root))
+
+    orch._ingest_training_log(client, paths)
+    assert orch._read_progress(client, paths.progress_json) == {"step": 42, "source": "fake-runner"}

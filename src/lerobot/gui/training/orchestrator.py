@@ -40,6 +40,8 @@ from pathlib import Path
 from typing import Any
 
 from lerobot.gui.training.hosts import HostRegistry, TrainingHost
+from lerobot.gui.training.jobs import atomic_write_json
+from lerobot.gui.training.log_parse import ProgressSample, parse_metric_sample, parse_progress
 from lerobot.gui.training.recipes import (
     build_lerobot_train_command,
     output_subdir_in_run,
@@ -95,10 +97,11 @@ class RunSnapshot:
     """
 
     run: Run
-    progress: dict[str, Any] | None  # contents of progress.json, or None if not written yet
+    progress: dict[str, Any] | None  # position snapshot (progress.json), or None if not parsed yet
     checkpoints: list[CheckpointEntry]  # all manifest entries
     stderr_tail: str  # last N bytes of stderr.log (configurable on poll)
     events: list[dict[str, Any]]  # all events.jsonl entries (oldest first)
+    metrics: list[dict[str, float]]  # training-signal series (metrics.jsonl), one row per logged step
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -259,8 +262,15 @@ class Orchestrator:
         if run.state in (RunState.RUNNING, RunState.COMPLETING) and host is not None:
             self._reconcile_state(run, paths, client)
 
+        # Derive real position + training-signal from the host's stdout. This
+        # is what populates the dashboard for real lerobot-train runs (which
+        # print but never write progress.json). No-op when nothing parseable
+        # has been logged yet.
+        self._ingest_training_log(client, paths)
+
         progress = self._read_progress(client, paths.progress_json)
         checkpoints = self._read_manifest(client, paths.checkpoints_jsonl)
+        metrics = self._read_metrics(paths.metrics_jsonl)
 
         # Completed-but-artifacts-elsewhere: a run that finished while the
         # GUI was down (or before the fetch feature existed) has a manifest
@@ -283,6 +293,7 @@ class Orchestrator:
             checkpoints=checkpoints,
             stderr_tail=stderr_tail,
             events=events,
+            metrics=metrics,
         )
 
     def stop(self, run_id: str) -> Run:
@@ -890,6 +901,92 @@ class Orchestrator:
             return json.loads(text)
         except json.JSONDecodeError:
             return None
+
+    def _ingest_training_log(self, client: TransportClient, paths: RunPaths) -> None:
+        """Parse the host's stdout into position (progress.json) + the
+        training-signal series (metrics.jsonl) — the one source of real
+        progress/metrics for every backend. The training container just
+        prints; structure is derived here on each poll.
+
+        Pre: ``client`` can read ``paths.stderr_log`` on the training host.
+        Post: if the log carried a tqdm bar, progress.json reflects the latest
+        position (its ``updated_at`` only advances when ``step`` advances, so a
+        hung run reads stale); every metric line is in metrics.jsonl. Writes
+        nothing it didn't parse — a backend that writes progress.json itself
+        (the test fake-runner) is never clobbered. Never raises.
+
+        v1 re-reads + re-parses the whole log each poll: idempotent,
+        restart-safe, cheap locally. Incremental offset reads
+        (``read_bytes_from_offset``) for large / SSH logs are a follow-up.
+        """
+        try:
+            text = client.read_text(paths.stderr_log)
+        except Exception as e:  # noqa: BLE001 — a read failure must not break poll()
+            logger.debug("ingest: could not read stderr for %s: %s", paths.run_id, e)
+            return
+        if not text:
+            return
+
+        latest: ProgressSample | None = None
+        samples: list[dict[str, float]] = []
+        for raw_line in text.splitlines():
+            # tqdm overwrites in place with \r within a single line; the last
+            # \r-segment is the freshest bar state.
+            for seg in raw_line.split("\r"):
+                seg = seg.strip()
+                if not seg:
+                    continue
+                p = parse_progress(seg)
+                if p is not None:
+                    latest = p
+                    continue
+                m = parse_metric_sample(seg)
+                if m is not None:
+                    samples.append(m)
+
+        if latest is not None:
+            step = latest.step
+            # A metric line's step can be fresher than the tqdm bar's.
+            if samples and samples[-1].get("step", 0) > step:
+                step = int(samples[-1]["step"])
+            prev = self._read_progress(client, paths.progress_json) or {}
+            advanced = step > int(prev.get("step", -1))
+            atomic_write_json(
+                paths.progress_json,
+                {
+                    "step": step,
+                    "total_steps": latest.total_steps,
+                    "eta_seconds": latest.eta_seconds,
+                    # Freshness signal for liveness: only bump when training
+                    # actually progressed, so a stalled run reads stale.
+                    "updated_at": time.time() if advanced else prev.get("updated_at", time.time()),
+                },
+            )
+
+        if samples:
+            # Rewrite, not append: a full reparse is idempotent, so this can't
+            # double-count rows across polls or a GUI restart.
+            body = "".join(json.dumps(s) + "\n" for s in samples)
+            tmp = paths.metrics_jsonl.parent / (paths.metrics_jsonl.name + ".tmp")
+            tmp.write_text(body)
+            tmp.replace(paths.metrics_jsonl)
+
+    @staticmethod
+    def _read_metrics(metrics_path: Path) -> list[dict[str, float]]:
+        """Read the metrics series (local file the orchestrator owns). Skips
+        malformed rows rather than failing the whole poll."""
+        if not metrics_path.exists():
+            return []
+        out: list[dict[str, float]] = []
+        for line in metrics_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return out
 
     @staticmethod
     def _read_manifest(client: TransportClient, manifest_path: Path) -> list[CheckpointEntry]:
