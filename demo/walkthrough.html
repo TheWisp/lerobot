@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeRobot Studio — Feature Walkthrough</title>
+<style>
+  :root { --bg:#0f1117; --card:#171a23; --line:#262b38; --fg:#e6e9ef; --mut:#9aa3b2; --acc:#34d399; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  header { padding:48px 32px 24px; max-width:1180px; margin:0 auto; }
+  header h1 { margin:0 0 6px; font-size:30px; letter-spacing:-0.3px; }
+  header p { margin:0; color:var(--mut); font-size:16px; }
+  nav { max-width:1180px; margin:0 auto; padding:0 32px 8px; display:flex; flex-wrap:wrap; gap:8px; }
+  nav a { color:var(--acc); text-decoration:none; font-size:13px; border:1px solid var(--line);
+          padding:5px 11px; border-radius:999px; }
+  nav a:hover { background:var(--card); }
+  section { max-width:1180px; margin:0 auto; padding:34px 32px; border-top:1px solid var(--line); }
+  section h2 { font-size:22px; margin:0 0 2px; }
+  section .lead { color:var(--mut); margin:0 0 20px; max-width:760px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:18px; }
+  figure { margin:0; background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  figure img { width:100%; display:block; background:#0b0d12; }
+  figure figcaption { padding:10px 13px; font-size:13px; color:var(--mut); }
+  figure figcaption b { color:var(--fg); font-weight:600; }
+  .wide { grid-column:1/-1; }
+  .video { position:relative; padding-top:56.25%; height:0; }
+  .video iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
+  footer { max-width:1180px; margin:0 auto; padding:30px 32px 60px; color:var(--mut); font-size:13px; }
+  .tag { display:inline-block; font-size:11px; color:var(--acc); border:1px solid var(--line);
+         border-radius:5px; padding:1px 6px; margin-left:8px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LeRobot Studio — Feature Walkthrough</h1>
+  <p>A single GUI for collecting, editing, visualizing, teleoperating, and training robot-learning data.</p>
+</header>
+<nav>
+  <a href="#data">Data editing</a>
+  <a href="#urdf">URDF + trajectory</a>
+  <a href="#latency">Latency monitoring</a>
+  <a href="#vr">VR teleoperation</a>
+  <a href="#transfers">Hub transfers</a>
+  <a href="#training">Training</a>
+  <a href="#nebius">Cloud GPUs on Nebius</a>
+</nav>
+
+<!-- 1 — DATA EDITING -->
+<section id="data">
+  <h2>Data editing</h2>
+  <p class="lead">Curate datasets in place — trim episodes, drop bad frames, add reward/quality columns —
+     with a review-before-apply workflow so nothing is destructive by surprise.</p>
+  <div class="grid">
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/a38098fcc661b2d367eb22aa1887f88ea1b0316a/src/lerobot/mcp/docs/proofs/feat_propose_trim.png">
+      <figcaption><b>Trim an episode</b> — drag the timeline handles; the cut region previews before you commit.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/a38098fcc661b2d367eb22aa1887f88ea1b0316a/src/lerobot/mcp/docs/proofs/feat_propose_delete.png">
+      <figcaption><b>Delete frames / episodes</b> — flagged inline on the timeline.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/a38098fcc661b2d367eb22aa1887f88ea1b0316a/src/lerobot/mcp/docs/proofs/feat_discard_pending.png">
+      <figcaption><b>Review &amp; discard</b> — pending edits are batched; apply or discard as a set.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/38cf914245b5ac4ae4af58b59344e944be8d503a/src/lerobot/gui/docs/images/open_dataset_missing_files_on_hub.png">
+      <figcaption><b>Integrity checks</b> — opening a dataset surfaces missing/inconsistent files with an exact fix.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- 2 — URDF + TRAJECTORY -->
+<section id="urdf">
+  <h2>URDF visualization + trajectory</h2>
+  <p class="lead">See the robot, not just numbers — a live URDF view in the data tab, the commanded-vs-actual
+     "ghost" overlay, and the end-effector path drawn as a 3D tube across an episode.</p>
+  <div class="grid">
+    <figure class="wide">
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/feat/urdf-viz-trajectory/src/lerobot/gui/docs/images/urdf_viz_data_tab_trajectory.png">
+      <figcaption><b>End-effector trajectory tube</b> — the whole episode's EE path rendered over the URDF.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/feat/urdf-viz-action-overlay/src/lerobot/gui/docs/images/urdf_viz_data_tab_on.png">
+      <figcaption><b>Action-overlay ghost (on)</b> — commanded pose ghosted against the recorded state.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/feat/cartesian-ee-virtual-robot/src/lerobot/robots/virtual_bi_so107/docs/virtual_bi_so107_demo.gif">
+      <figcaption><b>Record → replay</b> on a virtual bimanual SO-107 — end-to-end with no hardware.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/proof/ik-e2e/proof/ik_so107_circle-30mm.gif">
+      <figcaption><b>Cartesian IK tracking</b> — SO-107 tracing a 30&nbsp;mm circle (Pink-based IK).</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- 3 — LATENCY -->
+<section id="latency">
+  <h2>Latency monitoring</h2>
+  <p class="lead">Know exactly where every millisecond goes — a per-stage Gantt of the teleop / record / inference
+     loop, with p50/p95, overrun ratio, and per-camera staleness.</p>
+  <div class="grid">
+    <figure class="wide">
+      <img loading="lazy" src="https://github.com/TheWisp/lerobot/raw/pr/latency-monitoring/src/lerobot/gui/docs/images/latency_dashboard.png">
+      <figcaption><b>Loop latency dashboard</b> — multi-track spans (per-arm motor reads, per-camera sub-spans), loop-health card, staleness footer.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/7d2556ac4c02088f98e9385e84705a9bc895ec1f/scripts/gui/screenshots/charts-latency-card.png">
+      <figcaption><b>Per-stage cards</b> — rolling latency per stage.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/7d2556ac4c02088f98e9385e84705a9bc895ec1f/scripts/gui/screenshots/charts-latency-card-hover.png">
+      <figcaption><b>Hover</b> — exact value at any point in the window.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- 4 — VR -->
+<section id="vr">
+  <h2>VR teleoperation <span class="tag">video</span></h2>
+  <p class="lead">Drive the arms from a Quest 3 headset — WebXR Cartesian control, straight into the same record
+     pipeline. Works against real hardware or a virtual robot.</p>
+  <div class="grid">
+    <figure>
+      <div class="video"><iframe loading="lazy" src="https://www.youtube.com/embed/KSwNev5JRIc"
+        title="Quest VR → real bimanual SO-107" allowfullscreen></iframe></div>
+      <figcaption><b>Quest 3 → real bimanual SO-107</b> — Cartesian teleop on hardware.</figcaption>
+    </figure>
+    <figure>
+      <div class="video"><iframe loading="lazy" src="https://www.youtube.com/embed/C5pX30HpgeI"
+        title="Quest VR → virtual SO-107" allowfullscreen></iframe></div>
+      <figcaption><b>Quest 3 → virtual SO-107</b> — same teleop, no hardware needed.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/feat/quest-vr/src/lerobot/teleoperators/quest_vr/docs/teleop_form.png">
+      <figcaption><b>One-form setup</b> — pick the headset teleop and go.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- 5 — TRANSFERS -->
+<section id="transfers">
+  <h2>Hub transfers</h2>
+  <p class="lead">Upload/download datasets and models to the Hugging Face Hub in the background — a persistent
+     tray with live progress, retry, and cancel, so a big transfer never blocks the UI.</p>
+  <div class="grid">
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/screenshots-hub-progress/impl_v2/C_active_inflight.png">
+      <figcaption><b>In flight</b> — live per-job progress in the tray.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/screenshots-hub-progress/impl_v2/D_complete_with_hide.png">
+      <figcaption><b>Complete</b> — finished jobs collapse out of the way.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/screenshots-hub-progress/impl_v2/E_failed_retry_discard.png">
+      <figcaption><b>Failure handling</b> — retry or discard a failed transfer.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- 6 — TRAINING -->
+<section id="training">
+  <h2>Training</h2>
+  <p class="lead">Launch a training run from the GUI on your workstation or a remote GPU, and watch it live —
+     real progress and auto-parsed loss/lr pulled straight from the trainer's output.</p>
+  <div class="grid">
+    <figure class="wide">
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/4ec86ee593430d2438aadcdd8d3a5a93f5729e51/scripts/training/screenshots/32-midrun-dashboard.gif">
+      <figcaption><b>Live mid-run dashboard</b> — progress bar advancing, loss (log-scale) descending in real time.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/4ec86ee593430d2438aadcdd8d3a5a93f5729e51/scripts/training/screenshots/03-detail-completed-act.png">
+      <figcaption><b>Completed run</b> — ACT policy, checkpoints captured.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/e9caf15401b10b64f94dcc7787c480b268101e16/scripts/gui/screenshots/charts-rlt-panel.png">
+      <figcaption><b>RLT fine-tuning panel</b> — multi-series training charts with synced hover.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- 7 — NEBIUS (closer) -->
+<section id="nebius">
+  <h2>Cloud GPUs on Nebius</h2>
+  <p class="lead">Train on a Nebius GPU without leaving the GUI: it spawns a VM when a run starts, trains over
+     SSH, and <b>destroys it automatically when the run ends</b> — no Nebius console, no forgotten instances.
+     A TTL and a cloud-init poweroff are the cost backstops; teardown is verified after every run.</p>
+  <div class="grid">
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/73ba9e38221ba5e85d506e7b6962dffb491f667d/scripts/training/screenshots/35-ephemeral-dialog-connection-status.png">
+      <figcaption><b>Add an ephemeral Nebius host</b> — pick GPU, disk, TTL, preemptible; spun up on demand.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/73ba9e38221ba5e85d506e7b6962dffb491f667d/scripts/training/screenshots/34-nebius-connection-configured.png">
+      <figcaption><b>Connected</b> — one server-held Nebius service-account key drives spawn <i>and</i> teardown.</figcaption>
+    </figure>
+    <figure>
+      <img loading="lazy" src="https://raw.githubusercontent.com/TheWisp/lerobot/73ba9e38221ba5e85d506e7b6962dffb491f667d/scripts/training/screenshots/33-nebius-connection-not-configured.png">
+      <figcaption><b>Guided setup</b> — the GUI walks you through pasting the key, project, and subnet.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<footer>
+  Generated from merged feature work · images/video hosted on GitHub &amp; YouTube · open in any browser.
+</footer>
+</body>
+</html>
