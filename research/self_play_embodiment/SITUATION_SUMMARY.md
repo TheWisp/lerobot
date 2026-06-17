@@ -184,3 +184,83 @@ off it — the opposite of the data-efficiency / robustness benefit we set out t
 line. Any future attempt should change the parts that actually diverge from the working literature: an
 **action-conditioned** (not spectator) objective, **coverage-oriented** self-play (not narrow), and a **stronger
 pretrained visual base** — i.e. a substantially different, larger bet, not a tweak to this configuration.
+
+---
+
+# Follow-up 4 (2026-06-17): FINAL synthesis — the negative was K-dependent; a real OOD benefit emerges at high data
+
+Two further sweeps **revise the flat-negative above.** The conclusion is now nuanced, not negative.
+
+## A. Demo-count (K) sweep, in-distribution (3 seeds, K = 10/25/50)
+
+The control − world-model gap **shrinks monotonically with K and closes to a tie by K=50**:
+
+| K   | control mean | WM mean | gap (+ = control) |
+| --- | ------------ | ------- | ----------------- |
+| 10  | 1.43         | 0.86    | +0.57             |
+| 25  | 2.36         | 2.06    | +0.30             |
+| 50  | 2.70         | 2.81    | ~tie              |
+
+This is the _opposite_ of the data-efficiency hypothesis: the WM hurts _most_ when demos are scarce and only
+catches up with abundant data — the signature of a **regularizer** (caps performance; the cap hurts less the more
+data you have), not an embodiment prior. At K=50 the two are also **behaviorally identical** (human review of
+matched rollouts): both reach correctly and fail the same way — missed grasps, premature drops, drops during
+handover. So the residual difficulty is **contact precision / grip stability**, which a scene-forecasting
+(spectator) objective has no representation of — explaining why the WM is _inert_ at high data rather than
+helpful.
+
+## B. OOD robustness at K=50 — the verdict FLIPS (this updates Follow-up 3)
+
+Follow-up 3's "no OOD upside" was measured at **K=10 only**. Re-running the visual-OOD sweep at **K=50** (the
+in-distribution tie point, so any difference is attributable to the objective) reverses it. 3-seed transfer rate:
+
+| visual shift         | control | world-model | more robust                          |
+| -------------------- | ------- | ----------- | ------------------------------------ |
+| table-color (mid)    | 12      | 26          | **WM** (control collapses, WM holds) |
+| cube-color (mid)     | 27      | 33          | **WM**                               |
+| pixel-noise (low)    | 48      | 75          | **WM** (partly chaotic dithering)    |
+| pixel-noise (mid)    | 4       | 13          | **WM**                               |
+| cube-color (extreme) | 22      | 7           | control (one outlier seed)           |
+| camera jitter        | floored | floored     | —                                    |
+
+At K=50 the world-model degrades **less** under visual shift and is **lower-variance across seeds** — the
+literature's robustness claim (H1), which we'd seen _refuted_ at K=10. So the effect is **data-dependent**: at low
+K the regularizer over-constrains into a brittle narrow basin; at high K, with enough task data to be competent,
+the same regularization yields a **smoother, more visually-robust** policy.
+
+## Revised overall conclusion
+
+The spectator world-model objective **trades peak in-distribution data-efficiency for OOD robustness that only
+materializes with sufficient demos.** Concretely:
+
+- It does **not** deliver the data-efficiency we set out to find (it _hurts_ at low K).
+- It **does** deliver **OOD visual robustness at high K** (consistent with the literature's actual claim, which
+  is about robustness, not data-efficiency).
+- The residual in-distribution difficulty (contact precision) is orthogonal to a scene-forecasting objective, so
+  the WM is inert there regardless of K.
+
+## Honest caveats / framing (NOT a refutation of VLA-JEPA)
+
+- Our null is **config-specific and confounded**. We diverge from the paper on, in likely order of importance:
+  **base model** (small from-scratch ResNet vs a multi-billion-parameter pretrained vision-language model with an
+  object-grounded encoder), **data scale/diversity** (narrow self-play vs large diverse human + robot video),
+  and **language conditioning** (theirs uses instructions, ours none).
+- On a close re-read, the paper's world model is **latent-action-conditioned** (the latent conditions future-state
+  prediction and is grounded to real actions only during robot fine-tuning), whereas ours is **action-free** (a
+  spectator latent that discards the available self-play actions). But the paper also **lacks an ablation
+  isolating the world-model objective** (its only relevant ablation, removing human video, is ~1 point), so it
+  never strongly establishes the mechanism in the first place. Our scoped study **provides the controlled
+  with/without comparison the paper omits** — and finds the effect data-dependent.
+- Robustness caveats on the K=50 OOD result: the low-noise spike is partly chaotic dithering (non-monotonic); one
+  extreme-recolor cell reverses on an outlier seed; seed variance is high. The defensible claim is "WM shows a
+  **consistent OOD-robustness advantage at K=50 across multiple structured shifts**," not "WM wins everywhere."
+
+## If continued (a larger bet, not a tweak)
+
+The untested, paper-aligned levers — in rough order: a **stronger pretrained visual base**; an
+**action-conditioned** latent (we have the self-play actions; the clean route is an inverse-dynamics auxiliary
+that forces action info into the latent); **coverage-oriented** self-play; and **language** conditioning. Our
+diagnostics caution that representation-side fixes target a bottleneck (perception) we don't have, while the
+in-distribution residual (contact precision) needs force/tactile or planning-based control — so the most
+defensible continuation targets the OOD-robustness benefit that already showed up, not the data-efficiency goal
+that didn't.
