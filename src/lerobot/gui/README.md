@@ -126,6 +126,25 @@ printed in the banner.
 
 Right-click any episode → **Open in Rerun** to launch the [Rerun](https://rerun.io/) visualizer for that episode. This spawns a separate process independent of the web server.
 
+## URDF State Visualization
+
+Render the robot's URDF live from a connected robot or replay it from dataset
+frames, with an optional action-overlay ghost and an end-effector trajectory tube.
+
+<p align="center">
+  <img alt="URDF state visualization" src="docs/images/urdf_viz.png" width="80%">
+</p>
+
+## Latency Monitoring
+
+For teleop / record / HVLA loops, the GUI surfaces a multi-track timeline with
+per-stage spans (per-arm motor reads, per-camera sub-spans), a loop-health card
+with p50/p95 and overrun ratio, and a per-camera staleness footer.
+
+<p align="center">
+  <img alt="Latency monitoring dashboard" src="docs/images/latency_dashboard.png" width="80%">
+</p>
+
 ## MCP Endpoint
 
 The server also mounts a [Model Context Protocol](https://modelcontextprotocol.io/)

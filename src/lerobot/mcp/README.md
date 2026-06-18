@@ -42,6 +42,10 @@ one port. Each user, on their own device, registers their AI tool
 against the host with a one-line copy-paste command from
 `lerobot.local/ai_setup`.
 
+<p align="center">
+  <img alt="End-to-end demo: an AI tool browsing datasets and driving the GUI" src="docs/demo_e2e.gif" width="90%">
+</p>
+
 ---
 
 ## For operators — connecting your AI tool
@@ -126,6 +130,10 @@ for each supported AI tool (Claude Code, Codex CLI, Gemini CLI,
 Cursor, Claude Desktop). The bearer is not recoverable — save it now
 (or re-issue later if you lose it).
 
+<p align="center">
+  <img alt="The /ai_setup token-issuance page with per-tool registration snippets" src="../gui/docs/images/ai_setup_expanded.png" width="80%">
+</p>
+
 **3. Register with your AI tool.** Copy the relevant command. For
 Claude Code:
 
@@ -160,7 +168,12 @@ You should see the AI list your datasets and pick one. Now:
 
 > _"Open episode 0 of that dataset in my GUI."_
 
-The already-open GUI tab navigates to the episode viewer.
+The already-open GUI tab navigates to the episode viewer. Bridge tools
+like `highlight_in_viewer` then let the AI mark items in that same tab:
+
+<p align="center">
+  <img alt="highlight_in_viewer: the AI highlighting episodes in the open GUI tab" src="docs/proofs/feat_highlight_viewer.png" width="80%">
+</p>
 
 ### Try these next
 
