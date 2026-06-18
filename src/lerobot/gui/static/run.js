@@ -598,6 +598,27 @@ function _modelCheckpointOptions() {
     return html;
 }
 
+// Built-in representation models for the debug-model dropdown. Overlay live
+// visual output on the camera view; no checkpoint needed (weights fetched from
+// HF on first load). SAM3 weights are gated (see the adapter).
+function _debugVisionOptgroup() {
+    return '<optgroup label="Representation models (built-in)">'
+        + '<option value="grounding_dino" data-policy-type="debug_vision">Grounding DINO — open-vocab boxes</option>'
+        + '<option value="dino_features" data-policy-type="debug_vision">DINOv2 — feature heatmap</option>'
+        + '<option value="depth_anything" data-policy-type="debug_vision">Depth Anything V2 — depth heatmap</option>'
+        + '<option value="sam2_mask" data-policy-type="debug_vision">SAM2.1 — segment (center point)</option>'
+        + '<option value="sam3" data-policy-type="debug_vision">SAM3 — text-prompt masks (gated)</option>'
+        + '<option value="cotracker3" data-policy-type="debug_vision">CoTracker3 — point tracks</option>'
+        + '</optgroup>';
+}
+
+// Full option set for the debug-model <select>: None + built-in vision models +
+// scanned checkpoints. Used by renderRunForm AND the post-scan refresh, so the
+// vision options aren't clobbered when checkpoint data loads in.
+function _debugModelOptions() {
+    return '<option value="">None</option>' + _debugVisionOptgroup() + _modelCheckpointOptions();
+}
+
 function _getDebugModelConfig() {
     // Returns debug model config or null if none selected.
     const sel = document.getElementById('run-teleop-debug-model');
@@ -615,7 +636,7 @@ function _getDebugModelConfig() {
         // Built-in vision model: the select value is the adapter key, not a checkpoint.
         config.checkpoint = '';
         config.model = sel.value;
-        if (sel.value === 'grounding_dino') {
+        if (sel.value === 'grounding_dino' || sel.value === 'sam3') {
             config.prompt = document.getElementById('run-teleop-debug-vision-prompt')?.value?.trim() || '';
         }
         config.cameras = (document.getElementById('run-teleop-debug-vision-cameras')?.value || '')
@@ -766,7 +787,7 @@ function _onDebugModelChange() {
     const isVision = policyType === 'debug_vision';
     const visionFields = document.getElementById('run-teleop-debug-vision-fields');
     if (visionFields) visionFields.style.display = isVision ? '' : 'none';
-    const needsPrompt = isVision && sel.value === 'grounding_dino';
+    const needsPrompt = isVision && ['grounding_dino', 'sam3'].includes(sel.value);
     for (const id of ['run-teleop-debug-vision-prompt', 'run-teleop-debug-vision-prompt-label',
                       'run-teleop-debug-vision-apply', 'run-teleop-debug-vision-hint']) {
         const el = document.getElementById(id);
@@ -917,7 +938,7 @@ async function _ensureModelDataLoaded() {
     const debugSel = document.getElementById('run-teleop-debug-model');
     if (debugSel) {
         const prev = debugSel.value;
-        debugSel.innerHTML = '<option value="">None</option>' + _modelCheckpointOptions();
+        debugSel.innerHTML = _debugModelOptions();
         debugSel.value = prev;
     }
 }
@@ -1062,14 +1083,7 @@ function renderRunForm() {
     html += '<div class="form-grid">';
     html += `<label>Model</label>`;
     html += `<select id="run-teleop-debug-model" onchange="_onDebugModelChange()">`;
-    html += `<option value="">None</option>`;
-    // Built-in representation models — overlay live visual output on the
-    // camera view (no checkpoint needed; weights fetched from HF on first load).
-    html += `<optgroup label="Representation models (built-in)">`;
-    html += `<option value="grounding_dino" data-policy-type="debug_vision">Grounding DINO — open-vocab boxes</option>`;
-    html += `<option value="dino_features" data-policy-type="debug_vision">DINOv2 — feature heatmap</option>`;
-    html += `</optgroup>`;
-    html += _modelCheckpointOptions();
+    html += _debugModelOptions();
     html += `</select>`;
     html += `<label></label>`;
     // Buttons start disabled; _updateDebugButtons() flips state based on
@@ -1819,9 +1833,13 @@ function _connectDebugOutputSSE() {
         const modelTerminal = document.getElementById('run-model-terminal');
         if (!modelTerminal) return;
         const text = _stripAnsi(event.data);
+        if (text.startsWith('##OVERLAY:')) return;  // camera-overlay protocol, not user-facing text
         const line = document.createElement('div');
         line.className = 'terminal-line';
-        line.textContent = text;
+        // Escape, then linkify http(s) URLs so e.g. the SAM3 accept-license link
+        // is click-through in the model output panel.
+        const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        line.innerHTML = esc.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
         modelTerminal.appendChild(line);
         modelTerminal.scrollTop = modelTerminal.scrollHeight;
         while (modelTerminal.children.length > 500) {

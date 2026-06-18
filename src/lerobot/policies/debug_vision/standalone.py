@@ -60,6 +60,23 @@ def main() -> None:
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
 
+    # Build the model FIRST so load failures (e.g. SAM3 gated weights) surface
+    # immediately on Load — before we block waiting for teleop's obs stream.
+    _set_overlay(f"loading {args.model} ...", "#e3b341")
+    try:
+        adapter = build_adapter(args.model, device=args.device)
+    except Exception as e:
+        # Surface load failures (e.g. SAM3 gated weights) to the GUI: a red
+        # camera overlay + the actionable message (incl. any URL) in the Output
+        # panel, instead of a silent crash.
+        logger.error("failed to load debug-vision model '%s': %s", args.model, e)
+        _set_overlay(f"{args.model}: failed to load — see Output panel", "#f85149")
+        print(f"ERROR loading '{args.model}': {e}", flush=True)
+        return
+    if args.prompt:
+        adapter.set_control({"prompt": args.prompt})
+    logger.info("model '%s' ready", args.model)
+
     reader = _wait_for_obs_stream(stop)
     if reader is None:
         return
@@ -76,12 +93,6 @@ def main() -> None:
         cams = all_cams
     dims = {c: (int(reader.image_keys[c][0]), int(reader.image_keys[c][1])) for c in cams}
     logger.info("overlaying %s", dims)
-
-    _set_overlay(f"loading {args.model} ...", "#e3b341")
-    adapter = build_adapter(args.model, device=args.device)
-    if args.prompt:
-        adapter.set_control({"prompt": args.prompt})
-    logger.info("model '%s' ready", args.model)
 
     overlay = SharedOverlayBuffer(cameras=dims, model=args.model, create=True)
     _set_overlay(f"{adapter.label} — live", "#39d353")
