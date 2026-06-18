@@ -383,10 +383,15 @@ class Sam3Adapter(DebugVisionAdapter):
         res = self.processor.post_process_instance_segmentation(
             out, threshold=self.threshold, target_sizes=[(h, w)]
         )[0]
+        cv2 = self._cv2
         rgba = np.zeros((h, w, 4), dtype=np.uint8)
         for i, mask in enumerate(res.get("masks", [])):
             m = (mask.cpu().numpy() if hasattr(mask, "cpu") else np.asarray(mask)) > 0
-            rgba[m] = (*_color_for(f"{self.prompt}{i}"), 120)
+            col = _color_for(f"{self.prompt}{i}")
+            rgba[m] = (*col, 130)  # translucent fill per instance
+            # bold outline so the segmentation split is obvious
+            cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
         return rgba
 
 
