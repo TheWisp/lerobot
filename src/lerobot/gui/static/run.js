@@ -598,6 +598,27 @@ function _modelCheckpointOptions() {
     return html;
 }
 
+// Built-in representation models for the debug-model dropdown. Overlay live
+// visual output on the camera view; no checkpoint needed (weights fetched from
+// HF on first load). SAM3 weights are gated (see the adapter).
+function _debugVisionOptgroup() {
+    return '<optgroup label="Representation models (built-in)">'
+        + '<option value="grounding_dino" data-policy-type="debug_vision">Grounding DINO — open-vocab boxes</option>'
+        + '<option value="dino_features" data-policy-type="debug_vision">DINOv2 — feature heatmap</option>'
+        + '<option value="depth_anything" data-policy-type="debug_vision">Depth Anything V2 — depth heatmap</option>'
+        + '<option value="sam2_mask" data-policy-type="debug_vision">SAM2.1 — segment (center point)</option>'
+        + '<option value="sam3" data-policy-type="debug_vision">SAM3 — text-prompt masks (gated)</option>'
+        + '<option value="cotracker3" data-policy-type="debug_vision">CoTracker3 — point tracks</option>'
+        + '</optgroup>';
+}
+
+// Full option set for the debug-model <select>: None + built-in vision models +
+// scanned checkpoints. Used by renderRunForm AND the post-scan refresh, so the
+// vision options aren't clobbered when checkpoint data loads in.
+function _debugModelOptions() {
+    return '<option value="">None</option>' + _debugVisionOptgroup() + _modelCheckpointOptions();
+}
+
 function _getDebugModelConfig() {
     // Returns debug model config or null if none selected.
     const sel = document.getElementById('run-teleop-debug-model');
@@ -611,6 +632,15 @@ function _getDebugModelConfig() {
     if (policyType === 'hvla_s2_vlm') {
         config.task = document.getElementById('run-teleop-debug-s2-task')?.value?.trim() || '';
         config.decode_subtask = document.getElementById('run-teleop-debug-s2-decode')?.checked || false;
+    } else if (policyType === 'debug_vision') {
+        // Built-in vision model: the select value is the adapter key, not a checkpoint.
+        config.checkpoint = '';
+        config.model = sel.value;
+        if (sel.value === 'grounding_dino' || sel.value === 'sam3') {
+            config.prompt = document.getElementById('run-teleop-debug-vision-prompt')?.value?.trim() || '';
+        }
+        config.cameras = (document.getElementById('run-teleop-debug-vision-cameras')?.value || '')
+            .split(',').map(s => s.trim()).filter(Boolean);  // empty = all cameras
     }
     return config;
 }
@@ -644,6 +674,7 @@ async function _loadDebugModel() {
         if (res.ok) {
             if (status) status.textContent = `Loaded (PID ${data.pid})`;
             _debugModelLoaded = true;
+            _debugVisionLoaded = (config.policy_type === 'debug_vision');
             showToast('Debug model', 'Model loaded', 'success');
             console.log('Debug model loaded, showing panel');
         } else {
@@ -670,6 +701,8 @@ async function _unloadDebugModel() {
         if (res.ok) {
             if (status) status.textContent = 'Not loaded';
             _debugModelLoaded = false;
+            _debugVisionLoaded = false;
+            _clearOverlayCanvases();
             _disconnectDebugOutputSSE();
             if (data.status !== 'not_loaded') showToast('Debug model', 'Model unloaded', 'info');
         }
@@ -682,6 +715,22 @@ async function _unloadDebugModel() {
 }
 
 let _debugModelLoaded = false;
+let _debugVisionLoaded = false;  // true when the loaded debug model emits camera overlays
+
+async function _applyDebugVisionControl() {
+    const prompt = document.getElementById('run-teleop-debug-vision-prompt')?.value?.trim() || '';
+    try {
+        const res = await fetch('/api/run/debug/control', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ prompt }),
+        });
+        if (res.ok) showToast('Debug model', 'Prompt applied', 'success');
+        else showToast('Error', (await res.json()).detail || 'No overlay model running', 'error');
+    } catch (e) {
+        showToast('Error', e.message, 'error');
+    }
+}
 
 function _updateDebugButtons() {
     const loadBtn = document.getElementById('run-debug-load-btn');
@@ -726,11 +775,24 @@ async function _refreshDebugModelStatus() {
 
 function _onDebugModelChange() {
     const sel = document.getElementById('run-teleop-debug-model');
-    const s2Fields = document.getElementById('run-teleop-debug-s2-fields');
-    if (!sel || !s2Fields) return;
+    if (!sel) return;
     const opt = sel.selectedOptions[0];
     const policyType = opt?.dataset?.policyType || '';
-    s2Fields.style.display = policyType === 'hvla_s2_vlm' ? '' : 'none';
+
+    const s2Fields = document.getElementById('run-teleop-debug-s2-fields');
+    if (s2Fields) s2Fields.style.display = policyType === 'hvla_s2_vlm' ? '' : 'none';
+
+    // Debug-vision: show vision fields; the prompt applies only to
+    // text-prompted models (Grounding DINO), hidden for DINOv2 features.
+    const isVision = policyType === 'debug_vision';
+    const visionFields = document.getElementById('run-teleop-debug-vision-fields');
+    if (visionFields) visionFields.style.display = isVision ? '' : 'none';
+    const needsPrompt = isVision && ['grounding_dino', 'sam3'].includes(sel.value);
+    for (const id of ['run-teleop-debug-vision-prompt', 'run-teleop-debug-vision-prompt-label',
+                      'run-teleop-debug-vision-apply', 'run-teleop-debug-vision-hint']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = needsPrompt ? '' : 'none';
+    }
     // Selection drives the Load button's enabled state.
     _updateDebugButtons();
 }
@@ -876,7 +938,7 @@ async function _ensureModelDataLoaded() {
     const debugSel = document.getElementById('run-teleop-debug-model');
     if (debugSel) {
         const prev = debugSel.value;
-        debugSel.innerHTML = '<option value="">None</option>' + _modelCheckpointOptions();
+        debugSel.innerHTML = _debugModelOptions();
         debugSel.value = prev;
     }
 }
@@ -1021,8 +1083,7 @@ function renderRunForm() {
     html += '<div class="form-grid">';
     html += `<label>Model</label>`;
     html += `<select id="run-teleop-debug-model" onchange="_onDebugModelChange()">`;
-    html += `<option value="">None</option>`;
-    html += _modelCheckpointOptions();
+    html += _debugModelOptions();
     html += `</select>`;
     html += `<label></label>`;
     // Buttons start disabled; _updateDebugButtons() flips state based on
@@ -1040,6 +1101,17 @@ function renderRunForm() {
     html += `<label>Decode Subtask</label>`;
     html += `<div style="text-align:left"><input type="checkbox" id="run-teleop-debug-s2-decode" checked></div>`;
     html += '</div>';
+    html += '</div>';
+    // Debug-vision fields (shown when a built-in representation model is selected).
+    html += `<div id="run-teleop-debug-vision-fields" style="display:none">`;
+    html += '<div class="form-grid">';
+    html += `<label>Cameras</label>`;
+    html += `<input type="text" id="run-teleop-debug-vision-cameras" placeholder="all (e.g. top)" value="">`;
+    html += `<label id="run-teleop-debug-vision-prompt-label">Prompt</label>`;
+    html += `<input type="text" id="run-teleop-debug-vision-prompt" placeholder="cup . bottle . hand ." value="cup . bottle . hand .">`;
+    html += '</div>';
+    html += `<div class="form-hint" id="run-teleop-debug-vision-hint">Lowercase, period-separated. Only list objects actually in view — spurious phrases get mislabeled. Edit + Apply to update live.</div>`;
+    html += `<button class="btn-tiny" id="run-teleop-debug-vision-apply" onclick="_applyDebugVisionControl()">Apply prompt</button>`;
     html += '</div>';
     html += '</div>';
     html += '</div>'; // end teleop section
@@ -1761,9 +1833,13 @@ function _connectDebugOutputSSE() {
         const modelTerminal = document.getElementById('run-model-terminal');
         if (!modelTerminal) return;
         const text = _stripAnsi(event.data);
+        if (text.startsWith('##OVERLAY:')) return;  // camera-overlay protocol, not user-facing text
         const line = document.createElement('div');
         line.className = 'terminal-line';
-        line.textContent = text;
+        // Escape, then linkify http(s) URLs so e.g. the SAM3 accept-license link
+        // is click-through in the model output panel.
+        const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        line.innerHTML = esc.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
         modelTerminal.appendChild(line);
         modelTerminal.scrollTop = modelTerminal.scrollHeight;
         while (modelTerminal.children.length > 500) {
@@ -1800,6 +1876,45 @@ function _hideSubtaskOverlay() {
         overlay.style.display = 'none';
         overlay.textContent = '';
     }
+}
+
+// Debug-vision overlays: fetch the per-camera RGBA PNG and composite it on a
+// <canvas> over the camera <img>, aligned to the object-fit:contain box so it
+// registers with the frame exactly. The last result persists between updates,
+// so a model slower than the camera never stutters the overlay.
+function _pollOverlay(camKeys, imgElements, canvasElements, seq) {
+    if (!_debugVisionLoaded) return;
+    for (const key of camKeys) {
+        const canvas = canvasElements?.[key];
+        const img = imgElements?.[key];
+        if (!canvas || !img) continue;
+        const overlayImg = new Image();
+        overlayImg.onload = () => _drawOverlay(canvas, img, overlayImg);
+        overlayImg.onerror = () => {};  // 204 (no overlay produced yet) -> ignore
+        overlayImg.src = `/api/run/debug/overlay/${encodeURIComponent(key)}?_=${seq}`;
+    }
+}
+
+function _drawOverlay(canvas, img, overlayImg) {
+    const cw = img.clientWidth, ch = img.clientHeight;
+    const fw = overlayImg.naturalWidth, fh = overlayImg.naturalHeight;
+    if (!cw || !ch || !fw || !fh) return;
+    if (canvas.width !== cw) canvas.width = cw;
+    if (canvas.height !== ch) canvas.height = ch;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, cw, ch);
+    // Match the <img>'s object-fit:contain letterbox so overlay pixels align
+    // with frame pixels.
+    const scale = Math.min(cw / fw, ch / fh);
+    const dw = fw * scale, dh = fh * scale;
+    ctx.drawImage(overlayImg, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+}
+
+function _clearOverlayCanvases() {
+    document.querySelectorAll('.debug-overlay-canvas').forEach((canvas) => {
+        const ctx = canvas.getContext('2d');
+        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    });
 }
 
 function _disconnectDebugOutputSSE() {
@@ -2059,6 +2174,7 @@ async function startObsStreamViewer() {
     `;
 
     const imgElements = {};
+    const canvasElements = {};
     for (const key of camKeys) {
         const cell = document.createElement('div');
         cell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
@@ -2067,6 +2183,12 @@ async function startObsStreamViewer() {
         img.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
         img.alt = key;
         cell.appendChild(img);
+
+        // Debug-vision overlay canvas — composited over the camera <img>.
+        const overlayCanvas = document.createElement('canvas');
+        overlayCanvas.className = 'debug-overlay-canvas';
+        overlayCanvas.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;';
+        cell.appendChild(overlayCanvas);
 
         const label = document.createElement('div');
         label.textContent = key;
@@ -2090,6 +2212,7 @@ async function startObsStreamViewer() {
 
         grid.appendChild(cell);
         imgElements[key] = img;
+        canvasElements[key] = overlayCanvas;
     }
 
     // URDF visualization tile — the in-browser three.js/urdf-loader viewer,
@@ -2131,6 +2254,7 @@ async function startObsStreamViewer() {
             img.src = `/api/run/obs-stream/image/${encodeURIComponent(key)}?_=${seq}`;
         }
         _pollSubtaskOverlay();
+        _pollOverlay(camKeys, imgElements, canvasElements, seq);
     }, 50);
 }
 
@@ -2141,6 +2265,7 @@ function stopObsStreamViewer() {
     }
     obsStreamMeta = null;
     _hideSubtaskOverlay();
+    _clearOverlayCanvases();
 
     const container = document.getElementById('rerun-viewer');
     if (!container) return;

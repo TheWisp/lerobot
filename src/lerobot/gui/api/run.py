@@ -156,10 +156,16 @@ def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bo
 
 
 class DebugModelConfig(BaseModel):
-    checkpoint: str
+    checkpoint: str = ""
     policy_type: str
     task: str = ""
     decode_subtask: bool = True
+    # debug-vision models (policy_type == "debug_vision"): a built-in
+    # representation model (Grounding DINO, DINOv2 features, ...) overlaid on
+    # the camera view rather than an HVLA checkpoint.
+    model: str = ""  # adapter key: grounding_dino | dino_features
+    prompt: str = ""
+    cameras: list[str] = []
 
 
 class TeleoperateRequest(BaseModel):
@@ -400,27 +406,15 @@ async def _launch_subprocess(
     asyncio.create_task(_wait_for_exit())
 
 
-async def _launch_debug_s2(config: DebugModelConfig) -> None:
-    """Launch HVLA S2 standalone as a debug model process alongside teleop."""
+async def _spawn_debug_logged(args: list[str]) -> None:
+    """Launch a debug-model subprocess, streaming its stdout+stderr to a temp
+    log file that _tail_debug_log surfaces to the GUI. Replaces any running
+    debug process. Shared by the S2 and debug-vision launchers."""
     global _debug_process, _debug_output_path, _debug_output_lines, _debug_read_task
     import tempfile
 
     await _stop_debug_process()
 
-    args = [
-        "python",
-        "-u",
-        "-m",
-        "lerobot.policies.hvla.s2_standalone",
-        f"--checkpoint={Path(config.checkpoint).expanduser() / 'model.safetensors'}"
-        if not config.checkpoint.endswith(".safetensors")
-        else f"--checkpoint={Path(config.checkpoint).expanduser()}",
-        f"--task={config.task}",
-    ]
-    if config.decode_subtask:
-        args.append("--decode-subtask")
-
-    # Write output to a dedicated log file (not mixed with main process output).
     # mkstemp -> path-only: the fd is closed immediately, then the subprocess
     # opens the path with O_TRUNC. Avoids mktemp's TOCTOU race.
     _fd, _log_path = tempfile.mkstemp(prefix="lerobot_debug_model_", suffix=".log")
@@ -428,8 +422,7 @@ async def _launch_debug_s2(config: DebugModelConfig) -> None:
     _debug_output_path = Path(_log_path)
     _debug_output_lines = []
 
-    env = {**__import__("os").environ}
-    logger.info(f"Launching debug S2: {' '.join(args)}")
+    logger.info(f"Launching debug model: {' '.join(args)}")
     logger.info(f"Debug model output: {_debug_output_path}")
 
     debug_log_fd = os.open(str(_debug_output_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
@@ -437,13 +430,47 @@ async def _launch_debug_s2(config: DebugModelConfig) -> None:
         *args,
         stdout=debug_log_fd,
         stderr=debug_log_fd,
-        env=env,
+        env={**os.environ},
         preexec_fn=_set_pdeathsig_preexec,
     )
     os.close(debug_log_fd)  # subprocess inherited the fd, we can close our copy
 
-    # Tail the log file in background
     _debug_read_task = asyncio.create_task(_tail_debug_log())
+
+
+async def _launch_debug_s2(config: DebugModelConfig) -> None:
+    """Launch HVLA S2 standalone as a debug model process alongside teleop."""
+    ckpt = Path(config.checkpoint).expanduser()
+    if not config.checkpoint.endswith(".safetensors"):
+        ckpt = ckpt / "model.safetensors"
+    args = [
+        "python",
+        "-u",
+        "-m",
+        "lerobot.policies.hvla.s2_standalone",
+        f"--checkpoint={ckpt}",
+        f"--task={config.task}",
+    ]
+    if config.decode_subtask:
+        args.append("--decode-subtask")
+    await _spawn_debug_logged(args)
+
+
+async def _launch_debug_vision(config: DebugModelConfig) -> None:
+    """Launch a debug-vision overlay model (Grounding DINO, DINOv2, ...)."""
+    args = [
+        "python",
+        "-u",
+        "-m",
+        "lerobot.policies.debug_vision.standalone",
+        f"--model={config.model}",
+    ]
+    if config.prompt:
+        args.append(f"--prompt={config.prompt}")
+    if config.cameras:
+        args.append("--cameras")
+        args.extend(config.cameras)
+    await _spawn_debug_logged(args)
 
 
 async def _tail_debug_log() -> None:
@@ -479,6 +506,7 @@ async def _stop_debug_process() -> None:
     """Stop the debug model process if running."""
     global _debug_process, _debug_read_task, _debug_output_path, _s2_subtask_cache
     _s2_subtask_cache = None
+    _close_overlay_reader()
     if _debug_process is not None and _debug_process.returncode is None:
         _debug_process.terminate()
         try:
@@ -528,6 +556,8 @@ async def load_debug_model(config: DebugModelConfig) -> dict:
 
         if config.policy_type == "hvla_s2_vlm":
             await _launch_debug_s2(config)
+        elif config.policy_type == "debug_vision":
+            await _launch_debug_vision(config)
         else:
             raise HTTPException(400, f"Unsupported debug model type: {config.policy_type}")
 
@@ -610,6 +640,90 @@ async def debug_subtask() -> dict:
         return {"subtask": ""}
 
 
+# ── Debug-vision overlay channel ─────────────────────────────────────────
+# A debug-vision subprocess writes per-camera RGBA overlays + a JSON control
+# block to a SharedOverlayBuffer. We attach read-only (lazily, since the
+# subprocess owns the segments) and serve the overlays as PNG.
+_overlay_reader = None  # SharedOverlayBuffer | None (read-only attach)
+_overlay_png_cache: dict[str, tuple[int, bytes]] = {}  # cam_key -> (seq, png)
+
+
+def _get_overlay_reader():
+    global _overlay_reader
+    if _overlay_reader is not None:
+        return _overlay_reader
+    try:
+        from lerobot.policies.debug_vision.overlay_ipc import SharedOverlayBuffer
+
+        _overlay_reader = SharedOverlayBuffer(create=False)
+    except FileNotFoundError:
+        _overlay_reader = None  # subprocess hasn't created the segments yet
+    except Exception:
+        logger.exception("overlay reader attach failed")
+        _overlay_reader = None
+    return _overlay_reader
+
+
+def _close_overlay_reader() -> None:
+    global _overlay_reader, _overlay_png_cache
+    if _overlay_reader is not None:
+        with contextlib.suppress(Exception):
+            _overlay_reader.cleanup()
+        _overlay_reader = None
+    _overlay_png_cache = {}
+
+
+@router.get("/debug/overlay/meta")
+async def debug_overlay_meta() -> dict:
+    """Which cameras the loaded debug-vision model is overlaying."""
+    if not _is_debug_loaded():
+        _close_overlay_reader()
+        return {"available": False, "cameras": [], "model": ""}
+    reader = _get_overlay_reader()
+    if reader is None:
+        return {"available": False, "cameras": [], "model": ""}
+    return {"available": True, "cameras": list(reader.cameras), "model": reader.model}
+
+
+@router.get("/debug/overlay/{cam_key}")
+async def debug_overlay_image(cam_key: str) -> Response:
+    """Latest RGBA overlay for a camera as PNG (204 if none yet)."""
+    reader = _get_overlay_reader()
+    if reader is None:
+        return Response(status_code=204)
+    seq = reader.overlay_seq(cam_key)
+    if seq == 0:
+        return Response(status_code=204)
+    cached = _overlay_png_cache.get(cam_key)
+    if cached is not None and cached[0] == seq:
+        return Response(content=cached[1], media_type="image/png", headers={"Cache-Control": "no-store"})
+    result = reader.read_overlay(cam_key)
+    if result is None:
+        return Response(status_code=204)
+    rgba, _ts = result
+
+    import cv2
+
+    def _encode() -> bytes:
+        bgra = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)
+        _, png = cv2.imencode(".png", bgra)
+        return png.tobytes()
+
+    png_bytes = await asyncio.get_event_loop().run_in_executor(None, _encode)
+    _overlay_png_cache[cam_key] = (seq, png_bytes)
+    return Response(content=png_bytes, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@router.post("/debug/control")
+async def debug_control(body: dict) -> dict:
+    """Push a control update (e.g. {"prompt": "..."}) to the debug-vision model."""
+    reader = _get_overlay_reader()
+    if reader is None:
+        raise HTTPException(409, "No debug-vision model is producing overlays")
+    reader.write_control(body)
+    return {"status": "ok"}
+
+
 # ============================================================================
 # Endpoints
 # ============================================================================
@@ -634,11 +748,17 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
         # because _debug_lock holders (load_debug_model / unload_debug_model)
         # never reach for _launch_lock — no cycle is possible.
         extra_env = None
-        if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
+        if req.debug_model and req.debug_model.policy_type:
             async with _debug_lock:
                 if _debug_process is None or _debug_process.returncode is not None:
-                    await _launch_debug_s2(req.debug_model)
-            extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
+                    if req.debug_model.policy_type == "hvla_s2_vlm":
+                        await _launch_debug_s2(req.debug_model)
+                    elif req.debug_model.policy_type == "debug_vision":
+                        await _launch_debug_vision(req.debug_model)
+            # S2 needs teleop to publish into its SharedImageBuffer; debug-vision
+            # reads the always-on ObservationStream, so it needs no extra env.
+            if req.debug_model.policy_type == "hvla_s2_vlm":
+                extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
 
         await _launch_subprocess(args, command="teleoperate", config=req.model_dump(), extra_env=extra_env)
         return {"status": "started", "command": "teleoperate", "pid": _active_process.pid}
@@ -682,11 +802,17 @@ async def start_record(req: RecordRequest) -> dict:
         args.append(f"--latency_output_dir={LATENCY_OUTPUT_DIR_RECORD}")
 
         extra_env = None
-        if req.debug_model and req.debug_model.policy_type == "hvla_s2_vlm":
+        if req.debug_model and req.debug_model.policy_type:
             async with _debug_lock:
                 if _debug_process is None or _debug_process.returncode is not None:
-                    await _launch_debug_s2(req.debug_model)
-            extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
+                    if req.debug_model.policy_type == "hvla_s2_vlm":
+                        await _launch_debug_s2(req.debug_model)
+                    elif req.debug_model.policy_type == "debug_vision":
+                        await _launch_debug_vision(req.debug_model)
+            # S2 needs teleop to publish into its SharedImageBuffer; debug-vision
+            # reads the always-on ObservationStream, so it needs no extra env.
+            if req.debug_model.policy_type == "hvla_s2_vlm":
+                extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
 
         await _launch_subprocess(args, command="record", config=req.model_dump(), extra_env=extra_env)
         return {"status": "started", "command": "record", "pid": _active_process.pid}

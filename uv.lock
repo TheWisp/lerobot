@@ -2840,6 +2840,9 @@ dataset-viz = [
     { name = "rerun-sdk" },
     { name = "torchcodec", marker = "(platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and sys_platform == 'linux') or (platform_machine != 'x86_64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
+debug-vision = [
+    { name = "transformers" },
+]
 deepdiff-dep = [
     { name = "deepdiff" },
 ]
@@ -3239,6 +3242,7 @@ requires-dist = [
     { name = "lerobot", extras = ["smolvla"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["test"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["training"], marker = "extra == 'all'" },
+    { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'debug-vision'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'groot'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'hilserl'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'hvla'" },
@@ -3319,7 +3323,7 @@ requires-dist = [
     { name = "websockets", marker = "extra == 'gui'", specifier = ">=13.0,<17.0" },
     { name = "zeroconf", marker = "extra == 'gui'", specifier = ">=0.130,<1.0" },
 ]
-provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "pink-dep", "transformers-dep", "grpcio-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "kinematics", "intelrealsense", "phone", "quest-vr", "diffusion", "wallx", "pi", "smolvla", "multi-task-dit", "groot", "sarm", "xvla", "hilserl", "hvla", "async", "peft", "gui", "mcp", "dev", "notebook", "test", "video-benchmark", "aloha", "pusht", "libero", "metaworld", "all"]
+provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "pink-dep", "transformers-dep", "grpcio-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "kinematics", "intelrealsense", "phone", "quest-vr", "diffusion", "wallx", "pi", "smolvla", "multi-task-dit", "groot", "sarm", "xvla", "hilserl", "hvla", "debug-vision", "async", "peft", "gui", "mcp", "dev", "notebook", "test", "video-benchmark", "aloha", "pusht", "libero", "metaworld", "all"]
 
 [[package]]
 name = "librt"

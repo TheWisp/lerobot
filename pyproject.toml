@@ -211,6 +211,20 @@ hvla = [
     "scikit-learn>=1.5.0,<2.0.0",
 ]
 
+# Debug-vision (fork-only). Representation-layer models (Grounding DINO,
+# DINOv2 feature viz, ...) run alongside teleop to overlay live model output
+# on the GUI camera view. Imported lazily under
+# src/lerobot/policies/debug_vision/. torch + opencv-python-headless + Pillow
+# + numpy are already core deps; transformers is the only addition. Weights
+# are public HF checkpoints fetched into the standard HF cache on first load
+# (Grounding DINO, DINOv2, Depth Anything V2, SAM2.1, SAM3*). CoTracker3 pulls
+# its code + weights via torch.hub into the standard torch cache on first load.
+# *SAM3 (facebook/sam3) is a GATED HF repo — accept the Meta SAM License + log
+#  in (hf auth login); the other models are ungated and work out of the box.
+debug-vision = [
+    "lerobot[transformers-dep]",
+]
+
 # Features
 async = ["lerobot[grpcio-dep]", "lerobot[matplotlib-dep]"]
 peft = ["lerobot[transformers-dep]", "lerobot[peft-dep]"]
