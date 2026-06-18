@@ -618,7 +618,8 @@ function _getDebugModelConfig() {
         if (sel.value === 'grounding_dino') {
             config.prompt = document.getElementById('run-teleop-debug-vision-prompt')?.value?.trim() || '';
         }
-        config.cameras = [];  // empty = overlay all cameras
+        config.cameras = (document.getElementById('run-teleop-debug-vision-cameras')?.value || '')
+            .split(',').map(s => s.trim()).filter(Boolean);  // empty = all cameras
     }
     return config;
 }
@@ -1090,10 +1091,12 @@ function renderRunForm() {
     // Debug-vision fields (shown when a built-in representation model is selected).
     html += `<div id="run-teleop-debug-vision-fields" style="display:none">`;
     html += '<div class="form-grid">';
+    html += `<label>Cameras</label>`;
+    html += `<input type="text" id="run-teleop-debug-vision-cameras" placeholder="all (e.g. top)" value="">`;
     html += `<label id="run-teleop-debug-vision-prompt-label">Prompt</label>`;
-    html += `<input type="text" id="run-teleop-debug-vision-prompt" placeholder="cup . bottle . hand . robot arm ." value="cup . bottle . hand . robot arm .">`;
+    html += `<input type="text" id="run-teleop-debug-vision-prompt" placeholder="cup . bottle . hand ." value="cup . bottle . hand .">`;
     html += '</div>';
-    html += `<div class="form-hint" id="run-teleop-debug-vision-hint">Lowercase, period-separated phrases. Edit + Apply to update boxes live.</div>`;
+    html += `<div class="form-hint" id="run-teleop-debug-vision-hint">Lowercase, period-separated. Only list objects actually in view — spurious phrases get mislabeled. Edit + Apply to update live.</div>`;
     html += `<button class="btn-tiny" id="run-teleop-debug-vision-apply" onclick="_applyDebugVisionControl()">Apply prompt</button>`;
     html += '</div>';
     html += '</div>';

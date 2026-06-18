@@ -66,8 +66,14 @@ def main() -> None:
     logger.info("attached to obs stream; cameras available: %s", list(reader.image_keys))
 
     all_cams = list(reader.image_keys)
-    requested = [c for c in (args.cameras or all_cams) if c in reader.image_keys]
-    cams = requested or all_cams
+    if args.cameras:
+        # Substring match so "top" selects "observation.images.top".
+        cams = [c for c in all_cams if any(sub.lower() in c.lower() for sub in args.cameras)]
+        if not cams:
+            logger.warning("no camera matched %s; overlaying all of %s", args.cameras, all_cams)
+            cams = all_cams
+    else:
+        cams = all_cams
     dims = {c: (int(reader.image_keys[c][0]), int(reader.image_keys[c][1])) for c in cams}
     logger.info("overlaying %s", dims)
 

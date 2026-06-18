@@ -72,11 +72,14 @@ class GroundingDinoAdapter(DebugVisionAdapter):
             "type": "text",
             "key": "prompt",
             "label": "Prompt",
-            "placeholder": "cup . bottle . hand . robot arm .",
-            "hint": "Lowercase, period-separated phrases.",
+            "placeholder": "cup . bottle . hand .",
+            "hint": "Lowercase, period-separated. Only list objects actually in view — "
+            "Grounding DINO grounds every phrase onto something, so spurious phrases get mislabeled.",
         }
     ]
-    DEFAULT_PROMPT = "cup . bottle . hand . robot arm ."
+    # Keep neutral: listing objects that aren't present makes the model force the
+    # label onto the nearest blob. Users edit this per scene.
+    DEFAULT_PROMPT = "cup . bottle . hand ."
 
     def __init__(self, device: str = "cuda"):
         super().__init__(device)
