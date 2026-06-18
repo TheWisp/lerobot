@@ -322,7 +322,12 @@ class TestNebiusSpawn:
         assert req.spec.resources.preset == "1gpu-16vcpu-96gb"
         assert req.spec.boot_disk.managed_disk.spec.size_gibibytes == 50
         assert req.metadata.parent_id == "project-TEST"
-        assert req.spec.network_interfaces[0].subnet_id == "vpcsubnet-TEST"
+        nic = req.spec.network_interfaces[0]
+        assert nic.subnet_id == "vpcsubnet-TEST"
+        # Server-required NIC fields (a real spawn 400s without them):
+        # name + an ip_address (empty = auto-allocate the internal IPv4).
+        assert nic.name, "network interface name is server-required"
+        assert nic.check_presence("ip_address"), "ip_address is server-required"
         assert "ssh-ed25519 AAAAFAKEKEY" in req.spec.cloud_init_user_data
 
     def test_spawn_cloud_init_arms_ttl_poweroff(self):

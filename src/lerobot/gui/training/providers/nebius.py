@@ -323,8 +323,13 @@ class NebiusProvider:
                     ),
                 ),
                 network_interfaces=[
+                    # name + ip_address are server-required (an empty IPAddress
+                    # auto-allocates the internal IPv4); public_ip_address adds
+                    # the external IP we SSH into.
                     sym.NetworkInterfaceSpec(
+                        name="eth0",
                         subnet_id=self._subnet_id,
+                        ip_address=sym.IPAddress(),
                         public_ip_address=sym.PublicIPAddress(static=True),
                     )
                 ],
@@ -454,6 +459,7 @@ class _SdkSymbols:
         "DiskSpec",
         "SourceImageFamily",
         "NetworkInterfaceSpec",
+        "IPAddress",
         "PublicIPAddress",
         "InstanceStatus",
         "ResourceMetadata",
@@ -471,6 +477,7 @@ class _SdkSymbols:
                 InstanceServiceClient,
                 InstanceSpec,
                 InstanceStatus,
+                IPAddress,
                 ManagedDisk,
                 NetworkInterfaceSpec,
                 PublicIPAddress,
@@ -495,6 +502,7 @@ class _SdkSymbols:
         self.DiskSpec = DiskSpec
         self.SourceImageFamily = SourceImageFamily
         self.NetworkInterfaceSpec = NetworkInterfaceSpec
+        self.IPAddress = IPAddress
         self.PublicIPAddress = PublicIPAddress
         self.InstanceStatus = InstanceStatus
         self.ResourceMetadata = ResourceMetadata
