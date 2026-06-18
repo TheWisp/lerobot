@@ -323,9 +323,11 @@ class NebiusProvider:
                     ),
                 ),
                 network_interfaces=[
-                    # name + ip_address are server-required (an empty IPAddress
-                    # auto-allocates the internal IPv4); public_ip_address adds
-                    # the external IP we SSH into.
+                    # name + ip_address are API-required. name is the in-VM OS
+                    # interface name (truncated to 15 chars by Nebius); "eth0" is
+                    # the conventional primary NIC. Empty IPAddress() auto-
+                    # allocates the internal IPv4; public_ip_address is the
+                    # external IP we SSH into.
                     sym.NetworkInterfaceSpec(
                         name="eth0",
                         subnet_id=self._subnet_id,
