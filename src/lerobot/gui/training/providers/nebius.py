@@ -541,7 +541,9 @@ def _public_ip(instance: Any) -> str | None:
         pub = getattr(nic, "public_ip_address", None)
         addr = getattr(pub, "address", None) if pub is not None else None
         if addr:
-            return str(addr)
+            # Nebius returns the address in CIDR form (e.g. "195.242.28.4/32");
+            # ssh needs the bare host or it can't resolve it, so drop the prefix.
+            return str(addr).split("/", 1)[0]
     return None
 
 

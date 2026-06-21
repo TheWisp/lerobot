@@ -312,6 +312,14 @@ class TestNebiusSpawn:
         assert handle.ssh_user == getpass.getuser()  # Fix A: matches GUI server user (#11 workaround)
         assert handle.expires_at_unix > 0
 
+    def test_spawn_strips_cidr_suffix_from_public_ip(self):
+        """Nebius returns the public IP in CIDR form (e.g. "195.242.28.4/32").
+        ssh_host must be the bare address — otherwise ssh fails with
+        "Could not resolve hostname 195.242.28.4/32" before training starts."""
+        svc = _FakeService(get_sequence=[_FakeInstance("RUNNING", "195.242.28.4/32")])
+        handle = _nebius(svc).spawn(_example_spec(ttl_seconds=3600))
+        assert handle.ssh_host == "195.242.28.4"
+
     def test_spawn_builds_request_with_verified_sku(self):
         """Exercises REAL SDK message construction: platform/preset/disk/
         cloud-init must land on the CreateInstanceRequest."""
