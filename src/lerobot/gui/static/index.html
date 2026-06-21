@@ -547,7 +547,12 @@ nebius iam auth-public-key generate \
                 </div>
                 <div>
                     <label for="nebius-conn-subnet" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Subnet ID</label>
-                    <input id="nebius-conn-subnet" type="text" spellcheck="false" placeholder="vpcsubnet-e00..." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                    <div style="display:flex; gap:6px;">
+                        <input id="nebius-conn-subnet" type="text" spellcheck="false" placeholder="vpcsubnet-e00..." style="flex:1; min-width:0; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                        <button type="button" id="nebius-conn-find-subnet" onclick="trainingFindSubnets()" title="List the subnets in this project" style="padding:5px 10px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px; white-space:nowrap;">Find</button>
+                    </div>
+                    <select id="nebius-conn-subnet-found" onchange="trainingPickSubnet()" style="display:none; width:100%; margin-top:6px; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;"></select>
+                    <span id="nebius-conn-subnet-hint" style="display:block; margin-top:4px; font-size:10px; color:var(--text-secondary,#777);"></span>
                 </div>
             </div>
             <div id="nebius-conn-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
@@ -623,7 +628,7 @@ nebius iam auth-public-key generate \
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=45"></script>
     <script src="/static/model.js?v=5"></script>
-    <script src="/static/training.js?v=22"></script>
+    <script src="/static/training.js?v=23"></script>
     <script src="/static/add_host_dialog.js?v=4"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>

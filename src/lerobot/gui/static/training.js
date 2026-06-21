@@ -50,6 +50,10 @@ function trainingOpenNebiusConnection() {
     if (el) el.value = "";
   });
   trainingNebiusModeChanged();
+  const foundSel = document.getElementById("nebius-conn-subnet-found");
+  if (foundSel) { foundSel.style.display = "none"; foundSel.innerHTML = ""; }
+  const subnetHint = document.getElementById("nebius-conn-subnet-hint");
+  if (subnetHint) subnetHint.textContent = "";
   overlay.style.display = "flex";
   trainingFetchNebiusConnection().then((st) => {
     document.getElementById("nebius-conn-current").textContent = _nebiusConnSummary(st);
@@ -80,26 +84,85 @@ function trainingNebiusModeChanged() {
   if (jsonEl) jsonEl.style.display = mode === "json" ? "block" : "none";
   if (fieldsEl) fieldsEl.style.display = mode === "fields" ? "block" : "none";
 }
-async function trainingSaveNebiusConnection() {
-  const statusEl = document.getElementById("nebius-conn-status");
+// The key portion of the payload for the active mode, or null (after writing a
+// message to statusEl, if given) when required fields are missing. Shared by
+// Connect and the subnet-discovery lookup.
+function _nebiusKeyPayload(statusEl) {
   const sel = document.getElementById("nebius-conn-mode");
   const mode = sel ? sel.value : "json";
+  if (mode === "json") {
+    const key_json = document.getElementById("nebius-conn-key").value.trim();
+    if (!key_json) {
+      if (statusEl) statusEl.textContent = "Paste the service-account key JSON.";
+      return null;
+    }
+    return { key_json };
+  }
+  const private_key = document.getElementById("nebius-conn-privkey").value.trim();
+  const key_id = document.getElementById("nebius-conn-kid").value.trim();
+  const service_account_id = document.getElementById("nebius-conn-said").value.trim();
+  if (!private_key || !key_id || !service_account_id) {
+    if (statusEl) statusEl.textContent = "Paste the private key and both IDs (key ID + service account ID).";
+    return null;
+  }
+  return { private_key, key_id, service_account_id };
+}
+// Look up the project's subnets so the operator can pick instead of hand-copying
+// an ID. Best-effort: on any failure the manual Subnet field still works.
+async function trainingFindSubnets() {
+  const hint = document.getElementById("nebius-conn-subnet-hint");
+  const select = document.getElementById("nebius-conn-subnet-found");
+  const input = document.getElementById("nebius-conn-subnet");
+  const project_id = document.getElementById("nebius-conn-project").value.trim();
+  const setHint = (msg, color) => { hint.style.color = color; hint.textContent = msg; };
+  if (!project_id) { setHint("Enter the Project ID first.", "#e5c07b"); return; }
+  const key = _nebiusKeyPayload(null);
+  if (!key) { setHint("Enter the key above first.", "#e5c07b"); return; }
+  setHint("Looking up subnets…", "#e5c07b");
+  try {
+    const resp = await fetch("/api/training/nebius/discover/subnets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...key, project_id }),
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      setHint((data && data.detail) || `Lookup failed (${resp.status}). Enter the subnet ID manually.`, "#e06c75");
+      return;
+    }
+    const subnets = data || [];
+    if (subnets.length === 0) {
+      select.style.display = "none";
+      setHint("No subnets found in that project.", "#e5c07b");
+    } else if (subnets.length === 1) {
+      select.style.display = "none";
+      input.value = subnets[0].id;
+      setHint(`✓ Using ${subnets[0].name}`, "#98c379");
+    } else {
+      select.innerHTML = subnets
+        .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)} (${escapeHtml(s.id)})</option>`)
+        .join("");
+      select.style.display = "block";
+      input.value = subnets[0].id;
+      setHint(`${subnets.length} subnets — pick one`, "#98c379");
+    }
+  } catch (e) {
+    setHint(`Lookup failed: ${e}. Enter the subnet ID manually.`, "#e06c75");
+  }
+}
+function trainingPickSubnet() {
+  const select = document.getElementById("nebius-conn-subnet-found");
+  document.getElementById("nebius-conn-subnet").value = select.value;
+}
+async function trainingSaveNebiusConnection() {
+  const statusEl = document.getElementById("nebius-conn-status");
+  const key = _nebiusKeyPayload(statusEl);
+  if (!key) return;
   const body = {
+    ...key,
     project_id: document.getElementById("nebius-conn-project").value.trim(),
     subnet_id: document.getElementById("nebius-conn-subnet").value.trim(),
   };
-  if (mode === "json") {
-    body.key_json = document.getElementById("nebius-conn-key").value.trim();
-    if (!body.key_json) { statusEl.textContent = "Paste the service-account key JSON."; return; }
-  } else {
-    body.private_key = document.getElementById("nebius-conn-privkey").value.trim();
-    body.key_id = document.getElementById("nebius-conn-kid").value.trim();
-    body.service_account_id = document.getElementById("nebius-conn-said").value.trim();
-    if (!body.private_key || !body.key_id || !body.service_account_id) {
-      statusEl.textContent = "Paste the private key and both IDs (key ID + service account ID).";
-      return;
-    }
-  }
   if (!body.project_id || !body.subnet_id) {
     statusEl.textContent = "Project ID and Subnet ID are required.";
     return;
