@@ -36,6 +36,7 @@ from lerobot.gui.api import (
     playback,
     robot,
     run,
+    training,
 )
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
@@ -93,6 +94,23 @@ async def startup_event():
     n = cleanup_stale_streams()
     if n:
         logger.info("Swept %d stale obs-stream shm segment(s) from a previous run", n)
+
+    # Policy registry health probe: import every registered policy's modeling
+    # module in a background thread; warn for any that fail. Surfaces
+    # "env missing deps for policy X" at startup instead of mid-run (e.g.
+    # 4 hours later when the user clicks "Test on robot"). Backgrounded
+    # because cold-importing 18 policy modules — each pulling transformers /
+    # diffusers / etc. — takes several seconds; the GUI mustn't block on it.
+    import threading
+
+    from lerobot.policies.factory import log_policy_registry_health
+
+    threading.Thread(
+        target=log_policy_registry_health,
+        args=("GUI server's lerobot environment",),
+        daemon=True,
+        name="policy-health-probe",
+    ).start()
 
     # If _mount_mcp() attached an MCP instance, enter its session-manager's
     # async context here. Starlette doesn't forward lifespan events to apps
@@ -241,6 +259,14 @@ app.include_router(models.router)
 app.include_router(bug_reports.router)
 app.include_router(ai_setup.router)
 app.include_router(bridge.router)
+app.include_router(training.router)
+
+# Wire up the training orchestrator with the auto-detected workstation host.
+# Safe at import time: HostRegistry.auto() probes nvidia-smi but tolerates
+# its absence; on a GPU-less server the training endpoints just return an
+# empty hosts list and the dropdown stays empty.
+_training_orch = training.make_default_orchestrator()
+training.init_state(orch=_training_orch, host_registry=_training_orch._hosts)  # noqa: SLF001
 
 # Serve static files (CSS, JS)
 _static_dir = Path(__file__).parent / "static"

@@ -194,8 +194,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
 /* Sidebar sections */
 .sidebar-section { border-bottom: 1px solid #0f3460; }
-.section-label { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+.section-label { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
 .section-label .btn-small { padding: 2px 8px; font-size: 11px; }
+/* Group multiple header actions (e.g. Training's Run/Host/Clear) on the
+   right so they read as one cluster, not spread across the row by the
+   parent's space-between. */
+.section-actions { display: flex; align-items: center; gap: 6px; }
 
 /* Sources section */
 .sources-section { max-height: 50%; overflow-y: auto; }
@@ -1229,4 +1233,474 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 @keyframes bridge-highlight-pulse {
     0%, 100% { background: rgba(79, 195, 247, 0.25) !important; }
     50%      { background: rgba(79, 195, 247, 0.55) !important; }
+}
+
+/* ── Training panel ──────────────────────────────────────────────────────── */
+.training-state-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.training-state-pending    { background: #4a4a4a; color: #ccc; }
+.training-state-running    { background: #2a4a5a; color: #80ccff; }
+.training-state-completing { background: #5a4a2a; color: #f0c040; }
+.training-state-completed  { background: #2a5a2a; color: #80f080; }
+.training-state-failed     { background: #5a2a2a; color: #f08080; }
+.training-state-aborted    { background: #4a4a4a; color: #aaa; }
+.training-run-row:hover { background: #1a2640; }
+
+/* ── Training panel — sidebar row + detail pane ───────────────────────────── */
+
+/* Constrain the runs list height so it scrolls instead of pushing the rest
+ * of the sidebar off-screen. Sized to ~8 rows; sibling sidebar sections
+ * (Models list, hosts info) stay visible regardless of run count. */
+#training-runs-list {
+    max-height: 320px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Right-click context menu on a run row. Floating, single-column,
+ * appears at the cursor; dismisses on any outside click. */
+.training-context-menu {
+    position: fixed;
+    display: none;
+    z-index: 9999;
+    min-width: 200px;
+    background: #16213e;
+    border: 1px solid #2a3a5a;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    padding: 4px 0;
+    font-size: 13px;
+    color: #e8e8e8;
+}
+.training-context-item {
+    padding: 8px 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.training-context-item:hover {
+    background: #1a2640;
+}
+.training-context-item-danger {
+    color: #ff9999;
+}
+.training-context-item-danger:hover {
+    background: #2e1a1a;
+}
+.training-context-icon {
+    color: #888;
+    font-size: 14px;
+    width: 16px;
+    text-align: center;
+}
+
+/* Configuration card — args table in the detail view */
+.training-args-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.training-args-table th,
+.training-args-table td {
+    text-align: left;
+    padding: 5px 10px;
+    border-bottom: 1px solid #1a1a2e;
+    vertical-align: top;
+}
+.training-args-table th {
+    color: #888;
+    font-weight: 500;
+    width: 32%;
+}
+.training-args-table td {
+    color: #d0d0d0;
+    word-break: break-all;
+}
+
+.training-empty-hint {
+    padding: 10px 12px;
+    color: #888;
+    font-size: 12px;
+}
+.training-run-row {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #1a1a2e;
+}
+.training-run-row.selected { background: #16213e; }
+.training-run-row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+.training-run-name {
+    font-weight: 500;
+    color: #e8e8e8;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.training-run-row-sub {
+    color: #888;
+    font-size: 11px;
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Image-prep status banner (between header and stats card) */
+.training-image-banner {
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    margin-bottom: 16px;
+    border: 1px solid transparent;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.training-image-banner.pending {
+    background: #1a1a2e;
+    border-color: #2a2a4a;
+    color: #b0b0c8;
+}
+.training-image-banner.pulling {
+    background: #1a2e1a;
+    border-color: #2a5a2a;
+    color: #b8e8b8;
+}
+.training-image-banner.pulling::before {
+    content: "⤓";
+    font-size: 14px;
+    color: #6aff6a;
+}
+.training-image-banner.ok {
+    background: #14241a;
+    border-color: #2a4a30;
+    color: #88c0a0;
+}
+.training-image-banner.ok::before {
+    content: "✓";
+    color: #6aff8a;
+}
+.training-image-banner.failed {
+    background: #2e1a1a;
+    border-color: #5a2a2a;
+    color: #ff9999;
+}
+.training-image-banner.failed::before {
+    content: "✗";
+    color: #ff6666;
+}
+
+/* Detail pane container — must scroll when the form gets tall (SmolVLA
+ * exposes 38 form fields; ACT 23; Diffusion 33). Parent `.tab-content`
+ * is `overflow: hidden` so the scroll has to happen here. Matches the
+ * existing `.model-detail` pattern. */
+#training-detail {
+    overflow-y: auto;
+    height: 100%;
+}
+
+/* Detail pane */
+.training-detail-pane {
+    padding: 24px;
+    max-width: 1000px;
+    color: #e8e8e8;
+    font-size: 13px;
+}
+.training-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #1a1a2e;
+}
+.training-detail-title {
+    margin: 0 0 6px;
+    font-size: 18px;
+    font-weight: 600;
+}
+.training-detail-meta {
+    color: #888;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.training-detail-meta .sep { color: #555; }
+.training-detail-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Card */
+.training-card {
+    background: #16213e;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+}
+.training-card-heading {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+/* Stats row inside a card */
+.training-stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+    gap: 16px;
+    margin-bottom: 12px;
+}
+.training-stat-label {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.training-stat-value {
+    font-size: 18px;
+    font-weight: 600;
+    color: #e8e8e8;
+    margin-top: 2px;
+}
+.training-progress-bar {
+    position: relative;
+    height: 18px;
+    background: #0f3460;
+    border-radius: 4px;
+    overflow: hidden;
+}
+.training-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4fc3f7, #80f080);
+    transition: width 0.5s ease;
+}
+.training-progress-label {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* Metric charts (hand-rolled inline SVG; no charting dependency) */
+.training-charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+}
+.training-chart {
+    background: var(--bg-primary, #252526);
+    border: 1px solid #1a3a6a;
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+.training-chart-title {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.training-chart-cur {
+    float: right;
+    color: #e8e8e8;
+}
+.training-chart-canvas {
+    width: 100%;
+    height: 96px;
+    display: block;
+}
+.training-chart-axis {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: #666;
+    margin-top: 2px;
+}
+
+/* Checkpoints list */
+.training-checkpoint-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    font-size: 12px;
+}
+.training-checkpoint-list li {
+    display: grid;
+    grid-template-columns: 80px 1fr 130px;
+    gap: 12px;
+    padding: 4px 0;
+    border-bottom: 1px dashed #1a1a2e;
+    align-items: center;
+}
+.training-checkpoint-list li:last-child { border-bottom: none; }
+
+/* Log */
+.training-log {
+    background: #0a0a1a;
+    color: #ccc;
+    padding: 10px 12px;
+    margin: 0;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    line-height: 1.5;
+    max-height: 280px;
+    overflow: auto;
+    white-space: pre-wrap;
+}
+
+.training-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.training-muted { color: #888; }
+
+.training-error {
+    background: #3a1a1a;
+    color: #f08080;
+    padding: 10px 12px;
+    border-radius: 4px;
+    margin-top: 12px;
+    font-size: 12px;
+}
+
+/* Form */
+.training-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-width: 720px;
+}
+/* Label-left / control-right rows — one field per line, so the form reads
+   as a vertical list (matching the read-only Configuration table) instead
+   of a flat multi-column grid. Label in col 1, control in col 2, help text
+   under the control (col 2, row 2). */
+.training-field {
+    display: grid;
+    grid-template-columns: minmax(120px, 34%) 1fr;
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 4px;
+}
+.training-field-label {
+    grid-column: 1;
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+.training-field > input,
+.training-field > select,
+.training-field > textarea {
+    grid-column: 2;
+    min-width: 0;
+}
+.training-field-hint {
+    grid-column: 2;
+    font-size: 11px;
+    color: #666;
+}
+.training-field input,
+.training-field select {
+    background: #0f3460;
+    border: 1px solid #1a3a6a;
+    color: #e8e8e8;
+    padding: 7px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+}
+.training-field input:focus,
+.training-field select:focus {
+    outline: none;
+    border-color: #4fc3f7;
+}
+.training-field input:disabled,
+.training-field select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.training-field-row {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.training-form-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+/* Collapsible section (shrinkable title) — used for the new-run fieldsets
+   AND the run-detail Configuration card, so both read the same way. */
+.training-section {
+    border: 1px solid #1a3a6a;
+    border-radius: 6px;
+    margin: 0;
+}
+.training-section > summary {
+    padding: 10px 14px;
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.training-section > summary::-webkit-details-marker {
+    display: none;
+}
+.training-section > summary::before {
+    content: "\25B8"; /* ▸ */
+    font-size: 10px;
+    transition: transform 0.15s ease;
+}
+.training-section[open] > summary::before {
+    transform: rotate(90deg);
+}
+.training-section[open] > summary {
+    border-bottom: 1px solid #1a3a6a;
+}
+.training-section > :not(summary) {
+    margin: 12px 14px;
+}
+
+/* Bool field: checkbox sits in the control column (col 2) next to its label. */
+.training-field-bool > input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    justify-self: start;
+    accent-color: #4fc3f7;
 }

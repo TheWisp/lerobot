@@ -303,6 +303,44 @@ all = [
     # "lerobot[unitree_g1]", TODO: Unitree requires specific installation instructions for unitree_sdk2
 ]
 
+# ─── Fork-only (TheWisp/lerobot) ──────────────────────────────────────────────
+# Single curated extras list for the training Docker image built by this
+# fork's CI (.github/workflows/docker_publish_fork_training.yml →
+# docker/Dockerfile.training). Centralises "what the training pod needs"
+# so the Dockerfile is just `uv sync --extra training-image` (one consumer,
+# one contract). Adding a new policy that the GUI form picker exposes
+# means appending one `lerobot[<extra>]` line below; the next CI image
+# build picks it up automatically.
+#
+# Deliberately a SEPARATE extra (not piggybacking on `all` or modifying
+# upstream `all`) so this is a single contained addition that's easy to
+# keep separate when rebasing on upstream. The Dockerfile then verifies
+# the image at build time by importing every registered policy — see
+# `lerobot.policies.factory.check_policy_registry_health()`.
+#
+# Skipped from this list:
+#   - hardware/feetech/dynamixel/intelrealsense — no robot on the pod
+#   - libero/metaworld — heavy, infrequently used, need cmake (mujoco)
+#   - dev/test/notebook — not needed in a deployment image
+#   - groot — needs flash-attn with platform-specific install
+training-image = [
+    "lerobot[dataset]",
+    "lerobot[training]",
+    "lerobot[pusht]",
+    # Every policy the GUI form picker exposes today (transitively pulls
+    # transformers/diffusers/num2words/accelerate/etc. — the deps that
+    # previously had to be enumerated --extra-by-extra in the Dockerfile).
+    "lerobot[diffusion]",
+    "lerobot[hvla]",
+    "lerobot[hilserl]",      # gates SAC policy + RL env
+    "lerobot[multi_task_dit]",
+    "lerobot[pi]",           # covers pi0, pi05, pi0_fast
+    "lerobot[sarm]",
+    "lerobot[smolvla]",
+    "lerobot[wallx]",
+    "lerobot[xvla]",
+]
+
 [project.scripts]
 lerobot-calibrate="lerobot.scripts.lerobot_calibrate:main"
 lerobot-find-cameras="lerobot.scripts.lerobot_find_cameras:main"
@@ -585,4 +623,6 @@ ignore_errors = false
 addopts = "-m 'not hub_live'"
 markers = [
     "hub_live: Tests that hit the real HuggingFace Hub. Skipped by default; opt in with `pytest -m hub_live`. Require a logged-in HF token + network; tests auto-skip if not logged in. Repos go under the logged-in user's namespace as `_lerobot_hub_live_*` and are deleted on test exit.",
+    "requires_ssh_loopback: Tests that exercise the SshClient transport via ssh-to-127.0.0.1. Need sshd running on :22 + ssh/scp/tmux installed + a working keypair. Auto-skip if any prereq is missing. CI sets up sshd in the workflow; local dev needs `ssh-keygen` + a pubkey in `~/.ssh/authorized_keys` (the fixture handles this automatically).",
+    "requires_playwright: Browser-driven GUI tests. Need the `playwright` package + a chromium install (`playwright install chromium`). Auto-skip (importorskip / launch-skip) if either is missing.",
 ]
