@@ -12,8 +12,10 @@
 
 <!-- <h3 align="center">Lerobot Studio</h3> -->
 
-This repository tracks Hugging Face [LeRobot](https://github.com/huggingface/lerobot)
-and adds three things on top of it:
+LeRobot is built around the **dataset**: you record robot episodes, review and
+clean them, then train policies on them. This repository tracks Hugging Face
+[LeRobot](https://github.com/huggingface/lerobot) and wraps that whole loop in
+tooling:
 
 1. **A browser GUI** for reviewing, editing, and recording robot datasets — and
    for launching training runs, including on ephemeral cloud GPUs.
@@ -77,27 +79,62 @@ Run any LeRobot command through `uv run` (e.g. `uv run lerobot-info`).
 
 ---
 
-## The GUI
+## The GUI — a dataset-first workbench
 
-A browser-based tool for reviewing and editing robot training datasets, managing
-robot/teleop profiles, and launching training.
+LeRobot's core object is the **dataset**, and the GUI is the workbench for it:
+review and clean episodes, record new ones, and launch training — all in the
+browser, no notebooks.
 
 ```bash
 uv run lerobot-gui --port 8000
 ```
 
-Open <http://127.0.0.1:8000/>, enter a Hub repo ID (e.g. `lerobot/pusht`) or a
-local dataset path, then:
+Open <http://127.0.0.1:8000/> and enter a Hub repo ID (e.g. `lerobot/pusht`) or a
+local dataset path. The window is organized as four tabs — **Data**, **Model**,
+**Run**, **Robot**.
+
+### Data — review & clean your dataset
+
+The heart of the tool. Browse every episode and play all cameras in sync with
+frame-accurate timeline scrubbing, then clean the data before you train on it:
 
 - **Play** episodes across all cameras with timeline scrubbing
-- **Delete** episodes you don't want (mark → save)
 - **Trim** episodes to keep only the useful frames (drag handles → save)
-- **Visualize** any episode in [Rerun](https://rerun.io/) via right-click
+- **Delete** episodes you don't want (mark → save)
+- **Tag** episodes (success / failure / …) and **visualize** any one in
+  [Rerun](https://rerun.io/) via right-click
 
 All edits are non-destructive until you hit **Save Changes**.
 
 <p align="center">
+  <img alt="The Data tab: an episode list with synchronized multi-camera playback and a timeline" src="./media/readme/data_tab.jpg" width="85%">
+  <br>
+  <sub><i>The Data tab — synchronized multi-camera playback over a real dataset.</i></sub>
+</p>
+
+### Model — trained checkpoints & training
+
+Browse the models your runs produce — each listed by name with its loss curve
+and checkpoints — and **launch new training**, locally or on an
+[ephemeral cloud GPU](#ephemeral-cloud-training).
+
+### Run — record new episodes & evaluate
+
+Teleoperate a robot to **record** new episodes straight into a `LeRobotDataset`,
+**replay** an episode back onto the hardware, or **run a trained policy**.
+
+<p align="center">
   <img alt="Record then replay an episode from the GUI" src="./media/readme/record_replay.gif" width="70%">
+</p>
+
+### Robot — profiles, calibration & teleop
+
+Define robot and teleoperator **profiles** (motor buses, cameras, port
+assignments), run calibration, and drive the arms — bimanual SO-107 with
+predictive control, plus Quest VR / scripted end-effector teleop and Cartesian IK.
+
+<p align="center">
+  <img alt="Bimanual SO-107 arms driven from the GUI" src="./media/readme/so100_video.webp" width="70%">
 </p>
 
 ### Open it from another device
