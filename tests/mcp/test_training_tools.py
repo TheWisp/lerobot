@@ -20,7 +20,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lerobot.gui.api import training as training_api
-from lerobot.gui.training.orchestrator import HostBusyError, RunSnapshot, StartRequest, UnknownRunError
+from lerobot.gui.training.orchestrator import (
+    HostBusyError,
+    RunSnapshot,
+    StartRequest,
+    UnknownHostError,
+    UnknownRunError,
+)
 from lerobot.gui.training.runs import Run, RunState
 from lerobot.mcp.server import build_server
 
@@ -96,7 +102,7 @@ def test_get_run_unknown(mcp):
     assert out["error"] == "unknown_run"
 
 
-def test_start_run_maps_args_to_start_request(mcp):
+def test_start_run_maps_args_and_fills_dataset(mcp):
     orch = _orch_returning(start=_run("new", state=RunState.PENDING))
     with patch.object(training_api, "get_state", return_value=(orch, MagicMock())):
         out = _call(
@@ -113,13 +119,70 @@ def test_start_run_maps_args_to_start_request(mcp):
     assert out["run_id"] == "new"
     req = orch.start.call_args.args[0]
     assert isinstance(req, StartRequest)
-    assert (req.host_id, req.dataset_id, req.recipe_name, req.args, req.idempotency_key) == (
+    assert (req.host_id, req.dataset_id, req.recipe_name, req.idempotency_key) == (
         "lab-L40s",
         "lerobot/pusht",
         "smoke",
-        {"steps": 30},
         "k1",
     )
+    # dataset_id is mirrored into the default recipe's dataset flag so the
+    # caller doesn't have to know the dotted-key convention.
+    assert req.args == {"steps": 30, "dataset.repo_id": "lerobot/pusht"}
+
+
+def test_start_run_respects_explicit_dataset_repo_id(mcp):
+    orch = _orch_returning(start=_run("new", state=RunState.PENDING))
+    with patch.object(training_api, "get_state", return_value=(orch, MagicMock())):
+        _call(
+            mcp,
+            "training_start_run",
+            {
+                "host_id": "h",
+                "dataset_id": "lerobot/pusht",
+                "recipe_name": "x",
+                "args": {"dataset.repo_id": "someone/other"},
+            },
+        )
+    req = orch.start.call_args.args[0]
+    assert req.args["dataset.repo_id"] == "someone/other"  # caller wins over auto-fill
+
+
+def test_start_run_hvla_recipe_fills_bare_key(mcp):
+    orch = _orch_returning(start=_run("new", state=RunState.PENDING))
+    with patch.object(training_api, "get_state", return_value=(orch, MagicMock())):
+        _call(
+            mcp,
+            "training_start_run",
+            {
+                "host_id": "h",
+                "dataset_id": "lerobot/pusht",
+                "recipe_name": "x",
+                "args": {"__recipe__": "hvla_flow_s1"},
+            },
+        )
+    req = orch.start.call_args.args[0]
+    assert req.args["dataset_repo_id"] == "lerobot/pusht"  # HVLA's bare key
+    assert "dataset.repo_id" not in req.args
+
+
+def test_start_run_unknown_host(mcp):
+    orch = MagicMock()
+    orch.start.side_effect = UnknownHostError("unknown host id: 'nope'")
+    with patch.object(training_api, "get_state", return_value=(orch, MagicMock())):
+        out = _call(mcp, "training_start_run", {"host_id": "nope", "dataset_id": "d", "recipe_name": "x"})
+    assert out["error"] == "unknown_host"
+    assert out["host_id"] == "nope"
+
+
+def test_list_hosts_serializes(mcp):
+    host = MagicMock()
+    host.model_dump.return_value = {"id": "lab-L40s", "transport_kind": "ephemeral"}
+    with (
+        patch.object(training_api, "get_state", return_value=(MagicMock(), MagicMock())),
+        patch.object(training_api, "list_hosts", return_value=[host]),
+    ):
+        out = _call(mcp, "training_list_hosts", {})
+    assert out["hosts"] == [{"id": "lab-L40s", "transport_kind": "ephemeral"}]
 
 
 def test_start_run_reports_host_busy(mcp):

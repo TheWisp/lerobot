@@ -1024,7 +1024,9 @@ def build_server(
 
             orch, _ = get_state()
             return orch
-        except Exception:
+        except (RuntimeError, ImportError):
+            # RuntimeError: GUI training state not initialized (no GUI server).
+            # ImportError: GUI/MCP extras not installed. Either way → unavailable.
             return None
 
     _training_unavailable = {
@@ -1062,6 +1064,10 @@ def build_server(
         vm_destroyed) and ``stderr_tail``. This is how you poll a run and
         confirm metrics streamed, the checkpoint was localized, and (for cloud
         runs) the VM was verifiably destroyed.
+
+        Note: polling a terminal ephemeral run drives its cloud-VM teardown +
+        checkpoint localization (identical to the GUI's own status poll) — a
+        read, but with that one lifecycle side effect.
 
         Returns ``{"error": "unknown_run", ...}`` for an unknown run_id.
         """
@@ -1106,10 +1112,16 @@ def build_server(
 
         On an ephemeral cloud host this spawns a BILLABLE VM that runs until the
         job finishes (or you call ``training_stop_run``) and is then torn down.
-        ``recipe_name`` is the run's display name; ``args`` are the training
-        flags (e.g. ``policy.type``, ``dataset.repo_id``, ``steps``,
-        ``batch_size``). Use ``training_list_hosts`` for valid host ids. Returns
-        the created run — poll it with ``training_get_run``.
+
+        ``dataset_id`` is the dataset to train on (e.g. ``lerobot/pusht``); it's
+        forwarded into ``args`` as the recipe's dataset flag for you
+        (``dataset.repo_id`` for the default lerobot-train recipe), so the
+        common case needs only ``dataset_id``. ``recipe_name`` is the run's
+        display label. ``args`` are extra lerobot-train flags as a flat dotted
+        dict (e.g. ``{"policy.type": "act", "steps": 5000, "batch_size": 8}``);
+        anything you set there wins over the auto-fill. Use
+        ``training_list_hosts`` for valid host ids. Returns the created run —
+        poll it with ``training_get_run``.
 
         Returns ``{"error": "unknown_host" | "host_busy", ...}`` on rejection.
         """
@@ -1119,13 +1131,23 @@ def build_server(
         from lerobot.gui.api.training import _run_to_dto
         from lerobot.gui.training.orchestrator import HostBusyError, StartRequest, UnknownHostError
 
+        # Mirror dataset_id into the recipe's dataset flag (the GUI form does
+        # the same) so callers needn't know the dotted-key convention: default
+        # lerobot-train wants dataset.repo_id; non-draccus recipes (HVLA, via
+        # __recipe__) want bare dataset_repo_id. setdefault → caller wins.
+        args = dict(args or {})
+        if "__recipe__" in args:
+            args.setdefault("dataset_repo_id", dataset_id)
+        else:
+            args.setdefault("dataset.repo_id", dataset_id)
+
         try:
             run = orch.start(
                 StartRequest(
                     host_id=host_id,
                     recipe_name=recipe_name,
                     dataset_id=dataset_id,
-                    args=args or {},
+                    args=args,
                     idempotency_key=idempotency_key,
                 )
             )
