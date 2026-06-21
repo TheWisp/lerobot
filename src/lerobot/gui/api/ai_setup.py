@@ -114,31 +114,42 @@ def _snippets(token: str, mcp_url: str) -> list[tuple[str, str, str]]:
     used by the in-page tab JS to switch which snippet is shown.
     """
     e = html.escape
+    # Flag syntax differs per client (verified against each tool's docs):
+    #   - Claude Code / Gemini: URL is positional, bearer via --header.
+    #   - Codex: --url flag, and the bearer must come from an env var (no inline
+    #     token flag), so we emit an `export` line first.
+    #   - Claude Desktop has no native remote-HTTP entry — it needs the
+    #     `mcp-remote` stdio proxy.
     return [
         (
             "claude-cli",
             "Claude Code",
-            f"claude mcp add lerobot \\\n  --transport http \\\n  --url {e(mcp_url)} \\\n  --token {e(token)}",
+            f"claude mcp add --transport http lerobot {e(mcp_url)} \\\n  --header 'Authorization: Bearer {e(token)}'",
         ),
         (
             "codex-cli",
             "Codex CLI",
-            f"codex mcp add lerobot \\\n  --transport http \\\n  --url {e(mcp_url)} \\\n  --header 'Authorization: Bearer {e(token)}'",
+            f"export LEROBOT_MCP_TOKEN={e(token)}\n"
+            f"codex mcp add lerobot \\\n  --url {e(mcp_url)} \\\n  --bearer-token-env-var LEROBOT_MCP_TOKEN",
         ),
         (
             "gemini-cli",
             "Gemini CLI",
-            f"gemini mcp add lerobot \\\n  --transport http \\\n  --url {e(mcp_url)} \\\n  --auth-bearer {e(token)}",
+            f"gemini mcp add --transport http lerobot {e(mcp_url)} \\\n  --header 'Authorization: Bearer {e(token)}'",
         ),
         (
             "claude-desktop",
             "Claude Desktop (JSON)",
             "// add to ~/.config/Claude/claude_desktop_config.json\n"
+            "// Claude Desktop has no native HTTP server entry — proxy via mcp-remote\n"
             '"mcpServers": {\n'
             '  "lerobot": {\n'
-            '    "transport": "http",\n'
-            f'    "url": "{e(mcp_url)}",\n'
-            f'    "headers": {{ "Authorization": "Bearer {e(token)}" }}\n'
+            '    "command": "npx",\n'
+            '    "args": [\n'
+            '      "mcp-remote",\n'
+            f'      "{e(mcp_url)}",\n'
+            f'      "--header", "Authorization: Bearer {e(token)}"\n'
+            "    ]\n"
             "  }\n"
             "}",
         ),

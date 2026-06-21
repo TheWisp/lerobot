@@ -47,6 +47,31 @@ def test_post_creates_token_and_shows_it_once(client: TestClient) -> None:
     assert "Codex CLI" in r.text
 
 
+def test_per_client_snippet_syntax(client: TestClient) -> None:
+    """Each client's install snippet uses that tool's real flag syntax.
+
+    Regression guard: an earlier version emitted `claude mcp add --url ... --token`,
+    which Claude Code rejects (`unknown option '--url'`). The four clients differ:
+    Claude Code / Gemini take a positional URL + `--header`; Codex uses `--url`
+    plus a bearer *env var* (no inline token flag); Claude Desktop has no native
+    HTTP entry and must be proxied via mcp-remote.
+    """
+    r = client.post("/ai_setup/tokens", data={"name": "dev-box", "scope": ["read"]})
+    assert r.status_code == 200
+    text = r.text
+    # Claude Code: positional URL, bearer via --header — not the old --url/--token
+    assert "claude mcp add --transport http lerobot" in text
+    assert "claude mcp add lerobot" not in text
+    # Gemini: positional URL + --header — not the old --auth-bearer
+    assert "gemini mcp add --transport http lerobot" in text
+    assert "--auth-bearer" not in text
+    # Codex: --url flag + bearer pulled from an env var
+    assert "--bearer-token-env-var LEROBOT_MCP_TOKEN" in text
+    assert "export LEROBOT_MCP_TOKEN=" in text
+    # Claude Desktop: mcp-remote stdio proxy (no native remote-HTTP entry)
+    assert "mcp-remote" in text
+
+
 def test_index_lists_active_token_but_not_the_bearer(client: TestClient) -> None:
     client.post("/ai_setup/tokens", data={"name": "bob", "scope": ["read"]})
     r = client.get("/ai_setup")
