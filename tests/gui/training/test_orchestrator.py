@@ -16,6 +16,7 @@ full state machine, reads its outputs, and reconciles state.
 from __future__ import annotations
 
 import dataclasses as _dc
+import hashlib
 import time
 from pathlib import Path
 
@@ -1309,6 +1310,65 @@ def test_teardown_survives_destroy_error(tmp_path: Path):
     paths.ensure_exists()
     orch._maybe_teardown_ephemeral(run, paths)  # must not raise
     assert run.ephemeral_destroyed is False  # not marked done; will retry next poll
+
+
+def test_fetch_verified_refetches_corrupt_then_succeeds(tmp_path: Path):
+    """A dropped scp leaves a partial file; _fetch_verified must overwrite +
+    verify against the remote sha (not skip it), and succeed once bytes match
+    (round-5: the localized model was silently corrupt)."""
+    good = b"correct-model-bytes"
+    good_sha = hashlib.sha256(good).hexdigest()
+    calls = {"n": 0}
+
+    class _C:
+        def sha256_of(self, _src):
+            return good_sha
+
+        def fetch_file(self, _src, dst):
+            calls["n"] += 1
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(b"partial" if calls["n"] == 1 else good)  # corrupt, then correct
+
+    orch = _orch(tmp_path, _FakeProvider())
+    dst = tmp_path / "out" / "model.safetensors"
+    assert orch._fetch_verified(_C(), Path("/remote/model.safetensors"), dst, good_sha) is True
+    assert dst.read_bytes() == good
+    assert calls["n"] == 2  # first (corrupt) copy re-fetched, not kept
+
+
+def test_fetch_verified_removes_file_when_irrecoverably_corrupt(tmp_path: Path):
+    """If bytes never match, leave NO file — a broken model is worse than none."""
+    sha = hashlib.sha256(b"expected").hexdigest()
+
+    class _C:
+        def sha256_of(self, _src):
+            return sha
+
+        def fetch_file(self, _src, dst):
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(b"always-wrong")  # never matches `sha`
+
+    orch = _orch(tmp_path, _FakeProvider())
+    dst = tmp_path / "out" / "model.safetensors"
+    assert orch._fetch_verified(_C(), Path("/r/model.safetensors"), dst, sha) is False
+    assert not dst.exists()
+
+
+def test_teardown_localizes_artifacts_before_destroy(tmp_path: Path):
+    """A completed ephemeral run must pull a verified model + rebuild the local
+    manifest BEFORE the VM is destroyed (the VM's copy dies with it)."""
+    prov = _FakeProvider()
+    orch = _orch(tmp_path, prov)
+    run = _terminal_eph_run(orch._runs, state=RunState.COMPLETED)
+    paths = RunPaths.for_run(run.run_id, orch._runs.runs_dir)
+    paths.ensure_exists()
+    order: list[str] = []
+    orch._fetch_run_artifacts = lambda _c, _r, _p: order.append("fetch")
+    orch._sync_checkpoints_manifest = lambda _c, _r, _p: order.append("manifest")
+    _real_destroy = prov.destroy
+    prov.destroy = lambda h: (order.append("destroy"), _real_destroy(h))[1]
+    orch._maybe_teardown_ephemeral(run, paths)
+    assert order == ["fetch", "manifest", "destroy"]  # pull happens while the VM is alive
 
 
 def test_client_routes_to_spawned_vm_then_local_after_destroy(tmp_path: Path):

@@ -263,6 +263,14 @@ _FORCED_FLAGS: dict[str, str] = {
 #                        model detail page after the run completes.
 _NEVER_USER_OVERRIDE: frozenset[str] = frozenset({"output_dir", "policy.push_to_hub"})
 
+# lerobot-train logs metrics only at ``step % log_freq == 0``. Its default
+# (~200) means a short run never logs and the dashboard chart stays empty
+# (round-5 smoke). When the user doesn't set log_freq, pick a cadence that
+# yields ~_TARGET_LOG_POINTS points, capped at the default so long runs aren't
+# spammed.
+_DEFAULT_LOG_FREQ = 200
+_TARGET_LOG_POINTS = 20
+
 
 def _docker_argv_base(image: str, paths: RunPaths) -> list[str]:
     """The docker-run prefix shared by every recipe: GPU passthrough,
@@ -356,6 +364,16 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         if k in seen:
             continue
         train_args.append(f"--{k}={v}")
+
+    # Make metrics actually print (see _DEFAULT_LOG_FREQ note) unless the user
+    # set their own log_freq.
+    if "log_freq" not in seen:
+        try:
+            steps = int(run.args.get("steps") or 0)
+        except (TypeError, ValueError):
+            steps = 0
+        if steps > 0:
+            train_args.append(f"--log_freq={max(1, min(_DEFAULT_LOG_FREQ, steps // _TARGET_LOG_POINTS))}")
 
     docker_argv = [
         *_docker_argv_base(image, paths),

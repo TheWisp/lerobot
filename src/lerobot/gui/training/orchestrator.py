@@ -28,6 +28,7 @@ DESIGN.md § Concurrency:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import re
@@ -72,6 +73,19 @@ logger = logging.getLogger(__name__)
 # giving up. Cloud-init (user + key) on a GPU VM is typically well under 2 min
 # after the instance reports RUNNING; 5 min is a safe ceiling.
 _EPHEMERAL_SSH_READY_TIMEOUT_S = 300.0
+
+# How many times to (re-)fetch an artifact whose transfer failed or whose
+# bytes don't match the remote sha256. A dropped scp can leave a partial file;
+# we overwrite + re-verify rather than trust it.
+_ARTIFACT_FETCH_RETRIES = 3
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 # ── Requests / responses ──────────────────────────────────────────────────────
 
@@ -484,6 +498,16 @@ class Orchestrator:
         handle = _handle_from_dict(run.ephemeral_handle)
         provider = self._provider_factory(handle.provider)
         local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+        # Localize artifacts off the VM BEFORE destroying it — the VM's copy
+        # dies with it, so a completed run must first pull a verified model and
+        # rebuild the manifest LOCALLY (it was written via the SSH client during
+        # the run, i.e. on the VM). Best-effort + idempotent (the fetch verifies
+        # sha, so a prior fetch is a no-op); never block teardown on a hiccup.
+        if run.state == RunState.COMPLETED:
+            with contextlib.suppress(Exception):
+                ssh = self._client_for_host(self._hosts.get(run.host_id), paths, run)
+                self._fetch_run_artifacts(ssh, run, paths)
+                self._sync_checkpoints_manifest(local, run, paths)
         try:
             provider.destroy(handle)
             ok = provider.verify_destroyed(handle)
@@ -967,15 +991,39 @@ class Orchestrator:
                     # the layout drifted — log loudly rather than guess.
                     logger.warning("artifact outside run dir, not fetching: %s", src)
                     continue
-                if dst.exists():
+                remote_sha = client.sha256_of(src)
+                # Already hold a byte-identical copy → skip. Otherwise (missing
+                # OR corrupt-partial from a dropped scp) (re-)fetch + verify.
+                if dst.exists() and remote_sha is not None and _sha256_file(dst) == remote_sha:
                     continue
-                try:
-                    client.fetch_file(src, dst)
+                if self._fetch_verified(client, src, dst, remote_sha):
                     fetched += 1
-                except Exception as e:
-                    logger.warning("artifact fetch failed for %s: %s", src, e)
         if fetched:
             self._emit_event(client, paths.events_jsonl, "artifacts_fetched", count=fetched)
+
+    def _fetch_verified(self, client: TransportClient, src: Path, dst: Path, remote_sha: str | None) -> bool:
+        """Fetch ``src``→``dst``, retrying on transfer failure or sha mismatch.
+
+        A dropped scp leaves a partial file; the old skip-if-exists kept it
+        forever (silently-corrupt model, found in the round-5 smoke). Here we
+        overwrite and re-verify against the remote sha256, and remove the file
+        if we can't get a good copy so the run has no (rather than a broken)
+        artifact. Returns True iff a verified copy now exists locally.
+        """
+        for attempt in range(_ARTIFACT_FETCH_RETRIES):
+            try:
+                client.fetch_file(src, dst)
+            except Exception as e:
+                logger.warning("fetch %s attempt %d/%d failed: %s", src, attempt + 1, _ARTIFACT_FETCH_RETRIES, e)
+                continue
+            if remote_sha is None or _sha256_file(dst) == remote_sha:
+                return True
+            logger.warning("fetch %s attempt %d/%d: sha mismatch, re-fetching", src, attempt + 1, _ARTIFACT_FETCH_RETRIES)
+        logger.warning("artifact NOT localized (failed/corrupt after %d tries): %s", _ARTIFACT_FETCH_RETRIES, src)
+        with contextlib.suppress(Exception):
+            if dst.exists():
+                dst.unlink()  # safe-destruct: remove the corrupt/partial scp output
+        return False
 
     def _sync_checkpoints_manifest(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
         """Append newly-discovered checkpoint dirs to ``checkpoints.jsonl``.

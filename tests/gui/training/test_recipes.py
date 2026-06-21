@@ -97,6 +97,30 @@ def _docker_cmd(run: Run, paths: RunPaths) -> list[str]:
     return cmd
 
 
+def test_log_freq_injected_so_short_runs_log(tmp_path: Path) -> None:
+    """lerobot logs metrics only at step % log_freq == 0, so a short run with
+    the default log_freq (~200) prints nothing and the chart stays empty
+    (round-5). The recipe injects a clamped log_freq when the user didn't."""
+    paths = RunPaths.for_run("t", runs_dir=tmp_path)
+    paths.ensure_exists()
+    cmd = _docker_cmd(
+        _make_run({"policy.type": "act", "dataset.repo_id": "lerobot/pusht", "steps": 30}), paths
+    )
+    flags = [a for a in cmd if a.startswith("--log_freq=")]
+    assert len(flags) == 1
+    assert 1 <= int(flags[0].split("=", 1)[1]) <= 30  # ≤ steps, so it actually fires
+
+
+def test_log_freq_respects_user_value(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("t", runs_dir=tmp_path)
+    paths.ensure_exists()
+    cmd = _docker_cmd(
+        _make_run({"policy.type": "act", "dataset.repo_id": "lerobot/pusht", "steps": 30, "log_freq": 7}),
+        paths,
+    )
+    assert [a for a in cmd if a.startswith("--log_freq=")] == ["--log_freq=7"]  # not double-injected
+
+
 def test_docker_recipe_command_shape(tmp_path: Path) -> None:
     paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
     paths.ensure_exists()
