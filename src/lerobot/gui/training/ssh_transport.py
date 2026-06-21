@@ -47,6 +47,8 @@ import os
 import shlex
 import subprocess
 import tempfile
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from lerobot.gui.training.transport import SshTransport
@@ -133,6 +135,11 @@ class SshClient:
             "ServerAliveCountMax=3",
             "-o",
             "StrictHostKeyChecking=accept-new",
+            # Bound the initial connect so a not-yet-ready host fails fast
+            # (ssh exits 255) instead of hanging to the subprocess timeout —
+            # this is what makes the wait_until_ready retry loop snappy.
+            "-o",
+            "ConnectTimeout=10",
         ]
 
     def _ssh_argv(self, *remote_argv: str) -> list[str]:
@@ -383,6 +390,47 @@ class SshClient:
             )
         self._host_identity = identity
         return identity
+
+    def wait_until_ready(
+        self,
+        *,
+        timeout_s: float = 300.0,
+        probe_timeout_s: float = 15.0,
+        poll_interval_s: float = 5.0,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        """Block until the host accepts SSH, or raise after ``timeout_s``.
+
+        A freshly-spawned cloud VM reports RUNNING before sshd / cloud-init
+        finish, so the first remote op races the boot. Poll a trivial command
+        until it answers. ``sleep``/``clock`` are injectable for tests.
+
+        Pre: the transport's host/port/user are set.
+        Post: returns iff SSH answered (rc 0); otherwise raises ``RuntimeError``
+        naming the two real causes — still booting, or inbound TCP/22 blocked.
+        """
+        assert timeout_s > 0 and probe_timeout_s > 0
+        deadline = clock() + timeout_s
+        last = "no attempt made"
+        while True:
+            try:
+                r = self._exec("true", timeout=probe_timeout_s)
+                if r.returncode == 0:
+                    return
+                last = f"rc={r.returncode} stderr={r.stderr.decode('utf-8', 'replace').strip()[-200:]}"
+            except subprocess.TimeoutExpired:
+                last = f"connect timed out after {probe_timeout_s:.0f}s"
+            except OSError as e:
+                last = f"{type(e).__name__}: {e}"
+            if clock() >= deadline:
+                t = self._transport
+                raise RuntimeError(
+                    f"{t.user}@{t.host}:{t.port} did not accept SSH within {timeout_s:.0f}s "
+                    f"(last: {last}). The VM may still be booting, or inbound TCP/22 may be "
+                    f"blocked by the cloud security group."
+                )
+            sleep(poll_interval_s)
 
     def ensure_dir(self, path: Path) -> None:
         assert path.is_absolute()

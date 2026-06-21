@@ -67,6 +67,11 @@ from lerobot.gui.training.transport import (
 
 logger = logging.getLogger(__name__)
 
+# How long to wait for a freshly-spawned ephemeral VM to accept SSH before
+# giving up. Cloud-init (user + key) on a GPU VM is typically well under 2 min
+# after the instance reports RUNNING; 5 min is a safe ceiling.
+_EPHEMERAL_SSH_READY_TIMEOUT_S = 300.0
+
 # ── Requests / responses ──────────────────────────────────────────────────────
 
 
@@ -543,6 +548,23 @@ class Orchestrator:
                 return
             run.ephemeral_handle = _handle_to_dict(handle)
             self._runs.save(run)
+            # The VM reports RUNNING before sshd/cloud-init are up. Wait for SSH
+            # to answer before image-prep / host-identity, else the first remote
+            # op races the boot and dies on a single attempt (the round-2 bug).
+            local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+            try:
+                self._client_for_host(host, paths, run).wait_until_ready(
+                    timeout_s=_EPHEMERAL_SSH_READY_TIMEOUT_S
+                )
+            except Exception as exc:
+                logger.exception("prepare-and-launch: ephemeral host never became SSH-ready")
+                run.error = f"ssh not ready: {exc!r}"
+                run.advance(RunState.FAILED)
+                self._runs.save(run)
+                self._emit_event(local, paths.events_jsonl, "ssh_not_ready", error=str(exc)[:300])
+                self._maybe_teardown_ephemeral(run, paths)
+                return
+            self._emit_event(local, paths.events_jsonl, "ssh_ready", resource_id=handle.provider_resource_id)
         client = self._client_for_host(host, paths, run)
         try:
             cmd = self._build_command(run, paths)

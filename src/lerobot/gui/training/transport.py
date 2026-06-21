@@ -191,6 +191,15 @@ class TransportClient(Protocol):
         """
         ...
 
+    def wait_until_ready(self, *, timeout_s: float = 300.0) -> None:
+        """Block until the host is reachable for remote ops, or raise.
+
+        For a freshly-spawned cloud VM the transport target exists before
+        sshd does; callers invoke this once after spawn so the first real
+        op doesn't race the boot. A no-op for already-up transports.
+        """
+        ...
+
     def ensure_dir(self, path: Path) -> None:
         """``mkdir -p`` on the host, as the transport's user. Used to
         pre-create bind-mount sources before ``docker run`` — a missing
@@ -396,6 +405,10 @@ class SubprocessClient:
     def host_identity(self) -> tuple[int, int, str]:
         # Local transport: the GUI server's own identity IS the host truth.
         return os.getuid(), os.getgid(), str(Path.home())
+
+    def wait_until_ready(self, *, timeout_s: float = 300.0) -> None:
+        # Local transport is always ready — nothing to boot.
+        return None
 
     def ensure_dir(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
