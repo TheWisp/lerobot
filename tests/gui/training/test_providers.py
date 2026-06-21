@@ -412,6 +412,9 @@ class TestNebiusCloudInit:
         assert "NOPASSWD:ALL" in doc
         assert "ssh-ed25519 AAAAKEY u@h" in doc
         assert "shutdown -P +60" in doc
+        # SSH user must join the docker group or `docker run` over SSH gets
+        # "permission denied" on /var/run/docker.sock (round-3 ephemeral bug).
+        assert "groups: [docker]" in doc
 
     def test_cloud_init_rejects_key_path(self):
         from lerobot.gui.training.providers.nebius import build_cloud_init

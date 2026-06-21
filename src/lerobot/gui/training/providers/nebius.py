@@ -594,6 +594,12 @@ def build_cloud_init(ssh_user: str, ssh_public_key: str, *, ttl_seconds: int) ->
         "users:\n"
         f"  - name: {ssh_user}\n"
         "    sudo: ALL=(ALL) NOPASSWD:ALL\n"
+        # Join the image's pre-installed `docker` group so the SSH user can
+        # reach /var/run/docker.sock (training runs via `docker run`). Set at
+        # user-creation, not a later usermod: it must be in effect for the very
+        # first login, since the persistent ControlMaster session would miss a
+        # group added mid-session.
+        "    groups: [docker]\n"
         "    shell: /bin/bash\n"
         "    ssh_authorized_keys:\n"
         f"      - {ssh_public_key}\n"
