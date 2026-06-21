@@ -497,7 +497,7 @@
         <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:480px; max-width:600px;">
             <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Nebius connection</h3>
             <p style="margin:0 0 10px 0; font-size:11px; color:var(--text-secondary, #999);">
-                One service-account key for this server, used for every cloud spawn and teardown. Saved securely on this server (only the server account can read it) — never shown in the browser or sent to a training VM. Anyone who can reach this server can use it, like the server's HuggingFace login.
+                One service-account key, stored on this GUI server and used to spawn and tear down the cloud GPUs. <strong>Note: it's saved on the server and usable by anyone who can reach the GUI</strong> (there's no per-user login), and it bills your Nebius account — so set it up only on a trusted network.
             </p>
             <details style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
                 <summary style="cursor:pointer; color:var(--accent,#0e639c);">How do I get a key?</summary>
