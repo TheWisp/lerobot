@@ -210,14 +210,17 @@ SAC, …) is intact under [`src/lerobot/policies`](src/lerobot/policies).
 
 From the GUI's training tab you can launch a run on an auto-managed cloud GPU
 (Nebius) instead of local hardware. The provider spins up a VM with the training
-image, streams logs back, and tears the VM down when the run reaches a terminal
-state — with a cloud-init `poweroff` timer as a hard-TTL backstop so a forgotten
-run can't bill indefinitely. Credentials are a single server-held service-account
-key, configured once via the Nebius-connection form. See
+image, streams logs and live metrics to the dashboard, pulls the trained
+checkpoint back to your machine, and tears the VM down when the run reaches a
+terminal state — with a cloud-init `poweroff` timer as a hard-TTL backstop so a
+forgotten run can't bill indefinitely. Credentials are a single server-held
+service-account key, configured once via the Nebius-connection form. See
 [`src/lerobot/gui/training`](src/lerobot/gui/training).
 
 <p align="center">
-  <img alt="Launching ephemeral cloud training from the GUI" src="./media/readme/nebius.png" width="80%">
+  <img alt="An ephemeral cloud-training run in the GUI: live loss/LR charts and the checkpoint pulled back from the VM" src="./media/readme/cloud_training.png" width="80%">
+  <br>
+  <sub><i>A cloud run's dashboard — live metrics and the retrieved checkpoint, after the VM is gone.</i></sub>
 </p>
 
 ---
