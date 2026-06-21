@@ -88,6 +88,24 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _count_local_models(paths: RunPaths) -> int:
+    """How many checkpoint model files are on the GUI server for this run.
+
+    Counts both the docker layout (``output/checkpoints/<step>/pretrained_model/
+    model.safetensors``) and the flat fake-runner layout. Used post-fetch at
+    teardown: 0 for a completed run means the model never made it off the VM.
+    """
+    for base in (paths.root / "output" / "checkpoints", paths.root / "checkpoints"):
+        if base.is_dir():
+            return sum(
+                1
+                for d in base.iterdir()
+                if (d / "pretrained_model" / "model.safetensors").is_file()
+                or (d / "model.safetensors").is_file()
+            )
+    return 0
+
+
 # ── Requests / responses ──────────────────────────────────────────────────────
 
 
@@ -519,12 +537,25 @@ class Orchestrator:
             # Localize artifacts off the VM BEFORE destroying it — the VM's copy
             # dies with it, so a completed run must first pull a verified model
             # and rebuild the manifest LOCALLY (it was written via the SSH client
-            # during the run, i.e. on the VM). Best-effort; never block teardown.
+            # during the run, i.e. on the VM). Best-effort: never block teardown,
+            # but DON'T fail silently — the per-file fetch is best-effort and a
+            # flaky scp can leave the model on the doomed VM (round-5/6). Record
+            # how many checkpoints actually made it local so a lost model is
+            # visible after the VM (and its remote events.jsonl) are gone.
             if run.state == RunState.COMPLETED:
-                with contextlib.suppress(Exception):
+                try:
                     ssh = self._client_for_host(self._hosts.get(run.host_id), paths, run)
                     self._fetch_run_artifacts(ssh, run, paths)
                     self._sync_checkpoints_manifest(local, run, paths)
+                except Exception:  # noqa: BLE001 — teardown must never wedge the run
+                    logger.exception("pre-teardown artifact localization failed for run %s", run.run_id)
+                n_local = _count_local_models(paths)
+                self._emit_event(
+                    local,
+                    paths.events_jsonl,
+                    "artifacts_localized" if n_local else "artifacts_fetch_failed",
+                    count=n_local,
+                )
             try:
                 provider.destroy(handle)
                 ok = provider.verify_destroyed(handle)
@@ -1043,7 +1074,12 @@ class Orchestrator:
                     "fetch %s attempt %d/%d failed: %s", src, attempt + 1, _ARTIFACT_FETCH_RETRIES, e
                 )
                 continue
-            if remote_sha is None or _sha256_file(dst) == remote_sha:
+            if remote_sha is None:
+                # Couldn't read the remote sha (e.g. file vanished after listing)
+                # — keep the fetched bytes but say so; we can't byte-verify it.
+                logger.warning("fetched %s but could not verify it (remote sha unavailable)", src)
+                return True
+            if _sha256_file(dst) == remote_sha:
                 return True
             logger.warning(
                 "fetch %s attempt %d/%d: sha mismatch, re-fetching", src, attempt + 1, _ARTIFACT_FETCH_RETRIES

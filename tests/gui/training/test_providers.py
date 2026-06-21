@@ -320,6 +320,16 @@ class TestNebiusSpawn:
         handle = _nebius(svc).spawn(_example_spec(ttl_seconds=3600))
         assert handle.ssh_host == "195.242.28.4"
 
+    def test_public_ip_normalizes_address_forms(self):
+        """_public_ip yields a bare host from any form Nebius might return:
+        CIDR-suffixed IPv4, a bare IP, or bracketed/CIDR IPv6; None when absent."""
+        from lerobot.gui.training.providers.nebius import _public_ip
+
+        assert _public_ip(_FakeInstance("RUNNING", "195.242.28.4/32")) == "195.242.28.4"
+        assert _public_ip(_FakeInstance("RUNNING", "10.0.0.5")) == "10.0.0.5"
+        assert _public_ip(_FakeInstance("RUNNING", "[2001:db8::1]/128")) == "2001:db8::1"
+        assert _public_ip(_FakeInstance("RUNNING", None)) is None
+
     def test_spawn_builds_request_with_verified_sku(self):
         """Exercises REAL SDK message construction: platform/preset/disk/
         cloud-init must land on the CreateInstanceRequest."""

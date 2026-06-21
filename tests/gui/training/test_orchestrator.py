@@ -1401,6 +1401,46 @@ def test_teardown_localizes_artifacts_before_destroy(tmp_path: Path):
     assert order == ["fetch", "manifest", "destroy"]  # pull happens while the VM is alive
 
 
+def _local_events(paths) -> list[dict]:
+    import json as _json
+
+    if not paths.events_jsonl.exists():
+        return []
+    return [_json.loads(line) for line in paths.events_jsonl.read_text().splitlines() if line.strip()]
+
+
+def test_teardown_records_localized_count(tmp_path: Path):
+    """A completed run records LOCALLY how many checkpoints made it off the VM,
+    so the outcome survives the VM's destruction (round-6 evidence gap)."""
+    orch = _orch(tmp_path, _FakeProvider())
+    run = _terminal_eph_run(orch._runs, state=RunState.COMPLETED)
+    paths = RunPaths.for_run(run.run_id, orch._runs.runs_dir)
+    paths.ensure_exists()
+    orch._fetch_run_artifacts = lambda *_a: None  # stub the SSH pull
+    orch._sync_checkpoints_manifest = lambda *_a: None
+    model = paths.root / "output" / "checkpoints" / "000030" / "pretrained_model" / "model.safetensors"
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"x")  # a localized model
+
+    orch._maybe_teardown_ephemeral(run, paths)
+    loc = [e for e in _local_events(paths) if e["type"] == "artifacts_localized"]
+    assert loc and loc[-1]["count"] == 1
+
+
+def test_teardown_flags_lost_model(tmp_path: Path):
+    """If nothing localized for a completed run, emit a VISIBLE artifacts_fetch_failed
+    (the old silent suppress hid a model lost on the destroyed VM)."""
+    orch = _orch(tmp_path, _FakeProvider())
+    run = _terminal_eph_run(orch._runs, state=RunState.COMPLETED)
+    paths = RunPaths.for_run(run.run_id, orch._runs.runs_dir)
+    paths.ensure_exists()
+    orch._fetch_run_artifacts = lambda *_a: None  # "fetch" localizes nothing
+    orch._sync_checkpoints_manifest = lambda *_a: None
+
+    orch._maybe_teardown_ephemeral(run, paths)
+    assert any(e["type"] == "artifacts_fetch_failed" for e in _local_events(paths))
+
+
 def test_client_routes_to_spawned_vm_then_local_after_destroy(tmp_path: Path):
     captured = {}
 
