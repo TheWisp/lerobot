@@ -780,7 +780,11 @@ class Orchestrator:
         """
         before = run.state
         host = self._hosts.get(run.host_id)
-        client = self._client_for_host(host, paths)
+        # Pass `run`: a live ephemeral run must route to its SSH client. Without
+        # it, _client_for_host falls back to a SubprocessClient that int()s the
+        # SSH-format session_id and crashes — 500-ing GET /runs for the whole
+        # run (the GUI shows "No runs yet" while training is actually going).
+        client = self._client_for_host(host, paths, run)
         terminal_event = self._read_terminal_event(client, paths.events_jsonl)
         if terminal_event == "completed_naturally" and run.state != RunState.COMPLETED:
             run.advance(RunState.COMPLETED)

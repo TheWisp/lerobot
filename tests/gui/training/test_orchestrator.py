@@ -1338,6 +1338,37 @@ def test_client_routes_to_spawned_vm_then_local_after_destroy(tmp_path: Path):
     assert "transport" not in captured
 
 
+def test_list_reconcile_uses_ssh_client_for_live_ephemeral(tmp_path: Path):
+    """Regression: list_runs' cheap reconcile resolved a SubprocessClient for a
+    live ephemeral run and int()'d its SSH-format session_id, 500-ing GET /runs
+    for the whole run (GUI showed "No runs yet"). It must route to the
+    run-aware SSH client instead."""
+    captured = {}
+
+    class _FakeSsh:
+        def read_text(self, _path):
+            return None  # no terminal event yet
+
+        def is_alive(self, _session_id):
+            return True  # still training — must NOT int() the session_id
+
+    def fake_make(transport):
+        captured["transport"] = transport
+        return _FakeSsh()
+
+    hr = HostRegistry(hosts=[])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(hr, rr, make_client_fn=fake_make)
+    run = _terminal_eph_run(rr, state=RunState.RUNNING)
+    run.session_id = "lerobot-ephr|/remote/runs/ephr"  # SSH (tmux|workdir) format
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+
+    orch._reconcile_from_events_only(run, paths)  # must not raise (was ValueError)
+    assert isinstance(captured["transport"], SshTransport)  # run-aware → SSH, not Subprocess
+
+
 def test_spawn_failure_marks_run_failed(tmp_path: Path):
     prov = _FakeProvider(spawn_exc=RuntimeError("quota exceeded"))
     host = TrainingHost(
