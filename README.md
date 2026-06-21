@@ -19,13 +19,13 @@ and adds three things on top of it:
    for launching training runs, including on ephemeral cloud GPUs.
 2. **An MCP server** so any AI tool you already use (Claude Code, Codex, Cursor,
    Claude Desktop, …) can browse your datasets, leave durable comments, and drive
-   the GUI — using *your* AI subscription, no extra API key.
+   the GUI — using _your_ AI subscription, no extra API key.
 3. **New policies** — a hierarchical dual-system VLA (**HVLA**) and online RL
    fine-tuning via an **RL Token** (**RLT**).
 
 Everything upstream LeRobot does — `LeRobotDataset`, the policy zoo, hardware
 drivers, `lerobot-train` / `lerobot-record` / `lerobot-teleoperate` — still works
-exactly as documented. This README focuses on what's *different*. For the core
+exactly as documented. This README focuses on what's _different_. For the core
 library, see the [upstream documentation](https://huggingface.co/docs/lerobot/index).
 
 <p align="center">
@@ -44,13 +44,13 @@ library, see the [upstream documentation](https://huggingface.co/docs/lerobot/in
 
 ## Key additions over upstream
 
-| Area | What's new | Where |
-| --- | --- | --- |
-| **GUI** | Browser tool to play / trim / delete / record dataset episodes, manage robot profiles, and launch training. LAN-discoverable via mDNS (`lerobot.local`). | [`src/lerobot/gui`](src/lerobot/gui/README.md) |
-| **MCP / AI-native** | Bring-your-own-AI-tool control over LeRobot via the Model Context Protocol. Scoped bearer tokens, a shared comment sidecar, and bridge tools that steer your open GUI tab. | [`src/lerobot/mcp`](src/lerobot/mcp/README.md) |
-| **HVLA policy** | Dual-system VLA: a slow VLM (S2) supplies scene understanding; a fast action policy (S1) generates action chunks conditioned on S2's latent. | [`src/lerobot/policies/hvla`](src/lerobot/policies/hvla/README.md) |
-| **RLT** | Online RL fine-tuning of a *frozen* HVLA S1 policy using a lightweight TD3 actor-critic over a learned "RL token". | [`src/lerobot/policies/hvla/rlt`](src/lerobot/policies/hvla/rlt/README.md) |
-| **Ephemeral cloud training** | Launch a training run on an auto-managed cloud GPU (Nebius) from the GUI; the VM is torn down on completion with a hard TTL backstop. | [`src/lerobot/gui/training`](src/lerobot/gui/training) |
+| Area                         | What's new                                                                                                                                                                 | Where                                                                      |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **GUI**                      | Browser tool to play / trim / delete / record dataset episodes, manage robot profiles, and launch training. LAN-discoverable via mDNS (`lerobot.local`).                   | [`src/lerobot/gui`](src/lerobot/gui/README.md)                             |
+| **MCP / AI-native**          | Bring-your-own-AI-tool control over LeRobot via the Model Context Protocol. Scoped bearer tokens, a shared comment sidecar, and bridge tools that steer your open GUI tab. | [`src/lerobot/mcp`](src/lerobot/mcp/README.md)                             |
+| **HVLA policy**              | Dual-system VLA: a slow VLM (S2) supplies scene understanding; a fast action policy (S1) generates action chunks conditioned on S2's latent.                               | [`src/lerobot/policies/hvla`](src/lerobot/policies/hvla/README.md)         |
+| **RLT**                      | Online RL fine-tuning of a _frozen_ HVLA S1 policy using a lightweight TD3 actor-critic over a learned "RL token".                                                         | [`src/lerobot/policies/hvla/rlt`](src/lerobot/policies/hvla/rlt/README.md) |
+| **Ephemeral cloud training** | Launch a training run on an auto-managed cloud GPU (Nebius) from the GUI; the VM is torn down on completion with a hard TTL backstop.                                      | [`src/lerobot/gui/training`](src/lerobot/gui/training)                     |
 
 Also extended: higher-rate bimanual SO-107 teleop with predictive control, Quest VR
 and scripted end-effector teleoperators, Cartesian IK, latency instrumentation, and a
@@ -151,9 +151,9 @@ claude mcp add lerobot \
 
 Then, from your AI tool:
 
-> *"What lerobot datasets do I have? Show me the last frame of episodes 0–9 of
+> _"What lerobot datasets do I have? Show me the last frame of episodes 0–9 of
 > `<dataset>`, tag the ones that look successful, and open the first failure in my
-> GUI."*
+> GUI."_
 
 Tokens carry one of four nested scopes — `read` ⊂ `comment` ⊂ `edit` ⊂ `operate`
 — so you grant exactly as much authority (up to and including starting hardware
@@ -184,7 +184,7 @@ S2 (slow, ~4–15 Hz)            shared memory          S1 (fast, ~22–30 Hz)
 ```
 
 S2 (a VLM) provides scene understanding at low rate; S1 generates action chunks at
-high rate conditioned on S2's latent plus a learned *age* embedding that accounts
+high rate conditioned on S2's latent plus a learned _age_ embedding that accounts
 for how stale the latent is. S1 can also run standalone (`--zero-s2`).
 See the **[HVLA README](src/lerobot/policies/hvla/README.md)**.
 
