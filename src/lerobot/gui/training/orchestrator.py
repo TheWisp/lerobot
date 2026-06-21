@@ -87,6 +87,7 @@ def _sha256_file(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+
 # ── Requests / responses ──────────────────────────────────────────────────────
 
 
@@ -1014,12 +1015,18 @@ class Orchestrator:
             try:
                 client.fetch_file(src, dst)
             except Exception as e:
-                logger.warning("fetch %s attempt %d/%d failed: %s", src, attempt + 1, _ARTIFACT_FETCH_RETRIES, e)
+                logger.warning(
+                    "fetch %s attempt %d/%d failed: %s", src, attempt + 1, _ARTIFACT_FETCH_RETRIES, e
+                )
                 continue
             if remote_sha is None or _sha256_file(dst) == remote_sha:
                 return True
-            logger.warning("fetch %s attempt %d/%d: sha mismatch, re-fetching", src, attempt + 1, _ARTIFACT_FETCH_RETRIES)
-        logger.warning("artifact NOT localized (failed/corrupt after %d tries): %s", _ARTIFACT_FETCH_RETRIES, src)
+            logger.warning(
+                "fetch %s attempt %d/%d: sha mismatch, re-fetching", src, attempt + 1, _ARTIFACT_FETCH_RETRIES
+            )
+        logger.warning(
+            "artifact NOT localized (failed/corrupt after %d tries): %s", _ARTIFACT_FETCH_RETRIES, src
+        )
         with contextlib.suppress(Exception):
             if dst.exists():
                 dst.unlink()  # safe-destruct: remove the corrupt/partial scp output
