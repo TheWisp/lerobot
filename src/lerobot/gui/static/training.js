@@ -42,6 +42,18 @@ function trainingOpenNebiusConnection() {
   const overlay = document.getElementById("nebius-conn-overlay");
   if (!overlay) return;
   document.getElementById("nebius-conn-status").textContent = "";
+  // Reset to the default (CLI) mode and clear any previously-typed secrets.
+  const modeSel = document.getElementById("nebius-conn-mode");
+  if (modeSel) modeSel.value = "json";
+  ["nebius-conn-key", "nebius-conn-privkey", "nebius-conn-kid", "nebius-conn-said"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+  trainingNebiusModeChanged();
+  const foundSel = document.getElementById("nebius-conn-subnet-found");
+  if (foundSel) { foundSel.style.display = "none"; foundSel.innerHTML = ""; }
+  const subnetHint = document.getElementById("nebius-conn-subnet-hint");
+  if (subnetHint) subnetHint.textContent = "";
   overlay.style.display = "flex";
   trainingFetchNebiusConnection().then((st) => {
     document.getElementById("nebius-conn-current").textContent = _nebiusConnSummary(st);
@@ -56,16 +68,105 @@ function trainingOpenNebiusConnection() {
 function trainingCloseNebiusConnection() {
   const overlay = document.getElementById("nebius-conn-overlay");
   if (overlay) overlay.style.display = "none";
-  document.getElementById("nebius-conn-key").value = "";  // don't retain pasted secret in the DOM
+  // Don't retain pasted secrets in the DOM (either input style).
+  ["nebius-conn-key", "nebius-conn-privkey"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+}
+// Toggle the two key-entry layouts: a pasted key file (CLI) vs the private
+// key + IDs (console). The server assembles the same JSON from either.
+function trainingNebiusModeChanged() {
+  const sel = document.getElementById("nebius-conn-mode");
+  const mode = sel ? sel.value : "json";
+  const jsonEl = document.getElementById("nebius-conn-json-fields");
+  const fieldsEl = document.getElementById("nebius-conn-fields-fields");
+  if (jsonEl) jsonEl.style.display = mode === "json" ? "block" : "none";
+  if (fieldsEl) fieldsEl.style.display = mode === "fields" ? "block" : "none";
+}
+// The key portion of the payload for the active mode, or null (after writing a
+// message to statusEl, if given) when required fields are missing. Shared by
+// Connect and the subnet-discovery lookup.
+function _nebiusKeyPayload(statusEl) {
+  const sel = document.getElementById("nebius-conn-mode");
+  const mode = sel ? sel.value : "json";
+  if (mode === "json") {
+    const key_json = document.getElementById("nebius-conn-key").value.trim();
+    if (!key_json) {
+      if (statusEl) statusEl.textContent = "Paste the service-account key JSON.";
+      return null;
+    }
+    return { key_json };
+  }
+  const private_key = document.getElementById("nebius-conn-privkey").value.trim();
+  const key_id = document.getElementById("nebius-conn-kid").value.trim();
+  const service_account_id = document.getElementById("nebius-conn-said").value.trim();
+  if (!private_key || !key_id || !service_account_id) {
+    if (statusEl) statusEl.textContent = "Paste the private key and both IDs (key ID + service account ID).";
+    return null;
+  }
+  return { private_key, key_id, service_account_id };
+}
+// Look up the project's subnets so the operator can pick instead of hand-copying
+// an ID. Best-effort: on any failure the manual Subnet field still works.
+async function trainingFindSubnets() {
+  const hint = document.getElementById("nebius-conn-subnet-hint");
+  const select = document.getElementById("nebius-conn-subnet-found");
+  const input = document.getElementById("nebius-conn-subnet");
+  const project_id = document.getElementById("nebius-conn-project").value.trim();
+  const setHint = (msg, color) => { hint.style.color = color; hint.textContent = msg; };
+  if (!project_id) { setHint("Enter the Project ID first.", "#e5c07b"); return; }
+  const key = _nebiusKeyPayload(null);
+  if (!key) { setHint("Enter the key above first.", "#e5c07b"); return; }
+  setHint("Looking up subnets…", "#e5c07b");
+  try {
+    const resp = await fetch("/api/training/nebius/discover/subnets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...key, project_id }),
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      setHint((data && data.detail) || `Lookup failed (${resp.status}). Enter the subnet ID manually.`, "#e06c75");
+      return;
+    }
+    const subnets = data || [];
+    if (subnets.length === 0) {
+      select.style.display = "none";
+      setHint("No subnets found in that project.", "#e5c07b");
+    } else if (subnets.length === 1) {
+      select.style.display = "none";
+      input.value = subnets[0].id;
+      setHint(`✓ Using ${subnets[0].name}`, "#98c379");
+    } else {
+      select.innerHTML = subnets
+        .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)} (${escapeHtml(s.id)})</option>`)
+        .join("");
+      select.style.display = "block";
+      input.value = subnets[0].id;
+      setHint(`${subnets.length} subnets — pick one`, "#98c379");
+    }
+  } catch (e) {
+    setHint(`Lookup failed: ${e}. Enter the subnet ID manually.`, "#e06c75");
+  }
+}
+function trainingPickSubnet() {
+  const select = document.getElementById("nebius-conn-subnet-found");
+  document.getElementById("nebius-conn-subnet").value = select.value;
 }
 async function trainingSaveNebiusConnection() {
   const statusEl = document.getElementById("nebius-conn-status");
+  const key = _nebiusKeyPayload(statusEl);
+  if (!key) return;
   const body = {
-    key_json: document.getElementById("nebius-conn-key").value.trim(),
+    ...key,
     project_id: document.getElementById("nebius-conn-project").value.trim(),
     subnet_id: document.getElementById("nebius-conn-subnet").value.trim(),
   };
-  if (!body.key_json) { statusEl.textContent = "Paste the service-account key JSON."; return; }
+  if (!body.project_id || !body.subnet_id) {
+    statusEl.textContent = "Project ID and Subnet ID are required.";
+    return;
+  }
   statusEl.style.color = "#e5c07b";
   statusEl.textContent = "Saving…";
   try {
@@ -100,13 +201,23 @@ async function trainingClearNebiusConnection() {
   document.getElementById("nebius-conn-key").value = "";
   trainingRefreshNebiusConnStatusLine();
 }
-// Updates the inline status line under the ephemeral Add-host help, if present.
+// The inline status line under the ephemeral Add-host help. It carries the
+// connection's only management actions: "set it up" when absent, "disconnect"
+// when present — so the dialog itself is just enter/replace-key (Cancel/Connect).
 function trainingRefreshNebiusConnStatusLine() {
   const el = document.getElementById("add-host-nebius-conn-status");
   if (!el) return;
   const st = _nebiusConnStatus;
-  el.textContent = _nebiusConnSummary(st);
-  el.style.color = st && st.configured ? "#98c379" : "#e5c07b";
+  if (st && st.configured) {
+    const proj = st.project_id ? ` (${escapeHtml(st.project_id)})` : "";
+    el.innerHTML =
+      `<span style="color:#98c379;">✓ Connected${proj}</span> · ` +
+      `<a href="#" onclick="trainingClearNebiusConnection(); return false;" style="color:var(--accent,#0e639c);">disconnect</a>`;
+  } else {
+    el.innerHTML =
+      `<span style="color:#e5c07b;">✗ Nebius not connected</span> — ` +
+      `<a href="#" onclick="trainingOpenNebiusConnection(); return false;" style="color:var(--accent,#0e639c);">set it up</a>`;
+  }
 }
 let _trainingDatasets = [];
 let _trainingPolicyCatalog = []; // populated by trainingLoadPolicies()

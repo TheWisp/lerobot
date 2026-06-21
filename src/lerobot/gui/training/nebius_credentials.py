@@ -96,6 +96,29 @@ def _validate_key_json(data: Any) -> tuple[str, str]:
     return str(subj["sub"]), str(subj["kid"])
 
 
+def assemble_authorized_key_json(*, private_key: str, key_id: str, service_account_id: str) -> str:
+    """Build the SDK ``subject-credentials`` JSON from the pieces the Nebius
+    console gives you — a locally-generated private key, the uploaded key's id,
+    and the service-account id. The console path (unlike ``auth-public-key
+    generate``) never hands you the combined file, so we assemble it here.
+
+    Post: the result parses + validates via :func:`_validate_key_json`.
+    """
+    sa = service_account_id.strip()
+    return json.dumps(
+        {
+            "subject-credentials": {
+                "alg": "RS256",
+                "private-key": private_key.strip(),
+                "kid": key_id.strip(),
+                "iss": sa,
+                "sub": sa,
+            }
+        },
+        indent=2,
+    )
+
+
 class NebiusConnectionStore:
     """File-backed store for the one server-held Nebius connection.
 

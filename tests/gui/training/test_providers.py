@@ -30,7 +30,7 @@ from lerobot.gui.training.providers import (
     get_provider,
     list_providers,
 )
-from lerobot.gui.training.providers.nebius import NEBIUS_DISK_WARN_GIB
+from lerobot.gui.training.providers.nebius import NEBIUS_DISK_WARN_GIB, NebiusConfigError
 from lerobot.gui.training.providers.protocol import (
     HostHandle,
     HostProvider,
@@ -443,3 +443,41 @@ class TestNebiusAuthError:
         assert "Nebius is not connected" in msg
         assert "service account" in msg
         assert "Nebius connection" in msg
+
+
+# ── NebiusProvider.list_subnets (subnet discovery for the connection form) ──
+
+
+class _FakeSubnet:
+    def __init__(self, sid, name):
+        self.metadata = type("M", (), {"id": sid, "name": name})()
+
+
+class _FakeSubnetList:
+    def __init__(self, items):
+        self.items = items
+
+
+class _FakeSubnetService:
+    def __init__(self, items):
+        self._items = items
+        self.listed: list = []
+
+    async def list(self, request):
+        self.listed.append(request)
+        return _FakeSubnetList(self._items)
+
+
+class TestNebiusListSubnets:
+    def test_returns_id_and_name_scoped_to_project(self):
+        svc = _FakeSubnetService([_FakeSubnet("vpcsubnet-1", "default"), _FakeSubnet("vpcsubnet-2", "lab")])
+        out = _nebius(subnet_service=svc).list_subnets("project-TEST")
+        assert out == [
+            {"id": "vpcsubnet-1", "name": "default"},
+            {"id": "vpcsubnet-2", "name": "lab"},
+        ]
+        assert svc.listed[0].parent_id == "project-TEST"
+
+    def test_empty_project_id_raises(self):
+        with pytest.raises(NebiusConfigError):
+            _nebius(subnet_service=_FakeSubnetService([])).list_subnets("  ")

@@ -517,9 +517,14 @@ class NebiusConnectionDTO(BaseModel):
 
 
 class NebiusConnectionBody(BaseModel):
-    # The full authorized-key JSON from `nebius iam auth-public-key create`
-    # (or the console) — a string, validated server-side before it touches disk.
-    key_json: str = Field(min_length=1)
+    # Two ways to supply the service-account key (both validated server-side):
+    #  - CLI:     key_json — the full file from `auth-public-key generate`.
+    #  - console: private_key (PEM) + key_id + service_account_id — the pieces
+    #             the console gives you; assembled into the same JSON here.
+    key_json: str | None = None
+    private_key: str | None = None
+    key_id: str | None = None
+    service_account_id: str | None = None
     project_id: str = Field(min_length=1)
     subnet_id: str = Field(min_length=1)
 
@@ -554,11 +559,32 @@ def set_nebius_connection(body: NebiusConnectionBody) -> NebiusConnectionDTO:
     Returns 400 if the pasted key is malformed. The key is written ``0600``
     and used for every ephemeral spawn/teardown thereafter.
     """
-    from lerobot.gui.training.nebius_credentials import NebiusConnectionStore, NebiusCredentialError
+    from lerobot.gui.training.nebius_credentials import (
+        NebiusConnectionStore,
+        NebiusCredentialError,
+        assemble_authorized_key_json,
+    )
+
+    if body.key_json and body.key_json.strip():
+        key_json = body.key_json
+    elif body.private_key and body.key_id and body.service_account_id:
+        key_json = assemble_authorized_key_json(
+            private_key=body.private_key,
+            key_id=body.key_id,
+            service_account_id=body.service_account_id,
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Provide either the key file JSON (from the CLI), or the private key "
+                "+ authorized key ID + service account ID (from the console)."
+            ),
+        )
 
     try:
         status = NebiusConnectionStore().set(
-            key_json=body.key_json, project_id=body.project_id, subnet_id=body.subnet_id
+            key_json=key_json, project_id=body.project_id, subnet_id=body.subnet_id
         )
     except NebiusCredentialError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -575,6 +601,68 @@ def clear_nebius_connection() -> ClearNebiusConnectionResponse:
     from lerobot.gui.training.nebius_credentials import NebiusConnectionStore
 
     return ClearNebiusConnectionResponse(cleared=NebiusConnectionStore().clear())
+
+
+class NebiusDiscoverBody(BaseModel):
+    # Same key shapes as the connection PUT; project_id is required to scope
+    # the subnet listing. Not persisted — used only to query Nebius.
+    key_json: str | None = None
+    private_key: str | None = None
+    key_id: str | None = None
+    service_account_id: str | None = None
+    project_id: str = Field(min_length=1)
+
+
+class NebiusSubnetDTO(BaseModel):
+    id: str
+    name: str
+
+
+@router.post("/nebius/discover/subnets", response_model=list[NebiusSubnetDTO])
+def discover_nebius_subnets(body: NebiusDiscoverBody) -> list[NebiusSubnetDTO]:
+    """List a project's VPC subnets from a not-yet-saved key, so the connection
+    form can offer a picker instead of a hand-copied ID. The key is written to
+    a ``0600`` temp file for the SDK and deleted immediately after; nothing is
+    persisted. 400 on a bad key or if the service account can't list subnets
+    (the form keeps a manual-entry fallback)."""
+    import contextlib
+    import os
+    import tempfile
+
+    from lerobot.gui.training.nebius_credentials import assemble_authorized_key_json
+    from lerobot.gui.training.providers.nebius import (
+        NebiusAuthError,
+        NebiusConfigError,
+        NebiusProvider,
+    )
+
+    if body.key_json and body.key_json.strip():
+        key_json = body.key_json
+    elif body.private_key and body.key_id and body.service_account_id:
+        key_json = assemble_authorized_key_json(
+            private_key=body.private_key, key_id=body.key_id, service_account_id=body.service_account_id
+        )
+    else:
+        raise HTTPException(
+            status_code=400, detail="Provide the key (file JSON, or private key + IDs) and a project ID."
+        )
+
+    fd, tmp = tempfile.mkstemp(prefix="nebius-discover-", suffix=".json")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(key_json)
+        subnets = NebiusProvider(credentials_file=tmp, project_id=body.project_id).list_subnets(
+            body.project_id
+        )
+    except (NebiusAuthError, NebiusConfigError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001 — surface SDK / permission errors to the form
+        raise HTTPException(status_code=400, detail=f"Couldn't list subnets: {e}") from e
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)  # safe-destruct: our own mkstemp temp key file
+    return [NebiusSubnetDTO(id=s["id"], name=s["name"]) for s in subnets]
 
 
 # ── Policy catalog (GET /api/training/policies) ───────────────────────────────

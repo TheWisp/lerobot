@@ -127,6 +127,7 @@ class NebiusProvider:
         self,
         *,
         instance_service: Any | None = None,
+        subnet_service: Any | None = None,
         sdk: Any | None = None,
         credentials_file: str | None = None,
         project_id: str | None = None,
@@ -143,6 +144,7 @@ class NebiusProvider:
         # built lazily from the SDK on first use — so construction never
         # imports the optional SDK or touches credentials.
         self._instance_service = instance_service
+        self._subnet_service = subnet_service
         self._sdk = sdk
         # Path to the server-held service-account key file (the one configured
         # via the Nebius-connection form). Passed straight to the SDK's
@@ -363,6 +365,36 @@ class NebiusProvider:
         # thread, which has no running loop — asyncio.run is safe here.
         return asyncio.run(coro)
 
+    def _subnet_svc(self) -> Any:
+        if self._subnet_service is not None:
+            return self._subnet_service
+        self._service()  # ensures self._sdk is built (raises NebiusAuthError on bad creds)
+        self._subnet_service = _sdk_symbols().SubnetServiceClient(self._sdk)
+        return self._subnet_service
+
+    def list_subnets(self, project_id: str) -> list[dict[str, str]]:
+        """List the VPC subnets in a project as ``[{"id", "name"}]``.
+
+        Lets the GUI offer a subnet picker so operators don't hand-copy IDs.
+        Raises :class:`NebiusAuthError` on bad credentials; other API errors
+        (e.g. the service account lacks ``vpc.subnets.list``) propagate so the
+        caller can fall back to manual entry.
+
+        Pre: ``project_id`` is non-empty. Post: list (possibly empty).
+        """
+        if not project_id or not project_id.strip():
+            raise NebiusConfigError("project_id is required to list subnets")
+        return self._run(self._alist_subnets(project_id.strip()))
+
+    async def _alist_subnets(self, project_id: str) -> list[dict[str, str]]:
+        sym = _sdk_symbols()
+        resp = await self._subnet_svc().list(sym.ListSubnetsRequest(parent_id=project_id))
+        out: list[dict[str, str]] = []
+        for item in getattr(resp, "items", None) or []:
+            md = item.metadata
+            out.append({"id": md.id, "name": getattr(md, "name", "") or md.id})
+        return out
+
     def _resolve_pubkey(self) -> str:
         if self._ssh_public_key:
             return self._ssh_public_key
@@ -465,6 +497,8 @@ class _SdkSymbols:
         "PublicIPAddress",
         "InstanceStatus",
         "ResourceMetadata",
+        "SubnetServiceClient",
+        "ListSubnetsRequest",
     )
 
     def __init__(self) -> None:
@@ -486,6 +520,7 @@ class _SdkSymbols:
                 ResourcesSpec,
                 SourceImageFamily,
             )
+            from nebius.api.nebius.vpc.v1 import ListSubnetsRequest, SubnetServiceClient
             from nebius.sdk import SDK
         except ImportError as e:
             raise NebiusConfigError(
@@ -508,6 +543,8 @@ class _SdkSymbols:
         self.PublicIPAddress = PublicIPAddress
         self.InstanceStatus = InstanceStatus
         self.ResourceMetadata = ResourceMetadata
+        self.SubnetServiceClient = SubnetServiceClient
+        self.ListSubnetsRequest = ListSubnetsRequest
 
 
 _SYMS: _SdkSymbols | None = None

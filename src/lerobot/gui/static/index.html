@@ -448,8 +448,8 @@
                 Use a <code style="color:var(--text-primary, #ccc);">~/.ssh/config</code> alias (e.g. <code style="color:var(--text-primary, #ccc);">lab-gpu1</code>) or <code style="color:var(--text-primary, #ccc);">user@host</code>. Auth uses your local SSH setup — the GUI server never reads your private keys.
             </p>
             <p id="add-host-help-ephemeral" style="display:none; margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
-                A Nebius VM is spawned when a run starts and destroyed when it ends. Auth uses the <strong>Nebius connection</strong> configured on this server (a service-account key). <strong>You pay the vendor directly</strong> — know the rates: <a href="https://docs.nebius.com/compute/resources/pricing" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">pricing ↗</a> · <a href="#" onclick="trainingOpenNebiusConnection(); return false;" style="color:var(--accent,#0e639c);">Nebius connection</a>
-                <span id="add-host-nebius-conn-status" style="display:block; margin-top:4px;"></span>
+                A Nebius VM is spawned when a run starts and destroyed when it ends, using the Nebius connection configured on this server. <strong>You pay the vendor directly</strong> — <a href="https://docs.nebius.com/compute/resources/pricing" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">know the rates ↗</a>.
+                <span id="add-host-nebius-conn-status" style="display:block; margin-top:6px;"></span>
             </p>
             <div style="margin-bottom:10px;">
                 <label for="add-host-name" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Name <span style="color:var(--text-secondary,#666);">(used as the host id; a–z, 0–9, _ -)</span></label>
@@ -482,10 +482,6 @@
                     <label for="add-host-preemptible" style="font-size:11px; color:var(--text-secondary, #999);">Preemptible (spot)</label>
                 </div>
             </div>
-            <div style="margin-bottom:10px;">
-                <label for="add-host-display-name" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Display name <span style="color:var(--text-secondary,#666);">(optional)</span></label>
-                <input id="add-host-display-name" type="text" placeholder="Lab H100" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
-            </div>
             <div id="add-host-probe-results" style="margin-bottom:12px; min-height:0;"></div>
             <div id="add-host-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
             <div style="display:flex; justify-content:flex-end; gap:8px;">
@@ -500,13 +496,49 @@
     <div id="nebius-conn-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
         <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:480px; max-width:600px;">
             <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Nebius connection</h3>
-            <p style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
-                One service-account credential for this GUI server, used for every ephemeral spawn and teardown. A Nebius <strong>tenant admin</strong> creates the service account and pastes its authorized-key JSON below — service-account keys don't expire, so unattended teardown keeps working. The key is stored on the server (<code style="color:var(--text-primary, #ccc);">~/.config/lerobot/nebius/</code>, mode 0600), never returned to the browser or sent to the training VM. It is shared by anyone who can reach this server — same as the server's HF token and SSH key.
+            <p style="margin:0 0 10px 0; font-size:11px; color:var(--text-secondary, #999);">
+                One service-account key, stored on this GUI server and used to spawn and tear down the cloud GPUs. <strong>Note: it's saved on the server and usable by anyone who can reach the GUI</strong> (there's no per-user login), and it bills your Nebius account — so set it up only on a trusted network.
             </p>
+            <details style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
+                <summary style="cursor:pointer; color:var(--accent,#0e639c);">How do I get a key?</summary>
+                <div style="margin-top:6px; line-height:1.5;">
+                    A Nebius <strong>tenant admin</strong> creates a service account and an authorized key — via the
+                    <a href="https://console.nebius.com" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">Nebius console ↗</a>
+                    (IAM → Service accounts → <em>Upload authorized key</em>), or the CLI:
+                    <pre style="margin:6px 0; padding:8px; background:var(--bg-primary,#252526); border-radius:4px; color:var(--text-primary,#ccc); font-size:11px; white-space:pre-wrap; overflow-x:auto;">nebius iam service-account create --name lerobot-training
+nebius iam auth-public-key generate \
+  --service-account-id &lt;SA_ID&gt; --output sa-key.json</pre>
+                    Paste the contents of <code style="color:var(--text-primary,#ccc);">sa-key.json</code> below.
+                    Docs: <a href="https://docs.nebius.com/iam/service-accounts/authorized-keys" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">authorized keys ↗</a> ·
+                    <a href="https://docs.nebius.com/cli/reference/iam/" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">CLI ↗</a>.
+                    The <strong>Project</strong> &amp; <strong>Subnet</strong> IDs are in the console (they start with <code style="color:var(--text-primary,#ccc);">project-</code> / <code style="color:var(--text-primary,#ccc);">vpcsubnet-</code>).
+                </div>
+            </details>
             <div id="nebius-conn-current" style="font-size:11px; padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px; min-height:18px; color:var(--text-secondary,#999);"></div>
             <div style="margin-bottom:10px;">
-                <label for="nebius-conn-key" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Service-account authorized-key JSON</label>
-                <textarea id="nebius-conn-key" rows="7" spellcheck="false" placeholder='{ "subject-credentials": { "alg": "RS256", "private-key": "-----BEGIN PRIVATE KEY----- ...", "kid": "publickey-...", "iss": "serviceaccount-...", "sub": "serviceaccount-..." } }' style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:11px; box-sizing:border-box; resize:vertical; font-family:monospace;"></textarea>
+                <label for="nebius-conn-mode" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">How did you create the key?</label>
+                <select id="nebius-conn-mode" onchange="trainingNebiusModeChanged()" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box; margin-bottom:8px;">
+                    <option value="json">A key file from the CLI (auth-public-key generate)</option>
+                    <option value="fields">A private key + IDs (uploaded in the console)</option>
+                </select>
+                <div id="nebius-conn-json-fields">
+                    <label for="nebius-conn-key" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Service-account key JSON <span style="color:var(--text-secondary,#666);">(contents of sa-key.json)</span></label>
+                    <textarea id="nebius-conn-key" rows="7" spellcheck="false" placeholder='{ "subject-credentials": { "alg": "RS256", "private-key": "-----BEGIN PRIVATE KEY----- ...", "kid": "publickey-...", "iss": "serviceaccount-...", "sub": "serviceaccount-..." } }' style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:11px; box-sizing:border-box; resize:vertical; font-family:monospace;"></textarea>
+                </div>
+                <div id="nebius-conn-fields-fields" style="display:none;">
+                    <label for="nebius-conn-privkey" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Private key (PEM) <span style="color:var(--text-secondary,#666);">(the local key whose public half you uploaded)</span></label>
+                    <textarea id="nebius-conn-privkey" rows="6" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----&#10;…&#10;-----END PRIVATE KEY-----" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:11px; box-sizing:border-box; resize:vertical; font-family:monospace;"></textarea>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+                        <div>
+                            <label for="nebius-conn-kid" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Authorized key ID</label>
+                            <input id="nebius-conn-kid" type="text" spellcheck="false" placeholder="publickey-e00..." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                        </div>
+                        <div>
+                            <label for="nebius-conn-said" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Service account ID</label>
+                            <input id="nebius-conn-said" type="text" spellcheck="false" placeholder="serviceaccount-e00..." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                        </div>
+                    </div>
+                </div>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px;">
                 <div>
@@ -515,14 +547,18 @@
                 </div>
                 <div>
                     <label for="nebius-conn-subnet" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Subnet ID</label>
-                    <input id="nebius-conn-subnet" type="text" spellcheck="false" placeholder="vpcsubnet-e00..." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                    <div style="display:flex; gap:6px;">
+                        <input id="nebius-conn-subnet" type="text" spellcheck="false" placeholder="vpcsubnet-e00..." style="flex:1; min-width:0; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                        <button type="button" id="nebius-conn-find-subnet" onclick="trainingFindSubnets()" title="List the subnets in this project" style="padding:5px 10px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px; white-space:nowrap;">Find</button>
+                    </div>
+                    <select id="nebius-conn-subnet-found" onchange="trainingPickSubnet()" style="display:none; width:100%; margin-top:6px; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;"></select>
+                    <span id="nebius-conn-subnet-hint" style="display:block; margin-top:4px; font-size:10px; color:var(--text-secondary,#777);"></span>
                 </div>
             </div>
             <div id="nebius-conn-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
             <div style="display:flex; justify-content:flex-end; gap:8px;">
                 <button onclick="trainingCloseNebiusConnection()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
-                <button id="nebius-conn-clear-btn" onclick="trainingClearNebiusConnection()" style="padding:5px 14px; background:transparent; color:#e06c75; border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Clear</button>
-                <button id="nebius-conn-save-btn" onclick="trainingSaveNebiusConnection()" style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Save</button>
+                <button id="nebius-conn-save-btn" onclick="trainingSaveNebiusConnection()" style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Connect</button>
             </div>
         </div>
     </div>
@@ -592,8 +628,8 @@
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=45"></script>
     <script src="/static/model.js?v=5"></script>
-    <script src="/static/training.js?v=20"></script>
-    <script src="/static/add_host_dialog.js?v=3"></script>
+    <script src="/static/training.js?v=23"></script>
+    <script src="/static/add_host_dialog.js?v=4"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
