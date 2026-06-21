@@ -12,6 +12,8 @@ from urllib.parse import unquote
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from lerobot.gui.training.runs import RUNS_DIR as _RUNS_DIR
+
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
 
@@ -36,10 +38,11 @@ def set_app_state(state: AppState) -> None:
 _DEFAULT_SOURCE = str(Path.cwd() / "outputs")
 _CONVERTED_SOURCE = str(Path.home() / ".cache" / "lerobot" / "converted")
 # GUI-managed training runs (lerobot.gui.training.orchestrator) land under
-# ~/.cache/lerobot/runs/<run_id>/output/checkpoints/<step>/pretrained_model/.
-# Auto-register the dir so trained models appear in the Models tab next
-# to other sources — closes the felt training loop (DESIGN.md C3).
-_GUI_RUNS_SOURCE = str(Path.home() / ".cache" / "lerobot" / "runs")
+# RUNS_DIR/<run_id>/output/checkpoints/<step>/pretrained_model/. Track the
+# orchestrator's ACTUAL runs dir (honours LEROBOT_RUNS_DIR) rather than a
+# hardcoded path, or a custom runs dir leaves trained models unscanned.
+# Auto-register so they appear in the Models tab — closes the loop (DESIGN.md C3).
+_GUI_RUNS_SOURCE = str(_RUNS_DIR)
 
 
 def _read_sources() -> list[dict]:

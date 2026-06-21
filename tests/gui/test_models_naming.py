@@ -47,3 +47,13 @@ def test_scan_falls_back_to_dir_name_without_run_json(tmp_path: Path) -> None:
     result = _scan_training_run(tmp_path)
     assert result is not None
     assert result["name"] == tmp_path.name
+
+
+def test_gui_runs_source_tracks_orchestrator_runs_dir() -> None:
+    """The auto-registered GUI-runs model source must follow the orchestrator's
+    actual RUNS_DIR (honours LEROBOT_RUNS_DIR), not a hardcoded path — else a
+    custom runs dir leaves trained models unscanned in the Models tab (round-6)."""
+    from lerobot.gui.api import models
+    from lerobot.gui.training.runs import RUNS_DIR
+
+    assert str(RUNS_DIR) == models._GUI_RUNS_SOURCE
