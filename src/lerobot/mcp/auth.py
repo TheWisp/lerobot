@@ -172,12 +172,19 @@ class TokenStore:
         return conn
 
     def issue(self, name: str, scopes: list[str]) -> str:
-        """Create a new token; return the cleartext bearer (shown once)."""
+        """Create a new token; return the cleartext bearer (shown once).
+
+        Reissuing the name of a previously-revoked token is a normal rotation:
+        the dead row is dropped first so ``UNIQUE(name)`` only ever guards
+        *active* names (a revoked token keeps the name reserved otherwise).
+        """
         assert name, "name must be non-empty"
         scopes = _validate_scopes(scopes)
         token = _generate_token()
+        conn = self._conn()
+        conn.execute("DELETE FROM tokens WHERE name = ? AND revoked_at IS NOT NULL", (name,))
         try:
-            self._conn().execute(
+            conn.execute(
                 """
                 INSERT INTO tokens(token_hash, name, scopes_json, created_at)
                 VALUES (?, ?, ?, ?)
@@ -185,7 +192,10 @@ class TokenStore:
                 (_hash(token), name, json.dumps(scopes), _now_iso()),
             )
         except sqlite3.IntegrityError as e:
-            raise ValueError(f"Token name {name!r} already exists; revoke first or pick another") from e
+            raise ValueError(
+                f"Token name {name!r} is already in use by an active token — "
+                f"revoke it first or pick another name"
+            ) from e
         return token
 
     def revoke(self, name: str) -> bool:

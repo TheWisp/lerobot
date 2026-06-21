@@ -57,10 +57,22 @@ def test_revoke_unknown_returns_false(store: TokenStore) -> None:
     assert store.revoke("nope") is False
 
 
-def test_duplicate_name_rejected(store: TokenStore) -> None:
+def test_duplicate_active_name_rejected(store: TokenStore) -> None:
     store.issue("alice", [SCOPE_READ])
-    with pytest.raises(ValueError, match="already exists"):
+    with pytest.raises(ValueError, match="active token"):
         store.issue("alice", [SCOPE_READ])
+
+
+def test_reissue_after_revoke_succeeds(store: TokenStore) -> None:
+    # Revoking frees the name: reissuing the same name is a normal rotation
+    # and must produce a fresh, working token (regression — a revoked row used
+    # to keep the name reserved via UNIQUE(name)).
+    first = store.issue("alice-laptop", [SCOPE_READ])
+    assert store.revoke("alice-laptop") is True
+    second = store.issue("alice-laptop", [SCOPE_READ])
+    assert second != first
+    assert store.lookup(first) is None  # old one stays revoked
+    assert store.lookup(second)["name"] == "alice-laptop"  # new one works
 
 
 def test_invalid_scope_rejected(store: TokenStore) -> None:
