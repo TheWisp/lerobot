@@ -107,6 +107,14 @@ class Run:
     session_id: str | None = None
     idempotency_key: str | None = None  # client-supplied, defends against double-clicks
     error: str | None = None  # short reason for FAILED state
+    # Ephemeral (provider-spawned) runs only. Persisted so the orchestrator
+    # can tear the VM down on every terminal transition — including after a
+    # GUI-server restart, where the in-memory handle would be lost. Stored as
+    # a plain dict (the serialized HostHandle); None for workstation/SSH runs.
+    ephemeral_handle: dict[str, Any] | None = None
+    # Set once the provider has destroyed the spawned VM, so teardown is
+    # idempotent (we never double-destroy, and verify only runs once).
+    ephemeral_destroyed: bool = False
 
     def to_json(self) -> str:
         d = asdict(self)

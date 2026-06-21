@@ -18,6 +18,7 @@ Covers:
 
 from __future__ import annotations
 
+import getpass
 import time
 
 import pytest
@@ -179,7 +180,8 @@ class TestNebiusDefensiveDefaults:
         assert warning is not None
 
     def test_platform_lookup(self):
-        assert NebiusProvider.platform_for("L40S") == "gpu-l40s-a"
+        # L40S is the VERIFIED value (from the GPU-smoke Terraform).
+        assert NebiusProvider.platform_for("L40S") == "gpu-l40s-d"
         assert NebiusProvider.platform_for("H100") == "gpu-h100-sxm5"
 
     def test_platform_lookup_unsupported_raises(self):
@@ -187,26 +189,246 @@ class TestNebiusDefensiveDefaults:
             NebiusProvider.platform_for("RTX_4090")
 
     def test_preset_lookup(self):
-        assert NebiusProvider.preset_for("L40S") == "1gpu-8vcpu-32gb"
+        assert NebiusProvider.preset_for("L40S") == "1gpu-16vcpu-96gb"
         assert NebiusProvider.preset_for("H100") == "1gpu-16vcpu-200gb"
 
 
-# ── NebiusProvider — lifecycle methods stubbed for C2 ──────────────────────
+# ── NebiusProvider — lifecycle via an injected fake SDK service ─────────────
+#
+# No credentials/network here, so the provider runs against a fake async
+# InstanceServiceClient. The CreateInstanceRequest is built with the REAL
+# SDK message classes (so these tests exercise actual message construction)
+# — hence importorskip("nebius"). Same loopback-first spirit as SshClient;
+# the live spawn→train→destroy smoke is run on the user's Nebius account.
+
+nebius_sdk = pytest.importorskip("nebius.api.nebius.compute.v1")
 
 
-class TestNebiusStubbedLifecycle:
-    """C1 lands cost math; spawn/destroy land in C2. These tests pin that
-    the stubs explicitly raise (vs. silently returning None) so a caller
-    that wires this up before C2 lands fails loudly."""
+class _FakeOp:
+    def __init__(self, resource_id="computeinstance-abc", ok=True):
+        self._rid = resource_id
+        self._ok = ok
 
-    def test_spawn_raises_notimplemented(self):
-        with pytest.raises(NotImplementedError, match="lands in C2"):
-            NebiusProvider().spawn(_example_spec())
+    async def wait(self):
+        return None
 
-    def test_destroy_raises_notimplemented(self):
-        with pytest.raises(NotImplementedError, match="lands in C2"):
-            NebiusProvider().destroy(_example_handle(provider="nebius"))
+    def successful(self):
+        return self._ok
 
-    def test_verify_destroyed_raises_notimplemented(self):
-        with pytest.raises(NotImplementedError, match="lands in C2"):
-            NebiusProvider().verify_destroyed(_example_handle(provider="nebius"))
+    @property
+    def resource_id(self):
+        return self._rid
+
+
+class _FakeState:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakePubIP:
+    def __init__(self, address):
+        self.address = address
+
+
+class _FakeNic:
+    def __init__(self, address):
+        self.public_ip_address = _FakePubIP(address)
+
+
+class _FakeStatus:
+    def __init__(self, state, ip):
+        self.state = _FakeState(state)
+        self.network_interfaces = [_FakeNic(ip)] if ip else []
+
+
+class _FakeMeta:
+    def __init__(self, parent_id):
+        self.parent_id = parent_id
+
+
+class _FakeInstance:
+    def __init__(self, state, ip, parent_id="eu-north1"):
+        self.status = _FakeStatus(state, ip)
+        self.metadata = _FakeMeta(parent_id)
+
+
+class _FakeService:
+    """Async InstanceServiceClient stand-in. Records the requests it's
+    handed and replays a scripted sequence of `get` instances so a spawn
+    can progress CREATING → RUNNING. ``create``/``delete`` can be made to
+    raise to exercise error paths."""
+
+    def __init__(self, get_sequence=None, create_exc=None, get_exc=None, delete_exc=None):
+        self.created: list = []
+        self.deleted: list = []
+        self.gotten: list = []
+        self._get_sequence = list(get_sequence or [])
+        self._create_exc = create_exc
+        self._get_exc = get_exc
+        self._delete_exc = delete_exc
+
+    async def create(self, request):
+        self.created.append(request)
+        if self._create_exc:
+            raise self._create_exc
+        return _FakeOp()
+
+    async def get(self, request):
+        self.gotten.append(request)
+        if self._get_exc:
+            raise self._get_exc
+        if self._get_sequence:
+            return self._get_sequence.pop(0)
+        raise AssertionError("unexpected extra get() call")
+
+    async def delete(self, request):
+        self.deleted.append(request)
+        if self._delete_exc:
+            raise self._delete_exc
+        return _FakeOp()
+
+
+def _nebius(service=None, **kw):
+    kw.setdefault("ssh_public_key", "ssh-ed25519 AAAAFAKEKEY test@host")
+    kw.setdefault("project_id", "project-TEST")
+    kw.setdefault("subnet_id", "vpcsubnet-TEST")
+    kw.setdefault("poll_interval_s", 0)
+    kw.setdefault("sleep", lambda _s: None)
+    return NebiusProvider(instance_service=service, **kw)
+
+
+class TestNebiusSpawn:
+    def test_spawn_happy_path_returns_handle(self):
+        svc = _FakeService(
+            get_sequence=[
+                _FakeInstance("CREATING", None),
+                _FakeInstance("RUNNING", "195.242.29.74"),
+            ]
+        )
+        handle = _nebius(svc).spawn(_example_spec(ttl_seconds=3600))
+        assert handle.provider == "nebius"
+        assert handle.provider_resource_id == "computeinstance-abc"
+        assert handle.ssh_host == "195.242.29.74"
+        assert handle.ssh_user == getpass.getuser()  # Fix A: matches GUI server user (#11 workaround)
+        assert handle.expires_at_unix > 0
+
+    def test_spawn_builds_request_with_verified_sku(self):
+        """Exercises REAL SDK message construction: platform/preset/disk/
+        cloud-init must land on the CreateInstanceRequest."""
+        svc = _FakeService(get_sequence=[_FakeInstance("RUNNING", "1.2.3.4")])
+        _nebius(svc).spawn(_example_spec(gpu="L40S", disk_gib=50, ttl_seconds=3600))
+        req = svc.created[0]
+        assert req.spec.resources.platform == "gpu-l40s-d"
+        assert req.spec.resources.preset == "1gpu-16vcpu-96gb"
+        assert req.spec.boot_disk.managed_disk.spec.size_gibibytes == 50
+        assert req.metadata.parent_id == "project-TEST"
+        nic = req.spec.network_interfaces[0]
+        assert nic.subnet_id == "vpcsubnet-TEST"
+        # Server-required NIC fields (a real spawn 400s without them):
+        # name + an ip_address (empty = auto-allocate the internal IPv4).
+        assert nic.name, "network interface name is server-required"
+        assert nic.check_presence("ip_address"), "ip_address is server-required"
+        assert "ssh-ed25519 AAAAFAKEKEY" in req.spec.cloud_init_user_data
+
+    def test_spawn_cloud_init_arms_ttl_poweroff(self):
+        svc = _FakeService(get_sequence=[_FakeInstance("RUNNING", "1.2.3.4")])
+        _nebius(svc).spawn(_example_spec(ttl_seconds=2 * 3600))
+        ud = svc.created[0].spec.cloud_init_user_data
+        assert "shutdown -P +120" in ud  # 2h → 120 min
+
+    def test_spawn_rejects_nonpositive_ttl(self):
+        with pytest.raises(ValueError, match="ttl_seconds"):
+            _nebius(_FakeService()).spawn(_example_spec(ttl_seconds=0))
+
+    def test_spawn_requires_project_and_subnet(self):
+        from lerobot.gui.training.providers.nebius import NebiusConfigError
+
+        with pytest.raises(NebiusConfigError, match="project_id"):
+            _nebius(_FakeService(), project_id=None).spawn(_example_spec())
+        with pytest.raises(NebiusConfigError, match="subnet_id"):
+            _nebius(_FakeService(), subnet_id=None).spawn(_example_spec())
+
+    def test_spawn_create_failure_raises(self):
+        svc = _FakeService(create_exc=RuntimeError("quota exceeded"))
+        with pytest.raises(RuntimeError, match="quota exceeded"):
+            _nebius(svc).spawn(_example_spec())
+
+    def test_spawn_times_out_when_never_ready(self):
+        svc = _FakeService(get_sequence=[_FakeInstance("CREATING", None) for _ in range(50)])
+        clock = iter([0.0, 0.0, 100.0, 1000.0])  # last exceeds the 900s default
+        with pytest.raises(Exception, match="not reachable"):
+            _nebius(svc, clock=lambda: next(clock)).spawn(_example_spec())
+
+
+class TestNebiusDestroyVerify:
+    def test_destroy_issues_delete(self):
+        svc = _FakeService()
+        _nebius(svc).destroy(_example_handle(provider="nebius", provider_resource_id="i-9"))
+        assert svc.deleted[0].id == "i-9"
+
+    def test_destroy_idempotent_on_not_found(self):
+        svc = _FakeService(delete_exc=RuntimeError("instance not found"))
+        _nebius(svc).destroy(_example_handle(provider="nebius"))  # no raise
+
+    def test_destroy_real_failure_raises(self):
+        svc = _FakeService(delete_exc=RuntimeError("permission denied"))
+        with pytest.raises(RuntimeError, match="permission denied"):
+            _nebius(svc).destroy(_example_handle(provider="nebius"))
+
+    def test_verify_destroyed_true_on_not_found(self):
+        svc = _FakeService(get_exc=RuntimeError("instance does not exist"))
+        assert _nebius(svc).verify_destroyed(_example_handle(provider="nebius")) is True
+
+    def test_verify_destroyed_false_when_still_running(self):
+        svc = _FakeService(get_sequence=[_FakeInstance("RUNNING", "1.2.3.4")])
+        assert _nebius(svc).verify_destroyed(_example_handle(provider="nebius")) is False
+
+    def test_verify_destroyed_true_when_deleting(self):
+        svc = _FakeService(get_sequence=[_FakeInstance("DELETING", None)])
+        assert _nebius(svc).verify_destroyed(_example_handle(provider="nebius")) is True
+
+    def test_verify_destroyed_false_on_unknown_error(self):
+        """Conservative: an error we can't classify as not-found reports
+        NOT destroyed, so the user keeps looking."""
+        svc = _FakeService(get_exc=RuntimeError("transient API 503"))
+        assert _nebius(svc).verify_destroyed(_example_handle(provider="nebius")) is False
+
+
+class TestNebiusCloudInit:
+    def test_cloud_init_grants_key_sudo_and_ttl(self):
+        from lerobot.gui.training.providers.nebius import build_cloud_init
+
+        doc = build_cloud_init("lerobot", "ssh-ed25519 AAAAKEY u@h", ttl_seconds=3600)
+        assert doc.startswith("#cloud-config")
+        assert "name: lerobot" in doc
+        assert "NOPASSWD:ALL" in doc
+        assert "ssh-ed25519 AAAAKEY u@h" in doc
+        assert "shutdown -P +60" in doc
+
+    def test_cloud_init_rejects_key_path(self):
+        from lerobot.gui.training.providers.nebius import build_cloud_init
+
+        with pytest.raises(AssertionError, match="not a path"):
+            build_cloud_init("lerobot", "/home/u/.ssh/id_ed25519.pub", ttl_seconds=3600)
+
+
+class TestNebiusAuthError:
+    def test_missing_credential_raises_instructive_auth_error(self, monkeypatch):
+        """No token + no ambient creds → a NebiusAuthError whose message
+        tells the user how to log in (not a raw SDK NoTokenInEnvError)."""
+        from lerobot.gui.training.providers.nebius import NebiusAuthError
+
+        monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+        # No credentials_file and no instance_service → real SDK() build,
+        # which fails credential resolution with no token/profile.
+        prov = NebiusProvider(
+            project_id="project-x",
+            subnet_id="vpcsubnet-y",
+            ssh_public_key="ssh-ed25519 AAAA t@h",
+        )
+        with pytest.raises(NebiusAuthError) as ei:
+            prov.spawn(_example_spec(ttl_seconds=3600))
+        msg = str(ei.value)
+        assert "Nebius is not connected" in msg
+        assert "service account" in msg
+        assert "Nebius connection" in msg

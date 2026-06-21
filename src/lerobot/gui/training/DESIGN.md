@@ -26,7 +26,7 @@ The three modes share the same shape — what swaps is _where_ the training host
    │ Browser  ├─────────►│   GUI server (orchestrator)    │
    └──────────┘          │  · run registry                │
                          │  · model storage               │
-                         │  · per-request vendor token    │
+                         │  · server-held Nebius SA key   │
                          └──┬─────────────────┬───────────┘
                             │                 │
         Workstation ───────►│                 │◄──── User-added SSH  /  Ephemeral
@@ -104,8 +104,8 @@ sequenceDiagram
   Training host
 ```
 
-- **Browser** — holds short-lived tokens in localStorage (paste in v1; helper-minted in v2) and forwards them per-request.
-- **GUI server** — orchestrates training and owns model storage. Auto-detects a local GPU at startup, holds host profiles + run state + the canonical checkpoint store. Never holds long-lived credentials.
+- **Browser** — pure UI; holds no credentials. The Nebius connection (service-account key) is configured server-side via a form; the browser only sees non-secret status.
+- **GUI server** — orchestrates training and owns model storage. Auto-detects a local GPU at startup, holds host profiles + run state + the canonical checkpoint store. Holds the one server-side Nebius service-account key (`0600`) and the ambient HF token — shared by whoever can reach it, as the GUI has no login of its own (see Authentication).
 - **Training host** — where the container runs. Writes checkpoints to local disk; never talks to external destinations.
 - **External destinations** — HF Hub today; S3/GCS/NAS later. Pushed from the GUI server only, never from the training host.
 
@@ -163,7 +163,7 @@ Saved hosts are persisted one JSON per host under `~/.config/lerobot/training_ho
 │  Provider     [ Nebius ▾ ]                                       │
 │   ⚠ The GUI server needs the vendor extra installed:             │
 │      uv sync --extra nebius                                      │
-│   ⓘ Vendor IAM token: paste in Settings (refresh every ~12h)     │
+│   ⓘ Nebius connection: paste a service-account key once (server) │
 │                                                                  │
 │  ── Spawn spec ──                                                │
 │  GPU class    [ H100 80GB ▾ ]      GPU count [ 1 ]               │
@@ -284,7 +284,7 @@ One implementation per vendor. Surface:
 
 Spawn spec (vendor-neutral): GPU class, GPU count (v1: 1), preemptibility, boot disk size, container image, region hint, hard TTL (vendor-side scheduled destroy; required). Host handle: provider id, vendor's resource id, transport, optional persistent volume id, region.
 
-Deliberately omitted: start/stop (a stopped VM still bills its disk; every off-switch is destroy), SSH command execution + log tailing (vendor-agnostic; live in the transport above), auth flow (per-request token injection — see Authentication), cost reporting (vendor pricing pages link out from the host config UI).
+Deliberately omitted: start/stop (a stopped VM still bills its disk; every off-switch is destroy), SSH command execution + log tailing (vendor-agnostic; live in the transport above), auth flow (the server-held service-account key, resolved by `get_provider` — see Authentication), cost reporting (vendor pricing pages link out from the host config UI).
 
 The Persistent provider is degenerate: every lifecycle method (`spawn` / `destroy` / `verify_destroyed`) raises — the user owns the VM, the GUI never creates or destroys it; only the cost methods answer (with zeros). The auto-registered workstation host has subprocess transport; user-added Persistent hosts and Ephemeral hosts have SSH transport.
 
@@ -471,19 +471,19 @@ Beyond that one thread, the orchestrator is sync. FastAPI's own thread pool hand
 
 ### Authentication
 
-Two distinct credential surfaces. SSH for persistent hosts uses the user's own SSH setup (no GUI-managed keys at all). The vendor cloud token for Ephemeral mode is the only credential the GUI server takes per-user. The training pod itself sees neither.
+Two distinct credential surfaces. SSH for persistent hosts uses the user's own SSH setup (no GUI-managed keys at all). The Nebius service-account key for Ephemeral mode is one server-held credential, configured once. The training pod itself sees neither.
+
+**The GUI has no login of its own.** It was built as a single-operator tool, so any credential held _on the server_ — the ambient HF token (`~/.cache/huggingface/token`), the SSH key the local `ssh` client resolves, and now the Nebius key — is usable by anyone who can reach the server's port. There are no per-user sessions to scope a credential to. This is the one trust assumption everything below rests on; the moment the GUI is exposed to a LAN with untrusted users it is violated, for HF _today_, not just for Nebius. Per-user scoping requires a real auth layer on the GUI (listed under Future enhancements); until that exists, "server-held" means "shared by whoever can reach the GUI."
 
 **SSH for persistent hosts — user's existing setup, never ours.** The Add-host dialog has zero key fields (see [§ Host setup UX](#host-setup-ux) for the dialog mock and the "Auth is the user's existing SSH setup" paragraph). The GUI server invokes `ssh` locally with `BatchMode=yes`; ssh resolves the key via `~/.ssh/config`, ssh-agent, or default paths exactly as a terminal `ssh <Host>` would. Private key bytes never enter the GUI server's address space, never get persisted, never cross the wire (public-key auth signs locally; only the signature is sent). Same trust posture VS Code Remote-SSH / JetBrains Gateway / `gh codespace ssh` take.
 
-**v1 paste-token model.** The user runs `nebius iam get-access-token --duration=12h` (or equivalent) on their laptop, pastes the token into Settings. Browser stores it in localStorage, sends it in a vendor-specific header (`X-Nebius-Authorization`) per request. The GUI server reads the header per request, uses the token in scope, discards. No persistence. Workstation users can bypass the paste via a "use my local CLI auth" toggle that has the vendor SDK read its default profile.
+**Nebius — one server-held service-account key.** Why not per-user tokens: a Nebius personal/federated access token has a 12 h hard cap and no refresh, so it cannot drive an unattended teardown of a run that outlives it — and forcing every (often non-technical) user to re-mint and re-paste a token every 12 h is unmanageable. A **service-account key** is the only Nebius credential that doesn't expire. Creating a service account requires the **Nebius tenant admin** role, so the operator who deploys the GUI (a Nebius admin, not necessarily the GUI's end users) creates one service account and pastes its authorized-key JSON — plus the project and subnet ids — once into the GUI's **Nebius connection** form. The server validates the key shape, writes it to `~/.config/lerobot/nebius/service_account.json` (mode `0600`, dir `0700`), and uses it for every spawn and every unattended teardown. The key is never returned to the browser (status shows only the SA's own id / key id), never written to run history or logs, never sent to the training VM. See `nebius_credentials.py`.
 
-**Shared-LAN case**: each user pastes their own token. Backend never sees another user's.
+This is the _same_ trust model as the existing SSH key and HF token: a server-held credential the operator configures, shared by anyone who can reach the GUI. It adds no new trust boundary — it sits on the existing one. The `{only-the-paster-can-use-it}` + `{unattended teardown past 12 h}` pair is unsatisfiable on a no-auth GUI, because teardown needs a credential the server keeps after the browser is gone; we chose guaranteed teardown and document the sharing limitation rather than risk leaked, billing VMs.
 
-**HF in v1 — unchanged.** The GUI server already reads `~/.cache/huggingface/token` for its existing Hub features; the training pipeline reuses this for cache-side dataset access. The training pod itself receives no HF token. The LAN-deployment shared-HF-identity limitation present in today's GUI is inherited — same as today.
+**HF — unchanged.** The GUI server already reads `~/.cache/huggingface/token` for its existing Hub features; the training pipeline reuses this for cache-side dataset access. The training pod itself receives no HF token. The shared-server-identity limitation is identical to the Nebius key's, and predates this work.
 
-**v2: credential helper + per-user HF auth.** A small loopback daemon on each user's laptop mints vendor tokens on demand (eliminating the daily re-paste), and a per-user HF auth flow replaces the inherited workstation-mode assumption. Architecture doesn't change for vendor auth; request shape stays the same.
-
-**Security properties.** Vendor cloud credentials never persisted by the backend. SSH private keys never enter the backend at all (resolved by the user's local `ssh` client). Per-user vendor isolation in LAN. Compromised backend worst case: short-lived (≤12 h) vendor tokens for currently-connected users — SSH keys not exposed. Pod compromise: zero external credentials to leak.
+**Security properties.** The Nebius key is held in one `0600` file the operator placed there deliberately; never returned to a client, never logged, never on the pod. SSH private keys never enter the backend at all (resolved by the user's local `ssh` client). Compromised backend worst case: the one Nebius service-account key and the ambient HF token are exposed — mitigated by scoping the service account to a dedicated project and rotating the key (re-paste replaces it; Clear removes it). Pod compromise: zero external credentials to leak.
 
 ### Cost discipline
 
@@ -507,7 +507,7 @@ The GUI server is the checkpoint store; if its disk fills, pulls would fail. v1 
 
 ### Dependencies — three places, three rules
 
-**1. User's laptop: vendor CLI** (out-of-band install, one-time per vendor). The v1 paste flow asks the user to run `<vendor> iam get-access-token`. The v2 helper shells out to the same CLI to mint tokens. Missing CLI → clear "install `<vendor>`" message; other vendors keep working.
+**1. Nebius tenant admin: one-time service-account setup** (out-of-band, per deployment). A Nebius admin creates a service account, grants it the compute role on the target project, and generates an authorized key (`nebius iam auth-public-key create` or the console). The resulting JSON is pasted once into the GUI's Nebius-connection form. No per-user CLI install; the GUI's end users do nothing.
 
 **2. GUI server: vendor Python SDKs as LeRobot optional extras.**
 
@@ -515,7 +515,7 @@ The GUI server is the checkpoint store; if its disk fills, pulls would fail. v1 
 uv sync --extra nebius
 ```
 
-Same pattern LeRobot already uses for hardware (`lerobot[aloha]`, `lerobot[feetech]`). At startup the GUI does a soft import; installed providers are enabled, missing ones disabled in the UI with a clear message. Other providers stay usable. Provider impl uses the SDK with the per-request bearer token; the SDK doesn't manage its own auth state. Fallback for vendors without a usable SDK: direct REST via `httpx` — same effort either way.
+Same pattern LeRobot already uses for hardware (`lerobot[aloha]`, `lerobot[feetech]`). At startup the GUI does a soft import; installed providers are enabled, missing ones disabled in the UI with a clear message. Other providers stay usable. The provider builds the SDK from the server-held service-account key file (`SDK(credentials_file_name=...)`); when none is configured it falls back to the SDK's ambient credentials (the single-user workstation path). Fallback for vendors without a usable SDK: direct REST via `httpx` — same effort either way.
 
 **3. Training image: vendor-neutral, runs on every host.** CUDA base + Python + LeRobot training stack + `huggingface_hub`. **No** vendor CLIs or SDKs (no Nebius, no RunPod, no AWS, no GCP). Same image runs on a workstation, a lab box, or any vendor's VM. No `tmux` or `sshd` either — those live on the host (the SSH transport uses host-side tmux to keep `docker run` detached, then SSHes back in for short-lived reads of the mounted log files). The container receives no external credentials; dataset cache + checkpoint dir + run dir are mounted in, worker runs `HF_HUB_OFFLINE=1`.
 
@@ -526,7 +526,7 @@ Same pattern LeRobot already uses for hardware (`lerobot[aloha]`, `lerobot[feete
 - **Pod provisioning outside the HostProvider protocol.** Ephemeral mode goes through a vetted vendor SDK with hard TTL + destroy-verification. The GUI does NOT embed vendor consoles or manage payment methods.
 - **Multi-GPU / multi-node training.** Out of scope for v1. `gpu_count` is in the schema so the UI can grow into it later.
 - **Browser-coupled providers** (Colab, Kaggle interactive). They kill on user-side idle regardless of GPU activity.
-- **In-GUI credential entry.** No "paste your API key" forms. Vendor tokens come from the user's local CLI state.
+- **Per-user credential entry / GUI login.** The GUI has no auth layer; the one Nebius service-account key is configured server-side by the deployment operator (a Nebius admin), not by individual end users, and is shared by whoever can reach the server. Scoping credentials per user needs a GUI auth layer (Future enhancements).
 - **Cost estimation.** No "this run will cost $X" claims, spend caps, or local price tables — vendor pricing changes too often to be accurate. The GUI links to the vendor's pricing page; spend protection is mechanical (hard TTL, disk-size warning, auto-destroy).
 - **Direct pod-to-external-store uploads.** Pod uploads only to the GUI server. External destinations are pushed from the GUI server — one credential boundary, not N.
 
@@ -534,8 +534,7 @@ Same pattern LeRobot already uses for hardware (`lerobot[aloha]`, `lerobot[feete
 
 ## Future enhancements
 
-- **Per-user HF auth in the GUI server** (v1 inherits the shared workstation-mode identity).
-- **Credential helper** on each user's laptop — eliminates manual token paste, replaces v2 HF paste with auto-mint.
+- **GUI authentication layer + per-user credentials.** The root limitation: the GUI has no login, so the HF token, SSH key, and Nebius service-account key are all server-held and shared by anyone who can reach it. A real auth layer would let each credential be scoped to a logged-in user — the correct fix for multi-user LAN deployments, and a prerequisite for per-user HF auth and per-user vendor credentials.
 - **Auto-discovery of the user's machine** as a candidate Persistent host (depends on the helper).
 - **Multi-GPU support** — `gpu_count` schema field already present; needs the slot abstraction.
 - **Auto-push on completion** — Models tab gets a "publish on completion" toggle per run/recipe.

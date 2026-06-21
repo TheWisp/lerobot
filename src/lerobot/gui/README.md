@@ -4,10 +4,26 @@ Browser-based tool for reviewing and editing robot training datasets.
 
 ![LeRobot GUI](screenshot.png)
 
+## Installation
+
+The GUI lives behind the `gui` extra. It pulls in FastAPI/uvicorn, the
+`python-multipart` form parser, mDNS (`zeroconf`), and the MCP server the
+GUI mounts at runtime:
+
+```bash
+pip install "lerobot[gui]"          # end users
+# or, from a checkout:
+uv sync --extra gui                 # dev (add --extra training/--extra nebius as needed)
+```
+
+If you see `RuntimeError: Form data requires "python-multipart"` or
+`ModuleNotFoundError: No module named 'mcp'`, your environment predates these
+dependencies — re-run the install above to pick them up.
+
 ## TLDR
 
 ```bash
-python -m lerobot.gui --port 8000
+uv run python -m lerobot.gui --port 8000   # or: python -m lerobot.gui --port 8000
 ```
 
 Open http://127.0.0.1:8000/, enter a repo ID (e.g. `lerobot/pusht`) or local path, then:
@@ -109,3 +125,16 @@ printed in the banner.
 ## Rerun Integration
 
 Right-click any episode → **Open in Rerun** to launch the [Rerun](https://rerun.io/) visualizer for that episode. This spawns a separate process independent of the web server.
+
+## MCP Endpoint
+
+The server also mounts a [Model Context Protocol](https://modelcontextprotocol.io/)
+app at `/mcp`, letting AI agents read datasets through the same host. It starts
+automatically; the startup banner prints the mount point and token store path:
+
+```
+MCP HTTP transport mounted at /mcp (token store: ~/.cache/huggingface/lerobot/_mcp_tokens.sqlite)
+```
+
+See [`../mcp/README.md`](../mcp/README.md) for the available tools and how to
+connect an agent.

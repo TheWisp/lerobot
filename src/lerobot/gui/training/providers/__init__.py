@@ -51,13 +51,30 @@ _PROVIDERS: dict[str, type] = {
 def get_provider(provider_id: str) -> HostProvider:
     """Resolve a vendor id to an instantiated HostProvider.
 
+    For Nebius, wires in the server-held service-account connection
+    (key file + project/subnet) from
+    :class:`~lerobot.gui.training.nebius_credentials.NebiusConnectionStore`
+    if one is configured; otherwise the provider falls back to ambient
+    credentials (the single-user workstation path). The key is server-held
+    and shared by anyone who can reach the GUI — same trust model as the
+    existing HF token / SSH key (see ``DESIGN.md`` § Authentication).
+
     Pre: ``provider_id`` is one of the registered providers.
-    Post: returns a fresh provider instance suitable for one spawn/destroy
-    cycle. Stateless — safe to call repeatedly.
+    Post: a fresh provider instance for one spawn/destroy cycle.
     """
     if provider_id not in _PROVIDERS:
         raise ValueError(f"unknown provider id: {provider_id!r}. Registered providers: {sorted(_PROVIDERS)}")
-    return _PROVIDERS[provider_id]()
+    cls = _PROVIDERS[provider_id]
+    if cls is NebiusProvider:
+        from lerobot.gui.training.nebius_credentials import NebiusConnectionStore
+
+        status = NebiusConnectionStore().status()
+        return cls(
+            credentials_file=str(NebiusConnectionStore().key_path) if status.has_key else None,
+            project_id=status.project_id,
+            subnet_id=status.subnet_id,
+        )
+    return cls()
 
 
 def list_providers() -> list[str]:

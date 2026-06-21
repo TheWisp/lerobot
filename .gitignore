@@ -186,3 +186,9 @@ outputs/
 # Local MCP server registration (machine-specific paths until we have a
 # portable `lerobot-mcp serve` install). Not committed for now.
 .mcp.json
+
+# Nebius / service-account credentials — never commit private keys.
+sa-key.json
+*-sa-key.json
+*.pem
+nebius-*.json

@@ -341,6 +341,15 @@ training-image = [
     "lerobot[xvla]",
 ]
 
+# Nebius Ephemeral-host provider (GUI server only). Deliberately NOT in
+# `training-image`: the SDK provisions/destroys VMs from the GUI server's
+# box; it has no place inside the training container that runs ON the
+# provisioned pod. nebius itself only caps protobuf>=5.29.1, but `wandb`
+# (via [training]) and grpcio-tools both cap protobuf<7, so a GUI server
+# with both extras resolves protobuf to 6.x — compatible all round
+# (verified 2026-06-15 on protobuf 6.33).
+nebius = ["nebius>=0.3,<0.4"]
+
 [project.scripts]
 lerobot-calibrate="lerobot.scripts.lerobot_calibrate:main"
 lerobot-find-cameras="lerobot.scripts.lerobot_find_cameras:main"

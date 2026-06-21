@@ -14,6 +14,100 @@
 
 const TRAINING_POLL_MS = 3000;
 let _trainingHosts = [];
+
+// ── Nebius connection (server-held service-account credential) ──────────────
+// One service-account key for the whole GUI server, configured once via the
+// Nebius-connection modal. The server stores the key (0600) and uses it for
+// every ephemeral spawn/teardown; the browser only sees non-secret status.
+// Shared by anyone who can reach the server — same trust model as the
+// server's HF token / SSH key. See DESIGN.md § Authentication.
+let _nebiusConnStatus = null;  // last fetched status, or null until loaded
+async function trainingFetchNebiusConnection() {
+  try {
+    const resp = await fetch("/api/training/nebius/connection");
+    _nebiusConnStatus = resp.ok ? await resp.json() : null;
+  } catch { _nebiusConnStatus = null; }
+  return _nebiusConnStatus;
+}
+function _nebiusConnSummary(st) {
+  if (!st) return "Status unknown.";
+  if (st.configured) {
+    const sa = st.service_account_id ? ` (${st.service_account_id})` : "";
+    return `✓ Connected${sa} · project ${st.project_id} · subnet ${st.subnet_id}`;
+  }
+  if (st.has_key) return "⚠ Key present but project/subnet missing.";
+  return "✗ Not connected — paste a service-account key to enable cloud spawning.";
+}
+function trainingOpenNebiusConnection() {
+  const overlay = document.getElementById("nebius-conn-overlay");
+  if (!overlay) return;
+  document.getElementById("nebius-conn-status").textContent = "";
+  overlay.style.display = "flex";
+  trainingFetchNebiusConnection().then((st) => {
+    document.getElementById("nebius-conn-current").textContent = _nebiusConnSummary(st);
+    // Pre-fill the non-secret ids so a re-save doesn't force re-typing them;
+    // the key field stays empty (never echoed back).
+    if (st) {
+      document.getElementById("nebius-conn-project").value = st.project_id || "";
+      document.getElementById("nebius-conn-subnet").value = st.subnet_id || "";
+    }
+  });
+}
+function trainingCloseNebiusConnection() {
+  const overlay = document.getElementById("nebius-conn-overlay");
+  if (overlay) overlay.style.display = "none";
+  document.getElementById("nebius-conn-key").value = "";  // don't retain pasted secret in the DOM
+}
+async function trainingSaveNebiusConnection() {
+  const statusEl = document.getElementById("nebius-conn-status");
+  const body = {
+    key_json: document.getElementById("nebius-conn-key").value.trim(),
+    project_id: document.getElementById("nebius-conn-project").value.trim(),
+    subnet_id: document.getElementById("nebius-conn-subnet").value.trim(),
+  };
+  if (!body.key_json) { statusEl.textContent = "Paste the service-account key JSON."; return; }
+  statusEl.style.color = "#e5c07b";
+  statusEl.textContent = "Saving…";
+  try {
+    const resp = await fetch("/api/training/nebius/connection", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      statusEl.style.color = "#e06c75";
+      statusEl.textContent = err.detail || `Save failed (${resp.status}).`;
+      return;
+    }
+    _nebiusConnStatus = await resp.json();
+    document.getElementById("nebius-conn-key").value = "";
+    trainingRefreshNebiusConnStatusLine();
+    trainingCloseNebiusConnection();
+    if (typeof showToast === "function") showToast("Nebius connection saved.", "success");
+  } catch (e) {
+    statusEl.style.color = "#e06c75";
+    statusEl.textContent = `Save failed: ${e}`;
+  }
+}
+async function trainingClearNebiusConnection() {
+  if (!window.confirm("Remove the stored Nebius service-account key from this server?")) return;
+  try {
+    await fetch("/api/training/nebius/connection", { method: "DELETE" });
+  } catch { /* ignore */ }
+  await trainingFetchNebiusConnection();
+  document.getElementById("nebius-conn-current").textContent = _nebiusConnSummary(_nebiusConnStatus);
+  document.getElementById("nebius-conn-key").value = "";
+  trainingRefreshNebiusConnStatusLine();
+}
+// Updates the inline status line under the ephemeral Add-host help, if present.
+function trainingRefreshNebiusConnStatusLine() {
+  const el = document.getElementById("add-host-nebius-conn-status");
+  if (!el) return;
+  const st = _nebiusConnStatus;
+  el.textContent = _nebiusConnSummary(st);
+  el.style.color = st && st.configured ? "#98c379" : "#e5c07b";
+}
 let _trainingDatasets = [];
 let _trainingPolicyCatalog = []; // populated by trainingLoadPolicies()
 let _trainingPollTimer = null;
@@ -134,13 +228,15 @@ function trainingRenderHostsInfo() {
     return;
   }
   const rows = _trainingHosts.map((h) => {
-    const isSsh = h.transport_kind === "ssh";
-    const gpu = h.capabilities?.gpu_name || (isSsh ? "remote SSH" : "GPU");
+    const removable = h.transport_kind !== "subprocess";  // anything but the local workstation
+    const isEph = h.transport_kind === "ephemeral";
+    const gpu = h.capabilities?.gpu_name || (isEph ? "cloud" : h.transport_kind === "ssh" ? "remote SSH" : "GPU");
     const vram = h.capabilities?.vram_mb ? ` · ${(h.capabilities.vram_mb / 1024).toFixed(1)} GB` : "";
-    const removeBtn = isSsh
-      ? ` <button class="btn-small secondary" style="margin-left:6px; padding:0 6px;" onclick="trainingDeleteHost('${cssEscape(h.id)}', '${cssEscape(h.display_name)}')" title="Remove this SSH host">×</button>`
+    const tag = isEph ? ' <span style="opacity:0.6;">(ephemeral)</span>' : "";
+    const removeBtn = removable
+      ? ` <button class="btn-small secondary" style="margin-left:6px; padding:0 6px;" onclick="trainingDeleteHost('${cssEscape(h.id)}', '${cssEscape(h.display_name)}')" title="Remove this host">×</button>`
       : "";
-    return `<div>${escapeHtml(h.display_name)} — ${escapeHtml(gpu)}${escapeHtml(vram)}${removeBtn}</div>`;
+    return `<div>${escapeHtml(h.display_name)} — ${escapeHtml(gpu)}${escapeHtml(vram)}${tag}${removeBtn}</div>`;
   });
   el.innerHTML = rows.join("");
   if (btn) {
@@ -1022,6 +1118,17 @@ async function trainingSubmitStart(ev) {
     args,
     idempotency_key: idempotencyKey,
   };
+  // Ephemeral hosts spawn a vendor VM via the server-held Nebius connection.
+  // Warn early (before submit) if it isn't configured, so the user fixes it
+  // here rather than hitting a spawn failure mid-run.
+  const startHost = _trainingHosts.find((h) => h.id === hostId);
+  if (startHost && startHost.transport_kind === "ephemeral") {
+    const st = await trainingFetchNebiusConnection();
+    if (!st || !st.configured) {
+      trainingOpenNebiusConnection();
+      return;
+    }
+  }
   const errEl = document.getElementById("training-start-error");
   errEl.style.display = "none";
   const submitBtn = form.querySelector("button[type=submit]");
@@ -1104,6 +1211,10 @@ window.trainingCancelForm = trainingCancelForm;
 window.trainingLeaveView = trainingLeaveView;
 window.trainingSubmitStart = trainingSubmitStart;
 window.trainingStopRun = trainingStopRun;
+window.trainingOpenNebiusConnection = trainingOpenNebiusConnection;
+window.trainingCloseNebiusConnection = trainingCloseNebiusConnection;
+window.trainingSaveNebiusConnection = trainingSaveNebiusConnection;
+window.trainingClearNebiusConnection = trainingClearNebiusConnection;
 window.trainingRenderPolicyFields = trainingRenderPolicyFields;
 window.trainingDuplicateRun = trainingDuplicateRun;
 window.trainingDeleteRun = trainingDeleteRun;
