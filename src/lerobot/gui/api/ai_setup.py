@@ -250,11 +250,35 @@ function copyText(targetSel, btn) {
   const el = document.querySelector(targetSel);
   if (!el) return;
   const text = el.dataset.copy ?? el.innerText;
-  navigator.clipboard.writeText(text).then(() => {
+  const flash = (ok) => {
     const orig = btn.innerText;
-    btn.innerText = "Copied";
-    setTimeout(() => { btn.innerText = orig; }, 1200);
-  });
+    btn.innerText = ok ? "Copied" : "Copy failed — select & ⌘/Ctrl-C";
+    setTimeout(() => { btn.innerText = orig; }, ok ? 1200 : 2500);
+  };
+  // navigator.clipboard exists only in a secure context (HTTPS or localhost).
+  // Over plain HTTP to a LAN host (http://lerobot.local:PORT) it's undefined,
+  // so fall back to a hidden-textarea + execCommand, which works there.
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => flash(true), () => flash(_legacyCopy(text)));
+    return;
+  }
+  flash(_legacyCopy(text));
+}
+function _legacyCopy(text) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 function switchSnippet(id) {
   document.querySelectorAll('.tabs button').forEach(b => {
@@ -373,6 +397,12 @@ def _render_install_snippets(token: str, mcp_url: str, *, id_prefix: str) -> str
         "router's client list). Claude Code, Codex CLI, Gemini CLI, Claude "
         "Desktop, <code>curl</code> and <code>ping</code> all go through the "
         "system resolver and work fine with <code>.local</code>."
+        "</div>"
+        '<div class="note" style="margin-top:8px;">'
+        "<strong>If the server moves</strong> (different port or host), this token stays "
+        "valid — just change the <em>URL</em> in your AI tool; no need to re-issue. For a "
+        "stable URL, run the GUI on a fixed port, or define <code>LEROBOT_MCP_PUBLIC_URL</code> "
+        "to pin a canonical address."
         "</div>"
         "<h3>Tool asks for fields separately? Use these</h3>"
         '<dl class="fields">'
