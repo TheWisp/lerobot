@@ -100,13 +100,23 @@ async function trainingClearNebiusConnection() {
   document.getElementById("nebius-conn-key").value = "";
   trainingRefreshNebiusConnStatusLine();
 }
-// Updates the inline status line under the ephemeral Add-host help, if present.
+// The inline status line under the ephemeral Add-host help. It carries the
+// connection's only management actions: "set it up" when absent, "disconnect"
+// when present — so the dialog itself is just enter/replace-key (Cancel/Connect).
 function trainingRefreshNebiusConnStatusLine() {
   const el = document.getElementById("add-host-nebius-conn-status");
   if (!el) return;
   const st = _nebiusConnStatus;
-  el.textContent = _nebiusConnSummary(st);
-  el.style.color = st && st.configured ? "#98c379" : "#e5c07b";
+  if (st && st.configured) {
+    const proj = st.project_id ? ` (${escapeHtml(st.project_id)})` : "";
+    el.innerHTML =
+      `<span style="color:#98c379;">✓ Connected${proj}</span> · ` +
+      `<a href="#" onclick="trainingClearNebiusConnection(); return false;" style="color:var(--accent,#0e639c);">disconnect</a>`;
+  } else {
+    el.innerHTML =
+      `<span style="color:#e5c07b;">✗ Nebius not connected</span> — ` +
+      `<a href="#" onclick="trainingOpenNebiusConnection(); return false;" style="color:var(--accent,#0e639c);">set it up</a>`;
+  }
 }
 let _trainingDatasets = [];
 let _trainingPolicyCatalog = []; // populated by trainingLoadPolicies()

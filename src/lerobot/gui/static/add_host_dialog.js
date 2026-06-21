@@ -38,7 +38,6 @@ function openAddHostDialog() {
     _abortPendingProbe();
     document.getElementById('add-host-name').value = '';
     document.getElementById('add-host-host').value = '';
-    document.getElementById('add-host-display-name').value = '';
     document.getElementById('add-host-probe-results').innerHTML = '';
     document.getElementById('add-host-status').textContent = '';
     document.getElementById('add-host-test-btn').textContent = 'Test';
@@ -54,6 +53,26 @@ function _addHostType() {
     return el ? el.value : 'ssh';
 }
 
+function _addHostNameValid() {
+    const name = (document.getElementById('add-host-name').value || '').trim();
+    return /^[a-zA-Z0-9_-]+$/.test(name);
+}
+
+// Save is enabled only with a valid Name AND (ephemeral, or a green SSH probe).
+// Surfaces an inline hint when the Name has invalid characters.
+function _addHostUpdateSaveBtn() {
+    const type = _addHostType();
+    const enabled = _addHostNameValid() && (type === 'ephemeral' || _addHostLastProbeOk);
+    document.getElementById('add-host-save-btn').disabled = !enabled;
+    const name = (document.getElementById('add-host-name').value || '').trim();
+    const status = document.getElementById('add-host-status');
+    if (name && !_addHostNameValid()) {
+        status.textContent = 'Name: letters, digits, _ and - only (no spaces).';
+    } else if (status.textContent.startsWith('Name:')) {
+        status.textContent = '';
+    }
+}
+
 // Toggle the SSH vs Ephemeral sections + button affordances. Ephemeral has
 // no endpoint to probe before the VM exists, so its Test button is hidden
 // and Save is enabled immediately; SSH keeps the probe-gates-Save flow.
@@ -67,8 +86,8 @@ function addHostTypeChanged() {
     document.getElementById('add-host-test-btn').style.display = isEph ? 'none' : 'inline-block';
     document.getElementById('add-host-probe-results').innerHTML = '';
     document.getElementById('add-host-status').textContent = '';
-    // SSH: Save waits for a green probe. Ephemeral: nothing to verify yet.
-    document.getElementById('add-host-save-btn').disabled = isEph ? false : !_addHostLastProbeOk;
+    // Save requires a valid Name; SSH additionally waits for a green probe.
+    _addHostUpdateSaveBtn();
     // Ephemeral hosts need the server-held Nebius connection — surface its
     // current status inline so the user knows whether spawning will work.
     if (isEph && typeof trainingFetchNebiusConnection === 'function') {
@@ -148,7 +167,7 @@ async function addHostTest() {
         const result = await resp.json();
         _renderProbeResults(result);
         _addHostLastProbeOk = !!result.ok;
-        saveBtn.disabled = !result.ok;
+        _addHostUpdateSaveBtn();
         if (!result.ok && result.message) {
             status.textContent = result.message;
         }
@@ -157,7 +176,7 @@ async function addHostTest() {
             status.textContent = `Probe failed: ${e.message}`;
         }
         _addHostLastProbeOk = false;
-        saveBtn.disabled = true;
+        _addHostUpdateSaveBtn();
     } finally {
         testBtn.textContent = originalLabel;
         testBtn.disabled = false;
@@ -166,7 +185,6 @@ async function addHostTest() {
 
 async function addHostSubmit() {
     const name = document.getElementById('add-host-name').value.trim();
-    const displayName = document.getElementById('add-host-display-name').value.trim();
     const status = document.getElementById('add-host-status');
     const saveBtn = document.getElementById('add-host-save-btn');
     const type = _addHostType();
@@ -180,7 +198,7 @@ async function addHostSubmit() {
     if (type === 'ephemeral') {
         payload = {
             name,
-            display_name: displayName || null,
+            display_name: name,
             provider_id: 'nebius',
             gpu: document.getElementById('add-host-gpu').value,
             disk_gib: parseInt(document.getElementById('add-host-disk').value, 10) || 100,
@@ -193,7 +211,7 @@ async function addHostSubmit() {
         if (!_addHostLastProbeOk) {
             status.textContent = 'Run Test first; Save is enabled after a green probe.'; return;
         }
-        payload = { name, host, display_name: displayName || null };
+        payload = { name, host, display_name: name };
     }
 
     saveBtn.disabled = true;
@@ -249,9 +267,9 @@ async function trainingDeleteHost(hostId, displayName) {
 // readyState guard: end-of-body scripts run before DOMContentLoaded today,
 // but this also survives the script ever being loaded async/deferred.
 function _attachAddHostInputListeners() {
-    ['add-host-name', 'add-host-host', 'add-host-display-name'].forEach((id) => {
+    ['add-host-name', 'add-host-host'].forEach((id) => {
         const el = document.getElementById(id);
-        if (el) el.addEventListener('input', _addHostInvalidateProbe);
+        if (el) el.addEventListener('input', () => { _addHostInvalidateProbe(); _addHostUpdateSaveBtn(); });
     });
 }
 if (document.readyState === 'loading') {
