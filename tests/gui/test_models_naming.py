@@ -20,7 +20,7 @@ import pytest
 torch = pytest.importorskip("torch")
 sft = pytest.importorskip("safetensors.torch")
 
-from lerobot.gui.api.models import _scan_training_run  # noqa: E402
+from lerobot.gui.api.models import _scan_source, _scan_training_run  # noqa: E402
 
 
 def _make_checkpoint(run_dir: Path, step: str = "000030") -> None:
@@ -47,6 +47,29 @@ def test_scan_falls_back_to_dir_name_without_run_json(tmp_path: Path) -> None:
     result = _scan_training_run(tmp_path)
     assert result is not None
     assert result["name"] == tmp_path.name
+
+
+def test_scan_source_keeps_run_name_not_dir_hash(tmp_path: Path) -> None:
+    """Integration: _scan_source (what the Models-tab endpoint calls) must NOT
+    overwrite the recipe_name with the run-id dir name. Round-7: _scan_training_run
+    set the name but _scan_recursive clobbered it, so the tree showed hashes."""
+    run_dir = tmp_path / "0ab7fbe199c7"  # random run-id dir name
+    _make_checkpoint(run_dir)
+    (run_dir / "run.json").write_text(json.dumps({"recipe_name": "round7-final"}))
+
+    entries = _scan_source(str(tmp_path))
+    assert len(entries) == 1
+    assert entries[0]["name"] == "round7-final"  # the name, not the hash dir
+    assert entries[0]["run_id"] == "0ab7fbe199c7"
+
+
+def test_scan_source_falls_back_to_relpath_without_run_json(tmp_path: Path) -> None:
+    run_dir = tmp_path / "abc123"
+    _make_checkpoint(run_dir, step="000010")  # no run.json → disambiguating rel-path name
+
+    entries = _scan_source(str(tmp_path))
+    assert len(entries) == 1
+    assert entries[0]["name"] == "abc123"
 
 
 def test_gui_runs_source_tracks_orchestrator_runs_dir() -> None:

@@ -367,8 +367,13 @@ def _scan_recursive(base: Path, current: Path, found: list[dict], max_depth: int
         if has_standard or has_gui:
             run_meta = _scan_training_run(current)
             if run_meta:
-                with contextlib.suppress(ValueError):
-                    run_meta["name"] = str(current.relative_to(base))
+                # _scan_training_run already prefers the run's human name
+                # (run.json recipe_name). Only fall back to the relative path
+                # (which disambiguates nested non-GUI runs) when there was no
+                # name — don't clobber the name the user gave the run.
+                if run_meta.get("name") == current.name:
+                    with contextlib.suppress(ValueError):
+                        run_meta["name"] = str(current.relative_to(base))
                 found.append(run_meta)
             return  # Don't recurse into training run subdirs
 
@@ -470,6 +475,11 @@ class SourceInfo(BaseModel):
 
 class ModelSourceEntry(BaseModel):
     name: str
+    # The run_id dir name + created_at, so the UI can show the id/date alongside
+    # the human name (name is the run's recipe_name for GUI runs). None for
+    # converted / non-GUI checkpoints with no run.json.
+    run_id: str | None = None
+    created_at: float | None = None
     path: str
     policy_type: str
     dataset: str
