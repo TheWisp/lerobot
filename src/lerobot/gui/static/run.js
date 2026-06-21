@@ -1106,9 +1106,9 @@ function renderRunForm() {
     html += `<div id="run-teleop-debug-vision-fields" style="display:none">`;
     html += '<div class="form-grid">';
     html += `<label>Cameras</label>`;
-    html += `<input type="text" id="run-teleop-debug-vision-cameras" placeholder="all (e.g. top)" value="">`;
+    html += `<input type="text" id="run-teleop-debug-vision-cameras" class="live-during-run" placeholder="all (e.g. top)" value="">`;
     html += `<label id="run-teleop-debug-vision-prompt-label">Prompt</label>`;
-    html += `<input type="text" id="run-teleop-debug-vision-prompt" placeholder="cup . bottle . hand ." value="cup . bottle . hand .">`;
+    html += `<input type="text" id="run-teleop-debug-vision-prompt" class="live-during-run" placeholder="cup . bottle . hand ." value="cup . bottle . hand .">`;
     html += '</div>';
     html += `<div class="form-hint" id="run-teleop-debug-vision-hint">Lowercase, period-separated. Only list objects actually in view — spurious phrases get mislabeled. Edit + Apply to update live.</div>`;
     html += `<button class="btn-tiny" id="run-teleop-debug-vision-apply" onclick="_applyDebugVisionControl()">Apply prompt</button>`;
@@ -2055,7 +2055,11 @@ function updateRunUI(isRunning) {
 
     if (stopBtn) stopBtn.disabled = !isRunning;
 
-    formInputs.forEach(el => el.disabled = isRunning);
+    // Keep live-controllable debug-model fields editable while running — the
+    // prompt applies to the live overlay subprocess (Apply prompt) and cameras
+    // apply on a debug-model reload, both of which happen DURING teleop. Locking
+    // them would block exactly the live tuning they exist for.
+    formInputs.forEach(el => { el.disabled = isRunning && !el.classList.contains('live-during-run'); });
     workflowBtns.forEach(el => el.disabled = isRunning);
 
     const indicator = document.getElementById('run-status-indicator');

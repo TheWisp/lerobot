@@ -394,6 +394,36 @@ class Sam3Adapter(DebugVisionAdapter):
             cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
         return rgba
 
+    def masks(self, frame_rgb: np.ndarray, prompt: str | None = None) -> list[dict]:
+        """Raw instance masks for ``prompt`` (defaults to the current prompt).
+
+        Returns ``[{"mask": (H,W) bool, "score": float}, ...]`` for every matching
+        instance, highest score first ([] if nothing matches). The reconstruction
+        path needs the boolean masks, not the RGBA overlay :meth:`infer` draws.
+        """
+        from PIL import Image
+
+        torch = self._torch
+        if prompt is not None and prompt.strip():
+            self.prompt = prompt.strip()
+        h, w = frame_rgb.shape[:2]
+        inp = self.processor(images=Image.fromarray(frame_rgb), text=self.prompt, return_tensors="pt").to(
+            self.device
+        )
+        with torch.inference_mode():
+            out = self.model(**inp)
+        res = self.processor.post_process_instance_segmentation(
+            out, threshold=self.threshold, target_sizes=[(h, w)]
+        )[0]
+        masks = res.get("masks", [])
+        scores = res.get("scores", [1.0] * len(masks))
+        items = []
+        for m, s in zip(masks, scores, strict=True):
+            arr = (m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m)) > 0
+            items.append({"mask": arr, "score": float(s.cpu() if hasattr(s, "cpu") else s)})
+        items.sort(key=lambda it: it["score"], reverse=True)
+        return items
+
 
 class CoTracker3Adapter(DebugVisionAdapter):
     """CoTracker3 online point tracking — auto grid, streaming. Points + short trails.
