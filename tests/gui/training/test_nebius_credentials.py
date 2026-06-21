@@ -23,6 +23,7 @@ import pytest
 from lerobot.gui.training.nebius_credentials import (
     NebiusConnectionStore,
     NebiusCredentialError,
+    assemble_authorized_key_json,
 )
 
 
@@ -43,6 +44,20 @@ def _valid_key(sub: str = "serviceaccount-xyz", kid: str = "publickey-abc") -> s
 @pytest.fixture
 def store(tmp_path: Path) -> NebiusConnectionStore:
     return NebiusConnectionStore(tmp_path / "nebius")
+
+
+def test_assemble_authorized_key_json_validates_and_stores(store: NebiusConnectionStore):
+    # The console path: pieces (PEM + key id + SA id) → the same subject-
+    # credentials JSON, which must pass the store's validation and round-trip.
+    key_json = assemble_authorized_key_json(
+        private_key="-----BEGIN PRIVATE KEY-----\nMIIfake\n-----END PRIVATE KEY-----",
+        key_id="publickey-abc",
+        service_account_id="serviceaccount-xyz",
+    )
+    st = store.set(key_json=key_json, project_id="project-e00", subnet_id="vpcsubnet-e00")
+    assert st.configured
+    assert st.service_account_id == "serviceaccount-xyz"  # iss == sub == SA id
+    assert st.key_id == "publickey-abc"
 
 
 def test_status_empty_when_nothing_stored(store: NebiusConnectionStore):

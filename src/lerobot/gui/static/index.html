@@ -516,8 +516,29 @@ nebius iam auth-public-key generate \
             </details>
             <div id="nebius-conn-current" style="font-size:11px; padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px; min-height:18px; color:var(--text-secondary,#999);"></div>
             <div style="margin-bottom:10px;">
-                <label for="nebius-conn-key" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Service-account authorized-key JSON</label>
-                <textarea id="nebius-conn-key" rows="7" spellcheck="false" placeholder='{ "subject-credentials": { "alg": "RS256", "private-key": "-----BEGIN PRIVATE KEY----- ...", "kid": "publickey-...", "iss": "serviceaccount-...", "sub": "serviceaccount-..." } }' style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:11px; box-sizing:border-box; resize:vertical; font-family:monospace;"></textarea>
+                <label for="nebius-conn-mode" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">How did you create the key?</label>
+                <select id="nebius-conn-mode" onchange="trainingNebiusModeChanged()" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box; margin-bottom:8px;">
+                    <option value="json">A key file from the CLI (auth-public-key generate)</option>
+                    <option value="fields">A private key + IDs (uploaded in the console)</option>
+                </select>
+                <div id="nebius-conn-json-fields">
+                    <label for="nebius-conn-key" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Service-account key JSON <span style="color:var(--text-secondary,#666);">(contents of sa-key.json)</span></label>
+                    <textarea id="nebius-conn-key" rows="7" spellcheck="false" placeholder='{ "subject-credentials": { "alg": "RS256", "private-key": "-----BEGIN PRIVATE KEY----- ...", "kid": "publickey-...", "iss": "serviceaccount-...", "sub": "serviceaccount-..." } }' style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:11px; box-sizing:border-box; resize:vertical; font-family:monospace;"></textarea>
+                </div>
+                <div id="nebius-conn-fields-fields" style="display:none;">
+                    <label for="nebius-conn-privkey" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Private key (PEM) <span style="color:var(--text-secondary,#666);">(the local key whose public half you uploaded)</span></label>
+                    <textarea id="nebius-conn-privkey" rows="6" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----&#10;…&#10;-----END PRIVATE KEY-----" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:11px; box-sizing:border-box; resize:vertical; font-family:monospace;"></textarea>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+                        <div>
+                            <label for="nebius-conn-kid" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Authorized key ID</label>
+                            <input id="nebius-conn-kid" type="text" spellcheck="false" placeholder="publickey-e00..." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                        </div>
+                        <div>
+                            <label for="nebius-conn-said" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Service account ID</label>
+                            <input id="nebius-conn-said" type="text" spellcheck="false" placeholder="serviceaccount-e00..." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                        </div>
+                    </div>
+                </div>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px;">
                 <div>
@@ -602,7 +623,7 @@ nebius iam auth-public-key generate \
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=45"></script>
     <script src="/static/model.js?v=5"></script>
-    <script src="/static/training.js?v=21"></script>
+    <script src="/static/training.js?v=22"></script>
     <script src="/static/add_host_dialog.js?v=4"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>

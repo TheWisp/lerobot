@@ -42,6 +42,14 @@ function trainingOpenNebiusConnection() {
   const overlay = document.getElementById("nebius-conn-overlay");
   if (!overlay) return;
   document.getElementById("nebius-conn-status").textContent = "";
+  // Reset to the default (CLI) mode and clear any previously-typed secrets.
+  const modeSel = document.getElementById("nebius-conn-mode");
+  if (modeSel) modeSel.value = "json";
+  ["nebius-conn-key", "nebius-conn-privkey", "nebius-conn-kid", "nebius-conn-said"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+  trainingNebiusModeChanged();
   overlay.style.display = "flex";
   trainingFetchNebiusConnection().then((st) => {
     document.getElementById("nebius-conn-current").textContent = _nebiusConnSummary(st);
@@ -56,16 +64,46 @@ function trainingOpenNebiusConnection() {
 function trainingCloseNebiusConnection() {
   const overlay = document.getElementById("nebius-conn-overlay");
   if (overlay) overlay.style.display = "none";
-  document.getElementById("nebius-conn-key").value = "";  // don't retain pasted secret in the DOM
+  // Don't retain pasted secrets in the DOM (either input style).
+  ["nebius-conn-key", "nebius-conn-privkey"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+}
+// Toggle the two key-entry layouts: a pasted key file (CLI) vs the private
+// key + IDs (console). The server assembles the same JSON from either.
+function trainingNebiusModeChanged() {
+  const sel = document.getElementById("nebius-conn-mode");
+  const mode = sel ? sel.value : "json";
+  const jsonEl = document.getElementById("nebius-conn-json-fields");
+  const fieldsEl = document.getElementById("nebius-conn-fields-fields");
+  if (jsonEl) jsonEl.style.display = mode === "json" ? "block" : "none";
+  if (fieldsEl) fieldsEl.style.display = mode === "fields" ? "block" : "none";
 }
 async function trainingSaveNebiusConnection() {
   const statusEl = document.getElementById("nebius-conn-status");
+  const sel = document.getElementById("nebius-conn-mode");
+  const mode = sel ? sel.value : "json";
   const body = {
-    key_json: document.getElementById("nebius-conn-key").value.trim(),
     project_id: document.getElementById("nebius-conn-project").value.trim(),
     subnet_id: document.getElementById("nebius-conn-subnet").value.trim(),
   };
-  if (!body.key_json) { statusEl.textContent = "Paste the service-account key JSON."; return; }
+  if (mode === "json") {
+    body.key_json = document.getElementById("nebius-conn-key").value.trim();
+    if (!body.key_json) { statusEl.textContent = "Paste the service-account key JSON."; return; }
+  } else {
+    body.private_key = document.getElementById("nebius-conn-privkey").value.trim();
+    body.key_id = document.getElementById("nebius-conn-kid").value.trim();
+    body.service_account_id = document.getElementById("nebius-conn-said").value.trim();
+    if (!body.private_key || !body.key_id || !body.service_account_id) {
+      statusEl.textContent = "Paste the private key and both IDs (key ID + service account ID).";
+      return;
+    }
+  }
+  if (!body.project_id || !body.subnet_id) {
+    statusEl.textContent = "Project ID and Subnet ID are required.";
+    return;
+  }
   statusEl.style.color = "#e5c07b";
   statusEl.textContent = "Saving…";
   try {

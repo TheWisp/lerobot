@@ -517,9 +517,14 @@ class NebiusConnectionDTO(BaseModel):
 
 
 class NebiusConnectionBody(BaseModel):
-    # The full authorized-key JSON from `nebius iam auth-public-key create`
-    # (or the console) — a string, validated server-side before it touches disk.
-    key_json: str = Field(min_length=1)
+    # Two ways to supply the service-account key (both validated server-side):
+    #  - CLI:     key_json — the full file from `auth-public-key generate`.
+    #  - console: private_key (PEM) + key_id + service_account_id — the pieces
+    #             the console gives you; assembled into the same JSON here.
+    key_json: str | None = None
+    private_key: str | None = None
+    key_id: str | None = None
+    service_account_id: str | None = None
     project_id: str = Field(min_length=1)
     subnet_id: str = Field(min_length=1)
 
@@ -554,11 +559,32 @@ def set_nebius_connection(body: NebiusConnectionBody) -> NebiusConnectionDTO:
     Returns 400 if the pasted key is malformed. The key is written ``0600``
     and used for every ephemeral spawn/teardown thereafter.
     """
-    from lerobot.gui.training.nebius_credentials import NebiusConnectionStore, NebiusCredentialError
+    from lerobot.gui.training.nebius_credentials import (
+        NebiusConnectionStore,
+        NebiusCredentialError,
+        assemble_authorized_key_json,
+    )
+
+    if body.key_json and body.key_json.strip():
+        key_json = body.key_json
+    elif body.private_key and body.key_id and body.service_account_id:
+        key_json = assemble_authorized_key_json(
+            private_key=body.private_key,
+            key_id=body.key_id,
+            service_account_id=body.service_account_id,
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Provide either the key file JSON (from the CLI), or the private key "
+                "+ authorized key ID + service account ID (from the console)."
+            ),
+        )
 
     try:
         status = NebiusConnectionStore().set(
-            key_json=body.key_json, project_id=body.project_id, subnet_id=body.subnet_id
+            key_json=key_json, project_id=body.project_id, subnet_id=body.subnet_id
         )
     except NebiusCredentialError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

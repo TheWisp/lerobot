@@ -75,6 +75,34 @@ def test_put_then_get_roundtrip(client: TestClient):
     assert got["subnet_id"] == "vpcsubnet-e00"
 
 
+def test_put_console_pieces_assembled_server_side(client: TestClient):
+    # Console path: no key_json — send the private key + the two IDs; the
+    # server assembles the same subject-credentials JSON.
+    resp = client.put(
+        "/api/training/nebius/connection",
+        json={
+            "private_key": "-----BEGIN PRIVATE KEY-----\nMIIfake\n-----END PRIVATE KEY-----",
+            "key_id": "publickey-abc",
+            "service_account_id": "serviceaccount-xyz",
+            "project_id": "project-e00",
+            "subnet_id": "vpcsubnet-e00",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["configured"] is True
+    assert body["service_account_id"] == "serviceaccount-xyz"
+    assert body["key_id"] == "publickey-abc"
+
+
+def test_put_with_neither_key_nor_pieces_returns_400(client: TestClient):
+    resp = client.put(
+        "/api/training/nebius/connection",
+        json={"project_id": "p", "subnet_id": "s"},
+    )
+    assert resp.status_code == 400
+
+
 def test_response_never_contains_private_key(client: TestClient, nebius_dir: Path):
     resp = client.put(
         "/api/training/nebius/connection",
