@@ -46,6 +46,7 @@ from lerobot.gui.training.providers import get_provider
 from lerobot.gui.training.providers.protocol import HostHandle
 from lerobot.gui.training.recipes import (
     build_lerobot_train_command,
+    is_fake_recipe,
     output_subdir_in_run,
     resolve_host_placeholders,
 )
@@ -566,6 +567,24 @@ class Orchestrator:
                 return
             self._emit_event(local, paths.events_jsonl, "ssh_ready", resource_id=handle.provider_resource_id)
         client = self._client_for_host(host, paths, run)
+        # Ensure the host can actually run training (Docker + nvidia-toolkit +
+        # docker-group membership). One idempotent step for every host type: a
+        # fresh ephemeral VM gets provisioned; a manually-added host is a fast
+        # no-op when already set up. Skipped for the test-only fake recipe,
+        # which runs plain Python with no Docker.
+        if not is_fake_recipe(run):
+            local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+            try:
+                client.ensure_prereqs()
+            except Exception as exc:
+                logger.exception("prepare-and-launch: host prereqs failed")
+                run.error = f"host prereqs failed: {exc!r}"
+                run.advance(RunState.FAILED)
+                self._runs.save(run)
+                self._emit_event(local, paths.events_jsonl, "prereqs_failed", error=str(exc)[:300])
+                self._maybe_teardown_ephemeral(run, paths)
+                return
+            self._emit_event(local, paths.events_jsonl, "prereqs_ready", host_id=host.id)
         try:
             cmd = self._build_command(run, paths)
             image = _extract_image_from_docker_argv(cmd)

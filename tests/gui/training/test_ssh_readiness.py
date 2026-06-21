@@ -84,3 +84,49 @@ def test_raises_after_deadline_naming_boot_or_security_group(tmp_path, monkeypat
 
     with pytest.raises(RuntimeError, match="security group"):
         client.wait_until_ready(timeout_s=20, poll_interval_s=5, sleep=fake_sleep, clock=clock)
+
+
+def test_ensure_prereqs_runs_script_over_sudo_and_resets_control(tmp_path, monkeypatch):
+    """ensure_prereqs pipes the setup script to `sudo bash -s`, skips the
+    redundant container smoke, and drops the control master so a freshly-added
+    docker group takes effect."""
+    captured = {}
+    closed = {"n": 0}
+
+    def fake_exec(remote_cmd, *, timeout, stdin=None):
+        captured["cmd"] = remote_cmd
+        captured["stdin"] = stdin
+        return _ok()
+
+    client = _client(tmp_path)
+    monkeypatch.setattr(client, "_exec", fake_exec)
+    monkeypatch.setattr(client, "close", lambda: closed.__setitem__("n", closed["n"] + 1))
+    client.ensure_prereqs()
+    assert "bash -s" in captured["cmd"]
+    assert "sudo" in captured["cmd"]
+    assert "LEROBOT_PREREQS_SKIP_CONTAINER_SMOKE=1" in captured["cmd"]
+    assert captured["stdin"] and b"install" in captured["stdin"].lower()  # the script text
+    assert closed["n"] == 1  # control master reset so the new group applies
+
+
+def test_ensure_prereqs_raises_on_setup_failure(tmp_path, monkeypatch):
+    def fail_exec(remote_cmd, *, timeout, stdin=None):
+        return subprocess.CompletedProcess(
+            args=["ssh"], returncode=1, stdout=b"", stderr=b"boom: held packages"
+        )
+
+    client = _client(tmp_path)
+    monkeypatch.setattr(client, "_exec", fail_exec)
+    monkeypatch.setattr(client, "close", lambda: pytest.fail("must not reset control on failure"))
+    with pytest.raises(RuntimeError, match="prereqs setup failed"):
+        client.ensure_prereqs()
+
+
+def test_local_ensure_prereqs_is_noop():
+    """SubprocessClient must not try to apt-install Docker on the user's box."""
+    from pathlib import Path
+
+    from lerobot.gui.training.transport import SubprocessClient, SubprocessTransport
+
+    client = SubprocessClient(SubprocessTransport(workdir=Path(".")))
+    assert client.ensure_prereqs() is None

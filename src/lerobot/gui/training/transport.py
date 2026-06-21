@@ -200,6 +200,17 @@ class TransportClient(Protocol):
         """
         ...
 
+    def ensure_prereqs(self) -> None:
+        """Make the host able to run training: Docker + nvidia-container-toolkit
+        installed, the transport user in the docker group, GPU reachable.
+
+        Idempotent — fast when the host is already provisioned, installs what's
+        missing otherwise. Raises if the host can't be made ready (e.g. no GPU,
+        or it can't reach the package repos). A no-op for the local transport,
+        where docker availability is probed separately at run start.
+        """
+        ...
+
     def ensure_dir(self, path: Path) -> None:
         """``mkdir -p`` on the host, as the transport's user. Used to
         pre-create bind-mount sources before ``docker run`` — a missing
@@ -408,6 +419,12 @@ class SubprocessClient:
 
     def wait_until_ready(self, *, timeout_s: float = 300.0) -> None:
         # Local transport is always ready — nothing to boot.
+        return None
+
+    def ensure_prereqs(self) -> None:
+        # The GUI server is the user's own machine — don't apt-install Docker on
+        # it. Docker availability for local docker recipes is probed at run
+        # start (recipes.docker_available); nothing to do here.
         return None
 
     def ensure_dir(self, path: Path) -> None:

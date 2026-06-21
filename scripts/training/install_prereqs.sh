@@ -139,25 +139,42 @@ fi
 
 # ── Sanity check ─────────────────────────────────────────────────────────────
 
-log "Verifying GPU access from a container..."
-# Try as the target user first (uses their docker socket access via the
-# group we just added). If they aren't in the group yet (need re-login),
-# fall back to root just to verify the toolkit/driver pair is working.
-SUDO_RUN="sudo -u ${TARGET_USER}"
-if ! ${SUDO_RUN} docker info >/dev/null 2>&1; then
-    log "  (target user can't reach docker yet — they need to log out/in;"
-    log "   running the smoke check as root to verify the toolkit instead)"
-    SUDO_RUN=""
-fi
-
-if ${SUDO_RUN} docker run --rm --gpus all \
-        nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi --query-gpu=name \
-        --format=csv,noheader >/dev/null 2>&1; then
-    log "✓ GPU access from container works."
-else
-    log "✗ Container could not access the GPU. Check the NVIDIA driver version"
-    log "  (must be ≥ 525.60 for CUDA 12.4). Run 'nvidia-smi' on the host."
+# Always do the cheap host-side check: is the GPU/driver visible at all?
+log "Verifying host GPU (nvidia-smi)..."
+if ! nvidia-smi -L >/dev/null 2>&1; then
+    log "✗ nvidia-smi failed on the host — GPU/driver not available. Run"
+    log "  'nvidia-smi' on the host to diagnose."
     exit 1
+fi
+log "✓ Host GPU visible."
+
+# The container GPU smoke pulls a CUDA image and runs nvidia-smi inside it.
+# Automated bringup skips it (LEROBOT_PREREQS_SKIP_CONTAINER_SMOKE=1): the
+# real training run pulls the training image and runs --gpus all anyway, so
+# a separate pull here is redundant. Manual setup runs keep it for assurance.
+if [[ "${LEROBOT_PREREQS_SKIP_CONTAINER_SMOKE:-0}" == "1" ]]; then
+    log "Skipping container GPU smoke (the training run is the end-to-end test)."
+else
+    log "Verifying GPU access from a container..."
+    # Try as the target user first (uses their docker socket access via the
+    # group we just added). If they aren't in the group yet (need re-login),
+    # fall back to root just to verify the toolkit/driver pair is working.
+    SUDO_RUN="sudo -u ${TARGET_USER}"
+    if ! ${SUDO_RUN} docker info >/dev/null 2>&1; then
+        log "  (target user can't reach docker yet — they need to log out/in;"
+        log "   running the smoke check as root to verify the toolkit instead)"
+        SUDO_RUN=""
+    fi
+
+    if ${SUDO_RUN} docker run --rm --gpus all \
+            nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi --query-gpu=name \
+            --format=csv,noheader >/dev/null 2>&1; then
+        log "✓ GPU access from container works."
+    else
+        log "✗ Container could not access the GPU. Check the NVIDIA driver version"
+        log "  (must be ≥ 525.60 for CUDA 12.4). Run 'nvidia-smi' on the host."
+        exit 1
+    fi
 fi
 
 log ""

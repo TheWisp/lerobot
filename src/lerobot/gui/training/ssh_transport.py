@@ -66,6 +66,21 @@ _DEFAULT_TIMEOUT_S = 30.0
 # a legitimate multi-GB transfer. 24 h is "effectively no timeout."
 _LONG_TIMEOUT_S = 24 * 3600.0
 
+# Timeout for the host prereqs install (apt install of Docker +
+# nvidia-container-toolkit on a bare host can take a few minutes).
+_PREREQS_TIMEOUT_S = 600.0
+
+# The idempotent host-setup script, run over SSH at launch.
+# TODO(packaging): ship this inside the package (package-data) so it resolves
+# in wheel installs too; today the GUI runs from a source checkout.
+_PREREQS_SCRIPT_PATH = Path(__file__).resolve().parents[4] / "scripts" / "training" / "install_prereqs.sh"
+
+
+def _load_prereqs_script() -> str:
+    assert _PREREQS_SCRIPT_PATH.is_file(), f"prereqs script not found at {_PREREQS_SCRIPT_PATH}"
+    return _PREREQS_SCRIPT_PATH.read_text(encoding="utf-8")
+
+
 # Encoded session_id separator. Splits ``<tmux-name>|<workdir>``.
 # Chosen because POSIX paths can't contain ``|`` unescaped in a typical
 # lerobot run dir layout. If we ever want to allow it, switch to a NUL
@@ -431,6 +446,33 @@ class SshClient:
                     f"blocked by the cloud security group."
                 )
             sleep(poll_interval_s)
+
+    def ensure_prereqs(self) -> None:
+        """Install/verify Docker + nvidia-container-toolkit + docker-group on the
+        remote host, then reset the control socket so the user's (possibly new)
+        docker-group membership applies to subsequent ops.
+
+        Runs the idempotent ``install_prereqs.sh`` over SSH as root. The
+        container GPU smoke is skipped (the real training run is the end-to-end
+        GPU test); the script still does a cheap host-side ``nvidia-smi`` check.
+
+        Pre: the host accepts SSH (call ``wait_until_ready`` first for a fresh
+        VM) and the SSH user has passwordless sudo.
+        Post: ``docker`` is usable by the SSH user, or ``RuntimeError`` is raised.
+        """
+        script = _load_prereqs_script()
+        r = self._exec(
+            "sudo LEROBOT_PREREQS_SKIP_CONTAINER_SMOKE=1 bash -s",
+            stdin=script.encode("utf-8"),
+            timeout=_PREREQS_TIMEOUT_S,
+        )
+        if r.returncode != 0:
+            err = r.stderr.decode("utf-8", "replace").strip()[-400:]
+            raise RuntimeError(f"host prereqs setup failed: rc={r.returncode}\n{err}")
+        # The script may have just added the SSH user to the docker group;
+        # group membership is fixed at login, so drop the persistent
+        # ControlMaster — the next op re-logs in and picks up the new group.
+        self.close()
 
     def ensure_dir(self, path: Path) -> None:
         assert path.is_absolute()
