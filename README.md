@@ -10,7 +10,7 @@
 
 </div>
 
-<h3 align="center">Lerobot Studio</h3>
+<!-- <h3 align="center">Lerobot Studio</h3> -->
 
 This repository tracks Hugging Face [LeRobot](https://github.com/huggingface/lerobot)
 and adds three things on top of it:
@@ -29,11 +29,9 @@ exactly as documented. This README focuses on what's *different*. For the core
 library, see the [upstream documentation](https://huggingface.co/docs/lerobot/index).
 
 <p align="center">
-  <a href="./media/readme/lerobot_studio.mp4">
-    <img alt="LeRobot Studio walkthrough" src="./media/readme/lerobot_studio.gif" width="80%">
-  </a>
+  <img alt="LeRobot Studio walkthrough" src="./media/readme/intro.gif" width="80%">
   <br/>
-  <sub><i>▶ LeRobot Studio in action — click for the full-quality video</i></sub>
+  <sub><i>▶ LeRobot Studio in action</i></sub>
 </p>
 
 <p align="center">
