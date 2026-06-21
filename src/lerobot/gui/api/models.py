@@ -208,8 +208,15 @@ def _scan_training_run(run_dir: Path) -> dict | None:
     # Read train_config.json from latest checkpoint
     train_config = _read_train_config(Path(latest["path"]))
 
+    # The run dir is named by random run_id; prefer the human name the user
+    # gave the run (stored on the GUI's run.json) so the Models tab is legible.
+    # Falls back to the dir name for converted / non-GUI checkpoints.
+    run_meta = _read_run_meta(run_dir)
+
     return {
-        "name": run_dir.name,
+        "name": run_meta.get("recipe_name") or run_dir.name,
+        "run_id": run_dir.name,
+        "created_at": run_meta.get("created_at"),
         "path": str(run_dir),
         "policy_type": latest["policy_type"],
         "dataset": train_config.get("dataset", {}).get("repo_id", "") if train_config else "",
@@ -231,6 +238,19 @@ def _scan_training_run(run_dir: Path) -> dict | None:
         "wandb_run_id": (train_config.get("wandb", {}) or {}).get("run_id") if train_config else None,
         "wandb_project": (train_config.get("wandb", {}) or {}).get("project") if train_config else None,
     }
+
+
+def _read_run_meta(run_dir: Path) -> dict:
+    """Run-level metadata from the GUI's ``run.json`` (the user-given name,
+    created_at, …). Empty dict for converted / non-GUI checkpoint dirs that
+    have no run.json."""
+    f = run_dir / "run.json"
+    if not f.is_file():
+        return {}
+    try:
+        return json.loads(f.read_text())
+    except Exception:
+        return {}
 
 
 def _read_train_config(ckpt_dir: Path) -> dict | None:
