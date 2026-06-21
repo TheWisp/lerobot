@@ -1280,11 +1280,41 @@ def test_teardown_destroys_and_verifies_once(tmp_path: Path):
 
     orch._maybe_teardown_ephemeral(run, paths)
     assert len(prov.destroyed) == 1 and len(prov.verified) == 1
-    assert run.ephemeral_destroyed is True
+    # Teardown reloads under its lock and mutates the PERSISTED record (not the
+    # caller's possibly-stale object), so check the saved state.
+    assert orch._runs.load(run.run_id).ephemeral_destroyed is True
 
     # Idempotent: a second call (e.g. next poll) does nothing.
     orch._maybe_teardown_ephemeral(run, paths)
     assert len(prov.destroyed) == 1
+
+
+def test_concurrent_teardown_destroys_exactly_once(tmp_path: Path):
+    """poll() runs on a threadpool, so several polls can call teardown at once.
+    The per-run lock + reload must collapse them to a single destroy — round-6
+    showed concurrent destroys yanking the VM out from under the artifact scp.
+    Uses a FAILED run so teardown skips the SSH artifact pull (no real network);
+    the lock path is identical regardless of terminal state."""
+    import threading
+    import time as _t
+
+    class _SlowProvider(_FakeProvider):
+        def destroy(self, handle):
+            _t.sleep(0.05)  # widen the race window so unlocked code would double-destroy
+            super().destroy(handle)
+
+    prov = _SlowProvider()
+    orch = _orch(tmp_path, prov)
+    run = _terminal_eph_run(orch._runs, state=RunState.FAILED)
+    paths = RunPaths.for_run(run.run_id, orch._runs.runs_dir)
+    paths.ensure_exists()
+
+    threads = [threading.Thread(target=orch._maybe_teardown_ephemeral, args=(run, paths)) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert len(prov.destroyed) == 1  # per-run lock + reload collapse the 4 calls to one
 
 
 def test_teardown_noop_while_running(tmp_path: Path):

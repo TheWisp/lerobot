@@ -197,6 +197,14 @@ class Orchestrator:
         # daemon=True so they don't block process shutdown. We keep refs so
         # tests can join them; in production they're fire-and-forget.
         self._prep_threads: dict[str, threading.Thread] = {}
+        # Per-run teardown locks. poll() runs on FastAPI's threadpool, so
+        # several concurrent polls can enter _maybe_teardown_ephemeral at once;
+        # without serialization one poll's pre-destroy artifact fetch races
+        # another's provider.destroy() — the VM vanishes mid-scp (round-6: the
+        # model never localized). One lock per run keeps cross-run teardowns
+        # independent.
+        self._teardown_locks: dict[str, threading.Lock] = {}
+        self._teardown_locks_guard = threading.Lock()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -494,40 +502,56 @@ class Orchestrator:
         stop-from-pending) so teardown is prompt; the cloud-init poweroff is
         only the backstop for "GUI server never ran this again".
         """
+        # Fast pre-check before taking the lock (the common no-op case).
         if run.state not in TERMINAL_STATES or run.ephemeral_handle is None or run.ephemeral_destroyed:
             return
-        handle = _handle_from_dict(run.ephemeral_handle)
-        provider = self._provider_factory(handle.provider)
-        local = SubprocessClient(SubprocessTransport(workdir=paths.root))
-        # Localize artifacts off the VM BEFORE destroying it — the VM's copy
-        # dies with it, so a completed run must first pull a verified model and
-        # rebuild the manifest LOCALLY (it was written via the SSH client during
-        # the run, i.e. on the VM). Best-effort + idempotent (the fetch verifies
-        # sha, so a prior fetch is a no-op); never block teardown on a hiccup.
-        if run.state == RunState.COMPLETED:
-            with contextlib.suppress(Exception):
-                ssh = self._client_for_host(self._hosts.get(run.host_id), paths, run)
-                self._fetch_run_artifacts(ssh, run, paths)
-                self._sync_checkpoints_manifest(local, run, paths)
-        try:
-            provider.destroy(handle)
-            ok = provider.verify_destroyed(handle)
-        except Exception as exc:  # noqa: BLE001 — teardown must never wedge the run
-            logger.exception("ephemeral teardown failed for run %s", run.run_id)
-            self._emit_event(local, paths.events_jsonl, "vm_destroy_failed", error=str(exc)[:200])
-            return
-        run.ephemeral_destroyed = True
-        self._runs.save(run)
-        self._emit_event(
-            local, paths.events_jsonl, "vm_destroyed", resource_id=handle.provider_resource_id, verified=ok
-        )
-        if not ok:
-            logger.warning(
-                "ephemeral teardown: destroy issued but verify_destroyed=False for %s "
-                "(resource %s) — check the Nebius console",
-                run.run_id,
-                handle.provider_resource_id,
+        with self._teardown_lock_for(run.run_id):
+            # Re-load under the lock: a concurrent poll may have already torn
+            # this run down. Operating on the fresh record makes destroy run
+            # exactly once and keeps the pre-destroy fetch from racing another
+            # poll's destroy (which would yank the VM out from under the scp).
+            run = self._runs.load(run.run_id) or run
+            if run.ephemeral_handle is None or run.ephemeral_destroyed:
+                return
+            handle = _handle_from_dict(run.ephemeral_handle)
+            provider = self._provider_factory(handle.provider)
+            local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+            # Localize artifacts off the VM BEFORE destroying it — the VM's copy
+            # dies with it, so a completed run must first pull a verified model
+            # and rebuild the manifest LOCALLY (it was written via the SSH client
+            # during the run, i.e. on the VM). Best-effort; never block teardown.
+            if run.state == RunState.COMPLETED:
+                with contextlib.suppress(Exception):
+                    ssh = self._client_for_host(self._hosts.get(run.host_id), paths, run)
+                    self._fetch_run_artifacts(ssh, run, paths)
+                    self._sync_checkpoints_manifest(local, run, paths)
+            try:
+                provider.destroy(handle)
+                ok = provider.verify_destroyed(handle)
+            except Exception as exc:  # noqa: BLE001 — teardown must never wedge the run
+                logger.exception("ephemeral teardown failed for run %s", run.run_id)
+                self._emit_event(local, paths.events_jsonl, "vm_destroy_failed", error=str(exc)[:200])
+                return
+            run.ephemeral_destroyed = True
+            self._runs.save(run)
+            self._emit_event(
+                local,
+                paths.events_jsonl,
+                "vm_destroyed",
+                resource_id=handle.provider_resource_id,
+                verified=ok,
             )
+            if not ok:
+                logger.warning(
+                    "ephemeral teardown: destroy issued but verify_destroyed=False for %s "
+                    "(resource %s) — check the Nebius console",
+                    run.run_id,
+                    handle.provider_resource_id,
+                )
+
+    def _teardown_lock_for(self, run_id: str) -> threading.Lock:
+        with self._teardown_locks_guard:
+            return self._teardown_locks.setdefault(run_id, threading.Lock())
 
     @staticmethod
     def _emit_event(client: TransportClient, events_path: Path, type_: str, **fields: Any) -> None:
