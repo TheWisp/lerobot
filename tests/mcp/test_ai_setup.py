@@ -118,3 +118,16 @@ def test_revoke_path_pattern_enforced(client: TestClient) -> None:
     """
     r = client.post("/ai_setup/tokens/bad%20name%21/revoke", follow_redirects=False)
     assert r.status_code == 422
+
+
+def test_operate_scope_is_selectable(client: TestClient) -> None:
+    """operate is the highest tier (hardware + training start/stop). It was
+    disabled in the issue form until operate-tier tools existed; the training_*
+    tools shipped, so the form must now offer it as a real, non-disabled box."""
+    import re
+
+    r = client.get("/ai_setup")
+    assert r.status_code == 200
+    m = re.search(r'<input[^>]*value="operate"[^>]*>', r.text)
+    assert m, "operate checkbox not offered"
+    assert "disabled" not in m.group(0)  # selectable now, not reserved

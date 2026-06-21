@@ -196,7 +196,6 @@ _PAGE_CSS = """
   .scope-group { display: inline-flex; gap: 12px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-2); }
   .scope-group label { font-family: monospace; font-size: 12px; }
   .scope-group input[type=checkbox] { accent-color: var(--accent); }
-  .scope-group label[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
 
   button.primary, .primary { background: var(--accent); color: var(--panel-2); border: 1px solid var(--accent); border-radius: 4px; padding: 6px 14px; font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   button.primary:hover { filter: brightness(1.1); }
@@ -327,29 +326,23 @@ def _render_listing(store: TokenStore) -> str:
 
 
 def _render_new_form(default_scopes: tuple[str, ...] = (SCOPE_READ, SCOPE_COMMENT)) -> str:
-    # Scope checkboxes: 'operate' is intentionally shown but disabled — its
-    # backing tools (start_record / hvla / motor ops) ship in a follow-up
-    # PR. The form is honest about what's wired today: read + comment are
-    # default; edit is available but opt-in; operate is reserved.
+    # Scope checkboxes. read + comment are checked by default; edit and operate
+    # are opt-in. operate is the highest tier — it grants hardware + training
+    # control (incl. starting cloud runs, which bill), so it's selectable but
+    # never default. (It was disabled until the operate-tier tools existed; the
+    # training_* tools are the first, so it's now grantable.)
     scope_tooltips = {
         SCOPE_READ: "List/read datasets, models, robots, runs. No state changes.",
         SCOPE_COMMENT: "Plus write sidecar comments — notes that persist across AI sessions, never touch canonical data.",
         "edit": "Plus mutate canonical state: dataset edits (delete/trim/feature-set), Hub uploads, profile config.",
-        "operate": "Plus run hardware: teleop, record, replay, training, recovery. Reserved — tools ship in a follow-up PR.",
+        "operate": "Plus run hardware + training: teleop, record, replay, start/stop training runs (cloud starts bill), recovery.",
     }
     boxes = []
     for s in ALL_SCOPES:
         checked = "checked" if s in default_scopes else ""
-        disabled = ""
-        aria = ""
         tooltip = scope_tooltips.get(s, "")
-        if s == "operate":
-            disabled = "disabled"
-            aria = ' aria-disabled="true"'
         title = f' title="{tooltip}"' if tooltip else ""
-        boxes.append(
-            f'<label{aria}{title}><input type="checkbox" name="scope" value="{s}" {checked} {disabled}> {s}</label>'
-        )
+        boxes.append(f'<label{title}><input type="checkbox" name="scope" value="{s}" {checked}> {s}</label>')
     return (
         '<form method="post" action="/ai_setup/tokens">'
         '<div class="form-row">'
