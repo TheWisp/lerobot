@@ -41,6 +41,20 @@ def _wait_for_obs_stream(stop: threading.Event) -> ObservationStreamReader | Non
     return None
 
 
+def _resolve_active(filter_names, all_cams: list[str]) -> set[str]:
+    """Camera keys to actually run inference on, from a requested filter.
+
+    Substring-matches each requested name against the obs-stream keys (so "top"
+    selects "observation.images.top"). Empty/None, or a filter that matches nothing,
+    falls back to all cameras. Used both at launch (``--cameras``) and live (the
+    ``cameras`` control), so the active set can change without recreating the buffer.
+    """
+    if not filter_names:
+        return set(all_cams)
+    matched = {c for c in all_cams if any(str(s).lower() in c.lower() for s in filter_names)}
+    return matched or set(all_cams)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Standalone debug-vision overlay process")
     parser.add_argument("--model", required=True, choices=list(ADAPTERS))
@@ -93,28 +107,29 @@ def main() -> None:
     logger.info("attached to obs stream; cameras available: %s", list(reader.image_keys))
 
     all_cams = list(reader.image_keys)
-    if args.cameras:
-        # Substring match so "top" selects "observation.images.top".
-        cams = [c for c in all_cams if any(sub.lower() in c.lower() for sub in args.cameras)]
-        if not cams:
-            logger.warning("no camera matched %s; overlaying all of %s", args.cameras, all_cams)
-            cams = all_cams
-    else:
-        cams = all_cams
-    dims = {c: (int(reader.image_keys[c][0]), int(reader.image_keys[c][1])) for c in cams}
-    logger.info("overlaying %s", dims)
+    # The overlay buffer covers ALL cameras so the active filter can change live (via
+    # the `cameras` control) without recreating shared memory. Disabled cameras are
+    # skipped in the loop — no inference, so the filter doubles as a compute dial.
+    dims = {c: (int(reader.image_keys[c][0]), int(reader.image_keys[c][1])) for c in all_cams}
+    active = _resolve_active(args.cameras, all_cams)
+    logger.info("cameras=%s active=%s", all_cams, sorted(active))
 
     overlay = SharedOverlayBuffer(cameras=dims, model=args.model, create=True)
     _set_overlay(f"{adapter.label} — live", "#39d353")
 
     throttle = max(0.0, args.throttle_ms / 1000.0)
+    last_active = set(active)
     try:
         while not stop.is_set():
             t0 = time.perf_counter()
             control = overlay.read_control()
             if control:
+                if "cameras" in control:
+                    active = _resolve_active(control.get("cameras"), all_cams)
                 adapter.set_control(control)
-            for cam in cams:
+            for cam in all_cams:
+                if cam not in active:
+                    continue
                 result = reader.read_image(cam)
                 if result is None:
                     continue
@@ -124,6 +139,12 @@ def main() -> None:
                     overlay.write_overlay(cam, rgba)
                 except Exception:
                     logger.exception("inference failed for camera %s", cam)
+            # Clear overlays for cameras just switched off so a stale mask doesn't linger.
+            for cam in last_active - active:
+                h, w = dims[cam]
+                with contextlib.suppress(Exception):
+                    overlay.write_overlay(cam, np.zeros((h, w, 4), dtype=np.uint8))
+            last_active = set(active)
             dt = time.perf_counter() - t0
             if throttle > dt:
                 time.sleep(throttle - dt)

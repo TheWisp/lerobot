@@ -736,13 +736,22 @@ function _renderMonitoredObjects() {
             ? `<button class="btn-tiny" onclick="_removeMonitoredObject(${i})" title="remove">✕</button>` : '';
         return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0">`
             + `<input type="text" class="live-during-run" placeholder="object name (e.g. robot arm)"`
-            + ` value="${_esc(o.name)}" oninput="_monitoredObjects[${i}].name=this.value;_scheduleDebugVisionApply()" style="flex:1">`
+            + ` value="${_esc(o.name)}" oninput="_setMonitoredName(${i}, this.value)" style="flex:1">`
             + `<span style="display:flex;gap:4px">${sw}</span>${rm}</div>`;
     }).join('');
     const add = document.getElementById('run-teleop-debug-vision-add-obj');
     if (add) add.disabled = _monitoredObjects.length >= 3;
 }
+// Inline handlers carry the row's render-time index. Guard every index access so a
+// stale row (DOM/state desync) can't throw — a throw in the name handler would skip
+// the debounced apply that used to follow it inline, silently swallowing the edit.
+function _setMonitoredName(i, value) {
+    if (i < 0 || i >= _monitoredObjects.length) return;
+    _monitoredObjects[i].name = value;
+    _scheduleDebugVisionApply();
+}
 function _setMonitoredColor(i, r, g, b) {
+    if (i < 0 || i >= _monitoredObjects.length) return;
     _monitoredObjects[i].color = [r, g, b];
     _renderMonitoredObjects();
     _applyDebugVisionNow();  // color change is instant (doesn't restart tracking)
@@ -753,7 +762,7 @@ function _addMonitoredObject() {
     _renderMonitoredObjects();  // no apply yet — the new row has no name
 }
 function _removeMonitoredObject(i) {
-    if (_monitoredObjects.length <= 1) return;
+    if (i < 0 || i >= _monitoredObjects.length || _monitoredObjects.length <= 1) return;
     _monitoredObjects.splice(i, 1);
     _renderMonitoredObjects();
     _applyDebugVisionNow();
@@ -783,7 +792,7 @@ async function _renderDebugVisionCameras() {
     box.innerHTML = cams.map(c => {
         const on = _debugVisionCamSel.includes(c);
         return `<button type="button" class="btn-tiny${on ? ' btn-accent' : ''}" data-cam="${_esc(c)}"`
-            + ` style="${on ? '' : 'opacity:.5'}" ${_debugModelLoaded ? 'disabled' : ''}`
+            + ` style="${on ? '' : 'opacity:.5'}"`
             + ` onclick="_toggleDebugVisionCam(this)">${_esc(c)}</button>`;
     }).join('');
 }
@@ -795,6 +804,19 @@ function _toggleDebugVisionCam(btn) {
     btn.style.opacity = on ? '' : '.5';
     if (on) { if (!_debugVisionCamSel.includes(c)) _debugVisionCamSel.push(c); }
     else _debugVisionCamSel = _debugVisionCamSel.filter(x => x !== c);
+    if (_debugModelLoaded) _applyCameraFilterNow();  // cameras are a live control — toggling off skips its inference
+}
+
+async function _applyCameraFilterNow() {
+    if (!_debugModelLoaded) return;
+    try {
+        const res = await fetch('/api/run/debug/control', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ cameras: _getDebugVisionCameras() }),
+        });
+        if (!res.ok && res.status !== 409) console.warn('camera filter apply:', (await res.json()).detail);
+    } catch (e) { console.warn('camera filter apply failed:', e.message); }
 }
 
 function _getDebugVisionCameras() {
@@ -817,7 +839,7 @@ function _applyDebugVisionNow() {
     _applyDebugVisionControl();
 }
 
-async function _applyDebugVisionControl() {
+async function _applyDebugVisionControl(attempt = 0) {
     const body = { objects: _getMonitoredObjects() };  // unified concept list for all models
     try {
         const res = await fetch('/api/run/debug/control', {
@@ -825,6 +847,12 @@ async function _applyDebugVisionControl() {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(body),
         });
+        // 409 = overlay pipeline not up yet (model warming / first frames not flowed).
+        // The edit would otherwise be silently dropped — retry briefly so it lands.
+        if (res.status === 409 && attempt < 6) {
+            setTimeout(() => _applyDebugVisionControl(attempt + 1), 500);
+            return;
+        }
         if (!res.ok) console.warn('debug-vision apply:', (await res.json()).detail);
     } catch (e) { console.warn('debug-vision apply failed:', e.message); }
 }
@@ -852,13 +880,9 @@ function _updateDebugButtons() {
         unloadBtn.disabled = !unloadEnabled;
         unloadBtn.classList.toggle('btn-accent', unloadEnabled);
     }
-    // The model selector + camera toggles are load-time config: lock them only while
-    // a model is loaded (independent of teleop); editable when nothing is loaded.
+    // The model selector is load-time config: lock it while a model is loaded
+    // (independent of teleop). Camera toggles are a LIVE control — never locked.
     if (sel) sel.disabled = _debugModelLoaded;
-    document.querySelectorAll('#run-teleop-debug-vision-cameras-box button').forEach(b => {
-        b.disabled = _debugModelLoaded;
-        b.style.cursor = _debugModelLoaded ? 'not-allowed' : 'pointer';
-    });
     _showModelPanel(_debugModelLoaded);
 }
 
