@@ -52,8 +52,7 @@ library, see the [upstream documentation](https://huggingface.co/docs/lerobot/in
 | **Ephemeral cloud training** | Launch a training run on an auto-managed cloud GPU (Nebius) from the GUI; the VM is torn down on completion with a hard TTL backstop.                                      | [`src/lerobot/gui/training`](src/lerobot/gui/training)                     |
 
 Also extended: higher-rate bimanual SO-107 teleop with predictive control, Quest VR
-and scripted end-effector teleoperators, Cartesian IK, latency instrumentation, and a
-broader policy set (`act_vlm`, `groot`, `sarm`, `wall_x`, `xvla`, `pi05`, …).
+and scripted end-effector teleoperators, Cartesian IK, and latency instrumentation.
 
 ---
 
