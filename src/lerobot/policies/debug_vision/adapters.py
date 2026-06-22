@@ -37,8 +37,8 @@ def _color_for(label: str) -> tuple[int, int, int]:
 
 
 # Distinct, legible colors assigned per concept in prompt order (hash fallback for
-# extras). A fixed palette + on-mask labels + a legend make it obvious which mask is
-# which — unlike hashing every instance to an arbitrary color with no key.
+# extras), so each concept keeps a stable color across frames — color alone tells
+# the masks apart, no on-image labels needed.
 _CONCEPT_PALETTE = [
     (239, 68, 68),
     (34, 197, 94),
@@ -49,24 +49,6 @@ _CONCEPT_PALETTE = [
     (249, 115, 22),
     (236, 72, 153),
 ]
-
-
-def _draw_label(cv2, rgba, text, center, color):
-    """Draw `text` centered at `center` in `color` with a black halo so it reads on any background."""
-    font, scale = cv2.FONT_HERSHEY_SIMPLEX, 0.5
-    (tw, th), _ = cv2.getTextSize(text, font, scale, 1)
-    org = (max(2, center[0] - tw // 2), max(th + 2, center[1]))
-    cv2.putText(rgba, text, org, font, scale, (0, 0, 0, 255), 3, cv2.LINE_AA)
-    cv2.putText(rgba, text, org, font, scale, (*color, 255), 1, cv2.LINE_AA)
-
-
-def _draw_legend(cv2, rgba, items):
-    """Color-swatch + label key, top-left. `items`: list of (label, (r, g, b))."""
-    for i, (label, col) in enumerate(items):
-        y = 12 + i * 22
-        cv2.rectangle(rgba, (10, y), (26, y + 16), (*col, 255), -1)
-        cv2.putText(rgba, label, (32, y + 13), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0, 255), 3, cv2.LINE_AA)
-        cv2.putText(rgba, label, (32, y + 13), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (*col, 255), 1, cv2.LINE_AA)
 
 
 class DebugVisionAdapter:
@@ -424,14 +406,9 @@ class Sam3Adapter(DebugVisionAdapter):
             m = (mask.cpu().numpy() if hasattr(mask, "cpu") else np.asarray(mask)) > 0
             col = _color_for(f"{self.prompt}{i}")
             rgba[m] = (*col, 130)  # translucent fill per instance
-            # bold outline + label so each detected instance is obvious
+            # bold outline so the split is obvious; color alone carries identity
             cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
-            if cnts:
-                mom = cv2.moments(max(cnts, key=cv2.contourArea))
-                if mom["m00"] > 0:
-                    center = (int(mom["m10"] / mom["m00"]), int(mom["m01"] / mom["m00"]))
-                    _draw_label(cv2, rgba, f"{self.prompt} {i}", center, col)
         return rgba
 
     def masks(self, frame_rgb: np.ndarray, prompt: str | None = None) -> list[dict]:
@@ -675,12 +652,6 @@ class Sam3VideoAdapter(DebugVisionAdapter):
             rgba[m] = (*col, 130)  # translucent fill
             cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
-            if cnts:
-                mom = cv2.moments(max(cnts, key=cv2.contourArea))
-                if mom["m00"] > 0:
-                    center = (int(mom["m10"] / mom["m00"]), int(mom["m01"] / mom["m00"]))
-                    _draw_label(cv2, rgba, obj_to_concept.get(oid, "?"), center, col)
-        _draw_legend(cv2, rgba, [(c, self._color(c)) for c in self._concepts])
         return rgba
 
 
