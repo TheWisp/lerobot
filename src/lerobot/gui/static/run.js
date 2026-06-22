@@ -642,8 +642,7 @@ function _getDebugModelConfig() {
         } else if (sel.value === 'sam3_video') {
             config.objects = _getMonitoredObjects();
         }
-        config.cameras = (document.getElementById('run-teleop-debug-vision-cameras')?.value || '')
-            .split(',').map(s => s.trim()).filter(Boolean);  // empty = all cameras
+        config.cameras = _getDebugVisionCameras();  // checked subset; [] = all cameras
     }
     return config;
 }
@@ -760,6 +759,40 @@ function _getMonitoredObjects() {
     return _monitoredObjects.map(o => ({name: (o.name || '').trim(), color: o.color})).filter(o => o.name);
 }
 
+// Camera filter for debug-vision overlays: checkboxes auto-detected from the selected
+// robot's cameras. The selection lives in this variable (not just the DOM) so a form
+// re-render can't silently drop it — that was the old free-text field's bug.
+let _debugVisionCamSel = null;  // null = uninitialised (defaults to all); else array of checked keys
+
+async function _renderDebugVisionCameras() {
+    const box = document.getElementById('run-teleop-debug-vision-cameras-box');
+    if (!box) return;
+    const robotSel = document.getElementById('run-teleop-robot');
+    if (!robotSel?.value) { box.innerHTML = '<span class="form-hint">select a robot first</span>'; return; }
+    let cams = [];
+    try {
+        const data = await _getProfileData('robot', robotSel.value);
+        cams = Object.keys(data?.cameras || {});
+    } catch (e) { /* ignore */ }
+    if (!cams.length) { box.innerHTML = '<span class="form-hint">no cameras on this robot</span>'; return; }
+    if (_debugVisionCamSel === null) _debugVisionCamSel = cams.slice();       // default: all on
+    _debugVisionCamSel = _debugVisionCamSel.filter(c => cams.includes(c));    // drop cams the new robot lacks
+    box.innerHTML = cams.map(c =>
+        `<label style="display:inline-flex;align-items:center;gap:4px;font-weight:normal">`
+        + `<input type="checkbox" value="${_esc(c)}" ${_debugVisionCamSel.includes(c) ? 'checked' : ''} `
+        + `onchange="_onDebugVisionCamToggle()">${_esc(c)}</label>`).join('');
+}
+
+function _onDebugVisionCamToggle() {
+    const box = document.getElementById('run-teleop-debug-vision-cameras-box');
+    if (box) _debugVisionCamSel = Array.from(box.querySelectorAll('input:checked')).map(cb => cb.value);
+}
+
+function _getDebugVisionCameras() {
+    // The checked subset. All-on (or uninitialised) sends [] = all cameras.
+    return _debugVisionCamSel ? _debugVisionCamSel.slice() : [];
+}
+
 async function _applyDebugVisionControl() {
     const sel = document.getElementById('run-teleop-debug-model');
     const body = sel?.value === 'sam3_video'
@@ -833,6 +866,7 @@ function _onDebugModelChange() {
     const isVision = policyType === 'debug_vision';
     const visionFields = document.getElementById('run-teleop-debug-vision-fields');
     if (visionFields) visionFields.style.display = isVision ? '' : 'none';
+    if (isVision) _renderDebugVisionCameras();  // auto-detect cameras from the selected robot
     const needsPrompt = isVision && ['grounding_dino', 'sam3'].includes(sel.value);
     for (const id of ['run-teleop-debug-vision-prompt', 'run-teleop-debug-vision-prompt-label',
                       'run-teleop-debug-vision-apply', 'run-teleop-debug-vision-hint']) {
@@ -1085,7 +1119,7 @@ function renderRunForm() {
     html += `<div id="run-section-teleop" style="${selectedWorkflow === 'teleop' ? '' : 'display:none'}">`;
     html += '<div class="form-grid">';
     html += `<label>Robot${_REQ}</label>`;
-    html += `<select id="run-teleop-robot">${_robotProfileOptions()}</select>`;
+    html += `<select id="run-teleop-robot" onchange="_renderDebugVisionCameras()">${_robotProfileOptions()}</select>`;
     html += `<label>Teleop${_REQ}</label>`;
     html += `<select id="run-teleop-teleop">${_teleopProfileOptions()}</select>`;
     html += `<label>FPS</label>`;
@@ -1157,7 +1191,7 @@ function renderRunForm() {
     html += `<div id="run-teleop-debug-vision-fields" style="display:none">`;
     html += '<div class="form-grid">';
     html += `<label>Cameras</label>`;
-    html += `<input type="text" id="run-teleop-debug-vision-cameras" class="live-during-run" placeholder="all (e.g. top)" value="">`;
+    html += `<div id="run-teleop-debug-vision-cameras-box" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center"><span class="form-hint">select a robot first</span></div>`;
     html += `<label id="run-teleop-debug-vision-prompt-label">Prompt</label>`;
     html += `<input type="text" id="run-teleop-debug-vision-prompt" class="live-during-run" placeholder="cup . bottle . hand ." value="cup . bottle . hand .">`;
     html += '</div>';
