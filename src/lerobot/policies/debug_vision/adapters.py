@@ -36,6 +36,39 @@ def _color_for(label: str) -> tuple[int, int, int]:
     return int(r * 255), int(g * 255), int(b * 255)
 
 
+# Distinct, legible colors assigned per concept in prompt order (hash fallback for
+# extras). A fixed palette + on-mask labels + a legend make it obvious which mask is
+# which — unlike hashing every instance to an arbitrary color with no key.
+_CONCEPT_PALETTE = [
+    (239, 68, 68),
+    (34, 197, 94),
+    (59, 130, 246),
+    (234, 179, 8),
+    (168, 85, 247),
+    (20, 184, 166),
+    (249, 115, 22),
+    (236, 72, 153),
+]
+
+
+def _draw_label(cv2, rgba, text, center, color):
+    """Draw `text` centered at `center` in `color` with a black halo so it reads on any background."""
+    font, scale = cv2.FONT_HERSHEY_SIMPLEX, 0.5
+    (tw, th), _ = cv2.getTextSize(text, font, scale, 1)
+    org = (max(2, center[0] - tw // 2), max(th + 2, center[1]))
+    cv2.putText(rgba, text, org, font, scale, (0, 0, 0, 255), 3, cv2.LINE_AA)
+    cv2.putText(rgba, text, org, font, scale, (*color, 255), 1, cv2.LINE_AA)
+
+
+def _draw_legend(cv2, rgba, items):
+    """Color-swatch + label key, top-left. `items`: list of (label, (r, g, b))."""
+    for i, (label, col) in enumerate(items):
+        y = 12 + i * 22
+        cv2.rectangle(rgba, (10, y), (26, y + 16), (*col, 255), -1)
+        cv2.putText(rgba, label, (32, y + 13), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0, 255), 3, cv2.LINE_AA)
+        cv2.putText(rgba, label, (32, y + 13), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (*col, 255), 1, cv2.LINE_AA)
+
+
 class DebugVisionAdapter:
     """Base adapter. Subclasses load a model and render an RGBA overlay.
 
@@ -389,9 +422,14 @@ class Sam3Adapter(DebugVisionAdapter):
             m = (mask.cpu().numpy() if hasattr(mask, "cpu") else np.asarray(mask)) > 0
             col = _color_for(f"{self.prompt}{i}")
             rgba[m] = (*col, 130)  # translucent fill per instance
-            # bold outline so the segmentation split is obvious
+            # bold outline + label so each detected instance is obvious
             cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
+            if cnts:
+                mom = cv2.moments(max(cnts, key=cv2.contourArea))
+                if mom["m00"] > 0:
+                    center = (int(mom["m10"] / mom["m00"]), int(mom["m01"] / mom["m00"]))
+                    _draw_label(cv2, rgba, f"{self.prompt} {i}", center, col)
         return rgba
 
     def masks(self, frame_rgb: np.ndarray, prompt: str | None = None) -> list[dict]:
@@ -514,6 +552,111 @@ class CoTracker3Adapter(DebugVisionAdapter):
         return rgba
 
 
+class Sam3VideoAdapter(DebugVisionAdapter):
+    """SAM3 VIDEO tracking — concept masks that PERSIST across frames (hold through
+    partial occlusion), each concept in its own stable color with an on-mask label
+    and a legend. The prompt is period-separated ("robot arm . cylinder . green ring")
+    and every concept is tracked independently.
+
+    Stateful: keeps a streaming session, so unlike the per-frame ``sam3`` model the
+    masks don't flicker and survive occlusion. Changing the prompt (or the camera
+    resolution) restarts tracking; like CoTracker3 it assumes a single camera stream.
+    GATED weights — accept the Meta SAM License at https://huggingface.co/facebook/sam3
+    (+ ``hf auth login``) first.
+    """
+
+    key = "sam3_video"
+    label = "SAM3 video — tracked masks (gated)"
+    controls = [
+        {
+            "type": "text",
+            "key": "prompt",
+            "label": "Concepts",
+            "placeholder": "robot arm . cylinder . green ring",
+            "hint": "Period-separated concepts; each is tracked across frames in its own color "
+            "(legend, top-left). Changing this restarts tracking.",
+        }
+    ]
+    SAM3_ID = "facebook/sam3"
+    DEFAULT_PROMPT = "object"
+
+    def __init__(self, device: str = "cuda"):
+        super().__init__(device)
+        try:
+            import torch
+            from PIL import Image
+            from transformers import Sam3VideoModel, Sam3VideoProcessor
+        except ImportError as e:
+            raise RuntimeError(_IMPORT_HINT) from e
+        self._torch = torch
+        self._cv2 = _import_cv2()
+        self._Image = Image
+        logger.info("loading %s (video) ...", self.SAM3_ID)
+        try:
+            self.processor = Sam3VideoProcessor.from_pretrained(self.SAM3_ID)
+            self.model = Sam3VideoModel.from_pretrained(self.SAM3_ID, dtype=torch.float16).to(device).eval()
+        except Exception as e:
+            raise RuntimeError(
+                f"SAM3 weights are gated — accept the Meta SAM License at "
+                f"https://huggingface.co/{self.SAM3_ID} and run `hf auth login`, then reload. ({type(e).__name__})"
+            ) from e
+        self.prompt = self.DEFAULT_PROMPT
+        self._session = None
+        self._concepts: list[str] = []
+        self._shape: tuple[int, int] | None = None
+
+    def _parse_concepts(self) -> list[str]:
+        parts = (c.strip() for c in self.prompt.replace(",", ".").split("."))
+        return list(dict.fromkeys(c for c in parts if c)) or [self.DEFAULT_PROMPT]
+
+    def _start_session(self, h: int, w: int) -> None:
+        self._concepts = self._parse_concepts()
+        self._session = self.processor.init_video_session(
+            inference_device=self.device, dtype=self._torch.float16
+        )
+        self.processor.add_text_prompt(self._session, self._concepts)
+        self._shape = (h, w)
+
+    def set_control(self, control: dict) -> None:
+        p = control.get("prompt")
+        if isinstance(p, str) and p.strip() and p.strip() != self.prompt:
+            self.prompt = p.strip()
+            self._session = None  # restart tracking with the new concepts
+
+    def _color(self, concept: str) -> tuple[int, int, int]:
+        if concept in self._concepts:
+            return _CONCEPT_PALETTE[self._concepts.index(concept) % len(_CONCEPT_PALETTE)]
+        return _color_for(concept)
+
+    def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
+        torch, cv2 = self._torch, self._cv2
+        h, w = frame_rgb.shape[:2]
+        if self._session is None or self._shape != (h, w):
+            self._start_session(h, w)
+        inp = self.processor(images=self._Image.fromarray(frame_rgb), return_tensors="pt")
+        pv = inp["pixel_values"][0].to(self.device, torch.float16)
+        with torch.inference_mode():
+            out = self.model(inference_session=self._session, frame=pv)
+        res = self.processor.postprocess_outputs(self._session, out, original_sizes=[[h, w]])
+        obj_to_concept = {oid: p for p, oids in res["prompt_to_obj_ids"].items() for oid in oids}
+        masks = res["masks"]
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        for k, oid in enumerate(res["object_ids"].tolist()):
+            arr = masks[k]
+            m = (arr.cpu().numpy() if hasattr(arr, "cpu") else np.asarray(arr)) > 0
+            col = self._color(obj_to_concept.get(oid, "?"))
+            rgba[m] = (*col, 130)  # translucent fill
+            cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
+            if cnts:
+                mom = cv2.moments(max(cnts, key=cv2.contourArea))
+                if mom["m00"] > 0:
+                    center = (int(mom["m10"] / mom["m00"]), int(mom["m01"] / mom["m00"]))
+                    _draw_label(cv2, rgba, obj_to_concept.get(oid, "?"), center, col)
+        _draw_legend(cv2, rgba, [(c, self._color(c)) for c in self._concepts])
+        return rgba
+
+
 def _import_cv2():
     try:
         import cv2
@@ -529,6 +672,7 @@ ADAPTERS: dict[str, type[DebugVisionAdapter]] = {
     DepthAnythingAdapter.key: DepthAnythingAdapter,
     Sam2MaskAdapter.key: Sam2MaskAdapter,
     Sam3Adapter.key: Sam3Adapter,
+    Sam3VideoAdapter.key: Sam3VideoAdapter,
     CoTracker3Adapter.key: CoTracker3Adapter,
 }
 
