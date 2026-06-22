@@ -738,22 +738,27 @@ function _renderMonitoredObjects() {
             ? `<button class="btn-tiny" onclick="_removeMonitoredObject(${i})" title="remove">✕</button>` : '';
         return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0">`
             + `<input type="text" class="live-during-run" placeholder="object name (e.g. robot arm)"`
-            + ` value="${_esc(o.name)}" oninput="_monitoredObjects[${i}].name=this.value" style="flex:1">`
+            + ` value="${_esc(o.name)}" oninput="_monitoredObjects[${i}].name=this.value;_scheduleDebugVisionApply()" style="flex:1">`
             + `<span style="display:flex;gap:4px">${sw}</span>${rm}</div>`;
     }).join('');
     const add = document.getElementById('run-teleop-debug-vision-add-obj');
     if (add) add.disabled = _monitoredObjects.length >= 3;
 }
-function _setMonitoredColor(i, r, g, b) { _monitoredObjects[i].color = [r, g, b]; _renderMonitoredObjects(); }
+function _setMonitoredColor(i, r, g, b) {
+    _monitoredObjects[i].color = [r, g, b];
+    _renderMonitoredObjects();
+    _applyDebugVisionNow();  // color change is instant (doesn't restart tracking)
+}
 function _addMonitoredObject() {
     if (_monitoredObjects.length >= 3) return;
     _monitoredObjects.push({name: '', color: _OBJ_PALETTE[_monitoredObjects.length % _OBJ_PALETTE.length]});
-    _renderMonitoredObjects();
+    _renderMonitoredObjects();  // no apply yet — the new row has no name
 }
 function _removeMonitoredObject(i) {
     if (_monitoredObjects.length <= 1) return;
     _monitoredObjects.splice(i, 1);
     _renderMonitoredObjects();
+    _applyDebugVisionNow();
 }
 function _getMonitoredObjects() {
     return _monitoredObjects.map(o => ({name: (o.name || '').trim(), color: o.color})).filter(o => o.name);
@@ -777,20 +782,41 @@ async function _renderDebugVisionCameras() {
     if (!cams.length) { box.innerHTML = '<span class="form-hint">no cameras on this robot</span>'; return; }
     if (_debugVisionCamSel === null) _debugVisionCamSel = cams.slice();       // default: all on
     _debugVisionCamSel = _debugVisionCamSel.filter(c => cams.includes(c));    // drop cams the new robot lacks
-    box.innerHTML = cams.map(c =>
-        `<label style="display:inline-flex;align-items:center;gap:4px;font-weight:normal">`
-        + `<input type="checkbox" value="${_esc(c)}" ${_debugVisionCamSel.includes(c) ? 'checked' : ''} `
-        + `onchange="_onDebugVisionCamToggle()">${_esc(c)}</label>`).join('');
+    box.innerHTML = cams.map(c => {
+        const on = _debugVisionCamSel.includes(c);
+        return `<button type="button" class="btn-tiny${on ? ' btn-accent' : ''}" data-cam="${_esc(c)}"`
+            + ` style="${on ? '' : 'opacity:.5'}" ${_debugModelLoaded ? 'disabled' : ''}`
+            + ` onclick="_toggleDebugVisionCam(this)">${_esc(c)}</button>`;
+    }).join('');
 }
 
-function _onDebugVisionCamToggle() {
-    const box = document.getElementById('run-teleop-debug-vision-cameras-box');
-    if (box) _debugVisionCamSel = Array.from(box.querySelectorAll('input:checked')).map(cb => cb.value);
+function _toggleDebugVisionCam(btn) {
+    const c = btn.dataset.cam;
+    const on = !btn.classList.contains('btn-accent');
+    btn.classList.toggle('btn-accent', on);
+    btn.style.opacity = on ? '' : '.5';
+    if (on) { if (!_debugVisionCamSel.includes(c)) _debugVisionCamSel.push(c); }
+    else _debugVisionCamSel = _debugVisionCamSel.filter(x => x !== c);
 }
 
 function _getDebugVisionCameras() {
     // The checked subset. All-on (or uninitialised) sends [] = all cameras.
     return _debugVisionCamSel ? _debugVisionCamSel.slice() : [];
+}
+
+// Real-time apply for the live debug-vision controls. Text edits debounce ~1.5s so
+// we don't restart tracking on every keystroke; discrete changes (color/remove) are
+// instant. No-op until a model is loaded — the values are used at the next Load.
+let _debugApplyTimer = null;
+function _scheduleDebugVisionApply() {
+    if (!_debugModelLoaded) return;
+    clearTimeout(_debugApplyTimer);
+    _debugApplyTimer = setTimeout(_applyDebugVisionControl, 1500);
+}
+function _applyDebugVisionNow() {
+    if (!_debugModelLoaded) return;
+    clearTimeout(_debugApplyTimer);
+    _applyDebugVisionControl();
 }
 
 async function _applyDebugVisionControl() {
@@ -804,11 +830,8 @@ async function _applyDebugVisionControl() {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(body),
         });
-        if (res.ok) showToast('Debug model', 'Applied', 'success');
-        else showToast('Error', (await res.json()).detail || 'No overlay model running', 'error');
-    } catch (e) {
-        showToast('Error', e.message, 'error');
-    }
+        if (!res.ok) console.warn('debug-vision apply:', (await res.json()).detail);
+    } catch (e) { console.warn('debug-vision apply failed:', e.message); }
 }
 
 function _updateDebugButtons() {
@@ -834,6 +857,13 @@ function _updateDebugButtons() {
         unloadBtn.disabled = !unloadEnabled;
         unloadBtn.classList.toggle('btn-accent', unloadEnabled);
     }
+    // The model selector + camera toggles are load-time config: lock them only while
+    // a model is loaded (independent of teleop); editable when nothing is loaded.
+    if (sel) sel.disabled = _debugModelLoaded;
+    document.querySelectorAll('#run-teleop-debug-vision-cameras-box button').forEach(b => {
+        b.disabled = _debugModelLoaded;
+        b.style.cursor = _debugModelLoaded ? 'not-allowed' : 'pointer';
+    });
     _showModelPanel(_debugModelLoaded);
 }
 
@@ -869,7 +899,7 @@ function _onDebugModelChange() {
     if (isVision) _renderDebugVisionCameras();  // auto-detect cameras from the selected robot
     const needsPrompt = isVision && ['grounding_dino', 'sam3'].includes(sel.value);
     for (const id of ['run-teleop-debug-vision-prompt', 'run-teleop-debug-vision-prompt-label',
-                      'run-teleop-debug-vision-apply', 'run-teleop-debug-vision-hint']) {
+                      'run-teleop-debug-vision-hint']) {
         const el = document.getElementById(id);
         if (el) el.style.display = needsPrompt ? '' : 'none';
     }
@@ -1167,7 +1197,7 @@ function renderRunForm() {
     html += '</div>';
     html += '<div class="form-grid">';
     html += `<label>Model</label>`;
-    html += `<select id="run-teleop-debug-model" onchange="_onDebugModelChange()">`;
+    html += `<select id="run-teleop-debug-model" class="live-during-run" onchange="_onDebugModelChange()">`;
     html += _debugModelOptions();
     html += `</select>`;
     html += `<label></label>`;
@@ -1193,19 +1223,17 @@ function renderRunForm() {
     html += `<label>Cameras</label>`;
     html += `<div id="run-teleop-debug-vision-cameras-box" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center"><span class="form-hint">select a robot first</span></div>`;
     html += `<label id="run-teleop-debug-vision-prompt-label">Prompt</label>`;
-    html += `<input type="text" id="run-teleop-debug-vision-prompt" class="live-during-run" placeholder="cup . bottle . hand ." value="cup . bottle . hand .">`;
+    html += `<input type="text" id="run-teleop-debug-vision-prompt" class="live-during-run" placeholder="cup . bottle . hand ." value="cup . bottle . hand ." oninput="_scheduleDebugVisionApply()">`;
     html += '</div>';
-    html += `<div class="form-hint" id="run-teleop-debug-vision-hint">Lowercase, period-separated. Only list objects actually in view — spurious phrases get mislabeled. Edit + Apply to update live.</div>`;
-    html += `<button class="btn-tiny" id="run-teleop-debug-vision-apply" onclick="_applyDebugVisionControl()">Apply prompt</button>`;
+    html += `<div class="form-hint" id="run-teleop-debug-vision-hint">Lowercase, period-separated. Only list objects actually in view — spurious phrases get mislabeled. Applies ~1.5s after you stop typing.</div>`;
     // Monitored-objects widget (SAM3 video): up to 3 open-vocab objects, each with a color.
     html += `<div id="run-teleop-debug-vision-objects" style="display:none">`;
     html += `<label style="display:block;margin-bottom:4px">Monitored objects (max 3)</label>`;
     html += `<div id="run-teleop-debug-vision-objects-rows"></div>`;
     html += `<div style="display:flex;gap:8px;margin-top:6px">`;
     html += `<button class="btn-tiny" id="run-teleop-debug-vision-add-obj" onclick="_addMonitoredObject()">+ Add object</button>`;
-    html += `<button class="btn-tiny live-during-run" id="run-teleop-debug-vision-objects-apply" onclick="_applyDebugVisionControl()">Apply</button>`;
     html += `</div>`;
-    html += `<div class="form-hint">Open-vocabulary names; each is tracked across frames in its own color. Edit + Apply to update live.</div>`;
+    html += `<div class="form-hint">Open-vocabulary names; each tracked in its own color. Name edits apply ~1.5s after you stop typing; color changes apply instantly.</div>`;
     html += `</div>`;
     html += '</div>';
     html += '</div>';
@@ -2161,11 +2189,10 @@ function updateRunUI(isRunning) {
 
     if (stopBtn) stopBtn.disabled = !isRunning;
 
-    // Keep live-controllable debug-model fields editable while running — the
-    // prompt applies to the live overlay subprocess (Apply prompt) and cameras
-    // apply on a debug-model reload, both of which happen DURING teleop. Locking
-    // them would block exactly the live tuning they exist for.
-    formInputs.forEach(el => { el.disabled = isRunning && !el.classList.contains('live-during-run'); });
+    // Don't touch live-during-run elements: the live debug controls (prompt/objects)
+    // stay editable, and the model selector is owned by _updateDebugButtons (locked by
+    // whether a model is LOADED, not by teleop — the two are decoupled).
+    formInputs.forEach(el => { if (!el.classList.contains('live-during-run')) el.disabled = isRunning; });
     workflowBtns.forEach(el => el.disabled = isRunning);
 
     const indicator = document.getElementById('run-status-indicator');
