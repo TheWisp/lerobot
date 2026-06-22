@@ -191,7 +191,7 @@ class GroundingDinoAdapter(DebugVisionAdapter):
 
 
 class DinoFeatureAdapter(DebugVisionAdapter):
-    """Frozen DINOv2 patch features -> PCA-RGB heatmap (whole-frame tint)."""
+    """Frozen DINOv2 patch features -> PCA-RGB heatmap (opaque whole-frame repaint)."""
 
     key = "dino_features"
     label = "DINOv2 — feature heatmap (PCA)"
@@ -203,7 +203,7 @@ class DinoFeatureAdapter(DebugVisionAdapter):
             "min": 0.0,
             "max": 1.0,
             "step": 0.05,
-            "default": 0.55,
+            "default": 1.0,
         }
     ]
     _PATCH = 14  # DINOv2 patch size
@@ -220,7 +220,7 @@ class DinoFeatureAdapter(DebugVisionAdapter):
         logger.info("loading %s ...", DINOV2_ID)
         self.processor = AutoImageProcessor.from_pretrained(DINOV2_ID)
         self.model = AutoModel.from_pretrained(DINOV2_ID).to(device).half().eval()
-        self.alpha = 140  # 0..255
+        self.alpha = 255  # 0..255; opaque repaint by default (dense heatmap, not a tint)
 
     def set_control(self, control: dict) -> None:
         if "alpha" in control:
@@ -261,7 +261,7 @@ class DepthAnythingAdapter(DebugVisionAdapter):
             "min": 0.0,
             "max": 1.0,
             "step": 0.05,
-            "default": 0.55,
+            "default": 1.0,
         }
     ]
     DEPTH_ID = "depth-anything/Depth-Anything-V2-Small-hf"
@@ -280,7 +280,9 @@ class DepthAnythingAdapter(DebugVisionAdapter):
         self.model = (
             AutoModelForDepthEstimation.from_pretrained(self.DEPTH_ID, dtype=torch.float16).to(device).eval()
         )
-        self.alpha = 140
+        self.alpha = (
+            255  # opaque: repaint the frame with the depth map; lower the slider to blend RGB back in
+        )
         self._dmin: float | None = None  # EMA'd depth range (anti-flicker)
         self._dmax: float | None = None
 
