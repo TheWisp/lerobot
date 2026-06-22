@@ -131,23 +131,9 @@ datasets, leaves comments that survive across sessions and tools, and drives the
 GUI tab you have open — all powered by **your** existing AI subscription. No
 separate API key, no "LeRobot AI account".
 
-The GUI process mounts the MCP endpoint automatically at `/mcp`, so one command
-serves the GUI, the AI-setup page, and the MCP transport on a single port:
-
-```bash
-uv run lerobot-gui --host 0.0.0.0 --port 8000
-```
-
-Each user, on their own device, issues a scoped token from `lerobot.local/ai_setup`
-and registers it with one line, e.g. for Claude Code:
-
-```bash
-claude mcp add lerobot \
-  --transport http \
-  --url http://lerobot.local:8000/mcp \
-  --token sk-lr-XXXXXXXX
-```
-
+The GUI serves the MCP endpoint at `/mcp` on the same port. Each user issues a
+scoped token from `lerobot.local/ai_setup` and pastes the one-line command the
+page generates for their tool (Claude Code, Codex, Cursor, Gemini, Claude Desktop).
 Then, from your AI tool:
 
 > _"What lerobot datasets do I have? Show me the last frame of episodes 0–9 of
@@ -156,8 +142,8 @@ Then, from your AI tool:
 
 Tokens carry one of four nested scopes — `read` ⊂ `comment` ⊂ `edit` ⊂ `operate`
 — so you grant exactly as much authority (up to and including starting hardware
-runs) as the situation warrants. The full tool surface, scope model, and design
-rationale are in the **[MCP README](src/lerobot/mcp/README.md)**.
+runs) as the situation warrants. The full setup walkthrough, tool surface, scope
+model, and design rationale are in the **[MCP README](src/lerobot/mcp/README.md)**.
 
 <p align="center">
   <img alt="End-to-end MCP demo: an AI tool driving LeRobot" src="./src/lerobot/mcp/docs/demo_e2e.gif" width="80%">

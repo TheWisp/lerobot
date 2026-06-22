@@ -138,10 +138,9 @@ Cursor, Claude Desktop). The bearer is not recoverable — save it now
 Claude Code:
 
 ```bash
-claude mcp add lerobot \
-  --transport http \
-  --url http://lerobot.local:8000/mcp \
-  --token sk-lr-XXXXXXXX
+claude mcp add --transport http lerobot \
+  http://lerobot.local:8000/mcp \
+  --header 'Authorization: Bearer sk-lr-XXXXXXXX'
 ```
 
 Verify:
@@ -199,15 +198,8 @@ host. The client tool's calls start failing with 401 immediately.
 re-issue. Tokens are one-shot secrets — there's no "show me the token
 again."
 
-**Multiple robot hosts on the same LAN.** Each host advertises under
-its own mDNS name. Add one MCP entry per host:
-
-```bash
-claude mcp add lerobot-bench --transport http --url http://bench.local:8000/mcp --token ...
-claude mcp add lerobot-prod  --transport http --url http://prod.local:8000/mcp  --token ...
-```
-
-The AI sees them as separate tool namespaces.
+**Multiple robot hosts on the same LAN.** Add one MCP entry per host; the AI
+sees them as separate tool namespaces.
 
 **When the robot host moves (different IP).** If you registered with
 the `lerobot.local` hostname (the `/ai_setup` default), nothing
