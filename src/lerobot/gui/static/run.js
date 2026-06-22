@@ -1394,6 +1394,17 @@ async function launchRun() {
         }
     }
 
+    // S2 runs alongside the teleop/record run; load it here via the synced Load path
+    // (panel + log wiring) so it isn't loaded headlessly by the backend. It loads
+    // before the run starts, so it creates its image buffer and teleop attaches.
+    // debug-vision is loaded explicitly via the Load button and is not auto-loaded.
+    if (selectedWorkflow !== 'replay') {
+        const dbg = document.getElementById('run-teleop-debug-model');
+        if (dbg?.value === 'hvla_s2_vlm' && !_debugModelLoaded && !_debugModelLoading) {
+            await _loadDebugModel();
+        }
+    }
+
     let endpoint, body;
 
     if (selectedWorkflow === 'teleop') {
