@@ -29,14 +29,13 @@ exactly as documented. This README focuses on what's _different_. For the core
 library, see the [upstream documentation](https://huggingface.co/docs/lerobot/index).
 
 <p align="center">
-  <img alt="LeRobot Studio walkthrough" src="./media/readme/intro.gif" width="80%">
+  <img alt="Features walkthrough" src="./media/readme/intro.gif" width="80%">
   <br/>
-  <sub><i>▶ LeRobot Studio in action</i></sub>
+  <sub><i>▶ Features walkthrough</i></sub>
 </p>
 
 <p align="center">
   <i>📺 More walkthroughs:</i>
-  <a href="https://media.githubusercontent.com/media/TheWisp/lerobot/d4cceff59d41dfa0d64621088d48cfdb55e60a0e/demo/highlight_reel.mp4">highlight reel</a> ·
   <a href="https://media.githubusercontent.com/media/TheWisp/lerobot/d4cceff59d41dfa0d64621088d48cfdb55e60a0e/demo/assets/training_dashboard.mp4">live training dashboard</a>
 </p>
 
