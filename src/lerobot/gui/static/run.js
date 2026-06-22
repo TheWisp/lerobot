@@ -637,10 +637,8 @@ function _getDebugModelConfig() {
         // Built-in vision model: the select value is the adapter key, not a checkpoint.
         config.checkpoint = '';
         config.model = sel.value;
-        if (sel.value === 'grounding_dino' || sel.value === 'sam3') {
-            config.prompt = document.getElementById('run-teleop-debug-vision-prompt')?.value?.trim() || '';
-        } else if (sel.value === 'sam3_video') {
-            config.objects = _getMonitoredObjects();
+        if (['grounding_dino', 'sam3', 'sam3_video'].includes(sel.value)) {
+            config.objects = _getMonitoredObjects();  // unified open-vocab list for all concept models
         }
         config.cameras = _getDebugVisionCameras();  // checked subset; [] = all cameras
     }
@@ -820,10 +818,7 @@ function _applyDebugVisionNow() {
 }
 
 async function _applyDebugVisionControl() {
-    const sel = document.getElementById('run-teleop-debug-model');
-    const body = sel?.value === 'sam3_video'
-        ? { objects: _getMonitoredObjects() }
-        : { prompt: document.getElementById('run-teleop-debug-vision-prompt')?.value?.trim() || '' };
+    const body = { objects: _getMonitoredObjects() };  // unified concept list for all models
     try {
         const res = await fetch('/api/run/debug/control', {
             method: 'POST',
@@ -897,14 +892,8 @@ function _onDebugModelChange() {
     const visionFields = document.getElementById('run-teleop-debug-vision-fields');
     if (visionFields) visionFields.style.display = isVision ? '' : 'none';
     if (isVision) _renderDebugVisionCameras();  // auto-detect cameras from the selected robot
-    const needsPrompt = isVision && ['grounding_dino', 'sam3'].includes(sel.value);
-    for (const id of ['run-teleop-debug-vision-prompt', 'run-teleop-debug-vision-prompt-label',
-                      'run-teleop-debug-vision-hint']) {
-        const el = document.getElementById(id);
-        if (el) el.style.display = needsPrompt ? '' : 'none';
-    }
-    // SAM3 video uses the monitored-objects widget instead of a raw prompt.
-    const needsObjects = isVision && sel.value === 'sam3_video';
+    // All concept-promptable models share the open-vocab objects widget (no raw prompt).
+    const needsObjects = isVision && ['grounding_dino', 'sam3', 'sam3_video'].includes(sel.value);
     const objBox = document.getElementById('run-teleop-debug-vision-objects');
     if (objBox) objBox.style.display = needsObjects ? '' : 'none';
     if (needsObjects) _renderMonitoredObjects();
@@ -1222,18 +1211,15 @@ function renderRunForm() {
     html += '<div class="form-grid">';
     html += `<label>Cameras</label>`;
     html += `<div id="run-teleop-debug-vision-cameras-box" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center"><span class="form-hint">select a robot first</span></div>`;
-    html += `<label id="run-teleop-debug-vision-prompt-label">Prompt</label>`;
-    html += `<input type="text" id="run-teleop-debug-vision-prompt" class="live-during-run" placeholder="cup . bottle . hand ." value="cup . bottle . hand ." oninput="_scheduleDebugVisionApply()">`;
     html += '</div>';
-    html += `<div class="form-hint" id="run-teleop-debug-vision-hint">Lowercase, period-separated. Only list objects actually in view — spurious phrases get mislabeled. Applies ~1.5s after you stop typing.</div>`;
-    // Monitored-objects widget (SAM3 video): up to 3 open-vocab objects, each with a color.
+    // Objects widget — the universal open-vocab concept selector (grounding_dino / sam3 / sam3_video).
     html += `<div id="run-teleop-debug-vision-objects" style="display:none">`;
-    html += `<label style="display:block;margin-bottom:4px">Monitored objects (max 3)</label>`;
+    html += `<label style="display:block;margin-bottom:4px">Objects (max 3)</label>`;
     html += `<div id="run-teleop-debug-vision-objects-rows"></div>`;
     html += `<div style="display:flex;gap:8px;margin-top:6px">`;
     html += `<button class="btn-tiny" id="run-teleop-debug-vision-add-obj" onclick="_addMonitoredObject()">+ Add object</button>`;
     html += `</div>`;
-    html += `<div class="form-hint">Open-vocabulary names; each tracked in its own color. Name edits apply ~1.5s after you stop typing; color changes apply instantly.</div>`;
+    html += `<div class="form-hint">Open-vocabulary names, each in its own color. Name edits apply ~1.5s after you stop typing; color changes are instant.</div>`;
     html += `</div>`;
     html += '</div>';
     html += '</div>';
