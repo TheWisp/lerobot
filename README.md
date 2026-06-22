@@ -89,11 +89,11 @@ Open <http://127.0.0.1:8000/>, enter a Hub repo ID (e.g. `lerobot/pusht`) or a
 local dataset path, then:
 
 - **Play** episodes across all cameras with timeline scrubbing
-- **Delete** episodes you don't want (mark → save)
-- **Trim** episodes to keep only the useful frames (drag handles → save)
-- **Visualize** any episode in [Rerun](https://rerun.io/) via right-click
-
-All edits are non-destructive until you hit **Save Changes**.
+- **Trim** episodes to keep only the useful frames (→ save)
+- **Label** episodes with tags or reward / quality columns
+- **Record** new episodes by teleoperation
+- **Train** policies locally or on cloud GPUs
+- **Run** a trained policy on the robot
 
 <p align="center">
   <img alt="Record then replay an episode from the GUI" src="./media/readme/record_replay.gif" width="70%">
