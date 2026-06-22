@@ -747,18 +747,21 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
         args.append("--latency_monitor=true")
         args.append(f"--latency_output_dir={LATENCY_OUTPUT_DIR}")
 
-        # Ensure debug model is loaded if selected (lazy load, stays warm after teleop).
+        # Lazy-load S2 only (it needs teleop's image buffer); debug-vision is loaded
+        # explicitly via the Load button and stays warm independently of teleop.
         # _debug_lock is nested under _launch_lock: this lock-ordering is safe
         # because _debug_lock holders (load_debug_model / unload_debug_model)
         # never reach for _launch_lock — no cycle is possible.
         extra_env = None
         if req.debug_model and req.debug_model.policy_type:
             async with _debug_lock:
-                if _debug_process is None or _debug_process.returncode is not None:
-                    if req.debug_model.policy_type == "hvla_s2_vlm":
-                        await _launch_debug_s2(req.debug_model)
-                    elif req.debug_model.policy_type == "debug_vision":
-                        await _launch_debug_vision(req.debug_model)
+                # S2 only: it reads teleop's image buffer, so it can't run standalone.
+                # debug-vision is loaded explicitly via the Load button (reads the
+                # always-on obs stream) — never auto-loaded here.
+                if (
+                    _debug_process is None or _debug_process.returncode is not None
+                ) and req.debug_model.policy_type == "hvla_s2_vlm":
+                    await _launch_debug_s2(req.debug_model)
             # S2 needs teleop to publish into its SharedImageBuffer; debug-vision
             # reads the always-on ObservationStream, so it needs no extra env.
             if req.debug_model.policy_type == "hvla_s2_vlm":
@@ -808,11 +811,13 @@ async def start_record(req: RecordRequest) -> dict:
         extra_env = None
         if req.debug_model and req.debug_model.policy_type:
             async with _debug_lock:
-                if _debug_process is None or _debug_process.returncode is not None:
-                    if req.debug_model.policy_type == "hvla_s2_vlm":
-                        await _launch_debug_s2(req.debug_model)
-                    elif req.debug_model.policy_type == "debug_vision":
-                        await _launch_debug_vision(req.debug_model)
+                # S2 only: it reads teleop's image buffer, so it can't run standalone.
+                # debug-vision is loaded explicitly via the Load button (reads the
+                # always-on obs stream) — never auto-loaded here.
+                if (
+                    _debug_process is None or _debug_process.returncode is not None
+                ) and req.debug_model.policy_type == "hvla_s2_vlm":
+                    await _launch_debug_s2(req.debug_model)
             # S2 needs teleop to publish into its SharedImageBuffer; debug-vision
             # reads the always-on ObservationStream, so it needs no extra env.
             if req.debug_model.policy_type == "hvla_s2_vlm":
