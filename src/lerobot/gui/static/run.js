@@ -608,6 +608,7 @@ function _debugVisionOptgroup() {
         + '<option value="depth_anything" data-policy-type="debug_vision">Depth Anything V2 — depth heatmap</option>'
         + '<option value="sam2_mask" data-policy-type="debug_vision">SAM2.1 — segment (center point)</option>'
         + '<option value="sam3" data-policy-type="debug_vision">SAM3 — text-prompt masks (gated)</option>'
+        + '<option value="sam3_video" data-policy-type="debug_vision">SAM3 video — tracked masks (gated)</option>'
         + '<option value="cotracker3" data-policy-type="debug_vision">CoTracker3 — point tracks</option>'
         + '</optgroup>';
 }
@@ -638,6 +639,8 @@ function _getDebugModelConfig() {
         config.model = sel.value;
         if (sel.value === 'grounding_dino' || sel.value === 'sam3') {
             config.prompt = document.getElementById('run-teleop-debug-vision-prompt')?.value?.trim() || '';
+        } else if (sel.value === 'sam3_video') {
+            config.objects = _getMonitoredObjects();
         }
         config.cameras = (document.getElementById('run-teleop-debug-vision-cameras')?.value || '')
             .split(',').map(s => s.trim()).filter(Boolean);  // empty = all cameras
@@ -717,15 +720,58 @@ async function _unloadDebugModel() {
 let _debugModelLoaded = false;
 let _debugVisionLoaded = false;  // true when the loaded debug model emits camera overlays
 
+// Monitored objects (SAM3 video): up to 3 open-vocab names, each with a color.
+const _OBJ_PALETTE = [[239,68,68],[34,197,94],[59,130,246],[234,179,8],[168,85,247],[20,184,166]];
+let _monitoredObjects = [{name: '', color: _OBJ_PALETTE[0]}];
+
+function _renderMonitoredObjects() {
+    const box = document.getElementById('run-teleop-debug-vision-objects-rows');
+    if (!box) return;
+    box.innerHTML = _monitoredObjects.map((o, i) => {
+        const sw = _OBJ_PALETTE.map(c => {
+            const sel = c[0] === o.color[0] && c[1] === o.color[1] && c[2] === o.color[2];
+            return `<span onclick="_setMonitoredColor(${i},${c[0]},${c[1]},${c[2]})" title="set color"`
+                + ` style="display:inline-block;width:15px;height:15px;border-radius:3px;cursor:pointer;`
+                + `background:rgb(${c[0]},${c[1]},${c[2]});border:2px solid ${sel ? '#fff' : 'transparent'};`
+                + `box-shadow:0 0 0 1px #0006"></span>`;
+        }).join(' ');
+        const rm = _monitoredObjects.length > 1
+            ? `<button class="btn-tiny" onclick="_removeMonitoredObject(${i})" title="remove">✕</button>` : '';
+        return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0">`
+            + `<input type="text" class="live-during-run" placeholder="object name (e.g. robot arm)"`
+            + ` value="${_esc(o.name)}" oninput="_monitoredObjects[${i}].name=this.value" style="flex:1">`
+            + `<span style="display:flex;gap:4px">${sw}</span>${rm}</div>`;
+    }).join('');
+    const add = document.getElementById('run-teleop-debug-vision-add-obj');
+    if (add) add.disabled = _monitoredObjects.length >= 3;
+}
+function _setMonitoredColor(i, r, g, b) { _monitoredObjects[i].color = [r, g, b]; _renderMonitoredObjects(); }
+function _addMonitoredObject() {
+    if (_monitoredObjects.length >= 3) return;
+    _monitoredObjects.push({name: '', color: _OBJ_PALETTE[_monitoredObjects.length % _OBJ_PALETTE.length]});
+    _renderMonitoredObjects();
+}
+function _removeMonitoredObject(i) {
+    if (_monitoredObjects.length <= 1) return;
+    _monitoredObjects.splice(i, 1);
+    _renderMonitoredObjects();
+}
+function _getMonitoredObjects() {
+    return _monitoredObjects.map(o => ({name: (o.name || '').trim(), color: o.color})).filter(o => o.name);
+}
+
 async function _applyDebugVisionControl() {
-    const prompt = document.getElementById('run-teleop-debug-vision-prompt')?.value?.trim() || '';
+    const sel = document.getElementById('run-teleop-debug-model');
+    const body = sel?.value === 'sam3_video'
+        ? { objects: _getMonitoredObjects() }
+        : { prompt: document.getElementById('run-teleop-debug-vision-prompt')?.value?.trim() || '' };
     try {
         const res = await fetch('/api/run/debug/control', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ prompt }),
+            body: JSON.stringify(body),
         });
-        if (res.ok) showToast('Debug model', 'Prompt applied', 'success');
+        if (res.ok) showToast('Debug model', 'Applied', 'success');
         else showToast('Error', (await res.json()).detail || 'No overlay model running', 'error');
     } catch (e) {
         showToast('Error', e.message, 'error');
@@ -793,6 +839,11 @@ function _onDebugModelChange() {
         const el = document.getElementById(id);
         if (el) el.style.display = needsPrompt ? '' : 'none';
     }
+    // SAM3 video uses the monitored-objects widget instead of a raw prompt.
+    const needsObjects = isVision && sel.value === 'sam3_video';
+    const objBox = document.getElementById('run-teleop-debug-vision-objects');
+    if (objBox) objBox.style.display = needsObjects ? '' : 'none';
+    if (needsObjects) _renderMonitoredObjects();
     // Selection drives the Load button's enabled state.
     _updateDebugButtons();
 }
@@ -1112,6 +1163,16 @@ function renderRunForm() {
     html += '</div>';
     html += `<div class="form-hint" id="run-teleop-debug-vision-hint">Lowercase, period-separated. Only list objects actually in view — spurious phrases get mislabeled. Edit + Apply to update live.</div>`;
     html += `<button class="btn-tiny" id="run-teleop-debug-vision-apply" onclick="_applyDebugVisionControl()">Apply prompt</button>`;
+    // Monitored-objects widget (SAM3 video): up to 3 open-vocab objects, each with a color.
+    html += `<div id="run-teleop-debug-vision-objects" style="display:none">`;
+    html += `<label style="display:block;margin-bottom:4px">Monitored objects (max 3)</label>`;
+    html += `<div id="run-teleop-debug-vision-objects-rows"></div>`;
+    html += `<div style="display:flex;gap:8px;margin-top:6px">`;
+    html += `<button class="btn-tiny" id="run-teleop-debug-vision-add-obj" onclick="_addMonitoredObject()">+ Add object</button>`;
+    html += `<button class="btn-tiny live-during-run" id="run-teleop-debug-vision-objects-apply" onclick="_applyDebugVisionControl()">Apply</button>`;
+    html += `</div>`;
+    html += `<div class="form-hint">Open-vocabulary names; each is tracked across frames in its own color. Edit + Apply to update live.</div>`;
+    html += `</div>`;
     html += '</div>';
     html += '</div>';
     html += '</div>'; // end teleop section

@@ -579,6 +579,7 @@ class Sam3VideoAdapter(DebugVisionAdapter):
     ]
     SAM3_ID = "facebook/sam3"
     DEFAULT_PROMPT = "object"
+    MAX_OBJECTS = 3  # cap monitored concepts (keeps the per-frame cost bounded)
 
     def __init__(self, device: str = "cuda"):
         super().__init__(device)
@@ -603,11 +604,13 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         self.prompt = self.DEFAULT_PROMPT
         self._session = None
         self._concepts: list[str] = []
+        self._colors: dict[str, tuple[int, int, int]] = {}  # user-chosen color per concept
         self._shape: tuple[int, int] | None = None
 
     def _parse_concepts(self) -> list[str]:
         parts = (c.strip() for c in self.prompt.replace(",", ".").split("."))
-        return list(dict.fromkeys(c for c in parts if c)) or [self.DEFAULT_PROMPT]
+        names = list(dict.fromkeys(c for c in parts if c))[: self.MAX_OBJECTS]
+        return names or [self.DEFAULT_PROMPT]
 
     def _start_session(self, h: int, w: int) -> None:
         self._concepts = self._parse_concepts()
@@ -618,12 +621,34 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         self._shape = (h, w)
 
     def set_control(self, control: dict) -> None:
+        # Structured monitored objects [{name, color:[r,g,b]}, ...] (preferred);
+        # a recolor alone keeps tracking, only a name change restarts it.
+        objs = control.get("objects")
+        if isinstance(objs, list) and any(str(o.get("name", "")).strip() for o in objs):
+            names: list[str] = []
+            colors: dict[str, tuple[int, int, int]] = {}
+            for o in objs[: self.MAX_OBJECTS]:
+                name = str(o.get("name", "")).strip()
+                if not name:
+                    continue
+                names.append(name)
+                col = o.get("color")
+                if isinstance(col, (list, tuple)) and len(col) == 3:
+                    colors[name] = (int(col[0]), int(col[1]), int(col[2]))
+            self._colors = colors
+            new_prompt = " . ".join(dict.fromkeys(names))
+            if new_prompt and new_prompt != self.prompt:
+                self.prompt = new_prompt
+                self._session = None  # restart tracking with the new concepts
+            return
         p = control.get("prompt")
         if isinstance(p, str) and p.strip() and p.strip() != self.prompt:
             self.prompt = p.strip()
-            self._session = None  # restart tracking with the new concepts
+            self._session = None
 
     def _color(self, concept: str) -> tuple[int, int, int]:
+        if concept in self._colors:
+            return self._colors[concept]
         if concept in self._concepts:
             return _CONCEPT_PALETTE[self._concepts.index(concept) % len(_CONCEPT_PALETTE)]
         return _color_for(concept)

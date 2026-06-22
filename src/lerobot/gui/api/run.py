@@ -165,6 +165,8 @@ class DebugModelConfig(BaseModel):
     # the camera view rather than an HVLA checkpoint.
     model: str = ""  # adapter key: grounding_dino | dino_features
     prompt: str = ""
+    # monitored objects for text-prompt models: [{"name", "color":[r,g,b]}], capped in the adapter
+    objects: list[dict] = []
     cameras: list[str] = []
 
 
@@ -465,7 +467,9 @@ async def _launch_debug_vision(config: DebugModelConfig) -> None:
         "lerobot.policies.debug_vision.standalone",
         f"--model={config.model}",
     ]
-    if config.prompt:
+    if config.objects:
+        args.append(f"--objects={json.dumps(config.objects)}")
+    elif config.prompt:
         args.append(f"--prompt={config.prompt}")
     if config.cameras:
         args.append("--cameras")

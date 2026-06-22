@@ -47,7 +47,10 @@ def main() -> None:
     parser.add_argument(
         "--cameras", nargs="*", default=None, help="Camera keys to overlay (default: all in the obs stream)"
     )
-    parser.add_argument("--prompt", default=None, help="Initial text prompt (Grounding DINO)")
+    parser.add_argument("--prompt", default=None, help="Initial text prompt (Grounding DINO / SAM3)")
+    parser.add_argument(
+        "--objects", default=None, help='Initial monitored objects, JSON [{"name","color":[r,g,b]}]'
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
         "--throttle-ms", type=int, default=33, help="Min ms between inference passes (default ~30Hz)"
@@ -73,7 +76,14 @@ def main() -> None:
         _set_overlay(f"{args.model}: failed to load — see Output panel", "#f85149")
         print(f"ERROR loading '{args.model}': {e}", flush=True)
         return
-    if args.prompt:
+    if args.objects:
+        import json
+
+        try:
+            adapter.set_control({"objects": json.loads(args.objects)})
+        except Exception:
+            logger.warning("ignoring malformed --objects: %s", args.objects)
+    elif args.prompt:
         adapter.set_control({"prompt": args.prompt})
     logger.info("model '%s' ready", args.model)
 
