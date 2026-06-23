@@ -120,27 +120,27 @@ class BiSO107FollowerPredictive(BiSO107Follower):
         self.left_arm = SO107FollowerPredictive(left_arm_config)
         self.right_arm = SO107FollowerPredictive(right_arm_config)
 
-        # Cameras + RealSense depth-edge post-grab processor installation —
-        # identical to BiSO107Follower.__init__. Kept inline rather than
-        # extracted into a helper because changing it would require also
-        # changing BiSO107Follower, and the two are independent embodiments
-        # that just happen to share hardware.
-        from lerobot.cameras.realsense import RealSenseCamera
         from lerobot.cameras.utils import make_cameras_from_configs
-        from lerobot.processor import DepthEdgeOverlayProcessorStep
 
         self.cameras = make_cameras_from_configs(config.cameras)
-        for cam_key, cam in self.cameras.items():
-            if isinstance(cam, RealSenseCamera) and cam.use_depth:
-                cam.post_grab_processor = DepthEdgeOverlayProcessorStep(
-                    camera_key=cam_key,
-                    threshold_percentile=90,
-                    blur_kernel=3,
-                    dilation_kernel=2,
-                    alpha=0.7,
-                    min_depth=0.2,
-                    max_depth=0.6,
-                )
+        # TEMP (proto/gui-debug-vision): RealSense depth-edge overlay disabled here
+        # too (see BiSO107Follower.__init__ for the rationale) so debug-vision sees a
+        # clean feed. Returns later as an opt-in robot config flag. Original install:
+        #
+        # from lerobot.cameras.realsense import RealSenseCamera
+        # from lerobot.processor import DepthEdgeOverlayProcessorStep
+        #
+        # for cam_key, cam in self.cameras.items():
+        #     if isinstance(cam, RealSenseCamera) and cam.use_depth:
+        #         cam.post_grab_processor = DepthEdgeOverlayProcessorStep(
+        #             camera_key=cam_key,
+        #             threshold_percentile=90,
+        #             blur_kernel=3,
+        #             dilation_kernel=2,
+        #             alpha=0.7,
+        #             min_depth=0.2,
+        #             max_depth=0.6,
+        #         )
 
         # Per-arm IK kinematics — same pre-build logic as plain BiSO107Follower:
         # parse the URDF here (~1-2 s/arm, CPU-bound) before connect() spins

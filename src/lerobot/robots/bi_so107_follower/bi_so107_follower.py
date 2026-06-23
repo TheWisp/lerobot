@@ -66,27 +66,26 @@ class BiSO107Follower(Robot):
         self.right_arm = SO107Follower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
 
-        # Install the depth-edge overlay as an in-camera post-grab processor
-        # on every RealSense camera that has depth enabled. The grab thread
-        # consumes the depth frame and caches the overlay-RGB directly, so
-        # the control loop never sees the depth frame or pays the overlay
-        # cost. Pre-refactor this ran as a downstream ``ObservationProcessor``
-        # on the control thread (~9.8 ms p50 per iteration); pushing it to
-        # the grab thread is the same idea as the streaming-encoder offload.
-        from lerobot.cameras.realsense import RealSenseCamera
-        from lerobot.processor import DepthEdgeOverlayProcessorStep
-
-        for cam_key, cam in self.cameras.items():
-            if isinstance(cam, RealSenseCamera) and cam.use_depth:
-                cam.post_grab_processor = DepthEdgeOverlayProcessorStep(
-                    camera_key=cam_key,
-                    threshold_percentile=90,  # Edge sensitivity (85-95, higher = fewer edges)
-                    blur_kernel=3,  # Noise reduction (1, 3, 5, 7)
-                    dilation_kernel=2,  # Edge thickness (0-5)
-                    alpha=0.7,  # Edge opacity (0.0-1.0)
-                    min_depth=0.2,  # Min depth in meters (20cm)
-                    max_depth=0.6,  # Max depth in meters (60cm)
-                )
+        # TEMP (proto/gui-debug-vision): the RealSense depth-edge overlay post-grab
+        # processor is disabled so the raw camera feed is clean for debug-vision
+        # overlays. It will return as an opt-in robot config flag, not an always-on
+        # hardcoded attachment. Original install (consumes the depth frame on the
+        # grab thread and caches overlay-RGB, so the control loop never pays for it):
+        #
+        # from lerobot.cameras.realsense import RealSenseCamera
+        # from lerobot.processor import DepthEdgeOverlayProcessorStep
+        #
+        # for cam_key, cam in self.cameras.items():
+        #     if isinstance(cam, RealSenseCamera) and cam.use_depth:
+        #         cam.post_grab_processor = DepthEdgeOverlayProcessorStep(
+        #             camera_key=cam_key,
+        #             threshold_percentile=90,  # Edge sensitivity (85-95, higher = fewer edges)
+        #             blur_kernel=3,  # Noise reduction (1, 3, 5, 7)
+        #             dilation_kernel=2,  # Edge thickness (0-5)
+        #             alpha=0.7,  # Edge opacity (0.0-1.0)
+        #             min_depth=0.2,  # Min depth in meters (20cm)
+        #             max_depth=0.6,  # Max depth in meters (60cm)
+        #         )
 
         # Build the per-arm IK kinematics now: PinkKinematics parses the
         # SO-107 URDF (~1-2 s/arm, CPU-bound). Doing it here — before
@@ -329,9 +328,9 @@ class BiSO107Follower(Robot):
         """Return custom observation processor steps for this robot.
 
         Empty by default: ``DepthEdgeOverlayProcessorStep`` used to live here
-        as a downstream step on the control thread, but is now installed
-        directly on the RealSense cameras as a ``post_grab_processor`` (see
-        ``__init__``). The grab thread consumes depth and caches the overlay-
-        RGB, so the control thread doesn't pay the ~9.8 ms per-iteration cost.
+        as a downstream step on the control thread, then moved to an in-camera
+        ``post_grab_processor`` install in ``__init__``. That install is
+        currently TEMP-disabled (clean feed for debug-vision); it will return
+        as an opt-in robot config flag rather than an always-on attachment.
         """
         return []
