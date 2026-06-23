@@ -15,4 +15,6 @@ including the parts hidden by occlusion. v1 is hardcoded to the **green ring** o
 
 **No overlay after ~20 s?** Most likely depth isn't reaching the stream (the one piece
 not yet validated live) — ping Fei. Only the **top** camera (the one with depth) shows
-the overlay; the first frame pauses ~3 s to register, then it tracks live.
+the overlay. The ~15–20 s wait is the sidecar **loading its models** (one-time); after
+that, registration is sub-second and tracking runs **~90 FPS** on the 5090, so the
+overlay loop stays smooth (no freeze).
