@@ -12,6 +12,7 @@ implements infer(). The GUI discovers controls from the class attributes.
 from __future__ import annotations
 
 import colorsys
+import contextlib
 import hashlib
 import logging
 
@@ -834,6 +835,10 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         self._cam: str | None = None
         self._sessions: dict[str | None, object] = {}
         self._shapes: dict[str | None, tuple[int, int]] = {}
+        # Amodal toggle: overlays the FoundationPose-tracked 3D mesh of the FIRST concept
+        # (occluded geometry included). Runs in a sidecar (see foundationpose_client).
+        self._amodal = False
+        self._fp = None
 
     def _parse_concepts(self) -> list[str]:
         parts = (c.strip() for c in self.prompt.replace(",", ".").split("."))
@@ -869,6 +874,31 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         bg = _parse_background(control)
         if bg is not _BG_UNSET:
             self._bg_color = bg
+        if "amodal" in control:
+            self._set_amodal(bool(control["amodal"]))
+
+    def _set_amodal(self, on: bool) -> None:
+        """Start/stop the FoundationPose sidecar that overlays the first concept's
+        tracked 3D mesh (occlusion-completed). Failures degrade to no overlay."""
+        if on and self._fp is None:
+            try:
+                from lerobot.policies.debug_vision.foundationpose_client import FoundationPoseClient
+
+                self._fp = FoundationPoseClient()
+                self._amodal = True
+                logger.info("amodal: FoundationPose sidecar enabled")
+            except Exception as e:
+                logger.warning("amodal: failed to start FoundationPose sidecar: %s", e)
+                self._fp, self._amodal = None, False
+        elif not on and self._fp is not None:
+            self._fp.close()
+            self._fp, self._amodal = None, False
+            logger.info("amodal: FoundationPose sidecar disabled")
+
+    def __del__(self):
+        if getattr(self, "_fp", None) is not None:
+            with contextlib.suppress(Exception):
+                self._fp.close()
 
     def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
         torch = self._torch
@@ -889,9 +919,23 @@ class Sam3VideoAdapter(DebugVisionAdapter):
             arr = masks[k]
             m = (arr.cpu().numpy() if hasattr(arr, "cpu") else np.asarray(arr)) > 0
             masks_by_concept.setdefault(obj_to_concept.get(oid, "?"), []).append(m)
-        return _composite_concepts(
+        rgba = _composite_concepts(
             h, w, masks_by_concept, self._concepts, self._colors, self._signs, self._bg_color, self._cv2
         )
+        # Amodal: overlay the FoundationPose-tracked mesh of the first concept (only the
+        # depth camera has depth, so the sidecar no-ops on other views). Overwrites the
+        # concept overlay where it draws — that region IS the remapped 3D object.
+        if self._amodal and self._fp is not None and self._concepts:
+            ms = masks_by_concept.get(self._concepts[0], [])
+            if ms:
+                union = np.zeros((h, w), dtype=bool)
+                for m in ms:
+                    union |= m
+                overlay = self._fp.process(np.ascontiguousarray(frame_rgb), union, cam)
+                if overlay is not None:
+                    sel = overlay[..., 3] > 0
+                    rgba[sel] = overlay[sel]
+        return rgba
 
 
 def _import_cv2():
