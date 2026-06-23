@@ -452,21 +452,26 @@ class Sam2MaskAdapter(DebugVisionAdapter):
 
 
 class Sam3TrackerAdapter(DebugVisionAdapter):
-    """SAM 3.1 tracker — geometric (click/box) promptable segmentation, SAM2 lineage.
+    """SAM3 geometric tracker — click/box-promptable segmentation, SAM2 lineage.
 
     Unlike :class:`Sam3Adapter` (text concepts), this is the geometric head: a point
-    or box seeds a single high-quality mask. The adapter contract has no click channel
-    yet, so we seed the frame CENTER (same stopgap as :class:`Sam2MaskAdapter`); this
-    is the SAM 3.1 upgrade of that adapter and the backbone for the planned click
-    picker. Stateless per frame — the video-memory variant (``Sam3TrackerVideoModel``)
-    is a later step once a click can be seeded once and propagated.
+    or box seeds a single high-quality mask. ("Tracker" is the SAM2-lineage name — its
+    video form, ``Sam3TrackerVideoModel``, is the click-and-propagate object tracker.)
+    The transformers port targets the SAM 3.1 tracker architecture (`sam3_tracker.1`),
+    but the only published weights are bundled in `facebook/sam3` (tagged just "sam3"),
+    so we don't claim a literal "3.1" in the user-facing name.
+
+    The adapter contract has no click channel yet, so we seed the frame CENTER (same
+    stopgap as :class:`Sam2MaskAdapter`) — the upgrade of that adapter and the backbone
+    for the planned click picker. Stateless per frame; the video-memory variant is a
+    later step once a click can be seeded once and propagated.
 
     GATED weights — accept the Meta SAM License at https://huggingface.co/facebook/sam3
     (+ ``hf auth login``) first.
     """
 
     key = "sam3_tracker"
-    label = "SAM 3.1 tracker — segment (center point)"
+    label = "SAM3 tracker — geometric click/point segment"
     controls: list[dict] = []
     # The published standalone tracker checkpoints (danelcsb/sam3_tracker.1_*,
     # facebook/sam3_tracker.1-*) referenced in the transformers docs do not exist on
