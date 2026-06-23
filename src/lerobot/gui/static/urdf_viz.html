@@ -36,6 +36,7 @@
     "three": "/static/vendor/three.module.js",
     "three/examples/jsm/loaders/STLLoader.js": "/static/vendor/STLLoader.js",
     "three/examples/jsm/loaders/ColladaLoader.js": "/static/vendor/ColladaLoader.js",
+    "gltf-loader": "/static/vendor/GLTFLoader.js",
     "urdf-loader": "/static/vendor/URDFLoader.js"
   }
 }
@@ -61,6 +62,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from '/static/vendor/OrbitControls.js';
 import { STLLoader } from '/static/vendor/STLLoader.js';
+import { GLTFLoader } from 'gltf-loader';
 import URDFLoader from 'urdf-loader';
 
 const PARAMS = new URLSearchParams(location.search);
@@ -148,6 +150,38 @@ window.addEventListener('resize', resize);
 resize();
 
 let _polls = 0, _label = '';
+// ── scanned object (SAM 3D Objects → mesh) ────────────────────────────────
+// Overlay a scanned object's geometry in the robot base frame. Mesh + placement come
+// from /api/run/scan3d; absent → nothing drawn. Polled so a fresh scan appears.
+const _gltfLoader = new GLTFLoader();
+let _scanObject = null, _scanVersion = null;
+function _placeScan(obj, d) {
+  obj.position.set(d.position[0], d.position[1], d.position[2]);
+  obj.quaternion.set(d.quaternion[0], d.quaternion[1], d.quaternion[2], d.quaternion[3]);
+  obj.scale.setScalar(d.scale || 1);
+}
+async function refreshScanObject() {
+  try {
+    const d = await (await fetch('/api/run/scan3d/object')).json();
+    if (!d.available) {
+      if (_scanObject) { scene.remove(_scanObject); _scanObject = null; _scanVersion = null; }
+      return;
+    }
+    if (_scanObject && d.version === _scanVersion) { _placeScan(_scanObject, d); return; }
+    _gltfLoader.load('/api/run/scan3d/mesh?v=' + d.version, (gltf) => {
+      if (_scanObject) scene.remove(_scanObject);
+      _scanObject = gltf.scene; _scanVersion = d.version;
+      _scanObject.traverse((o) => {
+        if (o.isMesh) o.material = new THREE.MeshStandardMaterial({ color: 0x4fc3f7, roughness: 0.65 });
+      });
+      _placeScan(_scanObject, d);
+      scene.add(_scanObject);
+    }, undefined, () => {});
+  } catch (e) { /* ignore */ }
+}
+refreshScanObject();
+setInterval(refreshScanObject, 3000);
+
 function animate() {
   requestAnimationFrame(animate);
   controls.update();

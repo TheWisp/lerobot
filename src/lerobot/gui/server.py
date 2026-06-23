@@ -36,6 +36,7 @@ from lerobot.gui.api import (
     playback,
     robot,
     run,
+    scan3d,
 )
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
@@ -237,6 +238,7 @@ app.include_router(playback.router)
 app.include_router(edits.router)
 app.include_router(robot.router)
 app.include_router(run.router)
+app.include_router(scan3d.router)
 app.include_router(models.router)
 app.include_router(bug_reports.router)
 app.include_router(ai_setup.router)
