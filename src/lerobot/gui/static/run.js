@@ -857,7 +857,7 @@ function _toggleDebugVisionCam(btn) {
     if (_debugModelLoaded) _applyCameraFilterNow();  // cameras are a live control — toggling off skips its inference
 }
 
-async function _applyCameraFilterNow() {
+async function _applyCameraFilterNow(attempt = 0) {
     if (!_debugModelLoaded) return;
     try {
         const res = await fetch('/api/run/debug/control', {
@@ -865,7 +865,12 @@ async function _applyCameraFilterNow() {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ cameras: _getDebugVisionCameras() }),
         });
-        if (!res.ok && res.status !== 409) console.warn('camera filter apply:', (await res.json()).detail);
+        // 409 = overlay pipeline not up yet — retry so the filter isn't silently dropped.
+        if (res.status === 409 && attempt < 6) {
+            setTimeout(() => _applyCameraFilterNow(attempt + 1), 500);
+            return;
+        }
+        if (!res.ok) console.warn('camera filter apply:', (await res.json()).detail);
     } catch (e) { console.warn('camera filter apply failed:', e.message); }
 }
 

@@ -144,7 +144,10 @@ def main() -> None:
             control = overlay.read_control()
             if control:
                 if "cameras" in control:
-                    active = _resolve_active(control.get("cameras"), all_cams)
+                    new_active = _resolve_active(control.get("cameras"), all_cams)
+                    if new_active != active:
+                        logger.info("camera filter -> %s (was %s)", sorted(new_active), sorted(active))
+                        active = new_active
                 adapter.set_control(control)
             for cam in all_cams:
                 if cam not in active:
