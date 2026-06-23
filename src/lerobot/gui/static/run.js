@@ -2103,8 +2103,7 @@ async function _pollDebugFps() {
         const f = document.getElementById('run-debug-model-fps');
         if (f) {
             if (d.available && d.fps) {
-                const v = d.vram;
-                const vram = (v && v.total_gb) ? ` · ${v.used_gb.toFixed(1)}/${v.total_gb.toFixed(0)} GB VRAM` : '';
+                const vram = (typeof d.vram === 'number' && d.vram) ? ` · ${d.vram.toFixed(1)} GB model` : '';
                 f.textContent = `${d.fps.toFixed(0)} fps overlay${vram}`;
             } else {
                 f.textContent = '';

@@ -27,15 +27,15 @@ from lerobot.robots.obs_stream import ObservationStreamReader
 logger = logging.getLogger(__name__)
 
 
-def _vram_gb() -> tuple[float, float]:
-    """Device-wide VRAM ``(used_gb, total_gb)``, or ``(0, 0)`` if CUDA is unavailable."""
+def _vram_gb() -> float:
+    """The loaded model's own VRAM footprint in GB — this process's live CUDA allocation
+    (so it stays flat once warmed and climbs if the model leaks). 0.0 without CUDA."""
     with contextlib.suppress(Exception):
         import torch
 
         if torch.cuda.is_available():
-            free, total = torch.cuda.mem_get_info()
-            return (total - free) / 1e9, total / 1e9
-    return 0.0, 0.0
+            return torch.cuda.memory_allocated() / 1e9
+    return 0.0
 
 
 def _set_overlay(text: str, color: str = "#39d353") -> None:
@@ -188,9 +188,9 @@ def main() -> None:
             fps_prev = now
             if now - fps_last_emit >= 1.0 and fps_window:
                 overlay.write_fps(len(fps_window) / sum(fps_window))  # -> GUI via the shared meta block
-                used_gb, total_gb = _vram_gb()
-                if total_gb:
-                    overlay.write_vram(used_gb, total_gb)
+                model_gb = _vram_gb()
+                if model_gb:
+                    overlay.write_vram(model_gb)
                 fps_last_emit = now
     except Exception:
         logger.exception("debug-vision crashed")
