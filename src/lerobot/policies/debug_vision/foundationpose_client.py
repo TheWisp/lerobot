@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess  # nosec B404  spawning our own worker; args are fixed paths
-import time
 
 import numpy as np
 
@@ -30,14 +29,15 @@ class FoundationPoseClient:
     overlay (RGBA) for the given frame, or None when unavailable (no depth, worker
     busy/dead, or registration not yet succeeded)."""
 
-    def __init__(self, timeout_register: float = 12.0, timeout_track: float = 1.0):
+    def __init__(self):
         from lerobot.policies.debug_vision.foundationpose_ipc import FoundationPoseIPC
 
         self._ipc = FoundationPoseIPC(create=True)
         self._proc = subprocess.Popen([_SAM3D_PY, _WORKER])  # nosec B603  fixed worker path
         self._reader = None
         self._registered = False
-        self._t_reg, self._t_trk = timeout_register, timeout_track
+        self._pending_seq = None  # one in-flight request at a time
+        self._last_overlay = None  # most recent completed overlay (shown while the next computes)
         logger.info("FoundationPose sidecar spawned (pid %s)", self._proc.pid)
 
     def _depth(self, cam: str | None):
@@ -56,34 +56,33 @@ class FoundationPoseClient:
         return r[0] if r else None
 
     def process(self, rgb: np.ndarray, mask: np.ndarray, cam: str | None):
-        """rgb HxWx3 uint8 RGB, mask HxW bool (the tracked object), cam key.
-        Returns the amodal RGBA overlay or None."""
+        """Non-blocking: collect the previous result (if ready), send a new request if
+        none is in flight, and return the most recent completed overlay (or None).
+
+        The overlay therefore lags by the worker's compute time (register ~seconds the
+        first time, then ~track latency) — but infer() never blocks, so the overlay loop
+        stays smooth even while the worker is still loading its models.
+        """
         from lerobot.policies.debug_vision.foundationpose_ipc import CMD_REGISTER, CMD_TRACK, ST_OK
 
         if self._proc.poll() is not None:
-            return None  # worker died
-        if mask is None or not mask.any():
-            return None
-        depth = self._depth(cam)
-        if depth is None or depth.shape[:2] != rgb.shape[:2]:
-            return None
-        cmd = CMD_TRACK if self._registered else CMD_REGISTER
-        seq = self._ipc.send(cmd, rgb, depth, mask, _K_TOP)
-        timeout = self._t_trk if self._registered else self._t_reg
-        t0 = time.time()
-        resp = None
-        while time.time() - t0 < timeout:
-            resp = self._ipc.read_response(seq)
+            return self._last_overlay  # worker died — keep showing the last result
+        # 1) harvest a completed response for the in-flight request
+        if self._pending_seq is not None:
+            resp = self._ipc.read_response(self._pending_seq)
             if resp is not None:
-                break
-            time.sleep(0.002)
-        if resp is None:
-            return None
-        status, overlay, _pose = resp
-        if status == ST_OK:
-            self._registered = True
-            return overlay
-        return None
+                self._pending_seq = None
+                status, overlay, _pose = resp
+                if status == ST_OK:
+                    self._registered = True
+                    self._last_overlay = overlay
+        # 2) if nothing in flight, send the next frame
+        if self._pending_seq is None and mask is not None and mask.any():
+            depth = self._depth(cam)
+            if depth is not None and depth.shape[:2] == rgb.shape[:2]:
+                cmd = CMD_TRACK if self._registered else CMD_REGISTER
+                self._pending_seq = self._ipc.send(cmd, rgb, depth, mask, _K_TOP)
+        return self._last_overlay
 
     def reset(self) -> None:
         """Force a re-register on the next frame (e.g. tracking lost)."""

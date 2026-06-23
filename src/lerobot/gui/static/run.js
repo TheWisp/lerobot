@@ -919,6 +919,25 @@ async function _applyDebugVisionControl(attempt = 0) {
     } catch (e) { console.warn('debug-vision apply failed:', e.message); }
 }
 
+// SAM3-video-only: toggle the FoundationPose amodal overlay (occlusion-completed 3D
+// mesh of the first concept). Starts/stops the sidecar worker server-side.
+async function _onAmodalToggle(attempt = 0) {
+    const cb = document.getElementById('run-teleop-debug-amodal-cb');
+    if (!cb) return;
+    try {
+        const res = await fetch('/api/run/debug/control', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ amodal: cb.checked }),
+        });
+        if (res.status === 409 && attempt < 6) {  // overlay pipeline not up yet — retry
+            setTimeout(() => _onAmodalToggle(attempt + 1), 500);
+            return;
+        }
+        if (!res.ok) console.warn('amodal toggle:', (await res.json()).detail);
+    } catch (e) { console.warn('amodal toggle failed:', e.message); }
+}
+
 function _updateDebugButtons() {
     const loadBtn = document.getElementById('run-debug-load-btn');
     const unloadBtn = document.getElementById('run-debug-unload-btn');
@@ -983,6 +1002,15 @@ function _onDebugModelChange() {
     const objBox = document.getElementById('run-teleop-debug-vision-objects');
     if (objBox) objBox.style.display = needsObjects ? '' : 'none';
     if (needsObjects) _renderMonitoredObjects();
+    // Amodal 3D-tracking checkbox: SAM3 video only. Reset it when switching away so a
+    // stale "checked" can't imply the sidecar is running on a different model.
+    const amodalBox = document.getElementById('run-teleop-debug-vision-amodal');
+    const amodalOn = isVision && sel.value === 'sam3_video';
+    if (amodalBox) amodalBox.style.display = amodalOn ? '' : 'none';
+    if (!amodalOn) {
+        const cb = document.getElementById('run-teleop-debug-amodal-cb');
+        if (cb) cb.checked = false;
+    }
     // Selection drives the Load button's enabled state.
     _updateDebugButtons();
 }
@@ -1304,6 +1332,13 @@ function renderRunForm() {
     html += `<button class="btn-tiny" id="run-teleop-debug-vision-add-obj" onclick="_addMonitoredObject()" style="margin-bottom:4px">+ Add object (1/6)</button>`;
     html += `<div class="form-hint" style="margin-bottom:6px">Open-vocabulary names, each in its own color. Name edits apply ~1.5s after you stop typing; color changes are instant.</div>`;
     html += `<div id="run-teleop-debug-vision-objects-rows"></div>`;
+    html += `</div>`;
+    // Amodal 3D tracking — SAM3-video only (FoundationPose sidecar).
+    html += `<div id="run-teleop-debug-vision-amodal" style="display:none;margin-top:10px">`;
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer">`;
+    html += `<input type="checkbox" id="run-teleop-debug-amodal-cb" onchange="_onAmodalToggle()">`;
+    html += `<span>Amodal 3D tracking — overlay the first concept's FoundationPose mesh (occlusion-completed)</span></label>`;
+    html += `<div class="form-hint" style="margin-top:4px">Needs a depth camera (RealSense) + the cached SAM 3D mesh. First frame registers (~3 s pause), then tracks live. v1: the ring.</div>`;
     html += `</div>`;
     html += '</div>';
     html += '</div>';
