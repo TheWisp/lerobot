@@ -457,9 +457,7 @@ class Sam3TrackerAdapter(DebugVisionAdapter):
     Unlike :class:`Sam3Adapter` (text concepts), this is the geometric head: a point
     or box seeds a single high-quality mask. ("Tracker" is the SAM2-lineage name — its
     video form, ``Sam3TrackerVideoModel``, is the click-and-propagate object tracker.)
-    The transformers port targets the SAM 3.1 tracker architecture (`sam3_tracker.1`),
-    but the only published weights are bundled in `facebook/sam3` (tagged just "sam3"),
-    so we don't claim a literal "3.1" in the user-facing name.
+    Runs SAM 3.0 weights; SAM 3.1 isn't usable in our pinned env yet — see ``CHECKPOINT``.
 
     The adapter contract has no click channel yet, so we seed the frame CENTER (same
     stopgap as :class:`Sam2MaskAdapter`) — the upgrade of that adapter and the backbone
@@ -471,14 +469,31 @@ class Sam3TrackerAdapter(DebugVisionAdapter):
     """
 
     key = "sam3_tracker"
-    label = "SAM3 tracker — geometric click/point segment"
+    label = "SAM3 tracker — geometric click/point segment (gated)"
     controls: list[dict] = []
-    # The published standalone tracker checkpoints (danelcsb/sam3_tracker.1_*,
-    # facebook/sam3_tracker.1-*) referenced in the transformers docs do not exist on
-    # the Hub yet (404). SAM3 is a unified model, so the tracker head ships inside the
-    # gated facebook/sam3 weights — Sam3TrackerModel's checkpoint-conversion mapping
-    # pulls it out (strips the tracker_model. prefix, ignores the memory/detector keys).
-    SAM3_ID = "facebook/sam3"
+    # Weights for the geometric tracker head.
+    #
+    # We run SAM 3.0 (facebook/sam3): its model.safetensors is properly converted to the
+    # transformers key scheme, so Sam3TrackerModel loads it cleanly (verified — a
+    # center-point seed segments the target). The tracker head is extracted from the
+    # unified sam3 checkpoint by the class's _checkpoint_conversion_mapping.
+    #
+    # WHY NOT SAM 3.1 (we tried, 2026-06-23): the official facebook/sam3.1 ships ONLY
+    # Meta's raw checkpoint (sam3.1_multiplex.pt) — no HF-format safetensors — so
+    # from_pretrained can't load it. The community "conversions"
+    # (strangervisionhf/sam3.1-st-bf16, research21/sam3.1, ...) only re-saved that raw
+    # .pt as safetensors WITHOUT remapping Meta's key names to the transformers scheme
+    # (which also splits Meta's fused QKV), so loading them gives an all-MISSING model =
+    # random weights = garbage masks. And transformers 5.3.0 doesn't implement 3.1's
+    # "Object Multiplex" architecture at all ("multiplex" appears nowhere in its sam3
+    # modeling code). Real 3.1 needs BOTH a newer transformers AND a properly-converted
+    # checkpoint (run transformers' Meta->HF sam3 converter on the official .pt).
+    #
+    # TO SWITCH later: point CHECKPOINT at a transformers-format SAM 3.1 (once
+    # facebook/sam3.1 publishes safetensors, or you convert it, on a transformers that
+    # supports multiplex). The load-time guard below rejects a key-mismatched checkpoint
+    # loudly instead of silently running random weights.
+    CHECKPOINT = "facebook/sam3"
 
     def __init__(self, device: str = "cuda"):
         super().__init__(device)
@@ -489,15 +504,31 @@ class Sam3TrackerAdapter(DebugVisionAdapter):
             raise RuntimeError(_IMPORT_HINT) from e
         self._torch = torch
         self._cv2 = _import_cv2()
-        logger.info("loading %s (tracker) ...", self.SAM3_ID)
+        logger.info("loading SAM3 tracker from %s ...", self.CHECKPOINT)
         try:
-            self.processor = Sam3TrackerProcessor.from_pretrained(self.SAM3_ID)
-            self.model = Sam3TrackerModel.from_pretrained(self.SAM3_ID, dtype=torch.float16).to(device).eval()
+            self.processor = Sam3TrackerProcessor.from_pretrained(self.CHECKPOINT)
+            model, info = Sam3TrackerModel.from_pretrained(
+                self.CHECKPOINT, dtype=torch.float16, output_loading_info=True
+            )
         except Exception as e:
             raise RuntimeError(
                 f"SAM3 weights are gated — accept the Meta SAM License at "
-                f"https://huggingface.co/{self.SAM3_ID} and run `hf auth login`, then reload. ({type(e).__name__})"
+                f"https://huggingface.co/{self.CHECKPOINT} and run `hf auth login`, then reload. "
+                f"({type(e).__name__})"
             ) from e
+        # Guard against the silent-garbage failure mode: a checkpoint whose keys don't
+        # match Sam3TrackerModel (e.g. a raw-Meta-key "conversion") loads with hundreds
+        # of MISSING params — randomly initialized — and segments noise. A correct load
+        # (facebook/sam3) has ~0 missing. Fail loudly so a bad CHECKPOINT can't ship.
+        missing = info.get("missing_keys", []) if isinstance(info, dict) else []
+        if len(missing) > 8:
+            raise RuntimeError(
+                f"{self.CHECKPOINT} loaded with {len(missing)} missing parameters — its keys "
+                f"don't match Sam3TrackerModel, so the model is mostly random (garbage masks). "
+                f"Typical of raw-Meta-key checkpoints that skip the transformers key remap. "
+                f"Use a properly transformers-converted checkpoint."
+            )
+        self.model = model.to(device).eval()
 
     def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
         from PIL import Image
