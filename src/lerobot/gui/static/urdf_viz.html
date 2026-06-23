@@ -172,11 +172,16 @@ async function refreshScanObject() {
       if (_scanObject) scene.remove(_scanObject);
       _scanObject = gltf.scene; _scanVersion = d.version;
       _scanObject.traverse((o) => {
-        if (o.isMesh) o.material = new THREE.MeshStandardMaterial({ color: 0x4fc3f7, roughness: 0.65 });
+        if (o.isMesh) {
+          o.geometry.computeVertexNormals();  // SAM3D/trimesh GLB can lack normals → dark under lighting
+          o.material = new THREE.MeshStandardMaterial({ color: 0x4fc3f7, roughness: 0.6, emissive: 0x103040, side: THREE.DoubleSide });
+          o.frustumCulled = false;
+        }
       });
       _placeScan(_scanObject, d);
       scene.add(_scanObject);
-    }, undefined, () => {});
+      setStatus('scanned object v' + d.version + ' loaded');
+    }, undefined, () => setStatus('scan mesh failed to load'));
   } catch (e) { /* ignore */ }
 }
 refreshScanObject();
