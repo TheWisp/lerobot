@@ -481,6 +481,14 @@ async def _launch_debug_vision(config: DebugModelConfig) -> None:
     await _spawn_debug_logged(args)
 
 
+# Cosmetic shutdown noise from multiprocessing's shared-memory resource_tracker (our
+# FoundationPose IPC unlinks its own segments, but every process's tracker still warns
+# about them at exit). Always benign, but it reads like errors — keep it out of the GUI
+# panel. The full output is still written to the debug log file for post-mortem.
+def _is_panel_noise(line: str) -> bool:
+    return "resource_tracker" in line
+
+
 async def _tail_debug_log() -> None:
     """Tail the debug model log file, appending lines to _debug_output_lines."""
     global _debug_output_lines
@@ -498,7 +506,7 @@ async def _tail_debug_log() -> None:
             line = f.readline()
             if line:
                 line = line.rstrip("\n\r")
-                if line:
+                if line and not _is_panel_noise(line):
                     _debug_output_lines.append(line)
                     if len(_debug_output_lines) > 1000:
                         _debug_output_lines = _debug_output_lines[-1000:]

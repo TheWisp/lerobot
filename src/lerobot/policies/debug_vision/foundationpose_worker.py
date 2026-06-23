@@ -18,11 +18,17 @@ import logging
 import os
 import sys
 import time
+import warnings
 
-import cv2
-import numpy as np
-import torch
-import trimesh
+# FoundationPose's internals are noisy with torch deprecations; they read like errors in
+# the GUI debug panel but are harmless. Real failures still surface via logging.exception.
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=".*set_default_tensor_type.*")
+
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+import trimesh  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # for foundationpose_ipc
 sys.path.insert(0, os.path.expanduser("~/.cache/foundationpose"))
