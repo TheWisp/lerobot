@@ -2444,7 +2444,7 @@ async function startObsStreamViewer() {
         // initial ghost state — bookmarkable, and what the screenshot
         // script keys off.
         const ghostInit = new URLSearchParams(location.search).get('urdfGhost') === 'on' ? '&ghost=on' : '';
-        iframe.src = `/static/urdf_viz.html?v=5${ghostInit}`;
+        iframe.src = `/static/urdf_viz.html?v=6${ghostInit}`;
         iframe.style.cssText = 'width: 100%; height: 100%; border: none; background: #1a1a1a;';
         iframe.title = 'Robot visualizer';
         cell.appendChild(iframe);

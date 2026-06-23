@@ -184,8 +184,11 @@ async function refreshScanObject() {
     }, undefined, () => setStatus('scan mesh failed to load'));
   } catch (e) { /* ignore */ }
 }
-refreshScanObject();
-setInterval(refreshScanObject, 3000);
+// Off by default — scan-to-3D is opt-in (?scan=on) until the automatic path lands.
+if (PARAMS.get('scan') === 'on') {
+  refreshScanObject();
+  setInterval(refreshScanObject, 3000);
+}
 
 function animate() {
   requestAnimationFrame(animate);

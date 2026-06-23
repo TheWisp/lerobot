@@ -558,7 +558,7 @@ async function _probeAndAttachUrdfViz(datasetId, episodeIdx) {
     // script). Bump the version any time this seams (URL param contract or
     // postMessage protocol) changes so an old cached iframe doesn't stick.
     const ghostInit = _urdfGhostPref() ? '&ghost=on' : '';
-    iframe.src = `/static/urdf_viz.html?mode=dataset&v=3${ghostInit}`;
+    iframe.src = `/static/urdf_viz.html?mode=dataset&v=4${ghostInit}`;
     // Fast path: iframe.onload fires when the document is parsed, which is
     // usually before the module script has registered its message listener
     // but in practice fast enough for an idle main thread. Belt:

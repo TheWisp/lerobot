@@ -316,7 +316,36 @@ Live overlay during teleop/record showing how the current state compares to the 
 - [ ] **Research the SAM3 tracker model (`Sam3TrackerModel` / `Sam3TrackerVideoModel`).** This is the _geometric_ promptable-visual-segmentation model in the SAM3 family (SAM2 lineage) — point clicks (positive/negative) + boxes → mask, and the video variant propagates a clicked object through frames via a memory bank. It is a **separate checkpoint** from the concept `Sam3Model`, and notably it's already shipped as **`facebook/sam3_tracker.1`** (i.e. the SAM 3.1 tracker; both classes are exported in transformers 5.3.0). It's the backbone for click-to-segment, hover-preview, and the picker. Research: checkpoint sizes (hiera-tiny/small/…), latency at our 1–6 object scale, whether it should replace the `sam2_mask` adapter, and how it integrates as a debug-vision adapter (single-frame click vs video-session propagation). Pairs with the picker item above.
 - [x] **SAM 3.1 perf benefit — checked (no win for our usage).** transformers 5.3.0 has **no separate 3.1 concept model**: `facebook/sam3` is the only concept checkpoint, so there's nothing to A/B for the live text-concept overlay. SAM 3.1's headline gains (Object Multiplex, ~7× at 128 objects, 32 FPS) live in the **tracker** (`sam3_tracker.1`, already the shipped version) and only help the _many-object_ regime; at our ≤6 concepts the benefit is marginal. Revisit only if we adopt the tracker-based picker with large object counts.
 - [ ] **SAM3 video is slow + wrong for multi-view — per-camera sessions.** `Sam3VideoAdapter` keeps a SINGLE `self._session`, but the standalone calls `adapter.infer(frame)` once per active camera _without passing the camera identity_, so every view feeds one tracking session interleaved. That corrupts tracking (one memory bank fed N incompatible viewpoints) and adds churn. Fix: key sessions by camera (`infer(frame, cam=...)` or a per-camera adapter instance). Separately, image (`sam3`) being much faster than video is **mostly inherent**: detection-per-frame with the shared encoder (encode once + ~14 ms/concept) is lighter than the video model's per-frame memory-attention + per-object propagation, which also can't reuse the shared-encoder trick. Consider making `sam3` the default for the live overlay and reserving `sam3_video` for when temporal identity through occlusion is actually needed.
-- [ ] **SAM3D → 3D objects in the URDF scene (design).** Use SAM3 masks (per detected object) + SAM 3D Objects to lift each segmented object into a mesh and place it in the virtual scene alongside the URDF robot. The SAM 3D path already runs on the 5090 (see do-as-i-do work / `~/.cache/sam3d`, `run_sam3d.py` image+mask→mesh). Open design: per-object mask → SAM3D mesh → metric scale + pose (needs depth/table-plane or the click-target extrinsic, same as do-as-i-do) → load into the URDF viewer's scene graph as a sibling of the robot. Pairs with the URDF viz work in [project_urdf_viz_calibration]. Cost: SAM3D is heavy (seconds per object, offline), so this is a "freeze frame → reconstruct → drop into scene" action, not live.
+
+### Scan-to-3D (SAM 3D Objects → mesh in the URDF viewer)
+
+**Proven (prototype on `proto/gui-debug-vision`):** SAM3 mask → SAM 3D Objects mesh → rendered in the URDF viewer's three.js scene alongside the robot. Verified end-to-end on a real `cylinder_ring` frame (SAM3 "cylinder" 0.75 → SAM3D → normalized GLB → displayed). Files:
+
+- `gui/api/scan3d.py` — serves `/scan3d/object` (availability + base-frame placement + `version`) and `/scan3d/mesh` (GLB). Cache: `~/.cache/.../gui/scan3d/`.
+- `gui/api/scan3d_worker.py` — frame + prompt → SAM3 mask → SAM 3D (subprocess in the isolated `~/.cache/sam3d` venv; SAM3 in the main env, SAM3D + trimesh in the venv) → cache.
+- `gui/static/urdf_viz.html` — vendored GLTFLoader (+ BufferGeometryUtils, r169) loads the GLB and overlays it; polls `/scan3d/object`, reloads geometry only when `version` bumps (cheap reposition otherwise).
+
+**Cleanup state:** the scanned-object display is gated **off by default** (`?scan=on` on the iframe); the cache mesh + worker are inert until the automatic path below is built. Nothing generates or shows by default.
+
+**Findings / decisions:**
+
+- **Two clocks.** Geometry is generated **once** (SAM3D ~seconds, offline); pose updates **live** (cheap). The viewer is already built for this — it repositions the resident mesh on every poll and only reloads the GLB when `version` changes.
+- **RealSense depth is NOT required.** Options: monocular depth (the **Depth-Anything** adapter we already have), known metric size (the scan itself yields the object's dimensions), or multi-view triangulation. RGB-only is the field norm. Triangulation was **rejected** — it forces SAM on ≥2 views, and each view is expensive (~14 fps/view).
+- **Real placement is blocked on the camera→base extrinsic** (hand-eye). It depends on _reported FK_, not URDF render accuracy, and rough is fine for an occupancy view → a ~20-pose **eye-to-hand** capture (AprilTag on the gripper, `cv2.calibrateHandEye`, `AX=XB`; tag-to-gripper offset cancels).
+- **Scanning must be AUTOMATIC**, not a manual "Scan" button — piggyback on the SAM3 detection overlay (detected object → background SAM3D → place), so there's no separate prompt/click.
+- **Perf reality:** SAM3D is seconds/object; SAM3 itself is the gating cost for live use (see SAM3-video notes above).
+
+**Inspiration (real2sim digital twins, 2025–26 — web-searched):** [SyncTwin](https://arxiv.org/html/2601.09920v2) (segment → **asset-based completion** → pose-track → render-in-sim, closed loop, occlusion-robust — almost exactly our pipeline); [FoundationPose](https://arxiv.org/pdf/2504.00639) (live 6-DoF of _novel_ objects from RGB(-D) given the mesh — the proper live-pose answer, incl. orientation); Gaussian-splatting twins ([VR-Robo](https://arxiv.org/html/2502.01536v3), [RoboGSim](https://arxiv.org/pdf/2411.11839)) (whole-scene **occupancy** alternative — no per-object segmentation/generation); Digital-Cousins-style **asset retrieval** over per-object generation; **monocular-depth back-projection** (mask × Depth-Anything → visible-surface cloud — cheaper than SAM3D's full-object hallucination and an honest "occupancy").
+
+**Roadmap (ordered):**
+
+- [ ] **SAM 3.1 integration** (the `sam3_tracker.1` model) — start here after compact.
+- [ ] **Automatic scan**: detected SAM3 object → debounce → background SAM3D → cache + place (no button). Reuse by label so a re-seen object isn't regenerated.
+- [ ] **Hand-eye calibration** (camera→base extrinsic) — the gate for real placement; ~20-pose eye-to-hand pass. Pairs with [project_urdf_viz_calibration].
+- [ ] **Monocular-depth placement**: Depth-Anything on the masked region → metric position in camera frame → base frame (via the extrinsic). Replaces the placeholder offset.
+- [ ] **Asset library / retrieval**: scan once, reuse the mesh by SAM3 label (faster, stable) — the SyncTwin/Digital-Cousins pattern.
+- [ ] **Live pose tracking**: mask + depth centroid → translation (v1); FoundationPose-style for full 6-DoF as it's manipulated.
+- [ ] **Evaluate Gaussian splatting** for whole-scene occupancy (vs per-object meshes).
 
 ## Robot Tab
 
