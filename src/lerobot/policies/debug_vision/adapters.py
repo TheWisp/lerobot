@@ -451,6 +451,81 @@ class Sam2MaskAdapter(DebugVisionAdapter):
         return rgba
 
 
+class Sam3TrackerAdapter(DebugVisionAdapter):
+    """SAM 3.1 tracker — geometric (click/box) promptable segmentation, SAM2 lineage.
+
+    Unlike :class:`Sam3Adapter` (text concepts), this is the geometric head: a point
+    or box seeds a single high-quality mask. The adapter contract has no click channel
+    yet, so we seed the frame CENTER (same stopgap as :class:`Sam2MaskAdapter`); this
+    is the SAM 3.1 upgrade of that adapter and the backbone for the planned click
+    picker. Stateless per frame — the video-memory variant (``Sam3TrackerVideoModel``)
+    is a later step once a click can be seeded once and propagated.
+
+    GATED weights — accept the Meta SAM License at https://huggingface.co/facebook/sam3
+    (+ ``hf auth login``) first.
+    """
+
+    key = "sam3_tracker"
+    label = "SAM 3.1 tracker — segment (center point)"
+    controls: list[dict] = []
+    # The published standalone tracker checkpoints (danelcsb/sam3_tracker.1_*,
+    # facebook/sam3_tracker.1-*) referenced in the transformers docs do not exist on
+    # the Hub yet (404). SAM3 is a unified model, so the tracker head ships inside the
+    # gated facebook/sam3 weights — Sam3TrackerModel's checkpoint-conversion mapping
+    # pulls it out (strips the tracker_model. prefix, ignores the memory/detector keys).
+    SAM3_ID = "facebook/sam3"
+
+    def __init__(self, device: str = "cuda"):
+        super().__init__(device)
+        try:
+            import torch
+            from transformers import Sam3TrackerModel, Sam3TrackerProcessor
+        except ImportError as e:
+            raise RuntimeError(_IMPORT_HINT) from e
+        self._torch = torch
+        self._cv2 = _import_cv2()
+        logger.info("loading %s (tracker) ...", self.SAM3_ID)
+        try:
+            self.processor = Sam3TrackerProcessor.from_pretrained(self.SAM3_ID)
+            self.model = Sam3TrackerModel.from_pretrained(self.SAM3_ID, dtype=torch.float16).to(device).eval()
+        except Exception as e:
+            raise RuntimeError(
+                f"SAM3 weights are gated — accept the Meta SAM License at "
+                f"https://huggingface.co/{self.SAM3_ID} and run `hf auth login`, then reload. ({type(e).__name__})"
+            ) from e
+
+    def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
+        from PIL import Image
+
+        torch, cv2 = self._torch, self._cv2
+        h, w = frame_rgb.shape[:2]
+        cx, cy = w // 2, h // 2
+        inp = self.processor(
+            images=Image.fromarray(frame_rgb),
+            input_points=[[[[cx, cy]]]],
+            input_labels=[[[1]]],
+            return_tensors="pt",
+        ).to(self.device)
+        # fp16 model: match the float inputs (pixel_values + point coords). Coords here
+        # are << 2048, so fp16 represents them exactly — no localization error.
+        for k, v in list(inp.items()):
+            if torch.is_tensor(v) and v.dtype == torch.float32:
+                inp[k] = v.half()
+        with torch.inference_mode():
+            out = self.model(**inp, multimask_output=True)
+        masks = self.processor.post_process_masks(out.pred_masks.cpu(), inp["original_sizes"])[0]
+        masks = masks.reshape(-1, masks.shape[-2], masks.shape[-1])  # (num, H, W)
+        scores = out.iou_scores.reshape(-1)
+        mask = masks[int(scores.argmax())].numpy() > 0
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        col = _color_for("seg")
+        rgba[mask] = (*col, 120)
+        cnts, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
+        cv2.drawMarker(rgba, (cx, cy), (255, 255, 255, 255), cv2.MARKER_CROSS, 16, 2)
+        return rgba
+
+
 class Sam3Adapter(DebugVisionAdapter):
     """SAM3 text/concept-promptable instance segmentation. GATED weights — accept the
     Meta SAM License at https://huggingface.co/facebook/sam3 (+ `hf auth login`) first."""
@@ -797,6 +872,7 @@ ADAPTERS: dict[str, type[DebugVisionAdapter]] = {
     DinoFeatureAdapter.key: DinoFeatureAdapter,
     DepthAnythingAdapter.key: DepthAnythingAdapter,
     Sam2MaskAdapter.key: Sam2MaskAdapter,
+    Sam3TrackerAdapter.key: Sam3TrackerAdapter,
     Sam3Adapter.key: Sam3Adapter,
     Sam3VideoAdapter.key: Sam3VideoAdapter,
     CoTracker3Adapter.key: CoTracker3Adapter,

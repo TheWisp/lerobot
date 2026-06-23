@@ -607,6 +607,7 @@ function _debugVisionOptgroup() {
         + '<option value="dino_features" data-policy-type="debug_vision">DINOv2 — feature heatmap</option>'
         + '<option value="depth_anything" data-policy-type="debug_vision">Depth Anything V2 — depth heatmap</option>'
         + '<option value="sam2_mask" data-policy-type="debug_vision">SAM2.1 — segment (center point)</option>'
+        + '<option value="sam3_tracker" data-policy-type="debug_vision">SAM 3.1 tracker — segment (center point, gated)</option>'
         + '<option value="sam3" data-policy-type="debug_vision">SAM3 — text-prompt masks (gated)</option>'
         + '<option value="sam3_video" data-policy-type="debug_vision">SAM3 video — tracked masks (gated)</option>'
         + '<option value="cotracker3" data-policy-type="debug_vision">CoTracker3 — point tracks</option>'
