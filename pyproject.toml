@@ -467,6 +467,7 @@ default.extend-ignore-identifiers-re = [
     # (`stacked_ba`, `features_ba`, "AB[0] should match BA[1]" comment).
     "ba",
     "BA",
+    "estimater",  # FoundationPose's module name (estimater.py) — third-party, can't rename
     # Compound English words appearing in code comments + docs:
     # "mis-load" (test_rlt.py), "mis-time" (test_intervention.py).
     "mis",
