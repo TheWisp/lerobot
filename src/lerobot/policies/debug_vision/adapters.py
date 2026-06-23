@@ -803,12 +803,11 @@ class Sam3VideoAdapter(DebugVisionAdapter):
     SAM3_ID = "facebook/sam3"
     DEFAULT_PROMPT = "object"
     MAX_OBJECTS = 6  # cap monitored concepts (shared encoder keeps multi-concept cheap)
-    # Streaming-memory retention. The session stores per-frame state forever (designed
-    # for finite videos) — ~6 MB/frame on the GPU — so an unbounded live stream OOMs in
-    # minutes. The model only attends to the last num_maskmem(=7) dense frames + the
-    # object-pointer horizon (~16), so keeping ~32 frames (~2 s @ 14 fps) is lossless and
-    # keeps GPU flat (~0.2 GB). Measured: see gui/TODO.md.
-    MEMORY_FRAMES = 32
+    # NOTE: the streaming session stores per-frame state forever (~6 MB/frame GPU) so a long
+    # live stream OOMs. We previously bounded it by pruning old frames, but that breaks the
+    # detector's track association (spawns phantom instances, then the track goes stale and
+    # never recovers). Reverted to the honest unbounded baseline pending the right API usage
+    # — see SAM3_VIDEO_STREAMING_OOM.md.
 
     def __init__(self, device: str = "cuda"):
         super().__init__(device)
@@ -841,11 +840,6 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         self._cam: str | None = None
         self._sessions: dict[str | None, object] = {}
         self._shapes: dict[str | None, tuple[int, int]] = {}
-        # sam3_video is a detector+tracker: it keeps finding NEW matches of a concept and
-        # accumulating them (measured ~1 spurious "green ring" every ~3s on a live stream),
-        # which clutters the view and destabilizes the amodal seed. We monitor *specific*
-        # objects, so lock each concept to ONE persistent instance: {cam: {concept: obj_id}}.
-        self._locks: dict[str | None, dict[str, int]] = {}
         # Amodal toggle: overlays the FoundationPose-tracked 3D mesh of the FIRST concept
         # (occluded geometry included). Runs in a sidecar (see foundationpose_client).
         self._amodal = False
@@ -862,46 +856,6 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         self.processor.add_text_prompt(session, self._concepts)
         self._sessions[cam] = session
         self._shapes[cam] = (h, w)
-        self._locks[cam] = {}  # fresh session -> drop any per-concept instance locks
-
-    def _lock_single(
-        self, cam: str | None, per_concept_objs: dict[str, dict[int, np.ndarray]]
-    ) -> dict[str, list[np.ndarray]]:
-        """Collapse each concept's detections to ONE persistent instance. Keep the locked
-        object if it's still tracked; otherwise (first sighting, or it truly vanished)
-        re-acquire the largest current instance. Stable single track per monitored object."""
-        locks = self._locks.setdefault(cam, {})
-        out: dict[str, list[np.ndarray]] = {}
-        for concept in self._concepts:
-            objs = per_concept_objs.get(concept, {})
-            if not objs:
-                out[concept] = []
-                continue
-            oid = locks.get(concept)
-            if oid not in objs:  # no lock yet, or the locked instance dropped -> re-acquire
-                oid = max(objs, key=lambda o: int(objs[o].sum()))
-                locks[concept] = oid
-            out[concept] = [objs[oid]]
-        return out
-
-    def _prune_session(self, session) -> None:
-        """Bound the streaming session's memory — it never evicts per-frame state, so a
-        live stream OOMs the GPU in minutes (~6 MB/frame). Keep the conditioning/prompt
-        frames + only the last MEMORY_FRAMES tracked frames (the model attends no further):
-        drop older non-cond memory features + stored pixels. Keeps GPU flat, no accuracy loss."""
-        keep = self.MEMORY_FRAMES
-        try:
-            for od in getattr(session, "output_dict_per_obj", {}).values():
-                nc = od.get("non_cond_frame_outputs", {})
-                if len(nc) > keep:
-                    for f in sorted(nc)[:-keep]:
-                        del nc[f]
-            pf = getattr(session, "processed_frames", None)
-            if pf is not None and len(pf) > keep:
-                for f in sorted(pf)[:-keep]:
-                    del pf[f]
-        except Exception:
-            logger.debug("sam3_video session prune failed", exc_info=True)
 
     def set_camera(self, cam: str | None) -> None:
         self._cam = cam  # which camera's tracking session infer() should use
@@ -963,16 +917,13 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         with torch.inference_mode():
             out = self.model(inference_session=session, frame=pv)
         res = self.processor.postprocess_outputs(session, out, original_sizes=[[h, w]])
-        self._prune_session(session)  # bound streaming memory (else OOM, see MEMORY_FRAMES)
         obj_to_concept = {oid: p for p, oids in res["prompt_to_obj_ids"].items() for oid in oids}
         masks = res["masks"]
-        per_concept_objs: dict[str, dict[int, np.ndarray]] = {c: {} for c in self._concepts}
+        masks_by_concept: dict[str, list[np.ndarray]] = {c: [] for c in self._concepts}
         for k, oid in enumerate(res["object_ids"].tolist()):
             arr = masks[k]
             m = (arr.cpu().numpy() if hasattr(arr, "cpu") else np.asarray(arr)) > 0
-            per_concept_objs.setdefault(obj_to_concept.get(oid, "?"), {})[oid] = m
-        # Lock to one persistent instance per concept (the detector keeps adding matches).
-        masks_by_concept = self._lock_single(cam, per_concept_objs)
+            masks_by_concept.setdefault(obj_to_concept.get(oid, "?"), []).append(m)
         rgba = _composite_concepts(
             h, w, masks_by_concept, self._concepts, self._colors, self._signs, self._bg_color, self._cv2
         )
