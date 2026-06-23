@@ -70,7 +70,8 @@ class SharedOverlayBuffer:
             assert cameras, "writer must pass cameras={cam_key: (h, w)}"
             self.cameras = {k: (int(v[0]), int(v[1])) for k, v in cameras.items()}
             self.model = model
-            _write_json(self._meta, {"cameras": self.cameras, "model": model})
+            self._meta_dict = {"cameras": self.cameras, "model": model, "fps": 0.0}
+            _write_json(self._meta, self._meta_dict)
         else:
             meta = _read_json(self._meta)
             self.cameras = {k: (int(v[0]), int(v[1])) for k, v in meta.get("cameras", {}).items()}
@@ -108,6 +109,15 @@ class SharedOverlayBuffer:
 
     def write_control(self, control: dict) -> None:
         _write_json(self._control, control)
+
+    def write_fps(self, fps: float) -> None:
+        """Writer: publish the current overlay frame rate via the meta block."""
+        self._meta_dict["fps"] = round(float(fps), 1)
+        _write_json(self._meta, self._meta_dict)
+
+    def read_fps(self) -> float:
+        """Reader: latest overlay frame rate the writer published (0.0 if none)."""
+        return float(_read_json(self._meta).get("fps", 0.0))
 
     def cleanup(self) -> None:
         for block in (*self._blocks.values(), self._meta, self._control):

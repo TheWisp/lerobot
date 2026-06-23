@@ -113,24 +113,32 @@ def _composite_concepts(h, w, masks_by_concept, concepts, colors, signs, bg_colo
     Background is painted first so positive fills + contours sit on top.
     """
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    # Fast path: with no negative concepts and a transparent background (the common
+    # case) we skip the per-mask full-frame ops (carve + detected-union) entirely —
+    # they cost ~2 HxW boolean passes PER mask, which dominates when a concept like
+    # "object" returns dozens of instances.
+    has_neg = any(signs.get(c, "+") == "-" for c in concepts)
+    need_detected = bg_color is not None
     neg = np.zeros((h, w), dtype=bool)
-    for c in concepts:
-        if signs.get(c, "+") == "-":
-            for m in masks_by_concept.get(c, []):
-                neg |= m
-    detected = np.zeros((h, w), dtype=bool)
+    if has_neg:
+        for c in concepts:
+            if signs.get(c, "+") == "-":
+                for m in masks_by_concept.get(c, []):
+                    neg |= m
+    detected = np.zeros((h, w), dtype=bool) if need_detected else None
     draw: list[tuple[np.ndarray, tuple[int, int, int]]] = []
     for c in concepts:
         if signs.get(c, "+") == "-":
             continue
         col = _concept_color(c, concepts, colors)
         for m in masks_by_concept.get(c, []):
-            mm = m & ~neg
-            if not mm.any():
+            mm = (m & ~neg) if has_neg else m
+            if has_neg and not mm.any():
                 continue
             draw.append((mm, col))
-            detected |= mm
-    if bg_color is not None:
+            if need_detected:
+                detected |= mm
+    if need_detected:
         rgba[~detected] = (*bg_color, fill_alpha)
     for mm, col in draw:
         rgba[mm] = (*col, fill_alpha)

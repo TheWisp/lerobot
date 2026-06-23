@@ -767,7 +767,7 @@ function _renderMonitoredObjects() {
     const clr = !_backgroundColor;
     const bgrow = `<div style="${ROW}">`
         + `<span style="${SLOT}"></span>`
-        + `<span style="flex:1;min-width:0;opacity:.7">Background <span style="opacity:.6">(inverse)</span></span>`
+        + `<span style="flex:1;min-width:0;opacity:.6;font-size:13px">Background</span>`
         + `<span style="${PAL}">${_paletteRow(_backgroundColor, '_setBackgroundColor(')}</span>`
         + `<button class="btn-tiny${clr ? ' btn-accent' : ''}" style="${SLOT}" onclick="_setBackgroundColor(null)" title="transparent (don't paint)">∅</button></div>`;
     box.innerHTML = rows + bgrow;
@@ -1969,10 +1969,6 @@ function connectOutputSSE() {
                 el.style.display = data.overlay.text ? 'block' : 'none';
             }
         }
-        if (data.fps !== undefined) {
-            const f = document.getElementById('run-debug-model-fps');
-            if (f) f.textContent = _debugModelLoaded ? `${data.fps.toFixed(0)} fps overlay` : '';
-        }
         if (data.line !== undefined) {
             appendTerminalLine(data.line);
         }
@@ -2059,6 +2055,19 @@ function _connectDebugOutputSSE() {
 // TODO: generalize — currently hardcoded for HVLA S2 subtask text.
 // When multiple debug model types exist, the model should declare its
 // output schema and the user picks which field to overlay.
+
+// Overlay FPS: the standalone publishes its measured loop rate into the shared meta
+// block; we read it from /debug/overlay/meta (~1 Hz) — no log parsing.
+async function _pollDebugFps() {
+    if (!_debugModelLoaded) return;
+    try {
+        const res = await fetch('/api/run/debug/overlay/meta');
+        if (!res.ok) return;
+        const d = await res.json();
+        const f = document.getElementById('run-debug-model-fps');
+        if (f) f.textContent = (d.available && d.fps) ? `${d.fps.toFixed(0)} fps overlay` : '';
+    } catch (e) { /* ignore */ }
+}
 
 // Called from the camera poll loop (startObsStreamViewer) — no separate timer.
 async function _pollSubtaskOverlay() {
@@ -2465,6 +2474,7 @@ async function startObsStreamViewer() {
         }
         _pollSubtaskOverlay();
         _pollOverlay(camKeys, imgElements, canvasElements, seq);
+        if (seq % 20 === 0) _pollDebugFps();  // ~1 Hz overlay FPS readout from the shared meta block
     }, 50);
 }
 

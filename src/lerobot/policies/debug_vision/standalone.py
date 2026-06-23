@@ -176,7 +176,7 @@ def main() -> None:
             fps_window.append(now - fps_prev)
             fps_prev = now
             if now - fps_last_emit >= 1.0 and fps_window:
-                print(f"##FPS:{len(fps_window) / sum(fps_window):.1f}##", flush=True)
+                overlay.write_fps(len(fps_window) / sum(fps_window))  # -> GUI via the shared meta block
                 fps_last_emit = now
     except Exception:
         logger.exception("debug-vision crashed")
