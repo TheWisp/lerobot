@@ -1336,7 +1336,7 @@ function renderRunForm() {
     // Amodal 3D tracking — SAM3-video only (FoundationPose sidecar).
     html += `<div id="run-teleop-debug-vision-amodal" style="display:none;margin-top:10px">`;
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer">`;
-    html += `<input type="checkbox" id="run-teleop-debug-amodal-cb" onchange="_onAmodalToggle()">`;
+    html += `<input type="checkbox" class="live-during-run" id="run-teleop-debug-amodal-cb" onchange="_onAmodalToggle()">`;
     html += `<span>Amodal 3D tracking — overlay the first concept's FoundationPose mesh (occlusion-completed)</span></label>`;
     html += `<div class="form-hint" style="margin-top:4px">Needs a depth camera (RealSense) + the cached SAM 3D mesh. First frame registers (~3 s pause), then tracks live. v1: the ring.</div>`;
     html += `</div>`;
