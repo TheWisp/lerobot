@@ -703,6 +703,8 @@ async function _unloadDebugModel() {
             if (status) status.textContent = 'Not loaded';
             _debugModelLoaded = false;
             _debugVisionLoaded = false;
+            const fpsEl = document.getElementById('run-debug-model-fps');
+            if (fpsEl) fpsEl.textContent = '';
             _clearOverlayCanvases();
             _disconnectDebugOutputSSE();
             if (data.status !== 'not_loaded') showToast('Debug model', 'Model unloaded', 'info');
@@ -725,45 +727,49 @@ let _monitoredObjects = [{name: '', color: _OBJ_PALETTE[0], sign: '+'}];
 let _backgroundColor = null;  // null = transparent (default); else [r,g,b] fills the inverse region
 
 function _swatchHTML(rgb, selected, onclick, title) {
-    const bg = rgb ? `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`
-        : 'repeating-conic-gradient(#bbb 0% 25%,#fff 0% 50%) 50%/8px 8px';  // transparent = checkerboard
     return `<span onclick="${onclick}" title="${title}" style="display:inline-block;width:15px;height:15px;`
-        + `border-radius:3px;cursor:pointer;background:${bg};border:2px solid ${selected ? '#fff' : 'transparent'};`
-        + `box-shadow:0 0 0 1px #0006"></span>`;
+        + `border-radius:3px;cursor:pointer;background:rgb(${rgb[0]},${rgb[1]},${rgb[2]});`
+        + `border:2px solid ${selected ? '#fff' : 'transparent'};box-shadow:0 0 0 1px #0006"></span>`;
 }
-function _paletteRow(selColor, setter, allowTransparent) {
-    // setter e.g. '_setMonitoredColor(2,' — we append 'r,g,b)' or 'null)'.
+function _paletteRow(selColor, setter) {
+    // setter e.g. '_setMonitoredColor(2,' — we append 'r,g,b)'.
     const eq = c => selColor && c[0] === selColor[0] && c[1] === selColor[1] && c[2] === selColor[2];
-    let html = _OBJ_PALETTE.map(c => _swatchHTML(c, eq(c), `${setter}${c[0]},${c[1]},${c[2]})`, 'set color')).join(' ');
-    if (allowTransparent) html += ' ' + _swatchHTML(null, !selColor, `${setter}null)`, "transparent (don't paint)");
-    return html;
+    return _OBJ_PALETTE.map(c => _swatchHTML(c, eq(c), `${setter}${c[0]},${c[1]},${c[2]})`, 'set color')).join(' ');
 }
 
 function _renderMonitoredObjects() {
     const box = document.getElementById('run-teleop-debug-vision-objects-rows');
     if (!box) return;
+    const anyNamed = _monitoredObjects.some(o => (o.name || '').trim());
     const rows = _monitoredObjects.map((o, i) => {
         const neg = o.sign === '-';
-        const sgn = `<button class="btn-tiny" onclick="_toggleMonitoredSign(${i})" style="width:24px;font-weight:bold;`
+        const sgn = `<button class="btn-tiny" onclick="_toggleMonitoredSign(${i})" style="width:22px;font-weight:bold;`
             + `color:${neg ? '#f87171' : '#34d399'}" title="${neg ? 'excluded (negative) — click to include'
             : 'included (positive) — click to exclude'}">${neg ? '−' : '+'}</button>`;
-        const sw = _paletteRow(o.color, `_setMonitoredColor(${i},`, false);
-        const rm = _monitoredObjects.length > 1
-            ? `<button class="btn-tiny" onclick="_removeMonitoredObject(${i})" title="remove">✕</button>` : '';
-        return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0">${sgn}`
-            + `<input type="text" class="live-during-run" placeholder="object name (e.g. robot arm)"`
+        // Row 0 shows the implicit default concept ("object") as a faded placeholder when nothing is named.
+        const ph = (i === 0 && !anyNamed) ? 'object' : 'object name (e.g. robot arm)';
+        const sw = _paletteRow(o.color, `_setMonitoredColor(${i},`);
+        const trail = _monitoredObjects.length > 1
+            ? `<button class="btn-tiny" onclick="_removeMonitoredObject(${i})" title="remove">✕</button>`
+            : `<span style="width:22px"></span>`;  // reserve the slot so palettes stay aligned
+        return `<div style="display:flex;align-items:center;gap:6px;margin:4px 0">${sgn}`
+            + `<input type="text" class="live-during-run" placeholder="${ph}"`
             + ` value="${_esc(o.name)}" oninput="_setMonitoredName(${i}, this.value)" style="flex:1">`
-            + `<span style="display:flex;gap:4px">${sw}</span>${rm}</div>`;
+            + `<span style="display:flex;gap:4px">${sw}</span>${trail}</div>`;
     }).join('');
-    // Always-present background row: the inverse of everything detected (transparent by default).
-    const bgsw = _paletteRow(_backgroundColor, '_setBackgroundColor(', true);
-    const bgrow = `<div style="display:flex;align-items:center;gap:8px;margin:8px 0 2px;border-top:1px solid #ffffff22;padding-top:8px">`
-        + `<span style="width:24px;text-align:center;opacity:.5" title="the region not covered by any detection">⌗</span>`
-        + `<span style="flex:1;opacity:.7">Background (inverse of all detected)</span>`
-        + `<span style="display:flex;gap:4px">${bgsw}</span></div>`;
+    // Always-present background row (inverse of all detected); ∅ = transparent (default).
+    const clr = !_backgroundColor;
+    const bgrow = `<div style="display:flex;align-items:center;gap:6px;margin:4px 0">`
+        + `<span style="width:22px"></span>`
+        + `<span style="flex:1;opacity:.7">Background <span style="opacity:.6">(inverse)</span></span>`
+        + `<span style="display:flex;gap:4px">${_paletteRow(_backgroundColor, '_setBackgroundColor(')}</span>`
+        + `<button class="btn-tiny${clr ? ' btn-accent' : ''}" onclick="_setBackgroundColor(null)" title="transparent (don't paint)">∅</button></div>`;
     box.innerHTML = rows + bgrow;
     const add = document.getElementById('run-teleop-debug-vision-add-obj');
-    if (add) add.disabled = _monitoredObjects.length >= _MAX_OBJECTS;
+    if (add) {
+        add.disabled = _monitoredObjects.length >= _MAX_OBJECTS;
+        add.textContent = `+ Add object (${_monitoredObjects.length}/${_MAX_OBJECTS})`;
+    }
 }
 // Inline handlers carry the row's render-time index. Guard every index access so a
 // stale row (DOM/state desync) can't throw — a throw in the name handler would skip
@@ -802,7 +808,14 @@ function _removeMonitoredObject(i) {
     _applyDebugVisionNow();
 }
 function _getMonitoredObjects() {
-    return _monitoredObjects.map(o => ({name: (o.name || '').trim(), color: o.color, sign: o.sign || '+'})).filter(o => o.name);
+    const named = _monitoredObjects
+        .map(o => ({name: (o.name || '').trim(), color: o.color, sign: o.sign || '+'}))
+        .filter(o => o.name);
+    if (named.length) return named;
+    // Nothing named → the implicit default concept "object", colored from row 0 so the
+    // palette actually drives its color (otherwise it always rendered the fallback red).
+    const o = _monitoredObjects[0] || {};
+    return [{name: 'object', color: o.color, sign: o.sign || '+'}];
 }
 function _getDebugBackground() {
     return { color: _backgroundColor };  // null = transparent
@@ -1256,7 +1269,8 @@ function renderRunForm() {
     // exactly one is enabled+highlighted at any time.
     html += `<div><button id="run-debug-load-btn" class="btn-tiny" onclick="_loadDebugModel()" disabled>Load</button> `;
     html += `<button id="run-debug-unload-btn" class="btn-tiny" onclick="_unloadDebugModel()" disabled>Unload</button> `;
-    html += `<span id="run-debug-model-status" class="form-hint">Not loaded</span></div>`;
+    html += `<span id="run-debug-model-status" class="form-hint">Not loaded</span>`;
+    html += `<span id="run-debug-model-fps" class="form-hint" style="margin-left:8px;color:#39d353"></span></div>`;
     html += `</div>`;
     // HVLA S2 specific fields (shown when S2 checkpoint selected)
     html += `<div id="run-teleop-debug-s2-fields" style="display:none">`;
@@ -1275,12 +1289,9 @@ function renderRunForm() {
     html += '</div>';
     // Objects widget — the universal open-vocab concept selector (grounding_dino / sam3 / sam3_video).
     html += `<div id="run-teleop-debug-vision-objects" style="display:none">`;
-    html += `<label style="display:block;margin-bottom:4px">Objects (max 6)</label>`;
+    html += `<button class="btn-tiny" id="run-teleop-debug-vision-add-obj" onclick="_addMonitoredObject()" style="margin-bottom:4px">+ Add object (1/6)</button>`;
+    html += `<div class="form-hint" style="margin-bottom:6px">Open-vocabulary names, each in its own color. Name edits apply ~1.5s after you stop typing; color changes are instant.</div>`;
     html += `<div id="run-teleop-debug-vision-objects-rows"></div>`;
-    html += `<div style="display:flex;gap:8px;margin-top:6px">`;
-    html += `<button class="btn-tiny" id="run-teleop-debug-vision-add-obj" onclick="_addMonitoredObject()">+ Add object</button>`;
-    html += `</div>`;
-    html += `<div class="form-hint">Open-vocabulary names, each in its own color. Name edits apply ~1.5s after you stop typing; color changes are instant.</div>`;
     html += `</div>`;
     html += '</div>';
     html += '</div>';
@@ -1946,6 +1957,10 @@ function connectOutputSSE() {
                 el.style.color = data.overlay.color || '#fff';
                 el.style.display = data.overlay.text ? 'block' : 'none';
             }
+        }
+        if (data.fps !== undefined) {
+            const f = document.getElementById('run-debug-model-fps');
+            if (f) f.textContent = _debugModelLoaded ? `${data.fps.toFixed(0)} fps overlay` : '';
         }
         if (data.line !== undefined) {
             appendTerminalLine(data.line);

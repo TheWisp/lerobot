@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import collections
 import contextlib
 import logging
 import signal
@@ -134,6 +135,9 @@ def main() -> None:
 
     throttle = max(0.0, args.throttle_ms / 1000.0)
     last_active = set(active)
+    fps_window: collections.deque = collections.deque(maxlen=20)  # rolling iteration times
+    fps_prev = time.perf_counter()
+    fps_last_emit = fps_prev
     try:
         while not stop.is_set():
             t0 = time.perf_counter()
@@ -163,6 +167,13 @@ def main() -> None:
             dt = time.perf_counter() - t0
             if throttle > dt:
                 time.sleep(throttle - dt)
+            # Achieved overlay rate (incl. throttle) → ##FPS## for the GUI panel, ~1 Hz.
+            now = time.perf_counter()
+            fps_window.append(now - fps_prev)
+            fps_prev = now
+            if now - fps_last_emit >= 1.0 and fps_window:
+                print(f"##FPS:{len(fps_window) / sum(fps_window):.1f}##", flush=True)
+                fps_last_emit = now
     except Exception:
         logger.exception("debug-vision crashed")
     finally:

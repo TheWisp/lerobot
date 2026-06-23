@@ -262,16 +262,22 @@ _OUTPUT_MAX_LINES = 2000
 
 
 _overlay_state: dict | None = None  # {"text": "...", "color": "..."}
+_fps_state: float | None = None  # latest overlay FPS reported by a debug-vision subprocess
 
 
 def _append_output(line: str) -> None:
     """Append a line to the output buffer and notify SSE waiters.
 
-    Lines matching ##OVERLAY:text:color## are intercepted as overlay
-    updates and not appended to the terminal. Any subprocess can set
-    the camera-feed overlay by printing this format to stdout.
+    Lines matching ##OVERLAY:text:color## (camera overlay) or ##FPS:value## (overlay
+    frame rate) are intercepted as structured updates and not appended to the terminal.
+    Any subprocess can set them by printing the format to stdout.
     """
-    global _output_lines, _overlay_state
+    global _output_lines, _overlay_state, _fps_state
+    if line.startswith("##FPS:"):
+        with contextlib.suppress(ValueError, IndexError):
+            _fps_state = float(line.strip().strip("#").split(":")[1])
+            _output_event.set()
+        return
     if line.startswith("##OVERLAY:"):
         parts = line.strip().strip("#").split(":")
         # OVERLAY:text or OVERLAY:text:color
@@ -1158,6 +1164,7 @@ async def stream_output() -> StreamingResponse:
     async def event_generator():
         sent_lines = 0
         sent_overlay = None  # track last overlay sent to avoid duplicates
+        sent_fps = None
         proc_at_start = _active_process
 
         logger.info(
@@ -1178,6 +1185,9 @@ async def stream_output() -> StreamingResponse:
             if _overlay_state is not None and _overlay_state != sent_overlay:
                 sent_overlay = _overlay_state.copy()
                 yield f"data: {json.dumps({'overlay': sent_overlay})}\n\n"
+            if _fps_state is not None and _fps_state != sent_fps:
+                sent_fps = _fps_state
+                yield f"data: {json.dumps({'fps': sent_fps})}\n\n"
 
             while sent_lines < len(_output_lines):
                 line = _output_lines[sent_lines]
