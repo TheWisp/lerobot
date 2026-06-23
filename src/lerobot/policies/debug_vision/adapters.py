@@ -803,6 +803,12 @@ class Sam3VideoAdapter(DebugVisionAdapter):
     SAM3_ID = "facebook/sam3"
     DEFAULT_PROMPT = "object"
     MAX_OBJECTS = 6  # cap monitored concepts (shared encoder keeps multi-concept cheap)
+    # Streaming-memory retention. The session stores per-frame state forever (designed
+    # for finite videos) — ~6 MB/frame on the GPU — so an unbounded live stream OOMs in
+    # minutes. The model only attends to the last num_maskmem(=7) dense frames + the
+    # object-pointer horizon (~16), so keeping ~32 frames (~2 s @ 14 fps) is lossless and
+    # keeps GPU flat (~0.2 GB). Measured: see gui/TODO.md.
+    MEMORY_FRAMES = 32
 
     def __init__(self, device: str = "cuda"):
         super().__init__(device)
@@ -851,6 +857,25 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         self.processor.add_text_prompt(session, self._concepts)
         self._sessions[cam] = session
         self._shapes[cam] = (h, w)
+
+    def _prune_session(self, session) -> None:
+        """Bound the streaming session's memory — it never evicts per-frame state, so a
+        live stream OOMs the GPU in minutes (~6 MB/frame). Keep the conditioning/prompt
+        frames + only the last MEMORY_FRAMES tracked frames (the model attends no further):
+        drop older non-cond memory features + stored pixels. Keeps GPU flat, no accuracy loss."""
+        keep = self.MEMORY_FRAMES
+        try:
+            for od in getattr(session, "output_dict_per_obj", {}).values():
+                nc = od.get("non_cond_frame_outputs", {})
+                if len(nc) > keep:
+                    for f in sorted(nc)[:-keep]:
+                        del nc[f]
+            pf = getattr(session, "processed_frames", None)
+            if pf is not None and len(pf) > keep:
+                for f in sorted(pf)[:-keep]:
+                    del pf[f]
+        except Exception:
+            logger.debug("sam3_video session prune failed", exc_info=True)
 
     def set_camera(self, cam: str | None) -> None:
         self._cam = cam  # which camera's tracking session infer() should use
@@ -912,6 +937,7 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         with torch.inference_mode():
             out = self.model(inference_session=session, frame=pv)
         res = self.processor.postprocess_outputs(session, out, original_sizes=[[h, w]])
+        self._prune_session(session)  # bound streaming memory (else OOM, see MEMORY_FRAMES)
         obj_to_concept = {oid: p for p, oids in res["prompt_to_obj_ids"].items() for oid in oids}
         masks = res["masks"]
         masks_by_concept: dict[str, list[np.ndarray]] = {c: [] for c in self._concepts}
