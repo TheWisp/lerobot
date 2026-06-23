@@ -22,6 +22,9 @@ _WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "foundationpo
 # camera that has depth (read_depth returns None otherwise), which in our rig is "top".
 # Generalize by publishing per-camera K in the ObservationStream meta.
 _K_TOP = np.array([[906.0, 0, 633.0], [0, 906.0, 376.0], [0, 0, 1.0]])
+# Persistent worker log — the debug-model log is unlinked on unload, so worker errors
+# would vanish; keep them here for post-mortem.
+_WORKER_LOG = os.path.expanduser("~/.cache/huggingface/lerobot/gui/fp_worker.log")
 
 
 class FoundationPoseClient:
@@ -33,12 +36,16 @@ class FoundationPoseClient:
         from lerobot.policies.debug_vision.foundationpose_ipc import FoundationPoseIPC
 
         self._ipc = FoundationPoseIPC(create=True)
-        self._proc = subprocess.Popen([_SAM3D_PY, _WORKER])  # nosec B603  fixed worker path
+        os.makedirs(os.path.dirname(_WORKER_LOG), exist_ok=True)
+        self._log = open(_WORKER_LOG, "w")  # noqa: SIM115  long-lived; closed in close()
+        self._proc = subprocess.Popen(  # nosec B603  fixed worker path
+            [_SAM3D_PY, _WORKER], stdout=self._log, stderr=subprocess.STDOUT
+        )
         self._reader = None
         self._registered = False
         self._pending_seq = None  # one in-flight request at a time
         self._last_overlay = None  # most recent completed overlay (shown while the next computes)
-        logger.info("FoundationPose sidecar spawned (pid %s)", self._proc.pid)
+        logger.info("FoundationPose sidecar spawned (pid %s); log %s", self._proc.pid, _WORKER_LOG)
 
     def _depth(self, cam: str | None):
         """Aligned uint16 depth for ``cam`` from the ObservationStream, or None."""
@@ -101,3 +108,7 @@ class FoundationPoseClient:
             self._ipc.close(unlink=True)
         except Exception:
             logger.debug("FoundationPose IPC close failed", exc_info=True)
+        try:
+            self._log.close()
+        except Exception:
+            logger.debug("FoundationPose worker log close failed", exc_info=True)

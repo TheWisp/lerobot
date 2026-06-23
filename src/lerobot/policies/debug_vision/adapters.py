@@ -954,10 +954,11 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         if self._amodal and self._fp is not None and self._concepts:
             ms = masks_by_concept.get(self._concepts[0], [])
             if ms:
-                union = np.zeros((h, w), dtype=bool)
-                for m in ms:
-                    union |= m
-                overlay = self._fp.process(np.ascontiguousarray(frame_rgb), union, cam)
+                # FoundationPose tracks ONE rigid object — seed it from the LARGEST single
+                # instance, NOT a union of every match (a generic concept like "object"
+                # matches many things; unioning them fits one mesh to a blob soup = garbage).
+                seed = max(ms, key=lambda m: int(m.sum()))
+                overlay = self._fp.process(np.ascontiguousarray(frame_rgb), seed, cam)
                 if overlay is not None:
                     sel = overlay[..., 3] > 0
                     rgba[sel] = overlay[sel]
