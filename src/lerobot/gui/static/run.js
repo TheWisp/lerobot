@@ -740,30 +740,36 @@ function _paletteRow(selColor, setter) {
 function _renderMonitoredObjects() {
     const box = document.getElementById('run-teleop-debug-vision-objects-rows');
     if (!box) return;
+    // Every leading/trailing element is exactly one SLOT wide and the palette is fixed
+    // content-width, so all rows line up: [slot][name flex:1][palette][slot]. (Spacer
+    // spans were collapsing because plain spans ignore width, and the buttons' padding
+    // made them wider than 22px — both broke the alignment.)
+    const SLOT = 'flex:0 0 24px;box-sizing:border-box;padding:0;text-align:center';
+    const PAL = 'flex:0 0 auto;display:flex;gap:4px';
+    const ROW = 'display:flex;align-items:center;gap:6px;margin:4px 0';
     const anyNamed = _monitoredObjects.some(o => (o.name || '').trim());
     const rows = _monitoredObjects.map((o, i) => {
         const neg = o.sign === '-';
-        const sgn = `<button class="btn-tiny" onclick="_toggleMonitoredSign(${i})" style="width:22px;font-weight:bold;`
-            + `color:${neg ? '#f87171' : '#34d399'}" title="${neg ? 'excluded (negative) — click to include'
+        const sgn = `<button class="btn-tiny" style="${SLOT};font-weight:bold;color:${neg ? '#f87171' : '#34d399'}"`
+            + ` onclick="_toggleMonitoredSign(${i})" title="${neg ? 'excluded (negative) — click to include'
             : 'included (positive) — click to exclude'}">${neg ? '−' : '+'}</button>`;
         // Row 0 shows the implicit default concept ("object") as a faded placeholder when nothing is named.
         const ph = (i === 0 && !anyNamed) ? 'object' : 'object name (e.g. robot arm)';
-        const sw = _paletteRow(o.color, `_setMonitoredColor(${i},`);
         const trail = _monitoredObjects.length > 1
-            ? `<button class="btn-tiny" onclick="_removeMonitoredObject(${i})" title="remove">✕</button>`
-            : `<span style="width:22px"></span>`;  // reserve the slot so palettes stay aligned
-        return `<div style="display:flex;align-items:center;gap:6px;margin:4px 0">${sgn}`
+            ? `<button class="btn-tiny" style="${SLOT}" onclick="_removeMonitoredObject(${i})" title="remove">✕</button>`
+            : `<span style="${SLOT}"></span>`;  // reserve the slot so palettes stay aligned
+        return `<div style="${ROW}">${sgn}`
             + `<input type="text" class="live-during-run" placeholder="${ph}"`
-            + ` value="${_esc(o.name)}" oninput="_setMonitoredName(${i}, this.value)" style="flex:1">`
-            + `<span style="display:flex;gap:4px">${sw}</span>${trail}</div>`;
+            + ` value="${_esc(o.name)}" oninput="_setMonitoredName(${i}, this.value)" style="flex:1;min-width:0">`
+            + `<span style="${PAL}">${_paletteRow(o.color, `_setMonitoredColor(${i},`)}</span>${trail}</div>`;
     }).join('');
     // Always-present background row (inverse of all detected); ∅ = transparent (default).
     const clr = !_backgroundColor;
-    const bgrow = `<div style="display:flex;align-items:center;gap:6px;margin:4px 0">`
-        + `<span style="width:22px"></span>`
-        + `<span style="flex:1;opacity:.7">Background <span style="opacity:.6">(inverse)</span></span>`
-        + `<span style="display:flex;gap:4px">${_paletteRow(_backgroundColor, '_setBackgroundColor(')}</span>`
-        + `<button class="btn-tiny${clr ? ' btn-accent' : ''}" onclick="_setBackgroundColor(null)" title="transparent (don't paint)">∅</button></div>`;
+    const bgrow = `<div style="${ROW}">`
+        + `<span style="${SLOT}"></span>`
+        + `<span style="flex:1;min-width:0;opacity:.7">Background <span style="opacity:.6">(inverse)</span></span>`
+        + `<span style="${PAL}">${_paletteRow(_backgroundColor, '_setBackgroundColor(')}</span>`
+        + `<button class="btn-tiny${clr ? ' btn-accent' : ''}" style="${SLOT}" onclick="_setBackgroundColor(null)" title="transparent (don't paint)">∅</button></div>`;
     box.innerHTML = rows + bgrow;
     const add = document.getElementById('run-teleop-debug-vision-add-obj');
     if (add) {
@@ -1287,7 +1293,7 @@ function renderRunForm() {
     html += '</div>';
     html += '</div>';
     // Debug-vision fields (shown when a built-in representation model is selected).
-    html += `<div id="run-teleop-debug-vision-fields" style="display:none">`;
+    html += `<div id="run-teleop-debug-vision-fields" style="display:none;margin-top:14px">`;
     html += '<div class="form-grid">';
     html += `<label>Cameras</label>`;
     html += `<div id="run-teleop-debug-vision-cameras-box" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center"><span class="form-hint">select a robot first</span></div>`;
