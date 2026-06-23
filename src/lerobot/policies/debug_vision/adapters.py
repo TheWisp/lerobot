@@ -776,72 +776,82 @@ class CoTracker3Adapter(DebugVisionAdapter):
 
 
 class Sam3VideoAdapter(DebugVisionAdapter):
-    """SAM3 VIDEO tracking — concept masks that PERSIST across frames (hold through
-    partial occlusion), each concept in its own stable color with an on-mask label
-    and a legend. The prompt is period-separated ("robot arm . cylinder . green ring")
-    and every concept is tracked independently.
+    """SAM3 LOCKED-OBJECT tracking (tracking-by-detection). Two tiers sharing one encoder:
 
-    Stateful: keeps a streaming session, so unlike the per-frame ``sam3`` model the
-    masks don't flicker and survive occlusion. Changing the prompt (or the camera
-    resolution) restarts tracking; like CoTracker3 it assumes a single camera stream.
-    GATED weights — accept the Meta SAM License at https://huggingface.co/facebook/sam3
-    (+ ``hf auth login``) first.
+    - Tier 1 — ``Sam3Model`` image detector: text -> mask. Used only to SEED a new object
+      and to RE-DETECT one after it's lost (heavy occlusion).
+    - Tier 2 — ``Sam3TrackerVideoModel`` geometric tracker: propagates each seeded object
+      frame-to-frame purely from spatial-temporal memory (no per-frame re-detection), so the
+      masks lock onto specific objects instead of the concept model's proliferating instances.
+
+    Indefinite-stream memory is bounded by REBUILD, not editing: every ``FLUSH_EVERY`` frames
+    (and on recovery) the tracker session is destroyed and reseeded from the current mask —
+    flat GPU forever, and it never desyncs the memory bank (which is what pruning did). Each
+    period-separated concept is locked to one instance in its own color.
+
+    Architecture per a SAM3 maintainer; see SAM3_VIDEO_STREAMING_OOM.md. GATED weights —
+    accept the Meta SAM License at https://huggingface.co/facebook/sam3 (+ ``hf auth login``).
     """
 
     key = "sam3_video"
-    label = "SAM3 video — tracked masks (gated)"
+    label = "SAM3 — locked object tracking (gated)"
     controls = [
         {
             "type": "text",
             "key": "prompt",
-            "label": "Concepts",
+            "label": "Objects",
             "placeholder": "robot arm . cylinder . green ring",
-            "hint": "Period-separated concepts; each is tracked across frames in its own color "
-            "(legend, top-left). Changing this restarts tracking.",
+            "hint": "Period-separated objects; each is detected once then locked + tracked in its "
+            "own color (legend, top-left). Changing this restarts tracking.",
         }
     ]
     SAM3_ID = "facebook/sam3"
     DEFAULT_PROMPT = "object"
-    MAX_OBJECTS = 6  # cap monitored concepts (shared encoder keeps multi-concept cheap)
-    # NOTE: the streaming session stores per-frame state forever (~6 MB/frame GPU) so a long
-    # live stream OOMs. We previously bounded it by pruning old frames, but that breaks the
-    # detector's track association (spawns phantom instances, then the track goes stale and
-    # never recovers). Reverted to the honest unbounded baseline pending the right API usage
-    # — see SAM3_VIDEO_STREAMING_OOM.md.
+    MAX_OBJECTS = 6  # cap monitored objects (shared encoder keeps multi-object cheap)
+    FLUSH_EVERY = 150  # rebuild each tracker session every N frames -> flat GPU memory
+    LOST_THRESH = 0.30  # sigmoid(object_score_logits) below this = track lost -> Tier-1 recover
+    RECOVER_EVERY = 5  # throttle Tier-1 re-detection attempts (frames) while an object is lost
 
     def __init__(self, device: str = "cuda"):
         super().__init__(device)
         try:
             import torch
             from PIL import Image
-            from transformers import Sam3VideoModel, Sam3VideoProcessor
+            from transformers import (
+                Sam3Model,
+                Sam3Processor,
+                Sam3TrackerVideoModel,
+                Sam3TrackerVideoProcessor,
+            )
         except ImportError as e:
             raise RuntimeError(_IMPORT_HINT) from e
         self._torch = torch
         self._cv2 = _import_cv2()
         self._Image = Image
-        logger.info("loading %s (video) ...", self.SAM3_ID)
+        logger.info("loading %s (detector + geometric tracker) ...", self.SAM3_ID)
         try:
-            self.processor = Sam3VideoProcessor.from_pretrained(self.SAM3_ID)
-            self.model = Sam3VideoModel.from_pretrained(self.SAM3_ID, dtype=torch.float16).to(device).eval()
+            self.det_proc = Sam3Processor.from_pretrained(self.SAM3_ID)
+            self.det = Sam3Model.from_pretrained(self.SAM3_ID, dtype=torch.float16).to(device).eval()
+            self.trk_proc = Sam3TrackerVideoProcessor.from_pretrained(self.SAM3_ID)
+            self.trk = (
+                Sam3TrackerVideoModel.from_pretrained(self.SAM3_ID, dtype=torch.float16).to(device).eval()
+            )
         except Exception as e:
             raise RuntimeError(
                 f"SAM3 weights are gated — accept the Meta SAM License at "
                 f"https://huggingface.co/{self.SAM3_ID} and run `hf auth login`, then reload. ({type(e).__name__})"
             ) from e
+        # Both tiers use the identical PE-ViT-L+ encoder; share the instance to save ~0.9 GB.
+        self.trk.vision_encoder = self.det.vision_encoder
         self.prompt = self.DEFAULT_PROMPT
         self._concepts: list[str] = []
         self._colors: dict[str, tuple[int, int, int]] = {}  # user-chosen color per concept
         self._signs: dict[str, str] = {}
         self._bg_color: tuple[int, int, int] | None = None
-        # One tracking session (memory bank) PER camera. Sharing a single session across
-        # views interleaves incompatible viewpoints into one memory bank and corrupts
-        # tracking — the whole point of the video model is per-stream temporal memory.
+        self._det_threshold = 0.5
         self._cam: str | None = None
-        self._sessions: dict[str | None, object] = {}
-        self._shapes: dict[str | None, tuple[int, int]] = {}
-        # Amodal toggle: overlays the FoundationPose-tracked 3D mesh of the FIRST concept
-        # (occluded geometry included). Runs in a sidecar (see foundationpose_client).
+        self._tracks: dict[str | None, dict] = {}  # per-camera tracker state (session + masks)
+        # Amodal toggle: overlays the FoundationPose-tracked 3D mesh of the FIRST concept.
         self._amodal = False
         self._fp = None
 
@@ -850,19 +860,12 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         names = list(dict.fromkeys(c for c in parts if c))[: self.MAX_OBJECTS]
         return names or [self.DEFAULT_PROMPT]
 
-    def _start_session(self, cam: str | None, h: int, w: int) -> None:
-        self._concepts = self._parse_concepts()
-        session = self.processor.init_video_session(inference_device=self.device, dtype=self._torch.float16)
-        self.processor.add_text_prompt(session, self._concepts)
-        self._sessions[cam] = session
-        self._shapes[cam] = (h, w)
-
     def set_camera(self, cam: str | None) -> None:
-        self._cam = cam  # which camera's tracking session infer() should use
+        self._cam = cam  # which camera's tracker state infer() should use
 
     def set_control(self, control: dict) -> None:
-        # Structured monitored objects (preferred). Color/sign/background are display-
-        # only (applied at composite time); only a concept-NAME change restarts tracking.
+        # Structured monitored objects (preferred). Color/sign/background are display-only;
+        # only an object-NAME change restarts tracking.
         names, colors, signs = _parse_objects(control, self.MAX_OBJECTS)
         if names is not None:
             self._colors = colors
@@ -870,17 +873,86 @@ class Sam3VideoAdapter(DebugVisionAdapter):
             new_prompt = " . ".join(names)
             if new_prompt and new_prompt != self.prompt:
                 self.prompt = new_prompt
-                self._sessions = {}  # restart tracking on every camera with the new concepts
+                self._tracks = {}  # restart tracking on every camera with the new objects
         else:
             p = control.get("prompt")
             if isinstance(p, str) and p.strip() and p.strip() != self.prompt:
                 self.prompt = p.strip()
-                self._sessions = {}
+                self._tracks = {}
         bg = _parse_background(control)
         if bg is not _BG_UNSET:
             self._bg_color = bg
         if "amodal" in control:
             self._set_amodal(bool(control["amodal"]))
+
+    # ---------------- Tier 1: image detector (text -> one mask per concept) ----------------
+    def _detect(self, frame_rgb: np.ndarray, concept: str, h: int, w: int) -> np.ndarray | None:
+        """Largest instance mask for ``concept`` on this single frame, or None."""
+        torch = self._torch
+        inp = self.det_proc(images=self._Image.fromarray(frame_rgb), text=concept, return_tensors="pt").to(
+            self.device
+        )
+        with torch.inference_mode():
+            out = self.det(**inp)
+        res = self.det_proc.post_process_instance_segmentation(
+            out, threshold=self._det_threshold, target_sizes=[(h, w)]
+        )[0]
+        masks = res.get("masks", [])
+        if len(masks) == 0:
+            return None
+        arrs = [(m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m)) > 0 for m in masks]
+        best = max(arrs, key=lambda a: int(a.sum()))
+        return best if int(best.sum()) > 50 else None
+
+    # ---------------- Tier 2: geometric video tracker ----------------
+    def _pv(self, frame_rgb: np.ndarray):
+        inp = self.trk_proc(images=self._Image.fromarray(frame_rgb), return_tensors="pt")
+        return inp["pixel_values"][0].to(self.device, self._torch.float16)
+
+    def _seed(self, track: dict, seeds: dict[str, np.ndarray], pv, h: int, w: int) -> None:
+        """REBUILD: drop the old session, init a fresh one, seed obj-per-concept from
+        ``seeds`` (current masks), run frame 0. Rebuilding (never editing the memory bank)
+        is what keeps GPU flat without desyncing the tracker's frame indices."""
+        torch = self._torch
+        old = track.get("session")
+        sess = self.trk_proc.init_video_session(
+            video=None, inference_device=self.device, inference_state_device=self.device, dtype=torch.float16
+        )
+        fidx = sess.add_new_frame(pv)
+        objs = {}
+        for i, (concept, mask) in enumerate(seeds.items(), start=1):
+            self.trk_proc.process_new_mask_for_video_frame(
+                inference_session=sess, frame_idx=fidx, obj_ids=[i], input_masks=mask.astype(np.uint8)
+            )
+            objs[concept] = i
+        with torch.inference_mode():
+            out = self.trk(inference_session=sess, frame_idx=fidx)
+        track["session"], track["objs"], track["since_flush"] = sess, objs, 0
+        self._read_output(track, out, h, w)
+        if old is not None:
+            del old  # free the previous session's memory bank
+
+    def _read_output(self, track: dict, out, h: int, w: int) -> None:
+        """Update per-concept full-res mask + score from a tracker forward output."""
+        torch = self._torch
+        id_to_concept = {oid: c for c, oid in track["objs"].items()}
+        track["masks"], track["scores"] = {}, {}
+        ids = list(out.object_ids or [])
+        if out.pred_masks is None or not ids:
+            return
+        pm = out.pred_masks
+        pm = pm.reshape(pm.shape[0], 1, *pm.shape[-2:])  # -> (num_obj, 1, low_h, low_w)
+        # post_process_masks wants a LIST of per-image mask batches -> upscale to frame size
+        full = self.trk_proc.post_process_masks([pm], original_sizes=[(h, w)])[0]  # (num_obj, 1, H, W)
+        logits = out.object_score_logits.reshape(-1) if out.object_score_logits is not None else None
+        for k, oid in enumerate(ids):
+            concept = id_to_concept.get(oid)
+            if concept is None:
+                continue
+            fm = full[k]
+            fm = fm.cpu().numpy() if hasattr(fm, "cpu") else np.asarray(fm)
+            track["masks"][concept] = fm.squeeze().astype(bool)  # (H, W)
+            track["scores"][concept] = float(torch.sigmoid(logits[k])) if logits is not None else 1.0
 
     def _set_amodal(self, on: bool) -> None:
         """Start/stop the FoundationPose sidecar that overlays the first concept's
@@ -905,39 +977,73 @@ class Sam3VideoAdapter(DebugVisionAdapter):
             with contextlib.suppress(Exception):
                 self._fp.close()
 
+    def _live_masks(self, track: dict) -> dict[str, list[np.ndarray]]:
+        """Per-concept mask list for compositing — only objects currently held (score ok)."""
+        return {
+            c: (
+                [track["masks"][c]]
+                if track["scores"].get(c, 0.0) >= self.LOST_THRESH and c in track["masks"]
+                else []
+            )
+            for c in self._concepts
+        }
+
     def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
         torch = self._torch
         h, w = frame_rgb.shape[:2]
         cam = self._cam
-        if self._sessions.get(cam) is None or self._shapes.get(cam) != (h, w):
-            self._start_session(cam, h, w)
-        session = self._sessions[cam]
-        inp = self.processor(images=self._Image.fromarray(frame_rgb), return_tensors="pt")
-        pv = inp["pixel_values"][0].to(self.device, torch.float16)
-        with torch.inference_mode():
-            out = self.model(inference_session=session, frame=pv)
-        res = self.processor.postprocess_outputs(session, out, original_sizes=[[h, w]])
-        obj_to_concept = {oid: p for p, oids in res["prompt_to_obj_ids"].items() for oid in oids}
-        masks = res["masks"]
-        masks_by_concept: dict[str, list[np.ndarray]] = {c: [] for c in self._concepts}
-        for k, oid in enumerate(res["object_ids"].tolist()):
-            arr = masks[k]
-            m = (arr.cpu().numpy() if hasattr(arr, "cpu") else np.asarray(arr)) > 0
-            masks_by_concept.setdefault(obj_to_concept.get(oid, "?"), []).append(m)
+        self._concepts = self._parse_concepts()
+        track = self._tracks.get(cam)
+        if track is None or track.get("shape") != (h, w):
+            track = {
+                "session": None,
+                "objs": {},
+                "masks": {},
+                "scores": {},
+                "since_flush": 0,
+                "since_recover": 0,
+                "shape": (h, w),
+            }
+            self._tracks[cam] = track
+        pv = self._pv(frame_rgb)
+
+        if track["session"] is None:
+            # No track yet — Tier 1 detects each object to seed Tier 2.
+            seeds = {c: m for c in self._concepts if (m := self._detect(frame_rgb, c, h, w)) is not None}
+            if seeds:
+                self._seed(track, seeds, pv, h, w)
+        else:
+            with torch.inference_mode():
+                out = self.trk(inference_session=track["session"], frame=pv)
+            self._read_output(track, out, h, w)
+            track["since_flush"] += 1
+            track["since_recover"] += 1
+            lost = [c for c in self._concepts if track["scores"].get(c, 0.0) < self.LOST_THRESH]
+            # Rebuild on the rolling-window flush, OR to recover a lost object (throttled).
+            if track["since_flush"] >= self.FLUSH_EVERY or (
+                lost and track["since_recover"] >= self.RECOVER_EVERY
+            ):
+                seeds = {}
+                for c in self._concepts:
+                    if track["scores"].get(c, 0.0) >= self.LOST_THRESH and c in track["masks"]:
+                        seeds[c] = track["masks"][c]  # healthy: reseed from current mask
+                    elif (m := self._detect(frame_rgb, c, h, w)) is not None:
+                        seeds[c] = m  # lost: Tier-1 re-detect
+                track["since_recover"] = 0
+                if seeds:
+                    self._seed(track, seeds, pv, h, w)
+
+        masks_by_concept = self._live_masks(track)
         rgba = _composite_concepts(
             h, w, masks_by_concept, self._concepts, self._colors, self._signs, self._bg_color, self._cv2
         )
         # Amodal: overlay the FoundationPose-tracked mesh of the first concept (only the
-        # depth camera has depth, so the sidecar no-ops on other views). Overwrites the
-        # concept overlay where it draws — that region IS the remapped 3D object.
+        # depth camera has depth, so the sidecar no-ops on other views). The locked mask is
+        # the seed — one stable object, exactly what FoundationPose needs.
         if self._amodal and self._fp is not None and self._concepts:
             ms = masks_by_concept.get(self._concepts[0], [])
             if ms:
-                # FoundationPose tracks ONE rigid object — seed it from the LARGEST single
-                # instance, NOT a union of every match (a generic concept like "object"
-                # matches many things; unioning them fits one mesh to a blob soup = garbage).
-                seed = max(ms, key=lambda m: int(m.sum()))
-                overlay = self._fp.process(np.ascontiguousarray(frame_rgb), seed, cam)
+                overlay = self._fp.process(np.ascontiguousarray(frame_rgb), ms[0], cam)
                 if overlay is not None:
                     sel = overlay[..., 3] > 0
                     rgba[sel] = overlay[sel]
@@ -958,7 +1064,6 @@ ADAPTERS: dict[str, type[DebugVisionAdapter]] = {
     DinoFeatureAdapter.key: DinoFeatureAdapter,
     DepthAnythingAdapter.key: DepthAnythingAdapter,
     Sam2MaskAdapter.key: Sam2MaskAdapter,
-    Sam3TrackerAdapter.key: Sam3TrackerAdapter,
     Sam3Adapter.key: Sam3Adapter,
     Sam3VideoAdapter.key: Sam3VideoAdapter,
     CoTracker3Adapter.key: CoTracker3Adapter,
