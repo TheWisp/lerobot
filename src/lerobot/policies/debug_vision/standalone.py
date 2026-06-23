@@ -63,7 +63,14 @@ def main() -> None:
     )
     parser.add_argument("--prompt", default=None, help="Initial text prompt (Grounding DINO / SAM3)")
     parser.add_argument(
-        "--objects", default=None, help='Initial monitored objects, JSON [{"name","color":[r,g,b]}]'
+        "--objects",
+        default=None,
+        help='Initial monitored objects, JSON [{"name","color":[r,g,b],"sign":"+"}]',
+    )
+    parser.add_argument(
+        "--background",
+        default=None,
+        help='Background fill JSON {"color":[r,g,b]} (null/absent = transparent)',
     )
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
@@ -90,15 +97,23 @@ def main() -> None:
         _set_overlay(f"{args.model}: failed to load — see Output panel", "#f85149")
         print(f"ERROR loading '{args.model}': {e}", flush=True)
         return
-    if args.objects:
-        import json
+    import json
 
+    init_control: dict = {}
+    if args.objects:
         try:
-            adapter.set_control({"objects": json.loads(args.objects)})
+            init_control["objects"] = json.loads(args.objects)
         except Exception:
             logger.warning("ignoring malformed --objects: %s", args.objects)
     elif args.prompt:
-        adapter.set_control({"prompt": args.prompt})
+        init_control["prompt"] = args.prompt
+    if args.background:
+        try:
+            init_control["background"] = json.loads(args.background)
+        except Exception:
+            logger.warning("ignoring malformed --background: %s", args.background)
+    if init_control:
+        adapter.set_control(init_control)
     logger.info("model '%s' ready", args.model)
 
     reader = _wait_for_obs_stream(stop)

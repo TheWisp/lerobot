@@ -165,8 +165,10 @@ class DebugModelConfig(BaseModel):
     # the camera view rather than an HVLA checkpoint.
     model: str = ""  # adapter key: grounding_dino | dino_features
     prompt: str = ""
-    # monitored objects for text-prompt models: [{"name", "color":[r,g,b]}], capped in the adapter
+    # monitored objects for text-prompt models: [{"name", "color":[r,g,b], "sign":"+"/"-"}], capped in the adapter
     objects: list[dict] = []
+    # background = inverse of all detections; {"color":[r,g,b]} fills it, null/absent = transparent
+    background: dict | None = None
     cameras: list[str] = []
 
 
@@ -471,6 +473,8 @@ async def _launch_debug_vision(config: DebugModelConfig) -> None:
         args.append(f"--objects={json.dumps(config.objects)}")
     elif config.prompt:
         args.append(f"--prompt={config.prompt}")
+    if config.background is not None:
+        args.append(f"--background={json.dumps(config.background)}")
     if config.cameras:
         args.append("--cameras")
         args.extend(config.cameras)

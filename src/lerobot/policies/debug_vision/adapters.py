@@ -54,15 +54,17 @@ _CONCEPT_PALETTE = [
 def _parse_objects(control: dict, max_objects: int):
     """Pull monitored objects from a control dict (the universal concept selector).
 
-    Returns ``(names, colors)`` — ``names`` deduped and ``<= max_objects``; ``colors``
-    maps name -> (r, g, b). Returns ``(None, None)`` when there are no usable objects,
-    so the caller keeps its current state (e.g. a plain-prompt update).
+    Returns ``(names, colors, signs)`` — ``names`` deduped and ``<= max_objects``;
+    ``colors`` maps name -> (r, g, b) (omitted when transparent/unset → palette
+    fallback); ``signs`` maps name -> "+"/"-" (default "+", "-" = exclude). Returns
+    ``(None, None, None)`` when there are no usable objects so the caller keeps state.
     """
     objs = control.get("objects")
     if not isinstance(objs, list) or not any(str(o.get("name", "")).strip() for o in objs):
-        return None, None
+        return None, None, None
     names: list[str] = []
     colors: dict[str, tuple[int, int, int]] = {}
+    signs: dict[str, str] = {}
     for o in objs[:max_objects]:
         name = str(o.get("name", "")).strip()
         if not name:
@@ -71,7 +73,8 @@ def _parse_objects(control: dict, max_objects: int):
         c = o.get("color")
         if isinstance(c, (list, tuple)) and len(c) == 3:
             colors[name] = (int(c[0]), int(c[1]), int(c[2]))
-    return list(dict.fromkeys(names)), colors
+        signs[name] = "-" if o.get("sign") == "-" else "+"
+    return list(dict.fromkeys(names)), colors, signs
 
 
 def _concept_color(concept, concepts, colors):
@@ -81,6 +84,59 @@ def _concept_color(concept, concepts, colors):
     if concept in concepts:
         return _CONCEPT_PALETTE[concepts.index(concept) % len(_CONCEPT_PALETTE)]
     return _color_for(concept)
+
+
+_BG_UNSET = object()  # sentinel: this control dict didn't mention the background
+
+
+def _parse_background(control: dict):
+    """Background fill color from a control dict.
+
+    Returns ``(r, g, b)`` to fill the inverse region, ``None`` for transparent
+    (don't paint), or ``_BG_UNSET`` when the key is absent (keep current state).
+    """
+    if "background" not in control:
+        return _BG_UNSET
+    bg = control.get("background") or {}
+    c = bg.get("color") if isinstance(bg, dict) else None
+    if isinstance(c, (list, tuple)) and len(c) == 3:
+        return (int(c[0]), int(c[1]), int(c[2]))
+    return None  # transparent
+
+
+def _composite_concepts(h, w, masks_by_concept, concepts, colors, signs, bg_color, cv2, fill_alpha=130):
+    """Paint an RGBA overlay from per-concept boolean masks.
+
+    ``+`` concepts are drawn in their color; ``-`` concepts are carved out of the
+    positive masks (and excluded from the detected region). ``bg_color`` (when not
+    None) fills everything NOT covered by a positive detection — the inverse region.
+    Background is painted first so positive fills + contours sit on top.
+    """
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    neg = np.zeros((h, w), dtype=bool)
+    for c in concepts:
+        if signs.get(c, "+") == "-":
+            for m in masks_by_concept.get(c, []):
+                neg |= m
+    detected = np.zeros((h, w), dtype=bool)
+    draw: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+    for c in concepts:
+        if signs.get(c, "+") == "-":
+            continue
+        col = _concept_color(c, concepts, colors)
+        for m in masks_by_concept.get(c, []):
+            mm = m & ~neg
+            if not mm.any():
+                continue
+            draw.append((mm, col))
+            detected |= mm
+    if bg_color is not None:
+        rgba[~detected] = (*bg_color, fill_alpha)
+    for mm, col in draw:
+        rgba[mm] = (*col, fill_alpha)
+        cnts, _ = cv2.findContours(mm.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
+    return rgba
 
 
 class DebugVisionAdapter:
@@ -146,11 +202,12 @@ class GroundingDinoAdapter(DebugVisionAdapter):
         self._colors: dict[str, tuple[int, int, int]] = {}  # per-concept color (objects selector)
 
     def set_control(self, control: dict) -> None:
-        names, colors = _parse_objects(control, 6)
+        names, colors, signs = _parse_objects(control, 6)
         if names is not None:
-            # Grounding DINO grounds one period-separated string in a single pass, so
-            # any number of concepts costs the same — no per-object inference.
-            self.prompt = " . ".join(names) + " ."
+            # Grounding DINO grounds one period-separated string in a single pass.
+            # Negative (-) concepts are simply dropped from the prompt (not detected).
+            pos = [n for n in names if signs.get(n, "+") == "+"]
+            self.prompt = (" . ".join(pos) + " .") if pos else "."
             self._colors = {n.lower(): c for n, c in colors.items()}
         else:
             p = control.get("prompt")
@@ -421,18 +478,25 @@ class Sam3Adapter(DebugVisionAdapter):
         self.threshold = 0.5
         self._concepts: list[str] = [self.DEFAULT_PROMPT]
         self._colors: dict[str, tuple[int, int, int]] = {}
+        self._signs: dict[str, str] = {}
+        self._bg_color: tuple[int, int, int] | None = None
 
     def set_control(self, control: dict) -> None:
-        names, colors = _parse_objects(control, 3)
+        names, colors, signs = _parse_objects(control, 6)
         if names is not None:
             self._concepts = names
             self._colors = colors
+            self._signs = signs
             self.prompt = names[0]  # keep self.prompt in sync for masks() / fallback
         else:
             p = control.get("prompt")
             if isinstance(p, str) and p.strip():
                 self.prompt = p.strip()
                 self._concepts = [self.prompt]
+                self._signs = {self.prompt: "+"}
+        bg = _parse_background(control)
+        if bg is not _BG_UNSET:
+            self._bg_color = bg
         if "threshold" in control:
             self.threshold = float(control["threshold"])
 
@@ -446,7 +510,7 @@ class Sam3Adapter(DebugVisionAdapter):
         img_inp = self.processor(images=Image.fromarray(frame_rgb), return_tensors="pt").to(self.device)
         with torch.inference_mode():
             vision_embeds = self.model.get_vision_features(pixel_values=img_inp["pixel_values"])
-        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        masks_by_concept: dict[str, list[np.ndarray]] = {}
         for concept in self._concepts:
             txt = self.processor(text=concept, return_tensors="pt").to(self.device)
             with torch.inference_mode():
@@ -458,13 +522,13 @@ class Sam3Adapter(DebugVisionAdapter):
             res = self.processor.post_process_instance_segmentation(
                 out, threshold=self.threshold, target_sizes=[(h, w)]
             )[0]
-            col = _concept_color(concept, self._concepts, self._colors)
-            for mask in res.get("masks", []):
-                m = (mask.cpu().numpy() if hasattr(mask, "cpu") else np.asarray(mask)) > 0
-                rgba[m] = (*col, 130)  # translucent fill
-                cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
-        return rgba
+            masks_by_concept[concept] = [
+                (mask.cpu().numpy() if hasattr(mask, "cpu") else np.asarray(mask)) > 0
+                for mask in res.get("masks", [])
+            ]
+        return _composite_concepts(
+            h, w, masks_by_concept, self._concepts, self._colors, self._signs, self._bg_color, cv2
+        )
 
     def masks(self, frame_rgb: np.ndarray, prompt: str | None = None) -> list[dict]:
         """Raw instance masks for ``prompt`` (defaults to the current prompt).
@@ -613,7 +677,7 @@ class Sam3VideoAdapter(DebugVisionAdapter):
     ]
     SAM3_ID = "facebook/sam3"
     DEFAULT_PROMPT = "object"
-    MAX_OBJECTS = 3  # cap monitored concepts (keeps the per-frame cost bounded)
+    MAX_OBJECTS = 6  # cap monitored concepts (shared encoder keeps multi-concept cheap)
 
     def __init__(self, device: str = "cuda"):
         super().__init__(device)
@@ -639,6 +703,8 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         self._session = None
         self._concepts: list[str] = []
         self._colors: dict[str, tuple[int, int, int]] = {}  # user-chosen color per concept
+        self._signs: dict[str, str] = {}
+        self._bg_color: tuple[int, int, int] | None = None
         self._shape: tuple[int, int] | None = None
 
     def _parse_concepts(self) -> list[str]:
@@ -655,26 +721,30 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         self._shape = (h, w)
 
     def set_control(self, control: dict) -> None:
-        # Structured monitored objects (preferred). A recolor alone keeps tracking;
-        # only a name change restarts the session.
-        names, colors = _parse_objects(control, self.MAX_OBJECTS)
+        # Structured monitored objects (preferred). Color/sign/background are display-
+        # only (applied at composite time); only a concept-NAME change restarts tracking.
+        names, colors, signs = _parse_objects(control, self.MAX_OBJECTS)
         if names is not None:
             self._colors = colors
+            self._signs = signs
             new_prompt = " . ".join(names)
             if new_prompt and new_prompt != self.prompt:
                 self.prompt = new_prompt
                 self._session = None  # restart tracking with the new concepts
-            return
-        p = control.get("prompt")
-        if isinstance(p, str) and p.strip() and p.strip() != self.prompt:
-            self.prompt = p.strip()
-            self._session = None
+        else:
+            p = control.get("prompt")
+            if isinstance(p, str) and p.strip() and p.strip() != self.prompt:
+                self.prompt = p.strip()
+                self._session = None
+        bg = _parse_background(control)
+        if bg is not _BG_UNSET:
+            self._bg_color = bg
 
     def _color(self, concept: str) -> tuple[int, int, int]:
         return _concept_color(concept, self._concepts, self._colors)
 
     def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
-        torch, cv2 = self._torch, self._cv2
+        torch = self._torch
         h, w = frame_rgb.shape[:2]
         if self._session is None or self._shape != (h, w):
             self._start_session(h, w)
@@ -685,15 +755,14 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         res = self.processor.postprocess_outputs(self._session, out, original_sizes=[[h, w]])
         obj_to_concept = {oid: p for p, oids in res["prompt_to_obj_ids"].items() for oid in oids}
         masks = res["masks"]
-        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        masks_by_concept: dict[str, list[np.ndarray]] = {c: [] for c in self._concepts}
         for k, oid in enumerate(res["object_ids"].tolist()):
             arr = masks[k]
             m = (arr.cpu().numpy() if hasattr(arr, "cpu") else np.asarray(arr)) > 0
-            col = self._color(obj_to_concept.get(oid, "?"))
-            rgba[m] = (*col, 130)  # translucent fill
-            cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
-        return rgba
+            masks_by_concept.setdefault(obj_to_concept.get(oid, "?"), []).append(m)
+        return _composite_concepts(
+            h, w, masks_by_concept, self._concepts, self._colors, self._signs, self._bg_color, self._cv2
+        )
 
 
 def _import_cv2():
