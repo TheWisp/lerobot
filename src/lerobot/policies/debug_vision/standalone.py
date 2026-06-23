@@ -154,6 +154,7 @@ def main() -> None:
                     continue
                 frame, _ts = result
                 try:
+                    adapter.set_camera(cam)  # scope per-camera tracking state (video model)
                     rgba = adapter.infer(np.ascontiguousarray(frame))
                     overlay.write_overlay(cam, rgba)
                 except Exception:
