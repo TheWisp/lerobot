@@ -70,7 +70,13 @@ class SharedOverlayBuffer:
             assert cameras, "writer must pass cameras={cam_key: (h, w)}"
             self.cameras = {k: (int(v[0]), int(v[1])) for k, v in cameras.items()}
             self.model = model
-            self._meta_dict = {"cameras": self.cameras, "model": model, "fps": 0.0}
+            self._meta_dict = {
+                "cameras": self.cameras,
+                "model": model,
+                "fps": 0.0,
+                "vram_used_gb": 0.0,
+                "vram_total_gb": 0.0,
+            }
             _write_json(self._meta, self._meta_dict)
         else:
             meta = _read_json(self._meta)
@@ -118,6 +124,20 @@ class SharedOverlayBuffer:
     def read_fps(self) -> float:
         """Reader: latest overlay frame rate the writer published (0.0 if none)."""
         return float(_read_json(self._meta).get("fps", 0.0))
+
+    def write_vram(self, used_gb: float, total_gb: float) -> None:
+        """Writer: publish device-wide VRAM usage (used/total GB) via the meta block."""
+        self._meta_dict["vram_used_gb"] = round(float(used_gb), 1)
+        self._meta_dict["vram_total_gb"] = round(float(total_gb), 1)
+        _write_json(self._meta, self._meta_dict)
+
+    def read_vram(self) -> dict:
+        """Reader: latest VRAM usage (``{"used_gb", "total_gb"}``, zeros if none)."""
+        m = _read_json(self._meta)
+        return {
+            "used_gb": float(m.get("vram_used_gb", 0.0)),
+            "total_gb": float(m.get("vram_total_gb", 0.0)),
+        }
 
     def cleanup(self) -> None:
         for block in (*self._blocks.values(), self._meta, self._control):

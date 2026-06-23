@@ -27,6 +27,17 @@ from lerobot.robots.obs_stream import ObservationStreamReader
 logger = logging.getLogger(__name__)
 
 
+def _vram_gb() -> tuple[float, float]:
+    """Device-wide VRAM ``(used_gb, total_gb)``, or ``(0, 0)`` if CUDA is unavailable."""
+    with contextlib.suppress(Exception):
+        import torch
+
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            return (total - free) / 1e9, total / 1e9
+    return 0.0, 0.0
+
+
 def _set_overlay(text: str, color: str = "#39d353") -> None:
     """Emit the GUI text-overlay protocol (parsed by run.py _append_output)."""
     print(f"##OVERLAY:{text}:{color}##", flush=True)
@@ -177,6 +188,9 @@ def main() -> None:
             fps_prev = now
             if now - fps_last_emit >= 1.0 and fps_window:
                 overlay.write_fps(len(fps_window) / sum(fps_window))  # -> GUI via the shared meta block
+                used_gb, total_gb = _vram_gb()
+                if total_gb:
+                    overlay.write_vram(used_gb, total_gb)
                 fps_last_emit = now
     except Exception:
         logger.exception("debug-vision crashed")

@@ -2101,7 +2101,15 @@ async function _pollDebugFps() {
         if (!res.ok) return;
         const d = await res.json();
         const f = document.getElementById('run-debug-model-fps');
-        if (f) f.textContent = (d.available && d.fps) ? `${d.fps.toFixed(0)} fps overlay` : '';
+        if (f) {
+            if (d.available && d.fps) {
+                const v = d.vram;
+                const vram = (v && v.total_gb) ? ` · ${v.used_gb.toFixed(1)}/${v.total_gb.toFixed(0)} GB VRAM` : '';
+                f.textContent = `${d.fps.toFixed(0)} fps overlay${vram}`;
+            } else {
+                f.textContent = '';
+            }
+        }
     } catch (e) { /* ignore */ }
 }
 

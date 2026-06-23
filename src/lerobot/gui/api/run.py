@@ -695,6 +695,7 @@ async def debug_overlay_meta() -> dict:
         "cameras": list(reader.cameras),
         "model": reader.model,
         "fps": reader.read_fps(),
+        "vram": reader.read_vram(),
     }
 
 
