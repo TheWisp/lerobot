@@ -609,6 +609,7 @@ function _debugVisionOptgroup() {
         + '<option value="sam2_mask" data-policy-type="debug_vision">SAM2.1 — segment (center point)</option>'
         + '<option value="sam3" data-policy-type="debug_vision">SAM3 — text-prompt masks (gated)</option>'
         + '<option value="sam3_video" data-policy-type="debug_vision">SAM3 — locked object tracking (gated)</option>'
+        + '<option value="sam3_video_concept" data-policy-type="debug_vision">SAM3 video — concept masks (legacy, OOMs)</option>'
         + '<option value="cotracker3" data-policy-type="debug_vision">CoTracker3 — point tracks</option>'
         + '</optgroup>';
 }

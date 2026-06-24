@@ -1050,6 +1050,117 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         return rgba
 
 
+class Sam3ConceptVideoAdapter(DebugVisionAdapter):
+    """LEGACY SAM3 concept-video tracker (``Sam3VideoModel``) — preserved while the new
+    tracking-by-detection ``sam3_video`` is stabilized. Period-separated concepts, each
+    tracked in its own color via the streaming concept model. Known limitations: the
+    streaming session's GPU memory grows unbounded (OOMs over a long session) and the
+    detector keeps adding instances over time. Crisp masks, though. See
+    SAM3_VIDEO_STREAMING_OOM.md. GATED weights — accept the Meta SAM License first.
+    """
+
+    key = "sam3_video_concept"
+    label = "SAM3 video — concept masks (legacy, OOMs)"
+    controls = [
+        {
+            "type": "text",
+            "key": "prompt",
+            "label": "Concepts",
+            "placeholder": "robot arm . cylinder . green ring",
+            "hint": "Period-separated concepts; each is tracked across frames in its own color "
+            "(legend, top-left). Changing this restarts tracking.",
+        }
+    ]
+    SAM3_ID = "facebook/sam3"
+    DEFAULT_PROMPT = "object"
+    MAX_OBJECTS = 6
+
+    def __init__(self, device: str = "cuda"):
+        super().__init__(device)
+        try:
+            import torch
+            from PIL import Image
+            from transformers import Sam3VideoModel, Sam3VideoProcessor
+        except ImportError as e:
+            raise RuntimeError(_IMPORT_HINT) from e
+        self._torch = torch
+        self._cv2 = _import_cv2()
+        self._Image = Image
+        logger.info("loading %s (concept video, legacy) ...", self.SAM3_ID)
+        try:
+            self.processor = Sam3VideoProcessor.from_pretrained(self.SAM3_ID)
+            self.model = Sam3VideoModel.from_pretrained(self.SAM3_ID, dtype=torch.float16).to(device).eval()
+        except Exception as e:
+            raise RuntimeError(
+                f"SAM3 weights are gated — accept the Meta SAM License at "
+                f"https://huggingface.co/{self.SAM3_ID} and run `hf auth login`, then reload. ({type(e).__name__})"
+            ) from e
+        self.prompt = self.DEFAULT_PROMPT
+        self._concepts: list[str] = []
+        self._colors: dict[str, tuple[int, int, int]] = {}
+        self._signs: dict[str, str] = {}
+        self._bg_color: tuple[int, int, int] | None = None
+        self._cam: str | None = None
+        self._sessions: dict[str | None, object] = {}
+        self._shapes: dict[str | None, tuple[int, int]] = {}
+
+    def _parse_concepts(self) -> list[str]:
+        parts = (c.strip() for c in self.prompt.replace(",", ".").split("."))
+        names = list(dict.fromkeys(c for c in parts if c))[: self.MAX_OBJECTS]
+        return names or [self.DEFAULT_PROMPT]
+
+    def _start_session(self, cam: str | None, h: int, w: int) -> None:
+        self._concepts = self._parse_concepts()
+        session = self.processor.init_video_session(inference_device=self.device, dtype=self._torch.float16)
+        self.processor.add_text_prompt(session, self._concepts)
+        self._sessions[cam] = session
+        self._shapes[cam] = (h, w)
+
+    def set_camera(self, cam: str | None) -> None:
+        self._cam = cam
+
+    def set_control(self, control: dict) -> None:
+        names, colors, signs = _parse_objects(control, self.MAX_OBJECTS)
+        if names is not None:
+            self._colors = colors
+            self._signs = signs
+            new_prompt = " . ".join(names)
+            if new_prompt and new_prompt != self.prompt:
+                self.prompt = new_prompt
+                self._sessions = {}
+        else:
+            p = control.get("prompt")
+            if isinstance(p, str) and p.strip() and p.strip() != self.prompt:
+                self.prompt = p.strip()
+                self._sessions = {}
+        bg = _parse_background(control)
+        if bg is not _BG_UNSET:
+            self._bg_color = bg
+
+    def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
+        torch = self._torch
+        h, w = frame_rgb.shape[:2]
+        cam = self._cam
+        if self._sessions.get(cam) is None or self._shapes.get(cam) != (h, w):
+            self._start_session(cam, h, w)
+        session = self._sessions[cam]
+        inp = self.processor(images=self._Image.fromarray(frame_rgb), return_tensors="pt")
+        pv = inp["pixel_values"][0].to(self.device, torch.float16)
+        with torch.inference_mode():
+            out = self.model(inference_session=session, frame=pv)
+        res = self.processor.postprocess_outputs(session, out, original_sizes=[[h, w]])
+        obj_to_concept = {oid: p for p, oids in res["prompt_to_obj_ids"].items() for oid in oids}
+        masks = res["masks"]
+        masks_by_concept: dict[str, list[np.ndarray]] = {c: [] for c in self._concepts}
+        for k, oid in enumerate(res["object_ids"].tolist()):
+            arr = masks[k]
+            m = (arr.cpu().numpy() if hasattr(arr, "cpu") else np.asarray(arr)) > 0
+            masks_by_concept.setdefault(obj_to_concept.get(oid, "?"), []).append(m)
+        return _composite_concepts(
+            h, w, masks_by_concept, self._concepts, self._colors, self._signs, self._bg_color, self._cv2
+        )
+
+
 def _import_cv2():
     try:
         import cv2
@@ -1066,6 +1177,7 @@ ADAPTERS: dict[str, type[DebugVisionAdapter]] = {
     Sam2MaskAdapter.key: Sam2MaskAdapter,
     Sam3Adapter.key: Sam3Adapter,
     Sam3VideoAdapter.key: Sam3VideoAdapter,
+    Sam3ConceptVideoAdapter.key: Sam3ConceptVideoAdapter,
     CoTracker3Adapter.key: CoTracker3Adapter,
 }
 
