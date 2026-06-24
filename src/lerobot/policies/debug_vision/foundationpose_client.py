@@ -76,6 +76,12 @@ class FoundationPoseClient:
 
         if self._proc.poll() is not None:
             return self._last_overlay  # worker died — keep showing the last result
+        # FoundationPose tracks ONE object on the depth camera (top). For any other view
+        # (no depth) there's nothing to overlay — return None so the caller doesn't paint the
+        # top-camera mesh onto a wrist/front frame (cross-camera contamination).
+        depth = self._depth(cam)
+        if depth is None or depth.shape[:2] != rgb.shape[:2]:
+            return None
         # 1) harvest a completed response for the in-flight request
         if self._pending_seq is not None:
             resp = self._ipc.read_response(self._pending_seq)
@@ -91,10 +97,8 @@ class FoundationPoseClient:
                         self._reg_count += 1  # a (re)registration just completed
         # 2) if nothing in flight, send the next frame
         if self._pending_seq is None and mask is not None and mask.any():
-            depth = self._depth(cam)
-            if depth is not None and depth.shape[:2] == rgb.shape[:2]:
-                cmd = CMD_TRACK if self._registered else CMD_REGISTER
-                self._pending_seq = self._ipc.send(cmd, rgb, depth, mask, _K_TOP)
+            cmd = CMD_TRACK if self._registered else CMD_REGISTER
+            self._pending_seq = self._ipc.send(cmd, rgb, depth, mask, _K_TOP)
         return self._last_overlay
 
     def reset(self) -> None:

@@ -824,6 +824,7 @@ class Sam3VideoAdapter(DebugVisionAdapter):
     LOST_THRESH = 0.30  # sigmoid(object_score_logits) below this = track lost -> Tier-1 recover
     RECOVER_EVERY = 5  # throttle Tier-1 re-detection attempts (frames) while an object is lost
     AMODAL_COVER_MIN = 0.30  # (SAM-mask ∩ FP-mesh)/SAM-mask below this = FP pose diverged -> re-register from the mask (keep showing, never hide)
+    AMODAL_RECOVER_EVERY = 20  # min frames between FP re-registrations (register is heavy; spamming it starves the GPU and destabilizes the tracker)
 
     def __init__(self, device: str = "cuda"):
         super().__init__(device)
@@ -872,6 +873,7 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         self._amodal = False
         self._fp = None
         self._amodal_n = 0  # frame counter for throttled amodal diagnostics
+        self._amodal_cooldown = 0  # frames until FP re-registration is allowed again
 
     def _parse_concepts(self) -> list[str]:
         parts = (c.strip() for c in self.prompt.replace(",", ".").split("."))
@@ -1095,8 +1097,12 @@ class Sam3VideoAdapter(DebugVisionAdapter):
                     if self._amodal_n % 8 == 0:  # ~2 Hz record -> persistent amodal.log (survives unload)
                         p = getattr(self._fp, "_last_pose", None)
                         t = p.reshape(-1)[[3, 7, 11]] if p is not None else (0.0, 0.0, 0.0)
+                        sy, sx = np.where(sam)
+                        sctr = (int(sx.mean()), int(sy.mean())) if sam.any() else (0, 0)
+                        fy, fx = np.where(fp)
+                        fctr = (int(fx.mean()), int(fy.mean())) if fp.any() else (0, 0)
                         line = (
-                            f"AMODAL f{self._amodal_n} sam={int(sam.sum())} fp={int(fp.sum())} "
+                            f"AMODAL f{self._amodal_n} sam={int(sam.sum())}@{sctr} fp={int(fp.sum())}@{fctr} "
                             f"cover={cover:.2f} iou={iou:.2f} "
                             f"t=({float(t[0]):.2f},{float(t[1]):.2f},{float(t[2]):.2f}) "
                             f"regs={getattr(self._fp, '_reg_count', 0)} diverged={diverged}"
@@ -1104,8 +1110,15 @@ class Sam3VideoAdapter(DebugVisionAdapter):
                         print(line, flush=True)
                         with contextlib.suppress(Exception), open(_AMODAL_LOG, "a") as f:
                             f.write(line + "\n")
-                    if diverged:
+                    # Re-register only: (a) when FP has actually diverged, (b) throttled (register
+                    # is heavy — spamming it starves the GPU and destabilizes the SAM tracker), and
+                    # (c) ONLY from a clean SAM mask near the mesh size — a blown-up SAM blob is
+                    # itself bad, so re-registering from it would corrupt FP and feed a spiral.
+                    self._amodal_cooldown = max(0, self._amodal_cooldown - 1)
+                    sam_clean = 0.5 * int(fp.sum()) < int(sam.sum()) < 1.8 * int(fp.sum())
+                    if diverged and sam_clean and self._amodal_cooldown == 0:
                         self._fp.reset()
+                        self._amodal_cooldown = self.AMODAL_RECOVER_EVERY
         return rgba
 
 
