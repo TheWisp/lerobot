@@ -818,7 +818,7 @@ class Sam3VideoAdapter(DebugVisionAdapter):
     FLUSH_EVERY = 150  # rebuild each tracker session every N frames -> flat GPU memory
     LOST_THRESH = 0.30  # sigmoid(object_score_logits) below this = track lost -> Tier-1 recover
     RECOVER_EVERY = 5  # throttle Tier-1 re-detection attempts (frames) while an object is lost
-    AMODAL_COVER_MIN = 0.30  # min (SAM-mask ∩ FP-mesh)/SAM-mask; below = FP drifted -> hide + re-register
+    AMODAL_COVER_MIN = 0.30  # (SAM-mask ∩ FP-mesh)/SAM-mask below this = FP pose diverged -> re-register from the mask (keep showing, never hide)
 
     def __init__(self, device: str = "cuda"):
         super().__init__(device)
@@ -1073,11 +1073,14 @@ class Sam3VideoAdapter(DebugVisionAdapter):
                 overlay = self._fp.process(np.ascontiguousarray(frame_rgb), sam, cam)
                 if overlay is not None:
                     fp = overlay[..., 3] > 0
+                    rgba[fp] = overlay[fp]  # always show FP's best estimate — never blank it
+                    # FP's track_one is incremental, so an edge-on / occluded ring makes the
+                    # ORIENTATION go stale. We know where the ring is (SAM mask + depth), so when
+                    # the pose diverges from the observation, re-register from the SAM mask to
+                    # re-estimate the pose toward the truth — recover, don't give up.
                     cover = float((sam & fp).sum()) / max(1, int(sam.sum()))
-                    if cover >= self.AMODAL_COVER_MIN:
-                        rgba[fp] = overlay[fp]
-                    else:
-                        self._fp.reset()  # drifted: re-register next frame, draw nothing now
+                    if cover < self.AMODAL_COVER_MIN:
+                        self._fp.reset()
         return rgba
 
 
