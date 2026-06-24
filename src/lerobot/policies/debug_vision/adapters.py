@@ -841,8 +841,12 @@ class Sam3VideoAdapter(DebugVisionAdapter):
                 f"SAM3 weights are gated — accept the Meta SAM License at "
                 f"https://huggingface.co/{self.SAM3_ID} and run `hf auth login`, then reload. ({type(e).__name__})"
             ) from e
-        # Both tiers use the identical PE-ViT-L+ encoder; share the instance to save ~0.9 GB.
-        self.trk.vision_encoder = self.det.vision_encoder
+        # Do NOT share the encoder (trk.vision_encoder = det.vision_encoder). Despite the same
+        # PE-ViT-L+ architecture, the detector's and tracker's encoder WEIGHTS differ — feeding
+        # the tracker the detector's features silently corrupts tracking: it drifts off the
+        # seeded object onto distractors while still reporting a high score. Measured on real
+        # frames: with the share the ring track jumped to the gripper by frame ~14; without it,
+        # it holds. The ~0.9 GB saved is not worth a broken tracker.
         self.prompt = self.DEFAULT_PROMPT
         self._concepts: list[str] = []
         self._colors: dict[str, tuple[int, int, int]] = {}  # user-chosen color per concept
