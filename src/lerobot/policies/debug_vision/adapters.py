@@ -105,13 +105,17 @@ def _parse_background(control: dict):
     return None  # transparent
 
 
-def _composite_concepts(h, w, masks_by_concept, concepts, colors, signs, bg_color, cv2, fill_alpha=130):
+def _composite_concepts(
+    h, w, masks_by_concept, concepts, colors, signs, bg_color, cv2, fill_alpha=130, outline_only=None
+):
     """Paint an RGBA overlay from per-concept boolean masks.
 
     ``+`` concepts are drawn in their color; ``-`` concepts are carved out of the
     positive masks (and excluded from the detected region). ``bg_color`` (when not
     None) fills everything NOT covered by a positive detection — the inverse region.
-    Background is painted first so positive fills + contours sit on top.
+    Background is painted first so positive fills + contours sit on top. Concepts in
+    ``outline_only`` get just their contour (no fill) — used so the amodal mesh shows
+    through the tracked concept instead of being hidden under its fill.
     """
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
     # Fast path: with no negative concepts and a transparent background (the common
@@ -127,22 +131,25 @@ def _composite_concepts(h, w, masks_by_concept, concepts, colors, signs, bg_colo
                 for m in masks_by_concept.get(c, []):
                     neg |= m
     detected = np.zeros((h, w), dtype=bool) if need_detected else None
-    draw: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+    outline = outline_only or set()
+    draw: list[tuple[np.ndarray, tuple[int, int, int], bool]] = []
     for c in concepts:
         if signs.get(c, "+") == "-":
             continue
         col = _concept_color(c, concepts, colors)
+        is_outline = c in outline
         for m in masks_by_concept.get(c, []):
             mm = (m & ~neg) if has_neg else m
             if has_neg and not mm.any():
                 continue
-            draw.append((mm, col))
+            draw.append((mm, col, is_outline))
             if need_detected:
                 detected |= mm
     if need_detected:
         rgba[~detected] = (*bg_color, fill_alpha)
-    for mm, col in draw:
-        rgba[mm] = (*col, fill_alpha)
+    for mm, col, is_outline in draw:
+        if not is_outline:
+            rgba[mm] = (*col, fill_alpha)
         cnts, _ = cv2.findContours(mm.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
     return rgba
@@ -811,6 +818,7 @@ class Sam3VideoAdapter(DebugVisionAdapter):
     FLUSH_EVERY = 150  # rebuild each tracker session every N frames -> flat GPU memory
     LOST_THRESH = 0.30  # sigmoid(object_score_logits) below this = track lost -> Tier-1 recover
     RECOVER_EVERY = 5  # throttle Tier-1 re-detection attempts (frames) while an object is lost
+    AMODAL_COVER_MIN = 0.30  # min (SAM-mask ∩ FP-mesh)/SAM-mask; below = FP drifted -> hide + re-register
 
     def __init__(self, device: str = "cuda"):
         super().__init__(device)
@@ -1038,19 +1046,38 @@ class Sam3VideoAdapter(DebugVisionAdapter):
                     self._seed(track, seeds, pv, h, w)
 
         masks_by_concept = self._live_masks(track)
+        # With amodal on, draw the tracked concept OUTLINE-only so the FP mesh shows through
+        # instead of being hidden under the SAM fill.
+        amodal_on = self._amodal and self._fp is not None and bool(self._concepts)
+        outline = {self._concepts[0]} if amodal_on else None
         rgba = _composite_concepts(
-            h, w, masks_by_concept, self._concepts, self._colors, self._signs, self._bg_color, self._cv2
+            h,
+            w,
+            masks_by_concept,
+            self._concepts,
+            self._colors,
+            self._signs,
+            self._bg_color,
+            self._cv2,
+            outline_only=outline,
         )
-        # Amodal: overlay the FoundationPose-tracked mesh of the first concept (only the
-        # depth camera has depth, so the sidecar no-ops on other views). The locked mask is
-        # the seed — one stable object, exactly what FoundationPose needs.
-        if self._amodal and self._fp is not None and self._concepts:
+        # Amodal: overlay the FoundationPose-tracked mesh of the first concept (only the depth
+        # camera has depth, so the sidecar no-ops on other views). FoundationPose drifts under
+        # heavy occlusion / an edge-on ring; the SAM mask stays good, so use it to detect drift:
+        # if the rendered mesh no longer covers the visible object, HIDE the wrong overlay and
+        # re-register FP from the SAM mask (recovers once the view is clean again).
+        if amodal_on:
             ms = masks_by_concept.get(self._concepts[0], [])
             if ms:
-                overlay = self._fp.process(np.ascontiguousarray(frame_rgb), ms[0], cam)
+                sam = ms[0]
+                overlay = self._fp.process(np.ascontiguousarray(frame_rgb), sam, cam)
                 if overlay is not None:
-                    sel = overlay[..., 3] > 0
-                    rgba[sel] = overlay[sel]
+                    fp = overlay[..., 3] > 0
+                    cover = float((sam & fp).sum()) / max(1, int(sam.sum()))
+                    if cover >= self.AMODAL_COVER_MIN:
+                        rgba[fp] = overlay[fp]
+                    else:
+                        self._fp.reset()  # drifted: re-register next frame, draw nothing now
         return rgba
 
 
