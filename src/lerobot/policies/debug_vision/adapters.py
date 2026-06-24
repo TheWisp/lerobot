@@ -15,10 +15,15 @@ import colorsys
 import contextlib
 import hashlib
 import logging
+import os
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Persistent amodal diagnostics (the debug-model log is unlinked on unload, so per-frame
+# FP-vs-SAM records would vanish — keep them here so a live test leaves a readable trail).
+_AMODAL_LOG = os.path.expanduser("~/.cache/huggingface/lerobot/gui/amodal.log")
 
 # Public HF checkpoints. Pinned by id so a fresh env fetches the same weights.
 GROUNDING_DINO_ID = "IDEA-Research/grounding-dino-tiny"
@@ -866,6 +871,7 @@ class Sam3VideoAdapter(DebugVisionAdapter):
         # Amodal toggle: overlays the FoundationPose-tracked 3D mesh of the FIRST concept.
         self._amodal = False
         self._fp = None
+        self._amodal_n = 0  # frame counter for throttled amodal diagnostics
 
     def _parse_concepts(self) -> list[str]:
         parts = (c.strip() for c in self.prompt.replace(",", ".").split("."))
@@ -975,7 +981,10 @@ class Sam3VideoAdapter(DebugVisionAdapter):
 
                 self._fp = FoundationPoseClient()
                 self._amodal = True
-                logger.info("amodal: FoundationPose sidecar enabled")
+                self._amodal_n = 0
+                with contextlib.suppress(Exception):
+                    open(_AMODAL_LOG, "w").close()  # fresh diagnostics log per amodal session
+                logger.info("amodal: FoundationPose sidecar enabled; diagnostics -> %s", _AMODAL_LOG)
             except Exception as e:
                 logger.warning("amodal: failed to start FoundationPose sidecar: %s", e)
                 self._fp, self._amodal = None, False
@@ -1078,8 +1087,24 @@ class Sam3VideoAdapter(DebugVisionAdapter):
                     # ORIENTATION go stale. We know where the ring is (SAM mask + depth), so when
                     # the pose diverges from the observation, re-register from the SAM mask to
                     # re-estimate the pose toward the truth — recover, don't give up.
-                    cover = float((sam & fp).sum()) / max(1, int(sam.sum()))
-                    if cover < self.AMODAL_COVER_MIN:
+                    inter = int((sam & fp).sum())
+                    cover = inter / max(1, int(sam.sum()))
+                    iou = inter / max(1, int((sam | fp).sum()))
+                    diverged = cover < self.AMODAL_COVER_MIN
+                    self._amodal_n += 1
+                    if self._amodal_n % 8 == 0:  # ~2 Hz record -> persistent amodal.log (survives unload)
+                        p = getattr(self._fp, "_last_pose", None)
+                        t = p.reshape(-1)[[3, 7, 11]] if p is not None else (0.0, 0.0, 0.0)
+                        line = (
+                            f"AMODAL f{self._amodal_n} sam={int(sam.sum())} fp={int(fp.sum())} "
+                            f"cover={cover:.2f} iou={iou:.2f} "
+                            f"t=({float(t[0]):.2f},{float(t[1]):.2f},{float(t[2]):.2f}) "
+                            f"regs={getattr(self._fp, '_reg_count', 0)} diverged={diverged}"
+                        )
+                        print(line, flush=True)
+                        with contextlib.suppress(Exception), open(_AMODAL_LOG, "a") as f:
+                            f.write(line + "\n")
+                    if diverged:
                         self._fp.reset()
         return rgba
 

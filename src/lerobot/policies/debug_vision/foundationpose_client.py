@@ -45,6 +45,8 @@ class FoundationPoseClient:
         self._registered = False
         self._pending_seq = None  # one in-flight request at a time
         self._last_overlay = None  # most recent completed overlay (shown while the next computes)
+        self._last_pose = None  # most recent 4x4 pose (for diagnostics/logging)
+        self._reg_count = 0  # how many (re)registrations have completed
         logger.info("FoundationPose sidecar spawned (pid %s); log %s", self._proc.pid, _WORKER_LOG)
 
     def _depth(self, cam: str | None):
@@ -79,10 +81,14 @@ class FoundationPoseClient:
             resp = self._ipc.read_response(self._pending_seq)
             if resp is not None:
                 self._pending_seq = None
-                status, overlay, _pose = resp
+                status, overlay, pose = resp
                 if status == ST_OK:
+                    was_registered = self._registered
                     self._registered = True
                     self._last_overlay = overlay
+                    self._last_pose = pose
+                    if not was_registered:
+                        self._reg_count += 1  # a (re)registration just completed
         # 2) if nothing in flight, send the next frame
         if self._pending_seq is None and mask is not None and mask.any():
             depth = self._depth(cam)
