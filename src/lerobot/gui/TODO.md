@@ -1,5 +1,13 @@
 # GUI TODO
 
+## Tooling
+
+- [ ] **`capture_camera_frame` MCP tool (live snapshot).** For debug-vision work we repeatedly need a fresh frame from a named camera (e.g. clean "ring on the desk" seeds, staged occlusion shots) to test SAM offline. Today it's an ad-hoc script (`RealSenseCamera(serial).connect();read()`, or read the ObservationStream when teleop is live). Expose it as an MCP tool `capture_camera_frame(camera="top")` that returns/saves a PNG: read the ObservationStream if teleop is streaming (no device conflict), else open the configured camera directly, warm up, grab one frame, release. Low-med priority; useful enough for the vision workstream to be worth it.
+
+## Debug-vision architecture (revisit holistically)
+
+- [ ] **Amodal: consider FoundationPose-as-tracker; drop the SAM geometric tracker from that path.** The amodal needs the object's 6-DoF _pose_ (to render the full mesh incl. occluded geometry), not a per-frame mask. FoundationPose's `track_one` already IS a pose tracker (register once with a mask, then render-and-compare, no mask after). So the leaner amodal pipeline = SAM3 _detector_ (register / re-register FP when lost) + FoundationPose (track + render). That removes the SAM3 geometric tracker (`sam3_video` Tier-2) from the amodal path. Caveats: FP needs depth + a known mesh, so the general "mask any concept" debug view still needs the SAM tracker (this is amodal-specific); and FP-alone robustness under occlusion / fast manipulation is untested (today the SAM mask constrains where the object is and FP refines pose). Deciding experiment: detector-seed → FP-track-alone vs current SAM+FP on real manipulation; if FP holds, drop the SAM tracker for amodal. Revisit the ~0.9 GB encoder-share cost then too (sharing is unsafe — it corrupts the tracker; see `Sam3VideoAdapter` in adapters.py).
+
 ## Data Tab
 
 - [High] **Warning/error panel**: dataset verification errors and warnings are currently buried in server log text. Add a visible warning panel (banner or sidebar) that surfaces verification results when a dataset is opened — errors as red, warnings as yellow. Users must not miss data integrity issues.
