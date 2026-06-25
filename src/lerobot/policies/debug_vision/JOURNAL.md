@@ -28,7 +28,7 @@ default (`RING_OUTER_DIA/HOLE_DIA/HEIGHT`, `trimesh.creation.annulus`); `--mesh`
 `anchor_scale` re-sizes to the depth at register, so absolute size self-corrects — the
 **ratios** are what matter. Overlay redesigned: white silhouette (outer + hole contours) +
 faint front-face wireframe + pose gizmo + cyan SAM-mask outline. (The old solid fill made
-amodal mesh-growth *under occlusion* look like a desync — it isn't: the mesh extending past
+amodal mesh-growth _under occlusion_ look like a desync — it isn't: the mesh extending past
 the SAM mask **is** amodal working.)
 
 **Spinning gizmo = symmetry.** A tube's rotation about its axis is unobservable. Declared to
@@ -44,15 +44,16 @@ perpendicular axes are derived from a fixed reference so it can't spin by constr
 
 **Register is a global ORIENTATION search, not an image search.** Position comes from the
 SAM mask centroid + depth (already known). Register builds ~240 rotation hypotheses
-(`make_rotation_grid` 40 views × 6 in-plane), refines *each* 5× through the refiner net, and
+(`make_rotation_grid` 40 views × 6 in-plane), refines _each_ 5× through the refiner net, and
 scores them. That's the 3.4 s. `track_one` is 18 ms because it refines one known pose, 2 iter.
 
-**Re-register behavior (heavy-occlusion relevant).** Triggered by *divergence*
+**Re-register behavior (heavy-occlusion relevant).** Triggered by _divergence_
 (`cover < 0.30`), throttled (every 20 frames), and only from a clean mask. Object disappears
 → holds the last overlay (no re-register); reappears near → cheap `TRACK`; reappears after
 moving while hidden → one 3.4 s register once it's cleanly visible.
 
 **Open research (deferred — not production).**
+
 - **SAM-guided register:** PCA the masked-depth point cloud → object axis → seed register at
   that orientation, skip the ~240-hypothesis grid. For the symmetric tube this could take
   register from 3.4 s toward tracking speed. Biggest win for the occlusion freeze.
@@ -62,6 +63,7 @@ moving while hidden → one 3.4 s register once it's cleanly visible.
   RGB-D → neural object field → mesh, for objects you can't put a ruler on.
 
 **Methodology lessons.**
+
 - For a hand-measurable object, **ruler ground truth beats any single-image neural
   reconstruction**. Don't reach for SAM 3D / NeRF when calipers will do.
 - The offline replay harness is **blocking** (send frame, wait) — not representative of the

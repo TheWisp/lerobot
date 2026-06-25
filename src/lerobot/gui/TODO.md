@@ -14,7 +14,7 @@
   - **Debug-only (live) =** Grounding DINO / DINOv2 / DepthAnything / CoTracker3 / SAM2.
   - Steps:
     1. [ ] Promote `sam3_video` (amodal off) as the production "SAM3 object tracker"; retire `sam3_tracker` + legacy `sam3_video_concept`.
-    2. [ ] **Data-view tracker** ("debug model in data mode"): decode episode RGB → detector seed on frame 0 → tracker propagate. **Default = pre-compute the whole episode on enable + cache masks in memory** (the tracker is sequential and the data view scrubs randomly, so on-the-fly doesn't work; one forward pass ~len×57 ms makes scrubbing instant). Overlay the cached mask by frame index. *(decided: pre-compute+cache over on-the-fly / always-persist.)*
+    2. [ ] **Data-view tracker** ("debug model in data mode"): decode episode RGB → detector seed on frame 0 → tracker propagate. **Default = pre-compute the whole episode on enable + cache masks in memory** (the tracker is sequential and the data view scrubs randomly, so on-the-fly doesn't work; one forward pass ~len×57 ms makes scrubbing instant). Overlay the cached mask by frame index. _(decided: pre-compute+cache over on-the-fly / always-persist.)_
     3. [ ] **"Save masks to dataset"** action → persist the cached track as a derived video feature `observation.masks.<obj>` (scrubbable, shareable, reusable for training/labeling — meets the depth-as-view / feature-editing direction; a tracked mask is just another derived view).
     4. [ ] Seeding UX in data view: name the object (same as live); detector seeds on the episode's first/chosen frame.
 
