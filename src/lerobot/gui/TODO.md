@@ -8,6 +8,16 @@
 
 - [ ] **Amodal: consider FoundationPose-as-tracker; drop the SAM geometric tracker from that path.** The amodal needs the object's 6-DoF _pose_ (to render the full mesh incl. occluded geometry), not a per-frame mask. FoundationPose's `track_one` already IS a pose tracker (register once with a mask, then render-and-compare, no mask after). So the leaner amodal pipeline = SAM3 _detector_ (register / re-register FP when lost) + FoundationPose (track + render). That removes the SAM3 geometric tracker (`sam3_video` Tier-2) from the amodal path. Caveats: FP needs depth + a known mesh, so the general "mask any concept" debug view still needs the SAM tracker (this is amodal-specific); and FP-alone robustness under occlusion / fast manipulation is untested (today the SAM mask constrains where the object is and FP refines pose). Deciding experiment: detector-seed → FP-track-alone vs current SAM+FP on real manipulation; if FP holds, drop the SAM tracker for amodal. Revisit the ~0.9 GB encoder-share cost then too (sharing is unsafe — it corrupts the tracker; see `Sam3VideoAdapter` in adapters.py).
 
+- [ ] **Productize the 2D SAM3 tracker (live + data view); split product vs research — plan 2026-06-25.** Motivating findings in [`policies/debug_vision/JOURNAL.md`](../../policies/debug_vision/JOURNAL.md).
+  - **Product = 2D SAM3 object tracker** (name an object → tracked mask/outline; no depth/pose/mesh). It's `sam3_video` (detector-seed + geometric-track) with amodal off. Expose **live + data view**.
+  - **Experimental, gated, live-only = FP amodal 3D** (tube + pose; needs depth + per-object mesh + the 3.4 s register). Keep as a clearly-labelled checkbox on the tracker, not a default.
+  - **Debug-only (live) =** Grounding DINO / DINOv2 / DepthAnything / CoTracker3 / SAM2.
+  - Steps:
+    1. [ ] Promote `sam3_video` (amodal off) as the production "SAM3 object tracker"; retire `sam3_tracker` + legacy `sam3_video_concept`.
+    2. [ ] **Data-view tracker** ("debug model in data mode"): decode episode RGB → detector seed on frame 0 → tracker propagate. **Default = pre-compute the whole episode on enable + cache masks in memory** (the tracker is sequential and the data view scrubs randomly, so on-the-fly doesn't work; one forward pass ~len×57 ms makes scrubbing instant). Overlay the cached mask by frame index. *(decided: pre-compute+cache over on-the-fly / always-persist.)*
+    3. [ ] **"Save masks to dataset"** action → persist the cached track as a derived video feature `observation.masks.<obj>` (scrubbable, shareable, reusable for training/labeling — meets the depth-as-view / feature-editing direction; a tracked mask is just another derived view).
+    4. [ ] Seeding UX in data view: name the object (same as live); detector seeds on the episode's first/chosen frame.
+
 ## Data Tab
 
 - [High] **Warning/error panel**: dataset verification errors and warnings are currently buried in server log text. Add a visible warning panel (banner or sidebar) that surfaces verification results when a dataset is opened — errors as red, warnings as yellow. Users must not miss data integrity issues.
