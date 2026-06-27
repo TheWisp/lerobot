@@ -284,6 +284,12 @@ def _ensure_no_active_process() -> None:
         )
 
 
+def is_run_active() -> bool:
+    """True while a run subprocess (teleop / record / replay / policy) is alive. It owns the
+    obs stream, so the data-tab overlay publisher must yield — see gui/api/overlays.py."""
+    return _active_process is not None and _active_process.returncode is None
+
+
 async def _read_stream(stream: asyncio.StreamReader, prefix: str = "") -> None:
     """Read lines from a subprocess stream and append to output buffer."""
     while True:
@@ -376,6 +382,16 @@ async def _launch_subprocess(
     # Close stale obs reader — the new process will create fresh shared memory
     # segments; any existing reader is mapped to old (possibly unlinked) segments.
     _close_obs_reader()
+
+    # A data-tab overlay may own the obs stream; a run must be its sole writer, so tear the data
+    # publisher down before the subprocess's robot-connect recreates the segment (else
+    # _Block(create=True) unlinks + recreates it under the publisher — see overlays.py).
+    try:
+        from lerobot.gui.api.overlays import stop_data_publisher
+
+        stop_data_publisher()
+    except Exception:
+        pass
 
     env = {**__import__("os").environ, "LEROBOT_OBS_STREAM": "1"}
     if extra_env:

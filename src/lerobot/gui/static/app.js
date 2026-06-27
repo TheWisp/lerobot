@@ -410,6 +410,8 @@ async function closeDataset(id, e) {
         if (currentDataset === id) {
             currentDataset = null;
             currentEpisode = null;
+            window.currentDataset = null;
+            window.currentEpisode = null;
             document.getElementById('camera-grid').innerHTML = '<div class="empty-state">Select an episode to view</div>';
         }
         renderTree();
@@ -421,6 +423,7 @@ async function closeDataset(id, e) {
 }
 
 function selectEpisode(datasetId, epIdx, length) {
+    const datasetChanged = currentDataset !== datasetId;
     currentDataset = datasetId;
     currentEpisode = epIdx;
     totalFrames = length;
@@ -441,6 +444,9 @@ function selectEpisode(datasetId, epIdx, length) {
     loadAllFrames(0);
     loadTrimForCurrentEpisode();
     if (window.FeatureEditing) window.FeatureEditing.onEpisodeSelected(datasetId, epIdx);
+    // A dataset switch changes the camera set — rebuild the overlay panel's camera list (dropping
+    // selections the new dataset lacks) and re-sync the worker to it.
+    if (datasetChanged && window.Overlays && window.Overlays.refreshCameras) window.Overlays.refreshCameras();
 }
 
 function renderCameraGrid() {
@@ -473,6 +479,7 @@ function renderCameraGrid() {
                 <div class="camera-title">${camName}</div>
                 <div class="camera-frame">
                     <img id="frame-${cam.replace(/\./g, '-')}" src="" alt="${camName}">
+                    <img class="overlay-layer" id="overlay-${cam.replace(/\./g, '-')}" src="" alt="">
                 </div>
             </div>
         `;
@@ -620,7 +627,13 @@ function loadAllFrames(idx) {
     const totalTime = formatTime(totalFrames / fps);
     document.getElementById('time-info').textContent = `${currentTime} / ${totalTime}`;
 
+    // Mirror playhead state to window so sibling scripts (overlays.js) can read it
+    // (these are top-level `let`s, which are NOT window properties on their own).
+    window.currentDataset = currentDataset;
+    window.currentEpisode = currentEpisode;
+    window.currentFrame = currentFrame;
     if (window.FeatureEditing) window.FeatureEditing.onPlayheadChanged();
+    if (window.Overlays) window.Overlays.onFrame();
     _postFrameToUrdfViz(currentFrame);
 
     return Promise.all(promises);

@@ -33,6 +33,7 @@ from lerobot.gui.api import (
     datasets,
     edits,
     models,
+    overlays,
     playback,
     robot,
     run,
@@ -83,6 +84,7 @@ async def startup_event():
     robot.set_app_state(_app_state)
     run.set_app_state(_app_state)
     models.set_app_state(_app_state)
+    overlays.set_app_state(_app_state)
     bug_reports.set_app_state(_app_state)
     logger.info(f"Initialized frame cache with {cache_size / 1_000_000:.0f} MB budget")
     # Sweep stale obs-stream shared-memory segments left by a previously-
@@ -201,6 +203,13 @@ async def shutdown_event():
         await _stop_debug_process()
     except Exception:
         logger.exception("shutdown: _stop_debug_process failed")
+    # Stop live overlay standalone (no-op if none).
+    try:
+        from lerobot.gui.api.overlays import _stop_live
+
+        await _stop_live()
+    except Exception:
+        logger.exception("shutdown: _stop_live failed")
     # Stop active teleop/record subprocess (no-op if none).
     try:
         await _terminate_active_process()
@@ -256,6 +265,7 @@ app.include_router(edits.router)
 app.include_router(robot.router)
 app.include_router(run.router)
 app.include_router(models.router)
+app.include_router(overlays.router)
 app.include_router(bug_reports.router)
 app.include_router(ai_setup.router)
 app.include_router(bridge.router)
