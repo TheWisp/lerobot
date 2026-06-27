@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import unquote
@@ -154,14 +155,21 @@ def _read_checkpoint_meta(ckpt_dir: Path) -> dict | None:
     }
 
 
+def _is_step_dir(name: str) -> bool:
+    """A checkpoint-step directory name. Accepts every convention real trainers write: a bare
+    numeric step (lerobot-train, e.g. ``000005`` / ``50000``) and ``checkpoint-<N>`` (HF Trainer
+    and the HVLA S1-standalone trainer, e.g. ``checkpoint-50000``). The ``last`` symlink and
+    backups (``checkpoint-50000-backup``) are deliberately not steps."""
+    return name.isdigit() or bool(re.fullmatch(r"checkpoint-\d+", name))
+
+
 def _dir_has_step_subdirs(d: Path) -> bool:
-    """True iff ``d`` exists AND contains at least one numeric-named subdir
-    (a real checkpoint dir like 000005). Filters out empty/placeholder dirs
-    that early code paths may have pre-created.
-    """
+    """True iff ``d`` exists AND contains at least one checkpoint-step subdir (see
+    :func:`_is_step_dir`). Filters out empty/placeholder dirs that early code paths may have
+    pre-created."""
     if not d.is_dir():
         return False
-    return any(child.is_dir() and child.name.lstrip("0").isdigit() for child in d.iterdir())
+    return any(child.is_dir() and _is_step_dir(child.name) for child in d.iterdir())
 
 
 def _scan_training_run(run_dir: Path) -> dict | None:
