@@ -372,7 +372,10 @@
             }
         }
 
-        function isLiveOn() { return mode === 'live' && started && current && namedObjects().length > 0; }
+        // Draw iff the backend machine says ACTIVE — single source of truth. `started` (below) is
+        // only the frontend's launch *request*, not a second copy of "is it running". The decision
+        // lives in OverlayGate.shouldDraw (overlay_gate.js) so it is unit-tested in isolation.
+        function isLiveOn() { return OverlayGate.shouldDraw(mode, current, namedObjects().length > 0, status.state); }
 
         // ---- status polling + badge ----
         function startPoll() { stopPoll(); pollTimer = setInterval(refreshStatus, 500); refreshStatus(); }
@@ -384,9 +387,12 @@
                 : '/api/overlays/data/status';
             fetch(url).then((r) => r.json()).then((s) => {
                 status = s;
-                // Reconcile with the backend machine: if it isn't running, drop our 'started' flag so
-                // a later change re-fires /live/start (recovers from a crash, clears a stale error).
-                if (mode === 'live' && started && (s.state === 'inactive' || s.state === 'error')) started = false;
+                // `started` is ONLY the launch request — it picks /live/start vs /live/control, nothing
+                // more. The draw gate (isLiveOn) reads the backend machine's ACTIVE state directly, so the
+                // worker's own INACTIVE→LOADING→ACTIVE warm-up needs no syncing here (the old reconcile
+                // mirrored `started` to the backend and a transient spawn 'inactive' latched it false
+                // forever). Clear the request only on a real crash, so a later change re-fires /live/start.
+                if (mode === 'live' && started && s.state === 'error') started = false;
                 applyBadge(s);
                 if (mode === 'live' && current) reportLiveDiag(s);
                 renderAction();
