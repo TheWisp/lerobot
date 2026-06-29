@@ -20,7 +20,12 @@ import pytest
 torch = pytest.importorskip("torch")
 sft = pytest.importorskip("safetensors.torch")
 
-from lerobot.gui.api.models import _scan_source, _scan_training_run  # noqa: E402
+from lerobot.gui.api.models import (  # noqa: E402
+    _dir_has_step_subdirs,
+    _is_step_dir,
+    _scan_source,
+    _scan_training_run,
+)
 
 
 def _make_checkpoint(run_dir: Path, step: str = "000030") -> None:
@@ -80,3 +85,58 @@ def test_gui_runs_source_tracks_orchestrator_runs_dir() -> None:
     from lerobot.gui.training.runs import RUNS_DIR
 
     assert str(RUNS_DIR) == models._GUI_RUNS_SOURCE
+
+
+# --- Checkpoint-dir naming conventions. The scanner must recognize every layout a real trainer
+#     writes, not only zero-padded numerics. Regression: HF / HVLA S1-standalone "checkpoint-NNNNN"
+#     runs went silently undetected from 2026-06-07 (commit 64f0233) — the run dir was skipped with
+#     no error because `"checkpoint-50000".lstrip("0").isdigit()` is False. ---
+
+
+@pytest.mark.parametrize(
+    "name, is_step",
+    [
+        ("000005", True),  # lerobot-train, zero-padded
+        ("008000", True),
+        ("50000", True),  # unpadded numeric
+        ("000000", True),  # all-zeros parses cleanly (the old lstrip("0") dropped it)
+        ("checkpoint-50000", True),  # HF Trainer / HVLA S1-standalone
+        ("checkpoint-0", True),
+        ("last", False),  # the rolling symlink is not a step dir
+        ("checkpoint", False),
+        ("checkpoint-", False),
+        ("checkpoint-50000-backup", False),  # a backup copy, not a live step
+        ("logs", False),
+    ],
+)
+def test_is_step_dir(name: str, is_step: bool) -> None:
+    assert _is_step_dir(name) is is_step
+
+
+def _make_standard_checkpoint(run_dir: Path, step_dir: str) -> None:
+    """Standard lerobot layout: <run_dir>/checkpoints/<step_dir>/pretrained_model/..."""
+    pretrained = run_dir / "checkpoints" / step_dir / "pretrained_model"
+    pretrained.mkdir(parents=True)
+    sft.save_file({"w": torch.zeros(1)}, str(pretrained / "model.safetensors"))
+    (pretrained / "config.json").write_text(json.dumps({"type": "hvla_flow_s1"}))
+
+
+@pytest.mark.parametrize("step_dir", ["000050", "checkpoint-50000"])
+def test_scan_detects_both_checkpoint_naming_conventions(tmp_path: Path, step_dir: str) -> None:
+    """A run is detected whether its checkpoints are bare-numeric (lerobot-train) or checkpoint-N
+    (HF Trainer / S1-standalone). The latter regressed in 64f0233; the real casualty was
+    flow_s1_no_s2_v1, which vanished from the Models tab."""
+    run_dir = tmp_path / "flow_s1_no_s2_v1"
+    _make_standard_checkpoint(run_dir, step_dir)
+    entries = _scan_source(str(tmp_path))
+    assert [e["name"] for e in entries] == ["flow_s1_no_s2_v1"]
+
+
+def test_dir_has_step_subdirs_rejects_placeholder(tmp_path: Path) -> None:
+    """The filter's real purpose — empty / non-step checkpoints dirs stay rejected."""
+    ckpts = tmp_path / "checkpoints"
+    ckpts.mkdir()
+    assert not _dir_has_step_subdirs(ckpts)  # empty
+    (ckpts / "logs").mkdir()
+    assert not _dir_has_step_subdirs(ckpts)  # only a non-step child
+    assert not _dir_has_step_subdirs(tmp_path / "nonexistent")

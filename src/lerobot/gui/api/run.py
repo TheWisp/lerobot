@@ -277,11 +277,23 @@ def _append_output(line: str) -> None:
 
 
 def _ensure_no_active_process() -> None:
-    """Raise 409 if a process is already running."""
+    """Raise 409 if a process is already running; otherwise sweep leftover obs-stream segments.
+
+    Reaching past the check means no run subprocess is alive, so any ``lerobot_obs_*`` segments in
+    /dev/shm are orphans from a crashed or hard-stopped run. Sweep them now (and log the count even
+    when the cause is unclear — the overlay's surface-loudly policy) so the next run's readers — the
+    overlay worker, the run-view camera viewer — can't latch a dead one and freeze (the stale-stream
+    bug). The new run creates a fresh stream immediately after.
+    """
     if _active_process is not None and _active_process.returncode is None:
         raise HTTPException(
             409, f"A '{_active_command}' process is already running (PID {_active_process.pid})"
         )
+    from lerobot.robots.obs_stream import cleanup_stale_streams
+
+    swept = cleanup_stale_streams()
+    if swept:
+        logger.warning("stale-stream guard: swept %d leftover obs-stream segment(s) before launch", swept)
 
 
 def is_run_active() -> bool:

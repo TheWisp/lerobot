@@ -206,6 +206,27 @@ The step renders its own result; the GUI only transports + composites.
    └─ GUI writes step config + stream generation ────► control   (GUI → worker)
 ```
 
+### `lerobot_aux_*` — policy internals (a second input, for model-debug overlays)
+
+Most steps need only the camera frame. A **model-debug** step needs something the frame can't carry —
+what the _running policy_ is doing. The `policy_attention` step draws a per-camera heatmap of where
+HVLA **S1** is attending: its own cross-attention, not a separate vision model's guess.
+
+The policy can't be re-run in the worker (that would double the GPU work and desync from the action
+actually taken), so the producer/consumer roles are **inverted** from `lerobot_overlay_*` — the
+**policy process is the writer**. On the last denoise step S1 recomputes the attention weights SDPA
+discards (`softmax(q·kᵀ/√d)`), averages over heads + action steps + decoder layers, slices the
+context's per-camera patch blocks into one small (16×16) saliency grid per camera, and publishes them
+to `SharedAuxBuffer` (`lerobot_aux_*`, owner-creates like every channel) keyed by the same camera
+names the obs-stream uses. The action is untouched; capture is one extra softmax on one step. The
+worker's `PolicyAttentionAdapter` attaches **read-only**, colorizes the latest grid, and composites it
+like any overlay — latest-wins, no frame pairing. On the data tab (no live policy) there's no aux to
+read, so it draws nothing.
+
+This is the reusable seam for _every_ model-internal overlay — a value/uncertainty map, an S2 grounding
+heatmap, a per-action-token attention breakdown — each is a new grid on `lerobot_aux_*` plus a thin
+adapter that colorizes it, with no change to the worker, the obs-stream, or the control envelope.
+
 ### All steps run out-of-process
 
 Every overlay step runs in the worker, out of process — there is no in-process special case. In

@@ -7,7 +7,9 @@ Supports pause/resume for human intervention: when paused, the thread stops
 consuming observations and producing chunks, freeing the GPU.
 """
 
+import contextlib
 import logging
+import os
 import threading
 import time
 
@@ -161,6 +163,34 @@ class InferenceThread:
         self._s2_latent_key = s2_latent_key
         self._s1_image_keys = s1_image_keys
         self._joint_names = joint_names
+        # Policy-internal overlay: publish a per-camera saliency grid to a SharedAuxBuffer (keyed by
+        # s1_image_keys, which match the obs-stream camera keys the worker reads) so the debug-vision
+        # worker can draw where the policy is looking. Two modes:
+        #   "saliency" (default): input-gradient — where the upcoming action depends on each camera's
+        #       pixels. Localizes on the manipulated object; costs a backward pass, so it publishes
+        #       every Nth inference (debug-rate).
+        #   "attention": legacy last-step cross-attention (one extra softmax, free, every step), kept
+        #       for A/B. Not object-crisp.
+        self._attn_aux = None
+        self._attn_warned = False  # rate-limit the publish-failure warning to once per process
+        # PROVISIONAL — NOT deployment-ready. This aux/overlay computation runs UNCONDITIONALLY on
+        # every HVLA-S1 run (not only when an overlay is open): `_publish_aux` pays a ~40ms saliency
+        # backward pass (DINOv2 unfrozen) every `_aux_every` steps and writes a `.npz` dump — a real
+        # cost regression on the control thread vs the pre-overlay path. The off-switch exists
+        # (OverlayControlReader.config() is the demand signal) but is NOT wired in, and `_aux_every=3`
+        # is a hardcoded placeholder cadence, not principled. Gate both on overlay demand (and put the
+        # dump behind an explicit debug flag) before this ships. TODO: gui/TODO.md →
+        # "policy-saliency: always-on cost regression" ([High], blocks #42).
+        self._aux_mode = "saliency"
+        self._aux_every = 3  # "every 3rd" is a placeholder hack (see note)
+        self._aux_step = -1
+        self._overlay_ctrl = None  # lazy OverlayControlReader — reads the GUI-selected saliency method
+        self._sal_dump_dir = (
+            None  # lazy on-disk capture — UNCONDITIONAL today (see the provisional note above)
+        )
+        _attn_model = getattr(policy, "model", None)
+        if _attn_model is not None and hasattr(_attn_model, "capture_attention"):
+            _attn_model.capture_attention = self._aux_mode == "attention"
         self._device = device
         self._resize_to = resize_to
         self._fps = fps
@@ -739,6 +769,10 @@ class InferenceThread:
         self._obs_ready.set()  # unblock if waiting for obs
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+        if self._attn_aux is not None:
+            with contextlib.suppress(Exception):
+                self._attn_aux.cleanup()
+            self._attn_aux = None
 
     def pause(self) -> None:
         """Pause inference (for intervention). Thread blocks until resume()."""
@@ -756,6 +790,118 @@ class InferenceThread:
     @property
     def is_paused(self) -> bool:
         return not self._paused.is_set()
+
+    def _publish_attention(self) -> None:
+        """Publish the last inference's per-camera attention saliency to the SharedAuxBuffer for the
+        debug-vision 'policy attention' overlay. No-op when the model didn't capture (e.g. a non-S1
+        policy). The writer is created lazily on the first capture, keyed by s1_image_keys — which
+        match the obs-stream camera keys the overlay worker reads — so grid i maps to camera i."""
+        model = getattr(self._policy, "model", None)
+        grids = getattr(model, "_last_attention", None) if model is not None else None
+        if not grids:
+            return
+        try:
+            # The model's image_features are "observation.images.<cam>"; the obs-stream (and the overlay
+            # worker's set_camera) use the bare "<cam>" robot key. Map so the worker can match the grids.
+            obs_keys = [k.removeprefix("observation.images.") for k in self._s1_image_keys]
+            if self._attn_aux is None:
+                cams = {
+                    obs_keys[i]: (int(g.shape[0]), int(g.shape[1]))
+                    for i, g in enumerate(grids)
+                    if i < len(obs_keys)
+                }
+                if not cams:
+                    return
+                from lerobot.overlays.aux_ipc import SharedAuxBuffer
+
+                self._attn_aux = SharedAuxBuffer(cameras=cams, model="policy_attention", create=True)
+                # One-time, at INFO so it lands in the persistent run log: positive confirmation the
+                # publisher engaged + the exact per-camera grid contract (grid i == camera obs_keys[i]).
+                logger.info("policy-attention overlay engaged — per-camera saliency grid map = %s", cams)
+            for i, g in enumerate(grids):
+                if i < len(obs_keys):
+                    self._attn_aux.write_saliency(obs_keys[i], np.asarray(g, dtype=np.float32))
+        except Exception:
+            if not self._attn_warned:  # WARNING survives the INFO root logger; emit once, not every step
+                logger.warning(
+                    "policy-attention overlay publish failed; overlay will not update", exc_info=True
+                )
+                self._attn_warned = True
+
+    def _publish_saliency(self, batch: dict, method: str = "gradient") -> None:
+        """Publish per-camera policy saliency to the SharedAuxBuffer for the 'policy saliency' overlay.
+        ``method`` picks the source: "gradient" -> input-gradient (``compute_input_saliency``, a backward
+        pass, ~40ms), "rollout" -> attention rollout (``compute_attention_rollout``, forward-only,
+        ~22ms). The caller throttles the rate. No-op for a policy lacking the method (e.g. non-S1)."""
+        attr = "compute_attention_rollout" if method == "rollout" else "compute_input_saliency"
+        fn = getattr(self._policy, attr, None)
+        if fn is None:
+            return
+        try:
+            sal = fn(batch)  # {image_feature_key: HxW float grid}
+            obs_keys = [k.removeprefix("observation.images.") for k in self._s1_image_keys]
+            key_map = {k: obs_keys[i] for i, k in enumerate(self._s1_image_keys) if i < len(obs_keys)}
+            if not sal:
+                logger.info("[saliency] %s returned {} this pass — nothing to publish (overlay blank)", attr)
+                return
+            written = {
+                key_map[k]: f"{float(np.asarray(g).max()):.2e}" for k, g in sal.items() if k in key_map
+            }
+            if not written:
+                logger.warning(
+                    "[saliency] grids %s map to NO obs key (key_map=%s) — overlay blank", list(sal), key_map
+                )
+                return
+            if self._attn_aux is None:
+                cams = {key_map[k]: tuple(g.shape) for k, g in sal.items() if k in key_map}
+                from lerobot.overlays.aux_ipc import SharedAuxBuffer
+
+                self._attn_aux = SharedAuxBuffer(cameras=cams, model="policy_saliency", create=True)
+                logger.info("policy-saliency overlay engaged — per-camera grid map = %s", cams)
+            for k, g in sal.items():
+                if k in key_map:
+                    self._attn_aux.write_saliency(key_map[k], np.asarray(g, dtype=np.float32))
+            logger.info("[saliency] published method=%s per-cam |grid|max=%s", method, written)
+            # Ground-truth capture: persist every published grid set to disk, time-indexed, so the
+            # run's overlay content is COMPARED frame-to-frame after the fact, not inferred from flags.
+            if self._sal_dump_dir is None:
+                self._sal_dump_dir = os.path.join("outputs", "saliency_dumps", time.strftime("%Y%m%d_%H%M%S"))
+                os.makedirs(self._sal_dump_dir, exist_ok=True)
+                self._sal_dump_n = 0
+                logger.info(
+                    "[saliency] recording grids -> %s (time-indexed ground truth)", self._sal_dump_dir
+                )
+            np.savez(
+                os.path.join(self._sal_dump_dir, f"{self._sal_dump_n:06d}.npz"),
+                t=time.time(),
+                **{key_map[k]: np.asarray(g, dtype=np.float32) for k, g in sal.items() if k in key_map},
+            )
+            self._sal_dump_n += 1
+        except Exception:
+            if not self._attn_warned:
+                logger.warning(
+                    "policy-saliency overlay publish failed; overlay will not update", exc_info=True
+                )
+                self._attn_warned = True
+
+    def _overlay_method(self) -> str:
+        """The saliency source ("gradient" | "rollout") selected in the GUI overlay control, read from
+        the worker's control block (default "gradient", incl. when no overlay worker is up)."""
+        if self._overlay_ctrl is None:
+            from lerobot.overlays.overlay_ipc import OverlayControlReader
+
+            self._overlay_ctrl = OverlayControlReader()
+        cfg = self._overlay_ctrl.config()
+        m = (cfg or {}).get("method")
+        return m if m in ("gradient", "rollout") else "gradient"
+
+    def _publish_aux(self, batch: dict) -> None:
+        """Dispatch the policy-internal overlay publish by mode + rate (see __init__)."""
+        self._aux_step += 1
+        if self._aux_mode == "attention":
+            self._publish_attention()
+        elif self._aux_mode == "saliency" and self._aux_step % self._aux_every == 0:
+            self._publish_saliency(batch, self._overlay_method())
 
     def publish_obs(self, obs: dict, t_now: float) -> None:
         """Main loop publishes observation for the inference thread."""
@@ -894,6 +1040,8 @@ class InferenceThread:
                         predict_kwargs["context"] = cached_context
                     actions = self._policy.predict_action_chunk(batch, **predict_kwargs)
                     actions = self._postprocessor(actions)
+
+                self._publish_aux(batch)  # policy-internal overlay (saliency by default; no-op for non-S1)
 
                 # RLT: compute ref_norm, optionally run actor, optionally dump.
                 # Dump is decoupled from actor activity so A/B baseline runs

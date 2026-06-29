@@ -513,8 +513,222 @@ def _import_cv2():
         raise RuntimeError("opencv (cv2) is required for debug-vision overlays") from e
 
 
+class PolicyAttentionAdapter(DebugVisionAdapter):
+    """Live heatmap of where the running policy is attending, per camera.
+
+    Unlike every other step this draws the POLICY's own internals, not a separate vision
+    model's output. The policy process publishes the cross-attention saliency it already
+    computed for the action it just took (a small per-camera grid) to a ``SharedAuxBuffer``;
+    this adapter attaches read-only and colorizes the latest grid onto the camera tile. It
+    runs no model of its own and never re-runs the policy.
+
+    Run-path only: the data tab scrubs a dataset with no live policy, so there is no aux to
+    read and it draws nothing (transparent). Attaches lazily — transparent until the policy
+    starts publishing, and re-attaches after a policy restart.
+    """
+
+    key = "policy_attention"
+    label = "Policy attention"
+    MAX_ALPHA = 180  # peak-saliency opacity; the heatmap fades to transparent at low attention
+    ALPHA_FLOOR = 0.25  # below this normalized saliency the tile stays clear (background not tinted)
+    LO_PCT, HI_PCT, GAMMA = 50.0, 99.0, 1.5  # contrast band + sharpening (subclasses retune)
+    CMAP_NAME = "COLORMAP_INFERNO"  # monotonic-lightness so the brightest pixel IS the peak
+
+    def __init__(self, device: str = "cuda"):
+        super().__init__(device)
+        self._cv2 = _import_cv2()
+        # Perceptually-monotonic colormap (INFERNO / CIVIDIS) so the brightest pixel IS the peak —
+        # TURBO/JET dip in lightness at both ends, making low and high both read dark and the hotspot
+        # ambiguous. Saliency uses CIVIDIS (blue->yellow) — INFERNO's bright yellow-white hot end reads
+        # like additive glow over the scene.
+        self._cmap = getattr(self._cv2, self.CMAP_NAME, self._cv2.COLORMAP_JET)
+        self._cam: str | None = None
+        self._aux = None  # SharedAuxBuffer reader, attached lazily once the policy publishes
+
+    def _ensure_aux(self) -> None:
+        if self._aux is not None:
+            return
+        try:
+            from lerobot.overlays.aux_ipc import SharedAuxBuffer
+
+            self._aux = SharedAuxBuffer(create=False)
+        except FileNotFoundError:
+            self._aux = None  # writer (policy) not up yet — retry next frame
+
+    def set_camera(self, cam: str | None) -> None:
+        self._cam = cam
+
+    def reset(self) -> None:
+        # Drop the reader so a restarted policy (new aux segment / camera set) reattaches cleanly.
+        if self._aux is not None:
+            with contextlib.suppress(Exception):
+                self._aux.cleanup()
+            self._aux = None
+
+    def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
+        h, w = frame_rgb.shape[:2]
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        self._ensure_aux()
+        # Throttled diagnostics (~1/s/cam): log WHICH branch makes the overlay transparent, so a
+        # blank overlay is never a guess — no aux / read=None / grid<=0 / actually drawn.
+        self._dbg_n = getattr(self, "_dbg_n", 0) + 1
+        dbg = self._dbg_n % 30 == 1
+        if self._aux is None or self._cam is None:
+            if dbg:
+                logger.info(
+                    "[saliency-adapter] cam=%s: no aux reader / no live policy -> transparent", self._cam
+                )
+            return rgba  # no live policy (e.g. the data tab) -> draw nothing
+        try:
+            got = self._aux.read_saliency(self._cam)
+        except Exception:
+            self._aux = None  # stale segment (policy restarted) — reattach next frame
+            if dbg:
+                logger.info(
+                    "[saliency-adapter] cam=%s: read_saliency raised -> reattach next frame", self._cam
+                )
+            return rgba
+        if got is None:
+            if dbg:
+                logger.info(
+                    "[saliency-adapter] cam=%s: read_saliency=None (no published grid for this cam) -> transparent",
+                    self._cam,
+                )
+            return rgba
+        grid, _ = got
+        if not grid.size or float(grid.max()) <= 0.0 or not np.isfinite(grid).all():
+            if dbg:
+                logger.info(
+                    "[saliency-adapter] cam=%s: grid empty/<=0/nonfinite (size=%d max=%s) -> transparent",
+                    self._cam,
+                    grid.size,
+                    float(grid.max()) if grid.size else None,
+                )
+            return rgba
+        if dbg:
+            logger.info(
+                "[saliency-adapter] cam=%s: DRAWN |grid|max=%.2e mean=%.2e",
+                self._cam,
+                float(grid.max()),
+                float(grid.mean()),
+            )
+        return self._render(grid, w, h)
+
+    def _render(self, grid: np.ndarray, w: int, h: int) -> np.ndarray:
+        """Colorize a saliency grid into a frame-sized RGBA overlay. Subclasses override to offer
+        runtime-switchable styles. Default: map the [p50, p99] band to [0, 1] (gamma-sharpened) so a
+        peaked-or-near-flat grid still reveals where it concentrates; INFERNO; alpha ~ value with a
+        floor (background tiles stay clear). INTER_LINEAR (not bicubic) avoids fabricated smoothness."""
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        lo, hi = np.percentile(grid, (self.LO_PCT, self.HI_PCT))
+        norm = np.clip((grid - lo) / (hi - lo + 1e-8), 0.0, 1.0) ** self.GAMMA
+        up = np.clip(self._cv2.resize(norm, (w, h), interpolation=self._cv2.INTER_LINEAR), 0.0, 1.0)
+        heat = self._cv2.applyColorMap((up * 255).astype(np.uint8), self._cmap)  # BGR
+        rgba[..., 0] = heat[..., 2]
+        rgba[..., 1] = heat[..., 1]
+        rgba[..., 2] = heat[..., 0]
+        alpha = up * self.MAX_ALPHA
+        alpha[up < self.ALPHA_FLOOR] = 0.0  # only real attention tints; background tiles stay clear
+        rgba[..., 3] = alpha.astype(np.uint8)
+        return rgba
+
+
+def _blue_yellow_lut(cv2) -> np.ndarray:
+    """A vivid blue→yellow 256×1×3 BGR LUT for ``cv2.applyColorMap``. CIVIDIS' low end is near-black
+    navy (reads as 'dark', not blue); this stays a saturated blue→teal→yellow so cool regions read."""
+    stops = [(0.0, (40, 90, 235)), (0.45, (40, 190, 200)), (1.0, (250, 230, 45))]  # RGB
+    xs = np.array([s[0] for s in stops])
+    t = np.linspace(0.0, 1.0, 256)
+    lut = np.zeros((256, 1, 3), np.uint8)
+    for ch in range(3):  # cv2 LUTs are BGR
+        lut[:, 0, 2 - ch] = np.interp(t, xs, [s[1][ch] for s in stops]).astype(np.uint8)
+    return lut
+
+
+class PolicySaliencyAdapter(PolicyAttentionAdapter):
+    """Live input-gradient saliency of the running policy, per camera — where the upcoming action
+    DEPENDS on each camera's pixels. Unlike raw attention (a broad context prior), this localizes on
+    the object the policy is acting on.
+
+    Same cross-process path as ``PolicyAttentionAdapter`` (reads the policy's per-camera grid from the
+    ``SharedAuxBuffer`` and colorizes it). Offers several render STYLES switchable at RUNTIME via the
+    overlay ``style`` control (``set_control``), so the look is A/B'd live without a restart."""
+
+    key = "policy_saliency"
+    label = "Policy saliency"
+
+    # name -> (colormap, alpha-mode, lo_pct, hi_pct). 'ramped'/'full' keep the COOL (blue) end visible;
+    # 'gated' shows only hotspots (scene stays clear). The GUI 'style' select picks one live.
+    STYLES = {
+        "blue_yellow": (
+            "vivid",
+            "gated",
+            50.0,
+            99.0,
+        ),  # vivid blue->yellow, hotspots only (scene stays clear)
+        "blue_yellow_field": ("vivid", "ramped", 10.0, 99.5),  # the old full-field tint (kept for A/B)
+        "cividis": ("cividis", "ramped", 10.0, 99.5),  # perceptually-uniform navy->yellow
+        "spotlight": ("cividis", "gated", 50.0, 99.0),  # hotspots only, scene stays clear
+        "heatmap": ("vivid", "full", 10.0, 99.5),  # full blue field + yellow hot, scene dimmed
+        "inferno": ("inferno", "gated", 50.0, 99.0),  # the original golden glow
+    }
+    DEFAULT_STYLE = "blue_yellow"
+    SMOOTH_SIGMA = 1.2  # grid-space gaussian — smooths the 64x64 blockiness on upscale (0 = off, raw)
+
+    def __init__(self, device: str = "cuda"):
+        super().__init__(device)
+        self._style = self.DEFAULT_STYLE
+        self._smooth = float(self.SMOOTH_SIGMA)
+        self._cmaps = {
+            "vivid": _blue_yellow_lut(self._cv2),
+            "cividis": getattr(self._cv2, "COLORMAP_CIVIDIS", self._cv2.COLORMAP_VIRIDIS),
+            "inferno": getattr(self._cv2, "COLORMAP_INFERNO", self._cv2.COLORMAP_JET),
+        }
+
+    def set_control(self, control: dict) -> None:
+        """Pick the render style + smoothing at runtime. ``style`` must be a ``STYLES`` key; ``smooth``
+        is the grid-space gaussian sigma (>=0, 0 = raw 64x64). Unknown/missing values leave the current
+        setting unchanged (idempotent)."""
+        control = control or {}
+        style = control.get("style")
+        if style in self.STYLES:
+            self._style = style
+        smooth = control.get("smooth")
+        if smooth is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                self._smooth = max(0.0, float(smooth))
+
+    def _render(self, grid: np.ndarray, w: int, h: int) -> np.ndarray:
+        cmap, mode, lo_pct, hi_pct = self.STYLES.get(self._style, self.STYLES[self.DEFAULT_STYLE])
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        # The grid is a coarse 64x64 (area-pooled from the 224px pixel gradient); a plain upscale shows
+        # that blockiness. Smooth in GRID space (so it scales with the upscale) + bicubic interpolate.
+        g = grid.astype(np.float32)
+        if self._smooth > 0:
+            g = self._cv2.GaussianBlur(g, (0, 0), self._smooth)
+        lo, hi = np.percentile(g, (lo_pct, hi_pct))
+        n = np.clip((g - lo) / (hi - lo + 1e-8), 0.0, 1.0)
+        up = np.clip(self._cv2.resize(n, (w, h), interpolation=self._cv2.INTER_CUBIC), 0.0, 1.0)
+        heat = self._cv2.applyColorMap((up * 255).astype(np.uint8), self._cmaps[cmap])  # BGR
+        rgba[..., 0] = heat[..., 2]
+        rgba[..., 1] = heat[..., 1]
+        rgba[..., 2] = heat[..., 0]
+        if mode == "gated":  # hotspots only — cool end fully transparent, scene clear
+            a = up.copy()
+            a[up < self.ALPHA_FLOOR] = 0.0
+            a = a * (self.MAX_ALPHA / 255.0)
+        elif mode == "ramped":  # cool end visible (floor alpha), hot strongest, scene still readable
+            a = 0.30 + 0.50 * up
+        else:  # "full" — blue field everywhere + yellow hot, scene dimmed
+            a = np.maximum(0.42, 0.30 + 0.45 * up)
+        rgba[..., 3] = (np.clip(a, 0.0, 1.0) * 255).astype(np.uint8)
+        return rgba
+
+
 ADAPTERS: dict[str, type[DebugVisionAdapter]] = {
     Sam3TrackByDetectionAdapter.key: Sam3TrackByDetectionAdapter,
+    PolicyAttentionAdapter.key: PolicyAttentionAdapter,
+    PolicySaliencyAdapter.key: PolicySaliencyAdapter,
 }
 
 

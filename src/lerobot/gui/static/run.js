@@ -5,6 +5,7 @@ let runEventSource = null;
 let selectedWorkflow = 'teleop'; // 'teleop' | 'replay' | 'policy'
 let obsStreamMeta = null; // {available, obs_scalar_keys, action_keys, image_keys}
 let obsStreamTimer = null; // interval ID for camera polling
+let obsStreamGen = 0; // bumped on stop/restart to cancel an in-flight "wait for the obs-stream" loop
 let _runFormRendered = false; // true once all three workflow sections are in the DOM
 
 // ============================================================================
@@ -2016,22 +2017,24 @@ function initSplitHandle() {
 
 async function startObsStreamViewer() {
     stopObsStreamViewer();
+    const myGen = ++obsStreamGen;  // claim this viewer; stop() / a newer start() supersedes it
 
     const container = document.getElementById('rerun-viewer');
     if (!container) return;
 
-    // Poll until the stream becomes available (robot needs time to connect)
-    let attempts = 0;
-    const maxAttempts = 30; // 30 × 500ms = 15s
-    while (attempts < maxAttempts) {
+    // Wait for the run's obs-stream to come up. There's no good fixed deadline — robot connect plus a
+    // torch.compile warmup can take a couple of seconds or minutes — so this is bounded by the RUN
+    // LIFECYCLE, not a timer: poll until the stream is available, the run ends (_isRunning, reconciled
+    // by pollRunStatus on the SSE `done`/backstop), or this viewer is superseded (stop / a newer start
+    // bumps obsStreamGen).
+    while (obsStreamGen === myGen && _isRunning) {
         try {
-            const res = await fetch('/api/run/obs-stream/meta');
-            obsStreamMeta = await res.json();
+            obsStreamMeta = await (await fetch('/api/run/obs-stream/meta')).json();
             if (obsStreamMeta?.available) break;
-        } catch (e) { /* not ready yet */ }
+        } catch (e) { obsStreamMeta = null; }
         await new Promise(r => setTimeout(r, 500));
-        attempts++;
     }
+    if (obsStreamGen !== myGen) return;  // superseded while waiting
 
     // Probe the URDF visualization — it's on by default, appearing as one
     // grid tile whenever the robot has a vendored URDF (see /api/run/urdf-viz).
@@ -2042,8 +2045,7 @@ async function startObsStreamViewer() {
     } catch (e) { /* probe failed; leave inactive */ }
 
     if (!obsStreamMeta?.available && !urdfVizActive) {
-        console.warn('Neither obs-stream nor urdf-viz available after timeout');
-        return;
+        return;  // the run ended before the stream or the URDF viz came up — nothing to show
     }
 
     const placeholder = document.getElementById('rerun-placeholder');
@@ -2167,6 +2169,7 @@ async function startObsStreamViewer() {
 }
 
 function stopObsStreamViewer() {
+    obsStreamGen++;  // cancel any in-flight "wait for the obs-stream" loop
     if (obsStreamTimer) {
         clearInterval(obsStreamTimer);
         obsStreamTimer = null;

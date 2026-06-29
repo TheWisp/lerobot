@@ -48,6 +48,39 @@ def _read_json(block: SharedBlock) -> dict:
         return {}
 
 
+class OverlayControlReader:
+    """Policy-side, read-only view of the worker's overlay control block.
+
+    Lets a running policy learn the selected overlay config (e.g. the saliency ``method``) without
+    owning the overlay buffer — it lazily attaches to just the control block. ``config()`` returns the
+    latest control config dict, or ``None`` when no overlay worker is up (the block doesn't exist),
+    which also doubles as a demand signal. Re-attaches on a stale segment (worker restart)."""
+
+    def __init__(self) -> None:
+        self._block: SharedBlock | None = None
+
+    def _ensure(self) -> None:
+        if self._block is not None:
+            return
+        try:
+            self._block = SharedBlock(
+                name=_PREFIX + "control", shape=(_CONTROL_BYTES,), dtype=np.uint8, create=False
+            )
+        except FileNotFoundError:
+            self._block = None  # no worker yet
+
+    def config(self) -> dict | None:
+        self._ensure()
+        if self._block is None:
+            return None
+        try:
+            ctrl = _read_json(self._block)
+        except Exception:
+            self._block = None  # stale (worker restarted) — drop, retry next call
+            return None
+        return ctrl.get("config", ctrl)  # live/control writes the config flat; _spawn_worker wraps it
+
+
 class SharedOverlayBuffer:
     """RGBA overlay channel keyed by camera + meta + control JSON blocks.
 
