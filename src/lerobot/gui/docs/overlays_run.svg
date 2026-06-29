@@ -1,0 +1,67 @@
+<svg viewBox="0 0 1000 430" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,-apple-system,sans-serif">
+  <rect width="1000" height="430" fill="#fafafa"/>
+
+  <!-- tab bar -->
+  <rect x="10" y="12" width="980" height="34" fill="#e8e8e8" stroke="#888"/>
+  <text x="34" y="34" font-size="14" fill="#444">Data</text>
+  <text x="92" y="34" font-size="14" fill="#444">Model</text>
+  <rect x="146" y="16" width="56" height="26" fill="#fff" stroke="#888"/>
+  <text x="174" y="34" font-size="14" font-weight="700" text-anchor="middle">Run</text>
+  <text x="220" y="34" font-size="14" fill="#444">Robot</text>
+
+  <!-- left setup panel (now pure session config — debug model moved to the right region) -->
+  <rect x="10" y="46" width="196" height="372" fill="#f0f0f0" stroke="#888"/>
+  <text x="22" y="72" font-size="13" font-weight="700" fill="#666">RUN SETUP</text>
+  <rect x="22" y="84" width="172" height="26" fill="#fff" stroke="#ccc"/><text x="32" y="102" font-size="13" fill="#444">Robot</text>
+  <rect x="22" y="116" width="172" height="26" fill="#fff" stroke="#ccc"/><text x="32" y="134" font-size="13" fill="#444">Teleop</text>
+  <rect x="22" y="148" width="172" height="26" fill="#fff" stroke="#ccc"/><text x="32" y="166" font-size="13" fill="#444">Record dataset…</text>
+  <text x="22" y="200" font-size="11.5" fill="#999">selection / setup only —</text>
+  <text x="22" y="216" font-size="11.5" fill="#999">overlay control is on the right</text>
+
+  <!-- center: camera viewer (no header), narrower to make room for the right region -->
+  <rect x="214" y="46" width="518" height="236" fill="#aaa" stroke="#aaa"/>
+  <rect x="216" y="48" width="256" height="232" fill="#1c1c1c"/><text x="344" y="270" font-size="12" fill="#bbb" text-anchor="middle">camera.top</text>
+  <rect x="474" y="48" width="256" height="232" fill="#1c1c1c"/><text x="602" y="270" font-size="12" fill="#bbb" text-anchor="middle">camera.front</text>
+  <!-- result renders on the tile: SAM outline (cyan) + silhouette (white) + gizmo -->
+  <ellipse cx="344" cy="150" rx="58" ry="40" fill="none" stroke="#22d3ee" stroke-width="2"/>
+  <ellipse cx="344" cy="150" rx="58" ry="40" fill="none" stroke="#fff" stroke-width="1" stroke-dasharray="3 3"/>
+  <ellipse cx="344" cy="150" rx="22" ry="15" fill="none" stroke="#fff" stroke-width="1"/>
+  <line x1="344" y1="150" x2="384" y2="150" stroke="#f00" stroke-width="1.5"/>
+  <line x1="344" y1="150" x2="344" y2="118" stroke="#0f0" stroke-width="1.5"/>
+  <text x="344" y="196" font-size="10.5" fill="#888" text-anchor="middle">result drawn on the tile</text>
+
+  <!-- bottom tabs (Output / Latency) — run keeps its workflow terminal -->
+  <rect x="214" y="290" width="518" height="128" fill="#f0f0f0" stroke="#888"/>
+  <rect x="214" y="290" width="84" height="24" fill="#fff" stroke="#888"/><text x="256" y="307" font-size="12" font-weight="700" text-anchor="middle">Output</text>
+  <text x="330" y="307" font-size="12" fill="#888">Latency</text>
+  <text x="226" y="338" font-size="11" fill="#777" font-family="monospace">› teleop loop @ 30 Hz …</text>
+  <text x="226" y="356" font-size="11" fill="#777" font-family="monospace">› recording episode 4 …</text>
+  <text x="226" y="404" font-size="11" fill="#aaa">workflow process output (unchanged); model logs in right panel</text>
+
+  <!-- right region: Overlays accordion section (only section in run) -->
+  <rect x="740" y="46" width="250" height="372" fill="#eef2ff" stroke="#6366f1"/>
+  <!-- header with badge + open log -->
+  <rect x="740" y="46" width="250" height="30" fill="#e0e7ff" stroke="#6366f1"/>
+  <path d="M752,58 l9,0 l-4.5,6 z" fill="#3730a3"/>
+  <text x="767" y="66" font-size="13" font-weight="700" fill="#3730a3">Overlays</text>
+  <circle cx="894" cy="61" r="4.5" fill="#22c55e"/>
+  <text x="978" y="65" font-size="11" font-weight="600" fill="#3730a3" text-anchor="end">active · 3.1 GB</text>
+  <!-- config: processing picker -->
+  <text x="752" y="100" font-size="11" fill="#666">processing</text>
+  <rect x="752" y="106" width="226" height="26" fill="#fff" stroke="#ccc"/><text x="762" y="124" font-size="12" fill="#333">SAM3 object tracker</text><path d="M962,116 l9,0 l-4.5,6 z" fill="#666"/>
+  <!-- open-vocab label input -->
+  <text x="752" y="152" font-size="11" fill="#666">add object</text>
+  <rect x="752" y="158" width="226" height="26" fill="#fff" stroke="#888"/><text x="762" y="176" font-size="12" fill="#333">green ring</text>
+  <!-- object list -->
+  <rect x="752" y="194" width="226" height="26" fill="#fff" stroke="#eee"/>
+  <circle cx="765" cy="207" r="4" fill="#22d3ee"/><text x="778" y="211" font-size="12" fill="#333">green ring</text><text x="966" y="211" font-size="13" fill="#999" text-anchor="end">×</text>
+  <!-- body label -->
+  <text x="752" y="232" font-size="9.5" fill="#9aa3d6" font-style="italic">↑ per-model body (SAM3)</text>
+  <!-- live: NO action button — stream-driven; status only -->
+  <text x="752" y="262" font-size="11" fill="#666">live · 18 fps · stream-driven</text>
+  <text x="752" y="282" font-size="11" fill="#666">no start/stop — picker <tspan font-style="italic">none</tspan> turns it off</text>
+  <text x="752" y="302" font-size="11" fill="#666">badge shows state; red on error · <tspan fill="#6366f1" text-decoration="underline">open log</tspan></text>
+
+  <text x="752" y="400" font-size="11" fill="#7c83c8">run gains a right region;</text>
+  <text x="752" y="414" font-size="11" fill="#7c83c8">Overlays only (no Inspector here)</text>
+</svg>

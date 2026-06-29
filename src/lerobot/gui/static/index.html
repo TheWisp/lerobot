@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=47">
+    <link rel="stylesheet" href="/static/style.css?v=51">
 </head>
 <body>
     <div class="tab-bar">
@@ -153,6 +153,24 @@
                 </div>
                 <div class="inspector-body" id="inspector-body">
                     <div class="empty-state">Open a dataset to inspect its features</div>
+                </div>
+                <!-- Overlays — run a processing step on the current observation.
+                     A collapsible accordion section stacked under the Inspector. -->
+                <div class="overlays-panel" id="overlays-panel">
+                    <div class="overlays-header" id="overlays-header">
+                        <span class="overlays-caret" id="overlays-caret">▾</span>
+                        <h2>Overlays</h2>
+                        <span class="overlays-badge off" id="overlays-badge">off</span>
+                        <a class="overlays-log-link" id="overlays-log-link" title="Open log">log</a>
+                    </div>
+                    <div class="overlays-body" id="overlays-body">
+                        <label class="overlays-label" for="overlays-picker">processing</label>
+                        <select class="overlays-picker" id="overlays-picker">
+                            <option value="">none</option>
+                        </select>
+                        <div class="overlays-model-body" id="overlays-model-body"></div>
+                        <div class="overlays-action" id="overlays-action"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -332,6 +350,21 @@
                             <div class="latency-empty" id="latency-no-sources">No latency data yet — waiting for first snapshot…</div>
                         </div>
                     </div>
+                </div>
+            </div>
+            <!-- Overlays panel (run tab) — same shell, live driver (no Inspector here) -->
+            <div class="overlays-panel overlays-panel-run" id="overlays-panel-run">
+                <div class="overlays-header">
+                    <span class="overlays-caret">▾</span>
+                    <h2>Overlays</h2>
+                    <span class="overlays-badge off">off</span>
+                    <a class="overlays-log-link" title="Open log">log</a>
+                </div>
+                <div class="overlays-body">
+                    <label class="overlays-label">processing</label>
+                    <select class="overlays-picker"><option value="">none</option></select>
+                    <div class="overlays-model-body"></div>
+                    <div class="overlays-action"></div>
                 </div>
             </div>
         </div>
@@ -621,12 +654,14 @@ nebius iam auth-public-key generate \
         </form>
     </dialog>
 
-    <script src="/static/app.js?v=36"></script>
+    <script src="/static/app.js?v=38"></script>
     <script src="/static/feature_editing.js?v=24"></script>
     <script src="/static/add_feature_dialog.js?v=2"></script>
     <script src="/static/charts.js?v=2"></script>
     <script src="/static/robot.js?v=18"></script>
-    <script src="/static/run.js?v=45"></script>
+    <script src="/static/run.js?v=46"></script>
+    <script src="/static/overlay_gate.js?v=1"></script>
+    <script src="/static/overlays.js?v=30"></script>
     <script src="/static/model.js?v=5"></script>
     <script src="/static/training.js?v=23"></script>
     <script src="/static/add_host_dialog.js?v=4"></script>

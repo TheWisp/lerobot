@@ -2075,6 +2075,7 @@ async function startObsStreamViewer() {
     `;
 
     const imgElements = {};
+    const overlayElements = {};  // key -> live Overlays result <img> over each tile
     for (const key of camKeys) {
         const cell = document.createElement('div');
         cell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
@@ -2083,6 +2084,15 @@ async function startObsStreamViewer() {
         img.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
         img.alt = key;
         cell.appendChild(img);
+
+        // Live Overlays result (RGBA PNG) composited over the obs frame.
+        const ov = document.createElement('img');
+        ov.className = 'overlay-layer';
+        ov.alt = '';
+        ov.onload = () => { ov.style.display = 'block'; };
+        ov.onerror = () => { ov.style.display = 'none'; };
+        cell.appendChild(ov);
+        overlayElements[key] = ov;
 
         const label = document.createElement('div');
         label.textContent = key;
@@ -2145,6 +2155,12 @@ async function startObsStreamViewer() {
             if (!img) continue;
             // Append seq to bust browser cache
             img.src = `/api/run/obs-stream/image/${encodeURIComponent(key)}?_=${seq}`;
+            const ov = overlayElements[key];
+            if (ov) {
+                const url = (window.Overlays && window.Overlays.liveFrameUrl) ? window.Overlays.liveFrameUrl(key, seq) : null;
+                if (url) ov.src = url;
+                else { ov.style.display = 'none'; ov.removeAttribute('src'); }
+            }
         }
         _pollSubtaskOverlay();
     }, 50);

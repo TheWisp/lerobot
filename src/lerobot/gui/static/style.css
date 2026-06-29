@@ -285,8 +285,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .camera-grid { flex: 1; display: grid; gap: 8px; padding: 16px; overflow: auto; }
 .camera-panel { background: #16213e; border-radius: 8px; display: flex; flex-direction: column; min-height: 200px; }
 .camera-title { padding: 8px 12px; font-size: 12px; color: #888; border-bottom: 1px solid #0f3460; }
-.camera-frame { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 0 0 8px 8px; overflow: hidden; }
+.camera-frame { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 0 0 8px 8px; overflow: hidden; position: relative; }
 .camera-frame img { max-width: 100%; max-height: 100%; object-fit: contain; }
+/* Overlay result (RGBA PNG) composited over the frame — same dims + sizing as
+   the frame img, centered identically, so the mask lands pixel-aligned. */
+.overlay-layer { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; display: none; }
 
 /* Controls */
 .controls-bar { background: #16213e; border-top: 1px solid #0f3460; padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
@@ -685,6 +688,79 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     line-height: 1.6;
 }
 .inspector-summary .summary-key { color: #888; }
+
+/* ---- Overlays panel: accordion section stacked under the Inspector ---- */
+.overlays-panel { border-top: 2px solid #0f3460; flex-shrink: 0; display: flex; flex-direction: column; }
+.overlays-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; user-select: none; }
+.overlays-caret { cursor: pointer; padding: 0 2px; }
+.overlays-header h2 { font-size: 14px; color: #4fc3f7; margin: 0; flex: 0 0 auto; }
+.overlays-caret { color: #4fc3f7; font-size: 11px; width: 10px; }
+.overlays-badge { margin-left: auto; font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.overlays-badge.off { background: #2a3550; color: #8aa; }
+.overlays-badge.loading { background: #5a4a1a; color: #e3b341; }
+.overlays-badge.running { background: #15324a; color: #4fc3f7; }
+.overlays-badge.ok { background: #14401f; color: #39d353; }
+.overlays-badge.error { background: #4a1a1a; color: #f85149; }
+.overlays-badge.idle { background: #33301a; color: #c9a94a; }
+.overlays-log-link { font-size: 10.5px; color: #6aa6d8; text-decoration: underline; cursor: pointer; flex: 0 0 auto; }
+.overlays-body { padding: 0 14px 14px; font-size: 12px; color: #ddd; }
+.overlays-panel.collapsed .overlays-body { display: none; }
+.overlays-label { display: block; color: #888; font-size: 11px; margin: 6px 0 4px; }
+.overlays-picker, .overlays-input { width: 100%; box-sizing: border-box; background: #0f1c2e; border: 1px solid #0f3460; color: #ddd; font-size: 12px; padding: 6px 8px; border-radius: 4px; }
+.overlays-input { margin-bottom: 6px; }
+.overlays-model-body { margin-top: 8px; }
+.overlays-objlist { display: flex; flex-direction: column; gap: 4px; }
+.overlays-obj { display: flex; align-items: center; gap: 6px; background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px; padding: 4px 8px; }
+.overlays-obj-dot { width: 8px; height: 8px; border-radius: 50%; background: #22d3ee; flex: 0 0 auto; }
+.overlays-obj-x { margin-left: auto; color: #888; cursor: pointer; font-size: 14px; line-height: 1; }
+.overlays-obj-x:hover { color: #f85149; }
+.overlays-hint { color: #777; font-size: 11px; margin-top: 6px; line-height: 1.4; }
+.overlays-action { margin-top: 10px; }
+.overlays-btn { width: 100%; box-sizing: border-box; border: none; border-radius: 4px; padding: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.overlays-btn.run { background: #4fc3f7; color: #06223a; }
+.overlays-btn.run:disabled { background: #2a3550; color: #667; cursor: not-allowed; }
+.overlays-btn.cancel { background: #4a1a1a; color: #f85149; }
+.overlays-progress { height: 6px; background: #0f1c2e; border-radius: 3px; margin-top: 8px; overflow: hidden; }
+.overlays-progress-bar { height: 100%; background: #4fc3f7; transition: width 0.2s; }
+.overlays-status { color: #888; font-size: 11px; margin-top: 6px; }
+/* Run-tab Overlays panel: a standalone right region (no Inspector to stack with). */
+.overlays-panel-run { width: 320px; min-width: 220px; flex-shrink: 0; background: #16213e; border-left: 1px solid #0f3460; border-top: none; overflow: hidden; }
+.overlays-panel-run .overlays-header { border-bottom: 1px solid #0f3460; }
+.overlays-panel-run .overlays-body { flex: 1; overflow-y: auto; }
+.overlays-panel-run.collapsed { width: auto; }
+.overlays-cameras { margin: 6px 0 4px; display: flex; flex-wrap: wrap; gap: 5px; }
+/* Object rows ported from the prototype: [sign][name][palette][trash] + Background. */
+.overlays-objrows { margin: 6px 0; }
+.overlays-objrow { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.overlays-obj-btn { flex: 0 0 24px; box-sizing: border-box; height: 22px; padding: 0; background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px; color: #ccc; font-size: 13px; line-height: 1; cursor: pointer; }
+.overlays-obj-btn.sign { font-weight: 700; color: #34d399; }
+.overlays-obj-btn.sign.neg { color: #f87171; }
+.overlays-obj-btn.bg-clear.on { background: #15324a; color: #4fc3f7; border-color: #4fc3f7; }
+.overlays-obj-slot { flex: 0 0 24px; }
+.overlays-obj-name { flex: 1; min-width: 0; box-sizing: border-box; background: #0f1c2e; border: 1px solid #0f3460; color: #ddd; font-size: 12px; padding: 4px 6px; border-radius: 4px; }
+/* The first object name is required (an open-vocab model needs a concept). Red-border it
+   while empty so the requirement is visible without a model-specific status badge. */
+.overlays-obj-name[data-i='0']:placeholder-shown { border-color: #f85149; }
+.overlays-bg-label { flex: 1; min-width: 0; opacity: 0.6; font-size: 12px; color: #ccc; }
+.overlays-palette { flex: 0 0 auto; display: flex; gap: 4px; }
+.overlays-swatch { display: inline-block; width: 15px; height: 15px; border-radius: 3px; cursor: pointer; border: 2px solid transparent; box-shadow: 0 0 0 1px #0006; }
+.overlays-swatch.sel { border-color: #fff; }
+.overlays-palette.disabled { opacity: 0.3; pointer-events: none; }
+.overlays-add-obj { margin: 2px 0 4px; background: #0f1c2e; border: 1px solid #0f3460; color: #9cf; font-size: 11.5px; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+.overlays-add-obj:disabled { color: #667; cursor: not-allowed; }
+.overlays-cam-btn { background: #0f1c2e; border: 1px solid #0f3460; color: #889; font-size: 11.5px; padding: 3px 9px; border-radius: 12px; cursor: pointer; opacity: 0.6; }
+.overlays-cam-btn.on { background: #15324a; color: #4fc3f7; border-color: #4fc3f7; opacity: 1; }
+/* "open log" viewer — roomy, dismissible (Esc / click-out / ×). */
+.overlays-log-modal { display: none; position: fixed; inset: 0; background: #0009; z-index: 9999; align-items: center; justify-content: center; }
+.overlays-log-box { background: #0d1620; border: 1px solid #0f3460; border-radius: 8px; width: min(900px, 86vw); max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 12px 48px #000a; }
+.overlays-log-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #0f3460; }
+.overlays-log-title { color: #cfe3ff; font-size: 13px; font-weight: 600; }
+.overlays-log-close { background: none; border: none; color: #9ab; font-size: 22px; line-height: 1; cursor: pointer; padding: 0 4px; }
+.overlays-log-close:hover { color: #fff; }
+.overlays-log-actions { display: flex; align-items: center; gap: 8px; }
+.overlays-log-btn { background: #15324a; border: 1px solid #1f5278; color: #cfe3ff; font-size: 11.5px; padding: 3px 10px; border-radius: 4px; cursor: pointer; }
+.overlays-log-btn:hover { background: #1c405e; }
+.overlays-log-pre { margin: 0; padding: 12px 14px; overflow: auto; color: #cdd6e0; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
 .inspector-summary .summary-value { color: #ddd; }
 
 /* Inspector section header — used twice (Episode N + Frames N…M). */

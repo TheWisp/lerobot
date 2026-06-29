@@ -1,0 +1,90 @@
+<svg viewBox="0 0 1000 560" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,-apple-system,sans-serif">
+  <rect width="1000" height="560" fill="#fafafa"/>
+
+  <!-- tab bar -->
+  <rect x="10" y="12" width="980" height="34" fill="#e8e8e8" stroke="#888"/>
+  <rect x="26" y="16" width="56" height="26" fill="#fff" stroke="#888"/>
+  <text x="54" y="34" font-size="14" font-weight="700" text-anchor="middle">Data</text>
+  <text x="104" y="34" font-size="14" fill="#444">Model</text>
+  <text x="166" y="34" font-size="14" fill="#444">Run</text>
+  <text x="218" y="34" font-size="14" fill="#444">Robot</text>
+
+  <!-- left datasets panel -->
+  <rect x="10" y="46" width="176" height="500" fill="#f0f0f0" stroke="#888"/>
+  <text x="22" y="72" font-size="13" font-weight="700" fill="#666">DATASETS</text>
+  <path d="M22,92 l9,0 l-4.5,6 z" fill="#555"/><text x="36" y="98" font-size="12" fill="#555">cylinder_assembly</text>
+  <text x="34" y="120" font-size="12" fill="#777">episode 0</text>
+  <rect x="22" y="126" width="152" height="20" fill="#dde7ff"/><text x="34" y="141" font-size="12" fill="#234">episode 4</text>
+  <text x="34" y="162" font-size="12" fill="#777">episode 5</text>
+  <text x="22" y="200" font-size="11.5" fill="#999">selection / navigation</text>
+
+  <!-- center: camera tiles (no header) -->
+  <rect x="194" y="46" width="488" height="230" fill="#aaa" stroke="#aaa"/>
+  <rect x="196" y="48" width="241" height="226" fill="#1c1c1c"/><text x="316" y="264" font-size="12" fill="#bbb" text-anchor="middle">camera.top</text>
+  <rect x="439" y="48" width="241" height="226" fill="#1c1c1c"/><text x="560" y="264" font-size="12" fill="#bbb" text-anchor="middle">camera.front</text>
+  <!-- result on the tile: SAM outline + silhouette + gizmo -->
+  <ellipse cx="316" cy="150" rx="60" ry="42" fill="none" stroke="#22d3ee" stroke-width="2"/>
+  <ellipse cx="316" cy="150" rx="60" ry="42" fill="none" stroke="#fff" stroke-width="1" stroke-dasharray="3 3"/>
+  <ellipse cx="316" cy="150" rx="23" ry="16" fill="none" stroke="#fff" stroke-width="1"/>
+  <line x1="316" y1="150" x2="358" y2="150" stroke="#f00" stroke-width="1.5"/>
+  <line x1="316" y1="150" x2="316" y2="116" stroke="#0f0" stroke-width="1.5"/>
+
+  <!-- controls bar (Play / speed) -->
+  <rect x="194" y="280" width="488" height="28" fill="#f0f0f0" stroke="#888"/>
+  <path d="M206,289 l0,10 l9,-5 z" fill="#444"/>
+  <text x="232" y="299" font-size="12" fill="#666">1.0×</text>
+  <text x="300" y="299" font-size="11.5" fill="#999">scrub: cached result, instant</text>
+
+  <!-- timeline -->
+  <rect x="194" y="312" width="488" height="234" fill="#f5f5f5" stroke="#888"/>
+  <text x="206" y="336" font-size="12" font-weight="700" fill="#666">TIMELINE</text>
+  <rect x="206" y="350" width="464" height="14" fill="#e3e3e3" stroke="#ccc"/>
+  <rect x="206" y="350" width="284" height="14" fill="#bcd3ff"/>
+  <line x1="394" y1="344" x2="394" y2="372" stroke="#333" stroke-width="2"/>
+  <text x="206" y="392" font-size="11" fill="#888">cached frames (one pass) · scrubber</text>
+
+  <!-- right region: accordion [Inspector | Overlays] -->
+  <rect x="690" y="46" width="300" height="500" fill="#f7f7f7" stroke="#888"/>
+
+  <!-- Inspector section (top) -->
+  <rect x="690" y="46" width="300" height="26" fill="#ececec" stroke="#bbb"/>
+  <path d="M702,56 l9,0 l-4.5,6 z" fill="#555"/>
+  <text x="717" y="64" font-size="13" font-weight="700" fill="#555">Inspector</text>
+  <text x="978" y="64" font-size="11" fill="#999" text-anchor="end">frame 188</text>
+  <text x="702" y="96" font-size="12" fill="#555">reward</text><rect x="820" y="82" width="158" height="20" fill="#fff" stroke="#ccc"/><text x="830" y="97" font-size="12" fill="#333">0.0</text>
+  <text x="702" y="124" font-size="12" fill="#555">success</text><rect x="820" y="110" width="158" height="20" fill="#fff" stroke="#ccc"/><text x="830" y="125" font-size="12" fill="#333">false</text>
+  <text x="702" y="152" font-size="12" fill="#555">subtask</text><rect x="820" y="138" width="158" height="20" fill="#fff" stroke="#ccc"/><text x="830" y="153" font-size="12" fill="#333">grasp ring</text>
+
+  <!-- draggable divider (resize handle) -->
+  <rect x="690" y="176" width="300" height="8" fill="#e0e0e0" stroke="#bbb"/>
+  <line x1="828" y1="180" x2="852" y2="180" stroke="#999" stroke-width="2"/>
+  <text x="978" y="182" font-size="10" fill="#aaa" text-anchor="end">drag</text>
+
+  <!-- Overlays section (bottom) -->
+  <rect x="690" y="184" width="300" height="362" fill="#eef2ff"/>
+  <rect x="690" y="184" width="300" height="30" fill="#e0e7ff" stroke="#6366f1"/>
+  <path d="M702,196 l9,0 l-4.5,6 z" fill="#3730a3"/>
+  <text x="717" y="204" font-size="13" font-weight="700" fill="#3730a3">Overlays</text>
+  <circle cx="812" cy="199" r="4.5" fill="#22c55e"/>
+  <text x="868" y="203" font-size="11" font-weight="600" fill="#3730a3" text-anchor="middle">loaded · 3.1 GB</text>
+  <text x="978" y="204" font-size="10.5" fill="#6366f1" text-anchor="end" text-decoration="underline">open log</text>
+  <!-- processing picker -->
+  <text x="702" y="238" font-size="11" fill="#666">processing</text>
+  <rect x="702" y="244" width="276" height="26" fill="#fff" stroke="#ccc"/><text x="712" y="262" font-size="12" fill="#333">SAM3 object tracker</text><path d="M962,254 l9,0 l-4.5,6 z" fill="#666"/>
+  <!-- open-vocab label -->
+  <text x="702" y="290" font-size="11" fill="#666">add object</text>
+  <rect x="702" y="296" width="276" height="26" fill="#fff" stroke="#888"/><text x="712" y="314" font-size="12" fill="#333">green ring</text>
+  <!-- object list -->
+  <rect x="702" y="332" width="276" height="26" fill="#fff" stroke="#eee"/>
+  <circle cx="715" cy="345" r="4" fill="#22d3ee"/><text x="728" y="349" font-size="12" fill="#333">green ring</text><text x="966" y="349" font-size="13" fill="#999" text-anchor="end">×</text>
+  <!-- body label -->
+  <text x="702" y="368" font-size="9.5" fill="#9aa3d6" font-style="italic">↑ per-model body (SAM3)</text>
+  <!-- run on episode + progress (the one action; becomes Cancel mid-pass) -->
+  <rect x="702" y="376" width="276" height="30" rx="4" fill="#6366f1"/><text x="840" y="396" font-size="12.5" font-weight="700" fill="#fff" text-anchor="middle">Run on episode</text>
+  <rect x="702" y="416" width="276" height="12" fill="#dfe3f5" stroke="#c7cdec"/><rect x="702" y="416" width="168" height="12" fill="#6366f1"/>
+  <text x="702" y="446" font-size="11" fill="#666">pass 61% · caches per frame (→ Cancel)</text>
+  <text x="702" y="466" font-size="11" fill="#666">scrub serves cache; picker none = off</text>
+
+  <text x="702" y="520" font-size="11" fill="#7c83c8">right = accordion (Inspector + Overlays),</text>
+  <text x="702" y="534" font-size="11" fill="#7c83c8">both visible; drag divider / collapse to weight</text>
+</svg>
