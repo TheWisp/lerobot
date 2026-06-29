@@ -13,7 +13,7 @@
 # limitations under the License.
 """Overlays API — run one processing step on the current observation.
 
-Both tabs drive the SAME out-of-process worker (``debug_vision/standalone.py``),
+Both tabs drive the SAME out-of-process worker (``overlays/standalone.py``),
 which reads the obs stream (``lerobot_obs_*``) and writes per-camera RGBA overlays
 to a SharedOverlayBuffer the GUI serves as PNG. The only difference is who publishes
 the obs stream: teleop/policy/record for the run tab; the GUI itself for the data
@@ -40,7 +40,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
-from lerobot.policies.debug_vision.overlay_state import Event, OverlayStateMachine, State
+from lerobot.overlays.overlay_state import Event, OverlayStateMachine, State
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
@@ -420,7 +420,7 @@ def _get_live_reader():
     if _live_reader is not None:
         return _live_reader
     try:
-        from lerobot.policies.debug_vision.overlay_ipc import SharedOverlayBuffer
+        from lerobot.overlays.overlay_ipc import SharedOverlayBuffer
 
         _live_reader = SharedOverlayBuffer(create=False)
     except FileNotFoundError:
@@ -458,7 +458,7 @@ def _read_status() -> dict:
     global _live_status_reader
     if _live_status_reader is None:
         try:
-            from lerobot.policies.debug_vision.overlay_ipc import OverlayStatus
+            from lerobot.overlays.overlay_ipc import OverlayStatus
 
             _live_status_reader = OverlayStatus(create=False)
         except (FileNotFoundError, RuntimeError):
@@ -570,7 +570,7 @@ async def _spawn_worker(model: str, *, objects=None, background=None, cameras=No
         return
     m.fire(Event.START)  # -> loading; the badge reflects it immediately
     await _teardown_current()  # stop a different running model first (serialised)
-    args = [sys.executable, "-u", "-m", "lerobot.policies.debug_vision.standalone", f"--model={model}"]
+    args = [sys.executable, "-u", "-m", "lerobot.overlays.standalone", f"--model={model}"]
     if objects:
         args.append(f"--objects={json.dumps(objects)}")
     if background is not None:

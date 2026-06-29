@@ -1,7 +1,7 @@
 # Overlays — observation processing in the main view (working name)
 
 **Status:** implemented — data + live (2026-06-26). Its own PR; `proto/gui-debug-vision` rebases on
-top. Motivating findings: `src/lerobot/policies/debug_vision/JOURNAL.md`.
+top. Motivating findings: `src/lerobot/overlays/JOURNAL.md`.
 
 ## What it is
 
@@ -98,7 +98,7 @@ frame (the live frame, or the scrubbed frame in data).
 ### Lifecycle states
 
 Each model has its own lifecycle as an explicit state machine
-(`policies/debug_vision/overlay_state.py`) — the single source of truth for the badge. The
+(`overlays/overlay_state.py`) — the single source of truth for the badge. The
 standalone reports its phase (loading → active), the GUI layers the process-lifecycle states on
 top, and **nothing assembles a state string by hand**; state changes only by firing an event, and
 every transition is logged. The machine is pure, so the table is unit-tested in isolation.
@@ -151,7 +151,7 @@ The robot's post-processed observation: scalars, last action, one image block pe
   Re-publishing the **same** frame (a paused playhead, or a status re-poll) is a no-op — it doesn't
   touch the stream, so pausing never re-runs inference or resets the tracker.
 - **Readers** (read-only, lock-free, any process): the GUI's live display + URDF joint transform
-  (`run.py`); the **overlay worker** (`debug_vision/standalone.py`). No reader writes here — the
+  (`run.py`); the **overlay worker** (`overlays/standalone.py`). No reader writes here — the
   observation stays pristine.
 
 > **Known limitation — run and data can't both own the stream.** `lerobot_obs_*` is a singleton

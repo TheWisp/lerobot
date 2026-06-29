@@ -3,7 +3,7 @@ table is verified in isolation (the whole point of the abstraction)."""
 
 from __future__ import annotations
 
-from lerobot.policies.debug_vision.overlay_state import Event, OverlayStateMachine, State
+from lerobot.overlays.overlay_state import Event, OverlayStateMachine, State
 
 
 def test_initial_is_inactive():
@@ -75,7 +75,7 @@ def test_transition_table_is_exhaustive():
     """Every (state, event) pair is accounted for: the listed pairs transition as specified, and
     EVERY other pair is a logged no-op (fire returns False, state unchanged) — the machine never
     raises on an unexpected event. This walks all |State|*|Event| pairs as the explicit spec."""
-    from lerobot.policies.debug_vision.overlay_state import _TABLE
+    from lerobot.overlays.overlay_state import _TABLE
 
     for state in State:
         for event in Event:

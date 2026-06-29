@@ -5,7 +5,7 @@ attach read-only), runs a DebugVisionAdapter, and publishes a per-camera RGBA
 overlay to a SharedOverlayBuffer that the GUI backend serves as PNG.
 
 Usage:
-    python -m lerobot.policies.debug_vision.standalone \
+    python -m lerobot.overlays.standalone \
         --model sam3_track --prompt "robot arm . cylinder . green ring" \
         --cameras observation.images.top
 """
@@ -20,8 +20,8 @@ import time
 
 import numpy as np
 
-from lerobot.policies.debug_vision.adapters import ADAPTERS, build_adapter
-from lerobot.policies.debug_vision.overlay_ipc import OverlayStatus, SharedOverlayBuffer
+from lerobot.overlays.adapters import ADAPTERS, build_adapter
+from lerobot.overlays.overlay_ipc import OverlayStatus, SharedOverlayBuffer
 from lerobot.robots.obs_stream import ObservationStreamReader
 
 logger = logging.getLogger(__name__)

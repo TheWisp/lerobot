@@ -20,7 +20,7 @@ import torch
 from PIL import Image
 
 from lerobot.gui.api import overlays
-from lerobot.policies.debug_vision import adapters, standalone
+from lerobot.overlays import adapters, standalone
 
 
 def test_every_step_key_resolves_to_an_adapter():
@@ -316,7 +316,7 @@ def test_concept_color_user_then_palette():
     ],
 )
 def test_overlay_buffer_roundtrips_arbitrary_camera_keys(keys):
-    from lerobot.policies.debug_vision.overlay_ipc import SharedOverlayBuffer
+    from lerobot.overlays.overlay_ipc import SharedOverlayBuffer
 
     cams = dict.fromkeys(keys, (4, 6))
     writer = SharedOverlayBuffer(cameras=cams, model="t", create=True)
@@ -394,7 +394,7 @@ def test_live_status_renders_the_per_model_machine(overlay_client, monkeypatch):
     """live_status is driven by the per-model state machine — inactive when nothing runs,
     loading while the standalone warms, active once it reports phase 'active' (LOADED fired by
     _observe). The endpoint assembles no string state itself."""
-    from lerobot.policies.debug_vision.overlay_state import Event
+    from lerobot.overlays.overlay_state import Event
 
     overlays._live_proc = None
     overlays._live_model = None
