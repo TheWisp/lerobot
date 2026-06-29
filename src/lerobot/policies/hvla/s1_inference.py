@@ -173,14 +173,15 @@ class InferenceThread:
         #       for A/B. Not object-crisp.
         self._attn_aux = None
         self._attn_warned = False  # rate-limit the publish-failure warning to once per process
-        # PROVISIONAL — NOT deployment-ready. This aux/overlay computation runs UNCONDITIONALLY on
-        # every HVLA-S1 run (not only when an overlay is open): `_publish_aux` pays a ~40ms saliency
-        # backward pass (DINOv2 unfrozen) every `_aux_every` steps and writes a `.npz` dump — a real
-        # cost regression on the control thread vs the pre-overlay path. The off-switch exists
-        # (OverlayControlReader.config() is the demand signal) but is NOT wired in, and `_aux_every=3`
-        # is a hardcoded placeholder cadence, not principled. Gate both on overlay demand (and put the
-        # dump behind an explicit debug flag) before this ships. TODO: gui/TODO.md →
-        # "policy-saliency: always-on cost regression" ([High], blocks #42).
+        # PROVISIONAL — not yet demand-gated. This aux/overlay computation runs UNCONDITIONALLY on
+        # every HVLA-S1 run (not only when an overlay is open): `_publish_aux` recomputes saliency every
+        # `_aux_every` steps and writes a `.npz` dump. Latency is a non-issue (MEASURED 2026-06-29:
+        # 29ms gradient < a 36ms inference, and chunk_size=50 gives the inference thread a ~50x budget
+        # margin — no underruns). The real costs are the UNBOUNDED `.npz` dumps + on-by-default. The
+        # off-switch exists (OverlayControlReader.config() is None when no worker is up) but is NOT
+        # wired in, and `_aux_every=3` is a hardcoded placeholder. Gate on overlay demand + put the dump
+        # behind a debug flag before this ships — hygiene, not perf. TODO: gui/TODO.md → Overlays →
+        # "Demand-gate the pass + flag the disk dump" ([Med]).
         self._aux_mode = "saliency"
         self._aux_every = 3  # "every 3rd" is a placeholder hack (see note)
         self._aux_step = -1
