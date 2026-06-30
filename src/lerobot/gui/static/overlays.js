@@ -108,6 +108,18 @@
             panels.push(p);
             if (r.mode === 'live') livePanel = p;
         }
+        // The data-editing menu lives alongside the data overlay (shares its
+        // objects). Init it once; reflect the active-job count on the button.
+        if (window.ProcessData) window.ProcessData.init({ onCountChange: updateProcessButtons });
+    }
+
+    // Show the running-job count on every "Process dataset…" button so a user
+    // who closed the menu still sees work is in flight.
+    function updateProcessButtons(count) {
+        document.querySelectorAll('.overlays-process').forEach((b) => {
+            b.textContent = count > 0 ? `⚙ Process dataset… (${count} running)` : '⚙ Process dataset…';
+            b.classList.toggle('busy', count > 0);
+        });
     }
 
     function Panel(root, mode) {
@@ -192,8 +204,11 @@
                     <div class="overlays-objrows"></div>
                     <button class="overlays-add-obj">+ Add object</button>
                     <label class="overlays-label">cameras</label>
-                    <div class="overlays-cameras"></div>`;
+                    <div class="overlays-cameras"></div>
+                    ${mode === 'data' ? '<button class="overlays-process" title="Segment these objects and apply a background/global effect to a new copy of the dataset">⚙ Process dataset…</button>' : ''}`;
                 els.modelBody.querySelector('.overlays-add-obj').addEventListener('click', addObject);
+                const procBtn = els.modelBody.querySelector('.overlays-process');
+                if (procBtn) procBtn.addEventListener('click', openProcess);
                 renderObjects();
             } else {
                 els.modelBody.innerHTML = '<label class="overlays-label">cameras</label><div class="overlays-cameras"></div>';
@@ -245,6 +260,18 @@
             if (objects.length >= MAX_OBJECTS) return;
             objects.push({ name: '', color: PALETTE[objects.length % PALETTE.length], sign: '+' });
             renderObjects();  // no apply — the new row has no name yet
+        }
+
+        // Open the data-editing menu with the panel's current objects (the
+        // protected foreground) + the selected cameras. Segmentation is the same
+        // SAM3 the overlay previews, so "what's kept" matches what's on screen.
+        function openProcess() {
+            if (!window.ProcessData || !window.currentDataset) return;
+            window.ProcessData.open({
+                datasetId: window.currentDataset,
+                objects: payloadObjects(),
+                cameras: camsArg(),
+            });
         }
 
         // Name edits restart tracking, so debounce; colour/sign/remove are display-only → instant.
