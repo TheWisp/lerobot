@@ -218,3 +218,62 @@ def test_compute_input_saliency_empty_without_image_features():
     stub = FlowMatchingS1Policy.__new__(FlowMatchingS1Policy)
     stub.config = type("C", (), {"image_features": []})()
     assert stub.compute_input_saliency({}) == {}
+
+
+def test_publish_aux_demand_gated():
+    """Regression (the always-on cost): `_publish_aux` must NOT compute saliency when no overlay worker
+    is up (the OverlayControlReader.config() demand signal is None), and MUST compute when one is.
+    Bypasses InferenceThread.__init__ — only the aux attributes matter here."""
+    from unittest.mock import MagicMock
+
+    from lerobot.policies.hvla.s1_inference import InferenceThread
+
+    it = InferenceThread.__new__(InferenceThread)
+    it._aux_mode = "saliency"
+    it._aux_every = 1  # every step, so one call is enough to trigger the cadence
+    it._aux_step = -1
+    it._aux_dump = False
+    it._s1_image_keys = []  # empty -> compute returns {} -> _publish_saliency early-returns cleanly
+    it._policy = MagicMock()
+    it._policy.compute_input_saliency.return_value = {}
+    it._overlay_ctrl = MagicMock()
+
+    # No overlay worker up -> demand off -> saliency must NOT be computed.
+    it._overlay_ctrl.config.return_value = None
+    it._publish_aux({})
+    it._publish_aux({})
+    it._policy.compute_input_saliency.assert_not_called()
+
+    # Overlay up -> demand on -> computed.
+    it._overlay_ctrl.config.return_value = {"method": "gradient"}
+    it._publish_aux({})
+    it._policy.compute_input_saliency.assert_called_once()
+
+
+def test_overlay_control_reader_is_reliable_demand_signal():
+    """config() is the demand signal: None with no worker, the written config while one is up, and None
+    again after the control segment is unlinked (clean stop) — never a stale latch."""
+    import os
+
+    import numpy as np
+
+    from lerobot.overlays.overlay_ipc import (
+        _CONTROL_BYTES,
+        _CONTROL_SHM,
+        _PREFIX,
+        OverlayControlReader,
+        _write_json,
+    )
+    from lerobot.policies.hvla.ipc import SharedBlock
+
+    if os.path.exists(_CONTROL_SHM):
+        os.remove(_CONTROL_SHM)  # a stale worker's segment would defeat the "no worker" assert
+    r = OverlayControlReader()
+    assert r.config() is None  # no worker
+    blk = SharedBlock(name=_PREFIX + "control", shape=(_CONTROL_BYTES,), dtype=np.uint8, create=True)
+    try:
+        _write_json(blk, {"config": {"method": "rollout"}})
+        assert r.config() == {"method": "rollout"}  # worker up -> demand on
+    finally:
+        blk.unlink()  # clean stop unlinks the segment
+    assert r.config() is None  # reliably off after stop, not a stale "rollout"

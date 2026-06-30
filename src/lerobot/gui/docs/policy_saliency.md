@@ -97,7 +97,7 @@ That's the whole contract. The overlay's render (gated blue→yellow, smoothing,
 ## 4. Files
 
 - `policies/hvla/s1/flow_matching/model.py` — `compute_input_saliency`, `compute_attention_rollout`
-- `policies/hvla/s1_inference.py` — `_publish_aux` / `_publish_saliency` / `_overlay_method` (the publish + method dispatch)
+- `policies/hvla/s1_inference.py` — `_publish_aux` (demand-gated) / `_publish_saliency` / `_overlay_config` (the gate + method dispatch)
 - `overlays/aux_ipc.py` — `SharedAuxBuffer` (the aux seam)
 - `overlays/adapters.py` — `PolicySaliencyAdapter` (the colorizer + render styles)
 - `overlays/standalone.py` — the worker (reads aux + obs-stream, writes the overlay buffer)

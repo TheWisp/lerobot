@@ -155,6 +155,12 @@ class InferenceThread:
         # aggregator/snapshot infrastructure used by teleop/record. The
         # default disabled session is a no-op (~50 ns per iteration).
         latency_session: LatencySession | None = None,
+        # Policy-internal overlay (saliency/attention) — see the aux block below. Demand-gated, so it
+        # costs ~nothing unless an overlay is open. ``aux_every`` is the publish cadence (every Nth
+        # inference); ``aux_dump`` persists each grid to outputs/saliency_dumps/ for offline analysis.
+        aux_mode: str | None = "saliency",
+        aux_every: int = 3,
+        aux_dump: bool = False,
     ):
         self._policy = policy
         self._preprocessor = preprocessor
@@ -173,22 +179,18 @@ class InferenceThread:
         #       for A/B. Not object-crisp.
         self._attn_aux = None
         self._attn_warned = False  # rate-limit the publish-failure warning to once per process
-        # PROVISIONAL — not yet demand-gated. This aux/overlay computation runs UNCONDITIONALLY on
-        # every HVLA-S1 run (not only when an overlay is open): `_publish_aux` recomputes saliency every
-        # `_aux_every` steps and writes a `.npz` dump. Latency is a non-issue (MEASURED 2026-06-29:
-        # 29ms gradient < a 36ms inference, and chunk_size=50 gives the inference thread a ~50x budget
-        # margin — no underruns). The real costs are the UNBOUNDED `.npz` dumps + on-by-default. The
-        # off-switch exists (OverlayControlReader.config() is None when no worker is up) but is NOT
-        # wired in, and `_aux_every=3` is a hardcoded placeholder. Gate on overlay demand + put the dump
-        # behind a debug flag before this ships — hygiene, not perf. TODO: gui/TODO.md → Overlays →
-        # "Demand-gate the pass + flag the disk dump" ([Med]).
-        self._aux_mode = "saliency"
-        self._aux_every = 3  # "every 3rd" is a placeholder hack (see note)
+        # DEMAND-GATED: `_publish_aux` recomputes saliency only while an overlay worker is up (the
+        # OverlayControlReader.config() demand signal), every `aux_every` inferences. Latency is a
+        # non-issue (MEASURED 2026-06-29: 29ms gradient < a 36ms inference; chunk_size=50 gives the
+        # inference thread a ~50x budget margin — no underruns), so the cadence is a tunable knob, not a
+        # perf guard. `aux_dump` persists each grid to outputs/saliency_dumps/ (off by default — it's an
+        # unbounded write, only wanted for offline saliency analysis).
+        self._aux_mode = aux_mode
+        self._aux_every = max(1, aux_every)
+        self._aux_dump = aux_dump
         self._aux_step = -1
-        self._overlay_ctrl = None  # lazy OverlayControlReader — reads the GUI-selected saliency method
-        self._sal_dump_dir = (
-            None  # lazy on-disk capture — UNCONDITIONAL today (see the provisional note above)
-        )
+        self._overlay_ctrl = None  # lazy OverlayControlReader — the demand signal + the selected method
+        self._sal_dump_dir = None  # lazy on-disk capture dir (only used when aux_dump=True)
         _attn_model = getattr(policy, "model", None)
         if _attn_model is not None and hasattr(_attn_model, "capture_attention"):
             _attn_model.capture_attention = self._aux_mode == "attention"
@@ -863,21 +865,23 @@ class InferenceThread:
                 if k in key_map:
                     self._attn_aux.write_saliency(key_map[k], np.asarray(g, dtype=np.float32))
             logger.info("[saliency] published method=%s per-cam |grid|max=%s", method, written)
-            # Ground-truth capture: persist every published grid set to disk, time-indexed, so the
-            # run's overlay content is COMPARED frame-to-frame after the fact, not inferred from flags.
-            if self._sal_dump_dir is None:
-                self._sal_dump_dir = os.path.join("outputs", "saliency_dumps", time.strftime("%Y%m%d_%H%M%S"))
-                os.makedirs(self._sal_dump_dir, exist_ok=True)
-                self._sal_dump_n = 0
-                logger.info(
-                    "[saliency] recording grids -> %s (time-indexed ground truth)", self._sal_dump_dir
+            # Optional ground-truth capture (aux_dump, default off): persist every published grid set,
+            # time-indexed, so the run's overlay content can be COMPARED frame-to-frame offline. An
+            # unbounded write — only enabled when explicitly doing offline saliency analysis.
+            if self._aux_dump:
+                if self._sal_dump_dir is None:
+                    self._sal_dump_dir = os.path.join(
+                        "outputs", "saliency_dumps", time.strftime("%Y%m%d_%H%M%S")
+                    )
+                    os.makedirs(self._sal_dump_dir, exist_ok=True)
+                    self._sal_dump_n = 0
+                    logger.info("[saliency] recording grids -> %s (time-indexed)", self._sal_dump_dir)
+                np.savez(
+                    os.path.join(self._sal_dump_dir, f"{self._sal_dump_n:06d}.npz"),
+                    t=time.time(),
+                    **{key_map[k]: np.asarray(g, dtype=np.float32) for k, g in sal.items() if k in key_map},
                 )
-            np.savez(
-                os.path.join(self._sal_dump_dir, f"{self._sal_dump_n:06d}.npz"),
-                t=time.time(),
-                **{key_map[k]: np.asarray(g, dtype=np.float32) for k, g in sal.items() if k in key_map},
-            )
-            self._sal_dump_n += 1
+                self._sal_dump_n += 1
         except Exception:
             if not self._attn_warned:
                 logger.warning(
@@ -885,24 +889,32 @@ class InferenceThread:
                 )
                 self._attn_warned = True
 
-    def _overlay_method(self) -> str:
-        """The saliency source ("gradient" | "rollout") selected in the GUI overlay control, read from
-        the worker's control block (default "gradient", incl. when no overlay worker is up)."""
+    def _overlay_config(self) -> dict | None:
+        """The overlay worker's control config, or ``None`` when no worker is up — the DEMAND signal
+        that gates `_publish_aux`. Lazily attaches a read-only OverlayControlReader."""
         if self._overlay_ctrl is None:
             from lerobot.overlays.overlay_ipc import OverlayControlReader
 
             self._overlay_ctrl = OverlayControlReader()
-        cfg = self._overlay_ctrl.config()
-        m = (cfg or {}).get("method")
-        return m if m in ("gradient", "rollout") else "gradient"
+        return self._overlay_ctrl.config()
 
     def _publish_aux(self, batch: dict) -> None:
-        """Dispatch the policy-internal overlay publish by mode + rate (see __init__)."""
+        """Dispatch the policy-internal overlay publish — DEMAND-GATED: skip entirely unless an overlay
+        worker is up, then by cadence + mode (see __init__). The off path is a single shm-existence
+        check, so a run with no overlay open pays ~nothing (the pre-overlay baseline)."""
+        if self._aux_mode is None:
+            return
         self._aux_step += 1
+        if self._aux_step % self._aux_every != 0:
+            return
+        cfg = self._overlay_config()  # None => no overlay worker up => no demand
+        if cfg is None:
+            return
         if self._aux_mode == "attention":
             self._publish_attention()
-        elif self._aux_mode == "saliency" and self._aux_step % self._aux_every == 0:
-            self._publish_saliency(batch, self._overlay_method())
+        elif self._aux_mode == "saliency":
+            method = cfg.get("method")
+            self._publish_saliency(batch, method if method in ("gradient", "rollout") else "gradient")
 
     def publish_obs(self, obs: dict, t_now: float) -> None:
         """Main loop publishes observation for the inference thread."""
