@@ -78,6 +78,46 @@ _STEPS: list[dict] = [
             }
         ],
     },
+    {
+        "key": "policy_saliency",
+        "label": "Policy saliency",
+        "result_kind": "spatial",
+        "load_cost": "fast",  # no model of its own — reads the running policy's saliency via shm
+        "controls": [
+            {
+                "type": "select",
+                "key": "method",
+                "label": "Method",
+                "default": "gradient",
+                "options": [
+                    {"value": "gradient", "label": "Gradient (causal — what the action uses)"},
+                    {"value": "rollout", "label": "Rollout (attention — where it routes from)"},
+                ],
+            },
+            {
+                "type": "select",
+                "key": "style",
+                "label": "Style",
+                "default": "blue_yellow",
+                "options": [
+                    {"value": "blue_yellow", "label": "Blue → Yellow"},
+                    {"value": "cividis", "label": "Cividis (uniform)"},
+                    {"value": "spotlight", "label": "Spotlight (hotspots only)"},
+                    {"value": "heatmap", "label": "Full heatmap"},
+                    {"value": "inferno", "label": "Inferno (golden)"},
+                ],
+            },
+            {
+                "type": "slider",
+                "key": "smooth",
+                "label": "Smoothing",
+                "min": 0.0,
+                "max": 3.0,
+                "step": 0.1,
+                "default": 1.2,
+            },
+        ],
+    },
 ]
 
 
@@ -542,6 +582,9 @@ class LiveStartRequest(BaseModel):
     objects: list[dict] | None = None
     background: dict | None = None
     cameras: list[str] | None = None
+    style: str | None = None  # policy_saliency render style (see PolicySaliencyAdapter.STYLES)
+    smooth: float | None = None  # policy_saliency smoothing sigma (0 = raw 64x64)
+    method: str | None = None  # policy_saliency source: "gradient" | "rollout" (read by the policy)
 
 
 class LiveDiagRequest(BaseModel):
@@ -556,7 +599,9 @@ class LiveDiagRequest(BaseModel):
     blank: list[str] = []
 
 
-async def _spawn_worker(model: str, *, objects=None, background=None, cameras=None) -> None:
+async def _spawn_worker(
+    model: str, *, objects=None, background=None, cameras=None, style=None, smooth=None, method=None
+) -> None:
     """Spawn (or push control to) the single overlay worker for ``model``. Caller MUST hold
     ``_live_lock``. The worker is identical for live + data — it reads the obs stream; only the
     publisher differs (teleop for run, the GUI data publisher for data). A same-model call just
@@ -566,7 +611,17 @@ async def _spawn_worker(model: str, *, objects=None, background=None, cameras=No
     if _live_model == model and _live_proc is not None and _live_proc.returncode is None:
         reader = _get_live_reader()  # already up — push control, don't restart
         if reader is not None:
-            reader.write_control({"config": {"objects": objects or [], "background": background}})
+            reader.write_control(
+                {
+                    "config": {
+                        "objects": objects or [],
+                        "background": background,
+                        "style": style,
+                        "smooth": smooth,
+                        "method": method,  # read by the POLICY (gradient|rollout), not the worker
+                    }
+                }
+            )
         return
     m.fire(Event.START)  # -> loading; the badge reflects it immediately
     await _teardown_current()  # stop a different running model first (serialised)
@@ -575,6 +630,10 @@ async def _spawn_worker(model: str, *, objects=None, background=None, cameras=No
         args.append(f"--objects={json.dumps(objects)}")
     if background is not None:
         args.append(f"--background={json.dumps(background)}")
+    if style:
+        args.append(f"--style={style}")
+    if smooth is not None:
+        args.append(f"--smooth={smooth}")
     if cameras:
         args.append("--cameras")
         args.extend(cameras)
@@ -591,6 +650,16 @@ async def _spawn_worker(model: str, *, objects=None, background=None, cameras=No
         *args, stdout=logf, stderr=asyncio.subprocess.STDOUT, preexec_fn=_set_pdeathsig_preexec
     )
     _live_model = model
+    if method:
+        # The method is read by the POLICY from the control block (the worker doesn't use it). A fresh
+        # spawn's buffer isn't up instantly, so push it once it exists — else a method chosen BEFORE
+        # start is silently dropped (only a mid-run /live/control would set it).
+        for _ in range(20):
+            await asyncio.sleep(0.3)
+            r = _get_live_reader()
+            if r is not None:
+                r.write_control({"config": {"method": method}})
+                break
 
 
 @router.post("/live/start")
@@ -601,7 +670,15 @@ async def live_start(req: LiveStartRequest) -> dict:
         raise HTTPException(status_code=400, detail=f"Unknown overlay model: {req.model}")
     m = _machine(req.model)
     async with _live_lock:
-        await _spawn_worker(req.model, objects=req.objects, background=req.background, cameras=req.cameras)
+        await _spawn_worker(
+            req.model,
+            objects=req.objects,
+            background=req.background,
+            cameras=req.cameras,
+            style=req.style,
+            smooth=req.smooth,
+            method=req.method,
+        )
     return {"ok": True, "state": m.state.value}
 
 

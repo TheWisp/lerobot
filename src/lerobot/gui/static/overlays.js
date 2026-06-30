@@ -128,6 +128,9 @@
         let dataVersion = 0;             // data: cache-buster, bumped on config change so scrubbing re-pulls
         let frameTick = 0;               // data: increments each overlay re-pull so the lagging worker result refreshes
         let selectedCameras = null;      // Set<camera key>; null until first loadCameras
+        let style = null;                // policy_saliency render style (from the 'select' control)
+        let smooth = null;               // policy_saliency smoothing sigma (from the 'slider' control)
+        let method = null;               // policy_saliency source: 'gradient' | 'rollout' (from a 'select' control)
         let availCameras = [];
         let camRetry;                    // retry timer while the live obs stream's cameras aren't up yet
         let lastDiag = '';               // last frontend-state signature reported to the server log (dedup)
@@ -151,6 +154,10 @@
 
         const modelSpec = (k) => MODELS.find((m) => m.key === k);
         const namedObjects = () => objects.filter((o) => (o.name || '').trim());
+        // A step needs a named object only if it declares an "objects" control (SAM3). A no-objects
+        // step like policy_attention is "ready" without one — don't gate its launch on the object field.
+        const requiresObjects = () => (modelSpec(current)?.controls || []).some((c) => c.type === 'objects');
+        const objectsReady = () => !requiresObjects() || namedObjects().length > 0;
         // What goes to the backend: named objects (with colour/sign), or the implicit
         // "object" default coloured from row 0 so the palette still drives it.
         function payloadObjects() {
@@ -184,7 +191,8 @@
                 els.action.innerHTML = '';
                 return;
             }
-            const ctrl = (modelSpec(current)?.controls || [])[0] || {};
+            const controls = modelSpec(current)?.controls || [];
+            const ctrl = controls[0] || {};
             if (ctrl.type === 'objects' || ctrl.type === 'text') {
                 els.modelBody.innerHTML = `
                     <label class="overlays-label">${esc(ctrl.label || 'Objects')}</label>
@@ -196,10 +204,43 @@
                 els.modelBody.querySelector('.overlays-add-obj').addEventListener('click', addObject);
                 renderObjects();
             } else {
-                els.modelBody.innerHTML = '<label class="overlays-label">cameras</label><div class="overlays-cameras"></div>';
+                // simple controls (select, slider, ...) rendered in order, then the camera picker
+                els.modelBody.innerHTML = controls.map(controlHTML).filter(Boolean).join('')
+                    + '<label class="overlays-label">cameras</label><div class="overlays-cameras"></div>';
+                controls.forEach(attachControl);
             }
             loadCameras();
             renderAction();
+        }
+
+        // ---- simple controls (select / slider) for non-objects steps ----
+        function controlHTML(c) {
+            if (c.type === 'select') {
+                const opts = c.options || [];
+                const setv = (v) => { if (c.key === 'method') method = v; else style = v; };
+                let cur = c.key === 'method' ? method : style;
+                if (!opts.some((o) => o.value === cur)) { cur = c.default ?? (opts[0] && opts[0].value) ?? null; setv(cur); }
+                return `<label class="overlays-label">${esc(c.label || c.key)}</label>
+                    <select class="overlays-select" data-key="${esc(c.key)}">${opts.map((o) => `<option value="${esc(o.value)}"${o.value === cur ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
+            }
+            if (c.type === 'slider') {
+                if (smooth === null) smooth = c.default ?? 0;
+                return `<label class="overlays-label">${esc(c.label || 'Smoothing')} <span class="overlays-sliderval">${(+smooth).toFixed(1)}</span></label>
+                    <input type="range" class="overlays-slider" min="${c.min ?? 0}" max="${c.max ?? 3}" step="${c.step ?? 0.1}" value="${smooth}">`;
+            }
+            return '';
+        }
+
+        function attachControl(c) {
+            if (c.type === 'select') {
+                const el = els.modelBody.querySelector(`.overlays-select[data-key="${c.key}"]`);
+                if (el) el.addEventListener('change', (e) => { if (c.key === 'method') method = e.target.value; else style = e.target.value; applyInstant(); });
+            } else if (c.type === 'slider') {
+                const el = els.modelBody.querySelector('.overlays-slider');
+                if (!el) return;
+                el.addEventListener('input', (e) => { smooth = parseFloat(e.target.value); const v = els.modelBody.querySelector('.overlays-sliderval'); if (v) v.textContent = smooth.toFixed(1); });
+                el.addEventListener('change', () => applyInstant());  // send on release (latest-wins), not every drag tick
+            }
         }
 
         // ---- object rows: [sign][name][palette][trash] + a Background row ----
@@ -268,13 +309,18 @@
                     if (current) camRetry = setTimeout(loadCameras, 1500);
                     return;
                 }
+                // Live defaults to ONE camera for an expensive per-camera model (SAM3's VLM = 4x cost
+                // per tile); a 'fast' model like policy_saliency has no model of its own (it just
+                // colorizes the running policy's per-camera saliency), so it shows ALL cameras like
+                // data mode — otherwise only the first tile ever drew.
+                const allCams = mode === 'data' || modelSpec(current)?.load_cost === 'fast';
                 if (selectedCameras === null) {
-                    selectedCameras = new Set(mode === 'live' ? [availCameras[0]] : availCameras);
+                    selectedCameras = new Set(allCams ? availCameras : [availCameras[0]]);
                 } else {
                     // A dataset switch may have changed the camera set — drop selections that no
                     // longer exist, else the panel offers a ghost camera the new dataset lacks.
                     selectedCameras = new Set([...selectedCameras].filter((c) => availCameras.includes(c)));
-                    if (!selectedCameras.size) selectedCameras = new Set(mode === 'live' ? [availCameras[0]] : availCameras);
+                    if (!selectedCameras.size) selectedCameras = new Set(allCams ? availCameras : [availCameras[0]]);
                 }
                 console.log('[overlays] cameras=', availCameras, 'selected=', [...selectedCameras]);
                 renderCameras(container);
@@ -329,7 +375,7 @@
 
         function syncData() {
             if (mode !== 'data') return;
-            if (!current || namedObjects().length === 0 || !window.currentDataset) {
+            if (!current || !objectsReady() || !window.currentDataset) {
                 fetch('/api/overlays/data/cancel', { method: 'POST' }).catch(() => {});
                 dataVersion++;
                 stopPoll();
@@ -352,7 +398,7 @@
         function syncLive() {
             if (mode !== 'live') return;
             reportLiveDiag(status);  // log the launch decision (incl. *why* it isn't starting) on every change
-            if (!current || namedObjects().length === 0) {
+            if (!current || !objectsReady()) {
                 if (started) { fetch('/api/overlays/live/stop', { method: 'POST' }).catch(() => {}); started = false; stopPoll(); setBadge('off', 'off'); }
                 return;
             }
@@ -361,13 +407,13 @@
                 started = true;
                 fetch('/api/overlays/live/start', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: current, objects: payloadObjects(), background: bgPayload(), cameras: camsArg() }),
+                    body: JSON.stringify({ model: current, objects: payloadObjects(), background: bgPayload(), cameras: camsArg(), style: style, smooth: smooth, method: method }),
                 }).then(() => startPoll()).catch(() => {});
                 setBadge('starting…', 'loading');
             } else {
                 fetch('/api/overlays/live/control', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ objects: payloadObjects(), background: bgPayload() }),
+                    body: JSON.stringify({ objects: payloadObjects(), background: bgPayload(), style: style, smooth: smooth, method: method }),
                 }).catch(() => {});
             }
         }
@@ -375,7 +421,7 @@
         // Draw iff the backend machine says ACTIVE — single source of truth. `started` (below) is
         // only the frontend's launch *request*, not a second copy of "is it running". The decision
         // lives in OverlayGate.shouldDraw (overlay_gate.js) so it is unit-tested in isolation.
-        function isLiveOn() { return OverlayGate.shouldDraw(mode, current, namedObjects().length > 0, status.state); }
+        function isLiveOn() { return OverlayGate.shouldDraw(mode, current, objectsReady(), status.state); }
 
         // ---- status polling + badge ----
         function startPoll() { stopPoll(); pollTimer = setInterval(refreshStatus, 500); refreshStatus(); }
@@ -400,7 +446,7 @@
                 // (fps / util / VRAM / cached) stays live; stop once it's off.
                 const busy = mode === 'live'
                     ? !!current  // poll while a model is picked so the launch decision keeps logging, even off
-                    : (current && namedObjects().length > 0);
+                    : (current && objectsReady());
                 if (busy) { if (!pollTimer) startPoll(); } else { stopPoll(); }
                 if (mode === 'data') onFrame();
             }).catch(() => {});
@@ -416,10 +462,11 @@
                 .filter((l) => l.cam);
             const objs = namedObjects().length;
             const reason = !current ? 'no model selected'
-                : objs === 0 ? 'no object named'
+                : !objectsReady() ? 'no object named'
                 : selectedCameras === null ? 'waiting for obs-stream cameras'
                 : !started ? 'ready (about to start)'
-                : 'running';
+                : (s && s.state === 'active') ? 'running'
+                : `warming up (${s ? s.state : '?'})`;
             const payload = {
                 model: current, fps: s ? s.fps : null, objects: objs, started: !!started, reason,
                 available: availCameras, selected: selectedCameras === null ? null : [...selectedCameras],
@@ -482,7 +529,7 @@
             if (mode !== 'data') return;
             const ds = window.datasets && window.datasets[window.currentDataset];
             if (!ds) return;
-            const showable = current && namedObjects().length > 0 && window.currentDataset && window.currentEpisode !== null;
+            const showable = current && objectsReady() && window.currentDataset && window.currentEpisode !== null;
             if (showable) {
                 // Feed the worker the current frame: the backend decodes it + publishes it to the obs
                 // stream (no-op if the frame is unchanged). Called on frame change AND the status poll,

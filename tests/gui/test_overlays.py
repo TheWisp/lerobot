@@ -417,12 +417,26 @@ def test_live_status_renders_the_per_model_machine(overlay_client, monkeypatch):
     assert r["state"] == "active" and r["available"] is True and r["fps"] == 5.0
 
 
+def test_stream_identity_tracks_segment_presence(tmp_path, monkeypatch):
+    """_stream_identity returns the meta segment's inode when present, None when absent —
+    the signal the worker uses to tell 'replaced/orphaned' from 'same segment, paused'."""
+    monkeypatch.setattr(standalone, "_SHM_DIR", str(tmp_path))
+    meta = tmp_path / f"{standalone.SHM_PREFIX}meta"
+    assert standalone._stream_identity() is None  # absent -> publisher gone
+    meta.write_bytes(b"x")
+    assert isinstance(standalone._stream_identity(), int)  # present -> an inode
+    meta.unlink()
+    assert standalone._stream_identity() is None  # removed again
+
+
 # --- C-case: standalone re-attaches when the publisher (teleop) restarts -----
 def test_try_reattach_swaps_only_on_publisher_restart():
-    """teleop stop+start creates a *fresh* obs-stream segment; the standalone must
-    re-attach to it (not stay stuck on the dead one) — but a merely PAUSED stream (same
-    segment, same high seq) must NOT trigger a swap. Regression for the lifecycle 'C'
-    bug where a restarted teleop left the overlay frozen idle."""
+    """teleop stop+start creates a *fresh* obs-stream segment (new inode); the standalone
+    must re-attach to it (not stay stuck on the dead one) — but a merely PAUSED stream
+    (same segment, same inode) must NOT trigger a swap, even at a high seq. Regression for
+    the lifecycle 'C' bug. Identity comes from the reader's OWN fd (`_reader_inode`), so it
+    names the segment we're bound to even when a separate path stat would race onto the new
+    one (the startup-race / TOCTOU windows the adversarial review flagged)."""
     from lerobot.robots.obs_stream import ObservationStream, ObservationStreamReader
 
     keys = ["front", "top"]
@@ -430,22 +444,32 @@ def test_try_reattach_swaps_only_on_publisher_restart():
     frame = {k: np.zeros((8, 8, 3), dtype=np.uint8) for k in keys}
 
     s1 = ObservationStream(feats, {})
-    s2 = old = new = None
+    s2 = old = new_reader = None
     try:
         for _ in range(5):
             s1.write_obs(frame)  # advance the segment's seq to 5
         old = ObservationStreamReader()
-        assert standalone._try_reattach(old, keys) is None  # paused/live: same segment -> no swap
+        held_ino = standalone._reader_inode(old)  # the segment OLD is actually bound to (its fd)
+        assert held_ino is not None and held_ino == standalone._stream_identity()
+        # paused/live: same segment (same inode) -> no swap, despite the advanced seq
+        assert standalone._try_reattach(keys, held_ino) is None
 
         s1.cleanup()
-        s1 = None  # teleop stops; the old reader still maps the now-dead segment
-        s2 = ObservationStream(feats, {})  # teleop starts again -> fresh segment, seq resets
+        s1 = None  # teleop stops; the old reader still maps the now-dead segment (pins its inode)
+        s2 = ObservationStream(feats, {})  # teleop restarts -> fresh segment, NEW inode
         s2.write_obs(frame)
-        new = standalone._try_reattach(old, keys)
-        assert new is not None, "did not re-attach to the restarted publisher (C bug)"
-        assert max(new.image_seq(c) for c in keys) == 1  # reads the fresh segment, not the dead one
+        # old reader's fd still names the ORPHAN while the path now names the live segment —
+        # the startup-race / TOCTOU shape; held-from-fd != current-path must trigger a swap:
+        assert standalone._reader_inode(old) == held_ino
+        assert standalone._stream_identity() != held_ino
+        swapped = standalone._try_reattach(keys, held_ino)
+        assert swapped is not None, "did not re-attach to the restarted publisher (C bug)"
+        new_reader, new_ino = swapped
+        assert new_ino != held_ino  # bound to the fresh segment's identity, not the orphan's
+        assert new_ino == standalone._reader_inode(new_reader)  # new_ino is the new reader's own fd inode
+        assert max(new_reader.image_seq(c) for c in keys) == 1  # reads the fresh segment, not the dead one
     finally:
-        for r in (old, new):
+        for r in (old, new_reader):
             if r is not None:
                 r.close()
         for st in (s1, s2):

@@ -26,7 +26,9 @@ References:
 
 from __future__ import annotations
 
+import logging
 import math
+import time
 from collections import deque
 
 import torch
@@ -36,6 +38,8 @@ from torch import Tensor
 
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.protocol import ACTION_PREFIX_KEY, S2_AGE_KEY, S2_LATENT_KEY
+
+logger = logging.getLogger(__name__)
 
 OBS_STATE = "observation.state"
 OBS_IMAGES = "observation.images"
@@ -140,6 +144,15 @@ class FlowMatchingS1Model(nn.Module):
         # --- Position embedding for action sequence ---
         self.action_pos_embed = nn.Embedding(config.chunk_size, d)
 
+        # Opt-in attention capture for the debug-vision "policy attention" overlay. When the
+        # inference loop sets capture_attention=True, sample_actions stashes the last denoise
+        # step's cross-attention as one per-camera saliency grid on _last_attention. Default
+        # off => zero overhead; the action path is never altered.
+        self.capture_attention = False
+        self._last_attention: list | None = None
+        self._ctx_layout: dict | None = None
+        self._last_attn_ctx: Tensor | None = None
+
     def encode_observations(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode images + state + S2 latent → context tokens [B, N_ctx, D]."""
         tokens = []
@@ -171,6 +184,9 @@ class FlowMatchingS1Model(nn.Module):
                 else:
                     features = self.backbone.forward_features(stacked)
                     all_patches = features["x_norm_patchtokens"]
+                # Camera patch blocks occupy the FIRST N_cams*patches positions of the context
+                # (state + S2 tokens follow); record the layout so capture can slice per camera.
+                self._ctx_layout = {"n_cams": N_cams, "patches_per_cam": int(all_patches.shape[1])}
                 # Split back per camera and project
                 per_cam = all_patches.reshape(N_cams, B, all_patches.shape[1], all_patches.shape[2])
                 for i in range(N_cams):
@@ -223,6 +239,7 @@ class FlowMatchingS1Model(nn.Module):
         context: Tensor,  # [B, N_ctx, D]
         timestep: Tensor,  # [B, chunk_size] per-position timestep
         cached_kv: list[tuple[Tensor, Tensor]] | None = None,
+        capture: bool = False,
     ) -> Tensor:
         """Single denoising step: predict velocity field v(x_t, t, context).
 
@@ -277,6 +294,15 @@ class FlowMatchingS1Model(nn.Module):
                 k = ck.reshape(B, -1, nhead, head_dim).transpose(1, 2)
                 v = cv.reshape(B, -1, nhead, head_dim).transpose(1, 2)
                 attn_out = F.scaled_dot_product_attention(q, k, v)
+                if capture and i == len(self.decoder_layers) - 1:
+                    # Recompute the attention weights SDPA discards (the action is unchanged). Condition on
+                    # the first FUTURE action token (the immediate next decision) — NOT a leading RTC-prefix
+                    # position, which holds an already-executed action clamped to t=0, whose cross-attention
+                    # reconstructs a known action rather than reflecting the upcoming move.
+                    aw = torch.softmax((q @ k.transpose(-2, -1)) * (head_dim**-0.5), dim=-1)
+                    nz = (timestep[0] > 0).nonzero(as_tuple=True)[0]
+                    tok = int(nz[0]) if nz.numel() else 0  # first non-prefix (future) action position
+                    self._last_attn_ctx = aw[:, :, tok, :].amax(dim=1)  # [B, N_ctx]
                 attn_out = attn_out.transpose(1, 2).reshape(B, T, d)
                 attn_out = mha.out_proj(attn_out)
                 x = layer.norm2(x + layer.dropout2(attn_out))
@@ -406,6 +432,7 @@ class FlowMatchingS1Model(nn.Module):
         """
         num_steps = num_steps or self.config.num_inference_steps
         device = next(self.parameters()).device
+        capture = bool(self.capture_attention)  # opt-in attention saliency for the overlay
 
         for v in batch.values():
             if isinstance(v, Tensor):
@@ -445,7 +472,9 @@ class FlowMatchingS1Model(nn.Module):
             if action_prefix is not None and prefix_len > 0:
                 per_pos_t[:, :D] = 0.0
 
-            v = self.denoise_step(x_t, context, per_pos_t, cached_kv=cached_kv)
+            v = self.denoise_step(
+                x_t, context, per_pos_t, cached_kv=cached_kv, capture=capture and i == num_steps - 1
+            )
             x_t = x_t + dt * v
 
             # Measure prefix drift BEFORE re-inject (how much the model
@@ -459,7 +488,27 @@ class FlowMatchingS1Model(nn.Module):
         # Store drift on the instance for external access
         self._last_prefix_drift = prefix_drift
 
+        # Per-camera attention saliency grids for the debug-vision overlay (None when not capturing).
+        self._last_attention = self._attention_grids() if capture else None
+
         return x_t
+
+    def _attention_grids(self) -> list | None:
+        """Reshape the last-step cross-attention (``_last_attn_ctx`` [B, N_ctx]) into one square
+        saliency grid per camera. Cameras occupy the first ``n_cams*patches`` context positions
+        (state + S2 tokens follow); returns None if no capture happened or the patch grid isn't
+        square."""
+        ctx = self._last_attn_ctx
+        layout = self._ctx_layout
+        if ctx is None or layout is None:
+            return None
+        n_cams = int(layout["n_cams"])
+        p = int(layout["patches_per_cam"])
+        g = int(round(p**0.5))
+        if g * g != p or ctx.shape[-1] < n_cams * p:
+            return None
+        a = ctx[0].detach().to(torch.float32).cpu().numpy()  # [N_ctx], batch item 0
+        return [a[i * p : (i + 1) * p].reshape(g, g) for i in range(n_cams)]
 
 
 class FlowMatchingS1Policy(nn.Module):
@@ -582,6 +631,149 @@ class FlowMatchingS1Policy(nn.Module):
             actions_norm = actions_norm * self._action_std.to(device) + self._action_mean.to(device)
 
         return actions_norm
+
+    def compute_input_saliency(self, batch: dict[str, Tensor], num_steps: int = 4, grid: int = 64) -> dict:
+        """Per-camera input-gradient saliency: where the upcoming action depends on each camera's
+        pixels. Returns ``{image_feature_key: (grid, grid) float32 ndarray}`` (area-pooled), or
+        ``{}`` for a policy with no image features.
+
+        Precondition: ``batch`` is the same raw batch ``predict_action_chunk`` consumes (camera
+        images + state + optional ACTION_PREFIX_KEY); norm stats loaded.
+        Postcondition: the policy's freeze state and the inference path are unchanged.
+
+        A SEPARATE grad-enabled pass — the ``no_grad`` inference path is untouched. It strips the
+        sampler's ``@torch.no_grad`` (via ``__wrapped__``), unfreezes the DINOv2 backbone for the
+        pass, and backprops ``|d action / d pixels|`` at the FIRST future (non-prefix) action
+        position. ~40 ms on a 5090, so callers run it at a debug rate, not every inference. Unlike
+        the attention overlay (captured inline, free) this costs a backward pass — but it localizes
+        on the object the policy is acting on, which raw cross-attention does not.
+        """
+        if not self.config.image_features:
+            return {}
+        t0 = time.perf_counter()  # whole-pass wall time; the first call would pay any one-time compile
+        self.eval()
+        prepared = self.prepare_batch_for_encode_observations(batch)
+        imgs: dict[str, Tensor] = {}
+        for k in self.config.image_features:
+            t = prepared[k].detach().clone().requires_grad_(True)
+            prepared[k] = t
+            imgs[k] = t
+        prepared[OBS_IMAGES] = [prepared[k] for k in self.config.image_features]  # point at the grad copies
+
+        action_prefix = prepared.pop(ACTION_PREFIX_KEY, None)
+        if action_prefix is not None and self._action_mean is not None:
+            dev = action_prefix.device
+            action_prefix = (action_prefix - self._action_mean.to(dev)) / self._action_std.to(dev)
+        prefix_len = action_prefix.shape[1] if action_prefix is not None else 0
+        tok = min(prefix_len, self.config.chunk_size - 1)  # first future (non-prefix) action position
+
+        sample = type(self.model).sample_actions.__wrapped__  # undecorated: run WITH grad
+        was_frozen = self.config.freeze_backbone
+        self.config.freeze_backbone = False
+        try:
+            with torch.enable_grad(), torch.autocast("cuda", enabled=False):
+                actions = sample(
+                    self.model,
+                    prepared,
+                    num_steps=num_steps,
+                    action_prefix=action_prefix,
+                    prefix_len=prefix_len,
+                )
+                target = actions[0, tok].pow(2).sum()
+                grads = torch.autograd.grad(target, list(imgs.values()), allow_unused=True)
+        finally:
+            self.config.freeze_backbone = was_frozen
+
+        out: dict = {}
+        health: dict = {}
+        for k, gr in zip(imgs, grads, strict=True):
+            if gr is None:
+                health[k] = "grad=None"  # input detached from the graph (e.g. a compiled forward)
+                continue
+            sal = gr[0].abs().sum(0)[None, None]  # [1,1,H,W]
+            sal = torch.nn.functional.interpolate(sal, size=(grid, grid), mode="area")[0, 0]
+            out[k] = sal.detach().float().cpu().numpy()
+            health[k] = f"max={float(out[k].max()):.2e}"
+        logger.info(
+            "[saliency] input-grad %.0fms tok=%d prefix=%d | per-cam=%s | published=%s",
+            (time.perf_counter() - t0) * 1000.0,
+            tok,
+            prefix_len,
+            health,
+            list(out),
+        )
+        return out
+
+    def compute_attention_rollout(self, batch: dict[str, Tensor], num_steps: int = 4, grid: int = 64) -> dict:
+        """Per-camera ATTENTION-ROLLOUT saliency (forward-only, GRADIENT-FREE). Composes the obs_encoder
+        self-attention (residual-aware, Â=½A+½I across its layers) with the decoder cross-attention, so
+        the action's attention is traced back through the obs_encoder's patch-mixing onto the original
+        patches. Returns ``{image_feature_key: (grid,grid) float32}`` (area-pooled), or ``{}`` with no
+        image features.
+
+        Differs from ``compute_input_saliency``: this is a *routing* view (where attention flows from),
+        needs NO backward pass, and undoes the obs_encoder MIXING but not the DINOv2 sinks. Cost: one
+        extra forward that re-encodes the cameras (no backward) — cheaper than the gradient.
+        """
+        if not self.config.image_features:
+            return {}
+        self.eval()
+        enc, dec = [], []
+
+        def _pre(m, args, kwargs):  # force the eager path so MHA returns per-head weights
+            kwargs["need_weights"], kwargs["average_attn_weights"] = True, False
+            return args, kwargs
+
+        def _post(m, args, kwargs, output):
+            enc.append(output[1].detach())  # [B, nhead, N_ctx, N_ctx]
+
+        orig_sdpa = F.scaled_dot_product_attention
+
+        def _msdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, **kw):
+            if q.shape[-2] != k.shape[-2]:  # action-query -> context cross-attn (T != N_ctx)
+                s = scale if scale is not None else q.shape[-1] ** -0.5
+                dec.append(torch.softmax((q @ k.transpose(-2, -1)) * s, dim=-1).detach())
+            return orig_sdpa(
+                q, k, v, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, scale=scale, **kw
+            )
+
+        handles = []
+        for layer in self.model.obs_encoder.layers:
+            handles.append(layer.self_attn.register_forward_pre_hook(_pre, with_kwargs=True))
+            handles.append(layer.self_attn.register_forward_hook(_post, with_kwargs=True))
+        F.scaled_dot_product_attention = _msdpa
+        try:
+            with torch.no_grad():
+                self.predict_action_chunk(batch, num_steps=num_steps)
+        finally:
+            F.scaled_dot_product_attention = orig_sdpa
+            for h in handles:
+                h.remove()
+        if not enc or not dec or self.model._ctx_layout is None:
+            return {}
+
+        A = dec[-1][0]  # [nhead, T, N_ctx] — last decoder layer, last denoise step
+        pre_chunk = batch.get(ACTION_PREFIX_KEY)
+        tok = min(pre_chunk.shape[1] if pre_chunk is not None else 0, A.shape[1] - 1)
+        a_dec = A[:, tok, :].mean(0).double()  # head-mean attention over context [N_ctx]
+        n = a_dec.shape[-1]
+        eye = torch.eye(n, dtype=torch.float64, device=a_dec.device)
+        R = eye
+        for E in enc:  # residual-aware rollout over the obs_encoder layers
+            ah = 0.5 * E[0].mean(0).double() + 0.5 * eye
+            R = (ah / (ah.sum(-1, keepdim=True) + 1e-9)) @ R
+        unmixed = a_dec @ R  # attention traced onto the obs_encoder input patches [N_ctx]
+
+        p = int(self.model._ctx_layout["patches_per_cam"])
+        gg = int(round(p**0.5))
+        out: dict = {}
+        for i, key in enumerate(self.config.image_features):
+            blk = unmixed[i * p : (i + 1) * p]
+            if blk.numel() != p or gg * gg != p:
+                continue
+            m = blk.reshape(gg, gg).float()[None, None]
+            out[key] = torch.nn.functional.interpolate(m, size=(grid, grid), mode="area")[0, 0].cpu().numpy()
+        return out
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         """Training forward: compute flow matching loss with training-time RTC."""

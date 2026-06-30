@@ -5,6 +5,7 @@ let runEventSource = null;
 let selectedWorkflow = 'teleop'; // 'teleop' | 'replay' | 'policy'
 let obsStreamMeta = null; // {available, obs_scalar_keys, action_keys, image_keys}
 let obsStreamTimer = null; // interval ID for camera polling
+let obsStreamGen = 0; // bumped on stop/restart to cancel an in-flight "wait for the obs-stream" loop
 let _runFormRendered = false; // true once all three workflow sections are in the DOM
 
 // ============================================================================
@@ -2016,22 +2017,29 @@ function initSplitHandle() {
 
 async function startObsStreamViewer() {
     stopObsStreamViewer();
+    const myGen = ++obsStreamGen;  // claim this viewer; stop() / a newer start() supersedes it
 
     const container = document.getElementById('rerun-viewer');
     if (!container) return;
 
-    // Poll until the stream becomes available (robot needs time to connect)
+    // Wait for the obs-stream to come up. When a run is tracking it there's no good fixed deadline
+    // (robot connect + a torch.compile warmup can take seconds or minutes), so we wait for the whole
+    // RUN LIFECYCLE (_isRunning, reconciled by pollRunStatus on the SSE `done`/backstop). But an
+    // externally-published stream (an out-of-GUI teleop, or the data publisher) has no _isRunning to
+    // bound it — so fall back to a 15s poll in that case rather than ignore the stream. Ends on: stream
+    // available, the run ending, superseded (stop / a newer start bumps obsStreamGen), or — with no
+    // run — the fallback deadline.
     let attempts = 0;
-    const maxAttempts = 30; // 30 × 500ms = 15s
-    while (attempts < maxAttempts) {
+    const maxAttempts = 30; // 30 × 500ms = 15s fallback when no run is tracking the stream
+    while (obsStreamGen === myGen && (_isRunning || attempts < maxAttempts)) {
         try {
-            const res = await fetch('/api/run/obs-stream/meta');
-            obsStreamMeta = await res.json();
+            obsStreamMeta = await (await fetch('/api/run/obs-stream/meta')).json();
             if (obsStreamMeta?.available) break;
-        } catch (e) { /* not ready yet */ }
+        } catch (e) { obsStreamMeta = null; }
         await new Promise(r => setTimeout(r, 500));
         attempts++;
     }
+    if (obsStreamGen !== myGen) return;  // superseded while waiting
 
     // Probe the URDF visualization — it's on by default, appearing as one
     // grid tile whenever the robot has a vendored URDF (see /api/run/urdf-viz).
@@ -2042,8 +2050,7 @@ async function startObsStreamViewer() {
     } catch (e) { /* probe failed; leave inactive */ }
 
     if (!obsStreamMeta?.available && !urdfVizActive) {
-        console.warn('Neither obs-stream nor urdf-viz available after timeout');
-        return;
+        return;  // the run ended before the stream or the URDF viz came up — nothing to show
     }
 
     const placeholder = document.getElementById('rerun-placeholder');
@@ -2167,6 +2174,7 @@ async function startObsStreamViewer() {
 }
 
 function stopObsStreamViewer() {
+    obsStreamGen++;  // cancel any in-flight "wait for the obs-stream" loop
     if (obsStreamTimer) {
         clearInterval(obsStreamTimer);
         obsStreamTimer = null;
