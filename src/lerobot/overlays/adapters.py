@@ -530,7 +530,13 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
                     if seeds:
                         self._seed(track, seeds, pv, h, w)
 
-        masks_by_concept = self._live_masks(track)
+        return self._live_masks(track), h, w
+
+    def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
+        assert frame_rgb.ndim == 3 and frame_rgb.shape[2] == 3, (
+            f"infer expects HxWx3 RGB, got {frame_rgb.shape}"
+        )
+        masks_by_concept, h, w = self._infer_masks(frame_rgb)
         rgba = _composite_concepts(
             h,
             w,
