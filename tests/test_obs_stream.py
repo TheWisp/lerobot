@@ -548,6 +548,27 @@ class TestCleanupStaleStreams:
         assert cleanup_stale_streams(tmp_path) == 1
         assert cleanup_stale_streams(tmp_path) == 0
 
+    def test_respects_live_writer(self, tmp_path):
+        # Regression (#42): respect_liveness=True must NOT remove a segment a live writer just stamped
+        # (fresh header timestamp) — sweeping it yanks a live external stream out from under its readers.
+        # A stale/old timestamp is still swept. The default (force) ignores liveness, for the
+        # writer-quiescent boundary callers (GUI start/stop).
+        import time
+
+        from lerobot.robots.obs_stream import _HDR
+
+        fresh = tmp_path / f"{SHM_PREFIX}meta"
+        fresh.write_bytes(_HDR.pack(5, 5, time.time()))  # seq_done>0, just written
+        assert cleanup_stale_streams(tmp_path, respect_liveness=True) == 0  # a writer is live -> bail
+        assert fresh.exists()
+        assert cleanup_stale_streams(tmp_path) == 1  # default (force) -> swept
+        assert not fresh.exists()
+
+        stale = tmp_path / f"{SHM_PREFIX}front"
+        stale.write_bytes(_HDR.pack(9, 9, time.time() - 100))  # last write long ago = crashed writer
+        assert cleanup_stale_streams(tmp_path, respect_liveness=True) == 1  # stale -> swept
+        assert not stale.exists()
+
     def test_unremovable_file_logs_and_continues(self, tmp_path, caplog):
         # A read-only dir prevents unlink. Sweep should log a warning and
         # continue rather than abort the whole pass.

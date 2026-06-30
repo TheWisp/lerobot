@@ -291,7 +291,10 @@ def _ensure_no_active_process() -> None:
         )
     from lerobot.robots.obs_stream import cleanup_stale_streams
 
-    swept = cleanup_stale_streams()
+    # respect_liveness: this fires mid-session (no GUI-tracked run), where a LIVE external writer (a
+    # teleop/feeder started outside the GUI) may own the stream — sweeping it would freeze that reader.
+    # Only orphan (no recent write) streams are removed; an active writer makes this a no-op.
+    swept = cleanup_stale_streams(respect_liveness=True)
     if swept:
         logger.warning("stale-stream guard: swept %d leftover obs-stream segment(s) before launch", swept)
 

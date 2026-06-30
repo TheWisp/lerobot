@@ -2022,17 +2022,22 @@ async function startObsStreamViewer() {
     const container = document.getElementById('rerun-viewer');
     if (!container) return;
 
-    // Wait for the run's obs-stream to come up. There's no good fixed deadline — robot connect plus a
-    // torch.compile warmup can take a couple of seconds or minutes — so this is bounded by the RUN
-    // LIFECYCLE, not a timer: poll until the stream is available, the run ends (_isRunning, reconciled
-    // by pollRunStatus on the SSE `done`/backstop), or this viewer is superseded (stop / a newer start
-    // bumps obsStreamGen).
-    while (obsStreamGen === myGen && _isRunning) {
+    // Wait for the obs-stream to come up. When a run is tracking it there's no good fixed deadline
+    // (robot connect + a torch.compile warmup can take seconds or minutes), so we wait for the whole
+    // RUN LIFECYCLE (_isRunning, reconciled by pollRunStatus on the SSE `done`/backstop). But an
+    // externally-published stream (an out-of-GUI teleop, or the data publisher) has no _isRunning to
+    // bound it — so fall back to a 15s poll in that case rather than ignore the stream. Ends on: stream
+    // available, the run ending, superseded (stop / a newer start bumps obsStreamGen), or — with no
+    // run — the fallback deadline.
+    let attempts = 0;
+    const maxAttempts = 30; // 30 × 500ms = 15s fallback when no run is tracking the stream
+    while (obsStreamGen === myGen && (_isRunning || attempts < maxAttempts)) {
         try {
             obsStreamMeta = await (await fetch('/api/run/obs-stream/meta')).json();
             if (obsStreamMeta?.available) break;
         } catch (e) { obsStreamMeta = null; }
         await new Promise(r => setTimeout(r, 500));
+        attempts++;
     }
     if (obsStreamGen !== myGen) return;  // superseded while waiting
 
