@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.gui.frame_cache import FrameCache
     from lerobot.gui.hub_jobs import HubJobState
+    from lerobot.gui.process_jobs import ProcessJobState
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,9 @@ class AppState:
     # jobs stick around (bounded by hub_job_retention_s below) so a brief
     # tab close doesn't lose the "done — N MB pushed" status.
     hub_jobs: dict[str, HubJobState] = field(default_factory=dict)
+    # Active + recently-finished dataset post-processing jobs (segment + effect
+    # → new dataset), keyed by job_id. Same lifecycle/tray model as hub_jobs.
+    process_jobs: dict[str, ProcessJobState] = field(default_factory=dict)
 
     def add_edit(self, edit: PendingEdit) -> None:
         """Add a pending edit."""
@@ -161,6 +165,32 @@ class AppState:
         ]
         for jid in to_drop:
             del self.hub_jobs[jid]
+        return len(to_drop)
+
+    def active_process_job_for(self, source_id: str) -> ProcessJobState | None:
+        """Return the in-flight post-process job for ``source_id``, if any.
+
+        "In-flight" = ``status in {"pending", "running"}``. Used to refuse a
+        second concurrent processing job on the same source dataset."""
+        for job in self.process_jobs.values():
+            if job.source_id == source_id and job.status in ("pending", "running"):
+                return job
+        return None
+
+    def gc_finished_process_jobs(self, *, max_age_s: float = 1800.0) -> int:
+        """Drop terminal post-process jobs older than ``max_age_s`` (peer of
+        :meth:`gc_finished_hub_jobs`). Active jobs are never collected."""
+        import time as _time
+
+        now = _time.time()
+        terminal = {"complete", "cancelled", "failed"}
+        to_drop = [
+            jid
+            for jid, j in self.process_jobs.items()
+            if j.status in terminal and j.finished_at is not None and (now - j.finished_at) > max_age_s
+        ]
+        for jid in to_drop:
+            del self.process_jobs[jid]
         return len(to_drop)
 
     def discard_lock(self, dataset_id: str) -> None:
