@@ -202,7 +202,7 @@ class _Block:
 class ObservationStream:
     """Publishes robot observations and actions to shared memory."""
 
-    def __init__(self, obs_features: dict, action_features: dict):
+    def __init__(self, obs_features: dict, action_features: dict, depth_cams: set[str] | None = None):
         self.obs_scalar_keys: list[str] = sorted(
             k for k, v in obs_features.items() if not isinstance(v, tuple)
         )
@@ -211,12 +211,23 @@ class ObservationStream:
             sorted((k, v) for k, v in obs_features.items() if isinstance(v, tuple))
         )
 
+        # Depth-capable cameras publish an extra uint16 block (aligned to the RGB, so
+        # same H×W). The set is sourced from the robot's cameras, NOT observation_features
+        # — depth is deliberately absent from features (datasets don't store it), so this
+        # keeps recording untouched. Written from obs["<cam>_depth"] each frame.
+        self.depth_keys: dict[str, tuple[int, int]] = {}
+        for cam in sorted(depth_cams or ()):
+            dims = self.image_keys.get(cam)
+            if dims is not None:
+                self.depth_keys[cam] = (int(dims[0]), int(dims[1]))
+
         # Meta block — JSON descriptor, written once
         meta_json = json.dumps(
             {
                 "obs_scalar_keys": self.obs_scalar_keys,
                 "action_keys": self.action_keys,
                 "image_keys": {k: list(v) for k, v in self.image_keys.items()},
+                "depth_image_keys": {k: list(v) for k, v in self.depth_keys.items()},
             }
         ).encode()
         self._meta = _Block(f"{SHM_PREFIX}meta", len(meta_json), create=True)
@@ -238,6 +249,12 @@ class ObservationStream:
             safe = cam_key.replace("/", "_")
             self._img_blocks[cam_key] = _Block(f"{SHM_PREFIX}img_{safe}", h * w * c, create=True)
 
+        # One uint16 depth block per depth-capable camera
+        self._depth_blocks: dict[str, _Block] = {}
+        for cam_key, (h, w) in self.depth_keys.items():
+            safe = cam_key.replace("/", "_")
+            self._depth_blocks[cam_key] = _Block(f"{SHM_PREFIX}depth_{safe}", h * w * 2, create=True)
+
         logger.info(
             "ObservationStream started: %d obs scalars, %d action scalars, %d cameras",
             len(self.obs_scalar_keys),
@@ -256,6 +273,11 @@ class ObservationStream:
             if img is not None:
                 block.write_array(np.ascontiguousarray(img, dtype=np.uint8))
 
+        for cam_key, block in self._depth_blocks.items():
+            depth = obs.get(f"{cam_key}_depth")
+            if depth is not None:
+                block.write_array(np.ascontiguousarray(depth, dtype=np.uint16))
+
     def write_action(self, action: dict) -> None:
         for i, key in enumerate(self.action_keys):
             val = action.get(key)
@@ -267,6 +289,8 @@ class ObservationStream:
         self._obs_block.cleanup()
         self._act_block.cleanup()
         for block in self._img_blocks.values():
+            block.cleanup()
+        for block in self._depth_blocks.values():
             block.cleanup()
         logger.info("ObservationStream cleaned up")
 
@@ -289,6 +313,7 @@ class ObservationStreamReader:
         self.obs_scalar_keys: list[str] = meta["obs_scalar_keys"]
         self.action_keys: list[str] = meta["action_keys"]
         self.image_keys: dict[str, list[int]] = meta["image_keys"]
+        self.depth_image_keys: dict[str, list[int]] = meta.get("depth_image_keys", {})
 
         self._obs_block = _Block(f"{SHM_PREFIX}obs", len(self.obs_scalar_keys) * 4, create=False)
         self._act_block = _Block(f"{SHM_PREFIX}act", len(self.action_keys) * 4, create=False)
@@ -298,6 +323,11 @@ class ObservationStreamReader:
             h, w = dims[0], dims[1]
             c = dims[2] if len(dims) > 2 else 3
             self._img_blocks[cam_key] = _Block(f"{SHM_PREFIX}img_{safe}", h * w * c, create=False)
+        self._depth_blocks: dict[str, _Block] = {}
+        for cam_key, dims in self.depth_image_keys.items():
+            safe = cam_key.replace("/", "_")
+            h, w = dims[0], dims[1]
+            self._depth_blocks[cam_key] = _Block(f"{SHM_PREFIX}depth_{safe}", h * w * 2, create=False)
 
     def read_obs(self) -> tuple[dict[str, float], float] | None:
         """Returns (obs_dict, timestamp) or None if no data."""
@@ -334,11 +364,26 @@ class ObservationStreamReader:
         dims = self.image_keys[cam_key]
         return np.frombuffer(data, dtype=np.uint8).reshape(dims), ts
 
+    def read_depth(self, cam_key: str) -> tuple[np.ndarray, float] | None:
+        """Returns (HW uint16 depth in millimetres aligned to the RGB, timestamp) or None.
+        Only depth-capable cameras (in ``depth_image_keys``) have a depth block."""
+        block = self._depth_blocks.get(cam_key)
+        if block is None:
+            return None
+        result = block.read()
+        if result is None:
+            return None
+        data, ts = result
+        h, w = self.depth_image_keys[cam_key][:2]
+        return np.frombuffer(data, dtype=np.uint16).reshape(h, w), ts
+
     def close(self) -> None:
         self._meta.cleanup()
         self._obs_block.cleanup()
         self._act_block.cleanup()
         for block in self._img_blocks.values():
+            block.cleanup()
+        for block in self._depth_blocks.values():
             block.cleanup()
 
 
@@ -488,7 +533,18 @@ def _maybe_start_stream(robot) -> None:
         _active_stream = None
         _active_robot_id = None
     try:
-        _active_stream = ObservationStream(robot.observation_features, robot.action_features)
+        # Depth-capable cameras: RealSense with depth on, whose depth isn't already
+        # consumed by an in-camera post-grab processor (then get_observation emits
+        # "<cam>_depth"). Detected from the robot's live cameras so depth can stream
+        # without being declared in observation_features (which would hit datasets).
+        depth_cams = {
+            cam_key
+            for cam_key, cam in (getattr(robot, "cameras", {}) or {}).items()
+            if getattr(cam, "use_depth", False) and getattr(cam, "post_grab_processor", None) is None
+        }
+        _active_stream = ObservationStream(
+            robot.observation_features, robot.action_features, depth_cams=depth_cams
+        )
         _active_robot_id = id(robot)
     except Exception:
         logger.warning("Failed to create ObservationStream", exc_info=True)
