@@ -13,6 +13,33 @@
 - [ ] Drag-drop dataset opening
 - [ ] Undo/redo — explicitly punted from Feature Editing V1 (per-chip removal in edits-bar covers most "oops" cases). Real undo across Saves needs pre-edit value capture or a Git-like history.
 
+### Data Editing / Augmentation (segment + effect → new dataset)
+
+Shipped (prototype): a "Process dataset…" button in the data-tab overlay panel
+opens a menu that reuses the SAM3-segmented objects as the protected foreground,
+applies a background/global effect to every frame, and writes an augmented copy
+as a new LeRobotDataset via an async worker job (modelled on the Hub-transfer
+tray). See [docs/data_editing.md](docs/data_editing.md). Effects:
+background random-colour / random-texture / solid / blur (foreground feathered) +
+global brightness-contrast. Randomized effects sample per-episode by default.
+
+Follow-ups:
+
+- [ ] **Background Replace from a texture/photo library** — the highest-impact
+      effect per GreenAug/RoboEngine (random _texture_ backgrounds beat solid colour
+      and beat generative). Needs a source-folder picker + per-episode image choice.
+- [ ] **Per-frame preview in the menu** — show the current scrubbed frame with the
+      effect applied (reuse the live overlay) before committing the whole-dataset run.
+- [ ] **Episode subset** — the core (`process_dataset`) already takes `episodes=`;
+      surface a range picker so the user can augment a slice, not always all episodes.
+- [ ] **Hue / colour-shift effect** — modest ±deg range (keep segmented target
+      objects recognizable); deferred to keep the v1 menu small.
+- [ ] **Multi-instance foreground** — SAM3 locks one instance per concept, so a
+      two-arm scene only protects one arm unless the user adds a second object row.
+      Consider auto-expanding "robot arm" to all detected instances.
+- [ ] **Worker GPU contention** — start currently tears down the live overlay to
+      free VRAM; a queued/sequenced model would let both coexist.
+
 ### Feature Editing (per-frame view + edit)
 
 See [docs/feature_editing.md](docs/feature_editing.md) for the full design.
