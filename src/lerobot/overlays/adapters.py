@@ -418,10 +418,51 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
             for c in self._concepts
         }
 
-    def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
-        assert frame_rgb.ndim == 3 and frame_rgb.shape[2] == 3, (
-            f"infer expects HxWx3 RGB, got {frame_rgb.shape}"
-        )
+    def segment(self, frame_rgb: np.ndarray) -> dict[str, np.ndarray]:
+        """Per-concept boolean masks for this frame (positive concepts only).
+
+        Runs the same tracking pipeline as :meth:`infer` but returns the raw
+        ``{concept: HxW bool mask}`` instead of an RGBA overlay — what an
+        offline pixel-editing pass (background replacement, recolor) needs.
+        Negative (``-``) concepts are carved out of the positives, exactly as
+        the overlay compositor does, so the returned masks are the region that
+        an effect should KEEP as foreground. Precondition: ``frame_rgb`` is
+        contiguous HxWx3 uint8 RGB; call :meth:`set_camera` / :meth:`reset` to
+        scope and reseed per-camera tracking just like the live loop.
+        """
+        masks_by_concept, _h, _w = self._infer_masks(frame_rgb)
+        # Apply the same +/- carving the compositor does, so a caller gets the
+        # final kept region per positive concept without re-deriving the logic.
+        neg = None
+        has_neg = any(self._signs.get(c, "+") == "-" for c in self._concepts)
+        if has_neg:
+            neg = np.zeros(frame_rgb.shape[:2], dtype=bool)
+            for c in self._concepts:
+                if self._signs.get(c, "+") == "-":
+                    for m in masks_by_concept.get(c, []):
+                        neg |= m
+        out: dict[str, np.ndarray] = {}
+        for c in self._concepts:
+            if self._signs.get(c, "+") == "-":
+                continue
+            ms = masks_by_concept.get(c, [])
+            if not ms:
+                continue
+            union = np.zeros(frame_rgb.shape[:2], dtype=bool)
+            for m in ms:
+                union |= m
+            if neg is not None:
+                union &= ~neg
+            out[c] = union
+        return out
+
+    def _infer_masks(self, frame_rgb: np.ndarray) -> tuple[dict[str, list[np.ndarray]], int, int]:
+        """Drive the tracker for one frame and return ``(masks_by_concept, h, w)``.
+
+        The body shared by :meth:`infer` (which composites an RGBA overlay) and
+        :meth:`segment` (which returns the raw masks). Mutates per-camera tracker
+        state — the caller must have selected the camera via :meth:`set_camera`.
+        """
         torch = self._torch
         h, w = frame_rgb.shape[:2]
         cam = self._cam
