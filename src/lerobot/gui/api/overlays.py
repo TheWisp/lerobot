@@ -120,6 +120,9 @@ class ConfigureRequest(BaseModel):
     objects: list[dict] | None = None  # [{name, color:[r,g,b], sign:'+'/'-'}]
     background: dict | None = None  # {color: [r,g,b] | null}
     cameras: list[str] | None = None  # active subset — worker infers + we publish only these; None = all
+    # Data-editing effect: {key, params}. When set, the worker composites the
+    # augmented frame (WYSIWYG) instead of the debug contour overlay. None = contours.
+    effect: dict | None = None
 
 
 def _frame_rgb(item: dict, cam: str) -> np.ndarray:
@@ -185,7 +188,7 @@ async def data_configure(req: ConfigureRequest) -> dict:
     cameras = _dataset_camera_dims(ds)
     if not cameras:
         raise HTTPException(status_code=400, detail="Dataset has no camera/image keys")
-    config = {"objects": req.objects or [], "background": req.background}
+    config = {"objects": req.objects or [], "background": req.background, "effect": req.effect}
     prev_dataset = _data_pub_dataset  # capture before start_data_publisher updates it
     if not start_data_publisher(req.dataset_id, cameras, config):
         raise HTTPException(
@@ -205,7 +208,10 @@ async def data_configure(req: ConfigureRequest) -> dict:
     global _data_pub_cameras
     if req.cameras is not None:
         _data_pub_cameras = req.cameras
-        _write_data_control()
+    # Always push the control so the worker picks up the effect/objects/background (the
+    # config lives in _data_pub_config; the reader attaches lazily, so this is a no-op
+    # until the worker's buffer exists, then the frontend's re-sync delivers it).
+    _write_data_control()
     return {"ok": True, "state": m.state.value}
 
 

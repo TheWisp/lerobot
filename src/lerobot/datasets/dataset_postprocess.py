@@ -34,13 +34,20 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.overlays.effects import (
+    EFFECTS,
+    EFFECTS_BY_KEY as _EFFECTS_BY_KEY,
+    apply_effect,
+    feathered_alpha as _feathered_alpha,
+    sample_effect,
+)
 from lerobot.utils.constants import DEFAULT_FEATURES, HF_LEROBOT_HOME
 
 logger = logging.getLogger(__name__)
@@ -53,149 +60,10 @@ logger = logging.getLogger(__name__)
 ApplyMode = Literal["per_episode", "per_frame", "static"]
 
 
-# ── Effects ──────────────────────────────────────────────────────────────────
-#
-# Each effect rewrites an HxWx3 uint8 RGB frame given a foreground alpha
-# (float [0,1], 1.0 = keep the original pixel). "background" effects composite a
-# replacement behind the foreground; "global" effects ignore the mask and touch
-# the whole frame. Randomness is drawn in ``sample()`` at the cadence ApplyMode
-# dictates, so the same draw is reused across a whole episode when per-episode.
-
-
-@dataclass(frozen=True)
-class EffectSpec:
-    """A productized effect: its identity + what the GUI should render for it."""
-
-    key: str
-    label: str
-    group: Literal["background", "global"]
-    # UI control declarations the frontend renders (color swatch / slider).
-    controls: list[dict] = field(default_factory=list)
-    randomized: bool = False  # does sample() draw anything? (drives the Apply-mode control)
-
-
-EFFECTS: list[EffectSpec] = [
-    EffectSpec(
-        key="bg_random_color",
-        label="Randomize background (color)",
-        group="background",
-        randomized=True,
-    ),
-    EffectSpec(
-        key="bg_random_noise",
-        label="Randomize background (texture)",
-        group="background",
-        randomized=True,
-    ),
-    EffectSpec(
-        key="bg_solid",
-        label="Solid background color",
-        group="background",
-        controls=[{"type": "color", "key": "color", "label": "Color", "default": [0, 200, 0]}],
-    ),
-    EffectSpec(
-        key="bg_blur",
-        label="Blur background",
-        group="background",
-        controls=[{"type": "range", "key": "sigma", "label": "Blur", "min": 3, "max": 41, "default": 15}],
-    ),
-    EffectSpec(
-        key="brightness",
-        label="Jitter brightness / contrast",
-        group="global",
-        randomized=True,
-        controls=[
-            {"type": "range", "key": "amount", "label": "Amount %", "min": 5, "max": 60, "default": 25}
-        ],
-    ),
-]
-
-_EFFECTS_BY_KEY = {e.key: e for e in EFFECTS}
-
-
-def _solid(h: int, w: int, color) -> np.ndarray:
-    out = np.empty((h, w, 3), dtype=np.uint8)
-    out[:] = np.asarray(color, dtype=np.uint8)
-    return out
-
-
-def _noise_texture(h: int, w: int, rng: np.random.Generator) -> np.ndarray:
-    """A blobby low-frequency colour texture (random patches upsampled), not
-    per-pixel static — closer to the random-texture backgrounds GreenAug found
-    most effective, and far less jarring than white noise."""
-    import cv2
-
-    blocks = int(rng.integers(6, 16))
-    small = rng.integers(0, 256, size=(blocks, blocks, 3), dtype=np.uint8)
-    return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
-
-
-def sample_effect(effect_key: str, params: dict, h: int, w: int, rng: np.random.Generator) -> dict:
-    """Draw the per-application random values for one effect (or ``{}`` if it is
-    deterministic). Called once per episode / per frame / per dataset depending
-    on ApplyMode; the returned dict is passed to :func:`apply_effect`."""
-    if effect_key == "bg_random_color":
-        return {"color": [int(c) for c in rng.integers(0, 256, size=3)]}
-    if effect_key == "bg_random_noise":
-        return {"bg": _noise_texture(h, w, rng)}
-    if effect_key == "brightness":
-        amt = float(params.get("amount", 25)) / 100.0
-        return {"bright": float(rng.uniform(-amt, amt)), "contrast": float(rng.uniform(1 - amt, 1 + amt))}
-    return {}
-
-
-def apply_effect(
-    rgb: np.ndarray, alpha: np.ndarray, effect_key: str, params: dict, sampled: dict
-) -> np.ndarray:
-    """Rewrite one frame. ``rgb`` is HxWx3 uint8; ``alpha`` is HxW float in
-    [0,1] (1.0 = protected foreground). Returns a new HxWx3 uint8 frame."""
-    import cv2
-
-    h, w = rgb.shape[:2]
-    if effect_key == "brightness":  # global — ignores the mask
-        b, c = sampled.get("bright", 0.0), sampled.get("contrast", 1.0)
-        out = rgb.astype(np.float32) * c + b * 255.0
-        return np.clip(out, 0, 255).astype(np.uint8)
-
-    if effect_key == "bg_solid":
-        bg = _solid(h, w, params.get("color", [0, 200, 0]))
-    elif effect_key == "bg_random_color":
-        bg = _solid(h, w, sampled.get("color", [0, 0, 0]))
-    elif effect_key == "bg_random_noise":
-        bg = sampled.get("bg")
-        if bg is None or bg.shape[:2] != (h, w):
-            bg = _solid(h, w, [0, 0, 0])
-    elif effect_key == "bg_blur":
-        k = int(params.get("sigma", 15)) | 1  # ksize must be odd
-        bg = cv2.GaussianBlur(rgb, (k, k), 0)
-    else:
-        raise ValueError(f"unknown effect {effect_key!r}")
-
-    a = alpha[:, :, None]
-    out = rgb.astype(np.float32) * a + bg.astype(np.float32) * (1.0 - a)
-    return np.clip(out, 0, 255).astype(np.uint8)
-
-
-def _feathered_alpha(masks: list[np.ndarray], h: int, w: int, feather: int = 5) -> np.ndarray:
-    """Union the per-object boolean masks into a soft foreground alpha. A small
-    dilation + blur softens the hard SAM edge so the composited seam isn't a
-    crisp cut-out (GreenAug shows imperfect masks are fine; this just avoids the
-    worst artefacts). Returns HxW float in [0,1]; all-zero (no detection) means
-    the whole frame is treated as background."""
-    import cv2
-
-    union = np.zeros((h, w), dtype=np.uint8)
-    for m in masks:
-        if m is not None and m.shape == (h, w):
-            union |= m.astype(np.uint8)
-    if not union.any():
-        return np.zeros((h, w), dtype=np.float32)
-    if feather > 0:
-        ksz = feather * 2 + 1
-        union = cv2.dilate(union, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksz, ksz)))
-        soft = cv2.GaussianBlur(union.astype(np.float32) * 255.0, (ksz, ksz), 0) / 255.0
-        return np.clip(soft, 0.0, 1.0)
-    return union.astype(np.float32)
+# The effect registry + pixel transforms (EFFECTS, apply_effect, sample_effect,
+# _feathered_alpha) live in the shared, dependency-free lerobot.overlays.effects
+# module, so the live overlay worker renders exactly what this batch pass commits.
+__all__ = ["EFFECTS", "apply_effect", "sample_effect", "process_dataset", "ProcessResult", "ApplyMode"]
 
 
 # ── Frame I/O helpers ────────────────────────────────────────────────────────

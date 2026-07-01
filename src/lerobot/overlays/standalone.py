@@ -188,6 +188,17 @@ def main() -> None:
         overlay.write_overlay(_cam, np.zeros((_h, _w, 4), dtype=np.uint8))
     _set_overlay(f"{adapter.label} — live", "#39d353")
 
+    # Data-editing effect (optional): when the config carries an ``effect``, the
+    # data tab wants the WYSIWYG augmented frame (segment + composite) instead of
+    # the debug contour overlay. Randomized effects are sampled once per
+    # (camera, generation) so the look is stable within an episode — same rule the
+    # batch pass uses, so what you preview is what gets committed.
+    from lerobot.overlays.effects import EFFECTS_BY_KEY, apply_effect, feathered_alpha, sample_effect
+
+    effect_cfg: dict | None = None
+    effect_samples: dict = {}
+    effect_rng = np.random.default_rng(0)
+
     throttle = max(0.0, args.throttle_ms / 1000.0)
     last_active = set(active)
     last_seq: dict[str, int] = {}  # per-camera obs-stream seq — gate inference on new frames
@@ -214,11 +225,14 @@ def main() -> None:
                 gen = control.get("generation")
                 if gen is not None and gen != last_generation:
                     last_generation = gen
+                    effect_samples.clear()  # new episode -> redraw the effect's random look
                     for c in active:
                         adapter.set_camera(c)
                         adapter.reset()
                 # The protocol owns `generation` / `cameras`; the rest is the step's opaque config.
-                adapter.set_control(control.get("config", control))
+                cfg = control.get("config", control)
+                adapter.set_control(cfg)
+                effect_cfg = cfg.get("effect") if isinstance(cfg, dict) else None
             did_infer = False
             for cam in all_cams:
                 if cam not in active:
@@ -237,7 +251,27 @@ def main() -> None:
                 try:
                     adapter.set_camera(cam)  # scope per-camera tracking state
                     tc = time.perf_counter()
-                    rgba = adapter.infer(np.ascontiguousarray(frame))
+                    frgb = np.ascontiguousarray(frame)
+                    ekey = effect_cfg.get("key") if effect_cfg else None
+                    if ekey and ekey in EFFECTS_BY_KEY:
+                        # WYSIWYG: composite the effect onto the frame and hand back an
+                        # opaque tile (segment() runs the same tracking pass infer() would).
+                        h, w = frgb.shape[:2]
+                        masks = list(adapter.segment(frgb).values())
+                        alpha = feathered_alpha(masks, h, w)
+                        params = effect_cfg.get("params") or {}
+                        if EFFECTS_BY_KEY[ekey].randomized:
+                            skey = (cam, last_generation)
+                            sampled = effect_samples.get(skey)
+                            if sampled is None:
+                                sampled = sample_effect(ekey, params, h, w, effect_rng)
+                                effect_samples[skey] = sampled
+                        else:
+                            sampled = {}
+                        composed = apply_effect(frgb, alpha, ekey, params, sampled)
+                        rgba = np.dstack([composed, np.full((h, w), 255, dtype=np.uint8)])
+                    else:
+                        rgba = adapter.infer(frgb)  # debug contour overlay (no effect selected)
                     compute_ms_sum += (time.perf_counter() - tc) * 1000.0
                     ti = time.perf_counter()
                     overlay.write_overlay(cam, rgba)
