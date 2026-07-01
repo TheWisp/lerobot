@@ -1842,3 +1842,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     padding: 4px 10px; font-size: 11px; cursor: pointer; }
 .proc-job-btn:hover { background: #1b3f5e; }
 .proc-job-btn.primary { background: #14401f; color: #39d353; border-color: #14401f; }
+
+/* Data overlay: effect selector (data mode) — the live WYSIWYG augmentation. */
+.overlays-effect { width: 100%; box-sizing: border-box; background: #0f1c2e; border: 1px solid #0f3460;
+    color: #ddd; font-size: 12px; padding: 6px 8px; border-radius: 4px; margin-bottom: 4px; }
+.overlays-effect-controls { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px; }
+.overlays-effect-ctl[type=range] { width: 100%; accent-color: #4fc3f7; }
+.overlays-effect-ctl[type=color] { width: 46px; height: 26px; padding: 2px; background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px; }
+/* Process menu: effect echoed read-only (chosen in the overlay). */
+.proc-effect-summary { background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px;
+    padding: 7px 10px; margin: 8px 0 2px; font-size: 12px; color: #cce; }
+.proc-effect-hint { color: #778; font-size: 11px; }
+.proc-effect-none { color: #c9a94a; font-size: 11.5px; }

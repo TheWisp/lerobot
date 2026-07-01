@@ -6,6 +6,7 @@
 
 (function () {
     let MODELS = [];
+    let EFFECTS = [];  // data-editing effects (from /api/process/effects); drive the WYSIWYG overlay
     const panels = [];
     let livePanel = null;
 
@@ -97,6 +98,9 @@
             { el: document.getElementById('overlays-panel-run'), mode: 'live' },
         ].filter((r) => r.el);
         if (!roots.length) return;
+        // The data-editing effects live in the overlay panel now (they drive the live
+        // preview); fetch them once so the picker is ready when a model is chosen.
+        fetch('/api/process/effects').then((r) => r.json()).then((d) => { EFFECTS = d.effects || []; }).catch(() => {});
         fetch('/api/overlays/models').then((r) => r.json())
             .then((d) => { MODELS = d.models || []; build(roots); })
             .catch(() => build(roots));
@@ -132,6 +136,7 @@
         let current = '';
         // Monitored objects: open-vocab name + colour + sign (+ include / − exclude).
         let objects = [{ name: '', color: PALETTE[0], sign: '+' }];
+        let effect = { key: '', params: {} };  // data mode: the augmentation the overlay renders (''=segmentation contours)
         let background = null;            // null = transparent; else [r,g,b]
         let nameTimer = null;
         let status = { state: 'idle' };
@@ -198,18 +203,24 @@
             }
             const ctrl = (modelSpec(current)?.controls || [])[0] || {};
             if (ctrl.type === 'objects' || ctrl.type === 'text') {
+                const effectBlock = mode === 'data' ? `
+                    <label class="overlays-label" title="What the tile shows: the augmented result (WYSIWYG). 'Process dataset…' applies this to every episode.">Effect (previewed live)</label>
+                    <select class="overlays-effect"></select>
+                    <div class="overlays-effect-controls"></div>` : '';
                 els.modelBody.innerHTML = `
                     <label class="overlays-label">${esc(ctrl.label || 'Objects')}</label>
                     <div class="overlays-hint">Open-vocab names, each in its own colour. <b>+</b> include / <b>−</b> exclude. Name edits apply ~1s after you stop typing; colour/sign are instant.</div>
                     <div class="overlays-objrows"></div>
                     <button class="overlays-add-obj">+ Add object</button>
+                    ${effectBlock}
                     <label class="overlays-label">cameras</label>
                     <div class="overlays-cameras"></div>
-                    ${mode === 'data' ? '<button class="overlays-process" title="Segment these objects and apply a background/global effect to a new copy of the dataset">⚙ Process dataset…</button>' : ''}`;
+                    ${mode === 'data' ? '<button class="overlays-process" title="Apply the previewed effect to every episode as a new copy of the dataset">⚙ Process dataset…</button>' : ''}`;
                 els.modelBody.querySelector('.overlays-add-obj').addEventListener('click', addObject);
                 const procBtn = els.modelBody.querySelector('.overlays-process');
                 if (procBtn) procBtn.addEventListener('click', openProcess);
                 renderObjects();
+                if (mode === 'data') renderEffect();
             } else {
                 els.modelBody.innerHTML = '<label class="overlays-label">cameras</label><div class="overlays-cameras"></div>';
             }
@@ -238,7 +249,9 @@
                     <input class="overlays-obj-name" type="text" data-i="${i}" placeholder="${ph}" value="${esc(o.name)}">
                     <span class="overlays-palette${neg ? ' disabled' : ''}" data-i="${i}" title="${neg ? 'a − concept is subtracted, not drawn — colour unused' : ''}">${paletteHTML(o.color)}</span>${trail}</div>`;
             }).join('');
-            const bgrow = `<div class="overlays-objrow">
+            // Run tab keeps the simple Background-colour highlight row; the data tab
+            // replaces it with the full Effect selector below (which renders live).
+            const bgrow = mode === 'data' ? '' : `<div class="overlays-objrow">
                 <span class="overlays-obj-slot"></span>
                 <span class="overlays-bg-label">Background</span>
                 <span class="overlays-palette" data-bg="1">${paletteHTML(background)}</span>
@@ -250,7 +263,8 @@
             box.querySelectorAll('.overlays-obj-name').forEach((inp) => inp.addEventListener('input', () => { objects[+inp.dataset.i].name = inp.value; renderAction(); scheduleApply(); }));
             box.querySelectorAll('.overlays-palette[data-i] .overlays-swatch').forEach((sw) => sw.addEventListener('click', () => { objects[+sw.parentElement.dataset.i].color = sw.dataset.rgb.split(',').map(Number); renderObjects(); applyInstant(); }));
             box.querySelectorAll('.overlays-palette[data-bg] .overlays-swatch').forEach((sw) => sw.addEventListener('click', () => { background = sw.dataset.rgb.split(',').map(Number); renderObjects(); applyInstant(); }));
-            box.querySelector('.overlays-obj-btn.bg-clear').addEventListener('click', () => { background = null; renderObjects(); applyInstant(); });
+            const bgClear = box.querySelector('.overlays-obj-btn.bg-clear');
+            if (bgClear) bgClear.addEventListener('click', () => { background = null; renderObjects(); applyInstant(); });
 
             const add = els.modelBody.querySelector('.overlays-add-obj');
             if (add) { add.disabled = objects.length >= MAX_OBJECTS; add.textContent = `+ Add object (${objects.length}/${MAX_OBJECTS})`; }
@@ -262,15 +276,65 @@
             renderObjects();  // no apply — the new row has no name yet
         }
 
+        // ---- effect selector (data mode): drives the live WYSIWYG overlay ----
+        const effectSpec = (k) => EFFECTS.find((e) => e.key === k);
+        function renderEffect() {
+            const sel = els.modelBody.querySelector('.overlays-effect');
+            if (!sel) return;
+            const grp = (g) => EFFECTS.filter((e) => e.group === g);
+            const og = (label, items) => items.length
+                ? `<optgroup label="${label}">${items.map((e) => `<option value="${e.key}">${esc(e.label)}</option>`).join('')}</optgroup>` : '';
+            sel.innerHTML = '<option value="">None (segmentation contours)</option>'
+                + og('Background (foreground protected)', grp('background')) + og('Global (whole frame)', grp('global'));
+            sel.value = effect.key;
+            sel.onchange = () => { effect = { key: sel.value, params: {} }; renderEffectControls(); applyInstant(); };
+            renderEffectControls();
+        }
+        function renderEffectControls() {
+            const box = els.modelBody.querySelector('.overlays-effect-controls');
+            if (!box) return;
+            const spec = effectSpec(effect.key);
+            box.innerHTML = (spec?.controls || []).map((c) => {
+                if (c.type === 'color') {
+                    const d = effect.params[c.key] || c.default || [0, 200, 0];
+                    const hex = '#' + d.map((x) => x.toString(16).padStart(2, '0')).join('');
+                    return `<label class="overlays-label">${esc(c.label)}</label><input class="overlays-effect-ctl" data-key="${c.key}" data-type="color" type="color" value="${hex}">`;
+                }
+                if (c.type === 'range') {
+                    const v = effect.params[c.key] ?? c.default;
+                    return `<label class="overlays-label">${esc(c.label)}: <span class="overlays-ctl-val">${v}</span></label>`
+                        + `<input class="overlays-effect-ctl" data-key="${c.key}" data-type="range" type="range" min="${c.min}" max="${c.max}" value="${v}">`;
+                }
+                return '';
+            }).join('');
+            box.querySelectorAll('.overlays-effect-ctl').forEach((inp) => {
+                const ev = inp.type === 'range' ? 'input' : 'change';
+                inp.addEventListener(ev, () => {
+                    effect.params[inp.dataset.key] = inp.dataset.type === 'color'
+                        ? [1, 3, 5].map((i) => parseInt(inp.value.slice(i, i + 2), 16))
+                        : Number(inp.value);
+                    const span = inp.previousElementSibling && inp.previousElementSibling.querySelector('.overlays-ctl-val');
+                    if (span) span.textContent = inp.value;
+                    // range = live drag: debounce like a name edit; color/discrete = instant.
+                    if (inp.type === 'range') scheduleApply(); else applyInstant();
+                });
+            });
+        }
+        // {key, params} for the overlay config + the commit; null = contours only.
+        const payloadEffect = () => (effect.key ? { key: effect.key, params: effect.params } : null);
+
         // Open the data-editing menu with the panel's current objects (the
         // protected foreground) + the selected cameras. Segmentation is the same
         // SAM3 the overlay previews, so "what's kept" matches what's on screen.
         function openProcess() {
             if (!window.ProcessData || !window.currentDataset) return;
+            const spec = effectSpec(effect.key);
             window.ProcessData.open({
                 datasetId: window.currentDataset,
                 objects: payloadObjects(),
                 cameras: camsArg(),
+                effect: payloadEffect(),  // the previewed effect — the menu just commits it
+                effectLabel: spec ? spec.label : null,
             });
         }
 
@@ -367,7 +431,7 @@
             dataVersion++;  // bust the per-frame img cache so changed objects/colours re-pull
             fetch('/api/overlays/data/configure', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background: bgPayload(), cameras: selectedCameras ? [...selectedCameras] : [] }),
+                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background: bgPayload(), effect: payloadEffect(), cameras: selectedCameras ? [...selectedCameras] : [] }),
             }).then((r) => {
                 // A run owns the obs stream (one writer at a time) — surface it, don't silently fail.
                 if (r.status === 409) { setBadge('run active', 'error'); stopPoll(); clearOverlays(); return; }
