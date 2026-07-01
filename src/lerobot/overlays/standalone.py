@@ -109,6 +109,11 @@ def main() -> None:
         default=None,
         help='Background fill JSON {"color":[r,g,b]} (null/absent = transparent)',
     )
+    parser.add_argument(
+        "--effect",
+        default=None,
+        help='Data-editing effect JSON {"key","params"} — render the augmented frame (WYSIWYG) instead of contours',
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
         "--throttle-ms", type=int, default=33, help="Min ms between inference passes (default ~30Hz)"
@@ -196,6 +201,11 @@ def main() -> None:
     from lerobot.overlays.effects import EFFECTS_BY_KEY, apply_effect, feathered_alpha, sample_effect
 
     effect_cfg: dict | None = None
+    if args.effect:  # seed from spawn so the very first inference already renders the effect
+        try:
+            effect_cfg = json.loads(args.effect)
+        except Exception:
+            logger.warning("ignoring malformed --effect: %s", args.effect)
     effect_samples: dict = {}
     effect_rng = np.random.default_rng(0)
 
@@ -232,7 +242,12 @@ def main() -> None:
                 # The protocol owns `generation` / `cameras`; the rest is the step's opaque config.
                 cfg = control.get("config", control)
                 adapter.set_control(cfg)
-                effect_cfg = cfg.get("effect") if isinstance(cfg, dict) else None
+                new_effect = cfg.get("effect") if isinstance(cfg, dict) else None
+                if new_effect != effect_cfg:
+                    # Effect changed — re-render the current (parked) frame so the tile
+                    # updates without needing a scrub. Clearing last_seq lets the gate fire.
+                    effect_cfg = new_effect
+                    last_seq.clear()
             did_infer = False
             for cam in all_cams:
                 if cam not in active:

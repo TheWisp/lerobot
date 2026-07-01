@@ -202,7 +202,7 @@ async def data_configure(req: ConfigureRequest) -> dict:
         # new shape. Same dataset: _spawn_worker just pushes control (no restart).
         if prev_dataset is not None and prev_dataset != req.dataset_id:
             await _teardown_current()
-        await _spawn_worker(req.model, objects=req.objects, background=req.background)
+        await _spawn_worker(req.model, objects=req.objects, background=req.background, effect=req.effect)
     # Narrow the worker to the panel's selected cameras so disabling one actually cuts its work:
     # publish only those + filter inference to them (None/absent = keep the default = all cameras).
     global _data_pub_cameras
@@ -562,7 +562,7 @@ class LiveDiagRequest(BaseModel):
     blank: list[str] = []
 
 
-async def _spawn_worker(model: str, *, objects=None, background=None, cameras=None) -> None:
+async def _spawn_worker(model: str, *, objects=None, background=None, cameras=None, effect=None) -> None:
     """Spawn (or push control to) the single overlay worker for ``model``. Caller MUST hold
     ``_live_lock``. The worker is identical for live + data — it reads the obs stream; only the
     publisher differs (teleop for run, the GUI data publisher for data). A same-model call just
@@ -572,7 +572,9 @@ async def _spawn_worker(model: str, *, objects=None, background=None, cameras=No
     if _live_model == model and _live_proc is not None and _live_proc.returncode is None:
         reader = _get_live_reader()  # already up — push control, don't restart
         if reader is not None:
-            reader.write_control({"config": {"objects": objects or [], "background": background}})
+            reader.write_control(
+                {"config": {"objects": objects or [], "background": background, "effect": effect}}
+            )
         return
     m.fire(Event.START)  # -> loading; the badge reflects it immediately
     await _teardown_current()  # stop a different running model first (serialised)
@@ -581,6 +583,11 @@ async def _spawn_worker(model: str, *, objects=None, background=None, cameras=No
         args.append(f"--objects={json.dumps(objects)}")
     if background is not None:
         args.append(f"--background={json.dumps(background)}")
+    # Seed the effect at spawn (like objects/background) — a control-channel push
+    # is a no-op until the worker's buffer exists, so the FIRST inference would
+    # otherwise miss it and render contours instead of the augmented frame.
+    if effect is not None:
+        args.append(f"--effect={json.dumps(effect)}")
     if cameras:
         args.append("--cameras")
         args.extend(cameras)
