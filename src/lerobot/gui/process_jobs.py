@@ -72,6 +72,8 @@ class ProcessJobConfig:
     apply_mode: str  # per_episode | per_frame | static
     variants: int
     cameras: list[str] | None  # subset to edit; None/[] = all
+    episodes: list[int] | None  # subset to process; None = all (used by preview)
+    preview: bool  # a quick single-episode run written to an ephemeral dir
     jobs_dir: str
 
     def to_json(self) -> str:
@@ -90,6 +92,8 @@ class ProcessJobConfig:
                 "apply_mode": self.apply_mode,
                 "variants": self.variants,
                 "cameras": self.cameras,
+                "episodes": self.episodes,
+                "preview": self.preview,
                 "jobs_dir": self.jobs_dir,
             }
         )
@@ -111,6 +115,8 @@ class ProcessJobConfig:
             apply_mode=d.get("apply_mode", "per_episode"),
             variants=int(d.get("variants", 1)),
             cameras=d.get("cameras"),
+            episodes=d.get("episodes"),
+            preview=bool(d.get("preview", False)),
             jobs_dir=d["jobs_dir"],
         )
 
@@ -156,6 +162,7 @@ class ProcessJobState:
     effect: str
     status: ProcessStatus
     started_at: float
+    preview: bool = False
     finished_at: float | None = None
     stage: str = "starting"
     frames_total: int = 0
@@ -175,6 +182,7 @@ class ProcessJobState:
             "out_repo_id": self.out_repo_id,
             "out_root": self.out_root,
             "effect": self.effect,
+            "preview": self.preview,
             "status": self.status,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -214,6 +222,7 @@ def make_job(
     out_repo_id: str,
     out_root: str,
     effect: str,
+    preview: bool = False,
 ) -> ProcessJobState:
     """Build a fresh server-side ``ProcessJobState`` in ``pending``."""
     return ProcessJobState(
@@ -222,6 +231,7 @@ def make_job(
         out_repo_id=out_repo_id,
         out_root=out_root,
         effect=effect,
+        preview=preview,
         status="pending",
         started_at=time.time(),
     )

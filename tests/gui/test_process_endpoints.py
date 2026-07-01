@@ -48,6 +48,8 @@ def test_config_roundtrip():
         apply_mode="per_episode",
         variants=2,
         cameras=["observation.images.top"],
+        episodes=[0, 1],
+        preview=False,
         jobs_dir="/j",
     )
     assert process_jobs.ProcessJobConfig.from_json(cfg.to_json()) == cfg
@@ -100,7 +102,6 @@ async def test_effects_listed(client):
     body = r.json()
     keys = {e["key"] for e in body["effects"]}
     assert "bg_random_color" in keys and "brightness" in keys
-    assert {m["key"] for m in body["apply_modes"]} == {"per_episode", "per_frame", "static"}
 
 
 @pytest.mark.asyncio
@@ -163,3 +164,36 @@ async def test_start_jobs_dismiss_flow(client):
         r = await c.post(f"/api/process/{jid}/dismiss")
         assert r.status_code == 200
         assert jid not in state.process_jobs
+
+
+@pytest.mark.asyncio
+async def test_preview_routes_to_ephemeral_dir_and_overwrites(client, monkeypatch, tmp_path):
+    c, state = client
+    monkeypatch.setattr(process_module, "PREVIEW_DIR", tmp_path / "preview")
+    async with c:
+        payload = {
+            "source_id": "/d",
+            "objects": [{"name": "ring"}],
+            "effect": "bg_solid",
+            "preview": True,
+            "episodes": [0],
+        }
+        r = await c.post("/api/process/start", json=payload)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["preview"] is True
+        assert body["out_repo_id"] == "me/demo__preview"  # ephemeral, fixed name
+        assert str(tmp_path / "preview") in body["out_root"]  # not in HF_LEROBOT_HOME
+        jid = body["job_id"]
+        assert state.process_jobs[jid].preview is True
+
+        # A second preview on the same source is refused only while the first is
+        # still running (same active-job guard); finish it and retry to confirm
+        # the ephemeral dir is overwritten rather than 409'd on collision.
+        state.process_jobs[jid].status = "complete"
+        state.process_jobs[jid].finished_at = time.time()
+        (tmp_path / "preview" / "me/demo__preview").mkdir(
+            parents=True, exist_ok=True
+        )  # simulate prior preview
+        r = await c.post("/api/process/start", json=payload)
+        assert r.status_code == 200, r.text  # overwrites, no collision error

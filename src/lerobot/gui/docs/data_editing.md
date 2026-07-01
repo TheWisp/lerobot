@@ -25,8 +25,8 @@ Data tab → Overlays panel (pick SAM3, name objects)  ──►  "⚙ Process d
    │                                                          │
    │  objects = protected foreground                          ▼
    │                                              ProcessData modal (process.js)
-   │                                              effect · params · apply-mode ·
-   │                                              copies · output name
+   │                                              effect · params · copies · name
+   │                                              [Preview episode] [Process all]
    ▼                                                          │ POST /api/process/start
 GUI server (api/process.py)                                   ▼
    • frees the live overlay (VRAM)                  spawn detached worker subprocess
@@ -58,10 +58,42 @@ Global (whole frame, mask ignored):
 
 - **Jitter brightness / contrast** — per-episode random within ±amount.
 
-**Apply mode** (`per_episode` default · `per_frame` · `static`) controls how often
-a randomized effect re-samples. Per-episode is the right default for trajectory
-data — per-frame flicker corrupts the motion cues a policy learns from. **Copies
+Randomized effects always sample **once per episode** (consistent within a
+trajectory — per-frame variation would flicker and corrupt the motion cues a
+policy learns from, and never makes sense here, so it isn't offered). **Copies
 per episode** writes N independently-randomized variants of each source episode.
+
+## Preview before committing (staged)
+
+Imperfect tracking is the main friction — the result may miss an object or drift,
+and a full run is expensive. So the flow is staged, cheapest-first:
+
+1. **Tune criteria live (free).** The data overlay runs SAM3 warm and draws the
+   masks on the scrubbed frame as you edit the object list — this is where you
+   catch "the left arm isn't detected" before spending anything.
+2. **Preview this episode (~seconds).** Runs the full pipeline on just the current
+   episode into an ephemeral dataset (`~/.cache/lerobot/gui/process_preview/`,
+   overwritten each time) and auto-opens it, so you can scrub the actual
+   composited result and see temporal tracking quality over a whole trajectory.
+3. **Process all episodes (minutes).** Commit the full run once the preview looks
+   right.
+
+### Measured overhead (RTX 5090, 720p)
+
+| Step                   | Cost         | Note                                                                    |
+| ---------------------- | ------------ | ----------------------------------------------------------------------- |
+| SAM3 load              | ~6 s         | one-time per run                                                        |
+| Segment (track)        | ~60 ms/frame | the per-frame steady state                                              |
+| Segment (seed/re-seed) | ~150 ms      | frame 0 + every 150 frames + **every 5 frames while an object is lost** |
+| Effect apply           | ~9 ms        | trivial                                                                 |
+| Decode source frame    | ~17 ms       |                                                                         |
+
+Segmentation dominates (~90 ms/frame/camera steady-state ≈ 11 fps); the effect
+and I/O are noise. So a full dataset (tens of thousands of frames × cameras) is
+**tens of minutes**, while a single-episode preview is **seconds-to-a-minute** —
+hence the split. The menu shows both estimates up front. A missing object is
+doubly costly (wrong result _and_ constant recovery re-seeds), which is exactly
+what the preview is for.
 
 ## Layers
 

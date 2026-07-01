@@ -21,24 +21,31 @@ applies a background/global effect to every frame, and writes an augmented copy
 as a new LeRobotDataset via an async worker job (modelled on the Hub-transfer
 tray). See [docs/data_editing.md](docs/data_editing.md). Effects:
 background random-colour / random-texture / solid / blur (foreground feathered) +
-global brightness-contrast. Randomized effects sample per-episode by default.
+global brightness-contrast. Randomized effects sample per-episode only.
+
+Staging (done): tune criteria live in the overlay → **Preview this episode**
+(ephemeral single-episode run, auto-opened) → **Process all episodes**. The menu
+shows measured wall-clock estimates for both (segmentation dominates at ~90
+ms/frame/cam; full dataset = tens of min, one episode = seconds).
 
 Follow-ups:
 
 - [ ] **Background Replace from a texture/photo library** — the highest-impact
       effect per GreenAug/RoboEngine (random _texture_ backgrounds beat solid colour
       and beat generative). Needs a source-folder picker + per-episode image choice.
-- [ ] **Per-frame preview in the menu** — show the current scrubbed frame with the
-      effect applied (reuse the live overlay) before committing the whole-dataset run.
-- [ ] **Episode subset** — the core (`process_dataset`) already takes `episodes=`;
-      surface a range picker so the user can augment a slice, not always all episodes.
+- [ ] **Live effect preview on the scrubbed frame** — the overlay already draws
+      masks per-frame; render the chosen _effect_ (not just contours) as the overlay
+      so the composited look updates as you scrub, before even the episode preview.
+      Near-free (reuses the warm overlay worker's masks + ~9 ms effect apply).
+- [ ] **Warm-model reuse across preview → commit** — today each run reloads SAM3
+      (~6 s) and preview tears down the live overlay. A persistent worker with a
+      command channel (like the overlay worker) would let preview and commit share a
+      loaded model and skip the reload.
 - [ ] **Hue / colour-shift effect** — modest ±deg range (keep segmented target
       objects recognizable); deferred to keep the v1 menu small.
 - [ ] **Multi-instance foreground** — SAM3 locks one instance per concept, so a
       two-arm scene only protects one arm unless the user adds a second object row.
       Consider auto-expanding "robot arm" to all detected instances.
-- [ ] **Worker GPU contention** — start currently tears down the live overlay to
-      free VRAM; a queued/sequenced model would let both coexist.
 
 ### Feature Editing (per-frame view + edit)
 

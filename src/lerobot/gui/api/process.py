@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -46,6 +47,11 @@ from lerobot.gui.process_jobs import (
     make_job,
 )
 from lerobot.utils.constants import HF_LEROBOT_HOME
+
+# Previews are ephemeral single-episode runs; they live here (NOT in
+# HF_LEROBOT_HOME) and are overwritten on each preview, so they never collide
+# with or clobber a real dataset.
+PREVIEW_DIR = JOBS_DIR.parent / "process_preview"
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
@@ -67,10 +73,11 @@ def set_app_state(state: AppState) -> None:
 
 @router.get("/effects")
 async def list_effects() -> dict:
-    """The effect menu the frontend renders, plus the apply-mode choices.
+    """The effect menu the frontend renders, grouped (background vs global) so the
+    UI can label "foreground protected" effects distinctly from whole-frame ones.
 
-    Grouped (background vs global) so the UI can label "foreground protected"
-    effects distinctly from whole-frame ones."""
+    Randomized effects always sample once per episode (consistent within a
+    trajectory); the mode isn't user-exposed."""
     return {
         "effects": [
             {
@@ -81,12 +88,7 @@ async def list_effects() -> dict:
                 "randomized": e.randomized,
             }
             for e in EFFECTS
-        ],
-        "apply_modes": [
-            {"key": "per_episode", "label": "Per episode (recommended)"},
-            {"key": "per_frame", "label": "Per frame"},
-            {"key": "static", "label": "One look for whole dataset"},
-        ],
+        ]
     }
 
 
@@ -100,6 +102,8 @@ class StartRequest(BaseModel):
     cameras: list[str] | None = None
     model: str = "sam3_track"
     out_name: str | None = None  # dataset name part; combined with the source owner
+    preview: bool = False  # quick single-episode run to an ephemeral dir, auto-opened
+    episodes: list[int] | None = None  # subset to process (preview passes [current])
 
 
 def _refresh(job) -> None:
@@ -131,13 +135,23 @@ async def start(req: StartRequest) -> dict:
     src = _app_state.datasets[req.source_id]
     owner = src.repo_id.split("/")[0] if "/" in src.repo_id else "local"
     src_name = src.repo_id.split("/")[-1]
-    name = (req.out_name or f"{src_name}_{req.effect}").strip()
-    if not _VALID_NAME.match(name):
-        raise HTTPException(status_code=400, detail="Output name may only contain letters, digits, . _ -")
-    out_repo_id = f"{owner}/{name}"
-    out_root = HF_LEROBOT_HOME / out_repo_id
-    if out_root.exists():
-        raise HTTPException(status_code=409, detail=f"Output dataset already exists: {out_repo_id}")
+
+    if req.preview:
+        # Ephemeral single-episode run: fixed name in PREVIEW_DIR, overwritten
+        # each time (never touches HF_LEROBOT_HOME, so it can't clobber a real
+        # dataset). Auto-opened on completion by the frontend.
+        out_repo_id = f"{owner}/{src_name}__preview"
+        out_root = PREVIEW_DIR / out_repo_id
+        if out_root.exists():
+            shutil.rmtree(out_root)  # safe-destruct: our own prior preview
+    else:
+        name = (req.out_name or f"{src_name}_{req.effect}").strip()
+        if not _VALID_NAME.match(name):
+            raise HTTPException(status_code=400, detail="Output name may only contain letters, digits, . _ -")
+        out_repo_id = f"{owner}/{name}"
+        out_root = HF_LEROBOT_HOME / out_repo_id
+        if out_root.exists():
+            raise HTTPException(status_code=409, detail=f"Output dataset already exists: {out_repo_id}")
 
     # Free the live data overlay first — the batch worker loads its own SAM3, so
     # running both would double VRAM. Tearing it down also releases the obs stream.
@@ -151,10 +165,17 @@ async def start(req: StartRequest) -> dict:
         out_repo_id=out_repo_id,
         out_root=str(out_root),
         effect=req.effect,
+        preview=req.preview,
     )
     _app_state.process_jobs[job.job_id] = job
     _spawn_worker(job=job, req=req, src=src, out_repo_id=out_repo_id, out_root=out_root)
-    return {"job_id": job.job_id, "status": "started", "out_repo_id": out_repo_id, "out_root": str(out_root)}
+    return {
+        "job_id": job.job_id,
+        "status": "started",
+        "out_repo_id": out_repo_id,
+        "out_root": str(out_root),
+        "preview": req.preview,
+    }
 
 
 def _spawn_worker(*, job, req: StartRequest, src, out_repo_id: str, out_root: Path) -> None:
@@ -175,6 +196,8 @@ def _spawn_worker(*, job, req: StartRequest, src, out_repo_id: str, out_root: Pa
         apply_mode=req.apply_mode,
         variants=max(1, int(req.variants)),
         cameras=req.cameras,
+        episodes=req.episodes,
+        preview=req.preview,
         jobs_dir=str(JOBS_DIR),
     )
     # Stub the progress file so a poll right after spawn reads something.
