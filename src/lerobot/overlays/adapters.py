@@ -315,6 +315,23 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         assert best.shape == (h, w), f"detector mask {best.shape} != frame {(h, w)}"
         return best if int(best.sum()) > 50 else None
 
+    def masks(self, frame, prompt: str | None = None) -> list[dict]:
+        """Raw SAM3 detection masks (Tier-1 detector only, NOT the tracked RGBA overlay) — one per
+        period-separated concept, largest instance each: ``[{"mask": HxW bool ndarray, "concept": str}]``.
+        The seeding/scan paths (scan3d reconstruction, FoundationPose registration) want the bool mask,
+        not the overlay. ``frame`` is RGB HxWx3 uint8 (ndarray or PIL)."""
+        rgb = np.asarray(frame)
+        if rgb.ndim != 3 or rgb.shape[2] != 3:
+            return []
+        h, w = rgb.shape[:2]
+        concepts = [c.strip() for c in (prompt or self.prompt).replace(",", ".").split(".") if c.strip()]
+        out: list[dict] = []
+        for c in concepts or [self.DEFAULT_PROMPT]:
+            m = self._detect(rgb, c, h, w)
+            if m is not None:
+                out.append({"mask": m, "concept": c})
+        return out
+
     # ---------------- Tier 2: geometric video tracker ----------------
     def _pv(self, frame_rgb: np.ndarray):
         inp = self.trk_proc(images=self._Image.fromarray(frame_rgb), return_tensors="pt")
