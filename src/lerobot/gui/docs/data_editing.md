@@ -63,20 +63,29 @@ trajectory — per-frame variation would flicker and corrupt the motion cues a
 policy learns from, and never makes sense here, so it isn't offered). **Copies
 per episode** writes N independently-randomized variants of each source episode.
 
-## Preview before committing (staged)
+## The overlay IS the preview (WYSIWYG)
+
+The effect isn't a separate step — it's configured in the **data overlay panel**
+(an "Effect (previewed live)" selector next to the objects), and the overlay
+worker composites that effect onto the scrubbed frame instead of drawing debug
+contours. So the camera tile shows the _actual augmented result_ as you scrub,
+using the warm SAM3 that's already running. "Process dataset…" just persists that
+same effect to every episode — the menu echoes the effect read-only. The overlay
+worker and the batch pass share `lerobot.overlays.effects`, so preview == commit.
 
 Imperfect tracking is the main friction — the result may miss an object or drift,
 and a full run is expensive. So the flow is staged, cheapest-first:
 
-1. **Tune criteria live (free).** The data overlay runs SAM3 warm and draws the
-   masks on the scrubbed frame as you edit the object list — this is where you
-   catch "the left arm isn't detected" before spending anything.
+1. **Tune + preview live (free).** Edit the object list and effect in the overlay;
+   the tile shows the composited result per frame (segmentation warm). This is
+   where you catch "the left arm isn't detected" before spending anything. The
+   effect re-renders the parked frame on change; scrub/play to check other frames.
 2. **Preview this episode (~seconds).** Runs the full pipeline on just the current
    episode into an ephemeral dataset (`~/.cache/lerobot/gui/process_preview/`,
-   overwritten each time) and auto-opens it, so you can scrub the actual
-   composited result and see temporal tracking quality over a whole trajectory.
-3. **Process all episodes (minutes).** Commit the full run once the preview looks
-   right.
+   overwritten each time) and auto-opens it — a clean every-frame pass (the live
+   overlay skips frames under load), so you see temporal tracking over a whole
+   trajectory exactly as the batch will produce it.
+3. **Process all episodes (minutes).** Commit the full run once it looks right.
 
 ### Measured overhead (RTX 5090, 720p)
 

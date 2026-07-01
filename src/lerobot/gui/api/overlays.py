@@ -226,6 +226,14 @@ async def data_status() -> dict:
     running = target is not None and _live_proc is not None and _live_proc.returncode is None
     st = _read_status() if running else {}
     reader = _get_live_reader() if running else None
+    # Re-push the current config every poll while the worker is up. Control writes
+    # are a no-op until the worker's shm buffer exists (created only after its ~6s
+    # load), so a config set during that window — typically the effect, chosen right
+    # after the object that triggered the spawn — would otherwise never arrive. This
+    # is idempotent (same objects = no-op; unchanged effect = no re-render), so it
+    # just guarantees eventual delivery once the buffer is there.
+    if reader is not None and _data_publisher_active():
+        _write_data_control()
     return {
         "state": state.value,
         "available": state is State.ACTIVE,

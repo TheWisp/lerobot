@@ -478,6 +478,9 @@
                 : '/api/overlays/data/status';
             fetch(url).then((r) => r.json()).then((s) => {
                 status = s;
+                // (The backend re-pushes the data config on every poll while the worker
+                // is up, so an effect chosen during its load window is delivered reliably
+                // once the shm buffer exists — no frontend reconcile needed here.)
                 // `started` is ONLY the launch request — it picks /live/start vs /live/control, nothing
                 // more. The draw gate (isLiveOn) reads the backend machine's ACTIVE state directly, so the
                 // worker's own INACTIVE→LOADING→ACTIVE warm-up needs no syncing here (the old reconcile
