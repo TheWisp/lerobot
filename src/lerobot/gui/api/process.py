@@ -99,6 +99,7 @@ class StartRequest(BaseModel):
     effect_params: dict | None = None
     apply_mode: str = "per_episode"
     variants: int = 1
+    multi_instance: bool = True  # segment all instances of each object (both arms) vs largest
     cameras: list[str] | None = None
     model: str = "sam3_track"
     out_name: str | None = None  # dataset name part; combined with the source owner
@@ -195,6 +196,7 @@ def _spawn_worker(*, job, req: StartRequest, src, out_repo_id: str, out_root: Pa
         effect_params=req.effect_params or {},
         apply_mode=req.apply_mode,
         variants=max(1, int(req.variants)),
+        multi_instance=req.multi_instance,
         cameras=req.cameras,
         episodes=req.episodes,
         preview=req.preview,

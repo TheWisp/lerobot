@@ -71,6 +71,7 @@ class ProcessJobConfig:
     effect_params: dict  # effect-specific params (color, sigma, amount, ...)
     apply_mode: str  # per_episode | per_frame | static
     variants: int
+    multi_instance: bool  # segment ALL instances of each concept (both arms) vs largest only
     cameras: list[str] | None  # subset to edit; None/[] = all
     episodes: list[int] | None  # subset to process; None = all (used by preview)
     preview: bool  # a quick single-episode run written to an ephemeral dir
@@ -91,6 +92,7 @@ class ProcessJobConfig:
                 "effect_params": self.effect_params,
                 "apply_mode": self.apply_mode,
                 "variants": self.variants,
+                "multi_instance": self.multi_instance,
                 "cameras": self.cameras,
                 "episodes": self.episodes,
                 "preview": self.preview,
@@ -114,6 +116,7 @@ class ProcessJobConfig:
             effect_params=d.get("effect_params", {}),
             apply_mode=d.get("apply_mode", "per_episode"),
             variants=int(d.get("variants", 1)),
+            multi_instance=bool(d.get("multi_instance", True)),
             cameras=d.get("cameras"),
             episodes=d.get("episodes"),
             preview=bool(d.get("preview", False)),

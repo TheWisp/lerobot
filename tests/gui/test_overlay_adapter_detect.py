@@ -92,25 +92,40 @@ def test_detect_none_when_nothing_found():
         assert ad._detect(np.zeros((20, 40, 3), np.uint8), "robot arm", 20, 40) is None
 
 
-def test_segment_and_infer_set_the_flag():
-    # segment() must request multi-instance; infer() must not. Both call
-    # _infer_masks — stub it to capture the flag at call time.
+def test_set_control_toggles_multi_instance_and_restarts_tracking():
+    # The instance policy is a shared knob set via set_control (so overlay preview
+    # and batch processing agree). A change restarts tracking so it takes effect now.
     a1, _ = _two_arms()
     ad = _adapter_with_masks([a1])
-    seen = {}
+    ad._seed_multi = False
+    ad.prompt = "robot arm"
+    ad._colors = {}
+    ad._signs = {}
+    ad._tracks = {"cam": {"session": object()}}  # pretend a track exists
 
-    def fake_infer_masks(frame):
-        seen["multi"] = ad._seed_multi
-        return {}, frame.shape[0], frame.shape[1]
+    ad.set_control({"multi_instance": True})
+    assert ad._seed_multi is True
+    assert ad._tracks == {}  # restarted so the next frame re-seeds under the new policy
 
-    ad._infer_masks = fake_infer_masks
+    ad._tracks = {"cam": {"session": object()}}
+    ad.set_control({"multi_instance": True})  # unchanged -> no restart
+    assert ad._tracks != {}
+
+    ad.set_control({"multi_instance": False})
+    assert ad._seed_multi is False
+
+
+def test_segment_and_infer_do_not_override_the_flag():
+    # Neither entry point sets the policy — they respect whatever set_control chose.
+    a1, _ = _two_arms()
+    ad = _adapter_with_masks([a1])
     ad._concepts = []
     ad._signs = {}
-    frame = np.zeros((20, 40, 3), np.uint8)
+    seen = []
+    ad._infer_masks = lambda frame: (seen.append(ad._seed_multi), ({}, frame.shape[0], frame.shape[1]))[1]
 
-    ad.segment(frame)
-    assert seen["multi"] is True
-    # infer() also composites; give it what _composite_concepts needs via a stub.
+    ad._seed_multi = True
+    ad.segment(np.zeros((20, 40, 3), np.uint8))
     import lerobot.overlays.adapters as mod
 
     orig = mod._composite_concepts
@@ -119,10 +134,11 @@ def test_segment_and_infer_set_the_flag():
         ad._colors = {}
         ad._bg_color = None
         ad._cv2 = MagicMock()
-        ad.infer(frame)
+        ad._seed_multi = False
+        ad.infer(np.zeros((20, 40, 3), np.uint8))
     finally:
         mod._composite_concepts = orig
-    assert seen["multi"] is False
+    assert seen == [True, False]  # segment saw True, infer saw False — neither changed it
 
 
 if __name__ == "__main__":

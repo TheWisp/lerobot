@@ -260,8 +260,8 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         self._bg_color: tuple[int, int, int] | None = None
         self._det_threshold = 0.5
         # Data editing unions all instances of a concept (protect every match, e.g.
-        # both arms); the debug overlay keeps the single-largest lock. segment()/infer()
-        # set this before driving the tracker.
+        # both arms); the debug overlay keeps the single-largest lock. Set via
+        # set_control({"multi_instance": ...}); default False = the debug lock.
         self._seed_multi = False
         self._cam: str | None = None
         self._tracks: dict[str | None, dict] = {}  # per-camera tracker state (session + masks)
@@ -298,6 +298,15 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         bg = _parse_background(control)
         if bg is not _BG_UNSET:
             self._bg_color = bg
+        # "Segment all instances of each concept" (both arms) vs the single largest.
+        # Absent = keep the current value (default False: the debug overlay's lock;
+        # the data-editing paths send True). A change restarts tracking so the next
+        # frame re-seeds under the new policy instead of waiting for a flush.
+        if "multi_instance" in control:
+            mv = bool(control["multi_instance"])
+            if mv != self._seed_multi:
+                self._seed_multi = mv
+                self._tracks = {}
 
     # ---------------- Tier 1: image detector (text -> mask per concept) ----------------
     def _detect(self, frame_rgb: np.ndarray, concept: str, h: int, w: int) -> np.ndarray | None:
@@ -447,9 +456,10 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         the overlay compositor does, so the returned masks are the region that
         an effect should KEEP as foreground. Precondition: ``frame_rgb`` is
         contiguous HxWx3 uint8 RGB; call :meth:`set_camera` / :meth:`reset` to
-        scope and reseed per-camera tracking just like the live loop.
+        scope and reseed per-camera tracking just like the live loop. Whether a
+        concept yields all its instances (both arms) or just the largest is set via
+        ``set_control({"multi_instance": ...})`` — same knob the overlay + batch share.
         """
-        self._seed_multi = True  # protect EVERY instance of each concept (both arms, etc.)
         masks_by_concept, _h, _w = self._infer_masks(frame_rgb)
         # Apply the same +/- carving the compositor does, so a caller gets the
         # final kept region per positive concept without re-deriving the logic.
@@ -556,7 +566,6 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         assert frame_rgb.ndim == 3 and frame_rgb.shape[2] == 3, (
             f"infer expects HxWx3 RGB, got {frame_rgb.shape}"
         )
-        self._seed_multi = False  # debug overlay: lock onto the single largest instance
         masks_by_concept, h, w = self._infer_masks(frame_rgb)
         rgba = _composite_concepts(
             h,

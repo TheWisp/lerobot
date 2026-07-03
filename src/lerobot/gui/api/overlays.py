@@ -123,6 +123,8 @@ class ConfigureRequest(BaseModel):
     # Data-editing effect: {key, params}. When set, the worker composites the
     # augmented frame (WYSIWYG) instead of the debug contour overlay. None = contours.
     effect: dict | None = None
+    # Segment ALL instances of each object (both arms) vs the single largest.
+    multi_instance: bool = True
 
 
 def _frame_rgb(item: dict, cam: str) -> np.ndarray:
@@ -188,7 +190,12 @@ async def data_configure(req: ConfigureRequest) -> dict:
     cameras = _dataset_camera_dims(ds)
     if not cameras:
         raise HTTPException(status_code=400, detail="Dataset has no camera/image keys")
-    config = {"objects": req.objects or [], "background": req.background, "effect": req.effect}
+    config = {
+        "objects": req.objects or [],
+        "background": req.background,
+        "effect": req.effect,
+        "multi_instance": req.multi_instance,
+    }
     prev_dataset = _data_pub_dataset  # capture before start_data_publisher updates it
     if not start_data_publisher(req.dataset_id, cameras, config):
         raise HTTPException(

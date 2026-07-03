@@ -137,6 +137,7 @@
         // Monitored objects: open-vocab name + colour + sign (+ include / − exclude).
         let objects = [{ name: '', color: PALETTE[0], sign: '+' }];
         let effect = { key: '', params: {} };  // data mode: the augmentation the overlay renders (''=segmentation contours)
+        let multiInstance = true;               // data mode: segment ALL instances of each object (both arms) vs largest
         let background = null;            // null = transparent; else [r,g,b]
         let nameTimer = null;
         let status = { state: 'idle' };
@@ -212,6 +213,8 @@
                     <div class="overlays-hint">Open-vocab names, each in its own colour. <b>+</b> include / <b>−</b> exclude. Name edits apply ~1s after you stop typing; colour/sign are instant.</div>
                     <div class="overlays-objrows"></div>
                     <button class="overlays-add-obj">+ Add object</button>
+                    ${mode === 'data' ? `<label class="overlays-check" title="On: keep every instance of each object (e.g. both robot arms). Off: keep only the single largest.">
+                        <input type="checkbox" class="overlays-multi"${multiInstance ? ' checked' : ''}> Segment all instances (e.g. both arms)</label>` : ''}
                     ${effectBlock}
                     <label class="overlays-label">cameras</label>
                     <div class="overlays-cameras"></div>
@@ -219,6 +222,8 @@
                 els.modelBody.querySelector('.overlays-add-obj').addEventListener('click', addObject);
                 const procBtn = els.modelBody.querySelector('.overlays-process');
                 if (procBtn) procBtn.addEventListener('click', openProcess);
+                const multiCb = els.modelBody.querySelector('.overlays-multi');
+                if (multiCb) multiCb.addEventListener('change', () => { multiInstance = multiCb.checked; applyInstant(); });
                 renderObjects();
                 if (mode === 'data') renderEffect();
             } else {
@@ -335,6 +340,7 @@
                 cameras: camsArg(),
                 effect: payloadEffect(),  // the previewed effect — the menu just commits it
                 effectLabel: spec ? spec.label : null,
+                multiInstance: multiInstance,
             });
         }
 
@@ -431,7 +437,7 @@
             dataVersion++;  // bust the per-frame img cache so changed objects/colours re-pull
             fetch('/api/overlays/data/configure', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background: bgPayload(), effect: payloadEffect(), cameras: selectedCameras ? [...selectedCameras] : [] }),
+                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background: bgPayload(), effect: payloadEffect(), multi_instance: multiInstance, cameras: selectedCameras ? [...selectedCameras] : [] }),
             }).then((r) => {
                 // A run owns the obs stream (one writer at a time) — surface it, don't silently fail.
                 if (r.status === 409) { setBadge('run active', 'error'); stopPoll(); clearOverlays(); return; }

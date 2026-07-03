@@ -95,6 +95,7 @@ def _run(cfg: ProcessJobConfig, state: _WorkerState) -> None:
         effect_params=cfg.effect_params,
         apply_mode=cfg.apply_mode,
         variants=cfg.variants,
+        multi_instance=cfg.multi_instance,
         cameras=cfg.cameras,
         episodes=cfg.episodes,
         out_root=cfg.out_root,

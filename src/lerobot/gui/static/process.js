@@ -146,6 +146,7 @@
             objects,
             effect: ctx.effect.key,
             effect_params: ctx.effect.params || {},
+            multi_instance: ctx.multiInstance !== false,
             apply_mode: 'per_episode',
             variants: preview ? 1 : Math.max(1, Number(modal.querySelector('.proc-variants').value) || 1),
             cameras: ctx.cameras && ctx.cameras.length ? ctx.cameras : null,

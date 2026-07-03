@@ -47,6 +47,7 @@ def test_config_roundtrip():
         effect_params={"sigma": 9},
         apply_mode="per_episode",
         variants=2,
+        multi_instance=True,
         cameras=["observation.images.top"],
         episodes=[0, 1],
         preview=False,

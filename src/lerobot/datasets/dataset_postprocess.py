@@ -110,6 +110,7 @@ def process_dataset(
     effect_params: dict | None = None,
     apply_mode: ApplyMode = "per_episode",
     variants: int = 1,
+    multi_instance: bool = True,
     cameras: list[str] | None = None,
     episodes: list[int] | None = None,
     out_root: str | Path | None = None,
@@ -179,7 +180,7 @@ def process_dataset(
         from lerobot.overlays.adapters import build_adapter
 
         adapter = build_adapter(model, device=device)
-    adapter.set_control({"objects": objects})
+    adapter.set_control({"objects": objects, "multi_instance": multi_instance})
 
     out = LeRobotDataset.create(
         repo_id=out_repo_id,
