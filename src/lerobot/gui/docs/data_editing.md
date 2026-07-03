@@ -18,6 +18,21 @@ the background gives the largest measured robustness gain, beating both
 no-augmentation and (more expensive) generative backgrounds. The segmented
 objects + anything the user marks are the **protected foreground**.
 
+The effect is configured in the data Overlays panel and the camera tiles show the
+augmented result live (WYSIWYG) — "robot arm" kept, background randomized:
+
+![Live WYSIWYG augmentation in the data tab](images/data_editing_wysiwyg.png)
+
+"Process dataset…" is a thin commit that echoes the previewed effect and runs it
+on one episode (preview) or all episodes:
+
+![The Process dataset commit menu](images/data_editing_process_menu.png)
+
+A real SAM3 pass on episode 0 (top camera) — source (left) vs augmented (right);
+the faint contours are baked into this source dataset's video, not added here:
+
+![Before / after on a real dataset](images/data_editing_before_after.png)
+
 ## Flow
 
 ```
