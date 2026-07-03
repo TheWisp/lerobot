@@ -259,6 +259,10 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         self._signs: dict[str, str] = {}
         self._bg_color: tuple[int, int, int] | None = None
         self._det_threshold = 0.5
+        # Data editing unions all instances of a concept (protect every match, e.g.
+        # both arms); the debug overlay keeps the single-largest lock. segment()/infer()
+        # set this before driving the tracker.
+        self._seed_multi = False
         self._cam: str | None = None
         self._tracks: dict[str | None, dict] = {}  # per-camera tracker state (session + masks)
 
@@ -295,9 +299,15 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         if bg is not _BG_UNSET:
             self._bg_color = bg
 
-    # ---------------- Tier 1: image detector (text -> one mask per concept) ----------------
+    # ---------------- Tier 1: image detector (text -> mask per concept) ----------------
     def _detect(self, frame_rgb: np.ndarray, concept: str, h: int, w: int) -> np.ndarray | None:
-        """Largest instance mask for ``concept`` on this single frame, or None."""
+        """Seed mask for ``concept`` on this single frame, or None.
+
+        Debug overlay (``_seed_multi`` False): the single largest instance — the
+        tracker then locks onto that one object. Data editing (``_seed_multi``
+        True): the UNION of every instance, so a concept like "robot arm" protects
+        BOTH arms, not just the biggest (SAM3 returns them as separate instances;
+        taking the largest silently dropped the second)."""
         torch = self._torch
         inp = self.det_proc(images=self._Image.fromarray(frame_rgb), text=concept, return_tensors="pt").to(
             self.device
@@ -311,9 +321,18 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         if len(masks) == 0:
             return None
         arrs = [(m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m)) > 0 for m in masks]
+        arrs = [a for a in arrs if int(a.sum()) > 50]
+        if not arrs:
+            return None
+        if self._seed_multi:
+            union = np.zeros((h, w), dtype=bool)
+            for a in arrs:
+                union |= a
+            assert union.shape == (h, w), f"detector mask {union.shape} != frame {(h, w)}"
+            return union
         best = max(arrs, key=lambda a: int(a.sum()))
         assert best.shape == (h, w), f"detector mask {best.shape} != frame {(h, w)}"
-        return best if int(best.sum()) > 50 else None
+        return best
 
     # ---------------- Tier 2: geometric video tracker ----------------
     def _pv(self, frame_rgb: np.ndarray):
@@ -430,6 +449,7 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         contiguous HxWx3 uint8 RGB; call :meth:`set_camera` / :meth:`reset` to
         scope and reseed per-camera tracking just like the live loop.
         """
+        self._seed_multi = True  # protect EVERY instance of each concept (both arms, etc.)
         masks_by_concept, _h, _w = self._infer_masks(frame_rgb)
         # Apply the same +/- carving the compositor does, so a caller gets the
         # final kept region per positive concept without re-deriving the logic.
@@ -536,6 +556,7 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         assert frame_rgb.ndim == 3 and frame_rgb.shape[2] == 3, (
             f"infer expects HxWx3 RGB, got {frame_rgb.shape}"
         )
+        self._seed_multi = False  # debug overlay: lock onto the single largest instance
         masks_by_concept, h, w = self._infer_masks(frame_rgb)
         rgba = _composite_concepts(
             h,
