@@ -1858,3 +1858,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 /* Data overlay: "segment all instances" checkbox (both arms vs largest). */
 .overlays-check { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; color: #cce; font-size: 12px; cursor: pointer; }
 .overlays-check input { accent-color: #4fc3f7; }
+
+/* Processing tray: offset left of Transfers so both popovers can be open. */
+#proc-popover { right: 376px; width: 360px; }
+#proc-jobs-list { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }

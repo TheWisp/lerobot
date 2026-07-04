@@ -72,7 +72,9 @@ EFFECTS: list[EffectSpec] = [
         key="bg_blur",
         label="Blur background",
         group="background",
-        controls=[{"type": "range", "key": "sigma", "label": "Blur", "min": 3, "max": 41, "default": 15}],
+        controls=[
+            {"type": "range", "key": "strength", "label": "Blur strength", "min": 2, "max": 40, "default": 12}
+        ],
     ),
     EffectSpec(
         key="brightness",
@@ -141,8 +143,12 @@ def apply_effect(
         if bg is None or bg.shape[:2] != (h, w):
             bg = _solid(h, w, [0, 0, 0])
     elif effect_key == "bg_blur":
-        k = int(params.get("sigma", 15)) | 1  # ksize must be odd
-        bg = cv2.GaussianBlur(rgb, (k, k), 0)
+        # Treat the control value as the ACTUAL gaussian sigma (blur strength), not
+        # the kernel size — cv2 derives a tiny sigma from ksize otherwise, so the
+        # blur was near-invisible on flat backgrounds. ksize wide enough for sigma.
+        sigma = max(1.0, float(params.get("strength", 12)))
+        k = int(sigma * 4) | 1
+        bg = cv2.GaussianBlur(rgb, (k, k), sigma)
     else:
         raise ValueError(f"unknown effect {effect_key!r}")
 

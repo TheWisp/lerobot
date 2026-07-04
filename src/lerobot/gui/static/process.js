@@ -18,6 +18,14 @@
 
     function init(opts) {
         onCountChange = opts && opts.onCountChange;
+        // Click-outside closes the Processing popover (mirrors the Transfers tray).
+        document.addEventListener('click', (e) => {
+            const pop = document.getElementById('proc-popover');
+            const ind = document.getElementById('proc-indicator');
+            if (!pop || pop.hidden) return;
+            if ((ind && ind.contains(e.target)) || pop.contains(e.target)) return;
+            pop.hidden = true;
+        });
         // Resume polling if a job was left running from a previous page state.
         refreshJobs();
     }
@@ -46,8 +54,10 @@
             }
             if (onCountChange) onCountChange(activeCount());
             renderJobs();
-            // Keep polling only while something is in flight or the modal is open.
-            if (activeCount() > 0 || (modal && modal.style.display !== 'none')) startPoll();
+            // Keep polling while something is in flight, or a view showing jobs is open.
+            const pop = document.getElementById('proc-popover');
+            const viewing = (modal && modal.style.display !== 'none') || (pop && !pop.hidden);
+            if (activeCount() > 0 || viewing) startPoll();
             else stopPoll();
         }).catch(() => {});
     }
@@ -79,10 +89,7 @@
                         <button class="proc-start" title="Run on every episode and write the augmented dataset">Process all episodes</button>
                     </div>
                 </div>
-                <div class="proc-jobs-wrap">
-                    <label class="proc-label">Jobs</label>
-                    <div class="proc-jobs"></div>
-                </div>
+                <div class="proc-jobs-note proc-hint"></div>
             </div>`;
         document.body.appendChild(modal);
         const close = () => { modal.style.display = 'none'; refreshJobs(); };
@@ -201,22 +208,52 @@
         </div>`;
     }
 
+    // ---- global tray (top bar, next to Transfers): always-visible progress ----
+    // Jobs run in a detached worker; the config window is dismissable, so progress
+    // lives here so it's never lost when the window is closed.
+    function renderIndicator() {
+        const ind = document.getElementById('proc-indicator');
+        const label = document.getElementById('proc-indicator-label');
+        if (!ind) return;
+        const n = activeCount();
+        ind.hidden = jobs.length === 0;  // appears once there's any job, active or recent
+        ind.classList.toggle('active', n > 0);
+        if (label) label.textContent = n > 0 ? `Processing (${n})` : 'Processing';
+    }
+
     function renderJobs() {
-        if (!modal) return;
-        const box = modal.querySelector('.proc-jobs');
+        renderIndicator();
+        const note = modal && modal.querySelector('.proc-jobs-note');
+        if (note) {
+            const n = activeCount();
+            note.textContent = n > 0 ? `${n} job(s) running — track them in the "Processing" tray (top bar).`
+                : 'Jobs run in the background; track them in the "Processing" tray (top bar).';
+        }
+        const box = document.getElementById('proc-jobs-list');
         if (!box) return;
-        box.innerHTML = jobs.length ? jobs.map(jobCard).join('') : '<div class="proc-hint">No processing jobs yet.</div>';
+        box.innerHTML = jobs.length ? jobs.map(jobCard).join('') : '<div class="proc-hint">No processing jobs.</div>';
         box.querySelectorAll('.proc-job-btn').forEach((b) => b.addEventListener('click', () => jobAction(b.dataset.act, b.dataset.id)));
+    }
+
+    function togglePopover() {
+        const pop = document.getElementById('proc-popover');
+        if (!pop) return;
+        pop.hidden = !pop.hidden;
+        if (!pop.hidden) refreshJobs();
     }
 
     function jobAction(act, id) {
         if (act === 'open') {
             const j = jobs.find((x) => x.job_id === id);
-            if (j && j.out_root && typeof window.openDataset === 'function') window.openDataset(j.out_root);
+            if (j && j.out_root && typeof window.openDataset === 'function') {
+                Promise.resolve(window.openDataset(j.out_root)).then(() => {
+                    if (typeof window.selectEpisode === 'function') window.selectEpisode(j.out_root, 0, 0);
+                }).catch(() => {});
+            }
             return;
         }
         fetch(`/api/process/${id}/${act}`, { method: 'POST' }).then(() => refreshJobs()).catch(() => {});
     }
 
-    window.ProcessData = { init, open, refreshJobs };
+    window.ProcessData = { init, open, refreshJobs, togglePopover };
 })();
