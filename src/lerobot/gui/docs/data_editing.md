@@ -138,20 +138,22 @@ what the preview is for.
 | API            | `gui/api/process.py`                              | `/effects`, `/start`, `/jobs`, `/{id}/cancel`, `/{id}/dismiss`                                           |
 | UI             | `gui/static/process.js` + button in `overlays.js` | modal + job tray                                                                                         |
 
-## Concurrency — one mutex over the aux-GPU overlay worker
+## Concurrency — one mutex over the shared overlay worker
 
-The exclusive resource is **one expensive auxiliary GPU worker** — the overlay /
-inference process (obs stream → worker → overlay buffer). SAM3 is just its current
-occupant (a future depth / attention / S2 overlay would be another); the mutex is
-over the _worker slot / GPU_, not the model. So everything that wants it is simply a
-**consumer** — a data tab, another machine's data tab, or the run-tab overlay — all
-treated identically. It's a **plain mutex**, no run-vs-data priority: whoever
-acquires it holds it (an opaque token), everyone else is "busy" and waits. No
-preemption; you stop one consumer before starting another. The holder's ~2 Hz status
-poll is the heartbeat, so a closed tab frees it after `LEASE_TIMEOUT_S` (12 s) and
-the next consumer auto-resumes. (GPU selection → one such worker slot + mutex per
-GPU; the token logic is unchanged.) The `X-Overlay-Session` header (a
-`sessionStorage` UUID per tab) is the data-side token; the run overlay's is `run`.
+The exclusive resource is the **one overlay worker** (process + its obs stream, a
+single frame slot, + one overlay buffer). It's a singleton because the model it
+hosts is expensive to _load_ (SAM3 ~3 GB VRAM, ~6 s) — you don't spawn one per
+client — so whoever wants an overlay must share it. The mutex **doesn't classify
+anything** (not "is it SAM / on the GPU / heavy"): it holds an opaque token, and
+every consumer is treated the same — a data tab, another machine's data tab, or the
+run-tab overlay. Whoever acquires it holds it; everyone else is "busy" and waits. No
+priority, no preemption — you stop one consumer before starting another. The
+holder's ~2 Hz status poll is the heartbeat, so a closed tab frees it after
+`LEASE_TIMEOUT_S` (12 s) and the next consumer auto-resumes. The `X-Overlay-Session`
+header (a `sessionStorage` UUID per tab) is the data-side token; the run overlay's
+is `run`. (A cheap standalone overlay with no shared model wouldn't route through
+this worker — it'd be per-request, no mutex; GPU selection just means one
+worker+mutex per GPU. Both are architecture, not this mutex's concern.)
 
 | Scenario                              | Behavior                                                                                                                                              |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |

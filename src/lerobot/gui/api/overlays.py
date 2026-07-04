@@ -176,19 +176,21 @@ class DataPublishRequest(BaseModel):
     frame: int
 
 
-# ── Aux-GPU overlay-worker mutex ─────────────────────────────────────────────
+# ── Overlay-worker mutex ─────────────────────────────────────────────────────
 #
-# The exclusive resource is ONE expensive auxiliary GPU worker (the overlay /
-# inference process: obs stream → worker → overlay buffer). SAM3 is merely its
-# current occupant — a future depth / attention / HVLA-S2 overlay is another; the
-# mutex is over the WORKER SLOT (the GPU), not the model. So it's a plain mutex:
-# every consumer holds an opaque token and is treated the same — a data tab
-# (token = its browser session), another machine's data tab, or the run-tab overlay
-# (token = "run"). Whoever acquires it holds it; anyone else is told it's busy and
-# waits for the holder to release (turn its overlay off) or to go silent past the
-# timeout (a closed tab). No priority, no preemption: the user stops one consumer
-# before starting another. (GPU selection = N such resources, one mutex each — the
-# token/holder logic is unchanged.)
+# The exclusive resource is the ONE overlay worker: process + its obs stream (one
+# frame slot) + one overlay buffer. It's a singleton because the model it hosts is
+# expensive to LOAD (SAM3 ~3 GB VRAM, ~6 s) — you don't spawn one per client — so
+# whoever wants an overlay must share it. The mutex doesn't classify anything: it
+# holds an opaque token and never asks "is this SAM / on the GPU / heavy". Every
+# consumer is treated the same — a data tab (token = its browser session), another
+# machine's data tab, or the run-tab overlay (token = "run"). Whoever acquires it
+# holds it; anyone else is told it's busy and waits for the holder to release (turn
+# its overlay off) or to go silent past the timeout (a closed tab). No priority, no
+# preemption: the user stops one consumer before starting another.
+# (A hypothetical cheap standalone overlay with no shared model wouldn't route
+# through this worker at all — it'd be per-request, no mutex. And GPU selection just
+# means one worker+mutex per GPU. Both are architecture, not this mutex's concern.)
 _overlay_holder: str | None = None  # opaque token of the current holder
 _overlay_holder_seen: float = 0.0  # last heartbeat (wall clock)
 LEASE_TIMEOUT_S = 12.0  # holder silent this long ⇒ the mutex is free (poll is ~2 Hz)
