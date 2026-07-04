@@ -104,10 +104,10 @@ and a full run is expensive. So the flow is staged, cheapest-first:
    where you catch "the left arm isn't detected" before spending anything. The
    effect re-renders the parked frame on change; scrub/play to check other frames.
 2. **Preview this episode (~seconds).** Runs the full pipeline on just the current
-   episode into an ephemeral dataset (`~/.cache/lerobot/gui/process_preview/`,
-   overwritten each time) and auto-opens it — a clean every-frame pass (the live
-   overlay skips frames under load), so you see temporal tracking over a whole
-   trajectory exactly as the batch will produce it.
+   episode into a `…__preview` dataset in the normal datasets dir (so it's
+   detectable/findable), overwritten each run, and auto-opens + navigates to it —
+   a clean every-frame pass (the live overlay skips frames under load), so you see
+   temporal tracking over a whole trajectory exactly as the batch will produce it.
 3. **Process all episodes (minutes).** Commit the full run once it looks right.
 
 ### Measured overhead (RTX 5090, 720p)

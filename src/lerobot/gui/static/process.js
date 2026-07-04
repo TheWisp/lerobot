@@ -30,12 +30,18 @@
     function refreshJobs() {
         fetch('/api/process/jobs').then((r) => r.json()).then((d) => {
             jobs = d.jobs || [];
-            // Auto-open a preview the moment it completes (once) — the point of a
-            // preview is to look at it, so don't make the user click Open.
+            // Auto-open AND navigate to a preview the moment it completes (once) —
+            // the point of a preview is to look at it, so open it and jump to its
+            // first episode instead of just adding it to the tree.
             for (const j of jobs) {
                 if (j.preview && j.status === 'complete' && !openedPreviews.has(j.job_id)) {
                     openedPreviews.add(j.job_id);
-                    if (j.out_root && typeof window.openDataset === 'function') window.openDataset(j.out_root);
+                    if (j.out_root && typeof window.openDataset === 'function') {
+                        Promise.resolve(window.openDataset(j.out_root)).then(() => {
+                            if (typeof window.selectEpisode === 'function') window.selectEpisode(j.out_root, 0, 0);
+                            if (typeof window.renderSources === 'function') window.renderSources();
+                        }).catch(() => {});
+                    }
                 }
             }
             if (onCountChange) onCountChange(activeCount());

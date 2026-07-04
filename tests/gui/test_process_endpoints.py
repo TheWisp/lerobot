@@ -168,9 +168,12 @@ async def test_start_jobs_dismiss_flow(client):
 
 
 @pytest.mark.asyncio
-async def test_preview_routes_to_ephemeral_dir_and_overwrites(client, monkeypatch, tmp_path):
+async def test_preview_fixed_name_overwrites_and_is_findable(client, monkeypatch, tmp_path):
     c, state = client
-    monkeypatch.setattr(process_module, "PREVIEW_DIR", tmp_path / "preview")
+    # Preview writes to the normal datasets dir (so it's a detectable Source),
+    # under a fixed __preview name we overwrite each run. Patch HF_LEROBOT_HOME to
+    # tmp so the test never touches the real home.
+    monkeypatch.setattr(process_module, "HF_LEROBOT_HOME", tmp_path / "hf")
     async with c:
         payload = {
             "source_id": "/d",
@@ -183,18 +186,14 @@ async def test_preview_routes_to_ephemeral_dir_and_overwrites(client, monkeypatc
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["preview"] is True
-        assert body["out_repo_id"] == "me/demo__preview"  # ephemeral, fixed name
-        assert str(tmp_path / "preview") in body["out_root"]  # not in HF_LEROBOT_HOME
+        assert body["out_repo_id"] == "me/demo__preview"  # fixed, suffix-named
+        assert str(tmp_path / "hf") in body["out_root"]  # in the datasets dir -> findable
         jid = body["job_id"]
         assert state.process_jobs[jid].preview is True
 
-        # A second preview on the same source is refused only while the first is
-        # still running (same active-job guard); finish it and retry to confirm
-        # the ephemeral dir is overwritten rather than 409'd on collision.
+        # A prior __preview on disk is overwritten (not 409'd) on the next preview.
         state.process_jobs[jid].status = "complete"
         state.process_jobs[jid].finished_at = time.time()
-        (tmp_path / "preview" / "me/demo__preview").mkdir(
-            parents=True, exist_ok=True
-        )  # simulate prior preview
+        (tmp_path / "hf" / "me/demo__preview").mkdir(parents=True, exist_ok=True)
         r = await c.post("/api/process/start", json=payload)
-        assert r.status_code == 200, r.text  # overwrites, no collision error
+        assert r.status_code == 200, r.text  # overwrote, no collision error

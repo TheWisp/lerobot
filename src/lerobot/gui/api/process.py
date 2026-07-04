@@ -48,10 +48,10 @@ from lerobot.gui.process_jobs import (
 )
 from lerobot.utils.constants import HF_LEROBOT_HOME
 
-# Previews are ephemeral single-episode runs; they live here (NOT in
-# HF_LEROBOT_HOME) and are overwritten on each preview, so they never collide
-# with or clobber a real dataset.
-PREVIEW_DIR = JOBS_DIR.parent / "process_preview"
+# Previews are single-episode runs written to the normal dataset location (so
+# they're detectable in the default Source + open like any dataset) under a
+# ``__preview`` suffix that we overwrite each run — ephemeral, but findable.
+PREVIEW_SUFFIX = "__preview"
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
@@ -138,13 +138,14 @@ async def start(req: StartRequest) -> dict:
     src_name = src.repo_id.split("/")[-1]
 
     if req.preview:
-        # Ephemeral single-episode run: fixed name in PREVIEW_DIR, overwritten
-        # each time (never touches HF_LEROBOT_HOME, so it can't clobber a real
-        # dataset). Auto-opened on completion by the frontend.
-        out_repo_id = f"{owner}/{src_name}__preview"
-        out_root = PREVIEW_DIR / out_repo_id
+        # Single-episode run in the normal datasets dir (detectable + findable),
+        # under a fixed __preview name we overwrite each time. Auto-opened by the
+        # frontend on completion.
+        out_repo_id = f"{owner}/{src_name}{PREVIEW_SUFFIX}"
+        out_root = HF_LEROBOT_HOME / out_repo_id
         if out_root.exists():
-            shutil.rmtree(out_root)  # safe-destruct: our own prior preview
+            assert out_root.name.endswith(PREVIEW_SUFFIX), f"refusing to rm non-preview {out_root}"
+            shutil.rmtree(out_root)  # safe-destruct: our own prior preview (suffix-guarded)
     else:
         name = (req.out_name or f"{src_name}_{req.effect}").strip()
         if not _VALID_NAME.match(name):
