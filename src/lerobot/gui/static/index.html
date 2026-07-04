@@ -18,13 +18,12 @@
              Hub transfers without remembering a hidden trigger. Click toggles
              the popover below; the popover lists one card per active or
              recently-completed Hub transfer (empty when idle). -->
-        <!-- Dataset-processing indicator: mirrors Transfers. In-flight augmentation
-             jobs run in a detached worker, so their progress lives here (always
-             visible) rather than only in the dismissable Process window. Hidden
-             until there's a job. -->
+        <!-- Dataset-processing indicator: mirrors Transfers, always visible. In-flight
+             augmentation jobs run in a detached worker, so their progress lives here
+             rather than only in the dismissable Process window. -->
         <button id="proc-indicator" class="transfers-indicator" type="button"
                 onclick="ProcessData.togglePopover()"
-                title="Dataset processing jobs" hidden>
+                title="Dataset processing jobs (augmentation)">
             <span id="proc-indicator-label">Processing</span>
         </button>
         <button id="transfers-indicator" class="transfers-indicator" type="button"
@@ -679,7 +678,7 @@ nebius iam auth-public-key generate \
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=46"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
-    <script src="/static/process.js?v=6"></script>
+    <script src="/static/process.js?v=7"></script>
     <script src="/static/overlays.js?v=34"></script>
     <script src="/static/model.js?v=5"></script>
     <script src="/static/training.js?v=23"></script>

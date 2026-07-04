@@ -16,17 +16,21 @@
 
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+    let _inited = false;
     function init(opts) {
-        onCountChange = opts && opts.onCountChange;
-        // Click-outside closes the Processing popover (mirrors the Transfers tray).
-        document.addEventListener('click', (e) => {
-            const pop = document.getElementById('proc-popover');
-            const ind = document.getElementById('proc-indicator');
-            if (!pop || pop.hidden) return;
-            if ((ind && ind.contains(e.target)) || pop.contains(e.target)) return;
-            pop.hidden = true;
-        });
-        // Resume polling if a job was left running from a previous page state.
+        if (opts && opts.onCountChange) onCountChange = opts.onCountChange;  // overlays wires its badge
+        if (!_inited) {
+            _inited = true;
+            // Click-outside closes the Processing popover (mirrors the Transfers tray).
+            document.addEventListener('click', (e) => {
+                const pop = document.getElementById('proc-popover');
+                const ind = document.getElementById('proc-indicator');
+                if (!pop || pop.hidden) return;
+                if ((ind && ind.contains(e.target)) || pop.contains(e.target)) return;
+                pop.hidden = true;
+            });
+        }
+        // Render the indicator + resume polling if a job was left running.
         refreshJobs();
     }
 
@@ -215,8 +219,7 @@
         const ind = document.getElementById('proc-indicator');
         const label = document.getElementById('proc-indicator-label');
         if (!ind) return;
-        const n = activeCount();
-        ind.hidden = jobs.length === 0;  // appears once there's any job, active or recent
+        const n = activeCount();  // always visible (like Transfers); highlight when active
         ind.classList.toggle('active', n > 0);
         if (label) label.textContent = n > 0 ? `Processing (${n})` : 'Processing';
     }
@@ -256,4 +259,8 @@
     }
 
     window.ProcessData = { init, open, refreshJobs, togglePopover };
+    // Self-init at load so the top-bar indicator renders + polls regardless of which
+    // tab is open; overlays.js calls init() again later just to wire onCountChange.
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => init());
+    else init();
 })();
