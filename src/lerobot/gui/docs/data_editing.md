@@ -84,6 +84,8 @@ Off = the single largest instance only. The setting is shared by the live previe
 and the batch commit (`multi_instance` on `set_control` / `process_dataset`), so
 what you preview is what you get; the run-tab debug overlay keeps its single lock.
 
+![Both arms segmented and preserved](images/data_editing_both_arms.png)
+
 ## The overlay IS the preview (WYSIWYG)
 
 The effect isn't a separate step — it's configured in the **data overlay panel**
