@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Header, HTTPException, Response
 from pydantic import BaseModel
 
 from lerobot.overlays.overlay_state import Event, OverlayStateMachine, State
@@ -176,16 +176,47 @@ class DataPublishRequest(BaseModel):
     frame: int
 
 
+# ── Data-overlay single-owner lease ─────────────────────────────────────────
+#
+# There is ONE shared worker + ONE obs stream (one frame slot) + ONE overlay
+# buffer for the whole server, so two browser tabs can't independently drive the
+# data overlay. Rather than silently clobber, the first tab to configure it OWNS
+# it; another tab is told it's busy. The status poll (~2 Hz) is the heartbeat, so
+# when the owner's tab closes/goes idle the lease expires and anyone can take over.
+# The model itself is loaded once and reused across owners (see _spawn_worker).
+_data_owner: str | None = None  # owning tab's session token
+_data_owner_seen: float = 0.0  # last heartbeat (monotonic-ish wall clock)
+LEASE_TIMEOUT_S = 12.0  # owner silent this long ⇒ lease is free (poll is ~2 Hz)
+
+
+def _lease_is_free(now: float) -> bool:
+    return _data_owner is None or (now - _data_owner_seen) > LEASE_TIMEOUT_S
+
+
+def _lease_held_by(session: str, now: float) -> bool:
+    """True if ``session`` may drive the overlay — it's the owner, or the lease is free."""
+    return _data_owner == session or _lease_is_free(now)
+
+
 @router.post("/data/configure")
-async def data_configure(req: ConfigureRequest) -> dict:
+async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = Header(default=None)) -> dict:
     """Turn on the data overlay: publish the scrubbed frames to the obs stream (the GUI is the
     writer) and spawn the worker, which reads that stream exactly like the run path. Refuses (409)
-    if a run already owns the stream — one writer at a time. A re-configure (same dataset/model)
-    just refreshes the step config."""
+    if a run already owns the stream, or if another browser session owns the data overlay (single
+    owner — the model is shared, one frame slot). A re-configure (same session) refreshes the config."""
     if _app_state is None or req.dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {req.dataset_id}")
     if req.model not in {s["key"] for s in _STEPS}:
         raise HTTPException(status_code=400, detail=f"Unknown overlay model: {req.model}")
+    global _data_owner, _data_owner_seen
+    session = x_overlay_session or "default"
+    now = time.time()
+    if not _lease_held_by(session, now):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "overlay_busy", "owner_since": _data_owner_seen},
+        )
+    _data_owner, _data_owner_seen = session, now  # acquire / refresh
     ds = _app_state.datasets[req.dataset_id]
     cameras = _dataset_camera_dims(ds)
     if not cameras:
@@ -223,9 +254,18 @@ async def data_configure(req: ConfigureRequest) -> dict:
 
 
 @router.get("/data/status")
-async def data_status() -> dict:
+async def data_status(x_overlay_session: str | None = Header(default=None)) -> dict:
     """Badge/state for the data overlay — the worker's lifecycle machine + fps/util/vram (the
-    worker is identical to the run path). ``publishing`` reflects the obs-stream writer."""
+    worker is identical to the run path). ``publishing`` reflects the obs-stream writer. Also the
+    lease heartbeat: the owner's poll refreshes its lease; a non-owner sees ``busy`` while another
+    session holds it."""
+    global _data_owner_seen
+    session = x_overlay_session or "default"
+    now = time.time()
+    is_owner = _data_owner == session and not _lease_is_free(now)
+    if is_owner:
+        _data_owner_seen = now  # heartbeat — the owner's active poll keeps the lease
+    busy = _data_owner is not None and not _lease_is_free(now) and not is_owner
     _observe()
     target = _live_model
     machine = _machines.get(target) if target else None
@@ -233,13 +273,9 @@ async def data_status() -> dict:
     running = target is not None and _live_proc is not None and _live_proc.returncode is None
     st = _read_status() if running else {}
     reader = _get_live_reader() if running else None
-    # Re-push the current config every poll while the worker is up. Control writes
-    # are a no-op until the worker's shm buffer exists (created only after its ~6s
-    # load), so a config set during that window — typically the effect, chosen right
-    # after the object that triggered the spawn — would otherwise never arrive. This
-    # is idempotent (same objects = no-op; unchanged effect = no re-render), so it
-    # just guarantees eventual delivery once the buffer is there.
-    if reader is not None and _data_publisher_active():
+    # Re-push the config each poll while the worker is up (control writes are a no-op until the
+    # worker's shm buffer exists) — but only the OWNER drives it, so a non-owner poll never clobbers.
+    if is_owner and reader is not None and _data_publisher_active():
         _write_data_control()
     return {
         "state": state.value,
@@ -250,13 +286,23 @@ async def data_status() -> dict:
         "vram": float(st.get("vram", 0.0)),
         "util": _proc_sm(_live_proc.pid) if running else 0,
         "publishing": _data_publisher_active(),
+        "owner": is_owner,
+        "busy": busy,
+        "owner_since": _data_owner_seen if busy else None,
     }
 
 
 @router.post("/data/cancel")
-async def data_cancel() -> dict:
+async def data_cancel(x_overlay_session: str | None = Header(default=None)) -> dict:
     """Turn the data overlay off — stop the obs-stream publisher (frees it for a run) and tear the
-    worker down."""
+    worker down. Only the lease OWNER tears down the shared worker; a non-owner cancel just clears
+    its own (non-existent) claim so it can't kill another session's overlay. Releases the lease."""
+    global _data_owner
+    session = x_overlay_session or "default"
+    now = time.time()
+    if not (_data_owner == session or _lease_is_free(now)):
+        return {"ok": True, "note": "not the owner; nothing torn down"}
+    _data_owner = None  # release
     stop_data_publisher()
     await _stop_live()
     return {"ok": True}
@@ -277,10 +323,16 @@ async def data_log(lines: int = 400) -> dict:
 
 
 @router.post("/data/publish")
-async def data_publish(req: DataPublishRequest) -> Response:
+async def data_publish(
+    req: DataPublishRequest, x_overlay_session: str | None = Header(default=None)
+) -> Response:
     """Frontend calls this on every frame change: decode the landed frame (all cameras) and publish
     it to the obs stream so the worker overlays it. The decode runs off the event loop. No-op unless
-    a data publisher is active for this dataset."""
+    a data publisher is active for this dataset AND the caller owns the lease (only the owner drives
+    the single frame slot, so a background tab can't fight over which frame is segmented)."""
+    session = x_overlay_session or "default"
+    if _data_owner is not None and _data_owner != session and not _lease_is_free(time.time()):
+        return Response(status_code=204)  # not the owner — don't publish into the shared slot
     if not _data_publisher_active() or _app_state is None or req.dataset_id not in _app_state.datasets:
         return Response(status_code=204)
     ds = _app_state.datasets[req.dataset_id]

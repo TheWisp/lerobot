@@ -12,6 +12,18 @@
 
     const PALETTE = [[239, 68, 68], [34, 197, 94], [59, 130, 246], [234, 179, 8], [168, 85, 247], [20, 184, 166]];
     const MAX_OBJECTS = 6;
+
+    // Per-tab identity for the data overlay's single-owner lease (the model + obs
+    // stream are shared, so one tab drives at a time). sessionStorage keeps ownership
+    // across a reload; a new tab gets a new token. Sent as X-Overlay-Session.
+    const OVL_SESSION = (() => {
+        try {
+            let s = sessionStorage.getItem('ovlSession');
+            if (!s) { s = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'ovl-' + Math.random().toString(36).slice(2); sessionStorage.setItem('ovlSession', s); }
+            return s;
+        } catch (e) { return 'ovl-' + Math.random().toString(36).slice(2); }
+    })();
+    const ovlHeaders = (extra) => Object.assign({ 'X-Overlay-Session': OVL_SESSION }, extra || {});
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const safeCam = (cam) => cam.replace(/\./g, '-');
 
@@ -142,6 +154,7 @@
         let nameTimer = null;
         let status = { state: 'idle' };
         let pollTimer = null;
+        let wasBusy = false;             // data: another tab owns the overlay (lease); auto-resume when freed
         let started = false;             // live: standalone launched
         let dataVersion = 0;             // data: cache-buster, bumped on config change so scrubbing re-pulls
         let frameTick = 0;               // data: increments each overlay re-pull so the lagging worker result refreshes
@@ -186,7 +199,7 @@
             current = key;
             if (!key) {
                 stopPoll();
-                if (mode === 'data') fetch('/api/overlays/data/cancel', { method: 'POST' }).catch(() => {});
+                if (mode === 'data') fetch('/api/overlays/data/cancel', { method: 'POST', headers: ovlHeaders() }).catch(() => {});
                 clearOverlays();
                 setBadge('off', 'off');
             }
@@ -427,7 +440,7 @@
         function syncData() {
             if (mode !== 'data') return;
             if (!current || namedObjects().length === 0 || !window.currentDataset) {
-                fetch('/api/overlays/data/cancel', { method: 'POST' }).catch(() => {});
+                fetch('/api/overlays/data/cancel', { method: 'POST', headers: ovlHeaders() }).catch(() => {});
                 dataVersion++;
                 stopPoll();
                 clearOverlays();
@@ -436,11 +449,20 @@
             }
             dataVersion++;  // bust the per-frame img cache so changed objects/colours re-pull
             fetch('/api/overlays/data/configure', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background: bgPayload(), effect: payloadEffect(), multi_instance: multiInstance, cameras: selectedCameras ? [...selectedCameras] : [] }),
-            }).then((r) => {
-                // A run owns the obs stream (one writer at a time) — surface it, don't silently fail.
-                if (r.status === 409) { setBadge('run active', 'error'); stopPoll(); clearOverlays(); return; }
+            }).then(async (r) => {
+                if (r.status === 409) {
+                    // Either a run owns the obs stream, or another browser tab owns the
+                    // data overlay (single owner). For the latter, keep polling so we
+                    // auto-resume the moment it frees.
+                    const d = await r.json().catch(() => ({}));
+                    const busy = d && d.detail && d.detail.code === 'overlay_busy';
+                    setBadge(busy ? 'in use by another tab' : 'run active', busy ? 'idle' : 'error');
+                    clearOverlays();
+                    if (busy) startPoll(); else stopPoll();
+                    return;
+                }
                 startPoll(); onFrame();
             }).catch(() => {});
         }
@@ -482,8 +504,22 @@
             const url = mode === 'live'
                 ? '/api/overlays/live/status?model=' + encodeURIComponent(current || '')  // per-model state
                 : '/api/overlays/data/status';
-            fetch(url).then((r) => r.json()).then((s) => {
+            fetch(url, { headers: ovlHeaders() }).then((r) => r.json()).then((s) => {
                 status = s;
+                // Single-owner lease: if another tab owns the data overlay, don't draw
+                // or publish — keep polling so we auto-resume the instant it frees.
+                if (mode === 'data' && s.busy) {
+                    wasBusy = true;
+                    setBadge('in use by another tab', 'idle');
+                    renderAction();
+                    clearOverlays();
+                    if (!pollTimer) startPoll();
+                    return;
+                }
+                if (mode === 'data' && wasBusy && !s.busy) {
+                    wasBusy = false;  // freed — retry configure to take ownership
+                    if (current && namedObjects().length) { syncData(); return; }
+                }
                 // (The backend re-pushes the data config on every poll while the worker
                 // is up, so an effect chosen during its load window is delivered reliably
                 // once the shm buffer exists — no frontend reconcile needed here.)
@@ -588,7 +624,7 @@
                 // stream (no-op if the frame is unchanged). Called on frame change AND the status poll,
                 // so a re-visited frame re-publishes and the overlay is never stale.
                 fetch('/api/overlays/data/publish', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ dataset_id: window.currentDataset, episode: window.currentEpisode, frame: window.currentFrame }),
                 }).catch(() => {});
             }
