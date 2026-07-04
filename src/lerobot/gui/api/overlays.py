@@ -176,17 +176,19 @@ class DataPublishRequest(BaseModel):
     frame: int
 
 
-# ── Overlay resource mutex (the single shared SAM worker) ────────────────────
+# ── Aux-GPU overlay-worker mutex ─────────────────────────────────────────────
 #
-# The expensive resource is the overlay pipeline: obs stream (one frame slot) →
-# one SAM worker (~3 GB VRAM) → one overlay buffer. There is exactly ONE, so it's
-# a plain mutex. Every would-be user holds an opaque token and is treated the same
-# — a data tab (token = its browser session), another machine's data tab, or the
-# run-tab debug overlay (token = "run"). Whoever acquires it holds it; anyone else
-# is told it's busy and waits for the holder to release (turn its overlay off) or
-# to go silent past the timeout (a closed tab). No priority, no preemption: the
-# user stops one overlay before starting another. (With GPU selection this becomes
-# one mutex per GPU — the token/holder logic is unchanged.)
+# The exclusive resource is ONE expensive auxiliary GPU worker (the overlay /
+# inference process: obs stream → worker → overlay buffer). SAM3 is merely its
+# current occupant — a future depth / attention / HVLA-S2 overlay is another; the
+# mutex is over the WORKER SLOT (the GPU), not the model. So it's a plain mutex:
+# every consumer holds an opaque token and is treated the same — a data tab
+# (token = its browser session), another machine's data tab, or the run-tab overlay
+# (token = "run"). Whoever acquires it holds it; anyone else is told it's busy and
+# waits for the holder to release (turn its overlay off) or to go silent past the
+# timeout (a closed tab). No priority, no preemption: the user stops one consumer
+# before starting another. (GPU selection = N such resources, one mutex each — the
+# token/holder logic is unchanged.)
 _overlay_holder: str | None = None  # opaque token of the current holder
 _overlay_holder_seen: float = 0.0  # last heartbeat (wall clock)
 LEASE_TIMEOUT_S = 12.0  # holder silent this long ⇒ the mutex is free (poll is ~2 Hz)
