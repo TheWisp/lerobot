@@ -78,6 +78,12 @@ trajectory — per-frame variation would flicker and corrupt the motion cues a
 policy learns from, and never makes sense here, so it isn't offered). **Copies
 per episode** writes N independently-randomized variants of each source episode.
 
+**Segment all instances** (checkbox in the overlay, default on): SAM3 returns each
+match as a separate instance, so a concept like "robot arm" covers _both_ arms.
+Off = the single largest instance only. The setting is shared by the live preview
+and the batch commit (`multi_instance` on `set_control` / `process_dataset`), so
+what you preview is what you get; the run-tab debug overlay keeps its single lock.
+
 ## The overlay IS the preview (WYSIWYG)
 
 The effect isn't a separate step — it's configured in the **data overlay panel**
