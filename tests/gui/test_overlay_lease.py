@@ -11,13 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Single-owner lease for the shared data overlay.
+"""Overlay resource mutex — the single shared SAM worker.
 
-One worker + one obs stream serve the whole server, so two browser tabs can't
-independently drive the data overlay. The first tab (session token) owns it; a
-second is told it's busy; the owner's status poll is a heartbeat, so the lease
-frees when the owner goes quiet. The worker spawn / obs stream are stubbed — this
-covers the lease logic, not SAM3.
+One worker + one obs stream serve the whole server, so it's a plain mutex: whoever
+holds it holds it, and EVERY other user — another data tab/machine, or the run-tab
+overlay — is treated the same (busy, no priority, no preemption). The holder's
+status poll is the heartbeat, so the mutex frees when it goes quiet. The worker
+spawn / obs stream are stubbed — this covers the mutex, not SAM.
 """
 
 from __future__ import annotations
@@ -38,80 +38,84 @@ def client(monkeypatch):
     state = AppState(frame_cache=FrameCache(max_bytes=1 << 20))
     state.datasets["/d"] = types.SimpleNamespace(repo_id="me/demo", root="/d")  # type: ignore
     ov.set_app_state(state)
-    # Stub the heavy bits: no obs stream, no subprocess, no shm control writes.
     monkeypatch.setattr(ov, "_dataset_camera_dims", lambda ds: {"observation.images.cam": (4, 4)})
     monkeypatch.setattr(ov, "start_data_publisher", lambda *a, **k: True)
     monkeypatch.setattr(ov, "_write_data_control", lambda: None)
     monkeypatch.setattr(ov, "_data_publisher_active", lambda: True)
 
-    async def _noop_spawn(*a, **k):
+    async def _noop(*a, **k):
         return None
 
-    monkeypatch.setattr(ov, "_spawn_worker", _noop_spawn)
-    # Reset the module-level lease between tests.
-    ov._data_owner = None
-    ov._data_owner_seen = 0.0
-    monkeypatch.setattr(ov, "_data_pub_dataset", None, raising=False)
+    monkeypatch.setattr(ov, "_spawn_worker", _noop)
+    monkeypatch.setattr(ov, "_stop_live", _noop)
+    # Reset the module-level mutex between tests.
+    ov._overlay_holder = None
+    ov._overlay_holder_seen = 0.0
 
     app = FastAPI()
     app.include_router(ov.router)
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
 
 
-def _cfg(session):
+def _data(session):
     return {
         "headers": {"X-Overlay-Session": session},
         "json": {"dataset_id": "/d", "model": "sam3_track", "objects": [{"name": "x"}]},
     }
 
 
-@pytest.mark.asyncio
-async def test_second_session_is_refused_busy(client):
-    async with client as c:
-        r = await c.post("/api/overlays/data/configure", **_cfg("A"))
-        assert r.status_code == 200, r.text  # A owns it
-
-        r = await c.post("/api/overlays/data/configure", **_cfg("B"))
-        assert r.status_code == 409
-        assert r.json()["detail"]["code"] == "overlay_busy"
-
-        # A re-configures freely (still the owner).
-        r = await c.post("/api/overlays/data/configure", **_cfg("A"))
-        assert r.status_code == 200
+def _live():
+    return {"json": {"model": "sam3_track", "objects": [{"name": "x"}]}}
 
 
 @pytest.mark.asyncio
-async def test_status_reports_owner_and_busy(client):
+async def test_second_data_client_is_busy(client):
     async with client as c:
-        await c.post("/api/overlays/data/configure", **_cfg("A"))
-        ra = await c.get("/api/overlays/data/status", headers={"X-Overlay-Session": "A"})
-        rb = await c.get("/api/overlays/data/status", headers={"X-Overlay-Session": "B"})
-        assert ra.json()["owner"] is True and ra.json()["busy"] is False
-        assert rb.json()["owner"] is False and rb.json()["busy"] is True
+        assert (await c.post("/api/overlays/data/configure", **_data("A"))).status_code == 200
+        r = await c.post("/api/overlays/data/configure", **_data("B"))
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "overlay_busy"
+        # The holder re-configures freely.
+        assert (await c.post("/api/overlays/data/configure", **_data("A"))).status_code == 200
 
 
 @pytest.mark.asyncio
-async def test_cancel_releases_only_for_owner(client):
+async def test_status_reports_holder_and_busy(client):
     async with client as c:
-        await c.post("/api/overlays/data/configure", **_cfg("A"))
-        # Non-owner cancel is a no-op (can't kill A's overlay).
-        r = await c.post("/api/overlays/data/cancel", headers={"X-Overlay-Session": "B"})
-        assert r.status_code == 200 and "note" in r.json()
-        r = await c.post("/api/overlays/data/configure", **_cfg("B"))
-        assert r.status_code == 409  # A still owns it
+        await c.post("/api/overlays/data/configure", **_data("A"))
+        ra = (await c.get("/api/overlays/data/status", headers={"X-Overlay-Session": "A"})).json()
+        rb = (await c.get("/api/overlays/data/status", headers={"X-Overlay-Session": "B"})).json()
+        assert ra["owner"] is True and ra["busy"] is False
+        assert rb["owner"] is False and rb["busy"] is True and rb["holder"] == "A"
 
-        # Owner cancel releases; now B can take it.
+
+@pytest.mark.asyncio
+async def test_run_overlay_and_data_share_one_mutex_symmetrically(client):
+    async with client as c:
+        # Data holds it -> the run overlay is refused, treated identically.
+        await c.post("/api/overlays/data/configure", **_data("A"))
+        r = await c.post("/api/overlays/live/start", **_live())
+        assert r.status_code == 409 and r.json()["detail"]["holder"] == "A"
+
+        # A releases; now the run overlay can hold it -> a data client is refused with holder "run".
         await c.post("/api/overlays/data/cancel", headers={"X-Overlay-Session": "A"})
-        r = await c.post("/api/overlays/data/configure", **_cfg("B"))
-        assert r.status_code == 200
+        assert (await c.post("/api/overlays/live/start", **_live())).status_code == 200
+        r = await c.post("/api/overlays/data/configure", **_data("B"))
+        assert r.status_code == 409 and r.json()["detail"]["holder"] == "run"
+        # And the data status shows the run as the busy holder.
+        rb = (await c.get("/api/overlays/data/status", headers={"X-Overlay-Session": "B"})).json()
+        assert rb["busy"] is True and rb["holder"] == "run"
 
 
 @pytest.mark.asyncio
-async def test_expired_lease_lets_another_take_over(client, monkeypatch):
+async def test_cancel_only_by_holder_and_expiry_frees(client):
     async with client as c:
-        await c.post("/api/overlays/data/configure", **_cfg("A"))
-        # Simulate A going silent past the timeout — B should be able to acquire.
-        ov._data_owner_seen -= ov.LEASE_TIMEOUT_S + 1
-        r = await c.post("/api/overlays/data/configure", **_cfg("B"))
-        assert r.status_code == 200
-        assert ov._data_owner == "B"
+        await c.post("/api/overlays/data/configure", **_data("A"))
+        # Another client's cancel is a no-op — can't kill the holder's overlay.
+        r = await c.post("/api/overlays/data/cancel", headers={"X-Overlay-Session": "B"})
+        assert "note" in r.json()
+        assert (await c.post("/api/overlays/data/configure", **_data("B"))).status_code == 409
+
+        # Holder goes silent past the timeout -> the mutex frees, anyone can take over.
+        ov._overlay_holder_seen -= ov.LEASE_TIMEOUT_S + 1
+        assert (await c.post("/api/overlays/data/configure", **_data("B"))).status_code == 200
+        assert ov._overlay_holder == "B"

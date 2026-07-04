@@ -138,6 +138,30 @@ what the preview is for.
 | API            | `gui/api/process.py`                              | `/effects`, `/start`, `/jobs`, `/{id}/cancel`, `/{id}/dismiss`                                           |
 | UI             | `gui/static/process.js` + button in `overlays.js` | modal + job tray                                                                                         |
 
+## Concurrency — one mutex over the shared SAM worker
+
+The live overlay (SAM3) is a single server-wide resource: one obs stream (one frame
+slot) → one worker (~3 GB VRAM) → one overlay buffer. It's guarded by a **plain
+mutex**, not any run-vs-data priority. Every would-be user holds an opaque token —
+a data tab (its browser session), another machine's data tab, or the run-tab debug
+overlay (token `run`) — and is treated identically: whoever acquires it holds it,
+everyone else is "busy" and waits. No preemption; the user stops one overlay before
+starting another. The holder's ~2 Hz status poll is the heartbeat, so a closed tab
+frees the mutex after `LEASE_TIMEOUT_S` (12 s) and the next client auto-resumes.
+(With future GPU selection this becomes one mutex per GPU; the token logic is
+unchanged.) The `X-Overlay-Session` header (a `sessionStorage` UUID per tab) is the
+data-side token.
+
+| Scenario                              | Behavior                                                                                                                                              |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SAM3 model load                       | Loaded **once**, reused by whoever holds the mutex — never twice.                                                                                     |
+| 2nd data client (any machine)         | 409 `overlay_busy` → "busy: another client"; auto-resumes when the holder releases or its heartbeat lapses.                                           |
+| Data overlay ↔ run overlay           | **Same mutex, symmetric** — whichever holds it blocks the other; stop one to use the other.                                                           |
+| Holder turns overlay off / tab closes | Mutex released (explicit, or 12 s heartbeat timeout) → next waiting client takes over.                                                                |
+| Live teleop run active                | Teleop owns the obs stream (a physical single-writer constraint) → the data publisher is refused, surfaced as the same `overlay_busy` (holder `run`). |
+| Only the holder                       | publishes frames + can tear the worker down; a non-holder can't clobber the frame slot or kill another client's overlay.                              |
+| Batch **processing** jobs             | Independent of the overlay mutex — each is its own subprocess; one job per source dataset.                                                            |
+
 ## Notes / limits
 
 - One processing job per source dataset at a time (409 otherwise); the output

@@ -453,14 +453,14 @@
                 body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background: bgPayload(), effect: payloadEffect(), multi_instance: multiInstance, cameras: selectedCameras ? [...selectedCameras] : [] }),
             }).then(async (r) => {
                 if (r.status === 409) {
-                    // Either a run owns the obs stream, or another browser tab owns the
-                    // data overlay (single owner). For the latter, keep polling so we
-                    // auto-resume the moment it frees.
+                    // The overlay mutex is held by another client (another data tab/machine,
+                    // or the run overlay). Show it and keep polling so we auto-resume when freed.
                     const d = await r.json().catch(() => ({}));
-                    const busy = d && d.detail && d.detail.code === 'overlay_busy';
-                    setBadge(busy ? 'in use by another tab' : 'run active', busy ? 'idle' : 'error');
+                    const holder = d && d.detail && d.detail.holder;
+                    wasBusy = true;
+                    setBadge(holder === 'run' ? 'busy: run overlay' : 'busy: another client', 'idle');
                     clearOverlays();
-                    if (busy) startPoll(); else stopPoll();
+                    startPoll();
                     return;
                 }
                 startPoll(); onFrame();
@@ -481,7 +481,17 @@
                 fetch('/api/overlays/live/start', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ model: current, objects: payloadObjects(), background: bgPayload(), cameras: camsArg() }),
-                }).then(() => startPoll()).catch(() => {});
+                }).then(async (r) => {
+                    if (r.status === 409) {
+                        // A data client holds the overlay mutex — can't start the run overlay.
+                        const d = await r.json().catch(() => ({}));
+                        started = false; wasBusy = true;
+                        setBadge('busy: ' + ((d.detail && d.detail.holder) === 'run' ? 'run overlay' : 'another client'), 'idle');
+                        startPoll();
+                        return;
+                    }
+                    startPoll();
+                }).catch(() => {});
                 setBadge('starting…', 'loading');
             } else {
                 fetch('/api/overlays/live/control', {
@@ -494,7 +504,7 @@
         // Draw iff the backend machine says ACTIVE — single source of truth. `started` (below) is
         // only the frontend's launch *request*, not a second copy of "is it running". The decision
         // lives in OverlayGate.shouldDraw (overlay_gate.js) so it is unit-tested in isolation.
-        function isLiveOn() { return OverlayGate.shouldDraw(mode, current, namedObjects().length > 0, status.state); }
+        function isLiveOn() { return !status.busy && OverlayGate.shouldDraw(mode, current, namedObjects().length > 0, status.state); }
 
         // ---- status polling + badge ----
         function startPoll() { stopPoll(); pollTimer = setInterval(refreshStatus, 500); refreshStatus(); }
@@ -506,19 +516,21 @@
                 : '/api/overlays/data/status';
             fetch(url, { headers: ovlHeaders() }).then((r) => r.json()).then((s) => {
                 status = s;
-                // Single-owner lease: if another tab owns the data overlay, don't draw
-                // or publish — keep polling so we auto-resume the instant it frees.
-                if (mode === 'data' && s.busy) {
+                // Overlay mutex: if another client holds the shared worker (another data
+                // tab/machine, or the run overlay), don't draw/publish — keep polling so
+                // we auto-resume the instant it frees. Same for both panels.
+                if (s.busy) {
                     wasBusy = true;
-                    setBadge('in use by another tab', 'idle');
+                    setBadge(s.holder === 'run' ? 'busy: run overlay' : 'busy: another client', 'idle');
                     renderAction();
                     clearOverlays();
                     if (!pollTimer) startPoll();
                     return;
                 }
-                if (mode === 'data' && wasBusy && !s.busy) {
-                    wasBusy = false;  // freed — retry configure to take ownership
-                    if (current && namedObjects().length) { syncData(); return; }
+                if (wasBusy && !s.busy) {
+                    wasBusy = false;  // freed — retry to take the mutex
+                    sync();
+                    return;
                 }
                 // (The backend re-pushes the data config on every poll while the worker
                 // is up, so an effect chosen during its load window is delivered reliably
