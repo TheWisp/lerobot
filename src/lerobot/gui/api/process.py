@@ -166,6 +166,11 @@ async def start(req: StartRequest, x_overlay_session: str | None = Header(defaul
 
     now = time.time()
     own_overlay = _data_key(x_overlay_session)
+    # Self-heal: a job that already finished but hasn't been polled by /jobs still
+    # holds the slot (background activities don't heartbeat-expire). Settle terminal
+    # jobs first so a just-finished preview doesn't block the next one.
+    for j in list(_app_state.process_jobs.values()):
+        _settle(j)
     holder = SLOT.holder(now)
     job = make_job(
         source_id=req.source_id,

@@ -100,3 +100,18 @@ async def test_start_from_free_slot_takes_it_as_background(client):
         assert r.status_code == 200
         h = SLOT.holder(now=time.time())
         assert h.heartbeat is False  # a job never lapses; it holds until it finishes
+
+
+@pytest.mark.asyncio
+async def test_finished_job_slot_self_heals_for_the_next_start(client):
+    # A finished job holds the slot until /jobs settles it; a fresh start must not be
+    # blocked by that stale hold (the next preview right after one completes).
+    async with client as c:
+        r1 = await c.post("/api/process/start", **_start("A"))
+        jid = r1.json()["job_id"]
+        job = pr._app_state.process_jobs[jid]
+        job.status = "complete"  # finished, but no /jobs poll yet → slot still held
+        job.finished_at = time.time()
+        r2 = await c.post("/api/process/start", **_start("A"))
+        assert r2.status_code == 200  # self-healed: the terminal job's slot was freed
+        assert SLOT.holder(now=time.time()).key != f"process:{jid}"
