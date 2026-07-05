@@ -42,6 +42,53 @@ async function scannerCapture() {
     }
 }
 
+async function scannerAddToSet() {
+    const id = document.getElementById('scanner-camera').value;
+    const st = document.getElementById('scanner-status');
+    if (!id) { st.textContent = 'pick a camera first (Detect)'; return; }
+    try {
+        const r = await (await fetch('/api/run/scan3d/captures', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ camera_id: id }),
+        })).json();
+        if (r.ok) {
+            scannerRenderSet(r.captures);
+            st.textContent = `added ${r.name} to the capture set`;
+        } else {
+            st.textContent = 'add failed: ' + (r.error || '');
+        }
+    } catch (e) {
+        st.textContent = 'add error: ' + e;
+    }
+}
+
+async function scannerClearSet() {
+    const r = await (await fetch('/api/run/scan3d/captures', { method: 'DELETE' })).json();
+    scannerRenderSet(r.captures || []);
+}
+
+async function scannerRefreshSet() {
+    try {
+        const r = await (await fetch('/api/run/scan3d/captures')).json();
+        scannerRenderSet(r.captures || []);
+    } catch (e) { /* GUI booting; the next action refreshes */ }
+}
+
+function scannerRenderSet(names) {
+    const grid = document.getElementById('scanner-set');
+    document.getElementById('scanner-set-count').textContent = names.length ? `(${names.length})` : '';
+    grid.innerHTML = '';
+    names.forEach((n) => {
+        const img = document.createElement('img');
+        img.src = `/api/run/scan3d/captures/${n}?t=${Date.now()}`;
+        img.title = n;
+        img.style.cssText = 'width:100%; aspect-ratio:4/3; object-fit:cover; border:1px solid var(--border,#333); border-radius:3px; background:#111;';
+        grid.appendChild(img);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', scannerRefreshSet);
+
 function scannerScan() {
     _scannerScan({ prompt: document.getElementById('scanner-prompt').value });
 }

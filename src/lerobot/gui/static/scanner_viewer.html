@@ -20,11 +20,18 @@ import * as THREE from 'three';
 import { OrbitControls } from '/static/vendor/OrbitControls.js';
 import { GLTFLoader } from 'gltf-loader';
 
+const hintEl = document.getElementById('hint');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a1a);
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 100);
 camera.position.set(0.22, 0.18, 0.28);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  hintEl.textContent = 'WebGL unavailable — the 3D viewer cannot render here (' + e.message + ')';
+  throw e;
+}
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(devicePixelRatio);
 document.body.appendChild(renderer.domElement);

@@ -71,6 +71,8 @@ async def scan_mesh() -> Response:
 STATIC_TEST_IMAGE = SCAN_DIR / "in_rgb.png"
 # The latest camera capture (the scan input for the real-object path).
 CAPTURE_PATH = SCAN_DIR / "capture.png"
+# Multi-view capture set: one photo per object placement/angle — the future fusion input.
+CAPTURES_DIR = SCAN_DIR / "captures"
 
 # Single in-flight scan; the tab polls /scan/status.
 _scan: dict = {"running": False, "done": False, "error": None, "log": "", "image": ""}
@@ -130,27 +132,36 @@ class CaptureRequest(BaseModel):
     camera_id: str  # the ``id`` from POST /api/robot/detect-cameras
 
 
-@router.post("/capture")
-async def capture_frame(req: CaptureRequest) -> dict:
-    """Grab ONE frame from a detected+opened preview camera → capture.png (the scan input)."""
+async def _grab_rgb(camera_id: str):
+    """One RGB frame from a detected+opened preview camera, or (None, error)."""
     from lerobot.gui.api import robot as robot_mod
 
     infos = getattr(robot_mod, "_preview_camera_info", [])
     cams = getattr(robot_mod, "_preview_cameras", [])
-    idx = next((i for i, ci in enumerate(infos) if str(ci.get("id")) == str(req.camera_id)), None)
+    idx = next((i for i, ci in enumerate(infos) if str(ci.get("id")) == str(camera_id)), None)
     if idx is None or idx >= len(cams):
-        return {"ok": False, "error": "camera not open — click 'Detect cameras' first"}
+        return None, "camera not open — click 'Detect cameras' first"
+    import numpy as np
+
+    frame = await asyncio.get_event_loop().run_in_executor(None, cams[idx].read)
+    if isinstance(frame, tuple):  # some cameras return (frame, meta)
+        frame = frame[0]
+    rgb = np.ascontiguousarray(np.asarray(frame)[:, :, ::-1])  # detect opens BGR -> RGB
+    return rgb, None
+
+
+@router.post("/capture")
+async def capture_frame(req: CaptureRequest) -> dict:
+    """Grab ONE frame from a detected+opened preview camera → capture.png (the scan input)."""
     try:
-        import numpy as np
+        rgb, err = await _grab_rgb(req.camera_id)
+        if rgb is None:
+            return {"ok": False, "error": err}
         from PIL import Image
 
-        frame = await asyncio.get_event_loop().run_in_executor(None, cams[idx].read)
-        if isinstance(frame, tuple):  # some cameras return (frame, meta)
-            frame = frame[0]
-        rgb = np.ascontiguousarray(np.asarray(frame)[:, :, ::-1])  # detect opens BGR -> RGB
         SCAN_DIR.mkdir(parents=True, exist_ok=True)
         Image.fromarray(rgb).save(CAPTURE_PATH)
-        return {"ok": True, "shape": list(np.asarray(frame).shape)}
+        return {"ok": True, "shape": list(rgb.shape)}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
 
@@ -162,3 +173,50 @@ async def capture_preview() -> Response:
     if not path.exists():
         return Response(status_code=404)
     return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+# --- Multi-view capture set (fusion input; today: collect + eyeball coverage) -------
+
+
+def _capture_names() -> list[str]:
+    if not CAPTURES_DIR.exists():
+        return []
+    return sorted(p.name for p in CAPTURES_DIR.glob("cap_*.png"))
+
+
+@router.post("/captures")
+async def captures_add(req: CaptureRequest) -> dict:
+    """Grab one frame and APPEND it to the capture set (one photo per placement/angle)."""
+    try:
+        rgb, err = await _grab_rgb(req.camera_id)
+        if rgb is None:
+            return {"ok": False, "error": err}
+        from PIL import Image
+
+        CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+        seq = 1 + max((int(n[4:7]) for n in _capture_names()), default=0)
+        name = f"cap_{seq:03d}.png"
+        Image.fromarray(rgb).save(CAPTURES_DIR / name)
+        return {"ok": True, "name": name, "captures": _capture_names()}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+@router.get("/captures")
+async def captures_list() -> dict:
+    return {"captures": _capture_names()}
+
+
+@router.delete("/captures")
+async def captures_clear() -> dict:
+    for n in _capture_names():
+        # safe-destruct: user clicked Clear; only our own cap_*.png in the cache dir
+        (CAPTURES_DIR / n).unlink(missing_ok=True)
+    return {"ok": True, "captures": []}
+
+
+@router.get("/captures/{name}")
+async def captures_image(name: str) -> Response:
+    if name not in _capture_names():  # whitelist: no traversal, only real set members
+        return Response(status_code=404)
+    return FileResponse(CAPTURES_DIR / name, media_type="image/png", headers={"Cache-Control": "no-store"})
