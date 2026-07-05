@@ -36,7 +36,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from lerobot.datasets.dataset_postprocess import EFFECTS
@@ -118,11 +118,15 @@ def _refresh(job) -> None:
 
 
 @router.post("/start")
-async def start(req: StartRequest) -> dict:
-    """Validate, free the live overlay's VRAM, and spawn the post-process worker.
+async def start(req: StartRequest, x_overlay_session: str | None = Header(default=None)) -> dict:
+    """Validate, acquire the aux-GPU slot, and spawn the post-process worker.
 
-    Refuses (409) if a processing job is already in flight for this source, or
-    (400) on a bad effect / missing objects / colliding output path."""
+    A batch job is an aux-GPU activity: it acquires the same slot as the live overlay
+    (see gpu_slot). If your OWN preview overlay holds it, we hand off (tear the overlay
+    down, take the slot); if another client's overlay/job holds it, refuse (409
+    overlay_busy). The slot is held for the job's whole lifetime and released when it
+    reaches a terminal state. Also 409 if a job is already running for this source, or
+    400 on a bad effect / missing objects / colliding output path."""
     if _app_state is None or req.source_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {req.source_id}")
     if req.effect not in _EFFECT_KEYS:
@@ -155,13 +159,14 @@ async def start(req: StartRequest) -> dict:
         if out_root.exists():
             raise HTTPException(status_code=409, detail=f"Output dataset already exists: {out_repo_id}")
 
-    # Free the live data overlay first — the batch worker loads its own SAM3, so
-    # running both would double VRAM. Tearing it down also releases the obs stream.
-    from lerobot.gui.api.overlays import _stop_live, stop_data_publisher
+    # Acquire the aux-GPU slot. If your OWN preview overlay holds it, hand off (tear it
+    # down + take the slot); if another activity holds it, refuse.
+    from lerobot.gui.api.overlays import _data_key, _stop_live, stop_data_publisher
+    from lerobot.gui.gpu_slot import SLOT
 
-    stop_data_publisher()
-    await _stop_live()
-
+    now = time.time()
+    own_overlay = _data_key(x_overlay_session)
+    holder = SLOT.holder(now)
     job = make_job(
         source_id=req.source_id,
         out_repo_id=out_repo_id,
@@ -169,6 +174,17 @@ async def start(req: StartRequest) -> dict:
         effect=req.effect,
         preview=req.preview,
     )
+    proc_key = f"process:{job.job_id}"
+    if holder is not None and holder.key not in (proc_key, own_overlay):
+        raise HTTPException(status_code=409, detail={"code": "overlay_busy", "holder": holder.label})
+    # Free (or held by our own preview overlay) → hand off: drop the overlay's claim, tear
+    # its worker down (the batch worker loads its own SAM3), and take the slot for the job.
+    SLOT.release(own_overlay)
+    stop_data_publisher()
+    await _stop_live()
+    label = f"processing {out_repo_id.split('/')[-1]} ({'preview' if req.preview else 'full'})"
+    SLOT.acquire(proc_key, label, now, heartbeat=False)  # background: held until the job ends
+
     _app_state.process_jobs[job.job_id] = job
     _spawn_worker(job=job, req=req, src=src, out_repo_id=out_repo_id, out_root=out_root)
     return {
@@ -227,14 +243,32 @@ def _spawn_worker(*, job, req: StartRequest, src, out_repo_id: str, out_root: Pa
     )
 
 
+def _settle(job) -> None:
+    """Refresh a running job; if its worker died without finalizing, mark it failed
+    (so the aux-GPU slot frees); release the slot once the job is terminal."""
+    from lerobot.gui.gpu_slot import SLOT
+    from lerobot.gui.hub_jobs import is_worker_alive, read_pid_file
+
+    if job.status in ("pending", "running"):
+        _refresh(job)
+        if job.status in ("pending", "running"):
+            payload = read_pid_file(ProcessJobPaths.for_job(job.job_id, JOBS_DIR).pid)
+            if payload is not None and not is_worker_alive(payload):
+                job.status = "failed"
+                job.error = "Worker exited without finalizing"
+                job.finished_at = time.time()
+    if job.status in ("complete", "failed", "cancelled"):
+        SLOT.release(f"process:{job.job_id}")  # give the aux-GPU slot back
+
+
 @router.get("/jobs")
 async def jobs() -> dict:
     """All post-process jobs, newest-first, refreshed from the workers' progress
-    files (the GUI tray polls this). GCs terminal jobs older than 30 min."""
+    files (the GUI tray polls this). Frees the aux-GPU slot for terminal jobs and
+    GCs jobs older than 30 min."""
     _app_state.gc_finished_process_jobs()
-    for j in _app_state.process_jobs.values():
-        if j.status in ("pending", "running"):
-            _refresh(j)
+    for j in list(_app_state.process_jobs.values()):
+        _settle(j)
     out = sorted(
         (j.to_dict() for j in _app_state.process_jobs.values()), key=lambda d: d["started_at"], reverse=True
     )
@@ -249,6 +283,7 @@ async def cancel(job_id: str) -> dict:
     job = _app_state.process_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    from lerobot.gui.gpu_slot import SLOT
     from lerobot.gui.hub_jobs import is_worker_alive, read_pid_file
 
     paths = ProcessJobPaths.for_job(job_id, JOBS_DIR)
@@ -258,6 +293,7 @@ async def cancel(job_id: str) -> dict:
             job.status = "failed"
             job.error = "Worker exited without finalizing"
             job.finished_at = time.time()
+        SLOT.release(f"process:{job_id}")  # give the aux-GPU slot back
         paths.pid.unlink(missing_ok=True)  # safe-destruct: stale PID file we own
         return {"status": "already_gone", "job_id": job_id}
     with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -273,6 +309,9 @@ async def dismiss(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
     if job.status in ("pending", "running"):
         raise HTTPException(status_code=409, detail="Cancel the job before dismissing it")
+    from lerobot.gui.gpu_slot import SLOT
+
+    SLOT.release(f"process:{job_id}")  # give the aux-GPU slot back (belt-and-suspenders)
     paths = ProcessJobPaths.for_job(job_id, JOBS_DIR)
     for p in (paths.progress, paths.log, paths.pid):
         p.unlink(missing_ok=True)  # safe-destruct: this job's own IPC files

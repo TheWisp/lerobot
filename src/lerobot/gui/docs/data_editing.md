@@ -133,37 +133,53 @@ what the preview is for.
 | -------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Core transform | `datasets/dataset_postprocess.py`                 | `process_dataset` + effect registry + compositing (pure, GPU-agnostic; SAM adapter injectable for tests) |
 | Segmentation   | `overlays/adapters.py`                            | `Sam3TrackByDetectionAdapter.segment()` — raw per-object masks (shared body with `infer()`)              |
+| Aux-GPU slot   | `gui/gpu_slot.py`                                 | `AuxGpuSlot` + `SLOT` singleton — the resource mutex overlays and jobs share (see Concurrency)           |
 | Job IPC        | `gui/process_jobs.py`                             | `ProcessJobConfig` / `State` / `Paths` (reuses `hub_jobs` pid/atomic-write helpers)                      |
 | Worker         | `gui/process_worker.py`                           | subprocess entry; progress writer thread; SIGTERM = graceful cancel                                      |
 | API            | `gui/api/process.py`                              | `/effects`, `/start`, `/jobs`, `/{id}/cancel`, `/{id}/dismiss`                                           |
 | UI             | `gui/static/process.js` + button in `overlays.js` | modal + job tray                                                                                         |
 
-## Concurrency — one mutex over the shared overlay worker
+## Concurrency — two layers: one aux-GPU slot, one activity at a time
 
-The exclusive resource is the **one overlay worker** (process + its obs stream, a
-single frame slot, + one overlay buffer). It's a singleton because the model it
-hosts is expensive to _load_ (SAM3 ~3 GB VRAM, ~6 s) — you don't spawn one per
-client — so whoever wants an overlay must share it. The mutex **doesn't classify
-anything** (not "is it SAM / on the GPU / heavy"): it holds an opaque token, and
-every consumer is treated the same — a data tab, another machine's data tab, or the
-run-tab overlay. Whoever acquires it holds it; everyone else is "busy" and waits. No
-priority, no preemption — you stop one consumer before starting another. The
-holder's ~2 Hz status poll is the heartbeat, so a closed tab frees it after
-`LEASE_TIMEOUT_S` (12 s) and the next consumer auto-resumes. The `X-Overlay-Session`
-header (a `sessionStorage` UUID per tab) is the data-side token; the run overlay's
-is `run`. (A cheap standalone overlay with no shared model wouldn't route through
-this worker — it'd be per-request, no mutex; GPU selection just means one
-worker+mutex per GPU. Both are architecture, not this mutex's concern.)
+The exclusive resource is a **GPU**, not the overlay. Heavy auxiliary GPU work is
+modelled as two layers (`gui/gpu_slot.py`):
 
-| Scenario                              | Behavior                                                                                                                                              |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SAM3 model load                       | Loaded **once**, reused by whoever holds the mutex — never twice.                                                                                     |
-| 2nd data client (any machine)         | 409 `overlay_busy` → "busy: another client"; auto-resumes when the holder releases or its heartbeat lapses.                                           |
-| Data overlay ↔ run overlay           | **Same mutex, symmetric** — whichever holds it blocks the other; stop one to use the other.                                                           |
-| Holder turns overlay off / tab closes | Mutex released (explicit, or 12 s heartbeat timeout) → next waiting client takes over.                                                                |
-| Live teleop run active                | Teleop owns the obs stream (a physical single-writer constraint) → the data publisher is refused, surfaced as the same `overlay_busy` (holder `run`). |
-| Only the holder                       | publishes frames + can tear the worker down; a non-holder can't clobber the frame slot or kill another client's overlay.                              |
-| Batch **processing** jobs             | Independent of the overlay mutex — each is its own subprocess; one job per source dataset.                                                            |
+- **The slot** — the _resource_: one exclusive **aux-GPU slot per GPU** (a single
+  slot today). It does **not** gate a robot's own GPU work (policy inference during
+  a run, or local training) — only the resource-expensive _auxiliary_ jobs the GUI
+  spins up on demand.
+- **An activity** — the _occupant_: exactly one at a time holds the slot. Today's
+  activities are the SAM3 overlay (data tab or run tab) and a batch augmentation
+  job; a future DepthAnything overlay / depth-export would be another. The slot
+  doesn't classify what the activity is — it holds an opaque `key` + a human
+  `label` and treats every requester the same (a plain mutex, no priority, no
+  preemption). You stop one activity before starting another; **switching from one
+  heavy overlay to another follows the same acquire path**.
+
+Interactive activities (overlays) **heartbeat** — the holder's ~2 Hz status poll
+refreshes the lease, so a closed tab frees the slot after `timeout_s` (12 s) and
+the next requester auto-resumes. Background activities (a batch job) hold the slot
+with **no heartbeat** until they explicitly release it (done / cancelled). The
+`X-Overlay-Session` header (a `sessionStorage` UUID per tab) keys a data overlay;
+the run overlay is `overlay:run`; a job is `process:<id>`. GPU selection later just
+means one slot per GPU — same two layers.
+
+**Process hands off from your own preview.** Hitting "Process dataset…" sends your
+tab's `X-Overlay-Session`; if _your own_ preview overlay holds the slot, the server
+tears it down and the job takes the slot (auto-handoff, no manual "stop preview"
+step). If **another** client's overlay or job holds it, the job is refused (409
+`overlay_busy`, "GPU busy: …") — no preempting other people.
+
+| Scenario                               | Behavior                                                                                                                                                     |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| SAM3 model load                        | Loaded by whoever holds the slot; reused within that activity. (Warm reuse _across_ activities is a later optimization — for now the next one reloads.)      |
+| 2nd data client (any machine)          | 409 `overlay_busy` → "busy: SAM3 overlay"; auto-resumes when the holder releases or its heartbeat lapses.                                                    |
+| Data overlay ↔ run overlay            | **Same slot, symmetric** — whichever holds it blocks the other; stop one to use the other.                                                                   |
+| Holder turns overlay off / tab closes  | Slot released (explicit, or 12 s heartbeat timeout) → next waiting activity takes over.                                                                      |
+| Start a job from your own preview      | **Auto-handoff** — your preview overlay is torn down and the job acquires the slot as a background (non-heartbeat) activity.                                 |
+| Start a job while another client holds | 409 `overlay_busy` with the holder's label; the other activity is untouched (no preemption).                                                                 |
+| Batch job running                      | Holds the slot until it finishes; you can still teleop / browse data (backgrounded), but another overlay shows "busy: processing …". One job per source.     |
+| Live teleop run active                 | Teleop owns the obs stream (a physical single-writer constraint) → the data publisher is refused, surfaced as the same `overlay_busy` (holder `teleop run`). |
 
 ## Notes / limits
 
@@ -171,7 +187,7 @@ worker+mutex per GPU. Both are architecture, not this mutex's concern.)
   path must not already exist (no clobber).
 - SAM3 tracks one instance per concept — a two-arm scene protects one arm unless
   the user adds a second object row.
-- Starting a job tears down the live data overlay to avoid double-loading SAM3 on
-  the GPU.
+- Starting a job hands the aux-GPU slot off from _your own_ preview overlay (tears
+  it down so SAM3 isn't double-loaded); another client's overlay/job blocks it.
 
 Follow-ups are tracked in [../TODO.md](../TODO.md) (Data Editing section).

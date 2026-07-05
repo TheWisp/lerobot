@@ -176,12 +176,25 @@
         const label = btn.textContent;
         btns.forEach((b) => { b.disabled = true; });
         btn.textContent = 'Starting…';
+        // Send the tab's overlay session so the server can hand the aux-GPU slot off
+        // from THIS tab's own preview overlay (vs. refuse if another client holds it).
+        let ovlSession = 'default';
+        try { ovlSession = sessionStorage.getItem('ovlSession') || 'default'; } catch (e) { /* ignore */ }
         fetch('/api/process/start', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Overlay-Session': ovlSession },
+            body: JSON.stringify(payload),
         }).then(async (r) => {
             btns.forEach((b) => { b.disabled = false; });
             btn.textContent = label;
-            if (!r.ok) { const d = await r.json().catch(() => ({})); errEl.textContent = (d && d.detail) || `Error ${r.status}`; return; }
+            if (!r.ok) {
+                const d = await r.json().catch(() => ({}));
+                const det = d && d.detail;
+                errEl.textContent = (det && det.code === 'overlay_busy')
+                    ? `GPU busy: ${det.holder} — stop it first`
+                    : (typeof det === 'string' ? det : `Error ${r.status}`);
+                return;
+            }
             refreshJobs();
         }).catch((err) => { btns.forEach((b) => { b.disabled = false; }); btn.textContent = label; errEl.textContent = String(err); });
     }

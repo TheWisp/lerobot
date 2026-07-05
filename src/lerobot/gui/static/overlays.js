@@ -458,7 +458,7 @@
                     const d = await r.json().catch(() => ({}));
                     const holder = d && d.detail && d.detail.holder;
                     wasBusy = true;
-                    setBadge(holder === 'run' ? 'busy: run overlay' : 'busy: another client', 'idle');
+                    setBadge('busy: ' + (holder || 'another client'), 'idle');
                     clearOverlays();
                     startPoll();
                     return;
@@ -486,7 +486,7 @@
                         // A data client holds the overlay mutex — can't start the run overlay.
                         const d = await r.json().catch(() => ({}));
                         started = false; wasBusy = true;
-                        setBadge('busy: ' + ((d.detail && d.detail.holder) === 'run' ? 'run overlay' : 'another client'), 'idle');
+                        setBadge('busy: ' + ((d.detail && d.detail.holder) || 'another client'), 'idle');
                         startPoll();
                         return;
                     }
@@ -521,7 +521,7 @@
                 // we auto-resume the instant it frees. Same for both panels.
                 if (s.busy) {
                     wasBusy = true;
-                    setBadge(s.holder === 'run' ? 'busy: run overlay' : 'busy: another client', 'idle');
+                    setBadge('busy: ' + (s.holder || 'another client'), 'idle');
                     renderAction();
                     clearOverlays();
                     if (!pollTimer) startPoll();

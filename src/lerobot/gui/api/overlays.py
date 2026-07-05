@@ -40,6 +40,7 @@ import numpy as np
 from fastapi import APIRouter, Header, HTTPException, Response
 from pydantic import BaseModel
 
+from lerobot.gui.gpu_slot import SLOT
 from lerobot.overlays.overlay_state import Event, OverlayStateMachine, State
 
 if TYPE_CHECKING:
@@ -176,75 +177,41 @@ class DataPublishRequest(BaseModel):
     frame: int
 
 
-# ── Overlay-worker mutex ─────────────────────────────────────────────────────
+# ── Overlay = one activity on the shared aux-GPU slot ─────────────────────────
 #
-# The exclusive resource is the ONE overlay worker: process + its obs stream (one
-# frame slot) + one overlay buffer. It's a singleton because the model it hosts is
-# expensive to LOAD (SAM3 ~3 GB VRAM, ~6 s) — you don't spawn one per client — so
-# whoever wants an overlay must share it. The mutex doesn't classify anything: it
-# holds an opaque token and never asks "is this SAM / on the GPU / heavy". Every
-# consumer is treated the same — a data tab (token = its browser session), another
-# machine's data tab, or the run-tab overlay (token = "run"). Whoever acquires it
-# holds it; anyone else is told it's busy and waits for the holder to release (turn
-# its overlay off) or to go silent past the timeout (a closed tab). No priority, no
-# preemption: the user stops one consumer before starting another.
-# (A hypothetical cheap standalone overlay with no shared model wouldn't route
-# through this worker at all — it'd be per-request, no mutex. And GPU selection just
-# means one worker+mutex per GPU. Both are architecture, not this mutex's concern.)
-_overlay_holder: str | None = None  # opaque token of the current holder
-_overlay_holder_seen: float = 0.0  # last heartbeat (wall clock)
-LEASE_TIMEOUT_S = 12.0  # holder silent this long ⇒ the mutex is free (poll is ~2 Hz)
-_RUN_TOKEN = "run"  # nosec B105 - a mutex holder LABEL, not a secret; the run-tab overlay's token
+# The live overlay is a heavy aux-GPU activity, so it acquires the process-wide
+# aux-GPU slot (see lerobot.gui.gpu_slot). The slot is a plain mutex over the one
+# GPU resource; batch augment jobs acquire the SAME slot. So a data tab, another
+# machine's data tab, the run-tab overlay, and a running process job all contend
+# for it identically. The overlay is an INTERACTIVE activity — it heartbeats via
+# its ~2 Hz status poll, so a closed tab frees the slot after the timeout.
+_RUN_KEY = "overlay:run"  # nosec B105 - the run-tab overlay's activity key (a label, not a secret)
 
 
-def _overlay_free(now: float) -> bool:
-    return _overlay_holder is None or (now - _overlay_holder_seen) > LEASE_TIMEOUT_S
-
-
-def _overlay_blocks(token: str, now: float) -> bool:
-    """True if someone OTHER than ``token`` holds the (unexpired) mutex."""
-    return _overlay_holder is not None and _overlay_holder != token and not _overlay_free(now)
-
-
-def _overlay_acquire(token: str, now: float) -> None:
-    global _overlay_holder, _overlay_holder_seen
-    _overlay_holder, _overlay_holder_seen = token, now
-
-
-def _overlay_release(token: str) -> None:
-    global _overlay_holder
-    if _overlay_holder == token:
-        _overlay_holder = None
-
-
-def _overlay_touch(token: str, now: float) -> bool:
-    """Heartbeat: refresh the holder's lease. Returns True iff ``token`` holds it."""
-    global _overlay_holder_seen
-    if _overlay_holder == token and not _overlay_free(now):
-        _overlay_holder_seen = now
-        return True
-    return False
+def _data_key(session: str | None) -> str:
+    return f"overlay:data:{session or 'default'}"
 
 
 @router.post("/data/configure")
 async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = Header(default=None)) -> dict:
     """Turn on the data overlay: publish the scrubbed frames to the obs stream (the GUI is the
     writer) and spawn the worker, which reads that stream exactly like the run path. Acquires the
-    single overlay mutex; refuses (409 ``overlay_busy``) if any other client (another data tab, or
-    the run-tab overlay) holds it. A re-configure by the same session just refreshes the config."""
+    aux-GPU slot as an activity; refuses (409 ``overlay_busy``) if any other activity (another data
+    tab, the run overlay, or a batch job) holds it. A re-configure by the same session refreshes it."""
     if _app_state is None or req.dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {req.dataset_id}")
     if req.model not in {s["key"] for s in _STEPS}:
         raise HTTPException(status_code=400, detail=f"Unknown overlay model: {req.model}")
-    session = x_overlay_session or "default"
+    key = _data_key(x_overlay_session)
     now = time.time()
-    if _overlay_blocks(session, now):
-        raise HTTPException(status_code=409, detail={"code": "overlay_busy", "holder": _overlay_holder})
-    _overlay_acquire(session, now)
+    if not SLOT.acquire(key, "SAM3 overlay", now, heartbeat=True):
+        raise HTTPException(
+            status_code=409, detail={"code": "overlay_busy", "holder": SLOT.holder(now).label}
+        )
     ds = _app_state.datasets[req.dataset_id]
     cameras = _dataset_camera_dims(ds)
     if not cameras:
-        _overlay_release(session)
+        SLOT.release(key)
         raise HTTPException(status_code=400, detail="Dataset has no camera/image keys")
     config = {
         "objects": req.objects or [],
@@ -253,11 +220,11 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
         "multi_instance": req.multi_instance,
     }
     prev_dataset = _data_pub_dataset  # capture before start_data_publisher updates it
-    # start_data_publisher still enforces the obs-stream physical constraint: teleop must be the
-    # sole writer during a run. If a run owns the stream, surface it as the same overlay_busy state.
+    # start_data_publisher enforces the obs-stream physical constraint (teleop is the sole writer
+    # during a run) — separate from the aux-GPU slot; surface it as the same overlay_busy state.
     if not start_data_publisher(req.dataset_id, cameras, config):
-        _overlay_release(session)
-        raise HTTPException(status_code=409, detail={"code": "overlay_busy", "holder": "run"})
+        SLOT.release(key)
+        raise HTTPException(status_code=409, detail={"code": "overlay_busy", "holder": "teleop run"})
     m = _machine(req.model)
     async with _live_lock:
         # A dataset switch recreates the obs stream (cameras/dims may differ), so the worker must
@@ -282,11 +249,11 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
 async def data_status(x_overlay_session: str | None = Header(default=None)) -> dict:
     """Badge/state for the data overlay — the worker's lifecycle machine + fps/util/vram (the
     worker is identical to the run path). ``publishing`` reflects the obs-stream writer. Also the
-    mutex heartbeat: the holder's poll refreshes its lease; anyone else sees ``busy``."""
-    session = x_overlay_session or "default"
+    slot heartbeat: the holder's poll refreshes its lease; anyone else sees ``busy`` + the holder."""
+    key = _data_key(x_overlay_session)
     now = time.time()
-    is_owner = _overlay_touch(session, now)  # heartbeat iff this session holds the mutex
-    busy = _overlay_blocks(session, now)
+    is_owner = SLOT.touch(key, now)  # heartbeat iff this session holds the slot
+    busy = SLOT.blocks(key, now)
     _observe()
     target = _live_model
     machine = _machines.get(target) if target else None
@@ -309,20 +276,20 @@ async def data_status(x_overlay_session: str | None = Header(default=None)) -> d
         "publishing": _data_publisher_active(),
         "owner": is_owner,
         "busy": busy,
-        "holder": _overlay_holder if busy else None,
+        "holder": SLOT.holder(now).label if busy else None,
     }
 
 
 @router.post("/data/cancel")
 async def data_cancel(x_overlay_session: str | None = Header(default=None)) -> dict:
-    """Turn the data overlay off — release the mutex, stop the obs-stream publisher, tear the worker
-    down. Only the HOLDER tears down the shared worker; another client's cancel is a no-op so it can't
-    kill the holder's overlay."""
-    session = x_overlay_session or "default"
+    """Turn the data overlay off — release the slot, stop the obs-stream publisher, tear the worker
+    down. Only the HOLDER tears down the shared worker; another activity's cancel is a no-op so it
+    can't kill the holder's overlay."""
+    key = _data_key(x_overlay_session)
     now = time.time()
-    if _overlay_blocks(session, now):  # someone else holds it — don't touch their overlay
+    if SLOT.blocks(key, now):  # someone else holds the slot — don't touch their overlay
         return {"ok": True, "note": "not the holder; nothing torn down"}
-    _overlay_release(session)
+    SLOT.release(key)
     stop_data_publisher()
     await _stop_live()
     return {"ok": True}
@@ -348,10 +315,9 @@ async def data_publish(
 ) -> Response:
     """Frontend calls this on every frame change: decode the landed frame (all cameras) and publish
     it to the obs stream so the worker overlays it. The decode runs off the event loop. No-op unless
-    a data publisher is active for this dataset AND the caller holds the mutex (only the holder drives
+    a data publisher is active for this dataset AND the caller holds the slot (only the holder drives
     the single frame slot, so a background client can't fight over which frame is segmented)."""
-    session = x_overlay_session or "default"
-    if _overlay_blocks(session, time.time()):
+    if SLOT.blocks(_data_key(x_overlay_session), time.time()):
         return Response(status_code=204)  # not the holder — don't publish into the shared slot
     if not _data_publisher_active() or _app_state is None or req.dataset_id not in _app_state.datasets:
         return Response(status_code=204)
@@ -696,14 +662,15 @@ async def _spawn_worker(model: str, *, objects=None, background=None, cameras=No
 @router.post("/live/start")
 async def live_start(req: LiveStartRequest) -> dict:
     """Launch the worker for a model (run tab) — fires START on that model's machine. Serialised
-    with stops by _live_lock. Acquires the SAME overlay mutex as the data tab (token ``run``), so a
-    data client holding it blocks the run overlay and vice versa — refuses (409 overlay_busy)."""
+    with stops by _live_lock. Acquires the SAME aux-GPU slot as the data tab + batch jobs, so any
+    of them holding it blocks the run overlay and vice versa — refuses (409 overlay_busy)."""
     if req.model not in {s["key"] for s in _STEPS}:
         raise HTTPException(status_code=400, detail=f"Unknown overlay model: {req.model}")
     now = time.time()
-    if _overlay_blocks(_RUN_TOKEN, now):
-        raise HTTPException(status_code=409, detail={"code": "overlay_busy", "holder": _overlay_holder})
-    _overlay_acquire(_RUN_TOKEN, now)
+    if not SLOT.acquire(_RUN_KEY, "SAM3 overlay (run)", now, heartbeat=True):
+        raise HTTPException(
+            status_code=409, detail={"code": "overlay_busy", "holder": SLOT.holder(now).label}
+        )
     m = _machine(req.model)
     async with _live_lock:
         await _spawn_worker(req.model, objects=req.objects, background=req.background, cameras=req.cameras)
@@ -723,7 +690,7 @@ async def live_control(body: dict) -> dict:
 
 @router.post("/live/stop")
 async def live_stop() -> dict:
-    _overlay_release(_RUN_TOKEN)  # release the mutex so a data client can take over
+    SLOT.release(_RUN_KEY)  # release the aux-GPU slot so another activity can take over
     await _stop_live()
     return {"ok": True}
 
@@ -734,8 +701,8 @@ async def live_status(model: str | None = None) -> dict:
     vram when that model is the running, active one. The state is the machine's — never a string
     assembled here. States: inactive / loading / active / stopping / error."""
     now = time.time()
-    _overlay_touch(_RUN_TOKEN, now)  # heartbeat while the run overlay panel polls
-    busy = _overlay_blocks(_RUN_TOKEN, now)  # a data client holds the mutex
+    SLOT.touch(_RUN_KEY, now)  # heartbeat while the run overlay panel polls
+    busy = SLOT.blocks(_RUN_KEY, now)  # another activity holds the aux-GPU slot
     _observe()  # fire LOADED / CRASH for the running standalone from its reported phase + liveness
     target = model or _live_model
     machine = _machines.get(target) if target else None
@@ -757,7 +724,7 @@ async def live_status(model: str | None = None) -> dict:
         "vram": float(st.get("vram", 0.0)),
         "util": _proc_sm(_live_proc.pid) if running else 0,
         "busy": busy,
-        "holder": _overlay_holder if busy else None,
+        "holder": SLOT.holder(now).label if busy else None,
     }
 
 
