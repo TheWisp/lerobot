@@ -19,6 +19,24 @@ import pytest
 import torch
 import torchvision.transforms.functional as TF
 
+# SO107 bimanual joint order — this file exercises the SO107-trained S1 model.
+_SO107_JOINTS = [
+    "left_shoulder_pan.pos",
+    "left_shoulder_lift.pos",
+    "left_elbow_flex.pos",
+    "left_forearm_roll.pos",
+    "left_wrist_flex.pos",
+    "left_wrist_roll.pos",
+    "left_gripper.pos",
+    "right_shoulder_pan.pos",
+    "right_shoulder_lift.pos",
+    "right_elbow_flex.pos",
+    "right_forearm_roll.pos",
+    "right_wrist_flex.pos",
+    "right_wrist_roll.pos",
+    "right_gripper.pos",
+]
+
 # ---------------------------------------------------------------------------
 # Test fixtures: small, deterministic raw observations
 # ---------------------------------------------------------------------------
@@ -103,9 +121,9 @@ class TestStateNormalizationParity:
         tensor out". Whoever consumes it is responsible for normalization.
         This test locks that contract so future refactors don't move
         responsibility accidentally."""
-        from lerobot.policies.hvla.s1_process import JOINT_NAMES, obs_to_s1_batch
+        from lerobot.policies.hvla.s1_process import obs_to_s1_batch
 
-        obs = {name: raw_state_14[i].item() for i, name in enumerate(JOINT_NAMES)}
+        obs = {name: raw_state_14[i].item() for i, name in enumerate(_SO107_JOINTS)}
         obs["front"] = np.zeros((224, 224, 3), dtype=np.uint8)
 
         batch = obs_to_s1_batch(
@@ -114,6 +132,7 @@ class TestStateNormalizationParity:
             shared_cache=None,
             s2_latent_key="observation.s2_latent",  # gitleaks:allow
             device=torch.device("cpu"),
+            joint_names=_SO107_JOINTS,
             resize_to=None,
         )
         assert torch.allclose(batch["observation.state"][0], raw_state_14)
@@ -230,10 +249,10 @@ class TestImagePreprocessingParity:
         the fix, obs_to_s1_batch / policy.preprocess_image produces the
         same tensor as FlowMatchingDataset.
         """
-        from lerobot.policies.hvla.s1_process import JOINT_NAMES, obs_to_s1_batch
+        from lerobot.policies.hvla.s1_process import obs_to_s1_batch
 
         resize_to = (224, 224)
-        obs = dict.fromkeys(JOINT_NAMES, 0.0)
+        obs = dict.fromkeys(_SO107_JOINTS, 0.0)
         obs["front"] = raw_image_hwc
 
         batch = obs_to_s1_batch(
@@ -242,6 +261,7 @@ class TestImagePreprocessingParity:
             shared_cache=None,
             s2_latent_key="observation.s2_latent",  # gitleaks:allow
             device=torch.device("cpu"),
+            joint_names=_SO107_JOINTS,
             resize_to=resize_to,
         )
         inference_img = batch["observation.images.front"][0]  # [3, H, W]
@@ -316,7 +336,6 @@ class TestActorDtypeParity:
         autocast + _rlt_inference_step path."""
         from lerobot.policies.hvla.rlt.config import RLTConfig
         from lerobot.policies.hvla.s1_inference import InferenceThread
-        from lerobot.policies.hvla.s1_process import JOINT_NAMES
 
         captured = {}
 
@@ -346,7 +365,7 @@ class TestActorDtypeParity:
         thread = InferenceThread.__new__(InferenceThread)
         thread._policy = _MinimalPolicy()
         thread._device = torch.device("cpu")
-        thread._joint_names = list(JOINT_NAMES)
+        thread._joint_names = list(_SO107_JOINTS)
         thread._rlt_actor = mock_actor
         thread._rlt_state = {
             "config": RLTConfig(rl_chunk_length=10, warmup_episodes=0),

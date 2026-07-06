@@ -13,20 +13,12 @@ from torch import Tensor
 
 logger = logging.getLogger(__name__)
 
-# Default camera keys matching SO107 bimanual setup
-DEFAULT_IMAGE_KEYS = (
-    "base_0_rgb",
-    "left_wrist_0_rgb",
-    "right_wrist_0_rgb",
-    "base_1_rgb",
-)
-
 IMAGE_RESOLUTION = (224, 224)
 
 
 def preprocess_images(
     images: dict[str, np.ndarray | Tensor],
-    image_keys: tuple[str, ...] = DEFAULT_IMAGE_KEYS,
+    image_keys: tuple[str, ...],
     resolution: tuple[int, int] = IMAGE_RESOLUTION,
     device: torch.device | str = "cpu",
 ) -> tuple[list[Tensor], list[Tensor]]:

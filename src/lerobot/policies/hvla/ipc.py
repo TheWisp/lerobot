@@ -345,5 +345,3 @@ DEFAULT_S2_CAM_KEY_MAP = {
     "left_wrist": "left_wrist_0_rgb",
     "right_wrist": "right_wrist_0_rgb",
 }
-
-DEFAULT_S2_IMAGE_KEYS = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb", "base_1_rgb")

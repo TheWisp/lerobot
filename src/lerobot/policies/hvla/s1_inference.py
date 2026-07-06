@@ -821,6 +821,7 @@ class InferenceThread:
                     self._shared_cache,
                     self._s2_latent_key,
                     self._device,
+                    joint_names=self._joint_names,
                     resize_to=self._resize_to,
                 )
                 batch = self._preprocessor(batch)
@@ -1071,7 +1072,9 @@ class InferenceThread:
 
             # Grip drop diagnostics
             if self._grip_drop_save_dir:
-                _save_infer_drop(chunk_np, obs, len(self.infer_times), self._grip_drop_save_dir)
+                _save_infer_drop(
+                    chunk_np, obs, len(self.infer_times), self._grip_drop_save_dir, self._joint_names
+                )
                 infer_count = len(self.infer_times)
                 if infer_count % 50 == 0:
                     import os
