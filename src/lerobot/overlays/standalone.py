@@ -28,8 +28,10 @@ logger = logging.getLogger(__name__)
 
 
 def _vram_gb() -> float:
-    """The loaded model's own VRAM footprint in GB — this process's live CUDA allocation
-    (so it stays flat once warmed and climbs if the model leaks). 0.0 without CUDA."""
+    """The model's live tensor allocations in GB (``torch.cuda.memory_allocated``) — flat once
+    warmed, climbs on a leak; that's the signal this badge is for. NOT the process's full GPU
+    footprint: the CUDA context + allocator cache are excluded, so ``nvidia-smi`` reads ~1-1.5 GB
+    higher (measured 3.7 vs 5.0 on the SAM3 worker). 0.0 without CUDA."""
     with contextlib.suppress(Exception):
         import torch
 

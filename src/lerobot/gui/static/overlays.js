@@ -440,7 +440,7 @@
             if (!current) { setBadge(mode === 'live' ? 'inactive' : 'off', 'off'); return; }
             const fpsPart = () => ({ t: `${s.fps || 0} fps`, title: 'Overlay inference rate — frames/sec the model actually processes (0 when the stream is idle).' });
             const utilPart = () => ({ t: `${s.util || 0}% gpu`, title: "This model's own GPU utilization (SM %, nvidia-smi pmon) — its share of the card, not the whole device. 0% = loaded but not computing." });
-            const vramPart = () => ({ t: `${s.vram} GB`, title: mode === 'live' ? "The overlay model's VRAM — the live subprocess's CUDA allocation." : "The model's VRAM — this process's CUDA allocation." });
+            const vramPart = () => ({ t: `${s.vram} GB`, title: "The model's live tensor allocations (torch memory_allocated) — a leak shows as steady growth. Excludes the CUDA context + allocator cache, so nvidia-smi reads higher for the process." });
             if (mode === 'live') {
                 // The badge renders the backend lifecycle state machine — the single source of truth
                 // (inactive / loading / active / stopping / error). We never assemble a string state here.
