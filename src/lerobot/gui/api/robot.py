@@ -611,15 +611,18 @@ async def scan_ports() -> list[dict]:
 
 
 def _wiggle_shoulder(port: str) -> dict:
-    """Wiggle the shoulder motor on the given port. Runs in thread pool."""
+    """Wiggle motor id 1 on the given port to physically identify it. Runs in thread pool."""
     try:
         from lerobot.motors import Motor, MotorNormMode
         from lerobot.motors.feetech import FeetechMotorsBus
     except ImportError:
         return {"status": "error", "message": "lerobot motor modules not available"}
 
+    # Motor id 1 is a stand-in for "the first motor on the bus" — the label is a
+    # local handle, not a claim about which joint it is, so it stays robot-agnostic.
+    probe_motor = "motor_1"
     motors = {
-        "shoulder_pan": Motor(1, "sts3215", MotorNormMode.RANGE_M100_100),
+        probe_motor: Motor(1, "sts3215", MotorNormMode.RANGE_M100_100),
     }
 
     bus = None
@@ -627,14 +630,14 @@ def _wiggle_shoulder(port: str) -> dict:
         bus = FeetechMotorsBus(port=port, motors=motors)
         bus.connect()
 
-        current_pos = bus.read("Present_Position", "shoulder_pan", normalize=False)
+        current_pos = bus.read("Present_Position", probe_motor, normalize=False)
         ticks = 200
 
-        bus.write("Goal_Position", "shoulder_pan", current_pos + ticks, normalize=False)
+        bus.write("Goal_Position", probe_motor, current_pos + ticks, normalize=False)
         time.sleep(0.5)
-        bus.write("Goal_Position", "shoulder_pan", current_pos - ticks, normalize=False)
+        bus.write("Goal_Position", probe_motor, current_pos - ticks, normalize=False)
         time.sleep(0.5)
-        bus.write("Goal_Position", "shoulder_pan", current_pos, normalize=False)
+        bus.write("Goal_Position", probe_motor, current_pos, normalize=False)
         time.sleep(0.3)
 
         return {"status": "ok", "port": port}

@@ -50,6 +50,7 @@ class FlowMatchingS1Config:
 
     # --- Image backbone ---
     use_dino_backbone: bool = True  # DINOv2 ViT-B/14 (same as ACTWithVLM)
+    # hardcode-ok: SO107 default cameras; the loaded checkpoint config overrides these
     image_features: dict = field(
         default_factory=lambda: {
             "observation.images.front": 224,
