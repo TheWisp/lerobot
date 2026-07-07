@@ -14,6 +14,7 @@ import time
 import numpy as np
 import torch
 
+from lerobot.overlays.saliency_publisher import SaliencyPublisher
 from lerobot.policies.hvla.rlt.episode import TerminalKind
 from lerobot.utils.latency import LatencySession
 
@@ -153,6 +154,11 @@ class InferenceThread:
         # aggregator/snapshot infrastructure used by teleop/record. The
         # default disabled session is a no-op (~50 ns per iteration).
         latency_session: LatencySession | None = None,
+        # Policy-internal "attention map" overlay — all logic lives in SaliencyPublisher
+        # (overlays/saliency_publisher.py). Demand-gated: ~zero cost unless an overlay is open.
+        aux_mode: str | None = "saliency",
+        aux_every: int = 3,
+        aux_dump: bool = False,
     ):
         self._policy = policy
         self._preprocessor = preprocessor
@@ -161,6 +167,13 @@ class InferenceThread:
         self._s2_latent_key = s2_latent_key
         self._s1_image_keys = s1_image_keys
         self._joint_names = joint_names
+        # Policy-internal overlay ("attention map"): publishing, demand-gating, cadence, and
+        # method dispatch all live in SaliencyPublisher (overlays/saliency_publisher.py) — the
+        # inference thread only calls publish(batch) once per inference. Keys: s1_image_keys
+        # match the obs-stream cameras the overlay worker reads.
+        self._aux_pub = SaliencyPublisher(
+            policy, s1_image_keys, mode=aux_mode, every=aux_every, dump=aux_dump
+        )
         self._device = device
         self._resize_to = resize_to
         self._fps = fps
@@ -739,6 +752,7 @@ class InferenceThread:
         self._obs_ready.set()  # unblock if waiting for obs
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+        self._aux_pub.cleanup()
 
     def pause(self) -> None:
         """Pause inference (for intervention). Thread blocks until resume()."""
@@ -895,6 +909,10 @@ class InferenceThread:
                         predict_kwargs["context"] = cached_context
                     actions = self._policy.predict_action_chunk(batch, **predict_kwargs)
                     actions = self._postprocessor(actions)
+
+                self._aux_pub.publish(
+                    batch
+                )  # policy-internal overlay (saliency by default; no-op for non-S1)
 
                 # RLT: compute ref_norm, optionally run actor, optionally dump.
                 # Dump is decoupled from actor activity so A/B baseline runs

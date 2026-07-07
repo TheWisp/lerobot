@@ -14,7 +14,9 @@ import argparse
 import atexit
 import contextlib
 import logging
+import os
 import signal
+import subprocess
 import threading
 import time
 
@@ -22,7 +24,7 @@ import numpy as np
 
 from lerobot.overlays.adapters import ADAPTERS, build_adapter
 from lerobot.overlays.overlay_ipc import OverlayStatus, SharedOverlayBuffer
-from lerobot.robots.obs_stream import ObservationStreamReader
+from lerobot.robots.obs_stream import _SHM_DIR, SHM_PREFIX, ObservationStreamReader
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,26 @@ def _set_overlay(text: str, color: str = "#39d353") -> None:
     print(f"##OVERLAY:{text}:{color}##", flush=True)
 
 
+def _build_identity() -> str:
+    """WHICH code this process is actually running: the loaded lerobot path + git SHA.
+
+    The antidote to 'stale deployment' — a stale long-lived worker, or the wrong checkout on
+    PYTHONPATH (this repo vs the conda-editable one). Logged at startup so one grep answers
+    'am I running the fix I just committed?' instead of post-hoc log forensics."""
+    import lerobot
+
+    path = lerobot.__file__
+    sha = "no-git"
+    with contextlib.suppress(Exception):
+        root = os.path.dirname(path)
+        sha = subprocess.check_output(
+            ["git", "-C", root, "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        if subprocess.call(["git", "-C", root, "diff", "--quiet"], stderr=subprocess.DEVNULL) != 0:
+            sha += "-dirty"
+    return f"lerobot @ {path} | git {sha}"
+
+
 def _wait_for_obs_stream(stop: threading.Event) -> ObservationStreamReader | None:
     logger.info("waiting for observation stream (start teleop to begin)...")
     while not stop.is_set():
@@ -55,15 +77,56 @@ def _wait_for_obs_stream(stop: threading.Event) -> ObservationStreamReader | Non
     return None
 
 
-def _try_reattach(old_reader, expected_cams: list[str]) -> ObservationStreamReader | None:
-    """Re-attach to the obs stream if the publisher was restarted.
+def _stream_identity() -> int | None:
+    """The obs stream's IDENTITY = the inode of its meta segment.
 
-    teleop stop+start creates a *fresh* shm segment with the same name; the existing
-    reader still maps the dead one and never sees new frames again. When idle, probe
-    for a replacement: same camera keys but a reset (lower) sequence counter. Returns
-    the new reader on a genuine restart, else None — a merely paused stream maps to the
-    same live segment (same high seq) and must NOT be swapped.
+    A run start unlinks + recreates the segment under the same name (fresh inode); a
+    pause keeps the same inode; a stopped+swept publisher leaves none. So the inode lets
+    a consumer tell "I'm holding a *replaced* (orphaned) stream" from "same stream, just
+    paused" — the distinction the seq counter alone couldn't make — without any
+    producer-side token. Returns None when the segment is absent.
+
+    Inode reuse can't bite us here: while we still map the old segment the kernel keeps
+    that inode pinned, so a freshly created segment necessarily gets a different one.
     """
+    with contextlib.suppress(OSError):
+        return os.stat(os.path.join(_SHM_DIR, f"{SHM_PREFIX}meta")).st_ino
+    return None
+
+
+def _reader_inode(reader: ObservationStreamReader) -> int | None:
+    """The inode of the segment `reader` is ACTUALLY bound to, via its own fd.
+
+    Race-free, unlike statting the path: the path resolves to whatever segment currently
+    owns the name, which can differ from what the reader mapped (a restart between attach
+    and a path-stat, or between a stat and an open). fstat-ing the reader's live fd always
+    names the segment it holds, so `held_ino` tracks our binding rather than a coincidental
+    path value — closing the startup-race and TOCTOU windows. Falls back to the path stat
+    if the reader internals aren't reachable (degrades to path-stat behavior, never thrashes).
+    """
+    with contextlib.suppress(AttributeError, OSError, ValueError):
+        return os.fstat(reader._meta._shm._fd).st_ino
+    return _stream_identity()
+
+
+def _try_reattach(
+    expected_cams: list[str], held_ino: int | None
+) -> tuple[ObservationStreamReader, int | None] | None:
+    """Re-attach iff the obs stream's backing segment was REPLACED.
+
+    teleop/policy stop+start unlinks + recreates a fresh segment under the same name; the
+    existing reader still maps the dead orphan and never sees frames again. Compare the
+    segment the NAME currently resolves to (`_stream_identity()`) against the one we're
+    actually bound to (`held_ino`, from our reader's fd): a *different* inode means a
+    genuinely new stream (swap to it); the *same* inode means the same segment — paused or
+    stopped, do NOT swap; a missing one (either side) means we can't act. Identity-based, so
+    it holds even when the new run's seq has already passed the stale one's. Returns
+    (new_reader, new_ino) — new_ino read from the new reader's own fd, not a pre-open stat —
+    on a real replacement, else None.
+    """
+    cur_ino = _stream_identity()
+    if cur_ino is None or held_ino is None or cur_ino == held_ino:
+        return None
     try:
         new = ObservationStreamReader()
     except (FileNotFoundError, RuntimeError):
@@ -71,13 +134,9 @@ def _try_reattach(old_reader, expected_cams: list[str]) -> ObservationStreamRead
     if set(new.image_keys) != set(expected_cams):
         new.close()  # different stream shape — don't silently swap (restart the overlay instead)
         return None
-    old_max = max((old_reader.image_seq(c) for c in expected_cams), default=0)
-    new_max = max((new.image_seq(c) for c in expected_cams), default=0)
-    if new_max < old_max:
-        logger.info("obs stream replaced (seq %d -> %d): re-attaching", old_max, new_max)
-        return new
-    new.close()  # same live segment (paused) — release the probe, keep the current reader
-    return None
+    new_ino = _reader_inode(new)  # the inode the NEW reader actually bound to
+    logger.info("obs stream segment replaced (inode %s -> %s): re-attaching", held_ino, new_ino)
+    return new, new_ino
 
 
 def _resolve_active(filter_names, all_cams: list[str]) -> set[str]:
@@ -110,6 +169,15 @@ def main() -> None:
         "--background",
         default=None,
         help='Background fill JSON {"color":[r,g,b]} (null/absent = transparent)',
+    )
+    parser.add_argument("--style", default=None, help="Initial render style (policy_saliency)")
+    parser.add_argument(
+        "--method",
+        default=None,
+        help="Initial saliency method (gradient|rollout) — seeded into the control block for the POLICY",
+    )
+    parser.add_argument(
+        "--smooth", type=float, default=None, help="Initial smoothing sigma (policy_saliency)"
     )
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
@@ -150,6 +218,9 @@ def main() -> None:
     # silence every INFO below — including the per-second "live: N infer/s" activity line, so
     # a WORKING stream would log nothing. Re-assert our config so the loop is actually visible.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
+    # Stamp the build AFTER the re-assert: transformers clears the root handlers during model load, so
+    # a stamp logged before it is silently dropped — which is exactly what swallowed it the first time.
+    logger.info("BUILD: %s | pid %d", _build_identity(), os.getpid())
     import json
 
     init_control: dict = {}
@@ -165,6 +236,10 @@ def main() -> None:
             init_control["background"] = json.loads(args.background)
         except Exception:
             logger.warning("ignoring malformed --background: %s", args.background)
+    if args.style:
+        init_control["style"] = args.style
+    if args.smooth is not None:
+        init_control["smooth"] = args.smooth
     if init_control:
         adapter.set_control(init_control)
     logger.info("model '%s' ready", args.model)
@@ -173,7 +248,8 @@ def main() -> None:
     reader = _wait_for_obs_stream(stop)
     if reader is None:
         return
-    logger.info("attached to obs stream; cameras available: %s", list(reader.image_keys))
+    held_ino = _reader_inode(reader)  # the segment we're bound to (from our fd); change == restart
+    logger.info("attached to obs stream (inode %s); cameras available: %s", held_ino, list(reader.image_keys))
 
     all_cams = list(reader.image_keys)
     # The overlay buffer covers ALL cameras so the active filter can change live (via
@@ -184,6 +260,11 @@ def main() -> None:
     logger.info("cameras=%s active=%s", all_cams, sorted(active))
 
     overlay = SharedOverlayBuffer(cameras=dims, model=args.model, create=True)
+    if args.method:
+        # Seed the POLICY-read method into the control block the moment it exists — the GUI can't
+        # (its write would race a segment that appears only now); a later GUI control write
+        # replaces the whole config including method, so this is only the initial value.
+        overlay.write_control({"config": {"method": args.method}})
     # Clear every camera up front so a reused shm segment can't surface a
     # previous run's stale overlays on cameras this run won't touch.
     for _cam, (_h, _w) in dims.items():
@@ -290,30 +371,46 @@ def main() -> None:
                         stalled = False
                 else:
                     idle_secs += 1
-                    logger.warning(
-                        "live: no new frames for %ds · active=%s · seqs=%s — obs stream not advancing "
-                        "(publisher paused, stopped, or a stale stream)",
-                        idle_secs,
-                        sorted(active),
-                        seqs,
-                    )
-                    # Don't keep flashing a green "live" badge over an idle feed — but don't cry
-                    # error either: we can't tell paused from stale yet (see umbrella-registry TODO).
-                    # Show a neutral 'idle' state.
-                    if idle_secs >= 3 and not stalled:
-                        _set_overlay(f"{adapter.label} — idle (no input frames)", "#c9a94a")
-                        stalled = True
-                    # The publisher may have RESTARTED (teleop stop+start), leaving us mapped
-                    # to the dead segment forever. Probe for a fresh one and resume on it; the
-                    # next productive window flips the badge back to live.
-                    if idle_secs >= 3 and idle_secs % 3 == 0:
-                        fresh = _try_reattach(reader, all_cams)
-                        if fresh is not None:
-                            with contextlib.suppress(Exception):
-                                reader.close()
-                            reader = fresh
-                            last_seq.clear()  # the new segment's low seqs count as new frames
-                            idle_secs = 0
+                    # Re-bind FIRST: a restarted run unlinks+recreates the segment under the
+                    # same name (fresh inode), leaving us mapped to the dead orphan. The inode
+                    # check is definitive, so probe every idle second and swap to the live one.
+                    swapped = _try_reattach(all_cams, held_ino)
+                    if swapped is not None:
+                        # Segment was replaced — bind the live one. _try_reattach logs the swap;
+                        # the badge is left to the next productive window (the `if stalled` path
+                        # flips it back to live once frames actually flow on the new segment).
+                        new_reader, held_ino = swapped
+                        with contextlib.suppress(Exception):
+                            reader.close()
+                        reader = new_reader
+                        last_seq.clear()  # the new segment's low seqs count as new frames
+                        idle_secs = 0
+                        # A fresh segment is a new run/scene: drop stateful adapter memory (e.g.
+                        # sam3_track's tracking) so it re-seeds against the new stream, exactly as
+                        # a `generation` bump resets it on a data-tab discontinuity.
+                        for c in active:
+                            adapter.set_camera(c)
+                            adapter.reset()
+                    else:
+                        # No live segment to swap to. Name the reason instead of the old catch-all:
+                        # the segment is gone (publisher exited + swept) vs frozen in place (paused,
+                        # or the writer died without cleanup — same orphan either way).
+                        gone = _stream_identity() is None
+                        logger.warning(
+                            "live: no new frames for %ds · active=%s · seqs=%s — %s",
+                            idle_secs,
+                            sorted(active),
+                            seqs,
+                            "publisher gone (segment removed)"
+                            if gone
+                            else "stream not advancing (paused or stalled)",
+                        )
+                        if idle_secs >= 3 and not stalled:
+                            if gone:
+                                _set_overlay(f"{adapter.label} — stale (publisher gone)", "#d29922")
+                            else:
+                                _set_overlay(f"{adapter.label} — idle (no input frames)", "#c9a94a")
+                            stalled = True
                 model_gb = _vram_gb()
                 if model_gb:
                     overlay.write_vram(model_gb)

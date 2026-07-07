@@ -13,6 +13,7 @@ SharedBlock (sequence-counter header).
 from __future__ import annotations
 
 import json
+import os
 
 import numpy as np
 
@@ -22,6 +23,7 @@ _PREFIX = "lerobot_overlay_"
 _META_BYTES = 8192
 _CONTROL_BYTES = 4096
 _STATUS_BYTES = 1024
+_CONTROL_SHM = f"/dev/shm/{_PREFIX}control"  # nosec B108  # POSIX shm path (not a temp dir), for a cheap existence check
 
 
 def _safe(cam_key: str) -> str:
@@ -46,6 +48,47 @@ def _read_json(block: SharedBlock) -> dict:
         return json.loads(raw.decode("utf-8", errors="replace"))
     except json.JSONDecodeError:
         return {}
+
+
+class OverlayControlReader:
+    """Policy-side, read-only view of the worker's overlay control block.
+
+    Lets a running policy learn the selected overlay config (e.g. the saliency ``method``) without
+    owning the overlay buffer — it lazily attaches to just the control block. ``config()`` returns the
+    latest control config dict, or ``None`` when no overlay worker is up, which doubles as a DEMAND
+    signal (gate expensive policy-internal overlays on it). Reliable both ways: returns ``None`` once
+    the worker stops — its control segment is unlinked on a clean SIGTERM stop, and a cached mmap stays
+    readable after unlink, so we check the segment's existence rather than trust a stale read."""
+
+    def __init__(self) -> None:
+        self._block: SharedBlock | None = None
+
+    def _ensure(self) -> None:
+        if self._block is not None:
+            return
+        try:
+            self._block = SharedBlock(
+                name=_PREFIX + "control", shape=(_CONTROL_BYTES,), dtype=np.uint8, create=False
+            )
+        except FileNotFoundError:
+            self._block = None  # no worker yet
+
+    def config(self) -> dict | None:
+        # The control segment's existence IS the demand signal: the worker creates it and unlinks it on
+        # a clean stop, so its absence => no overlay up. Check the file directly — a cached mmap stays
+        # readable after unlink, so without this a stale config would latch demand "on" forever.
+        if not os.path.exists(_CONTROL_SHM):
+            self._block = None
+            return None
+        self._ensure()
+        if self._block is None:
+            return None
+        try:
+            ctrl = _read_json(self._block)
+        except Exception:
+            self._block = None  # stale (worker restarted) — drop, retry next call
+            return None
+        return ctrl.get("config", ctrl)  # live/control writes the config flat; _spawn_worker wraps it
 
 
 class SharedOverlayBuffer:

@@ -78,6 +78,46 @@ _STEPS: list[dict] = [
             }
         ],
     },
+    {
+        "key": "policy_saliency",
+        "label": "Attention map",  # colloquial name; technically gradient saliency / attention rollout (see the doc)
+        "result_kind": "spatial",
+        "load_cost": "fast",  # no model of its own — reads the running policy's saliency via shm
+        "controls": [
+            {
+                "type": "select",
+                "key": "method",
+                "label": "Method",
+                "default": "gradient",
+                "options": [
+                    {"value": "gradient", "label": "Gradient (causal — what the action uses)"},
+                    {"value": "rollout", "label": "Rollout (attention — where it routes from)"},
+                ],
+            },
+            {
+                "type": "select",
+                "key": "style",
+                "label": "Style",
+                "default": "blue_yellow",
+                "options": [
+                    {"value": "blue_yellow", "label": "Blue → Yellow"},
+                    {"value": "cividis", "label": "Cividis (uniform)"},
+                    {"value": "spotlight", "label": "Spotlight (hotspots only)"},
+                    {"value": "heatmap", "label": "Full heatmap"},
+                    {"value": "inferno", "label": "Inferno (golden)"},
+                ],
+            },
+            {
+                "type": "slider",
+                "key": "smooth",
+                "label": "Smoothing",
+                "min": 0.0,
+                "max": 3.0,
+                "step": 0.1,
+                "default": 1.2,
+            },
+        ],
+    },
 ]
 
 
@@ -542,6 +582,9 @@ class LiveStartRequest(BaseModel):
     objects: list[dict] | None = None
     background: dict | None = None
     cameras: list[str] | None = None
+    style: str | None = None  # policy_saliency render style (see PolicySaliencyAdapter.STYLES)
+    smooth: float | None = None  # policy_saliency smoothing sigma (0 = raw 64x64)
+    method: str | None = None  # policy_saliency source: "gradient" | "rollout" (read by the policy)
 
 
 class LiveDiagRequest(BaseModel):
@@ -556,7 +599,9 @@ class LiveDiagRequest(BaseModel):
     blank: list[str] = []
 
 
-async def _spawn_worker(model: str, *, objects=None, background=None, cameras=None) -> None:
+async def _spawn_worker(
+    model: str, *, objects=None, background=None, cameras=None, style=None, smooth=None, method=None
+) -> None:
     """Spawn (or push control to) the single overlay worker for ``model``. Caller MUST hold
     ``_live_lock``. The worker is identical for live + data — it reads the obs stream; only the
     publisher differs (teleop for run, the GUI data publisher for data). A same-model call just
@@ -566,7 +611,17 @@ async def _spawn_worker(model: str, *, objects=None, background=None, cameras=No
     if _live_model == model and _live_proc is not None and _live_proc.returncode is None:
         reader = _get_live_reader()  # already up — push control, don't restart
         if reader is not None:
-            reader.write_control({"config": {"objects": objects or [], "background": background}})
+            reader.write_control(
+                {
+                    "config": {
+                        "objects": objects or [],
+                        "background": background,
+                        "style": style,
+                        "smooth": smooth,
+                        "method": method,  # read by the POLICY (gradient|rollout), not the worker
+                    }
+                }
+            )
         return
     m.fire(Event.START)  # -> loading; the badge reflects it immediately
     await _teardown_current()  # stop a different running model first (serialised)
@@ -575,6 +630,12 @@ async def _spawn_worker(model: str, *, objects=None, background=None, cameras=No
         args.append(f"--objects={json.dumps(objects)}")
     if background is not None:
         args.append(f"--background={json.dumps(background)}")
+    if style:
+        args.append(f"--style={style}")
+    if method:
+        args.append(f"--method={method}")  # worker seeds it into its control block at creation
+    if smooth is not None:
+        args.append(f"--smooth={smooth}")
     if cameras:
         args.append("--cameras")
         args.extend(cameras)
@@ -601,7 +662,15 @@ async def live_start(req: LiveStartRequest) -> dict:
         raise HTTPException(status_code=400, detail=f"Unknown overlay model: {req.model}")
     m = _machine(req.model)
     async with _live_lock:
-        await _spawn_worker(req.model, objects=req.objects, background=req.background, cameras=req.cameras)
+        await _spawn_worker(
+            req.model,
+            objects=req.objects,
+            background=req.background,
+            cameras=req.cameras,
+            style=req.style,
+            smooth=req.smooth,
+            method=req.method,
+        )
     return {"ok": True, "state": m.state.value}
 
 
@@ -639,7 +708,7 @@ async def live_status(model: str | None = None) -> dict:
     )
     st = _read_status() if running else {}
     reader = _get_live_reader() if running else None
-    return {
+    resp = {
         "state": state.value,
         "available": state is State.ACTIVE,
         "model": target,
@@ -648,6 +717,18 @@ async def live_status(model: str | None = None) -> dict:
         "vram": float(st.get("vram", 0.0)),
         "util": _proc_sm(_live_proc.pid) if running else 0,
     }
+    # A policy-internal overlay's real cost lives in the POLICY process (the worker only
+    # colorizes), published as pass_ms through the aux stats block. Attach just that one block —
+    # not the whole SharedAuxBuffer (meta + a grid mmap per camera) — this runs on every poll.
+    # Absent until the first publish; dropped when stale (policy stopped publishing).
+    if running:
+        with contextlib.suppress(Exception):  # no aux stats (non-publishing model) — omit
+            from lerobot.overlays.aux_ipc import read_stats_pass_ms
+
+            pm = read_stats_pass_ms()
+            if pm is not None and time.time() - pm[1] < 30.0:
+                resp["sal_ms"] = round(pm[0], 1)
+    return resp
 
 
 @router.get("/live/log")

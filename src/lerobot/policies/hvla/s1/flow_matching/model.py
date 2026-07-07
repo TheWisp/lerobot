@@ -140,6 +140,10 @@ class FlowMatchingS1Model(nn.Module):
         # --- Position embedding for action sequence ---
         self.action_pos_embed = nn.Embedding(config.chunk_size, d)
 
+        # Context-token layout (patches-per-camera etc.), recorded by encode_observations —
+        # the attention-rollout overlay (flow_matching/saliency.py) slices per camera with it.
+        self._ctx_layout: dict | None = None
+
     def encode_observations(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode images + state + S2 latent → context tokens [B, N_ctx, D]."""
         tokens = []
@@ -171,6 +175,9 @@ class FlowMatchingS1Model(nn.Module):
                 else:
                     features = self.backbone.forward_features(stacked)
                     all_patches = features["x_norm_patchtokens"]
+                # Camera patch blocks occupy the FIRST N_cams*patches positions of the context
+                # (state + S2 tokens follow); record the layout so capture can slice per camera.
+                self._ctx_layout = {"n_cams": N_cams, "patches_per_cam": int(all_patches.shape[1])}
                 # Split back per camera and project
                 per_cam = all_patches.reshape(N_cams, B, all_patches.shape[1], all_patches.shape[2])
                 for i in range(N_cams):
@@ -582,6 +589,19 @@ class FlowMatchingS1Policy(nn.Module):
             actions_norm = actions_norm * self._action_std.to(device) + self._action_mean.to(device)
 
         return actions_norm
+
+    def compute_input_saliency(self, batch: dict[str, Tensor], num_steps: int = 4, grid: int = 64) -> dict:
+        """Per-camera input-gradient attention map — see ``flow_matching/saliency.py`` (kept out of
+        the policy class; this delegator is the documented per-policy overlay contract)."""
+        from lerobot.policies.hvla.s1.flow_matching.saliency import compute_input_saliency
+
+        return compute_input_saliency(self, batch, num_steps=num_steps, grid=grid)
+
+    def compute_attention_rollout(self, batch: dict[str, Tensor], num_steps: int = 4, grid: int = 64) -> dict:
+        """Per-camera attention-rollout map — see ``flow_matching/saliency.py``."""
+        from lerobot.policies.hvla.s1.flow_matching.saliency import compute_attention_rollout
+
+        return compute_attention_rollout(self, batch, num_steps=num_steps, grid=grid)
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         """Training forward: compute flow matching loss with training-time RTC."""
