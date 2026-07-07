@@ -17,6 +17,10 @@ def _s2_env(monkeypatch):
     """Set the env vars for obs stream + S2 buffer."""
     monkeypatch.setenv("LEROBOT_OBS_STREAM", "1")
     monkeypatch.setenv("LEROBOT_S2_IMAGE_BUFFER", "1")
+    monkeypatch.setenv(
+        "LEROBOT_S2_CAM_KEY_MAP",
+        "front:base_0_rgb,top:base_1_rgb,left_wrist:left_wrist_0_rgb,right_wrist:right_wrist_0_rgb",
+    )
 
 
 @pytest.fixture
@@ -166,3 +170,29 @@ class TestS2BufferUnloadReload:
             assert result["base_0_rgb"][0, 0, 0] == 99
         finally:
             _cleanup_s2_shared_memory(s2_buf2)
+
+
+class TestS2CamMapRequired:
+    """The robot→S2 camera map is config-driven (env), not a hardcoded SO107 default."""
+
+    def test_disabled_without_cam_map(self, monkeypatch, dummy_obs):
+        """S2 buffer disables (with a warning) when the map env is absent — no
+        silent fallback to an SO107 layout."""
+        monkeypatch.delenv("LEROBOT_S2_CAM_KEY_MAP", raising=False)
+        from lerobot.robots.obs_stream import ObservationStreamWriterStep
+
+        step = ObservationStreamWriterStep()
+        step.observation(dummy_obs)
+        assert step._s2_buffer is None
+        assert not step._s2_enabled
+
+
+def test_parse_s2_camera_map():
+    from lerobot.policies.hvla.ipc import parse_s2_camera_map
+
+    assert parse_s2_camera_map("front:base_0_rgb, top:base_1_rgb") == {
+        "front": "base_0_rgb",
+        "top": "base_1_rgb",
+    }
+    with pytest.raises(ValueError):
+        parse_s2_camera_map("front")  # missing ':'

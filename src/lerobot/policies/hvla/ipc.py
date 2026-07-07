@@ -338,10 +338,20 @@ class SharedImageBuffer:
             self._state_block.unlink()
 
 
-# hardcode-ok: SO107 default cam map; superseded by the config-driven S2 map in #47
-DEFAULT_S2_CAM_KEY_MAP = {
-    "front": "base_0_rgb",
-    "top": "base_1_rgb",
-    "left_wrist": "left_wrist_0_rgb",
-    "right_wrist": "right_wrist_0_rgb",
-}
+def parse_s2_camera_map(spec: str) -> dict[str, str]:
+    """Parse a "robot_cam:s2_slot,..." spec into a {robot_cam: s2_slot} map.
+
+    Maps each robot camera name to the image slot the S2 model expects. There is
+    no default — which robot camera fills which S2 slot is setup-specific, so
+    callers must supply it for their robot + S2 checkpoint.
+    """
+    out: dict[str, str] = {}
+    for pair in spec.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if ":" not in pair:
+            raise ValueError(f"Invalid s2-camera-map entry {pair!r}; expected 'robot_cam:s2_slot'")
+        robot_cam, s2_slot = pair.split(":", 1)
+        out[robot_cam.strip()] = s2_slot.strip()
+    return out

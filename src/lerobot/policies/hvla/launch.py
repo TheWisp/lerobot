@@ -18,7 +18,7 @@ import multiprocessing
 import os
 import signal
 
-from lerobot.policies.hvla.ipc import SharedImageBuffer, SharedLatentCache
+from lerobot.policies.hvla.ipc import SharedImageBuffer, SharedLatentCache, parse_s2_camera_map
 from lerobot.policies.hvla.logging_utils import setup_process_logging
 
 logger = logging.getLogger(__name__)
@@ -41,11 +41,17 @@ def main():
     parser.add_argument("--n-action-steps", type=int, default=None)
     parser.add_argument("--decode-subtask", action="store_true")
     parser.add_argument("--norm-stats", default=None)
-    # hardcode-ok: SO107 default slot order; made required (no default) in #47
     parser.add_argument(
         "--s2-image-keys",
         nargs="+",
-        default=["base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb", "base_1_rgb"],
+        default=None,
+        help="S2 model image slot names in the order the S2 model expects (required unless --zero-s2).",
+    )
+    parser.add_argument(
+        "--s2-camera-map",
+        default=None,
+        help="Map this robot's cameras to the S2 model's image slots as 'cam:slot' pairs, "
+        "e.g. 'cam0:slot0,cam1:slot1' (required unless --zero-s2).",
     )
     parser.add_argument("--zero-s2", action="store_true")
     parser.add_argument(
@@ -217,7 +223,10 @@ def main():
     setup_process_logging()
 
     resize = tuple(int(x) for x in args.resize_images.split("x")) if args.resize_images else None
-    s2_image_keys = tuple(args.s2_image_keys)
+    s2_image_keys = tuple(args.s2_image_keys) if args.s2_image_keys else None
+    s2_camera_map = parse_s2_camera_map(args.s2_camera_map) if args.s2_camera_map else None
+    if not args.zero_s2 and (not s2_image_keys or not s2_camera_map):
+        raise SystemExit("--s2-image-keys and --s2-camera-map are required unless --zero-s2 is set.")
 
     # Use 'spawn' context — child process gets fresh CUDA context
     ctx = multiprocessing.get_context("spawn")
@@ -309,6 +318,7 @@ def main():
             shared_images=shared_images,
             task=args.task,
             robot_config_path=args.robot_config,
+            s2_camera_map=s2_camera_map,
             fps=args.fps,
             device=args.device,
             resize_images=resize,

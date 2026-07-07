@@ -378,9 +378,17 @@ class ObservationStreamWriterStep:
         # One-time: discover joint names and image resolution from first observation
         if self._s2_joint_names is None:
             try:
-                from lerobot.policies.hvla.ipc import DEFAULT_S2_CAM_KEY_MAP
+                from lerobot.policies.hvla.ipc import parse_s2_camera_map
 
-                self._s2_cam_key_map = DEFAULT_S2_CAM_KEY_MAP
+                cam_map_spec = os.environ.get("LEROBOT_S2_CAM_KEY_MAP")
+                if not cam_map_spec:
+                    logger.warning(
+                        "LEROBOT_S2_IMAGE_BUFFER is set but LEROBOT_S2_CAM_KEY_MAP is not; "
+                        "cannot map robot cameras to S2 slots — disabling S2 image buffer."
+                    )
+                    self._s2_enabled = False
+                    return
+                self._s2_cam_key_map = parse_s2_camera_map(cam_map_spec)
                 self._s2_joint_names = [
                     k for k, v in obs.items() if isinstance(v, (int, float)) and not k.startswith("_")
                 ]
