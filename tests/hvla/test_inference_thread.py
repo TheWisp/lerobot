@@ -151,6 +151,25 @@ class TestRobotAgnostic:
                 device=torch.device("cpu"),
             )
 
+    def test_so107_action_features_match_trained_order_TEMP(self):
+        """TEMPORARY guard: the deleted SO107 JOINT_NAMES constant is now sourced
+        from robot.action_features. On SO107 those must stay byte-identical so the
+        S1 state vector keeps the order the policy was trained on. This fails loudly
+        if anyone reorders the SO107 motor bus before we re-verify S1 on hardware.
+
+        TODO(remove after SO107 hardware rollout confirms S1 parity): delete this
+        test once the live SO107 flow is re-verified against this branch.
+        """
+        try:
+            from lerobot.robots.bi_so107_follower.bi_so107_follower import BiSO107Follower
+            from lerobot.robots.bi_so107_follower.config_bi_so107_follower import BiSO107FollowerConfig
+        except ImportError as e:
+            pytest.skip(f"SO107 robot deps unavailable: {e}")
+
+        # Ports are unused — construction doesn't open hardware.
+        robot = BiSO107Follower(BiSO107FollowerConfig(left_arm_port="/dev/null", right_arm_port="/dev/null"))
+        assert list(robot.action_features) == _SO107_JOINTS
+
 
 class TestSliceWithPad:
     """``_slice_with_pad`` — used to safely slice the actor's ``[D:D+C]``
