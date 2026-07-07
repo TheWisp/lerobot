@@ -6,11 +6,24 @@
 
 (function () {
     let MODELS = [];
+    let EFFECTS = [];  // data-editing effects (from /api/process/effects); drive the WYSIWYG overlay
     const panels = [];
     let livePanel = null;
 
     const PALETTE = [[239, 68, 68], [34, 197, 94], [59, 130, 246], [234, 179, 8], [168, 85, 247], [20, 184, 166]];
     const MAX_OBJECTS = 6;
+
+    // Per-tab identity for the data overlay's single-owner lease (the model + obs
+    // stream are shared, so one tab drives at a time). sessionStorage keeps ownership
+    // across a reload; a new tab gets a new token. Sent as X-Overlay-Session.
+    const OVL_SESSION = (() => {
+        try {
+            let s = sessionStorage.getItem('ovlSession');
+            if (!s) { s = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'ovl-' + Math.random().toString(36).slice(2); sessionStorage.setItem('ovlSession', s); }
+            return s;
+        } catch (e) { return 'ovl-' + Math.random().toString(36).slice(2); }
+    })();
+    const ovlHeaders = (extra) => Object.assign({ 'X-Overlay-Session': OVL_SESSION }, extra || {});
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const safeCam = (cam) => cam.replace(/\./g, '-');
 
@@ -97,6 +110,9 @@
             { el: document.getElementById('overlays-panel-run'), mode: 'live' },
         ].filter((r) => r.el);
         if (!roots.length) return;
+        // The data-editing effects live in the overlay panel now (they drive the live
+        // preview); fetch them once so the picker is ready when a model is chosen.
+        fetch('/api/process/effects').then((r) => r.json()).then((d) => { EFFECTS = d.effects || []; }).catch(() => {});
         fetch('/api/overlays/models').then((r) => r.json())
             .then((d) => { MODELS = d.models || []; build(roots); })
             .catch(() => build(roots));
@@ -108,6 +124,18 @@
             panels.push(p);
             if (r.mode === 'live') livePanel = p;
         }
+        // The data-editing menu lives alongside the data overlay (shares its
+        // objects). Init it once; reflect the active-job count on the button.
+        if (window.ProcessData) window.ProcessData.init({ onCountChange: updateProcessButtons });
+    }
+
+    // Show the running-job count on every "Process dataset…" button so a user
+    // who closed the menu still sees work is in flight.
+    function updateProcessButtons(count) {
+        document.querySelectorAll('.overlays-process').forEach((b) => {
+            b.textContent = count > 0 ? `⚙ Process dataset… (${count} running)` : '⚙ Process dataset…';
+            b.classList.toggle('busy', count > 0);
+        });
     }
 
     function Panel(root, mode) {
@@ -120,10 +148,13 @@
         let current = '';
         // Monitored objects: open-vocab name + colour + sign (+ include / − exclude).
         let objects = [{ name: '', color: PALETTE[0], sign: '+' }];
+        let effect = { key: '', params: {} };  // data mode: the augmentation the overlay renders (''=segmentation contours)
+        let multiInstance = true;               // data mode: segment ALL instances of each object (both arms) vs largest
         let background = null;            // null = transparent; else [r,g,b]
         let nameTimer = null;
         let status = { state: 'idle' };
         let pollTimer = null;
+        let wasBusy = false;             // data: another tab owns the overlay (lease); auto-resume when freed
         let started = false;             // live: standalone launched
         let dataVersion = 0;             // data: cache-buster, bumped on config change so scrubbing re-pulls
         let frameTick = 0;               // data: increments each overlay re-pull so the lagging worker result refreshes
@@ -168,7 +199,7 @@
             current = key;
             if (!key) {
                 stopPoll();
-                if (mode === 'data') fetch('/api/overlays/data/cancel', { method: 'POST' }).catch(() => {});
+                if (mode === 'data') fetch('/api/overlays/data/cancel', { method: 'POST', headers: ovlHeaders() }).catch(() => {});
                 clearOverlays();
                 setBadge('off', 'off');
             }
@@ -186,15 +217,28 @@
             }
             const ctrl = (modelSpec(current)?.controls || [])[0] || {};
             if (ctrl.type === 'objects' || ctrl.type === 'text') {
+                const effectBlock = mode === 'data' ? `
+                    <label class="overlays-label" title="What the tile shows: the augmented result (WYSIWYG). 'Process dataset…' applies this to every episode.">Effect (previewed live)</label>
+                    <select class="overlays-effect"></select>
+                    <div class="overlays-effect-controls"></div>` : '';
                 els.modelBody.innerHTML = `
                     <label class="overlays-label">${esc(ctrl.label || 'Objects')}</label>
                     <div class="overlays-hint">Open-vocab names, each in its own colour. <b>+</b> include / <b>−</b> exclude. Name edits apply ~1s after you stop typing; colour/sign are instant.</div>
                     <div class="overlays-objrows"></div>
                     <button class="overlays-add-obj">+ Add object</button>
+                    ${mode === 'data' ? `<label class="overlays-check" title="On: keep every instance of each object (e.g. both robot arms). Off: keep only the single largest.">
+                        <input type="checkbox" class="overlays-multi"${multiInstance ? ' checked' : ''}> Segment all instances (e.g. both arms)</label>` : ''}
+                    ${effectBlock}
                     <label class="overlays-label">cameras</label>
-                    <div class="overlays-cameras"></div>`;
+                    <div class="overlays-cameras"></div>
+                    ${mode === 'data' ? '<button class="overlays-process" title="Apply the previewed effect to every episode as a new copy of the dataset">⚙ Process dataset…</button>' : ''}`;
                 els.modelBody.querySelector('.overlays-add-obj').addEventListener('click', addObject);
+                const procBtn = els.modelBody.querySelector('.overlays-process');
+                if (procBtn) procBtn.addEventListener('click', openProcess);
+                const multiCb = els.modelBody.querySelector('.overlays-multi');
+                if (multiCb) multiCb.addEventListener('change', () => { multiInstance = multiCb.checked; applyInstant(); });
                 renderObjects();
+                if (mode === 'data') renderEffect();
             } else {
                 els.modelBody.innerHTML = '<label class="overlays-label">cameras</label><div class="overlays-cameras"></div>';
             }
@@ -223,7 +267,9 @@
                     <input class="overlays-obj-name" type="text" data-i="${i}" placeholder="${ph}" value="${esc(o.name)}">
                     <span class="overlays-palette${neg ? ' disabled' : ''}" data-i="${i}" title="${neg ? 'a − concept is subtracted, not drawn — colour unused' : ''}">${paletteHTML(o.color)}</span>${trail}</div>`;
             }).join('');
-            const bgrow = `<div class="overlays-objrow">
+            // Run tab keeps the simple Background-colour highlight row; the data tab
+            // replaces it with the full Effect selector below (which renders live).
+            const bgrow = mode === 'data' ? '' : `<div class="overlays-objrow">
                 <span class="overlays-obj-slot"></span>
                 <span class="overlays-bg-label">Background</span>
                 <span class="overlays-palette" data-bg="1">${paletteHTML(background)}</span>
@@ -235,7 +281,8 @@
             box.querySelectorAll('.overlays-obj-name').forEach((inp) => inp.addEventListener('input', () => { objects[+inp.dataset.i].name = inp.value; renderAction(); scheduleApply(); }));
             box.querySelectorAll('.overlays-palette[data-i] .overlays-swatch').forEach((sw) => sw.addEventListener('click', () => { objects[+sw.parentElement.dataset.i].color = sw.dataset.rgb.split(',').map(Number); renderObjects(); applyInstant(); }));
             box.querySelectorAll('.overlays-palette[data-bg] .overlays-swatch').forEach((sw) => sw.addEventListener('click', () => { background = sw.dataset.rgb.split(',').map(Number); renderObjects(); applyInstant(); }));
-            box.querySelector('.overlays-obj-btn.bg-clear').addEventListener('click', () => { background = null; renderObjects(); applyInstant(); });
+            const bgClear = box.querySelector('.overlays-obj-btn.bg-clear');
+            if (bgClear) bgClear.addEventListener('click', () => { background = null; renderObjects(); applyInstant(); });
 
             const add = els.modelBody.querySelector('.overlays-add-obj');
             if (add) { add.disabled = objects.length >= MAX_OBJECTS; add.textContent = `+ Add object (${objects.length}/${MAX_OBJECTS})`; }
@@ -245,6 +292,69 @@
             if (objects.length >= MAX_OBJECTS) return;
             objects.push({ name: '', color: PALETTE[objects.length % PALETTE.length], sign: '+' });
             renderObjects();  // no apply — the new row has no name yet
+        }
+
+        // ---- effect selector (data mode): drives the live WYSIWYG overlay ----
+        const effectSpec = (k) => EFFECTS.find((e) => e.key === k);
+        function renderEffect() {
+            const sel = els.modelBody.querySelector('.overlays-effect');
+            if (!sel) return;
+            const grp = (g) => EFFECTS.filter((e) => e.group === g);
+            const og = (label, items) => items.length
+                ? `<optgroup label="${label}">${items.map((e) => `<option value="${e.key}">${esc(e.label)}</option>`).join('')}</optgroup>` : '';
+            sel.innerHTML = '<option value="">None (segmentation contours)</option>'
+                + og('Background (foreground protected)', grp('background')) + og('Global (whole frame)', grp('global'));
+            sel.value = effect.key;
+            sel.onchange = () => { effect = { key: sel.value, params: {} }; renderEffectControls(); applyInstant(); };
+            renderEffectControls();
+        }
+        function renderEffectControls() {
+            const box = els.modelBody.querySelector('.overlays-effect-controls');
+            if (!box) return;
+            const spec = effectSpec(effect.key);
+            box.innerHTML = (spec?.controls || []).map((c) => {
+                if (c.type === 'color') {
+                    const d = effect.params[c.key] || c.default || [0, 200, 0];
+                    const hex = '#' + d.map((x) => x.toString(16).padStart(2, '0')).join('');
+                    return `<label class="overlays-label">${esc(c.label)}</label><input class="overlays-effect-ctl" data-key="${c.key}" data-type="color" type="color" value="${hex}">`;
+                }
+                if (c.type === 'range') {
+                    const v = effect.params[c.key] ?? c.default;
+                    return `<label class="overlays-label">${esc(c.label)}: <span class="overlays-ctl-val">${v}</span></label>`
+                        + `<input class="overlays-effect-ctl" data-key="${c.key}" data-type="range" type="range" min="${c.min}" max="${c.max}" value="${v}">`;
+                }
+                return '';
+            }).join('');
+            box.querySelectorAll('.overlays-effect-ctl').forEach((inp) => {
+                const ev = inp.type === 'range' ? 'input' : 'change';
+                inp.addEventListener(ev, () => {
+                    effect.params[inp.dataset.key] = inp.dataset.type === 'color'
+                        ? [1, 3, 5].map((i) => parseInt(inp.value.slice(i, i + 2), 16))
+                        : Number(inp.value);
+                    const span = inp.previousElementSibling && inp.previousElementSibling.querySelector('.overlays-ctl-val');
+                    if (span) span.textContent = inp.value;
+                    // range = live drag: debounce like a name edit; color/discrete = instant.
+                    if (inp.type === 'range') scheduleApply(); else applyInstant();
+                });
+            });
+        }
+        // {key, params} for the overlay config + the commit; null = contours only.
+        const payloadEffect = () => (effect.key ? { key: effect.key, params: effect.params } : null);
+
+        // Open the data-editing menu with the panel's current objects (the
+        // protected foreground) + the selected cameras. Segmentation is the same
+        // SAM3 the overlay previews, so "what's kept" matches what's on screen.
+        function openProcess() {
+            if (!window.ProcessData || !window.currentDataset) return;
+            const spec = effectSpec(effect.key);
+            window.ProcessData.open({
+                datasetId: window.currentDataset,
+                objects: payloadObjects(),
+                cameras: camsArg(),
+                effect: payloadEffect(),  // the previewed effect — the menu just commits it
+                effectLabel: spec ? spec.label : null,
+                multiInstance: multiInstance,
+            });
         }
 
         // Name edits restart tracking, so debounce; colour/sign/remove are display-only → instant.
@@ -330,7 +440,7 @@
         function syncData() {
             if (mode !== 'data') return;
             if (!current || namedObjects().length === 0 || !window.currentDataset) {
-                fetch('/api/overlays/data/cancel', { method: 'POST' }).catch(() => {});
+                fetch('/api/overlays/data/cancel', { method: 'POST', headers: ovlHeaders() }).catch(() => {});
                 dataVersion++;
                 stopPoll();
                 clearOverlays();
@@ -339,11 +449,20 @@
             }
             dataVersion++;  // bust the per-frame img cache so changed objects/colours re-pull
             fetch('/api/overlays/data/configure', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background: bgPayload(), cameras: selectedCameras ? [...selectedCameras] : [] }),
-            }).then((r) => {
-                // A run owns the obs stream (one writer at a time) — surface it, don't silently fail.
-                if (r.status === 409) { setBadge('run active', 'error'); stopPoll(); clearOverlays(); return; }
+                method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background: bgPayload(), effect: payloadEffect(), multi_instance: multiInstance, cameras: selectedCameras ? [...selectedCameras] : [] }),
+            }).then(async (r) => {
+                if (r.status === 409) {
+                    // The overlay mutex is held by another client (another data tab/machine,
+                    // or the run overlay). Show it and keep polling so we auto-resume when freed.
+                    const d = await r.json().catch(() => ({}));
+                    const holder = d && d.detail && d.detail.holder;
+                    wasBusy = true;
+                    setBadge('busy: ' + (holder || 'another client'), 'idle');
+                    clearOverlays();
+                    startPoll();
+                    return;
+                }
                 startPoll(); onFrame();
             }).catch(() => {});
         }
@@ -362,7 +481,17 @@
                 fetch('/api/overlays/live/start', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ model: current, objects: payloadObjects(), background: bgPayload(), cameras: camsArg() }),
-                }).then(() => startPoll()).catch(() => {});
+                }).then(async (r) => {
+                    if (r.status === 409) {
+                        // A data client holds the overlay mutex — can't start the run overlay.
+                        const d = await r.json().catch(() => ({}));
+                        started = false; wasBusy = true;
+                        setBadge('busy: ' + ((d.detail && d.detail.holder) || 'another client'), 'idle');
+                        startPoll();
+                        return;
+                    }
+                    startPoll();
+                }).catch(() => {});
                 setBadge('starting…', 'loading');
             } else {
                 fetch('/api/overlays/live/control', {
@@ -375,7 +504,7 @@
         // Draw iff the backend machine says ACTIVE — single source of truth. `started` (below) is
         // only the frontend's launch *request*, not a second copy of "is it running". The decision
         // lives in OverlayGate.shouldDraw (overlay_gate.js) so it is unit-tested in isolation.
-        function isLiveOn() { return OverlayGate.shouldDraw(mode, current, namedObjects().length > 0, status.state); }
+        function isLiveOn() { return !status.busy && OverlayGate.shouldDraw(mode, current, namedObjects().length > 0, status.state); }
 
         // ---- status polling + badge ----
         function startPoll() { stopPoll(); pollTimer = setInterval(refreshStatus, 500); refreshStatus(); }
@@ -385,8 +514,27 @@
             const url = mode === 'live'
                 ? '/api/overlays/live/status?model=' + encodeURIComponent(current || '')  // per-model state
                 : '/api/overlays/data/status';
-            fetch(url).then((r) => r.json()).then((s) => {
+            fetch(url, { headers: ovlHeaders() }).then((r) => r.json()).then((s) => {
                 status = s;
+                // Overlay mutex: if another client holds the shared worker (another data
+                // tab/machine, or the run overlay), don't draw/publish — keep polling so
+                // we auto-resume the instant it frees. Same for both panels.
+                if (s.busy) {
+                    wasBusy = true;
+                    setBadge('busy: ' + (s.holder || 'another client'), 'idle');
+                    renderAction();
+                    clearOverlays();
+                    if (!pollTimer) startPoll();
+                    return;
+                }
+                if (wasBusy && !s.busy) {
+                    wasBusy = false;  // freed — retry to take the mutex
+                    sync();
+                    return;
+                }
+                // (The backend re-pushes the data config on every poll while the worker
+                // is up, so an effect chosen during its load window is delivered reliably
+                // once the shm buffer exists — no frontend reconcile needed here.)
                 // `started` is ONLY the launch request — it picks /live/start vs /live/control, nothing
                 // more. The draw gate (isLiveOn) reads the backend machine's ACTIVE state directly, so the
                 // worker's own INACTIVE→LOADING→ACTIVE warm-up needs no syncing here (the old reconcile
@@ -488,7 +636,7 @@
                 // stream (no-op if the frame is unchanged). Called on frame change AND the status poll,
                 // so a re-visited frame re-publishes and the overlay is never stale.
                 fetch('/api/overlays/data/publish', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ dataset_id: window.currentDataset, episode: window.currentEpisode, frame: window.currentFrame }),
                 }).catch(() => {});
             }

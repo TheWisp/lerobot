@@ -259,6 +259,10 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         self._signs: dict[str, str] = {}
         self._bg_color: tuple[int, int, int] | None = None
         self._det_threshold = 0.5
+        # Data editing unions all instances of a concept (protect every match, e.g.
+        # both arms); the debug overlay keeps the single-largest lock. Set via
+        # set_control({"multi_instance": ...}); default False = the debug lock.
+        self._seed_multi = False
         self._cam: str | None = None
         self._tracks: dict[str | None, dict] = {}  # per-camera tracker state (session + masks)
 
@@ -294,10 +298,25 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         bg = _parse_background(control)
         if bg is not _BG_UNSET:
             self._bg_color = bg
+        # "Segment all instances of each concept" (both arms) vs the single largest.
+        # Absent = keep the current value (default False: the debug overlay's lock;
+        # the data-editing paths send True). A change restarts tracking so the next
+        # frame re-seeds under the new policy instead of waiting for a flush.
+        if "multi_instance" in control:
+            mv = bool(control["multi_instance"])
+            if mv != self._seed_multi:
+                self._seed_multi = mv
+                self._tracks = {}
 
-    # ---------------- Tier 1: image detector (text -> one mask per concept) ----------------
+    # ---------------- Tier 1: image detector (text -> mask per concept) ----------------
     def _detect(self, frame_rgb: np.ndarray, concept: str, h: int, w: int) -> np.ndarray | None:
-        """Largest instance mask for ``concept`` on this single frame, or None."""
+        """Seed mask for ``concept`` on this single frame, or None.
+
+        Debug overlay (``_seed_multi`` False): the single largest instance — the
+        tracker then locks onto that one object. Data editing (``_seed_multi``
+        True): the UNION of every instance, so a concept like "robot arm" protects
+        BOTH arms, not just the biggest (SAM3 returns them as separate instances;
+        taking the largest silently dropped the second)."""
         torch = self._torch
         inp = self.det_proc(images=self._Image.fromarray(frame_rgb), text=concept, return_tensors="pt").to(
             self.device
@@ -311,9 +330,18 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         if len(masks) == 0:
             return None
         arrs = [(m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m)) > 0 for m in masks]
+        arrs = [a for a in arrs if int(a.sum()) > 50]
+        if not arrs:
+            return None
+        if self._seed_multi:
+            union = np.zeros((h, w), dtype=bool)
+            for a in arrs:
+                union |= a
+            assert union.shape == (h, w), f"detector mask {union.shape} != frame {(h, w)}"
+            return union
         best = max(arrs, key=lambda a: int(a.sum()))
         assert best.shape == (h, w), f"detector mask {best.shape} != frame {(h, w)}"
-        return best if int(best.sum()) > 50 else None
+        return best
 
     # ---------------- Tier 2: geometric video tracker ----------------
     def _pv(self, frame_rgb: np.ndarray):
@@ -418,10 +446,53 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
             for c in self._concepts
         }
 
-    def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
-        assert frame_rgb.ndim == 3 and frame_rgb.shape[2] == 3, (
-            f"infer expects HxWx3 RGB, got {frame_rgb.shape}"
-        )
+    def segment(self, frame_rgb: np.ndarray) -> dict[str, np.ndarray]:
+        """Per-concept boolean masks for this frame (positive concepts only).
+
+        Runs the same tracking pipeline as :meth:`infer` but returns the raw
+        ``{concept: HxW bool mask}`` instead of an RGBA overlay — what an
+        offline pixel-editing pass (background replacement, recolor) needs.
+        Negative (``-``) concepts are carved out of the positives, exactly as
+        the overlay compositor does, so the returned masks are the region that
+        an effect should KEEP as foreground. Precondition: ``frame_rgb`` is
+        contiguous HxWx3 uint8 RGB; call :meth:`set_camera` / :meth:`reset` to
+        scope and reseed per-camera tracking just like the live loop. Whether a
+        concept yields all its instances (both arms) or just the largest is set via
+        ``set_control({"multi_instance": ...})`` — same knob the overlay + batch share.
+        """
+        masks_by_concept, _h, _w = self._infer_masks(frame_rgb)
+        # Apply the same +/- carving the compositor does, so a caller gets the
+        # final kept region per positive concept without re-deriving the logic.
+        neg = None
+        has_neg = any(self._signs.get(c, "+") == "-" for c in self._concepts)
+        if has_neg:
+            neg = np.zeros(frame_rgb.shape[:2], dtype=bool)
+            for c in self._concepts:
+                if self._signs.get(c, "+") == "-":
+                    for m in masks_by_concept.get(c, []):
+                        neg |= m
+        out: dict[str, np.ndarray] = {}
+        for c in self._concepts:
+            if self._signs.get(c, "+") == "-":
+                continue
+            ms = masks_by_concept.get(c, [])
+            if not ms:
+                continue
+            union = np.zeros(frame_rgb.shape[:2], dtype=bool)
+            for m in ms:
+                union |= m
+            if neg is not None:
+                union &= ~neg
+            out[c] = union
+        return out
+
+    def _infer_masks(self, frame_rgb: np.ndarray) -> tuple[dict[str, list[np.ndarray]], int, int]:
+        """Drive the tracker for one frame and return ``(masks_by_concept, h, w)``.
+
+        The body shared by :meth:`infer` (which composites an RGBA overlay) and
+        :meth:`segment` (which returns the raw masks). Mutates per-camera tracker
+        state — the caller must have selected the camera via :meth:`set_camera`.
+        """
         torch = self._torch
         h, w = frame_rgb.shape[:2]
         cam = self._cam
@@ -489,7 +560,13 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
                     if seeds:
                         self._seed(track, seeds, pv, h, w)
 
-        masks_by_concept = self._live_masks(track)
+        return self._live_masks(track), h, w
+
+    def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
+        assert frame_rgb.ndim == 3 and frame_rgb.shape[2] == 3, (
+            f"infer expects HxWx3 RGB, got {frame_rgb.shape}"
+        )
+        masks_by_concept, h, w = self._infer_masks(frame_rgb)
         rgba = _composite_concepts(
             h,
             w,

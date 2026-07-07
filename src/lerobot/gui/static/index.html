@@ -18,6 +18,14 @@
              Hub transfers without remembering a hidden trigger. Click toggles
              the popover below; the popover lists one card per active or
              recently-completed Hub transfer (empty when idle). -->
+        <!-- Dataset-processing indicator: mirrors Transfers, always visible. In-flight
+             augmentation jobs run in a detached worker, so their progress lives here
+             rather than only in the dismissable Process window. -->
+        <button id="proc-indicator" class="transfers-indicator" type="button"
+                onclick="ProcessData.togglePopover()"
+                title="Dataset processing jobs (augmentation)">
+            <span id="proc-indicator-label">Processing</span>
+        </button>
         <button id="transfers-indicator" class="transfers-indicator" type="button"
                 onclick="toggleTransfersPopover()"
                 title="Hub uploads / downloads">
@@ -41,6 +49,15 @@
                     title="Dismiss all finished transfers">Clear finished</button>
         </div>
         <div id="transfers-list" class="transfers-list"></div>
+    </div>
+
+    <!-- Processing popover: mirrors the Transfers popover; lists augmentation jobs
+         (preview + full runs) with live progress + Cancel / Open / Dismiss. -->
+    <div id="proc-popover" class="transfers-popover" hidden>
+        <div class="transfers-popover-header">
+            <span>Dataset processing</span>
+        </div>
+        <div id="proc-jobs-list" class="proc-jobs"></div>
     </div>
 
     <!-- Data tab (existing) -->
@@ -661,7 +678,8 @@ nebius iam auth-public-key generate \
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=46"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
-    <script src="/static/overlays.js?v=30"></script>
+    <script src="/static/process.js?v=8"></script>
+    <script src="/static/overlays.js?v=37"></script>
     <script src="/static/model.js?v=5"></script>
     <script src="/static/training.js?v=23"></script>
     <script src="/static/add_host_dialog.js?v=4"></script>
