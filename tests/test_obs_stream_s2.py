@@ -35,10 +35,10 @@ def dummy_obs():
 
 def _create_s2_shared_memory():
     """Simulate S2 standalone creating SharedImageBuffer."""
-    from lerobot.policies.hvla.ipc import DEFAULT_S2_IMAGE_KEYS, SharedImageBuffer
+    from lerobot.policies.hvla.ipc import SharedImageBuffer
 
     buf = SharedImageBuffer(
-        camera_keys=DEFAULT_S2_IMAGE_KEYS,
+        camera_keys=("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb", "base_1_rgb"),
         height=720,
         width=1280,
         create=True,

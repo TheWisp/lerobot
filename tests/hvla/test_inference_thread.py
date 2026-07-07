@@ -46,15 +46,28 @@ class MockSharedCache:
         return torch.zeros(2048), 0.0
 
 
-# Use the real JOINT_NAMES so obs_to_s1_batch works without modification
-from lerobot.policies.hvla.s1_process import JOINT_NAMES
+# SO107 bimanual joint order — fixture for the 14-DOF bimanual robot.
+_SO107_JOINTS = [
+    "left_shoulder_pan.pos",
+    "left_shoulder_lift.pos",
+    "left_elbow_flex.pos",
+    "left_forearm_roll.pos",
+    "left_wrist_flex.pos",
+    "left_wrist_roll.pos",
+    "left_gripper.pos",
+    "right_shoulder_pan.pos",
+    "right_shoulder_lift.pos",
+    "right_elbow_flex.pos",
+    "right_forearm_roll.pos",
+    "right_wrist_flex.pos",
+    "right_wrist_roll.pos",
+    "right_gripper.pos",
+]
 
 
-def _make_obs():
-    """Create a minimal observation dict matching JOINT_NAMES."""
-    obs = {}
-    for name in JOINT_NAMES:
-        obs[name] = 0.0
+def _make_obs(joint_names=_SO107_JOINTS):
+    """Create a minimal observation dict for the given robot's joints."""
+    obs = dict.fromkeys(joint_names, 0.0)
     obs["front"] = np.zeros((224, 224, 3), dtype=np.uint8)
     return obs
 
@@ -68,13 +81,94 @@ def _make_thread(**kwargs) -> InferenceThread:
         "shared_cache": MockSharedCache(),
         "s2_latent_key": "observation.s2_latent",  # gitleaks:allow
         "s1_image_keys": ["observation.images.front"],
-        "joint_names": list(JOINT_NAMES),
+        "joint_names": list(_SO107_JOINTS),
         "device": torch.device("cpu"),
         "resize_to": None,
         "fps": 30,
     }
     defaults.update(kwargs)
     return InferenceThread(**defaults)
+
+
+# Deliberately different robot: single-arm SO101 (6 DOF, different joint names AND count).
+_SO101_JOINTS = [
+    "shoulder_pan.pos",
+    "shoulder_lift.pos",
+    "elbow_flex.pos",
+    "wrist_flex.pos",
+    "wrist_roll.pos",
+    "gripper.pos",
+]
+
+
+class TestRobotAgnostic:
+    """The S1 path must follow the connected robot's joints, not a hardcoded SO107 set.
+
+    Drives a non-SO107 robot (single-arm SO101: 6 joints, no left_/right_ prefix)
+    end-to-end. On the old SO107-hardcoded path, obs_to_s1_batch fell back to a
+    14-joint SO107 list and would KeyError on "left_shoulder_pan.pos" (absent here).
+    """
+
+    def test_non_so107_robot_produces_chunk_e2e(self):
+        thread = _make_thread(policy=MockS1Policy(action_dim=6), joint_names=list(_SO101_JOINTS))
+        thread.start()
+        try:
+            thread.publish_obs(_make_obs(_SO101_JOINTS), time.perf_counter())
+            assert thread.wait_for_first_chunk(timeout=5.0)
+            chunk, _, _ = thread.get_chunk()
+            assert chunk is not None
+            assert chunk.shape == (50, 6)  # 6-DOF robot, not 14
+        finally:
+            thread.stop()
+
+    def test_state_vector_follows_robot_joint_order(self):
+        from lerobot.policies.hvla.s1_process import obs_to_s1_batch
+
+        # Distinct value per joint so order is verifiable.
+        obs = {name: float(i + 1) for i, name in enumerate(_SO101_JOINTS)}
+        obs["front"] = np.zeros((224, 224, 3), dtype=np.uint8)
+        batch = obs_to_s1_batch(
+            obs,
+            s1_image_keys=["observation.images.front"],
+            shared_cache=None,
+            s2_latent_key="observation.s2_latent",  # gitleaks:allow
+            device=torch.device("cpu"),
+            joint_names=list(_SO101_JOINTS),
+        )
+        state = batch["observation.state"]
+        assert state.shape == (1, 6)
+        assert state[0].tolist() == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+    def test_joint_names_is_required(self):
+        from lerobot.policies.hvla.s1_process import obs_to_s1_batch
+
+        with pytest.raises(TypeError):
+            obs_to_s1_batch(
+                {},
+                s1_image_keys=[],
+                shared_cache=None,
+                s2_latent_key="observation.s2_latent",  # gitleaks:allow
+                device=torch.device("cpu"),
+            )
+
+    def test_so107_action_features_match_trained_order_TEMP(self):
+        """TEMPORARY guard: the deleted SO107 JOINT_NAMES constant is now sourced
+        from robot.action_features. On SO107 those must stay byte-identical so the
+        S1 state vector keeps the order the policy was trained on. This fails loudly
+        if anyone reorders the SO107 motor bus before we re-verify S1 on hardware.
+
+        TODO(remove after SO107 hardware rollout confirms S1 parity): delete this
+        test once the live SO107 flow is re-verified against this branch.
+        """
+        try:
+            from lerobot.robots.bi_so107_follower.bi_so107_follower import BiSO107Follower
+            from lerobot.robots.bi_so107_follower.config_bi_so107_follower import BiSO107FollowerConfig
+        except ImportError as e:
+            pytest.skip(f"SO107 robot deps unavailable: {e}")
+
+        # Ports are unused — construction doesn't open hardware.
+        robot = BiSO107Follower(BiSO107FollowerConfig(left_arm_port="/dev/null", right_arm_port="/dev/null"))
+        assert list(robot.action_features) == _SO107_JOINTS
 
 
 class TestSliceWithPad:

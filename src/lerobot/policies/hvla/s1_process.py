@@ -21,24 +21,6 @@ from lerobot.types import ActionChunk
 
 logger = logging.getLogger(__name__)
 
-# Default joint names for SO107 bimanual robot (backward compat / tests)
-JOINT_NAMES = [
-    "left_shoulder_pan.pos",
-    "left_shoulder_lift.pos",
-    "left_elbow_flex.pos",
-    "left_forearm_roll.pos",
-    "left_wrist_flex.pos",
-    "left_wrist_roll.pos",
-    "left_gripper.pos",
-    "right_shoulder_pan.pos",
-    "right_shoulder_lift.pos",
-    "right_elbow_flex.pos",
-    "right_forearm_roll.pos",
-    "right_wrist_flex.pos",
-    "right_wrist_roll.pos",
-    "right_gripper.pos",
-]
-
 # Default S1→S2 camera key map for SO107 (override via --s2-camera-map)
 S2_CAM_KEY_MAP = {
     "front": "base_0_rgb",
@@ -235,7 +217,7 @@ def _rlt_flush_intervention_terminal(rlt_state, rlt_recorder, rlt_replay, infer_
 
 
 def _save_infer_drop(
-    chunk_np: np.ndarray, obs: dict, infer_count: int, save_dir: str, joint_names: list[str] | None = None
+    chunk_np: np.ndarray, obs: dict, infer_count: int, save_dir: str, joint_names: list[str]
 ):
     """Detect large jumps in any joint of predicted chunk and save obs for analysis."""
     # Max per-joint jump in first 20 steps
@@ -244,7 +226,7 @@ def _save_infer_drop(
     if max_jump <= 10:
         return
     worst_joint = int(np.argmax(per_joint_max))
-    names = joint_names or JOINT_NAMES
+    names = joint_names
     joint_label = names[worst_joint] if worst_joint < len(names) else f"joint_{worst_joint}"
 
     drop_dir = os.path.join(save_dir, f"infer_drop_{infer_count}")
@@ -271,10 +253,10 @@ def _log_joint_jump(
     step_count: int,
     idx: int,
     chunk_data: np.ndarray | None,
+    joint_names: list[str],
     robot_state: np.ndarray | None = None,
     save_dir: str | None = None,
     obs_images: dict | None = None,
-    joint_names: list[str] | None = None,
 ):
     """Log large per-joint jumps with chunk trajectory and optional obs saving."""
     per_joint_delta = np.abs(action_np - prev_action_np)
@@ -283,7 +265,7 @@ def _log_joint_jump(
         return
     if chunk_data is None:
         return
-    names = joint_names or JOINT_NAMES
+    names = joint_names
     worst = int(np.argmax(per_joint_delta))
     joint_label = names[worst] if worst < len(names) else f"joint_{worst}"
     delta = np.linalg.norm(action_np - prev_action_np)
@@ -327,16 +309,13 @@ def obs_to_s1_batch(
     shared_cache: SharedLatentCache,
     s2_latent_key: str,
     device: torch.device,
+    joint_names: list[str],
     resize_to: tuple[int, int] | None = None,
-    joint_names: list[str] | None = None,
 ) -> dict:
     """Convert robot observation to S1 input batch.
 
     Images are resized on CPU before GPU transfer (0.6MB vs 10.5MB per image).
     """
-    if joint_names is None:
-        joint_names = JOINT_NAMES
-
     batch = {}
 
     for key in s1_image_keys:
