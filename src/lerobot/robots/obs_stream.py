@@ -43,40 +43,47 @@ SHM_PREFIX = "lerobot_obs_"
 _SHM_DIR = "/dev/shm"  # nosec B108  # well-known POSIX shm path
 
 
-def cleanup_stale_streams(shm_dir: str | os.PathLike[str] = _SHM_DIR) -> int:
-    """Remove ``<shm_dir>/lerobot_obs_*`` segments left by a crashed writer.
+def cleanup_stale_streams(
+    shm_dir: str | os.PathLike[str] = _SHM_DIR, *, respect_liveness: bool = False, live_window_s: float = 2.0
+) -> int:
+    """Remove ``<shm_dir>/lerobot_obs_*`` segments left by a crashed / orphaned writer.
 
-    A normal ``ObservationStream.cleanup()`` (called from the robot's
-    ``disconnect()``) unlinks the segments — but if the writer process
-    dies via SIGKILL, SIGABRT, segfault, etc. the cleanup never runs and
-    the segments persist in ``/dev/shm`` until a reboot.
+    A normal ``ObservationStream.cleanup()`` (from the robot's ``disconnect()``) unlinks the segments —
+    but a writer killed by SIGKILL/segfault leaves them in ``/dev/shm`` forever. A stale segment is
+    *worse than nothing*: a reader attaches and serves frozen data, so the GUI thinks teleop is alive
+    when it isn't.
 
-    A stale segment is *worse than nothing* for the GUI's reader path:
-    ``ObservationStreamReader()`` happily attaches to whatever exists and
-    serves frozen data, making the GUI think teleop is alive when it
-    isn't. Sweeping at process boundaries (GUI startup / shutdown) closes
-    that hole.
-
-    Safe to call only when no observation stream writer is active in
-    *any* process. The GUI calls this on startup (before any subprocess
-    runs) and on shutdown (after killing the active subprocess).
-
-    Args:
-      shm_dir: directory to scan. Defaults to the system POSIX shm path
-        (``/dev/shm`` on Linux); tests pass a tmp_path.
+    ``respect_liveness=False`` (default) sweeps every match unconditionally — use ONLY at writer-quiescent
+    boundaries (GUI startup; or shutdown right after killing the active writer, where a recent timestamp
+    is still an orphan). ``respect_liveness=True`` first reads each header's wall-clock write timestamp and
+    BAILS (removes nothing) if any segment was written within ``live_window_s`` — i.e. a writer is alive,
+    possibly an EXTERNAL teleop this process doesn't track, and sweeping would yank a live stream out from
+    under its readers. That makes the call safe mid-session (e.g. before launching a run), not just at
+    boundaries.
 
     Returns the number of segments removed.
     """
     if not os.path.isdir(shm_dir):
         return 0
+    names = [n for n in os.listdir(shm_dir) if n.startswith(SHM_PREFIX)]
+    if respect_liveness and names:
+        now = time.time()
+        for name in names:
+            try:
+                with open(os.path.join(shm_dir, name), "rb") as f:  # tmpfs file == the live mmap
+                    hdr = f.read(_HDR_SIZE)
+            except OSError:
+                continue
+            if len(hdr) < _HDR_SIZE:
+                continue
+            _, seq_done, ts = _HDR.unpack(hdr)
+            if seq_done > 0 and (now - ts) < live_window_s:
+                return 0  # a writer is alive — leave the whole stream alone
     removed = 0
-    for name in os.listdir(shm_dir):
-        if not name.startswith(SHM_PREFIX):
-            continue
+    for name in names:
         path = os.path.join(shm_dir, name)
         try:
-            # safe-destruct: shm we created (matches our SHM_PREFIX), only swept when no writer is active
-            os.unlink(path)
+            os.unlink(path)  # safe-destruct: our SHM_PREFIX; liveness-gated above when a writer may be live
             removed += 1
         except OSError as e:
             logger.warning("could not remove stale shm %s: %s", path, e)
