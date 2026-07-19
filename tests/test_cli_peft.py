@@ -24,6 +24,9 @@ def lerobot_train(args):
     return run_command(cmd="lerobot-train", module="lerobot_train", args=args)
 
 
+# fork-only: upstream deleted this helper together with `test_peft_record_loads_policy`
+# when policy deployment moved to `lerobot-rollout` (#3413); the fork keeps policy
+# loading in `lerobot-record`, so the helper and the test stay.
 def lerobot_record(args):
     return run_command(cmd="lerobot-record", module="lerobot_record", args=args)
 
