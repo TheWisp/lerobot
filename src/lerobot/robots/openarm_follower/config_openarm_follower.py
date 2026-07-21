@@ -20,27 +20,40 @@ from lerobot.cameras import CameraConfig
 
 from ..config import RobotConfig
 
+# OpenArm 2.0 standard joint limits (degrees), converted from the validated
+# openarm_standard.yaml radians. Convention: motors are factory-zeroed with
+# the arms hanging straight down and the gripper closed; that zero matches
+# the openarm_bimanual.xml MuJoCo model's qpos=0, so no offset conversion
+# is needed anywhere (including gravity feedforward).
 LEFT_DEFAULT_JOINTS_LIMITS: dict[str, tuple[float, float]] = {
-    "joint_1": (-75.0, 75.0),
-    "joint_2": (-90.0, 9.0),
-    "joint_3": (-85.0, 85.0),
-    "joint_4": (0.0, 135.0),
-    "joint_5": (-85.0, 85.0),
-    "joint_6": (-40.0, 40.0),
-    "joint_7": (-80.0, 80.0),
-    "gripper": (-65.0, 0.0),
+    "joint_1": (-200.0, 80.0),
+    "joint_2": (-190.0, 10.0),
+    "joint_3": (-90.0, 90.0),
+    "joint_4": (0.0, 140.0),
+    "joint_5": (-90.0, 90.0),
+    "joint_6": (-45.0, 45.0),
+    "joint_7": (-90.0, 90.0),
+    "gripper": (0.0, 45.0),
 }
 
 RIGHT_DEFAULT_JOINTS_LIMITS: dict[str, tuple[float, float]] = {
-    "joint_1": (-75.0, 75.0),
-    "joint_2": (-9.0, 90.0),
-    "joint_3": (-85.0, 85.0),
-    "joint_4": (0.0, 135.0),
-    "joint_5": (-85.0, 85.0),
-    "joint_6": (-40.0, 40.0),
-    "joint_7": (-80.0, 80.0),
-    "gripper": (-65.0, 0.0),
+    "joint_1": (-80.0, 200.0),
+    "joint_2": (-10.0, 190.0),
+    "joint_3": (-90.0, 90.0),
+    "joint_4": (0.0, 140.0),
+    "joint_5": (-90.0, 90.0),
+    "joint_6": (-45.0, 45.0),
+    "joint_7": (-90.0, 90.0),
+    "gripper": (-45.0, 0.0),
 }
+
+# OpenArm 2.0 standard PD gains: [joint_1, ..., joint_7, gripper].
+DEFAULT_POSITION_KP: list[float] = [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0, 10.0]
+DEFAULT_POSITION_KD: list[float] = [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5, 0.2]
+
+# OpenArm 2.0 standard joint delta (velocity) limits [rad/s], used to clamp
+# the velocity feedforward: [joint_1, ..., joint_7, gripper].
+JOINT_DELTA_LIMITS_RAD_S: list[float] = [1.8, 1.8, 3.3, 2.3, 3.5, 3.5, 3.5, 3.5]
 
 
 @dataclass
@@ -74,6 +87,30 @@ class OpenArmFollowerConfigBase:
     # Set to a positive scalar for all motors, or a dict mapping motor names to limits
     max_relative_target: float | dict[str, float] | None = None
 
+    # Gravity feedforward gain in [0, 1] via the MIT torque slot (0 = disabled).
+    # Validated value: 0.9. Requires the `openarm-ff` extra (mujoco + openarm-mujoco).
+    gravity_ff_gain: float = 0.0
+
+    # MJCF model for gravity torque (default: openarm_bimanual.xml shipped by
+    # the openarm-mujoco pip package). Only used when gravity_ff_gain > 0.
+    gravity_ff_xml: str | None = None
+
+    # Velocity feedforward gain (0 = disabled). When > 0, the MIT velocity slot
+    # carries gain * finite-difference of successive commanded positions,
+    # clamped per joint to JOINT_DELTA_LIMITS_RAD_S.
+    velocity_ff_gain: float = 0.0
+
+    # Alignment ramp: per-step position clamp toward the target [rad/step]
+    # (validated: 0.003). None = disabled (targets sent as-is). The gripper is
+    # EXCLUDED from the clamp: it is a 1 N·m force-limited POS_FORCE finger, so
+    # the ramp has no safety value for it and only delays grasps.
+    align_step_limit: float | None = None
+
+    # Jump guard [rad]: when the alignment ramp is enabled and any arm-joint
+    # target jumps more than this vs the last command, the jump is logged
+    # (rate-limited, ~2 s) and the ramp rate-limits the move automatically.
+    align_jump_threshold: float = 0.1
+
     # Camera configurations
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
 
@@ -97,15 +134,16 @@ class OpenArmFollowerConfigBase:
         }
     )
 
-    # MIT control parameters for position control (used in send_action)
+    # MIT control parameters for position control (used in send_action).
+    # OpenArm 2.0 standard gains.
     # List of 8 values: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, joint_7, gripper]
-    position_kp: list[float] = field(
-        default_factory=lambda: [240.0, 240.0, 240.0, 240.0, 24.0, 31.0, 25.0, 25.0]
-    )
-    position_kd: list[float] = field(default_factory=lambda: [5.0, 5.0, 3.0, 5.0, 0.3, 0.3, 0.3, 0.3])
+    position_kp: list[float] = field(default_factory=lambda: list(DEFAULT_POSITION_KP))
+    position_kd: list[float] = field(default_factory=lambda: list(DEFAULT_POSITION_KD))
 
-    # Values for joint limits. Can be overridden via CLI (for custom values) or by setting config.side to either 'left' or 'right'.
-    # If config.side is left set to None and no CLI values are passed, the default joint limit values are small for safety.
+    # Values for joint limits. Can be overridden via CLI (for custom values) or by setting
+    # config.side to either 'left' or 'right', which selects the OpenArm 2.0 standard
+    # per-side limits (LEFT/RIGHT_DEFAULT_JOINTS_LIMITS). If config.side is left set to None
+    # and no CLI values are passed, the default joint limit values are small for safety.
     joint_limits: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {
             "joint_1": (-5.0, 5.0),
