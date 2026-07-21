@@ -30,13 +30,30 @@ to one or two controllers) differs.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import numpy as np
 
-from .server import quest_delta_to_robot, quest_rot_to_robot
+from .server import QUEST_TO_ROBOT_M, quest_delta_to_robot, quest_rot_to_robot
 
 logger = logging.getLogger(__name__)
+
+# After a tracking-dropout recovery, keep the clutch released this long even
+# if the grip is physically held: rediscovered controllers often report OK
+# while their pose is still settling, and the settle-snap would otherwise
+# reach the arm. Ported from the validated dora OpenArm VR stack
+# (_SETTLE_SECS in quest_receiver.py).
+_SETTLE_SECS = 0.25
+
+# Target jump guard (diagnostic): warn when the emitted EE target steps more
+# than this in one WebXR tick. The per-frame glitch clamps below bound the
+# step, but a step near the cap is still suspicious — legit hand motion at
+# 90 Hz rarely exceeds these. Ports the dora stack's target-step warning;
+# rate-limited per controller so a fast-but-legit stretch doesn't spam.
+_TARGET_STEP_WARN_POS_M = 0.02
+_TARGET_STEP_WARN_ROT_RAD = 0.1
+_TARGET_STEP_WARN_MIN_INTERVAL_S = 1.0
 
 
 class QuestArmController:
@@ -70,6 +87,8 @@ class QuestArmController:
         max_pos_step_m_per_tick: float = 0.10,
         key_prefix: str = "",
         reset_button_index: int = 4,
+        quest_to_robot_m: np.ndarray | None = None,
+        settle_secs: float = _SETTLE_SECS,
     ) -> None:
         self.clutch_button_index = int(clutch_button_index)
         self.gripper_button_index = int(gripper_button_index)
@@ -84,6 +103,16 @@ class QuestArmController:
         self.gripper_open_motor = float(gripper_open_motor)
         self.gripper_closed_motor = float(gripper_closed_motor)
         self.key_prefix = key_prefix
+        # Quest stage -> robot base rotation. None = the server module's
+        # SO-107 default; QuestVRTeleop passes one built from the config's
+        # robot_forward_in_urdf / robot_up_in_urdf.
+        self._q2r = (
+            QUEST_TO_ROBOT_M if quest_to_robot_m is None else np.asarray(quest_to_robot_m, dtype=float)
+        )
+        assert self._q2r.shape == (3, 3), "quest_to_robot_m must be 3x3"
+        # Post-recovery settle window (see _SETTLE_SECS).
+        self.settle_secs = float(settle_secs)
+        self._recover_t: float | None = None
         self._engaged: bool = False
         self._quest_pos_at_engage: np.ndarray | None = None
         self._quest_rot_at_engage = None  # scipy Rotation
@@ -91,6 +120,11 @@ class QuestArmController:
         # to detect tracking glitches (huge teleport-style jumps between
         # consecutive samples). Reset to None on disconnect / clutch loss.
         self._quest_pos_prev: np.ndarray | None = None
+        # Previous ENGAGED emission's (target_xyz, target_wxyz rotvec), for
+        # the jump-guard diagnostic log. Cleared on disengage so a fresh
+        # engage (new anchor) never compares across anchors.
+        self._prev_emitted: tuple[np.ndarray, np.ndarray] | None = None
+        self._last_step_warn_t: float = 0.0
         # Latched gripper command while disengaged. Init to the open value
         # so a freshly-connected teleop with no clutch press doesn't move
         # the gripper at all.
@@ -133,6 +167,8 @@ class QuestArmController:
         self._quest_pos_at_engage = None
         self._quest_rot_at_engage = None
         self._quest_pos_prev = None
+        self._prev_emitted = None
+        self._recover_t = None
         self._last_gripper_pos = self.gripper_open_motor
         self._tracked = True
 
@@ -178,9 +214,19 @@ class QuestArmController:
         if not self._tracked:
             # Re-acquired after a dropout. on_tracking_lost() already cleared
             # the engage state, so a still-held clutch re-anchors below as a
-            # fresh rising edge — no stale-snapshot delta.
-            logger.info("Quest %s controller tracking re-acquired", self._label)
+            # fresh rising edge — no stale-snapshot delta. Arm the settle
+            # window: for ``settle_secs`` after recovery the clutch is
+            # treated as released even while physically held, so the
+            # rediscovered controller's settle-snap never reaches the arm.
+            logger.info(
+                "Quest %s controller tracking re-acquired — settling %.2fs",
+                self._label,
+                self.settle_secs,
+            )
             self._tracked = True
+            self._recover_t = time.monotonic()
+
+        now = time.monotonic()
 
         quest_pos = np.asarray(pose["pos"], dtype=float)
         quest_quat = pose.get("rot", [0.0, 0.0, 0.0, 1.0])  # [x, y, z, w]
@@ -193,6 +239,18 @@ class QuestArmController:
             else 0.0
         )
         engaged = clutch > 0.5
+
+        # Post-recovery settle window: a controller that just came back from
+        # a tracking dropout reports OK while its pose is still settling.
+        # Treat the clutch as released until the window expires — the pose
+        # baselines below keep following the (settling) pose, so when the
+        # window lapses the next engaged frame re-anchors seamlessly and
+        # none of the settle-snap becomes a teleop delta.
+        if engaged and self._recover_t is not None:
+            if now - self._recover_t < self.settle_secs:
+                engaged = False
+            else:
+                self._recover_t = None
 
         # Tracking-glitch suppression: if the raw Quest position jumped
         # more than max_pos_step_m_per_tick between consecutive frames,
@@ -222,7 +280,7 @@ class QuestArmController:
 
         if engaged and not self._engaged:
             self._quest_pos_at_engage = quest_pos.copy()
-            self._quest_rot_at_engage = quest_rot_to_robot(quest_quat)
+            self._quest_rot_at_engage = quest_rot_to_robot(quest_quat, self._q2r)
             # Reset the glitch-cap baseline to the current pose so the next
             # WebXR frame's step is measured from "where we just engaged",
             # not from a possibly-stale value left over from before engage.
@@ -243,12 +301,15 @@ class QuestArmController:
             # pose each frame keeps delta_p at zero across the reset →
             # release transition.
             self._quest_pos_at_engage = quest_pos.copy()
-            self._quest_rot_at_engage = quest_rot_to_robot(quest_quat)
+            self._quest_rot_at_engage = quest_rot_to_robot(quest_quat, self._q2r)
             self._quest_pos_prev = quest_pos.copy()
         self._engaged = engaged
 
         p = self.key_prefix
         if not engaged:
+            # New anchor on next engage: don't compare emitted targets
+            # across anchors in the jump-guard log.
+            self._prev_emitted = None
             action = self.idle_action()
             action[f"{p}gripper_pos"] = float(gripper_pos)
             action[f"{p}reset"] = reset
@@ -258,16 +319,37 @@ class QuestArmController:
         assert self._quest_pos_at_engage is not None
         assert self._quest_rot_at_engage is not None
         dquest = quest_pos - self._quest_pos_at_engage
-        drobot = quest_delta_to_robot(dquest) * self.position_scale
+        drobot = quest_delta_to_robot(dquest, self._q2r) * self.position_scale
 
         # Rotation delta in robot frame (as rotvec).
-        quest_rot_now = quest_rot_to_robot(quest_quat)
+        quest_rot_now = quest_rot_to_robot(quest_quat, self._q2r)
         delta_rot = quest_rot_now * self._quest_rot_at_engage.inv()
         rotvec = delta_rot.as_rotvec()
         mag = float(np.linalg.norm(rotvec))
         cap = self.max_rot_step_rad_per_tick
         if mag > cap > 0.0:
             rotvec = rotvec * (cap / mag)
+
+        # Target jump guard (diagnostic only): the per-frame glitch clamps
+        # above bound the emitted step, but a step near those bounds means a
+        # snap likely slipped through — say so in the run log. Rate-limited
+        # per controller; compared only across consecutive ENGAGED frames
+        # (same anchor), cleared on disengage.
+        emitted = (drobot.copy(), rotvec.copy())
+        if self._prev_emitted is not None:
+            dp = float(np.linalg.norm(emitted[0] - self._prev_emitted[0]))
+            da = float(np.linalg.norm(emitted[1] - self._prev_emitted[1]))
+            if (dp > _TARGET_STEP_WARN_POS_M or da > _TARGET_STEP_WARN_ROT_RAD) and (
+                now - self._last_step_warn_t > _TARGET_STEP_WARN_MIN_INTERVAL_S
+            ):
+                self._last_step_warn_t = now
+                logger.warning(
+                    "Quest %s target step %.0f mm / %.1f deg in one tick",
+                    self._label,
+                    dp * 1000,
+                    float(np.degrees(da)),
+                )
+        self._prev_emitted = emitted
 
         return {
             f"{p}enabled": 1.0,

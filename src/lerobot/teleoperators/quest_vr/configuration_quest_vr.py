@@ -145,6 +145,33 @@ class QuestVRTeleopConfig(TeleoperatorConfig):
     position_scale: float = field(default=1.0, metadata={"description": _POSITION_SCALE_DESC})
     max_rot_step_rad_per_tick: float = field(default=math.pi, metadata={"description": _MAX_ROT_DESC})
     max_pos_step_m_per_tick: float = field(default=0.04, metadata={"description": _MAX_POS_VEL_DESC})
+    # Quest stage -> robot base frame mapping. The Quest stage frame is
+    # gravity-aligned and fixed to the playspace (it does NOT rotate with
+    # head yaw), so a constant rotation derived from the robot's forward /
+    # up axes is the whole mapping. Defaults preserve the SO-107 convention
+    # (arm reaches in -Y). For OpenArm 2.0 set robot_forward_in_urdf to
+    # [1, 0, 0] (the OpenArm URDF/MJCF base frame reaches in +X; up stays
+    # +Z — gravity-aligned, arms hang in -Z at zero).
+    robot_forward_in_urdf: list[float] = field(
+        default_factory=lambda: [0.0, -1.0, 0.0],
+        metadata={
+            "description": (
+                "Unit 3-vector: which URDF (robot base) direction the arms "
+                "reach in — i.e. where 'push the controller away from you' "
+                "should send the EE. SO-107: [0, -1, 0] (default). "
+                "OpenArm 2.0: [1, 0, 0]."
+            ),
+        },
+    )
+    robot_up_in_urdf: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 1.0],
+        metadata={
+            "description": (
+                "Unit 3-vector: which URDF (robot base) direction is up "
+                "(anti-gravity). [0, 0, 1] for both SO-107 and OpenArm 2.0."
+            ),
+        },
+    )
     # Per-arm gripper motor mapping. The bimanual SO-107 has OPPOSITE
     # motor-direction conventions between left and right (verified
     # empirically: with both at open=0/closed=80 the left arm felt
