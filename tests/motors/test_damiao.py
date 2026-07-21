@@ -45,7 +45,7 @@ def test_damiao_motor():
         print("Testing MIT control batch...")
         current_pos = states["joint_3"]["position"]
         commands = {"joint_3": (10.0, 0.5, current_pos, 0.0, 0.0)}
-        bus._mit_control_batch(commands)
+        bus.mit_control_batch(commands)
         print("✓ MIT control batch sent")
 
         print("Disabling torque...")
