@@ -58,6 +58,20 @@ _WS_MIN = (-0.20, -0.35, 0.03)
 _WS_MAX = (0.25, 0.05, 0.36)
 
 
+def _no_solution(msg: str) -> Exception:
+    """Build the IK no-solution exception across pink versions.
+
+    pink 4.2's ``NoSolutionFound`` takes ``(problem, results)``; older pink
+    and the no-pink sentinel in ``cartesian_ik`` take a plain message.
+    """
+    from lerobot.robots.so107_description.cartesian_ik import _NoSolutionFound
+
+    try:
+        return _NoSolutionFound(msg)
+    except TypeError:
+        return _NoSolutionFound(None, None)  # pink 4.2: (problem, results)
+
+
 class _StubKinematics:
     """Deterministic FK/IK stand-in for controller-logic tests.
 
@@ -603,7 +617,6 @@ def test_unsolvable_ik_is_held():
     NoSolutionFound`` -> uncaught -> ``lerobot-teleoperate`` exited rc=1.
     Same conceptual treatment as the implausible-jump guard above.
     """
-    from lerobot.robots.so107_description.cartesian_ik import _NoSolutionFound
 
     class _InfeasibleIK:
         def forward_kinematics(self, q):
@@ -612,7 +625,7 @@ def test_unsolvable_ik_is_held():
             return t
 
         def inverse_kinematics(self, seed, target):
-            raise _NoSolutionFound("target unreachable")
+            raise _no_solution("target unreachable")
 
     q_init = np.array([0.0, -0.2, 0.15, 0.0, 0.0, 0.0, 50.0])
     ctrl = CartesianIKController(
@@ -647,10 +660,8 @@ def test_is_holding_flag_tracks_solve_outcome():
             return t
 
         def inverse_kinematics(self, seed, target):
-            from lerobot.robots.so107_description.cartesian_ik import _NoSolutionFound
-
             if self.next_raises:
-                raise _NoSolutionFound("infeasible")
+                raise _no_solution("infeasible")
             return self.next_returns if self.next_returns is not None else seed
 
     q_init = np.array([0.0, -0.2, 0.15, 0.0, 0.0, 0.0, 50.0])
@@ -689,7 +700,6 @@ def test_bimanual_transform_exposes_per_arm_hold_state():
     without reaching for the controllers directly."""
     from lerobot.robots.so107_description.cartesian_ik import (
         BimanualSO107IKTransform,
-        _NoSolutionFound,
     )
 
     class _Stub:
@@ -703,7 +713,7 @@ def test_bimanual_transform_exposes_per_arm_hold_state():
 
         def inverse_kinematics(self, seed, target):
             if self.raises:
-                raise _NoSolutionFound("infeasible")
+                raise _no_solution("infeasible")
             return seed
 
     q_init = np.array([0.0, -0.2, 0.15, 0.0, 0.0, 0.0, 50.0])
