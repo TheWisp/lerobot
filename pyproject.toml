@@ -181,6 +181,9 @@ robstride = ["lerobot[can-dep]"]
 
 # Robots
 openarms = ["lerobot[damiao]"]
+# Gravity feedforward for OpenArm followers: MuJoCo inverse dynamics on the
+# bimanual OpenArm 2.0 model (model files ship with the openarm-mujoco package).
+openarm-ff = ["lerobot[openarms]", "mujoco>=3.2,<4", "openarm-mujoco>=2.0"]
 gamepad = ["lerobot[pygame-dep]", "hidapi>=0.14.0,<0.15.0"]
 hopejr = ["lerobot[feetech]", "lerobot[pygame-dep]"]
 lekiwi = ["lerobot[feetech]", "lerobot[pyzmq-dep]"]
