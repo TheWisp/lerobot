@@ -19,21 +19,31 @@ import time
 from functools import cached_property
 from typing import Any
 
+import numpy as np
+
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
-from lerobot.motors.damiao import DamiaoMotorsBus
+from lerobot.motors.damiao import DamiaoMotorsBus, MotorState
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
 from .config_openarm_follower import (
+    JOINT_DELTA_LIMITS_RAD_S,
     LEFT_DEFAULT_JOINTS_LIMITS,
     RIGHT_DEFAULT_JOINTS_LIMITS,
     OpenArmFollowerConfig,
 )
+from .gravity_ff import GravityFF
+from .telemetry import FollowerTelemetry
 
 logger = logging.getLogger(__name__)
+
+# Command order used for gains, feedforward arrays and telemetry.
+MOTOR_ORDER = [f"joint_{i}" for i in range(1, 8)] + ["gripper"]
+MOTOR_INDEX = {name: i for i, name in enumerate(MOTOR_ORDER)}
+ARM_JOINTS = MOTOR_ORDER[:7]  # gripper excluded: 1 N·m POS_FORCE finger, not MIT
 
 
 class OpenArmFollower(Robot):
@@ -83,6 +93,31 @@ class OpenArmFollower(Robot):
                 "Set config.side to either 'left' or 'right' to use pre-configured values for joint limits."
             )
         logger.info(f"Values used for joint limits: {config.joint_limits}.")
+
+        # Gravity feedforward (MIT torque slot). Off by default (gain 0.0);
+        # validated value is 0.9. Requires the `openarm-ff` extra.
+        self._gravity_ff: GravityFF | None = None
+        if config.gravity_ff_gain > 0.0:
+            if config.side not in ("left", "right"):
+                raise ValueError(
+                    "gravity_ff_gain requires config.side to be 'left' or 'right' "
+                    "(the gravity model needs to know which arm this is)."
+                )
+            self._gravity_ff = GravityFF(
+                side=config.side,
+                xml=config.gravity_ff_xml,
+                gain=config.gravity_ff_gain,
+            )
+            logger.info(f"Gravity feedforward ENABLED (side={config.side}, gain={config.gravity_ff_gain})")
+
+        # Aggregated follower telemetry (always on; a few vector ops per cycle).
+        self._telemetry = FollowerTelemetry(self.id)
+        self._last_tff = np.zeros(7)
+
+        # Alignment ramp / jump guard / velocity feedforward state.
+        self._last_cmd_deg: dict[str, float] = {}  # last command actually sent
+        self._last_send_time: float | None = None
+        self._last_jump_log = 0.0
 
         # Initialize cameras
         self.cameras = make_cameras_from_configs(config.cameras)
@@ -296,30 +331,80 @@ class OpenArmFollower(Robot):
                     logger.debug(f"Clipped {motor_name} from {position:.2f}° to {clipped_position:.2f}°")
                 goal_pos[motor_name] = clipped_position
 
+        now = time.monotonic()
+        states: dict[str, MotorState] | None = None
+
+        # Jump guard: log (rate-limited) when an arm-joint target jumps vs the
+        # last command. The alignment ramp below rate-limits the move itself.
+        if self.config.align_step_limit is not None and self._last_cmd_deg:
+            for motor_name in ARM_JOINTS:
+                if motor_name not in goal_pos or motor_name not in self._last_cmd_deg:
+                    continue
+                jump_rad = abs(np.radians(goal_pos[motor_name] - self._last_cmd_deg[motor_name]))
+                if jump_rad > self.config.align_jump_threshold:
+                    if now - self._last_jump_log > 2.0:
+                        self._last_jump_log = now
+                        logger.warning(
+                            f"[{self.id}] target jumped {jump_rad:.3f} rad on {motor_name}"
+                            f" (threshold {self.config.align_jump_threshold}), ramping"
+                        )
+                    break
+
+        # Alignment ramp: rate-limit commanded positions toward the target.
+        # The gripper is EXCLUDED from the clamp (POS_FORCE finger — the ramp
+        # has no safety value for it and only delays grasps).
+        if self.config.align_step_limit is not None:
+            step_deg = float(np.degrees(self.config.align_step_limit))
+            if not self._last_cmd_deg:
+                # First command: ramp from the measured pose, not from zero.
+                states = self.bus.sync_read_all_states()
+                self._last_cmd_deg = {m: s["position"] for m, s in states.items()}
+            for motor_name, position in goal_pos.items():
+                if motor_name == "gripper" or motor_name not in self._last_cmd_deg:
+                    continue
+                prev = self._last_cmd_deg[motor_name]
+                goal_pos[motor_name] = prev + float(np.clip(position - prev, -step_deg, step_deg))
+
         # Cap goal position when too far away from present position.
         # /!\ Slower fps expected due to reading from the follower.
         if self.config.max_relative_target is not None:
-            present_pos = self.bus.sync_read("Present_Position")
+            if states is not None:
+                present_pos = {motor: state["position"] for motor, state in states.items()}
+            else:
+                present_pos = self.bus.sync_read("Present_Position")
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
-        # TODO(Steven, Pepijn): Refactor writing
-        # Motor name to index mapping for gains
-        motor_index = {
-            "joint_1": 0,
-            "joint_2": 1,
-            "joint_3": 2,
-            "joint_4": 3,
-            "joint_5": 4,
-            "joint_6": 5,
-            "joint_7": 6,
-            "gripper": 7,
-        }
+        # Gravity feedforward torque for the MIT torque slot (arm joints only;
+        # the gripper gets 0 — it runs POS_FORCE). Uses the measured pose:
+        # one CAN refresh per cycle, reused from the ramp when available.
+        tff = np.zeros(7)
+        if self._gravity_ff is not None:
+            if states is None:
+                states = self.bus.sync_read_all_states()
+            q_meas_rad = np.radians([states[m]["position"] for m in ARM_JOINTS])
+            tff = self._gravity_ff.torque(q_meas_rad)
+        self._last_tff = tff
+
+        # Velocity feedforward: finite difference of successive commanded
+        # positions, clamped per joint to the OpenArm 2.0 delta limits.
+        vff_deg_s = np.zeros(8)
+        if self.config.velocity_ff_gain > 0.0 and self._last_send_time is not None and self._last_cmd_deg:
+            dt = max(1e-3, now - self._last_send_time)
+            for motor_name, position in goal_pos.items():
+                idx = MOTOR_INDEX.get(motor_name)
+                if idx is None or motor_name not in self._last_cmd_deg:
+                    continue
+                vel_rad_s = np.radians(position - self._last_cmd_deg[motor_name]) / dt
+                vel_rad_s = float(
+                    np.clip(vel_rad_s, -JOINT_DELTA_LIMITS_RAD_S[idx], JOINT_DELTA_LIMITS_RAD_S[idx])
+                )
+                vff_deg_s[idx] = self.config.velocity_ff_gain * float(np.degrees(vel_rad_s))
 
         # Use batch MIT control for arm (sends all commands, then collects responses)
         commands = {}
         for motor_name, position_degrees in goal_pos.items():
-            idx = motor_index.get(motor_name, 0)
+            idx = MOTOR_INDEX.get(motor_name, 0)
             # Use custom gains if provided, otherwise use config defaults
             if custom_kp is not None and motor_name in custom_kp:
                 kp = custom_kp[motor_name]
@@ -337,9 +422,27 @@ class OpenArmFollower(Robot):
                     if isinstance(self.config.position_kd, list)
                     else self.config.position_kd
                 )
-            commands[motor_name] = (kp, kd, position_degrees, 0.0, 0.0)
+            torque = float(tff[idx]) if motor_name in ARM_JOINTS else 0.0
+            commands[motor_name] = (kp, kd, position_degrees, float(vff_deg_s[idx]), torque)
 
-        self.bus._mit_control_batch(commands)
+        self.bus.mit_control_batch(commands)
+
+        # Merge so partial actions keep the previous positions of uncommanded motors.
+        self._last_cmd_deg = {**self._last_cmd_deg, **goal_pos}
+        self._last_send_time = now
+
+        # Telemetry: reuse this cycle's fresh states if we read them, otherwise
+        # the cache just updated by the batch responses above (no extra CAN traffic).
+        telem_states = states if states is not None else self.bus.get_cached_states()
+        if all(m in telem_states for m in MOTOR_ORDER) and all(m in self._last_cmd_deg for m in MOTOR_ORDER):
+            self._telemetry.update(
+                q_cmd=[self._last_cmd_deg[m] for m in MOTOR_ORDER],
+                q_pos=[telem_states[m]["position"] for m in MOTOR_ORDER],
+                q_torque=[telem_states[m]["torque"] for m in MOTOR_ORDER],
+                t_mos=[telem_states[m]["temp_mos"] for m in MOTOR_ORDER],
+                tff=tff,
+            )
+            self._telemetry.maybe_report(now)
 
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
