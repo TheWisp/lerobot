@@ -494,6 +494,7 @@ lerobot = ["envs/*.json", "annotations/steerable_pipeline/prompts/*.txt"]
 "lerobot.gui" = ["static/*.html", "static/*.css", "static/*.js"]
 "lerobot.robots.so101_description" = ["urdf/*.urdf", "meshes/*.stl"]
 "lerobot.robots.so107_description" = ["urdf/*.urdf", "meshes/*.stl"]
+"lerobot.robots.openarm_description" = ["urdf/*.urdf", "LICENSE.txt", "README.md"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
