@@ -36,3 +36,32 @@ class BiOpenArmFollowerConfig(RobotConfig):
     # observations (no `left_`/`right_` prefix). Per-arm cameras (declared on
     # `{left,right}_arm_config.cameras`) are prefixed.
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+
+    # Per-arm Cartesian-IK tuning. Only consulted when a Cartesian teleop
+    # is attached (Quest VR); a joint-space leader never builds the IK
+    # kinematics so these are inert. Two arms share one setting because the
+    # IK behavior is per-arm-geometry — both arms are the same URDF
+    # (mirrored). Mirrors BiSO107FollowerConfig's knobs.
+    ik_posture_cost: float = field(
+        default=0.05,
+        metadata={
+            "description": (
+                "PostureTask weight relative to FrameTask (which is 1.0). "
+                "Default 0.05 makes posture a null-space tiebreaker. Raise "
+                "(e.g. 0.3) for stronger 'stay near previous pose' — tighter "
+                "joint continuity near reach limits / singularities, at the "
+                "cost of small EE tracking lag."
+            ),
+        },
+    )
+    ik_max_iters: int = field(
+        default=50,
+        metadata={
+            "description": (
+                "QP iteration budget per IK call. Pink's default is 10; 50 "
+                "closes per-call lag on a moving teleop target (mm-scale at "
+                "typical speeds). Lower to 10–20 for more 'stick to seed' "
+                "feel at the cost of moving-target tracking accuracy."
+            ),
+        },
+    )
