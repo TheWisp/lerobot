@@ -462,3 +462,156 @@ def test_config_clutch_and_gripper_button_defaults():
     # Default Quest 3 mapping: grip (1) = clutch, trigger (0) = gripper.
     assert cfg.clutch_button_index == 1
     assert cfg.gripper_button_index == 0
+
+
+# ── 8. Post-recovery settle window (ported from the dora OpenArm stack) ────
+
+
+def test_settle_window_keeps_clutch_released_after_recovery(monkeypatch):
+    """After a tracking dropout, a rediscovered controller reports OK while
+    its pose is still settling. For ``settle_secs`` the clutch must be
+    treated as RELEASED even while physically held, so the settle-snap never
+    becomes a teleop delta. Once the window lapses, a still-held clutch
+    re-anchors seamlessly (near-zero deltas)."""
+    import lerobot.teleoperators.quest_vr.arm_controller as ac_mod
+
+    fake_now = [100.0]
+    monkeypatch.setattr(ac_mod.time, "monotonic", lambda: fake_now[0])
+
+    ctrl = _make_controller(settle_secs=0.25)
+    # Engage at origin.
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    # Dropout, then re-acquire 40 cm away with the clutch still held.
+    ctrl.on_tracking_lost()
+    fake_now[0] += 0.5
+
+    a = ctrl.process_pose(_pose([0.4, 0.0, 0.0], clutch=1.0))
+    assert a["enabled"] == 0.0, "settle window must release the clutch on recovery"
+
+    # 100 ms later: still within the 250 ms window — still released, even
+    # though the hand jitters (the settling pose).
+    fake_now[0] += 0.1
+    a = ctrl.process_pose(_pose([0.35, 0.0, 0.0], clutch=1.0))
+    assert a["enabled"] == 0.0, "settle window ended early"
+
+    # Past the window: the clutch engages again, re-anchored at the current
+    # pose — the 35-40 cm of recovery motion must NOT appear as a delta.
+    fake_now[0] += 0.2
+    a = ctrl.process_pose(_pose([0.35, 0.0, 0.0], clutch=1.0))
+    assert a["enabled"] == 1.0
+    mag = float(np.linalg.norm([a["target_x"], a["target_y"], a["target_z"]]))
+    assert mag < 1e-9, f"|target| {mag} after settle — re-anchor did not follow the settling pose"
+
+
+def test_settle_window_zero_disables(monkeypatch):
+    """settle_secs=0 restores the pre-hardening behavior: immediate
+    re-engagement on the recovery frame."""
+    import lerobot.teleoperators.quest_vr.arm_controller as ac_mod
+
+    fake_now = [0.0]
+    monkeypatch.setattr(ac_mod.time, "monotonic", lambda: fake_now[0])
+
+    ctrl = _make_controller(settle_secs=0.0)
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    ctrl.on_tracking_lost()
+    a = ctrl.process_pose(_pose([0.4, 0.0, 0.0], clutch=1.0))
+    assert a["enabled"] == 1.0
+
+
+def test_settle_window_cleared_by_reset():
+    """A teleop-level reset (disconnect) must disarm the settle window."""
+    ctrl = _make_controller(settle_secs=0.25)
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    ctrl.on_tracking_lost()
+    ctrl.process_pose(_pose([0.4, 0.0, 0.0], clutch=1.0))
+    assert ctrl._recover_t is not None
+    ctrl.reset()
+    assert ctrl._recover_t is None
+
+
+# ── 9. Target jump guard (diagnostic log, ported from dora) ───────────────
+
+
+def test_jump_guard_logs_on_large_target_step(caplog):
+    """A > 20 mm emitted-target step in one tick must produce a warning —
+    the clamps bound the step, but a near-cap step means a snap likely
+    slipped through and should be visible in the run log."""
+    import logging
+
+    ctrl = _make_controller()  # max_pos_step_m_per_tick=1.0 (off) via helper
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))  # engage
+    with caplog.at_level(logging.WARNING, logger="lerobot.teleoperators.quest_vr.arm_controller"):
+        ctrl.process_pose(_pose([0.05, 0.0, 0.0], clutch=1.0))  # 50 mm step
+    assert "target step" in caplog.text
+
+
+def test_jump_guard_silent_on_normal_motion(caplog):
+    import logging
+
+    ctrl = _make_controller()
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    with caplog.at_level(logging.WARNING, logger="lerobot.teleoperators.quest_vr.arm_controller"):
+        for i in range(20):
+            # 5 mm/tick — normal teleop speed at 90 Hz.
+            ctrl.process_pose(_pose([0.005 * (i + 1), 0.0, 0.0], clutch=1.0))
+    assert "target step" not in caplog.text
+
+
+def test_jump_guard_does_not_compare_across_anchors(caplog):
+    """Re-engaging far from the previous anchor is legitimate (mouse-lift
+    style): the guard compares consecutive ENGAGED frames only."""
+    import logging
+
+    ctrl = _make_controller()
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    ctrl.process_pose(_pose([0.01, 0.0, 0.0], clutch=1.0))
+    ctrl.process_pose(_pose([0.5, 0.0, 0.0], clutch=0.0))  # release + move
+    with caplog.at_level(logging.WARNING, logger="lerobot.teleoperators.quest_vr.arm_controller"):
+        a = ctrl.process_pose(_pose([0.5, 0.0, 0.0], clutch=1.0))  # re-engage elsewhere
+    assert a["enabled"] == 1.0
+    assert "target step" not in caplog.text
+
+
+# ── 10. Configurable quest -> robot frame ─────────────────────────────────
+
+
+def test_config_frame_defaults_preserve_so107_mapping():
+    from lerobot.teleoperators.quest_vr.server import quest_to_robot_matrix
+
+    cfg = QuestVRTeleopConfig()
+    assert cfg.robot_forward_in_urdf == [0.0, -1.0, 0.0]
+    assert cfg.robot_up_in_urdf == [0.0, 0.0, 1.0]
+    np.testing.assert_allclose(
+        quest_to_robot_matrix(cfg.robot_forward_in_urdf, cfg.robot_up_in_urdf),
+        QUEST_TO_ROBOT_M,
+        atol=1e-12,
+    )
+
+
+def test_custom_frame_openarm_forward_plus_x():
+    """OpenArm 2.0 convention (forward = +X, up = +Z): pushing the controller
+    away from the user (Quest -z) must drive the EE target in +x, and a
+    rightward hand move (Quest +x) must drive -y."""
+    from lerobot.teleoperators.quest_vr.server import quest_to_robot_matrix
+
+    q2r = quest_to_robot_matrix([1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    ctrl = _make_controller(quest_to_robot_m=q2r)
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))  # engage at origin
+
+    # Push away from the user (Quest -z) -> robot forward (+x).
+    a = ctrl.process_pose(_pose([0.0, 0.0, -0.05], clutch=1.0))
+    np.testing.assert_allclose([a["target_x"], a["target_y"], a["target_z"]], [0.05, 0.0, 0.0], atol=1e-12)
+
+    # Re-anchor, then move the hand right (Quest +x) -> robot -y.
+    ctrl.reset()
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    a = ctrl.process_pose(_pose([0.05, 0.0, 0.0], clutch=1.0))
+    np.testing.assert_allclose([a["target_x"], a["target_y"], a["target_z"]], [0.0, -0.05, 0.0], atol=1e-12)
+
+
+def test_default_frame_so107_forward_minus_y():
+    """Same probe as above with the SO-107 default frame: push away -> -y."""
+    ctrl = _make_controller()  # quest_to_robot_m=None -> SO-107 module default
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    a = ctrl.process_pose(_pose([0.0, 0.0, -0.05], clutch=1.0))
+    np.testing.assert_allclose([a["target_x"], a["target_y"], a["target_z"]], [0.0, -0.05, 0.0], atol=1e-12)
