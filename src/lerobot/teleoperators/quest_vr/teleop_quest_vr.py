@@ -38,7 +38,7 @@ from lerobot.utils.import_utils import _pin_pink_available
 from ..teleoperator import Teleoperator
 from .arm_controller import QuestArmController
 from .configuration_quest_vr import QuestVRTeleopConfig
-from .server import QuestServer
+from .server import QuestServer, quest_to_robot_matrix
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,9 @@ class QuestVRTeleop(Teleoperator):
         self.config: QuestVRTeleopConfig = config
         self._cache_lock = threading.Lock()
         self._cached_action: dict[str, float] | None = None
+        # Quest stage -> robot base rotation, built from the config's
+        # robot forward/up axes (SO-107 defaults; OpenArm 2.0: forward +X).
+        q2r = quest_to_robot_matrix(config.robot_forward_in_urdf, config.robot_up_in_urdf)
         self._left = QuestArmController(
             clutch_button_index=config.clutch_button_index,
             gripper_button_index=config.gripper_button_index,
@@ -94,6 +97,7 @@ class QuestVRTeleop(Teleoperator):
             gripper_open_motor=config.left_gripper_open_motor,
             gripper_closed_motor=config.left_gripper_closed_motor,
             key_prefix="left_",
+            quest_to_robot_m=q2r,
         )
         self._right = QuestArmController(
             clutch_button_index=config.clutch_button_index,
@@ -105,6 +109,7 @@ class QuestVRTeleop(Teleoperator):
             gripper_open_motor=config.right_gripper_open_motor,
             gripper_closed_motor=config.right_gripper_closed_motor,
             key_prefix="right_",
+            quest_to_robot_m=q2r,
         )
         self._server: QuestServer | None = None
         # Optional per-tick action transform, installed by a robot's

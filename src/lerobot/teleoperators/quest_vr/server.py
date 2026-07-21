@@ -324,7 +324,7 @@ class QuestServer:
         return ws
 
 
-# Axis-mapping helper kept here (not in teleop module) since it relates to
+# Axis-mapping helpers kept here (not in teleop module) since they relate to
 # the WebXR frame -> robot-frame translation that happens server-side.
 
 # Quest local stage frame: +x = user right, +y = up, +z = toward user.
@@ -333,27 +333,55 @@ class QuestServer:
 # user is assumed to stand behind the robot facing the same direction the
 # arm reaches. ROBOT_FORWARD_IN_URDF + ROBOT_UP_IN_URDF below define what
 # "forward" / "up" are in URDF coords; the mapping is derived from them.
+# Per-robot values are configurable on QuestVRTeleopConfig
+# (``robot_forward_in_urdf`` / ``robot_up_in_urdf``); these module constants
+# keep the SO-107 defaults for backwards compatibility.
 ROBOT_FORWARD_IN_URDF = np.array([0.0, -1.0, 0.0])  # SO-107 default; arm reaches in -Y
 ROBOT_UP_IN_URDF = np.array([0.0, 0.0, 1.0])
-_ROBOT_LEFT_IN_URDF = np.cross(ROBOT_UP_IN_URDF, ROBOT_FORWARD_IN_URDF)
-
-# columns map (quest_x, quest_y, quest_z) unit vectors into URDF frame.
-QUEST_TO_ROBOT_M = np.column_stack(
-    [
-        -_ROBOT_LEFT_IN_URDF,  # quest_x = user_right  -> robot_right
-        +ROBOT_UP_IN_URDF,  # quest_y = user_up     -> robot_up
-        -ROBOT_FORWARD_IN_URDF,  # quest_z = user_back   -> robot_back
-    ]
-)
 
 
-def quest_delta_to_robot(delta_quest: np.ndarray) -> np.ndarray:
-    return QUEST_TO_ROBOT_M @ delta_quest
+def quest_to_robot_matrix(
+    forward: np.ndarray | list[float] = ROBOT_FORWARD_IN_URDF,
+    up: np.ndarray | list[float] = ROBOT_UP_IN_URDF,
+) -> np.ndarray:
+    """Build the 3x3 Quest-stage -> robot-base rotation from the robot's
+    forward / up axes expressed in URDF (robot base) coords.
+
+    Columns map the Quest (quest_x, quest_y, quest_z) unit vectors into the
+    robot frame: quest_x = user-right -> robot-right, quest_y = user-up ->
+    robot-up, quest_z = user-backward -> robot-backward. ``forward`` / ``up``
+    need not be exactly unit or orthogonal — they are normalized and ``up``
+    is orthogonalized against ``forward``.
+    """
+    f = np.asarray(forward, dtype=float)
+    u = np.asarray(up, dtype=float)
+    assert f.shape == (3,) and u.shape == (3,), "forward/up must be 3-vectors"
+    f = f / np.linalg.norm(f)
+    u = u - f * float(np.dot(u, f))
+    assert np.linalg.norm(u) > 1e-9, "up must not be parallel to forward"
+    u = u / np.linalg.norm(u)
+    left = np.cross(u, f)
+    return np.column_stack(
+        [
+            -left,  # quest_x = user_right  -> robot_right
+            +u,  # quest_y = user_up     -> robot_up
+            -f,  # quest_z = user_back   -> robot_back
+        ]
+    )
 
 
-def quest_rot_to_robot(quat_xyzw: list[float]):
+QUEST_TO_ROBOT_M = quest_to_robot_matrix(ROBOT_FORWARD_IN_URDF, ROBOT_UP_IN_URDF)
+
+
+def quest_delta_to_robot(delta_quest: np.ndarray, quest_to_robot_m: np.ndarray | None = None) -> np.ndarray:
+    m = QUEST_TO_ROBOT_M if quest_to_robot_m is None else quest_to_robot_m
+    return m @ delta_quest
+
+
+def quest_rot_to_robot(quat_xyzw: list[float], quest_to_robot_m: np.ndarray | None = None):
     """Quest controller quaternion -> robot-frame scipy Rotation."""
     from scipy.spatial.transform import Rotation
 
+    m = QUEST_TO_ROBOT_M if quest_to_robot_m is None else quest_to_robot_m
     r_quest = Rotation.from_quat(quat_xyzw).as_matrix()
-    return Rotation.from_matrix(QUEST_TO_ROBOT_M @ r_quest @ QUEST_TO_ROBOT_M.T)
+    return Rotation.from_matrix(m @ r_quest @ m.T)
