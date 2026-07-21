@@ -3247,6 +3247,11 @@ notebook = [
     { name = "ipykernel" },
     { name = "jupyter" },
 ]
+openarm-ff = [
+    { name = "mujoco" },
+    { name = "openarm-mujoco" },
+    { name = "python-can" },
+]
 openarms = [
     { name = "python-can" },
 ]
@@ -3543,6 +3548,7 @@ requires-dist = [
     { name = "lerobot", extras = ["multi-task-dit"], marker = "extra == 'training-image'" },
     { name = "lerobot", extras = ["notebook"], marker = "extra == 'dev'" },
     { name = "lerobot", extras = ["openarms"], marker = "extra == 'all'" },
+    { name = "lerobot", extras = ["openarms"], marker = "extra == 'openarm-ff'" },
     { name = "lerobot", extras = ["peft"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["peft-dep"], marker = "extra == 'groot'" },
     { name = "lerobot", extras = ["peft-dep"], marker = "extra == 'molmoact2'" },
@@ -3630,6 +3636,7 @@ requires-dist = [
     { name = "mock-serial", marker = "sys_platform != 'win32' and extra == 'test'", specifier = ">=0.0.1,<0.1.0" },
     { name = "motorbridge", marker = "extra == 'motorbridge-dep'", specifier = ">=0.3.2,<0.4.0" },
     { name = "motorbridge-smart-servo", marker = "extra == 'motorbridge-smart-servo-dep'", specifier = ">=0.0.4,<0.1.0" },
+    { name = "mujoco", marker = "extra == 'openarm-ff'", specifier = ">=3.2,<4" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.19.1" },
     { name = "nebius", marker = "extra == 'nebius'", specifier = ">=0.3,<0.4" },
     { name = "num2words", marker = "extra == 'smolvla'", specifier = ">=0.5.14,<0.6.0" },
@@ -3637,6 +3644,7 @@ requires-dist = [
     { name = "onnx", marker = "extra == 'unitree-g1'", specifier = ">=1.16.0,<2.0.0" },
     { name = "onnxruntime", marker = "extra == 'unitree-g1'", specifier = ">=1.16.0,<2.0.0" },
     { name = "openai", marker = "extra == 'annotations'", specifier = ">=1.40,<2.0" },
+    { name = "openarm-mujoco", marker = "extra == 'openarm-ff'", specifier = ">=2.0" },
     { name = "opencv-python-headless", specifier = ">=4.9.0,<4.14.0" },
     { name = "packaging", specifier = ">=24.2,<26.0" },
     { name = "pandas", marker = "extra == 'dataset'", specifier = ">=2.0.0,<3.0.0" },
@@ -3695,7 +3703,7 @@ requires-dist = [
     { name = "websockets", marker = "extra == 'gui'", specifier = ">=13.0,<17.0" },
     { name = "zeroconf", marker = "extra == 'gui'", specifier = ">=0.130,<1.0" },
 ]
-provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "pink-dep", "transformers-dep", "grpcio-dep", "accelerate-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "motorbridge-dep", "motorbridge-smart-servo-dep", "timm-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "rebot", "kinematics", "intelrealsense", "phone", "quest-vr", "diffusion", "wallx", "pi", "molmoact2", "smolvla", "multi-task-dit", "groot", "sarm", "robometer", "topreward", "xvla", "eo1", "fastwam", "evo1", "hilserl", "vla-jepa", "lingbot-va", "hvla", "async", "peft", "gui", "mcp", "annotations", "dev", "notebook", "test", "video-benchmark", "aloha", "pusht", "libero", "metaworld", "all", "training-image", "nebius"]
+provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "pink-dep", "transformers-dep", "grpcio-dep", "accelerate-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "motorbridge-dep", "motorbridge-smart-servo-dep", "timm-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "openarm-ff", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "rebot", "kinematics", "intelrealsense", "phone", "quest-vr", "diffusion", "wallx", "pi", "molmoact2", "smolvla", "multi-task-dit", "groot", "sarm", "robometer", "topreward", "xvla", "eo1", "fastwam", "evo1", "hilserl", "vla-jepa", "lingbot-va", "hvla", "async", "peft", "gui", "mcp", "annotations", "dev", "notebook", "test", "video-benchmark", "aloha", "pusht", "libero", "metaworld", "all", "training-image", "nebius"]
 
 [[package]]
 name = "librt"
@@ -4829,6 +4837,16 @@ sdist = { url = "https://files.pythonhosted.org/packages/c6/a1/a303104dc55fc546a
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1d/2a/7dd3d207ec669cacc1f186fd856a0f61dbc255d24f6fdc1a6715d6051b0f/openai-1.109.1-py3-none-any.whl", hash = "sha256:6bcaf57086cf59159b8e27447e4e7dd019db5d29a438072fbd49c290c7e65315", size = 948627, upload-time = "2025-09-24T13:00:50.754Z" },
 ]
+
+[[package]]
+name = "openarm-mujoco"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mujoco" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2f/9d/f2d5aca5aa433d1c92e5b063108d399f99d1f29257a655bc13301d68960e/openarm_mujoco-2.0.0.tar.gz", hash = "sha256:7cf378b66c87e64e3f2a84f5683c3b144a6a1872ecda0617d438b8cc7e8f7711", size = 5685294, upload-time = "2026-06-03T05:21:34.231Z" }
 
 [[package]]
 name = "opencv-python"
