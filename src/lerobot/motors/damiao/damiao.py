@@ -462,6 +462,42 @@ class DamiaoMotorsBus(MotorsBusBase):
         data[7] = tau_uint & 0xFF
         return data
 
+    def mit_control(
+        self,
+        motor: NameOrID,
+        kp: float,
+        kd: float,
+        position_degrees: float,
+        velocity_deg_per_sec: float = 0.0,
+        torque: float = 0.0,
+    ) -> None:
+        """
+        Send an MIT control command to a single motor (public API).
+
+        Args:
+            motor: Motor name or CAN ID
+            kp: Position gain (stiffness)
+            kd: Velocity gain (damping)
+            position_degrees: Goal position in degrees
+            velocity_deg_per_sec: Velocity feedforward in degrees/second
+            torque: Torque feedforward in N·m
+        """
+        self._mit_control(motor, kp, kd, position_degrees, velocity_deg_per_sec, torque)
+
+    def mit_control_batch(
+        self,
+        commands: dict[NameOrID, tuple[float, float, float, float, float]],
+    ) -> None:
+        """
+        Send MIT control commands to multiple motors in batch (public API).
+        Sends all commands first, then collects responses.
+
+        Args:
+            commands: Dict mapping motor name/ID to (kp, kd, position_deg, velocity_deg/s, torque)
+                     Example: {'joint_1': (10.0, 0.5, 45.0, 0.0, 0.0), ...}
+        """
+        self._mit_control_batch(commands)
+
     def _mit_control(
         self,
         motor: NameOrID,
@@ -672,6 +708,16 @@ class DamiaoMotorsBus(MotorsBusBase):
         for motor in target_motors:
             result[motor] = self._last_known_states[motor].copy()
         return result
+
+    def get_cached_states(self) -> dict[str, MotorState]:
+        """
+        Return the most recent decoded state per motor WITHOUT touching the CAN bus.
+
+        The cache is refreshed by every motor response (MIT control, refresh, reads),
+        so right after `mit_control_batch` it reflects the feedback frames the motors
+        just sent. Useful for cheap per-cycle consumers (telemetry, feedforward).
+        """
+        return {name: state.copy() for name, state in self._last_known_states.items()}
 
     def _batch_refresh(self, motors: list[str]) -> None:
         """Internal helper to refresh a list of motors and update cache."""
