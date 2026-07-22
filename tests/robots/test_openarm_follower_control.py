@@ -52,7 +52,7 @@ class StubBus:
         self.posforce_sent: list[dict] = []
         self.zero_calls = 0
         self.disconnect_calls: list[bool] = []
-        self.sync_reads: list[dict] = []
+        self.sync_reads: list[str] = []
 
     def connect(self, handshake=True):
         self.is_connected = True
@@ -73,10 +73,8 @@ class StubBus:
     def enable_torque(self, motors=None, num_retry=0):
         pass
 
-    def sync_read_all_states(
-        self, motors=None, *, num_retry=0, require_all=True, context="sync_read_all_states", timeout=0.01
-    ):
-        self.sync_reads.append({"require_all": require_all, "context": context, "timeout": timeout})
+    def sync_read_all_states(self, motors=None, *, num_retry=0, context="sync_read_all_states"):
+        self.sync_reads.append(context)
         return {n: dict(s) for n, s in self.states.items()}
 
     def get_cached_states(self):
@@ -147,16 +145,12 @@ def test_default_sends_zero_feedforward(tmp_path, monkeypatch):
     }
 
 
-def test_observation_requires_one_complete_motor_sample(tmp_path, monkeypatch):
+def test_observation_labels_can_refresh_context(tmp_path, monkeypatch):
     follower = make_follower(tmp_path, monkeypatch)
 
     follower.get_observation()
 
-    assert follower.bus.sync_reads[-1] == {
-        "require_all": True,
-        "context": "test_arm.observation",
-        "timeout": 0.01,
-    }
+    assert follower.bus.sync_reads[-1] == "test_arm.observation"
 
 
 def test_connect_does_not_rewrite_motor_zero(tmp_path, monkeypatch):

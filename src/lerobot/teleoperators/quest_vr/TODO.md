@@ -115,33 +115,3 @@ since either alone leaves the diagnosis ambiguous:
 
 Land P0+P1 together; rerun the same 5-minute hardware session; the
 resulting `latency_snapshot.json` will conclusively name the bottleneck.
-
-## P0 — Define the production motor-state synchronization contract
-
-The OpenArm2 path now requires every J1-J8 response before it publishes a
-LeRobot observation. It retains the Damiao driver's upstream 10 ms batch-read
-timeout and fails explicitly instead of silently combining fresh responses
-with cached values. `CAN_REFRESH` diagnostics record the CAN interface, caller,
-send time, first/last and per-motor response times, receive time, decode time,
-total time, missing motors, and unexpected traffic.
-
-This is the safe diagnostic policy, not yet the final real-time architecture.
-Resolve the following with a measured hardware run before changing it:
-
-- Measure per-motor response arrival distributions, stale age, SocketCAN
-  queue/overrun/error counters, and scheduler delay for both buses under a
-  representative 5-minute 60 Hz Quest session.
-- Decide whether one LeRobot observation means all joints answered the same
-  explicit refresh, or a timestamped snapshot from a continuously updated
-  receive cache with a bounded maximum age/skew.
-- Decide whether J8 POS_FORCE belongs in every arm-state barrier. The official
-  OpenArm CAN path sends POS_FORCE without a per-command wait and drains
-  available feedback separately; our previous hardware run showed intermittent
-  J8 misses at the 10 ms barrier.
-- If moving to asynchronous receive, keep per-motor monotonic timestamps and
-  sequence/generation IDs, publish sample age and cross-joint skew, use a
-  watchdog with a measured threshold, and disable both arms on violation.
-- Verify whether 60 Hz is the correct application-loop target. A 500 Hz servo
-  loop has a 2 ms total budget and therefore cannot contain a 10 ms blocking
-  transaction; it normally consumes a bounded-age process image populated by
-  cyclic I/O or a dedicated receive path.
