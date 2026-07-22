@@ -484,6 +484,14 @@ conflicts = [
         { extra = "openarm-ik" },
         { extra = "pink-dep" },
     ],
+    [
+        { extra = "openarm-ik" },
+        { extra = "kinematics" },
+    ],
+    [
+        { extra = "openarm-ik" },
+        { extra = "all" },
+    ],
 ]
 
 [[tool.uv.index]]
