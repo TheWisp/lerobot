@@ -1,5 +1,8 @@
 # OpenArm 2.0 — Data Collection Examples
 
+> For what this branch changes and why (dora→lerobot port map, VR teleop
+> solution choice, validation status), see [PORTING.md](PORTING.md).
+
 `lerobot-record` command snippets for a bimanual OpenArm 2.0 setup
 (`bi_openarm_follower`), with either the joint-space leader arms
 (`bi_openarm_leader`) or a Meta Quest 3 (`quest_vr`, Cartesian IK) as the
