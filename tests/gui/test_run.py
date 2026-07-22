@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -276,7 +277,7 @@ class TestTeleoperateEndpoint:
 
         asyncio.run(run())
 
-        assert captured_args[0] == "lerobot-teleoperate"
+        assert captured_args[:3] == [sys.executable, "-m", "lerobot.scripts.lerobot_teleoperate"]
         assert "--robot.type=so107_follower" in captured_args
         assert "--robot.port=/dev/ttyACM0" in captured_args
         assert "--teleop.type=so107_leader" in captured_args
@@ -313,7 +314,7 @@ class TestRecordEndpoint:
 
         asyncio.run(run())
 
-        assert captured_args[0] == "lerobot-record"
+        assert captured_args[:3] == [sys.executable, "-m", "lerobot.scripts.lerobot_record"]
         assert "--robot.type=so107_follower" in captured_args
         assert "--teleop.type=so107_leader" in captured_args
         assert "--dataset.repo_id=user/my_dataset" in captured_args
@@ -524,7 +525,7 @@ class TestReplayEndpoint:
 
         asyncio.run(run())
 
-        assert captured_args[0] == "lerobot-replay"
+        assert captured_args[:3] == [sys.executable, "-m", "lerobot.scripts.lerobot_replay"]
         assert "--robot.type=so107_follower" in captured_args
         assert "--robot.port=/dev/ttyACM0" in captured_args
         assert "--dataset.repo_id=user/my_dataset" in captured_args

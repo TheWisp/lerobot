@@ -740,7 +740,10 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
     async with _launch_lock:
         _ensure_no_active_process()
 
-        args = ["lerobot-teleoperate"]
+        # Use the interpreter running the GUI instead of relying on console
+        # scripts being discoverable on PATH. This also preserves the GUI's
+        # active virtual environment and editable source tree.
+        args = [sys.executable, "-m", "lerobot.scripts.lerobot_teleoperate"]
         args.extend(_profile_to_cli_args(req.robot, "robot"))
         args.extend(_profile_to_cli_args(req.teleop, "teleop"))
         args.append(f"--fps={req.fps}")
@@ -772,7 +775,7 @@ async def start_record(req: RecordRequest) -> dict:
         if req.teleop is None and req.policy_path is None:
             raise HTTPException(400, "Either teleop or policy_path must be provided")
 
-        args = ["lerobot-record"]
+        args = [sys.executable, "-m", "lerobot.scripts.lerobot_record"]
         args.extend(_profile_to_cli_args(req.robot, "robot"))
         if req.teleop is not None:
             args.extend(_profile_to_cli_args(req.teleop, "teleop"))
@@ -820,7 +823,7 @@ async def start_replay(req: ReplayRequest) -> dict:
         # Note: --dataset.fps is intentionally omitted — `lerobot-replay` declares
         # it as config but ignores it (the loop paces by `dataset.fps` directly),
         # so passing it from the GUI was dead wiring.
-        args = ["lerobot-replay"]
+        args = [sys.executable, "-m", "lerobot.scripts.lerobot_replay"]
         args.extend(_profile_to_cli_args(req.robot, "robot"))
         args.append(f"--dataset.repo_id={req.repo_id}")
         if req.root:
