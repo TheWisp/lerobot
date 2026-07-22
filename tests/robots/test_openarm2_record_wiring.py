@@ -88,10 +88,10 @@ _QUEST_VR_ARGS = [
     "--teleop.port=8443",
     "--teleop.robot_forward_in_urdf=[1,0,0]",
     "--teleop.robot_up_in_urdf=[0,0,1]",
-    "--teleop.left_gripper_open_motor=0",
-    "--teleop.left_gripper_closed_motor=45",
-    "--teleop.right_gripper_open_motor=0",
-    "--teleop.right_gripper_closed_motor=-45",
+    "--teleop.left_gripper_open_motor=45",
+    "--teleop.left_gripper_closed_motor=0",
+    "--teleop.right_gripper_open_motor=-45",
+    "--teleop.right_gripper_closed_motor=0",
     "--dataset.repo_id=user/openarm2_quest_vr",
     "--dataset.single_task=Pick the cube.",
     "--dataset.fps=30",
@@ -134,12 +134,12 @@ def test_record_config_parses_bi_openarm_follower_with_quest_vr():
     assert isinstance(cfg.teleop, QuestVRTeleopConfig)
     assert cfg.teleop.robot_forward_in_urdf == [1.0, 0.0, 0.0]
     assert cfg.teleop.robot_up_in_urdf == [0.0, 0.0, 1.0]
-    # OpenArm gripper motor ranges: left 0 (open) .. +45 (closed);
-    # right 0 (open) .. -45 (closed).
-    assert cfg.teleop.left_gripper_open_motor == pytest.approx(0.0)
-    assert cfg.teleop.left_gripper_closed_motor == pytest.approx(45.0)
-    assert cfg.teleop.right_gripper_open_motor == pytest.approx(0.0)
-    assert cfg.teleop.right_gripper_closed_motor == pytest.approx(-45.0)
+    # Standard-edition mapping from the pinned dora IK implementation:
+    # trigger released opens to +/-45 degrees; trigger pulled closes to zero.
+    assert cfg.teleop.left_gripper_open_motor == pytest.approx(45.0)
+    assert cfg.teleop.left_gripper_closed_motor == pytest.approx(0.0)
+    assert cfg.teleop.right_gripper_open_motor == pytest.approx(-45.0)
+    assert cfg.teleop.right_gripper_closed_motor == pytest.approx(0.0)
 
 
 def test_factories_construct_robot_and_teleop_without_hardware():

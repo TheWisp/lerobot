@@ -73,8 +73,8 @@ OpenArm 2.0 specifics vs the SO-107 defaults:
 
 - `robot_forward_in_urdf=[1,0,0]` — the OpenArm base frame reaches in +X
   (up stays +Z).
-- Gripper motor ranges (motor degrees): left arm 0 = open .. +45 = closed;
-  right arm 0 = open .. -45 = closed.
+- Standard-edition gripper mapping (motor degrees), matching the pinned dora
+  controller: left arm +45 = open .. 0 = closed; right arm -45 = open .. 0 = closed.
 
 ```bash
 lerobot-record \
@@ -94,10 +94,10 @@ lerobot-record \
     --teleop.port=8443 \
     --teleop.robot_forward_in_urdf="[1,0,0]" \
     --teleop.robot_up_in_urdf="[0,0,1]" \
-    --teleop.left_gripper_open_motor=0 \
-    --teleop.left_gripper_closed_motor=45 \
-    --teleop.right_gripper_open_motor=0 \
-    --teleop.right_gripper_closed_motor=-45 \
+    --teleop.left_gripper_open_motor=45 \
+    --teleop.left_gripper_closed_motor=0 \
+    --teleop.right_gripper_open_motor=-45 \
+    --teleop.right_gripper_closed_motor=0 \
     --dataset.repo_id=$HF_USERNAME/openarm2_quest_vr_pick_place \
     --dataset.single_task="Pick the cube and place it in the bin." \
     --dataset.fps=30 \
