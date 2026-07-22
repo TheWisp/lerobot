@@ -1,15 +1,23 @@
 """Standalone S2 process — keeps VLM hot between S1 restarts.
 
+This process has no robot: it reads named image slots from shared memory and
+feeds them to the VLM. ``--s2-image-keys`` names those slots — the view names
+the S2 checkpoint was trained with, in the order the model expects them. The
+robot side (launch.py / obs_stream) decides which camera fills which slot via
+its camera map; the slot names there must match the ones given here.
+
 Usage:
     # Terminal 1: start S2 (stays running)
     python -m lerobot.policies.hvla.s2_standalone \
         --checkpoint ~/.cache/lerobot/converted/soarm-pi05-fast-11999-pytorch/model.safetensors \
-        --task "assemble cylinder into ring"
+        --task "assemble cylinder into ring" \
+        --s2-image-keys base_0_rgb left_wrist_0_rgb right_wrist_0_rgb base_1_rgb
 
     # Terminal 2: start S1 (connects to existing S2 shared memory)
     python -m lerobot.policies.hvla.launch \
         --s1-type flow --s1-checkpoint outputs/flow_s1_hvla_v7/checkpoint-50000/model.safetensors \
         --task "assemble cylinder into ring" --resize-images 224x224 \
+        --s2-camera-map "front:base_0_rgb,left_wrist:left_wrist_0_rgb,right_wrist:right_wrist_0_rgb,top:base_1_rgb" \
         --attach-s2
 
     # With subtask decoding + keyboard injection:
@@ -39,11 +47,14 @@ def main():
     parser.add_argument("--checkpoint", required=True, help="Path to Pi0.5 model.safetensors")
     parser.add_argument("--task", required=True, help="High-level task prompt")
     parser.add_argument("--device", default="cuda")
-    # hardcode-ok: SO107 default slot order; made required (no default) in #47
+    # hardcode-ok: help text naming pi05 checkpoint views as a documentation example
     parser.add_argument(
         "--s2-image-keys",
         nargs="+",
-        default=["base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb", "base_1_rgb"],
+        required=True,
+        help="View names the S2 checkpoint was trained with, in the order the model expects "
+        "them (e.g. 'base_0_rgb left_wrist_0_rgb ...' for pi05-style checkpoints). These name "
+        "the shared-memory slots; the robot side maps its cameras onto them (--s2-camera-map).",
     )
     parser.add_argument("--decode-subtask", action="store_true")
     parser.add_argument(
