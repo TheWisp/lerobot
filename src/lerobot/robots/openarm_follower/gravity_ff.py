@@ -61,6 +61,17 @@ logger = logging.getLogger(__name__)
 DOFS = {"left": list(range(0, 7)), "right": list(range(9, 16))}
 
 
+def _find_distribution_model(module_file: str | Path) -> Path | None:
+    """Find model data relative to the distribution that provided the module."""
+    relative_model = Path("share/openarm_mujoco/v2/openarm_bimanual.xml")
+    module_path = Path(module_file).resolve()
+    for ancestor in module_path.parents:
+        candidate = ancestor / relative_model
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def default_bimanual_xml() -> str:
     """Resolve the openarm_bimanual.xml shipped by the `openarm-mujoco` package."""
     require_package("openarm-mujoco", extra="openarm-ff", import_name="openarm_mujoco")
@@ -70,13 +81,13 @@ def default_bimanual_xml() -> str:
     if model_path.is_file():
         return str(model_path)
 
-    # ``pip/uv --target`` keeps package data beside the imported distribution,
-    # while openarm-mujoco resolves its default through the interpreter prefix.
-    # Use only that distribution-local share directory as a fallback.
-    distribution_root = Path(model_module.__file__).resolve().parents[2]
-    target_local = distribution_root / "share" / "openarm_mujoco" / "v2" / "openarm_bimanual.xml"
-    if target_local.is_file():
-        return str(target_local)
+    # The package helper derives its path from ``sys.prefix``. That is wrong
+    # when the GUI interpreter and the imported hardware packages come from
+    # different virtual environments. Resolve data relative to the module that
+    # was actually imported instead.
+    distribution_model = _find_distribution_model(model_module.__file__)
+    if distribution_model is not None:
+        return str(distribution_model)
     raise FileNotFoundError(f"openarm-mujoco returned a missing model path: {model_path}")
 
 
