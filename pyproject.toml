@@ -214,10 +214,9 @@ intelrealsense = [
     "pyrealsense2-macosx>=2.54,<2.57.0 ; sys_platform == 'darwin'",
 ]
 phone = ["hebi-py>=2.8.0,<2.12.0", "teleop>=0.1.0,<0.2.0", "fastapi<1.0", "lerobot[scipy-dep]"]
-# Quest 3 WebXR teleop (fork-only). aiohttp serves the WebXR page over a
-# daemon-thread HTTPS server; the Cartesian IK a robot installs for this
-# OpenArm uses the separate openarm-ik extra; SO-107 still uses pin-pink.
-quest-vr = ["aiohttp>=3.9,<4.0", "lerobot[pink-dep]"]
+# Quest 3 WebXR transport (fork-only). Select the robot's IK separately:
+# OpenArm2 uses openarm-ik; SO-107 and other Pink robots use kinematics.
+quest-vr = ["aiohttp>=3.9,<4.0"]
 
 # Policies
 diffusion = ["lerobot[diffusers-dep]"]
@@ -479,6 +478,12 @@ override-dependencies = [
     # ("failed to set fourcc/width"). Null out the transitive package with an
     # unsatisfiable marker — headless provides cv2 for every consumer.
     "opencv-python; sys_platform == 'never'",
+]
+conflicts = [
+    [
+        { extra = "openarm-ik" },
+        { extra = "pink-dep" },
+    ],
 ]
 
 [[tool.uv.index]]
