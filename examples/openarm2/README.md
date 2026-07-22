@@ -2,6 +2,8 @@
 
 > For what this branch changes and why (dora→lerobot port map, VR teleop
 > solution choice, validation status), see [PORTING.md](PORTING.md).
+> OpenArm-wide safety, feedback, multi-rate control, and validation follow-ups
+> are tracked in [TODO.md](TODO.md).
 
 `lerobot-record` command snippets for a bimanual OpenArm 2.0 setup
 (`bi_openarm_follower`), with either the joint-space leader arms

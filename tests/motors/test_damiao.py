@@ -8,7 +8,7 @@ if not _can_available:
     pytest.skip("python-can not available", allow_module_level=True)
 
 from lerobot.motors import Motor
-from lerobot.motors.damiao import DamiaoMotorsBus, IncompleteMotorStateError
+from lerobot.motors.damiao import DamiaoMotorsBus
 
 
 class SendOnlyCanBus:
@@ -19,14 +19,16 @@ class SendOnlyCanBus:
         self.sent.append(msg)
 
 
-def test_strict_batch_refresh_rejects_partial_state(monkeypatch, caplog):
+def test_batch_refresh_retains_last_state_and_logs_age(monkeypatch, caplog):
     bus = DamiaoMotorsBus.__new__(DamiaoMotorsBus)
     bus.port = "can-test"
     bus.canbus = SendOnlyCanBus()
     bus.use_can_fd = True
     bus._recv_id_to_motor = {0x11: "joint_1", 0x12: "joint_2"}
+    bus._last_state_update_monotonic = {"joint_1": None, "joint_2": 10.0}
     monkeypatch.setattr(bus, "_get_motor_id", lambda motor: {"joint_1": 1, "joint_2": 2}[motor])
     monkeypatch.setattr(bus, "_get_motor_recv_id", lambda motor: {"joint_1": 0x11, "joint_2": 0x12}[motor])
+    monkeypatch.setattr("lerobot.motors.damiao.damiao.time.monotonic", lambda: 10.05)
 
     def receive_one(expected_recv_ids, timeout, diagnostics):
         diagnostics.update(
@@ -45,17 +47,12 @@ def test_strict_batch_refresh_rejects_partial_state(monkeypatch, caplog):
     monkeypatch.setattr(bus, "_recv_all_responses", receive_one)
     monkeypatch.setattr(bus, "_process_response", lambda motor, msg: None)
 
-    with caplog.at_level("WARNING"), pytest.raises(IncompleteMotorStateError) as exc_info:
-        bus._batch_refresh(
-            ["joint_1", "joint_2"],
-            require_all=True,
-            context="left.observation",
-        )
+    with caplog.at_level("WARNING"):
+        bus._batch_refresh(["joint_1", "joint_2"], context="left.observation")
 
-    assert exc_info.value.missing_motors == ["joint_2"]
-    assert exc_info.value.received_motors == ["joint_1"]
     assert "port=can-test context=left.observation" in caplog.text
-    assert "arrivals_ms={'joint_1': 0.3}" in caplog.text
+    assert "missing=['joint_2']" in caplog.text
+    assert "stale_age_ms={'joint_2': 50.0}" in caplog.text
 
 
 @pytest.mark.skip(reason="Requires physical Damiao motor and CAN interface")

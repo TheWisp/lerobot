@@ -69,33 +69,6 @@ SHORT_TIMEOUT_SEC = 0.001
 PRECISE_TIMEOUT_SEC = 0.0001
 
 
-class IncompleteMotorStateError(ConnectionError):
-    """Raised when a synchronized read cannot assemble one complete motor sample."""
-
-    def __init__(
-        self,
-        *,
-        port: str,
-        context: str,
-        missing_motors: list[str],
-        received_motors: list[str],
-        timeout: float,
-        total_ms: float,
-    ) -> None:
-        self.port = port
-        self.context = context
-        self.missing_motors = missing_motors
-        self.received_motors = received_motors
-        self.timeout = timeout
-        self.total_ms = total_ms
-        super().__init__(
-            f"Incomplete synchronized motor state on {port} during {context}: "
-            f"missing={missing_motors}, received={received_motors}, "
-            f"timeout_ms={timeout * 1e3:.3f}, total_ms={total_ms:.3f}. "
-            "Refusing to combine fresh and cached motor states."
-        )
-
-
 class MotorState(TypedDict):
     position: float
     velocity: float
@@ -177,6 +150,7 @@ class DamiaoMotorsBus(MotorsBusBase):
             }
             for name in self.motors
         }
+        self._last_state_update_monotonic: dict[str, float | None] = dict.fromkeys(self.motors)
 
         # Dynamic gains storage
         # Defaults: Kp=10.0 (Stiffness), Kd=0.5 (Damping)
@@ -730,6 +704,7 @@ class DamiaoMotorsBus(MotorsBusBase):
                 "temp_mos": float(t_mos),
                 "temp_rotor": float(t_rotor),
             }
+            self._last_state_update_monotonic[motor] = time.monotonic()
         except Exception as e:
             logger.warning(f"Failed to decode response from {motor}: {e}")
 
@@ -807,24 +782,17 @@ class DamiaoMotorsBus(MotorsBusBase):
         motors: str | list[str] | None = None,
         *,
         num_retry: int = 0,
-        require_all: bool = True,
         context: str = "sync_read_all_states",
-        timeout: float = MEDIUM_TIMEOUT_SEC,
     ) -> dict[str, MotorState]:
         """
         Read ALL motor states (position, velocity, torque) from multiple motors in ONE refresh cycle.
-
-        ``require_all=True`` prevents a caller from receiving a state mapping
-        assembled from different refresh generations. The upstream 10 ms
-        deadline remains bounded so a disconnected motor cannot hang a control
-        loop indefinitely.
 
         Returns:
             Dictionary mapping motor names to state dicts with keys: 'position', 'velocity', 'torque'
             Example: {'joint_1': {'position': 45.2, 'velocity': 1.3, 'torque': 0.5}, ...}
         """
         target_motors = self._get_motors_list(motors)
-        self._batch_refresh(target_motors, require_all=require_all, context=context, timeout=timeout)
+        self._batch_refresh(target_motors, context=context)
 
         result = {}
         for motor in target_motors:
@@ -841,15 +809,8 @@ class DamiaoMotorsBus(MotorsBusBase):
         """
         return {name: state.copy() for name, state in self._last_known_states.items()}
 
-    def _batch_refresh(
-        self,
-        motors: list[str],
-        *,
-        require_all: bool = False,
-        context: str = "batch_refresh",
-        timeout: float = MEDIUM_TIMEOUT_SEC,
-    ) -> None:
-        """Internal helper to refresh a list of motors and update cache."""
+    def _batch_refresh(self, motors: list[str], *, context: str = "batch_refresh") -> None:
+        """Refresh motors, retaining the last valid state when a response is late or missing."""
 
         if self.canbus is None:
             raise RuntimeError("CAN bus is not initialized.")
@@ -869,22 +830,33 @@ class DamiaoMotorsBus(MotorsBusBase):
         # Collect responses
         expected_recv_ids = [self._get_motor_recv_id(m) for m in motors]
         diagnostics: dict[str, Any] = {}
-        responses = self._recv_all_responses(expected_recv_ids, timeout=timeout, diagnostics=diagnostics)
+        responses = self._recv_all_responses(
+            expected_recv_ids,
+            timeout=MEDIUM_TIMEOUT_SEC,
+            diagnostics=diagnostics,
+        )
 
         # Update cache
         decode_start = time.perf_counter()
         missing_motors: list[str] = []
-        received_motors: list[str] = []
         for motor in motors:
             recv_id = self._get_motor_recv_id(motor)
             msg = responses.get(recv_id)
             if msg:
                 self._process_response(motor, msg)
-                received_motors.append(motor)
             else:
                 missing_motors.append(motor)
         decode_ms = (time.perf_counter() - decode_start) * 1e3
         total_ms = (time.perf_counter() - refresh_start) * 1e3
+        now = time.monotonic()
+        stale_age_ms = {
+            motor: (
+                None
+                if self._last_state_update_monotonic[motor] is None
+                else round((now - self._last_state_update_monotonic[motor]) * 1e3, 3)
+            )
+            for motor in missing_motors
+        }
         arrival_ms_by_motor = {
             self._recv_id_to_motor.get(recv_id, f"0x{recv_id:02X}"): round(arrival_ms, 3)
             for recv_id, arrival_ms in diagnostics.get("arrival_ms_by_id", {}).items()
@@ -894,15 +866,16 @@ class DamiaoMotorsBus(MotorsBusBase):
             self.port,
             context,
             len(motors),
-            len(received_motors),
+            len(responses),
             send_ms,
-            timeout * 1e3,
+            MEDIUM_TIMEOUT_SEC * 1e3,
             diagnostics.get("first_response_ms"),
             diagnostics.get("last_response_ms"),
             diagnostics.get("receive_ms", 0.0),
             decode_ms,
             total_ms,
             missing_motors,
+            stale_age_ms,
             arrival_ms_by_motor,
             diagnostics.get("messages_seen", 0),
             diagnostics.get("poll_calls", 0),
@@ -911,19 +884,11 @@ class DamiaoMotorsBus(MotorsBusBase):
         metric_format = (
             "CAN_REFRESH port=%s context=%s expected=%d received=%d send_ms=%.3f timeout_ms=%.3f "
             "first_response_ms=%s last_response_ms=%s receive_ms=%.3f decode_ms=%.3f "
-            "total_ms=%.3f missing=%s arrivals_ms=%s messages_seen=%d poll_calls=%d unexpected_ids=%s"
+            "total_ms=%.3f missing=%s reuse_last_state=true stale_age_ms=%s arrivals_ms=%s messages_seen=%d "
+            "poll_calls=%d unexpected_ids=%s"
         )
         if missing_motors:
             logger.warning(metric_format, *metric_args)
-            if require_all:
-                raise IncompleteMotorStateError(
-                    port=self.port,
-                    context=context,
-                    missing_motors=missing_motors,
-                    received_motors=received_motors,
-                    timeout=timeout,
-                    total_ms=total_ms,
-                )
         else:
             logger.debug(metric_format, *metric_args)
 
