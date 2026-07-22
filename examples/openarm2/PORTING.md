@@ -67,7 +67,8 @@ are guarded (`lerobot/utils/import_utils.py`).
   pin-pink FK/IK round-trips, dropout-no-slew full-stack, and draccus-parsed
   `RecordConfig`s for both `README.md` record commands
   (`tests/robots/test_openarm2_record_wiring.py`).
-- Hardware (2026-07-22): PCAN-USB Pro FD up on can0/can1 (1 M / 5 M FD),
+- Hardware (2026-07-22): PCAN-USB Pro FD up with the Standard mapping
+  `right=can0`, `left=can1` (1 M / 5 M FD),
   16/16 motors detected, read-only joint states sane.
 - Not yet done: calibration + first torque-enabled connect, then the
   circle/square bench vs the dora atlas baseline (8–10 mm mean, ~100 ms
