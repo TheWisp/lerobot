@@ -103,7 +103,30 @@ function describeInputSources() {
     has_grip_space: !!src.gripSpace,
     has_gamepad: !!src.gamepad,
     button_count: src.gamepad ? src.gamepad.buttons.length : 0,
+    profiles: Array.from(src.profiles || []),
+    is_hand_tracking: !!src.hand,
   }));
+}
+
+function describeNavigatorGamepads() {
+  if (!navigator.getGamepads) return [];
+  return Array.from(navigator.getGamepads()).filter(Boolean).map(gamepad => ({
+    id: gamepad.id,
+    connected: gamepad.connected,
+    button_count: gamepad.buttons.length,
+    axes_count: gamepad.axes.length,
+  }));
+}
+
+function describeInputEvent(event) {
+  const src = event.inputSource;
+  return {
+    hand: src ? src.handedness : "none",
+    target_ray_mode: src ? src.targetRayMode : "unknown",
+    has_grip_space: !!(src && src.gripSpace),
+    has_gamepad: !!(src && src.gamepad),
+    profiles: src ? Array.from(src.profiles || []) : [],
+  };
 }
 
 function _openWS() {
@@ -165,6 +188,13 @@ async function enterSession(mode) {
     xrSession = await navigator.xr.requestSession(mode);
     await xrSession.updateRenderState({ baseLayer: new XRWebGLLayer(xrSession, gl) });
     refSpace = await xrSession.requestReferenceSpace("local");
+    xrSession.addEventListener("visibilitychange", () => {
+      sendDiagnostic("xr_visibility_changed", {
+        visibility_state: xrSession.visibilityState,
+        document_visibility: document.visibilityState,
+        document_has_focus: document.hasFocus(),
+      });
+    });
     xrSession.addEventListener("inputsourceschange", ev => {
       sendDiagnostic("input_sources_changed", {
         added: ev.added.length,
@@ -172,6 +202,11 @@ async function enterSession(mode) {
         sources: describeInputSources(),
       });
     });
+    for (const eventName of ["selectstart", "selectend", "squeezestart", "squeezeend"]) {
+      xrSession.addEventListener(eventName, ev => {
+        sendDiagnostic("xr_" + eventName, describeInputEvent(ev));
+      });
+    }
     xrSession.requestAnimationFrame(onXRFrame);
     xrSession.addEventListener("end", () => {
       xrSession = null;
@@ -182,7 +217,11 @@ async function enterSession(mode) {
     sendDiagnostic("xr_session_started", {
       mode,
       environment_blend_mode: xrSession.environmentBlendMode,
+      visibility_state: xrSession.visibilityState,
+      document_visibility: document.visibilityState,
+      document_has_focus: document.hasFocus(),
       sources: describeInputSources(),
+      navigator_gamepads: describeNavigatorGamepads(),
     });
     updateStats();
   } catch (e) {
@@ -249,7 +288,11 @@ function onXRFrame(time, frame) {
       emitted_pose_count: poses.length,
       missing_grip_space: missingGripSpace,
       missing_pose: missingPose,
+      visibility_state: xrSession.visibilityState,
+      document_visibility: document.visibilityState,
+      document_has_focus: document.hasFocus(),
       sources: describeInputSources(),
+      navigator_gamepads: describeNavigatorGamepads(),
     });
   }
   if ((sentCount & 31) === 0) updateStats();
