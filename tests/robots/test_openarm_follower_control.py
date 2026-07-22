@@ -42,11 +42,26 @@ class StubBus:
     def __init__(self, port, motors, **kwargs):
         self.motors = motors
         self.is_connected = True
+        self.is_calibrated = True
         self.states = {
             name: {"position": 0.0, "velocity": 0.0, "torque": 0.0, "temp_mos": 40.0, "temp_rotor": 30.0}
             for name in motors
         }
         self.sent: list[dict] = []
+        self.posforce_sent: list[dict] = []
+        self.zero_calls = 0
+
+    def connect(self, handshake=True):
+        self.is_connected = True
+
+    def configure_motors(self):
+        pass
+
+    def set_zero_position(self, motors=None):
+        self.zero_calls += 1
+
+    def enable_torque(self, motors=None, num_retry=0):
+        pass
 
     def sync_read_all_states(self, motors=None, *, num_retry=0):
         return {n: dict(s) for n, s in self.states.items()}
@@ -60,6 +75,16 @@ class StubBus:
 
     def mit_control_batch(self, commands):
         self.sent.append(dict(commands))
+
+    def posforce_control(self, motor, position_rad, speed_rad_s, current_pu):
+        self.posforce_sent.append(
+            {
+                "motor": motor,
+                "position_rad": position_rad,
+                "speed_rad_s": speed_rad_s,
+                "current_pu": current_pu,
+            }
+        )
 
 
 def make_follower(tmp_path, monkeypatch, **overrides):
@@ -89,6 +114,10 @@ def last_cmd(follower, motor):
     return follower.bus.sent[-1][motor]
 
 
+def last_gripper_cmd(follower):
+    return follower.bus.posforce_sent[-1]
+
+
 def test_default_sends_zero_feedforward(tmp_path, monkeypatch):
     follower = make_follower(tmp_path, monkeypatch)
     follower.send_action(action(joint_1=5.0, gripper=-10.0))
@@ -96,7 +125,31 @@ def test_default_sends_zero_feedforward(tmp_path, monkeypatch):
     assert (kp, kd) == (70.0, 2.75)  # OpenArm 2.0 standard gains
     assert pos == pytest.approx(5.0)
     assert vel == 0.0 and torque == 0.0
-    assert last_cmd(follower, "gripper")[4] == 0.0
+    assert "gripper" not in follower.bus.sent[-1]
+    assert last_gripper_cmd(follower) == {
+        "motor": "gripper",
+        "position_rad": pytest.approx(np.radians(-10.0)),
+        "speed_rad_s": 50.0,
+        "current_pu": pytest.approx(1.0 / 4.5),
+    }
+
+
+def test_connect_does_not_rewrite_motor_zero(tmp_path, monkeypatch):
+    follower = make_follower(tmp_path, monkeypatch)
+    follower.bus.is_connected = False
+
+    follower.connect(calibrate=False)
+
+    assert follower.bus.zero_calls == 0
+
+
+def test_explicit_mit_gripper_compatibility_mode(tmp_path, monkeypatch):
+    follower = make_follower(tmp_path, monkeypatch, gripper_control_mode="mit")
+
+    follower.send_action(action(gripper=-10.0))
+
+    assert last_cmd(follower, "gripper")[2] == pytest.approx(-10.0)
+    assert follower.bus.posforce_sent == []
 
 
 def test_side_selects_standard_joint_limits(tmp_path, monkeypatch):
@@ -119,7 +172,7 @@ class TestAlignRamp:
         assert last_cmd(follower, "joint_1")[2] == pytest.approx(2.0 + step_deg)
         assert last_cmd(follower, "joint_2")[2] == pytest.approx(0.0 + step_deg)
         # Gripper is EXCLUDED from the clamp: it rides unclipped to the target.
-        assert last_cmd(follower, "gripper")[2] == pytest.approx(-30.0)
+        assert last_gripper_cmd(follower)["position_rad"] == pytest.approx(np.radians(-30.0))
 
     def test_ramp_converges_step_by_step(self, tmp_path, monkeypatch):
         step_deg = np.degrees(0.003)
@@ -193,12 +246,13 @@ class TestVelocityFF:
         # joint_1 delta limit: 1.8 rad/s.
         assert last_cmd(follower, "joint_1")[3] == pytest.approx(np.degrees(1.8))
 
-    def test_gripper_uses_own_delta_limit(self, tmp_path, monkeypatch):
+    def test_gripper_uses_posforce_speed_not_mit_velocity_feedforward(self, tmp_path, monkeypatch):
         follower = make_follower(tmp_path, monkeypatch, velocity_ff_gain=1.0)
         follower.send_action(action(gripper=0.0))
         follower.send_action(action(gripper=-45.0))
-        # gripper delta limit: 3.5 rad/s (sign preserved).
-        assert last_cmd(follower, "gripper")[3] == pytest.approx(-np.degrees(3.5))
+        assert "gripper" not in follower.bus.sent[-1]
+        assert last_gripper_cmd(follower)["position_rad"] == pytest.approx(np.radians(-45.0))
+        assert last_gripper_cmd(follower)["speed_rad_s"] == 50.0
 
 
 class TestTelemetryWiring:
@@ -235,8 +289,9 @@ class TestGravityFFWiring:
         expected = 0.9 * follower._gravity_ff.raw_tau(FRONT_MID_RIGHT_RAD)
         assert last_cmd(follower, "joint_1")[4] == pytest.approx(expected[0], rel=1e-3)
         assert last_cmd(follower, "joint_2")[4] == pytest.approx(expected[1], rel=1e-3)
-        # Gripper always gets zero torque (POS_FORCE finger).
-        assert last_cmd(follower, "gripper")[4] == 0.0
+        # Gripper is sent through its independent POS_FORCE frame.
+        assert "gripper" not in follower.bus.sent[-1]
+        assert last_gripper_cmd(follower)["position_rad"] == pytest.approx(np.radians(-10.0))
         # tff actually sent is tracked for telemetry.
         np.testing.assert_allclose(follower._last_tff, expected, rtol=1e-3)
 

@@ -16,6 +16,8 @@
 
 """Hardware-free tests for the Damiao MIT control public API and packet encoding."""
 
+import struct
+
 import numpy as np
 import pytest
 
@@ -109,3 +111,51 @@ def test_get_cached_states_returns_copies(bus):
     assert states["joint_1"]["position"] == 0.0
     states["joint_1"]["position"] = 999.0
     assert bus.get_cached_states()["joint_1"]["position"] == 0.0
+
+
+def test_encode_posforce_packet_uses_official_little_endian_layout(bus):
+    payload = bus._encode_posforce_packet(
+        "joint_1",
+        position_rad=0.25,
+        speed_rad_s=5.5,
+        current_pu=0.12,
+    )
+
+    assert len(payload) == 8
+    position, speed_scaled, current_scaled = struct.unpack("<fHH", payload)
+    assert position == pytest.approx(0.25)
+    assert speed_scaled == 550
+    assert current_scaled == 1200
+
+
+@pytest.mark.parametrize(
+    ("position", "speed", "current", "message"),
+    [
+        (float("nan"), 1.0, 0.1, "finite"),
+        (0.0, -0.1, 0.1, "speed_rad_s"),
+        (0.0, 100.1, 0.1, "speed_rad_s"),
+        (0.0, 1.0, -0.1, "current_pu"),
+        (0.0, 1.0, 1.1, "current_pu"),
+    ],
+)
+def test_encode_posforce_packet_rejects_invalid_values(bus, position, speed, current, message):
+    with pytest.raises(ValueError, match=message):
+        bus._encode_posforce_packet("joint_1", position, speed, current)
+
+
+def test_posforce_control_uses_offset_arbitration_id(bus, monkeypatch):
+    class FakeCanBus:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, message):
+            self.sent.append(message)
+
+    fake = FakeCanBus()
+    bus.canbus = fake
+    bus._is_connected = True
+    bus.posforce_control("joint_1", position_rad=0.25, speed_rad_s=5.0, current_pu=0.1)
+
+    assert len(fake.sent) == 1
+    assert fake.sent[0].arbitration_id == 0x301
+    assert bytes(fake.sent[0].data) == bus._encode_posforce_packet("joint_1", 0.25, 5.0, 0.1)
