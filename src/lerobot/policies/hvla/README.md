@@ -110,6 +110,29 @@ Flow matching S1 implements [Training-Time Action Conditioning for Efficient Rea
 - No S2 latent delay augmentation or age embedding (matching old ACT setup that worked)
 - v6: curated dataset + bidirectional attention (v5 used causal)
 
+### 3. The S2 camera map (read this once)
+
+The S2 checkpoint was trained on **named views** — e.g. pi05-style checkpoints expect
+`base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb, base_1_rgb`, in that order. Your robot's
+cameras have **their own names** (`front`, `top`, ...). The bridge is one flag:
+
+```
+robot cameras ──["cam:slot,..."]──► shm image slots ──► S2 VLM input
+(your names)    --s2-camera-map     (checkpoint's view names, in order)
+```
+
+- `--s2-camera-map "front:base_0_rgb,left_wrist:left_wrist_0_rgb,right_wrist:right_wrist_0_rgb,top:base_1_rgb"`
+  says: _my_ `front` camera is what the checkpoint knows as `base_0_rgb`, and so on.
+  **Entry order = the order views are fed to the model** (must match training). There is no
+  default: only you know which physical view corresponds to which training view.
+- `s2_standalone` has no robot, so it takes the slot side only: `--s2-image-keys base_0_rgb left_wrist_0_rgb ...`
+  (same names, same order as your map's slot values).
+- The obs-stream S2 feed (GUI/teleop path) reads the same mapping from the
+  `LEROBOT_S2_CAM_KEY_MAP` env var, same `"cam:slot,..."` syntax.
+
+Wrong slot names fail loudly (shared-memory attach error); a missing map is a startup error —
+never a silent wrong-camera.
+
 ### 3a. Inference — ACT (default)
 
 ```bash
@@ -117,6 +140,7 @@ python -m lerobot.policies.hvla.launch \
     --s1-checkpoint outputs/act_vlm_hvla/checkpoint-100000 \
     --s2-checkpoint ~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch/model.safetensors \
     --task "assemble cylinder into ring" \
+    --s2-camera-map "front:base_0_rgb,left_wrist:left_wrist_0_rgb,right_wrist:right_wrist_0_rgb,top:base_1_rgb" \
     --resize-images 224x224 \
     --temporal-ensemble-coeff 0.07
 ```
@@ -129,6 +153,7 @@ python -m lerobot.policies.hvla.launch \
     --s1-checkpoint outputs/flow_s1_hvla_v6/checkpoint-40000/model.safetensors \
     --s2-checkpoint ~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch/model.safetensors \
     --task "assemble cylinder into ring" \
+    --s2-camera-map "front:base_0_rgb,left_wrist:left_wrist_0_rgb,right_wrist:right_wrist_0_rgb,top:base_1_rgb" \
     --resize-images 224x224
 ```
 
@@ -149,10 +174,12 @@ S2 auto-discovery: the launcher first tries to attach to an existing S2 process 
 Start S2 once in a separate terminal — it stays hot between S1 restarts:
 
 ```bash
-# Terminal 1: start S2 (one-time, stays running)
+# Terminal 1: start S2 (one-time, stays running). No robot here — it only
+# needs the checkpoint's view names (the slot side of the camera map).
 python -m lerobot.policies.hvla.s2_standalone \
     --checkpoint ~/.cache/lerobot/converted/soarm-pi05-state-11997-pytorch/model.safetensors \
-    --task "assemble cylinder into ring"
+    --task "assemble cylinder into ring" \
+    --s2-image-keys base_0_rgb left_wrist_0_rgb right_wrist_0_rgb base_1_rgb
 ```
 
 ```bash
@@ -161,6 +188,7 @@ python -m lerobot.policies.hvla.launch \
     --s1-type flow \
     --s1-checkpoint outputs/flow_s1_hvla_v6/checkpoint-40000/model.safetensors \
     --task "assemble cylinder into ring" \
+    --s2-camera-map "front:base_0_rgb,left_wrist:left_wrist_0_rgb,right_wrist:right_wrist_0_rgb,top:base_1_rgb" \
     --resize-images 224x224
 ```
 

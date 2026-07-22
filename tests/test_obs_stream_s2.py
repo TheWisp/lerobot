@@ -190,9 +190,11 @@ class TestS2CamMapRequired:
 def test_parse_s2_camera_map():
     from lerobot.policies.hvla.ipc import parse_s2_camera_map
 
-    assert parse_s2_camera_map("front:base_0_rgb, top:base_1_rgb") == {
-        "front": "base_0_rgb",
-        "top": "base_1_rgb",
-    }
+    parsed = parse_s2_camera_map("front:base_0_rgb, top:base_1_rgb")
+    assert parsed == {"front": "base_0_rgb", "top": "base_1_rgb"}
+    # Entry order is meaningful: launch derives the model's input sequence from it.
+    assert tuple(parsed.values()) == ("base_0_rgb", "base_1_rgb")
     with pytest.raises(ValueError):
         parse_s2_camera_map("front")  # missing ':'
+    with pytest.raises(ValueError):
+        parse_s2_camera_map("front:slot0,top:slot0")  # two cameras -> same slot

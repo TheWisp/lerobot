@@ -3,11 +3,24 @@
 S2 (VLM, ~4-15Hz) extracts scene latent → shared memory.
 S1 (action policy, ~22-30Hz) reads latent, controls robot.
 
+Camera plumbing — one flag, ``--s2-camera-map``::
+
+    robot cameras ──["cam:slot,..."]──► shm image slots ──► S2 VLM input
+    (your names)                        (checkpoint's view names, in order)
+
+The S2 checkpoint was trained on named views (e.g. a pi05 checkpoint expects
+``base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb, base_1_rgb``). The map says
+which of THIS robot's cameras feeds which of those views; its entry order is
+also the order the views are fed to the model, so list entries in the order
+the checkpoint expects. Only the operator knows the correspondence (which
+physical view matches which training view) — there is no default.
+
 Usage:
     python -m lerobot.policies.hvla.launch \
         --s1-checkpoint outputs/act_vlm/checkpoint-80000 \
         --s2-checkpoint ~/.cache/lerobot/converted/soarm-pi05-pytorch/model.safetensors \
         --task "assemble cylinder into ring" \
+        --s2-camera-map "front:base_0_rgb,left_wrist:left_wrist_0_rgb,right_wrist:right_wrist_0_rgb,top:base_1_rgb" \
         --resize-images 224x224 \
         --temporal-ensemble-coeff 0.01
 """
@@ -41,17 +54,15 @@ def main():
     parser.add_argument("--n-action-steps", type=int, default=None)
     parser.add_argument("--decode-subtask", action="store_true")
     parser.add_argument("--norm-stats", default=None)
-    parser.add_argument(
-        "--s2-image-keys",
-        nargs="+",
-        default=None,
-        help="S2 model image slot names in the order the S2 model expects (required unless --zero-s2).",
-    )
+    # hardcode-ok: help text naming pi05 checkpoint views as a documentation example
     parser.add_argument(
         "--s2-camera-map",
         default=None,
-        help="Map this robot's cameras to the S2 model's image slots as 'cam:slot' pairs, "
-        "e.g. 'cam0:slot0,cam1:slot1' (required unless --zero-s2).",
+        help="'cam:slot,...' pairs mapping THIS robot's camera names to the view names the "
+        "S2 checkpoint was trained with, in the order the model expects its views "
+        "(e.g. 'front:base_0_rgb,top:base_1_rgb' on a rig whose front camera matches the "
+        "checkpoint's base_0_rgb view). The slot names and their order also define the "
+        "shared-memory image buffer. Required unless --zero-s2; see the module docstring.",
     )
     parser.add_argument("--zero-s2", action="store_true")
     parser.add_argument(
@@ -223,10 +234,12 @@ def main():
     setup_process_logging()
 
     resize = tuple(int(x) for x in args.resize_images.split("x")) if args.resize_images else None
-    s2_image_keys = tuple(args.s2_image_keys) if args.s2_image_keys else None
     s2_camera_map = parse_s2_camera_map(args.s2_camera_map) if args.s2_camera_map else None
-    if not args.zero_s2 and (not s2_image_keys or not s2_camera_map):
-        raise SystemExit("--s2-image-keys and --s2-camera-map are required unless --zero-s2 is set.")
+    if not args.zero_s2 and not s2_camera_map:
+        raise SystemExit("--s2-camera-map is required unless --zero-s2 is set.")
+    # The map's slot values (in entry order) ARE the S2 image keys: they name the
+    # shm blocks and the sequence the model consumes. One flag, one source of truth.
+    s2_image_keys = tuple(s2_camera_map.values()) if s2_camera_map else None
 
     # Use 'spawn' context — child process gets fresh CUDA context
     ctx = multiprocessing.get_context("spawn")

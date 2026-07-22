@@ -339,11 +339,22 @@ class SharedImageBuffer:
 
 
 def parse_s2_camera_map(spec: str) -> dict[str, str]:
-    """Parse a "robot_cam:s2_slot,..." spec into a {robot_cam: s2_slot} map.
+    """Parse a "robot_cam:s2_slot,..." spec into an ordered {robot_cam: s2_slot} map.
 
-    Maps each robot camera name to the image slot the S2 model expects. There is
-    no default — which robot camera fills which S2 slot is setup-specific, so
-    callers must supply it for their robot + S2 checkpoint.
+    The map is the bridge between the two vocabularies of the image pipe::
+
+        robot obs (your camera names)  ──map──►  S2 image slots (checkpoint's view names)
+        e.g.        top                            base_1_rgb
+
+    Left side: this robot's camera names (whatever ``robot.observation_features``
+    calls them). Right side: the image slot names the S2 checkpoint was trained
+    with. Only the operator knows which physical view corresponds to which
+    training view, so there is no default. Entry ORDER matters when the map is
+    the sole source of slot names (``launch.py`` derives the model's input
+    sequence from it): list entries in the order the S2 model expects its views.
+
+    Preconditions: every entry is ``name:slot``; slots are unique (two cameras
+    cannot fill the same slot). Raises ``ValueError`` otherwise.
     """
     out: dict[str, str] = {}
     for pair in spec.split(","):
@@ -353,5 +364,8 @@ def parse_s2_camera_map(spec: str) -> dict[str, str]:
         if ":" not in pair:
             raise ValueError(f"Invalid s2-camera-map entry {pair!r}; expected 'robot_cam:s2_slot'")
         robot_cam, s2_slot = pair.split(":", 1)
-        out[robot_cam.strip()] = s2_slot.strip()
+        robot_cam, s2_slot = robot_cam.strip(), s2_slot.strip()
+        if s2_slot in out.values():
+            raise ValueError(f"s2-camera-map maps two cameras to the same slot {s2_slot!r}")
+        out[robot_cam] = s2_slot
     return out
