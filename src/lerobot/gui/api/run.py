@@ -800,7 +800,10 @@ async def start_record(req: RecordRequest) -> dict:
         args.append(f"--dataset.num_episodes={req.num_episodes}")
         args.append(f"--dataset.video={'true' if req.video else 'false'}")
         args.append("--dataset.push_to_hub=false")
-        args.append(f"--dataset.vcodec={req.vcodec}")
+        # Video encoder fields moved under ``dataset.rgb_encoder`` in the
+        # current recording config. Keep the GUI's flat ``vcodec`` request
+        # field for API compatibility, but emit the CLI's canonical path.
+        args.append(f"--dataset.rgb_encoder.vcodec={req.vcodec}")
         args.append(f"--play_sounds={'true' if req.play_sounds else 'false'}")
         if req.resume:
             args.append("--resume=true")

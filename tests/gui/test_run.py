@@ -352,7 +352,8 @@ class TestRecordEndpoint:
         assert "--dataset.num_episodes=10" in captured_args
         assert "--dataset.video=true" in captured_args
         assert "--dataset.push_to_hub=false" in captured_args
-        assert "--dataset.vcodec=libsvtav1" in captured_args
+        assert "--dataset.rgb_encoder.vcodec=libsvtav1" in captured_args
+        assert not any(a.startswith("--dataset.vcodec=") for a in captured_args)
         assert "--play_sounds=false" in captured_args
         # resume=False should not add --resume
         assert "--resume=true" not in captured_args
