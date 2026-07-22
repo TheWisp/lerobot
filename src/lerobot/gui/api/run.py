@@ -635,6 +635,13 @@ _debug_lock = asyncio.Lock()  # prevent concurrent load/unload
 _launch_lock = asyncio.Lock()
 
 
+async def _release_preview_cameras() -> None:
+    """Release Robot-tab preview devices before a hardware subprocess starts."""
+    from lerobot.gui.api.robot import _close_preview_cameras
+
+    await asyncio.get_running_loop().run_in_executor(None, _close_preview_cameras)
+
+
 def _is_debug_loaded() -> bool:
     return _debug_process is not None and _debug_process.returncode is None
 
@@ -739,6 +746,7 @@ async def debug_subtask() -> dict:
 async def start_teleoperate(req: TeleoperateRequest) -> dict:
     async with _launch_lock:
         _ensure_no_active_process()
+        await _release_preview_cameras()
 
         # Use the interpreter running the GUI instead of relying on console
         # scripts being discoverable on PATH. This also preserves the GUI's
@@ -771,6 +779,7 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
 async def start_record(req: RecordRequest) -> dict:
     async with _launch_lock:
         _ensure_no_active_process()
+        await _release_preview_cameras()
 
         if req.teleop is None and req.policy_path is None:
             raise HTTPException(400, "Either teleop or policy_path must be provided")
@@ -819,6 +828,7 @@ async def start_record(req: RecordRequest) -> dict:
 async def start_replay(req: ReplayRequest) -> dict:
     async with _launch_lock:
         _ensure_no_active_process()
+        await _release_preview_cameras()
 
         # Note: --dataset.fps is intentionally omitted — `lerobot-replay` declares
         # it as config but ignores it (the loop paces by `dataset.fps` directly),
@@ -841,6 +851,7 @@ async def start_hvla(req: HVLARunRequest) -> dict:
 
     async with _launch_lock:
         _ensure_no_active_process()
+        await _release_preview_cameras()
 
         # Write robot profile to temp file (HVLA launch reads robot config from file)
         robot_config = dict(req.robot)
