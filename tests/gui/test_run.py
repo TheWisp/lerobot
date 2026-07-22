@@ -264,6 +264,33 @@ def _make_fake_launch(captured_args):
 class TestTeleoperateEndpoint:
     """Tests for the teleoperate endpoint's CLI arg assembly."""
 
+    def test_teleoperate_releases_preview_before_launch(self):
+        events = []
+
+        async def release_preview():
+            events.append("release-preview")
+
+        async def launch(args, command, config, extra_env=None):
+            import lerobot.gui.api.run as run_module
+
+            events.append("launch")
+            mock_proc = AsyncMock()
+            mock_proc.pid = 9999
+            run_module._active_process = mock_proc
+
+        async def run():
+            req = TeleoperateRequest(robot=_ROBOT, teleop=_TELEOP)
+            with (
+                patch("lerobot.gui.api.run._active_process", None),
+                patch("lerobot.gui.api.run._release_preview_cameras", release_preview),
+                patch("lerobot.gui.api.run._launch_subprocess", launch),
+            ):
+                await start_teleoperate(req)
+
+        asyncio.run(run())
+
+        assert events == ["release-preview", "launch"]
+
     def test_teleoperate_args(self):
         captured_args = []
 
