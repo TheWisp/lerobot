@@ -15,7 +15,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Literal
 
 from lerobot.cameras import CameraConfig
 
@@ -114,7 +113,9 @@ class OpenArmFollowerConfigBase:
 
     # OpenArm 2.0 configures J8 in POS_FORCE mode. MIT remains available as
     # an explicit compatibility setting for differently configured hardware.
-    gripper_control_mode: Literal["pos_force", "mit"] = "pos_force"
+    # Keep this as str for Draccus CLI/profile compatibility; OpenArmFollower
+    # validates the allowed values during construction.
+    gripper_control_mode: str = "pos_force"
     gripper_speed_rad_s: float = 50.0
     gripper_torque_pu: float = 1.0 / 4.5
 
