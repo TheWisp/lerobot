@@ -2015,19 +2015,6 @@ function initSplitHandle() {
 // Live camera viewer (obs-stream via shared memory)
 // ============================================================================
 
-async function watchForLateStream(gen) {
-    // The viewer rendered without camera tiles (URDF only). If the obs stream comes up later in
-    // the same run (slow robot connect / torch.compile warmup), restart the viewer so the camera
-    // tiles appear. Ends when the run ends or the viewer is superseded (gen bumped).
-    while (obsStreamGen === gen && _isRunning) {
-        await new Promise(r => setTimeout(r, 2000));
-        try {
-            const meta = await (await fetch('/api/run/obs-stream/meta')).json();
-            if (meta?.available && obsStreamGen === gen) { startObsStreamViewer(); return; }
-        } catch (e) { /* keep watching */ }
-    }
-}
-
 async function startObsStreamViewer() {
     stopObsStreamViewer();
     const myGen = ++obsStreamGen;  // claim this viewer; stop() / a newer start() supersedes it
@@ -2041,36 +2028,28 @@ async function startObsStreamViewer() {
     // externally-published stream (an out-of-GUI teleop, or the data publisher) has no _isRunning to
     // bound it — so fall back to a 15s poll in that case rather than ignore the stream. Ends on: stream
     // available, the run ending, superseded (stop / a newer start bumps obsStreamGen), or — with no
-    // run — the fallback deadline.
-    // Probe the URDF visualization up front — it's on by default, appearing as one grid tile
-    // whenever the robot has a vendored URDF (see /api/run/urdf-viz). Probing BEFORE the stream
-    // wait matters: a camera-less run never flips the stream available, and the URDF tile must
-    // not be starved behind that wait.
-    let urdfVizActive = false;
-    try {
-        const res = await fetch('/api/run/urdf-viz');
-        urdfVizActive = !!(await res.json()).available;
-    } catch (e) { /* probe failed; leave inactive */ }
-
+    // run — the fallback deadline. NOTE: the URDF probe must stay AFTER this wait — /api/run/urdf-viz
+    // is only answerable once the run's obs stream has data (same moment this loop exits), so an
+    // up-front probe would latch false for every GUI-launched run and hide the visualizer tile.
     let attempts = 0;
     const maxAttempts = 30; // 30 × 500ms = 15s fallback when no run is tracking the stream
-    let streamPending = false;  // deadline hit with the run alive — render the URDF tile, watch for the stream
     while (obsStreamGen === myGen && (_isRunning || attempts < maxAttempts)) {
         try {
             obsStreamMeta = await (await fetch('/api/run/obs-stream/meta')).json();
             if (obsStreamMeta?.available) break;
         } catch (e) { obsStreamMeta = null; }
-        if (urdfVizActive && attempts >= maxAttempts) {
-            // Don't starve the URDF tile behind a stream that may never come (camera-less run);
-            // if the stream shows up later (slow warmup), the watcher restarts this viewer.
-            streamPending = _isRunning;
-            break;
-        }
         await new Promise(r => setTimeout(r, 500));
         attempts++;
     }
     if (obsStreamGen !== myGen) return;  // superseded while waiting
-    if (streamPending) watchForLateStream(myGen);
+
+    // Probe the URDF visualization — it's on by default, appearing as one
+    // grid tile whenever the robot has a vendored URDF (see /api/run/urdf-viz).
+    let urdfVizActive = false;
+    try {
+        const res = await fetch('/api/run/urdf-viz');
+        urdfVizActive = !!(await res.json()).available;
+    } catch (e) { /* probe failed; leave inactive */ }
 
     if (!obsStreamMeta?.available && !urdfVizActive) {
         return;  // the run ended before the stream or the URDF viz came up — nothing to show
