@@ -198,3 +198,47 @@ def test_parse_s2_camera_map():
         parse_s2_camera_map("front")  # missing ':'
     with pytest.raises(ValueError):
         parse_s2_camera_map("front:slot0,top:slot0")  # two cameras -> same slot
+
+
+# The documented SO107 spec. Its ENTRY ORDER is deliberately the legacy
+# image-key order, NOT the legacy map's dict order — launch derives the model
+# input sequence from map order, and the pi05 checkpoint expects this sequence.
+_SO107_CANONICAL_SPEC = (
+    "front:base_0_rgb,left_wrist:left_wrist_0_rgb,right_wrist:right_wrist_0_rgb,top:base_1_rgb"
+)
+
+
+def test_so107_documented_spec_reproduces_legacy_wiring():
+    """The canonical SO107 spec must reproduce BOTH pre-#47 constants exactly.
+
+    Legacy fixtures (the constants #46/#47 deleted):
+      S2_CAM_KEY_MAP pairs and DEFAULT_S2_IMAGE_KEYS order. If parser semantics,
+    dict ordering, or the canonical spec drift, SO107 launches would silently
+    feed the VLM re-ordered or re-paired views vs what the checkpoint saw in
+    training. This is the flag-level analogue of the #46 joint-order guard.
+    """
+    from lerobot.policies.hvla.ipc import parse_s2_camera_map
+
+    legacy_map_pairs = {
+        "front": "base_0_rgb",
+        "top": "base_1_rgb",
+        "left_wrist": "left_wrist_0_rgb",
+        "right_wrist": "right_wrist_0_rgb",
+    }
+    legacy_image_keys = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb", "base_1_rgb")
+
+    parsed = parse_s2_camera_map(_SO107_CANONICAL_SPEC)
+    assert parsed == legacy_map_pairs  # same camera->slot pairing (order-insensitive)
+    assert tuple(parsed.values()) == legacy_image_keys  # same model input order
+
+
+def test_so107_canonical_spec_is_what_the_docs_show():
+    """The docs must show the order-correct spec verbatim — a well-meaning
+    'reorder for readability' edit would break real SO107 launches."""
+    import importlib.util
+    from pathlib import Path
+
+    launch_py = Path(importlib.util.find_spec("lerobot.policies.hvla.launch").origin)
+    assert _SO107_CANONICAL_SPEC in launch_py.read_text(encoding="utf-8")
+    readme = launch_py.parent / "README.md"
+    assert _SO107_CANONICAL_SPEC in readme.read_text(encoding="utf-8")
