@@ -111,7 +111,25 @@ def _get_known_fields(profile_type: str, prefix: str) -> set[str] | None:
     config_cls = choices.get(profile_type)
     if config_cls is None:
         return None
-    return {f.name for f in dataclasses.fields(config_cls)}
+    def leaf_paths(cls: type, path_prefix: str = "") -> set[str]:
+        try:
+            import typing
+
+            type_hints = typing.get_type_hints(cls)
+        except Exception:
+            type_hints = {}
+
+        result = set()
+        for field in dataclasses.fields(cls):
+            path = f"{path_prefix}.{field.name}" if path_prefix else field.name
+            resolved_type = type_hints.get(field.name, field.type)
+            if dataclasses.is_dataclass(resolved_type):
+                result.update(leaf_paths(resolved_type, path))
+            else:
+                result.add(path)
+        return result
+
+    return leaf_paths(config_cls)
 
 
 def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bool = True) -> list[str]:
@@ -129,7 +147,21 @@ def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bo
     args = [f"--{prefix}.type={profile_data['type']}"]
     known_fields = _get_known_fields(profile_data["type"], prefix)
 
-    for key, value in profile_data.get("fields", {}).items():
+    def iter_values(values: dict, path_prefix: str = ""):
+        for key, value in values.items():
+            path = f"{path_prefix}.{key}" if path_prefix else key
+            # Only recurse when the config schema says this mapping is a
+            # nested dataclass. Dict-valued leaf fields (joint limits, motor
+            # config, etc.) must remain one JSON CLI value.
+            is_nested_config = known_fields is not None and any(
+                field.startswith(f"{path}.") for field in known_fields
+            )
+            if isinstance(value, dict) and is_nested_config:
+                yield from iter_values(value, path)
+            else:
+                yield path, value
+
+    for key, value in iter_values(profile_data.get("fields", {})):
         if value is None:
             continue
         if known_fields is not None and key not in known_fields:
@@ -140,6 +172,8 @@ def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bo
             continue
         if isinstance(value, bool):
             args.append(f"--{prefix}.{key}={str(value).lower()}")
+        elif isinstance(value, (dict, list)):
+            args.append(f"--{prefix}.{key}={json.dumps(value)}")
         else:
             args.append(f"--{prefix}.{key}={value}")
 

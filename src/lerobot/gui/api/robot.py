@@ -126,8 +126,13 @@ def _literal_choices(annotation: Any) -> list[str] | None:
     return None
 
 
-def _introspect_fields(cls: type) -> list[dict]:
-    """Extract field info from a dataclass config class."""
+def _introspect_fields(cls: type, *, prefix: str = "") -> list[dict]:
+    """Extract editable leaf fields, recursively flattening nested dataclasses.
+
+    Nested field names use the same dotted path accepted by draccus, for
+    example ``left_arm_config.port``. Profile JSON remains nested; the dotted
+    name is only the schema/UI address of a leaf value.
+    """
     # Resolve string annotations (PEP 563 / __future__ annotations) so
     # ``Literal["latest", "wait_for_new"]`` is the actual ``Literal``
     # generic, not a bare string. Without this, ``_literal_choices``
@@ -153,9 +158,13 @@ def _introspect_fields(cls: type) -> list[dict]:
             default = None
 
         resolved_type = type_hints.get(f.name, f.type)
+        field_name = f"{prefix}.{f.name}" if prefix else f.name
+        if dataclasses.is_dataclass(resolved_type):
+            result.extend(_introspect_fields(resolved_type, prefix=field_name))
+            continue
         entry = {
-            "name": f.name,
-            "type_str": _stringify_type(f.type),
+            "name": field_name,
+            "type_str": _stringify_type(resolved_type),
             "required": required,
             "default": default,
         }
@@ -584,7 +593,7 @@ async def stop_cameras() -> dict:
 
 @router.get("/ports")
 async def scan_ports() -> list[dict]:
-    """Scan for USB serial ports (ttyACM*, ttyUSB* on Linux).
+    """Scan for USB serial ports and Linux SocketCAN interfaces.
 
     Only shows USB serial adapters, not legacy serial ports (ttyS*),
     virtual terminals (tty0-63), or kernel consoles (ttyprintk).
@@ -619,7 +628,41 @@ async def scan_ports() -> list[dict]:
                     ports.append({"path": str(p), "name": p.name})
         else:
             logger.warning("pyserial not installed, cannot scan ports")
+    ports.extend(_scan_socketcan_interfaces())
     return ports
+
+
+def _scan_socketcan_interfaces(sys_class_net: Path = Path("/sys/class/net")) -> list[dict]:
+    """Return CAN network interfaces using read-only Linux sysfs metadata."""
+    if platform.system() != "Linux" or not sys_class_net.is_dir():
+        return []
+
+    interfaces = []
+    try:
+        candidates = sorted(sys_class_net.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return []
+    for interface in candidates:
+        try:
+            # ARPHRD_CAN from linux/if_arp.h. Reading sysfs has no effect on
+            # interface state, bitrate, or attached hardware.
+            if (interface / "type").read_text().strip() != "280":
+                continue
+            state_path = interface / "operstate"
+            state = state_path.read_text().strip() if state_path.exists() else "unknown"
+        except OSError:
+            continue
+        interfaces.append(
+            {
+                "path": interface.name,
+                "name": f"SocketCAN {interface.name}",
+                "manufacturer": "SocketCAN",
+                "vid_pid": "",
+                "kind": "socketcan",
+                "state": state,
+            }
+        )
+    return interfaces
 
 
 def _probe_motor_spec(profile: dict) -> tuple[type, str, object]:
@@ -731,18 +774,17 @@ def _collect_all_port_assignments() -> list[dict]:
             config_cls = choices.get(profile_type)
             if not config_cls:
                 continue
-            for field in dataclasses.fields(config_cls):
-                if field.name in _SKIP_FIELDS:
-                    continue
-                if "port" in field.name and "str" in _stringify_type(field.type).lower():
-                    port_value = fields_data.get(field.name)
+            for field in _introspect_fields(config_cls):
+                field_name = field["name"]
+                if "port" in field_name and "str" in field["type_str"].lower():
+                    port_value = _get_nested_value(fields_data, field_name)
                     if port_value and isinstance(port_value, str) and port_value.strip():
                         assignments.append(
                             {
                                 "port": port_value.strip(),
                                 "profile_name": profile_name,
                                 "profile_kind": kind,
-                                "field_name": field.name,
+                                "field_name": field_name,
                             }
                         )
 
@@ -753,6 +795,27 @@ def _collect_all_port_assignments() -> list[dict]:
 async def get_all_port_assignments() -> list[dict]:
     """Return all port assignments across all saved profiles."""
     return _collect_all_port_assignments()
+
+
+def _get_nested_value(data: dict, dotted_path: str) -> Any:
+    value: Any = data
+    for part in dotted_path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _supports_feetech_wiggle(profile_type: str | None, port: str) -> bool:
+    """Reject device families/interfaces that cannot use Feetech serial I/O."""
+    type_name = (profile_type or "").lower()
+    port_name = Path(port).name.lower()
+    return not (
+        "openarm" in type_name
+        or "damiao" in type_name
+        or port_name.startswith("can")
+        or port_name.startswith("vcan")
+    )
 
 
 class IdentifyArmRequest(BaseModel):
@@ -789,6 +852,12 @@ async def open_in_file_manager(body: dict) -> dict:
 @router.post("/identify-arm")
 async def identify_arm(request: IdentifyArmRequest) -> dict:
     """Wiggle the robot's first motor on the given port to identify which arm it is."""
+    if not _supports_feetech_wiggle(request.profile.get("type"), request.port):
+        return {
+            "status": "error",
+            "port": request.port,
+            "message": "Feetech arm identification is unavailable for OpenArm/Damiao or SocketCAN devices",
+        }
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, _wiggle_first_motor, request.port, request.profile)
     return result

@@ -1,5 +1,6 @@
 """Tests for robot/teleop profile CRUD and schema introspection."""
 
+import asyncio
 import dataclasses
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from lerobot.gui.api.robot import (
+    IdentifyArmRequest,
     ProfileData,
     _collect_all_port_assignments,
     _delete_profile,
@@ -17,8 +19,11 @@ from lerobot.gui.api.robot import (
     _list_profiles,
     _read_profile,
     _rename_profile,
+    _scan_socketcan_interfaces,
     _stringify_type,
+    _supports_feetech_wiggle,
     _write_profile,
+    identify_arm,
 )
 
 # ============================================================================
@@ -82,6 +87,19 @@ class _MockConfigFactory:
     items: list = dataclasses.field(default_factory=list)
 
 
+@dataclasses.dataclass
+class _MockArmConfig:
+    port: str
+    side: str | None = None
+
+
+@dataclasses.dataclass
+class _MockBimanualConfig:
+    left_arm_config: _MockArmConfig
+    right_arm_config: _MockArmConfig
+    gain: float = 0.9
+
+
 class TestIntrospectFields:
     """Tests for dataclass field extraction."""
 
@@ -133,6 +151,20 @@ class TestIntrospectFields:
 
         fields = _introspect_fields(_Empty)
         assert fields == []
+
+    def test_nested_dataclasses_are_flattened_to_dotted_leaf_paths(self):
+        fields = _introspect_fields(_MockBimanualConfig)
+        by_name = {field["name"]: field for field in fields}
+
+        assert set(by_name) == {
+            "left_arm_config.port",
+            "left_arm_config.side",
+            "right_arm_config.port",
+            "right_arm_config.side",
+            "gain",
+        }
+        assert by_name["left_arm_config.port"]["required"] is True
+        assert by_name["right_arm_config.side"]["default"] is None
 
 
 # ============================================================================
@@ -255,6 +287,12 @@ class _NoPortConfig:
     cameras: dict = dataclasses.field(default_factory=dict)
 
 
+@dataclasses.dataclass
+class _NestedPortRobotConfig:
+    left_arm_config: _MockArmConfig
+    right_arm_config: _MockArmConfig
+
+
 class TestCollectAllPortAssignments:
     """Tests for port assignment extraction from saved profiles."""
 
@@ -330,6 +368,45 @@ class TestCollectAllPortAssignments:
         assert len(assignments) == 2
         ports = {a["port"] for a in assignments}
         assert ports == {"/dev/ttyACM0", "/dev/ttyACM1"}
+
+    def test_extracts_nested_socketcan_assignments(self, tmp_path):
+        robot_dir, teleop_dir = self._setup_dirs(tmp_path)
+        (robot_dir / "openarm.json").write_text(
+            json.dumps(
+                {
+                    "name": "openarm",
+                    "type": "nested_robot",
+                    "fields": {
+                        "left_arm_config": {"port": "can1", "side": "left"},
+                        "right_arm_config": {"port": "can0", "side": "right"},
+                    },
+                }
+            )
+        )
+
+        mock_robot_base = MagicMock()
+        mock_robot_base.get_known_choices.return_value = {"nested_robot": _NestedPortRobotConfig}
+        mock_teleop_base = MagicMock()
+        mock_teleop_base.get_known_choices.return_value = {}
+
+        with (
+            patch("lerobot.gui.api.robot.ROBOT_PROFILES_DIR", robot_dir),
+            patch("lerobot.gui.api.robot.TELEOP_PROFILES_DIR", teleop_dir),
+            patch("lerobot.gui.api.robot._ensure_configs_loaded"),
+            patch.dict(
+                "sys.modules",
+                {
+                    "lerobot.robots.config": MagicMock(RobotConfig=mock_robot_base),
+                    "lerobot.teleoperators.config": MagicMock(TeleoperatorConfig=mock_teleop_base),
+                },
+            ),
+        ):
+            assignments = _collect_all_port_assignments()
+
+        assert {(item["port"], item["field_name"]) for item in assignments} == {
+            ("can1", "left_arm_config.port"),
+            ("can0", "right_arm_config.port"),
+        }
 
     def test_skips_unknown_type(self, tmp_path):
         robot_dir, teleop_dir = self._setup_dirs(tmp_path)
@@ -412,6 +489,7 @@ class TestCollectAllPortAssignments:
 
         assert assignments == []
 
+
     def test_skips_corrupt_json(self, tmp_path):
         robot_dir, teleop_dir = self._setup_dirs(tmp_path)
         (robot_dir / "corrupt.json").write_text("not json {{{")
@@ -436,6 +514,51 @@ class TestCollectAllPortAssignments:
             assignments = _collect_all_port_assignments()
 
         assert assignments == []
+
+
+class TestSocketCANDiscovery:
+    def test_reads_can_interfaces_from_sysfs_without_mutating_them(self, tmp_path):
+        for name, device_type, state in [
+            ("can0", "280", "up"),
+            ("can1", "280", "down"),
+            ("eth0", "1", "up"),
+        ]:
+            interface = tmp_path / name
+            interface.mkdir()
+            (interface / "type").write_text(device_type)
+            (interface / "operstate").write_text(state)
+
+        with patch("lerobot.gui.api.robot.platform.system", return_value="Linux"):
+            ports = _scan_socketcan_interfaces(tmp_path)
+
+        assert [(port["path"], port["state"]) for port in ports] == [("can0", "up"), ("can1", "down")]
+        assert all(port["kind"] == "socketcan" for port in ports)
+
+
+class TestIdentifyArmCompatibility:
+    @pytest.mark.parametrize(
+        ("profile_type", "port"),
+        [
+            ("bi_openarm_follower", "can0"),
+            ("openarm_follower", "/dev/ttyUSB0"),
+            ("damiao_follower", "/dev/ttyUSB0"),
+            ("so101_follower", "can1"),
+            ("so101_follower", "vcan0"),
+        ],
+    )
+    def test_rejects_non_feetech_profiles_and_can_interfaces(self, profile_type, port):
+        assert _supports_feetech_wiggle(profile_type, port) is False
+
+    def test_allows_feetech_serial_profile(self):
+        assert _supports_feetech_wiggle("so101_follower", "/dev/ttyACM0") is True
+
+    def test_endpoint_does_not_call_wiggle_for_openarm(self):
+        request = IdentifyArmRequest(port="can0", profile_type="bi_openarm_follower")
+        with patch("lerobot.gui.api.robot._wiggle_shoulder") as wiggle:
+            result = asyncio.run(identify_arm(request))
+
+        assert result["status"] == "error"
+        wiggle.assert_not_called()
 
 
 class TestPortConflictSuppression:
