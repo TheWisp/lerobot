@@ -46,6 +46,8 @@ from lerobot.robots.utils import make_robot_from_config
 from lerobot.scripts.lerobot_record import RecordConfig
 from lerobot.teleoperators.quest_vr.configuration_quest_vr import QuestVRTeleopConfig
 from lerobot.teleoperators.utils import make_teleoperator_from_config
+from lerobot.utils.constants import ACTION
+from lerobot.utils.feature_utils import build_dataset_frame
 from lerobot.utils.import_utils import _pin_pink_available
 
 # Mirrors Option A of examples/openarm2/README.md (leader-follower).
@@ -163,6 +165,24 @@ def test_factories_construct_robot_and_teleop_without_hardware():
     names = set(teleop.action_features["names"])
     assert {f"{s}_target_x" for s in ("left", "right")} <= names
     assert {f"{s}_gripper_pos" for s in ("left", "right")} <= names
+
+
+def test_record_action_schema_contains_only_values_returned_by_send_action():
+    cfg = _parse(_QUEST_VR_ARGS)
+    robot = make_robot_from_config(cfg.robot)
+
+    action_names = list(robot.action_features)
+    expected = {f"{side}_{motor}.pos" for side in ("left", "right") for motor in MOTOR_NAMES}
+    assert set(action_names) == expected
+    assert any(name.endswith(".vel") for name in robot.observation_features)
+    assert any(name.endswith(".torque") for name in robot.observation_features)
+
+    sent_action = dict.fromkeys(action_names, 0.0)
+    dataset_features = {
+        ACTION: {"dtype": "float32", "shape": (len(action_names),), "names": action_names}
+    }
+    frame = build_dataset_frame(dataset_features, sent_action, prefix=ACTION)
+    assert frame[ACTION].shape == (len(action_names),)
 
 
 @pytest.mark.skipif(not _pin_pink_available, reason="pin-pink (optional) not installed")

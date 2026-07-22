@@ -160,8 +160,8 @@ class OpenArmFollower(Robot):
 
     @cached_property
     def action_features(self) -> dict[str, type]:
-        """Action features."""
-        return self._motors_ft
+        """Commanded motor positions; velocity and torque are feedback-only."""
+        return {f"{motor}.pos": float for motor in self.bus.motors}
 
     @property
     def is_connected(self) -> bool:
