@@ -39,6 +39,10 @@ class DatasetRecordConfig:
     num_episodes: int = 50
     # Encode frames in the dataset into video
     video: bool = True
+    # Record camera frames. Disable this for parquet-only runs such as fast policy evaluation.
+    record_images: bool = True
+    # Optional observation-key overrides used when adapting pretrained policies.
+    rename_map: dict[str, str] = field(default_factory=dict)
     # Upload dataset to Hugging Face hub.
     push_to_hub: bool = True
     # If True, upload as private; if None, defer to the org default on the Hub (only affects orgs).
