@@ -183,7 +183,8 @@ robstride = ["lerobot[can-dep]"]
 openarms = ["lerobot[damiao]"]
 # Gravity feedforward for OpenArm followers: MuJoCo inverse dynamics on the
 # bimanual OpenArm 2.0 model (model files ship with the openarm-mujoco package).
-openarm-ff = ["lerobot[openarms]", "mujoco>=3.2,<4", "openarm-mujoco>=2.0"]
+openarm-ff = ["lerobot[openarms]", "mujoco>=3.6,<4", "openarm-mujoco>=2.0"]
+openarm-ik = ["lerobot[openarm-ff]", "openarm-control==0.1.0"]
 gamepad = ["lerobot[pygame-dep]", "hidapi>=0.14.0,<0.15.0"]
 hopejr = ["lerobot[feetech]", "lerobot[pygame-dep]"]
 lekiwi = ["lerobot[feetech]", "lerobot[pyzmq-dep]"]
@@ -215,7 +216,7 @@ intelrealsense = [
 phone = ["hebi-py>=2.8.0,<2.12.0", "teleop>=0.1.0,<0.2.0", "fastapi<1.0", "lerobot[scipy-dep]"]
 # Quest 3 WebXR teleop (fork-only). aiohttp serves the WebXR page over a
 # daemon-thread HTTPS server; the Cartesian IK a robot installs for this
-# teleop in attach_teleop needs pin-pink (see lerobot[pink-dep]).
+# OpenArm uses the separate openarm-ik extra; SO-107 still uses pin-pink.
 quest-vr = ["aiohttp>=3.9,<4.0", "lerobot[pink-dep]"]
 
 # Policies

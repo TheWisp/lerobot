@@ -25,11 +25,11 @@ export ROBOT_CAMERAS="{ left_wrist: {type: opencv, index_or_path: /dev/video0, w
   uv sync --locked --extra openarm-ff
   ```
 
-- The Quest VR path additionally needs the `quest-vr` extra and `pin-pink`
-  (Cartesian IK):
+- The Quest VR path additionally needs the WebXR server and the official
+  OpenArm MJCF/Mink IK package:
 
   ```bash
-  uv sync --locked --extra quest-vr --extra openarm-ff
+  uv sync --locked --extra quest-vr --extra openarm-ik
   ```
 
 ## Option A — Leader-follower (joint space)
@@ -67,8 +67,8 @@ lerobot-record \
 ## Option B — Quest 3 VR (Cartesian IK)
 
 `quest_vr` streams per-arm end-effector deltas; the follower's
-`attach_teleop` installs the OpenArm Cartesian-IK transform (per-arm URDFs in
-`lerobot.robots.openarm_description`) that turns them into joint commands.
+`attach_teleop` installs one shared bimanual MJCF/Mink transform backed by
+`openarm-control==0.1.0`, matching the pinned dora OpenArm control stack.
 OpenArm 2.0 specifics vs the SO-107 defaults:
 
 - `robot_forward_in_urdf=[1,0,0]` — the OpenArm base frame reaches in +X
