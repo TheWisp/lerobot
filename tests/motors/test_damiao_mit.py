@@ -26,6 +26,8 @@ from lerobot.utils.import_utils import _can_available
 if not _can_available:
     pytest.skip("python-can not available", allow_module_level=True)
 
+import can
+
 from lerobot.motors import Motor, MotorNormMode
 from lerobot.motors.damiao import DamiaoMotorsBus
 from lerobot.motors.damiao.tables import MIT_KD_RANGE, MIT_KP_RANGE, MOTOR_LIMIT_PARAMS, MotorType
@@ -111,6 +113,32 @@ def test_get_cached_states_returns_copies(bus):
     assert states["joint_1"]["position"] == 0.0
     states["joint_1"]["position"] = 999.0
     assert bus.get_cached_states()["joint_1"]["position"] == 0.0
+
+
+def test_handshake_processes_received_status_frame(bus, monkeypatch):
+    response = can.Message(arbitration_id=0x11, data=bytes(8), is_extended_id=False)
+
+    class FakeCanBus:
+        def __init__(self):
+            self.response_pending = False
+
+        def send(self, _message):
+            self.response_pending = True
+
+        def recv(self, timeout):
+            del timeout
+            if self.response_pending:
+                self.response_pending = False
+                return response
+            return None
+
+    processed = []
+    bus.canbus = FakeCanBus()
+    monkeypatch.setattr(bus, "_process_response", lambda motor_name, message: processed.append((motor_name, message)))
+
+    bus._handshake()
+
+    assert processed == [("joint_1", response)]
 
 
 def test_encode_posforce_packet_uses_official_little_endian_layout(bus):
