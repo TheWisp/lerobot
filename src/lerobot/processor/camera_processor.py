@@ -34,6 +34,7 @@ class TopCameraProcessorStep(ObservationProcessorStep):
         brightness_factor: Multiplier for brightness adjustment (default: 1.0)
     """
 
+    # hardcode-ok: this step targets the top camera by design (see class name)
     camera_key: str = "top"
     brightness_factor: float = 1.0
 

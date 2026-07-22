@@ -99,6 +99,19 @@ repos:
         files: ^(src|scripts)/.*\.py$
         pass_filenames: true
 
+  ##### Local: setup-overfitting guard #####
+  - repo: local
+    hooks:
+      - id: no-setup-hardcode
+        name: Flag setup-specific identifiers (camera/joint names) hardcoded into general code
+        entry: scripts/lint/no_setup_hardcode.py
+        language: python
+        # General-purpose code only. Robot/teleop/env/config definitions, tests,
+        # examples, one-off scripts, and upstream files are excluded by the hook
+        # itself; silence a case with `# hardcode-ok:` or `# hardcode-lint: ignore-file`.
+        files: ^src/lerobot/(policies|processor|gui)/.*\.py$
+        pass_filenames: true
+
   # TODO(Steven): Uncomment when ready to use
   ##### Static Analysis & Typing #####
   - repo: https://github.com/pre-commit/mirrors-mypy

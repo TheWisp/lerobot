@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--n-action-steps", type=int, default=None)
     parser.add_argument("--decode-subtask", action="store_true")
     parser.add_argument("--norm-stats", default=None)
+    # hardcode-ok: SO107 default slot order; made required (no default) in #47
     parser.add_argument(
         "--s2-image-keys",
         nargs="+",

@@ -220,7 +220,7 @@ class DepthEdgeOverlayProcessorStep(ObservationProcessorStep):
         max_depth: Maximum depth in meters for edge filtering
     """
 
-    camera_key: str = "top"
+    camera_key: str | None = None
     threshold_percentile: int = 95
     blur_kernel: int = 3
     dilation_kernel: int = 2

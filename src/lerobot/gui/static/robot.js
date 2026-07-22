@@ -901,6 +901,10 @@ function unassignPort(port) {
 }
 
 async function identifyArm(port, btn) {
+    if (!currentProfile?.data?.type) {
+        showToast('Error', 'Select a robot profile first — the wiggle probe uses its motor definition', 'error');
+        return;
+    }
     if (btn) {
         btn.textContent = 'Wiggling...';
         btn.classList.add('wiggling');
@@ -910,7 +914,7 @@ async function identifyArm(port, btn) {
         const res = await fetch('/api/robot/identify-arm', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ port }),
+            body: JSON.stringify({ port, profile: currentProfile.data }),
         });
         const result = await res.json();
         if (result.status === 'ok') {
