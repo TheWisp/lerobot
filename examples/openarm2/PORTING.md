@@ -35,11 +35,10 @@ and jump-guard logging were missing and were ported.
 The teleop outputs Cartesian EE targets; driving OpenArm arms required new
 pieces:
 
-- `src/lerobot/robots/openarm_description/` — per-arm OpenArm 2.0 URDFs
-  (kinematics-only, mechanically extracted from enactic/openarm_description
-  v2.0, Apache-2.0 `LICENSE.txt` vendored; provenance in that README) plus
-  `cartesian_ik.py` reusing the fork's pin-pink machinery
-  (`BimanualOpenArmIKTransform`, `build_openarm_bimanual_ik_transform`).
+- `src/lerobot/robots/openarm_description/mink_ik.py` adapts the official
+  `openarm-control==0.1.0` shared bimanual MJCF/Mink solver to LeRobot's
+  Cartesian action dictionary. The earlier per-arm URDF/Pink implementation
+  remains only as a comparison artifact and is not the runtime OpenArm path.
 - `BiOpenArmFollower.attach_teleop` — detects the Cartesian teleop and
   installs the IK transform (mirrors the SO-107 pattern), so
   `lerobot-record` / `lerobot-teleoperate` work unchanged.
@@ -52,10 +51,10 @@ pieces:
 
 ## Dependencies
 
-New extra `openarm-ff = ["lerobot[openarms]", "mujoco>=3.2,<4",
-"openarm-mujoco>=2.0"]` (pyproject.toml + regenerated `uv.lock`). The MuJoCo
+New extras include `openarm-ff` for gravity compensation and `openarm-ik`
+for `openarm-control==0.1.0`. The MuJoCo
 model resolves via the `openarm-mujoco` package itself — no XML vendored for
-gravity FF. IK needs `quest-vr` (aiohttp + pin-pink). All optional imports
+gravity FF. Quest transport separately needs `quest-vr` (aiohttp). All optional imports
 are guarded (`lerobot/utils/import_utils.py`).
 
 ## Validation
@@ -64,7 +63,7 @@ are guarded (`lerobot/utils/import_utils.py`).
   `test`+`quest-vr`+`openarm-ff` extras), incl. gravity-torque vs MuJoCo
   (front-mid J1 ≈ +8.64 N·m, matching the physically validated band),
   MIT packet round-trips, ramp/gripper-exclusion, telemetry math, real
-  pin-pink FK/IK round-trips, dropout-no-slew full-stack, and draccus-parsed
+  Cartesian FK/IK round-trips, dropout-no-slew full-stack, and draccus-parsed
   `RecordConfig`s for both `README.md` record commands
   (`tests/robots/test_openarm2_record_wiring.py`).
 - Hardware (2026-07-22): PCAN-USB Pro FD up with the Standard mapping

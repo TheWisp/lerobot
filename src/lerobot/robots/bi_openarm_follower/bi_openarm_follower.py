@@ -107,27 +107,21 @@ class BiOpenArmFollower(BimanualMixin, Robot):
         # Only for compatibility with other parts of the codebase that expect a `robot.cameras` attribute
         self.cameras = {**self.left_arm.cameras, **self.right_arm.cameras}
 
-        # Build the per-arm IK kinematics now: PinkKinematics parses the
-        # OpenArm URDF (~1-2 s/arm, CPU-bound). Doing it here — before
-        # connect() starts any camera read thread — keeps that parse from
+        # Build the official shared bimanual MJCF/Mink solver now. Doing it
+        # here — before connect() starts any camera read thread — keeps model
+        # parsing from
         # starving the camera and tripping its frame-age watchdog.
-        # None if pin-pink is missing (Cartesian teleop then no-ops).
-        self._ik_kinematics: dict[str, Any] | None = None
+        self._ik_kinematics: tuple[Any, Any] | None = None
         try:
-            from lerobot.robots.openarm_description.cartesian_ik import make_openarm_arm_kinematics
+            from lerobot.robots.openarm_description.mink_ik import make_openarm_mink_kinematics
+            from lerobot.robots.openarm_follower.gravity_ff import default_bimanual_xml
 
-            self._ik_kinematics = {
-                "left": make_openarm_arm_kinematics(
-                    "left",
-                    posture_cost=config.ik_posture_cost,
-                    max_iters=config.ik_max_iters,
-                ),
-                "right": make_openarm_arm_kinematics(
-                    "right",
-                    posture_cost=config.ik_posture_cost,
-                    max_iters=config.ik_max_iters,
-                ),
-            }
+            self._ik_kinematics = make_openarm_mink_kinematics(
+                xml=default_bimanual_xml(),
+                posture_cost=config.ik_posture_cost,
+                max_iters=config.ik_max_iters,
+                damping=config.ik_damping,
+            )
         except Exception:
             logger.exception("%s: Cartesian-IK kinematics unavailable; Cartesian teleop disabled", self.name)
 
@@ -163,7 +157,7 @@ class BiOpenArmFollower(BimanualMixin, Robot):
     def attach_teleop(self, teleop: Any) -> None:
         """Wire a teleoperator as this robot's intent source.
 
-        For a bimanual Cartesian VR teleop (Quest), build a per-arm IK
+        For a bimanual Cartesian VR teleop (Quest), build the shared MJCF/Mink
         controller and install it into the teleop via
         ``set_action_transform`` so ``teleop.get_action()`` returns
         motor-space joint commands. The IK stays robot-owned and the
@@ -178,11 +172,11 @@ class BiOpenArmFollower(BimanualMixin, Robot):
         """
         # Detect a bimanual Cartesian teleop by its action features. Done
         # before importing the IK module so a joint-space leader never
-        # triggers the optional pin-pink import.
+        # requires the optional OpenArm IK dependency.
         from lerobot.robots.openarm_description.cartesian_ik import (
-            build_openarm_bimanual_ik_transform,
             is_openarm_bimanual_cartesian_teleop,
         )
+        from lerobot.robots.openarm_description.mink_ik import build_openarm_mink_transform
 
         if not is_openarm_bimanual_cartesian_teleop(teleop):
             return
@@ -193,14 +187,18 @@ class BiOpenArmFollower(BimanualMixin, Robot):
         )
 
         if self._ik_kinematics is None:
-            logger.warning(
-                "%s: Cartesian teleop attached but IK kinematics are unavailable "
-                "(is pin-pink installed?) — the arms will not be driven.",
-                self.name,
+            raise RuntimeError(
+                "OpenArm Cartesian teleop requires lerobot[openarm-ik]; "
+                "the shared MJCF/Mink solver failed to initialize"
             )
-            return
 
-        transform = build_openarm_bimanual_ik_transform(self._ik_kinematics, self.left_arm, self.right_arm)
+        kinematics, setup = self._ik_kinematics
+        transform = build_openarm_mink_transform(
+            kinematics,
+            setup,
+            self.left_arm,
+            self.right_arm,
+        )
         teleop.set_action_transform(transform)
         logger.info("%s: installed Cartesian-IK transform into %s", self.name, type(teleop).__name__)
 

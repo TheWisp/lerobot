@@ -1,8 +1,9 @@
 # OpenArm 2.0 robot description (kinematics-only)
 
-Per-arm URDFs for Pink/pinocchio Cartesian IK, used by
-`bi_openarm_follower` to drive the two OpenArm 2.0 arms from a Cartesian
-teleop (Quest VR).
+The runtime OpenArm Cartesian path is `mink_ik.py`: one shared bimanual
+MJCF/Mink solver from the official `openarm-control` package. The per-arm
+URDF/Pink files in this directory are retained for provenance and offline
+comparison; `bi_openarm_follower` does not use them for Quest control.
 
 ## Provenance
 
