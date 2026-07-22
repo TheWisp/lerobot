@@ -183,7 +183,7 @@ function renderEditor() {
     html += '</select>';
     if (schema) {
         for (const field of schema.fields) {
-            const value = currentProfile.data.fields?.[field.name] ?? field.default ?? '';
+            const value = _getNestedField(currentProfile.data.fields || {}, field.name) ?? field.default ?? '';
             html += renderFormField(field, value);
         }
     }
@@ -302,6 +302,48 @@ function _serializeProfile(data) {
     });
 }
 
+function _getNestedField(data, dottedPath) {
+    let value = data;
+    for (const part of dottedPath.split('.')) {
+        if (value === null || typeof value !== 'object' || !(part in value)) return undefined;
+        value = value[part];
+    }
+    return value;
+}
+
+function _setNestedField(data, dottedPath, value) {
+    const parts = dottedPath.split('.');
+    let target = data;
+    for (const part of parts.slice(0, -1)) {
+        if (target[part] === null || typeof target[part] !== 'object' || Array.isArray(target[part])) {
+            target[part] = {};
+        }
+        target = target[part];
+    }
+    target[parts[parts.length - 1]] = value;
+}
+
+function _deleteNestedField(data, dottedPath) {
+    const parts = dottedPath.split('.');
+    const parents = [];
+    let target = data;
+    for (const part of parts.slice(0, -1)) {
+        if (target === null || typeof target !== 'object' || !(part in target)) return;
+        parents.push([target, part]);
+        target = target[part];
+    }
+    if (target === null || typeof target !== 'object') return;
+    delete target[parts[parts.length - 1]];
+    // Remove empty containers created solely for nested GUI fields.
+    for (const [parent, key] of parents.reverse()) {
+        if (parent[key] && typeof parent[key] === 'object' && Object.keys(parent[key]).length === 0) {
+            delete parent[key];
+        } else {
+            break;
+        }
+    }
+}
+
 function _collectFormFields() {
     const schemas = currentProfile.kind === 'robot' ? robotSchemas : teleopSchemas;
     const schema = schemas?.find(s => s.type_name === currentProfile.data.type);
@@ -310,12 +352,16 @@ function _collectFormFields() {
     // fields from the editing UI but they still need to round-trip through
     // save / launch. Starting from `{}` here would silently drop them and
     // any subsequent save would erase the JSON's calibration_dir.
-    const fields = { ...(currentProfile?.data?.fields || {}) };
+    const fields = JSON.parse(JSON.stringify(currentProfile?.data?.fields || {}));
     if (schema) {
         for (const field of schema.fields) {
             const input = document.getElementById(`field-${field.name}`);
             if (!input) continue;
-            fields[field.name] = parseFieldValue(field, input.value);
+            const value = parseFieldValue(field, input.value);
+            // Omit blank/None values so dataclass defaults and default_factory
+            // values remain effective when draccus decodes the profile.
+            if (value === null) _deleteNestedField(fields, field.name);
+            else _setNestedField(fields, field.name, value);
         }
     }
     return fields;
@@ -795,7 +841,7 @@ function renderPortList(ports, allAssignments) {
     const list = document.getElementById('port-list');
     if (!list) return;
     if (ports.length === 0) {
-        list.innerHTML = '<div style="color: #666; font-size: 13px; padding: 8px;">No serial ports found</div>';
+        list.innerHTML = '<div style="color: #666; font-size: 13px; padding: 8px;">No serial or SocketCAN ports found</div>';
         return;
     }
     const portFields = _getPortFields();
@@ -806,7 +852,7 @@ function renderPortList(ports, allAssignments) {
     const curFields = (currentProfile && currentProfile.data.fields) || {};
     const curPortToField = {};
     for (const f of portFields) {
-        const v = curFields[f.name];
+        const v = _getNestedField(curFields, f.name);
         if (typeof v === 'string' && v.trim()) curPortToField[v.trim()] = f.name;
     }
 
@@ -832,6 +878,7 @@ function renderPortList(ports, allAssignments) {
         const meta = [p.name || ''];
         if (p.manufacturer) meta.push(p.manufacturer);
         if (p.vid_pid) meta.push(p.vid_pid);
+        if (p.state) meta.push(p.state);
 
         const claimedBy = usedByOthers[p.path];
 
@@ -860,10 +907,14 @@ function renderPortList(ports, allAssignments) {
             }
         }
 
+        const canWiggle = _supportsFeetechWiggle(p.path);
+        const wiggleButton = canWiggle
+            ? `<button class="btn-small" onclick="identifyArm('${esc(p.path)}', this)">Wiggle</button>`
+            : '<button class="btn-small" disabled title="Feetech identification is unavailable for OpenArm/Damiao and SocketCAN devices">Wiggle unavailable</button>';
         return `<div class="port-item">
             <span class="port-path">${esc(p.path)}</span>
             <span class="port-name">${esc(meta.join(' | '))}</span>
-            <button class="btn-small" onclick="identifyArm('${esc(p.path)}', this)">Wiggle</button>
+            ${wiggleButton}
             ${assignHtml}
             ${claimedHtml}
         </div>`;
@@ -881,7 +932,7 @@ function assignPort(port, fieldName, claimedByProfile, claimedByKind) {
     }
     if (!fieldName) return;
     if (!currentProfile.data.fields) currentProfile.data.fields = {};
-    currentProfile.data.fields[fieldName] = port;
+    _setNestedField(currentProfile.data.fields, fieldName, port);
     _rerender();
     _updateDirtyState();
     showToast('Port set', `${fieldName} = ${port}`, 'info');
@@ -891,8 +942,8 @@ function unassignPort(port) {
     if (!currentProfile || !currentProfile.data.fields) return;
     const portFields = _getPortFields();
     for (const f of portFields) {
-        if (currentProfile.data.fields[f.name] === port) {
-            delete currentProfile.data.fields[f.name];
+        if (_getNestedField(currentProfile.data.fields, f.name) === port) {
+            _deleteNestedField(currentProfile.data.fields, f.name);
         }
     }
     _rerender();
@@ -931,6 +982,17 @@ async function identifyArm(port, btn) {
             btn.disabled = false;
         }
     }
+}
+
+function _supportsFeetechWiggle(port) {
+    const profileType = (currentProfile?.data?.type || '').toLowerCase();
+    const portName = String(port || '').split('/').pop().toLowerCase();
+    return !(
+        profileType.includes('openarm') ||
+        profileType.includes('damiao') ||
+        portName.startsWith('can') ||
+        portName.startsWith('vcan')
+    );
 }
 
 // ============================================================================

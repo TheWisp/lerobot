@@ -110,6 +110,47 @@ class TestProfileToCliArgs:
         assert not any("unused" in a for a in args)
         assert any("cameras" in a for a in args)
 
+    def test_nested_dataclass_fields_expand_to_dotted_cli_args(self):
+        profile = {
+            "type": "bi_openarm_follower",
+            "fields": {
+                "left_arm_config": {"port": "can1", "side": "left", "use_can_fd": True},
+                "right_arm_config": {"port": "can0", "side": "right", "use_can_fd": False},
+                "ik_max_iters": 10,
+            },
+        }
+        known_fields = {
+            "left_arm_config.port",
+            "left_arm_config.side",
+            "left_arm_config.use_can_fd",
+            "right_arm_config.port",
+            "right_arm_config.side",
+            "right_arm_config.use_can_fd",
+            "ik_max_iters",
+        }
+
+        with patch("lerobot.gui.api.run._get_known_fields", return_value=known_fields):
+            args = _profile_to_cli_args(profile, "robot")
+
+        assert "--robot.left_arm_config.port=can1" in args
+        assert "--robot.left_arm_config.side=left" in args
+        assert "--robot.left_arm_config.use_can_fd=true" in args
+        assert "--robot.right_arm_config.port=can0" in args
+        assert "--robot.right_arm_config.side=right" in args
+        assert "--robot.right_arm_config.use_can_fd=false" in args
+        assert not any("left_arm_config={'" in arg for arg in args)
+
+    def test_dict_valued_leaf_stays_one_json_argument(self):
+        profile = {
+            "type": "openarm_follower",
+            "fields": {"joint_limits": {"joint_1": [-20.0, 20.0]}},
+        }
+
+        with patch("lerobot.gui.api.run._get_known_fields", return_value={"joint_limits"}):
+            args = _profile_to_cli_args(profile, "robot")
+
+        assert f'--robot.joint_limits={json.dumps(profile["fields"]["joint_limits"])}' in args
+
     def test_unknown_fields_filtered_with_warning(self):
         """Fields not in the config class are silently skipped."""
         profile = {
