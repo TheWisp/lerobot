@@ -610,34 +610,71 @@ async def scan_ports() -> list[dict]:
     return ports
 
 
-def _wiggle_shoulder(port: str) -> dict:
-    """Wiggle motor id 1 on the given port to physically identify it. Runs in thread pool."""
-    try:
-        from lerobot.motors import Motor, MotorNormMode
-        from lerobot.motors.feetech import FeetechMotorsBus
-    except ImportError:
-        return {"status": "error", "message": "lerobot motor modules not available"}
+def _probe_motor_spec(profile: dict) -> tuple[type, str, object]:
+    """Derive the port-probe motor from the robot's own definition.
 
-    # Motor id 1 is a stand-in for "the first motor on the bus" — the label is a
-    # local handle, not a claim about which joint it is, so it stays robot-agnostic.
-    probe_motor = "motor_1"
-    motors = {
-        probe_motor: Motor(1, "sts3215", MotorNormMode.RANGE_M100_100),
-    }
+    Returns ``(bus_cls, motor_name, motor)`` — the first motor of the profile's
+    (first) arm bus, so the probe speaks the right protocol and motor model for
+    this robot instead of assuming a specific servo.
+
+    Preconditions: ``profile["type"]`` is a registered robot type. Port fields
+    may be unassigned mid-setup (identifying ports is why the user is here) —
+    they are dummy-filled for construction; no hardware is touched.
+    """
+    import dataclasses
+
+    import draccus
+
+    from lerobot.robots.config import RobotConfig
+    from lerobot.robots.utils import make_robot_from_config
+
+    _ensure_configs_loaded()
+
+    config_cls = RobotConfig.get_known_choices().get(profile.get("type"))
+    if config_cls is None:
+        raise ValueError(f"Unknown robot type: {profile.get('type')!r}")
+
+    config_dict = {"type": profile["type"]}
+    config_dict.update(profile.get("fields", {}))
+    for field in dataclasses.fields(config_cls):
+        if "port" in field.name and not config_dict.get(field.name):
+            config_dict[field.name] = "/dev/null"
+
+    robot = make_robot_from_config(draccus.decode(RobotConfig, config_dict))
+    bus = getattr(robot, "bus", None)
+    if bus is None and hasattr(robot, "left_arm"):
+        bus = robot.left_arm.bus
+    if bus is None:
+        raise ValueError(f"Robot type {profile['type']!r} has no motor bus to probe")
+
+    motor_name, motor = next(iter(bus.motors.items()))
+    return type(bus), motor_name, motor
+
+
+def _wiggle_first_motor(port: str, profile: dict) -> dict:
+    """Wiggle the robot's first motor on the given port to physically identify it.
+
+    Runs in thread pool. Bus protocol and motor model come from the robot
+    profile (see ``_probe_motor_spec``) — nothing about the servo is assumed.
+    """
+    try:
+        bus_cls, motor_name, motor = _probe_motor_spec(profile)
+    except Exception as e:
+        return {"status": "error", "port": port, "message": str(e)}
 
     bus = None
     try:
-        bus = FeetechMotorsBus(port=port, motors=motors)
+        bus = bus_cls(port=port, motors={motor_name: motor})
         bus.connect()
 
-        current_pos = bus.read("Present_Position", probe_motor, normalize=False)
+        current_pos = bus.read("Present_Position", motor_name, normalize=False)
         ticks = 200
 
-        bus.write("Goal_Position", probe_motor, current_pos + ticks, normalize=False)
+        bus.write("Goal_Position", motor_name, current_pos + ticks, normalize=False)
         time.sleep(0.5)
-        bus.write("Goal_Position", probe_motor, current_pos - ticks, normalize=False)
+        bus.write("Goal_Position", motor_name, current_pos - ticks, normalize=False)
         time.sleep(0.5)
-        bus.write("Goal_Position", probe_motor, current_pos, normalize=False)
+        bus.write("Goal_Position", motor_name, current_pos, normalize=False)
         time.sleep(0.3)
 
         return {"status": "ok", "port": port}
@@ -708,6 +745,8 @@ async def get_all_port_assignments() -> list[dict]:
 
 class IdentifyArmRequest(BaseModel):
     port: str
+    # Robot profile data ({type, fields}) — the probe derives its motor/bus from it.
+    profile: dict
 
 
 @router.post("/open-in-files")
@@ -737,9 +776,9 @@ async def open_in_file_manager(body: dict) -> dict:
 
 @router.post("/identify-arm")
 async def identify_arm(request: IdentifyArmRequest) -> dict:
-    """Wiggle the shoulder motor on the given port to identify which arm it is."""
+    """Wiggle the robot's first motor on the given port to identify which arm it is."""
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, _wiggle_shoulder, request.port)
+    result = await loop.run_in_executor(None, _wiggle_first_motor, request.port, request.profile)
     return result
 
 
