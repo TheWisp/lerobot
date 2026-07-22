@@ -16,5 +16,6 @@
 
 from .config_openarm_follower import OpenArmFollowerConfig, OpenArmFollowerConfigBase
 from .openarm_follower import OpenArmFollower
+from .telemetry import FollowerTelemetry
 
-__all__ = ["OpenArmFollower", "OpenArmFollowerConfig", "OpenArmFollowerConfigBase"]
+__all__ = ["FollowerTelemetry", "OpenArmFollower", "OpenArmFollowerConfig", "OpenArmFollowerConfigBase"]

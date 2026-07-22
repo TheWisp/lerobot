@@ -17,6 +17,7 @@
 import logging
 from functools import cached_property
 
+from lerobot.motors.damiao import MotorState
 from lerobot.types import RobotAction
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
@@ -49,6 +50,7 @@ class BiOpenArmLeader(Teleoperator):
             can_data_bitrate=config.left_arm_config.can_data_bitrate,
             motor_config=config.left_arm_config.motor_config,
             manual_control=config.left_arm_config.manual_control,
+            set_zero_on_connect=config.left_arm_config.set_zero_on_connect,
             position_kd=config.left_arm_config.position_kd,
             position_kp=config.left_arm_config.position_kp,
         )
@@ -63,6 +65,7 @@ class BiOpenArmLeader(Teleoperator):
             can_data_bitrate=config.right_arm_config.can_data_bitrate,
             motor_config=config.right_arm_config.motor_config,
             manual_control=config.right_arm_config.manual_control,
+            set_zero_on_connect=config.right_arm_config.set_zero_on_connect,
             position_kd=config.right_arm_config.position_kd,
             position_kp=config.right_arm_config.position_kp,
         )
@@ -78,6 +81,14 @@ class BiOpenArmLeader(Teleoperator):
         return {
             **{f"left_{k}": v for k, v in left_arm_features.items()},
             **{f"right_{k}": v for k, v in right_arm_features.items()},
+        }
+
+    @property
+    def last_motor_states(self) -> dict[str, MotorState]:
+        """Latest full per-motor diagnostics, with arm prefixes."""
+        return {
+            **{f"left_{motor}": state for motor, state in self.left_arm.last_motor_states.items()},
+            **{f"right_{motor}": state for motor, state in self.right_arm.last_motor_states.items()},
         }
 
     @cached_property

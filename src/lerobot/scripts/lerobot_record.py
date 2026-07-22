@@ -1268,6 +1268,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             intervention_dataset.finalize()
             logging.info(f"Intervention dataset contains {intervention_dataset.num_episodes} episodes")
 
+        if teleop is not None:
+            robot.attach_teleop(None)
         if robot.is_connected:
             robot.disconnect()
         if teleop and teleop.is_connected:

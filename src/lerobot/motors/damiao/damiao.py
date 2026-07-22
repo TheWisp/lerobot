@@ -17,6 +17,8 @@
 # https://github.com/cmjang/DM_Control_Python
 
 import logging
+import math
+import struct
 import time
 from contextlib import contextmanager
 from copy import deepcopy
@@ -37,7 +39,6 @@ else:
 
 import numpy as np
 
-from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import enter_pressed, move_cursor_up
 
 from ..motors_bus import Motor, MotorCalibration, MotorsBusBase, NameOrID, Value
@@ -63,14 +64,30 @@ LONG_TIMEOUT_SEC = 0.1
 MEDIUM_TIMEOUT_SEC = 0.01
 SHORT_TIMEOUT_SEC = 0.001
 PRECISE_TIMEOUT_SEC = 0.0001
+MAX_DRAIN_MESSAGES = 256
+MAX_DRAIN_DURATION_SEC = 0.02
+HANDSHAKE_READ_COUNT = 2
+HANDSHAKE_MAX_POSITION_DELTA_DEG = 5.0
+HANDSHAKE_MAX_VELOCITY_DELTA_DEG_S = 20.0
+HANDSHAKE_MAX_TORQUE_DELTA = 5.0
+VALID_MOTOR_STATUSES = {0, 1}
 
 
 class MotorState(TypedDict):
+    status: int
     position: float
     velocity: float
     torque: float
     temp_mos: float
     temp_rotor: float
+
+
+class MotorStateUnavailableError(ConnectionError):
+    """Raised when a command does not produce fresh feedback from every requested motor."""
+
+
+class MotorFeedbackError(MotorStateUnavailableError):
+    """Raised when a received CAN frame is not valid feedback for the requested motor."""
 
 
 class DamiaoMotorsBus(MotorsBusBase):
@@ -98,6 +115,7 @@ class DamiaoMotorsBus(MotorsBusBase):
         use_can_fd: bool = True,
         bitrate: int = 1000000,
         data_bitrate: int | None = 5000000,
+        state_timeout_s: float = 0.1,
     ):
         """
         Initialize the Damiao motors bus.
@@ -110,6 +128,7 @@ class DamiaoMotorsBus(MotorsBusBase):
             use_can_fd: Whether to use CAN FD mode (default: True for OpenArms)
             bitrate: Nominal bitrate in bps (default: 1000000 = 1 Mbps)
             data_bitrate: Data bitrate for CAN FD in bps (default: 5000000 = 5 Mbps), ignored if use_can_fd is False
+            state_timeout_s: Maximum age of cached feedback accepted by cached-state accessors
         """
         require_package("python-can", extra="damiao", import_name="can")
         super().__init__(port, motors, calibration)
@@ -118,8 +137,13 @@ class DamiaoMotorsBus(MotorsBusBase):
         self.use_can_fd = use_can_fd
         self.bitrate = bitrate
         self.data_bitrate = data_bitrate
+        if state_timeout_s <= 0:
+            raise ValueError("state_timeout_s must be greater than zero")
+        self.state_timeout_s = state_timeout_s
         self.canbus: can.interface.Bus | None = None
         self._is_connected = False
+        self._fault_latched = False
+        self._fault_reason: str | None = None
 
         # Map motor names to CAN IDs
         self._motor_can_ids: dict[str, int] = {}
@@ -135,17 +159,11 @@ class DamiaoMotorsBus(MotorsBusBase):
             if motor.recv_id is not None:
                 self._recv_id_to_motor[motor.recv_id] = name
 
-        # State cache for handling packet drops safely
-        self._last_known_states: dict[str, MotorState] = {
-            name: {
-                "position": 0.0,
-                "velocity": 0.0,
-                "torque": 0.0,
-                "temp_mos": 0.0,
-                "temp_rotor": 0.0,
-            }
-            for name in self.motors
-        }
+        # A motor is absent from this cache until a valid feedback frame has been decoded.
+        # Keeping an empty cache prevents an initial all-zero placeholder from being mistaken
+        # for a real robot state.
+        self._last_known_states: dict[str, MotorState] = {}
+        self._state_updated_at: dict[str, float] = {}
 
         # Dynamic gains storage
         # Defaults: Kp=10.0 (Stiffness), Kd=0.5 (Damping)
@@ -155,6 +173,65 @@ class DamiaoMotorsBus(MotorsBusBase):
     def is_connected(self) -> bool:
         """Check if the CAN bus is connected."""
         return self._is_connected and self.canbus is not None
+
+    @property
+    def fault_latched(self) -> bool:
+        """Whether a prior command or feedback failure has inhibited further control."""
+        return self._fault_latched
+
+    @property
+    def fault_reason(self) -> str | None:
+        return self._fault_reason
+
+    def clear_fault_latch(self) -> None:
+        """Clear the software latch only while disconnected; reconnect will revalidate hardware."""
+        if self.is_connected:
+            raise RuntimeError("Disconnect before clearing the Damiao fault latch")
+        self._fault_latched = False
+        self._fault_reason = None
+
+    def _ensure_control_allowed(self) -> None:
+        if self._fault_latched:
+            raise MotorFeedbackError(f"Damiao control is fault-latched: {self._fault_reason}")
+
+    def _send_disable_best_effort(self, motors: list[str]) -> None:
+        if self.canbus is None:
+            return
+        for motor in dict.fromkeys(motors):
+            try:
+                msg = can.Message(
+                    arbitration_id=self._get_motor_id(motor),
+                    data=[0xFF] * 7 + [CAN_CMD_DISABLE],
+                    is_extended_id=False,
+                    is_fd=self.use_can_fd,
+                )
+                self.canbus.send(msg)
+            except Exception:
+                logger.exception("Failed to send fail-safe disable to %s", motor)
+
+    def _latch_fault(self, reason: str, motors: list[str]) -> None:
+        self._fault_latched = True
+        self._fault_reason = reason
+        self._send_disable_best_effort(motors)
+
+    def _latch_software_fault(self, reason: str) -> None:
+        """Inhibit later control without emitting any CAN frame."""
+        self._fault_latched = True
+        self._fault_reason = reason
+
+    def _drain_pending_messages(self) -> int:
+        """Discard a bounded number of stale frames without allowing an endless live bus drain."""
+        if self.canbus is None:
+            raise RuntimeError("CAN bus is not initialized.")
+        count = 0
+        deadline = time.monotonic() + MAX_DRAIN_DURATION_SEC
+        while count < MAX_DRAIN_MESSAGES and time.monotonic() < deadline:
+            if self.canbus.recv(timeout=0) is None:
+                break
+            count += 1
+        if count == MAX_DRAIN_MESSAGES or time.monotonic() >= deadline:
+            logger.warning("Stopped draining stale CAN frames at the configured safety bound")
+        return count
 
     @check_if_already_connected
     def connect(self, handshake: bool = True) -> None:
@@ -192,6 +269,8 @@ class DamiaoMotorsBus(MotorsBusBase):
 
             self.canbus = can.interface.Bus(**kwargs)
             self._is_connected = True
+            self._last_known_states.clear()
+            self._state_updated_at.clear()
 
             if handshake:
                 self._handshake()
@@ -199,53 +278,66 @@ class DamiaoMotorsBus(MotorsBusBase):
             logger.debug(f"{self.__class__.__name__} connected via {self.can_interface}.")
         except Exception as e:
             self._is_connected = False
+            if self.canbus is not None:
+                self.canbus.shutdown()
+                self.canbus = None
+            self._last_known_states.clear()
+            self._state_updated_at.clear()
             raise ConnectionError(f"Failed to connect to CAN bus: {e}") from e
 
     def _handshake(self) -> None:
         """
-        Verify all motors are present and populate initial state cache.
+        Verify all motors are present and populate initial state cache without enabling torque.
         Raises ConnectionError if any motor fails to respond.
         """
         logger.info("Starting handshake with motors...")
 
-        # Drain any pending messages
         if self.canbus is None:
             raise RuntimeError("CAN bus is not initialized.")
 
-        while self.canbus.recv(timeout=0.01):
-            pass
+        self._drain_pending_messages()
 
         missing_motors = []
-        for motor_name in self.motors:
-            motor_id = self._get_motor_id(motor_name)
-            recv_id = self._get_motor_recv_id(motor_name)
+        try:
+            for motor_name in self.motors:
+                samples: list[MotorState] = []
+                for _ in range(HANDSHAKE_READ_COUNT):
+                    response = self._refresh_motor(motor_name, timeout=LONG_TIMEOUT_SEC)
+                    if response is None:
+                        break
+                    samples.append(self._decode_validated_response(motor_name, response))
+                    time.sleep(MEDIUM_TIMEOUT_SEC)
 
-            # Send enable command
-            data = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, CAN_CMD_ENABLE]
-            msg = can.Message(arbitration_id=motor_id, data=data, is_extended_id=False, is_fd=self.use_can_fd)
-            self.canbus.send(msg)
+                if len(samples) != HANDSHAKE_READ_COUNT:
+                    missing_motors.append(motor_name)
+                    continue
+                if not self._handshake_samples_consistent(samples[0], samples[1]):
+                    raise MotorFeedbackError(f"Inconsistent consecutive handshake feedback from '{motor_name}'")
 
-            # Wait for response with longer timeout
-            response = None
-            start_time = time.time()
-            while time.time() - start_time < 0.1:
-                response = self.canbus.recv(timeout=0.1)
-                if response and response.arbitration_id == recv_id:
-                    break
-                response = None
-
-            if response is None:
-                missing_motors.append(motor_name)
-            else:
-                self._process_response(motor_name, msg)
-            time.sleep(MEDIUM_TIMEOUT_SEC)
+                self._cache_state(motor_name, samples[-1])
+        except Exception as e:
+            self._latch_software_fault(f"Handshake validation failed: {e}")
+            raise
 
         if missing_motors:
-            raise ConnectionError(
+            error = ConnectionError(
                 f"Handshake failed. The following motors did not respond: {missing_motors}. "
                 "Check power (24V) and CAN wiring."
             )
+            self._latch_software_fault(str(error))
+            raise error
         logger.info("Handshake successful. All motors ready.")
+
+    @staticmethod
+    def _handshake_samples_consistent(first: MotorState, second: MotorState) -> bool:
+        return (
+            first["status"] == second["status"]
+            and abs(first["position"] - second["position"]) <= HANDSHAKE_MAX_POSITION_DELTA_DEG
+            and abs(first["velocity"] - second["velocity"]) <= HANDSHAKE_MAX_VELOCITY_DELTA_DEG_S
+            and abs(first["torque"] - second["torque"]) <= HANDSHAKE_MAX_TORQUE_DELTA
+            and abs(first["temp_mos"] - second["temp_mos"]) <= 5.0
+            and abs(first["temp_rotor"] - second["temp_rotor"]) <= 5.0
+        )
 
     @check_if_not_connected
     def disconnect(self, disable_torque: bool = True) -> None:
@@ -266,17 +358,19 @@ class DamiaoMotorsBus(MotorsBusBase):
             self.canbus.shutdown()
             self.canbus = None
         self._is_connected = False
+        self._last_known_states.clear()
+        self._state_updated_at.clear()
         logger.debug(f"{self.__class__.__name__} disconnected.")
 
     def configure_motors(self) -> None:
-        """Configure all motors with default settings."""
-        # Damiao motors don't require much configuration in MIT mode
-        # Just ensure they're enabled
-        for motor in self.motors:
-            self._send_simple_command(motor, CAN_CMD_ENABLE)
-            time.sleep(MEDIUM_TIMEOUT_SEC)
+        """Deprecated compatibility no-op; configuration must be explicit."""
+        logger.warning(
+            "Damiao configure_motors() is a safety no-op; use explicit configuration and torque APIs"
+        )
 
-    def _send_simple_command(self, motor: NameOrID, command_byte: int) -> None:
+    def _send_simple_command(
+        self, motor: NameOrID, command_byte: int, *, expected_status: int | None = None
+    ) -> MotorState:
         """Helper to send simple 8-byte commands (Enable, Disable, Zero)."""
         motor_id = self._get_motor_id(motor)
         motor_name = self._get_motor_name(motor)
@@ -287,59 +381,90 @@ class DamiaoMotorsBus(MotorsBusBase):
         if self.canbus is None:
             raise RuntimeError("CAN bus is not initialized.")
 
+        self._drain_pending_messages()
         self.canbus.send(msg)
         if msg := self._recv_motor_response(expected_recv_id=recv_id):
-            self._process_response(motor_name, msg)
-        else:
-            logger.debug(f"No response from {motor_name} after command 0x{command_byte:02X}")
+            state = self._process_response(motor_name, msg)
+            if expected_status is not None and state["status"] != expected_status:
+                raise MotorFeedbackError(
+                    f"Motor '{motor_name}' returned status {state['status']} after command "
+                    f"0x{command_byte:02X}; expected {expected_status}"
+                )
+            return state
+        raise MotorStateUnavailableError(
+            f"No feedback from motor '{motor_name}' after command 0x{command_byte:02X}"
+        )
 
     def enable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
         """Enable torque on selected motors."""
         target_motors = self._get_motors_list(motors)
-        for motor in target_motors:
-            for _ in range(num_retry + 1):
-                try:
-                    self._send_simple_command(motor, CAN_CMD_ENABLE)
-                    break
-                except Exception as e:
-                    if _ == num_retry:
-                        raise e
-                    time.sleep(MEDIUM_TIMEOUT_SEC)
+        self._ensure_control_allowed()
+        try:
+            for motor in target_motors:
+                for attempt in range(num_retry + 1):
+                    try:
+                        self._send_simple_command(motor, CAN_CMD_ENABLE, expected_status=1)
+                        break
+                    except Exception:
+                        if attempt == num_retry:
+                            raise
+                        time.sleep(MEDIUM_TIMEOUT_SEC)
+        except Exception as e:
+            self._latch_fault(f"Enable sequence failed: {e}", target_motors)
+            raise
 
     def disable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
         """Disable torque on selected motors."""
         target_motors = self._get_motors_list(motors)
-        for motor in target_motors:
-            for _ in range(num_retry + 1):
-                try:
-                    self._send_simple_command(motor, CAN_CMD_DISABLE)
-                    break
-                except Exception as e:
-                    if _ == num_retry:
-                        raise e
-                    time.sleep(MEDIUM_TIMEOUT_SEC)
+        try:
+            for motor in target_motors:
+                for attempt in range(num_retry + 1):
+                    try:
+                        self._send_simple_command(motor, CAN_CMD_DISABLE, expected_status=0)
+                        break
+                    except Exception:
+                        if attempt == num_retry:
+                            raise
+                        time.sleep(MEDIUM_TIMEOUT_SEC)
+        except Exception as e:
+            self._latch_fault(f"Disable sequence failed: {e}", target_motors)
+            raise
 
     @contextmanager
-    def torque_disabled(self, motors: str | list[str] | None = None):
+    def torque_disabled(
+        self,
+        motors: str | list[str] | None = None,
+        *,
+        reenable_on_success: bool = False,
+    ):
         """
-        Context manager that guarantees torque is re-enabled.
+        Disable torque for the context and leave it disabled by default.
 
-        This helper is useful to temporarily disable torque when configuring motors.
+        Re-enabling requires an explicit opt-in and occurs only after a clean context exit.
+        An exception from the context body never triggers an enable command.
         """
         self.disable_torque(motors)
         try:
             yield
-        finally:
-            self.enable_torque(motors)
+        except BaseException:
+            raise
+        else:
+            if reenable_on_success:
+                self.enable_torque(motors)
 
     def set_zero_position(self, motors: str | list[str] | None = None) -> None:
         """Set current position as zero for selected motors."""
         target_motors = self._get_motors_list(motors)
-        for motor in target_motors:
-            self._send_simple_command(motor, CAN_CMD_SET_ZERO)
-            time.sleep(MEDIUM_TIMEOUT_SEC)
+        self._ensure_control_allowed()
+        try:
+            for motor in target_motors:
+                self._send_simple_command(motor, CAN_CMD_SET_ZERO)
+                time.sleep(MEDIUM_TIMEOUT_SEC)
+        except Exception as e:
+            self._latch_fault(f"Set-zero sequence failed: {e}", target_motors)
+            raise
 
-    def _refresh_motor(self, motor: NameOrID) -> can.Message | None:
+    def _refresh_motor(self, motor: NameOrID, *, timeout: float = SHORT_TIMEOUT_SEC) -> can.Message | None:
         """Refresh motor status and return the response."""
         motor_id = self._get_motor_id(motor)
         recv_id = self._get_motor_recv_id(motor)
@@ -349,8 +474,135 @@ class DamiaoMotorsBus(MotorsBusBase):
         if self.canbus is None:
             raise RuntimeError("CAN bus is not initialized.")
 
+        self._drain_pending_messages()
         self.canbus.send(msg)
-        return self._recv_motor_response(expected_recv_id=recv_id)
+        return self._recv_motor_response(expected_recv_id=recv_id, timeout=timeout)
+
+    def _decode_control_mode_response(self, motor: NameOrID, msg: can.Message) -> int:
+        """Validate a Damiao RID 10 parameter reply and return its control mode."""
+        motor_name = self._get_motor_name(motor)
+        if getattr(msg, "is_error_frame", False) or getattr(msg, "is_remote_frame", False):
+            raise MotorFeedbackError(f"Invalid CAN frame type in control-mode reply for '{motor_name}'")
+        if getattr(msg, "is_rx", True) is False:
+            raise MotorFeedbackError(f"Rejected transmit echo in control-mode reply for '{motor_name}'")
+
+        expected_recv_id = self._get_motor_recv_id(motor)
+        if msg.arbitration_id != expected_recv_id:
+            raise MotorFeedbackError(
+                f"Control-mode reply ID mismatch for '{motor_name}': "
+                f"expected 0x{expected_recv_id:X}, got 0x{msg.arbitration_id:X}"
+            )
+        data = msg.data
+        if len(data) != 8 or getattr(msg, "dlc", len(data)) != 8:
+            raise MotorFeedbackError(f"Control-mode reply for '{motor_name}' must have DLC 8")
+        if data[2] not in (0x33, 0x55):
+            raise MotorFeedbackError(
+                f"Control-mode reply for '{motor_name}' has invalid parameter opcode 0x{data[2]:02X}"
+            )
+        if data[3] != 10:
+            raise MotorFeedbackError(
+                f"Control-mode reply for '{motor_name}' has RID {data[3]}, expected 10"
+            )
+
+        embedded_motor_id = data[0] | (data[1] << 8)
+        expected_motor_id = self._get_motor_id(motor)
+        if embedded_motor_id != expected_motor_id:
+            raise MotorFeedbackError(
+                f"Control-mode reply identity mismatch for '{motor_name}': "
+                f"expected {expected_motor_id}, got {embedded_motor_id}"
+            )
+
+        mode = int.from_bytes(bytes(data[4:8]), byteorder="little", signed=False)
+        if not 0 <= mode <= 4:
+            raise MotorFeedbackError(f"Control-mode reply for '{motor_name}' has invalid value {mode}")
+        return mode
+
+    @check_if_not_connected
+    def query_control_mode(self, motor: NameOrID) -> int:
+        """Read RID 10 twice without changing motor mode or sending any control command."""
+        if self.canbus is None:
+            raise RuntimeError("CAN bus is not initialized.")
+        motor_name = self._get_motor_name(motor)
+        motor_id = self._get_motor_id(motor)
+        recv_id = self._get_motor_recv_id(motor)
+        query_data = [motor_id & 0xFF, (motor_id >> 8) & 0xFF, 0x33, 0x0A, 0, 0, 0, 0]
+        samples: list[int] = []
+
+        try:
+            for _ in range(2):
+                self._drain_pending_messages()
+                self.canbus.send(
+                    can.Message(
+                        arbitration_id=CAN_PARAM_ID,
+                        data=query_data,
+                        is_extended_id=False,
+                        is_fd=self.use_can_fd,
+                    )
+                )
+                response = self._recv_motor_response(expected_recv_id=recv_id, timeout=LONG_TIMEOUT_SEC)
+                if response is None:
+                    raise MotorStateUnavailableError(
+                        f"No RID 10 control-mode reply from motor '{motor_name}'"
+                    )
+                samples.append(self._decode_control_mode_response(motor, response))
+                time.sleep(MEDIUM_TIMEOUT_SEC)
+
+            if samples[0] != samples[1]:
+                raise MotorFeedbackError(
+                    f"Inconsistent consecutive control-mode replies from '{motor_name}': {samples}"
+                )
+            return samples[0]
+        except Exception as e:
+            # This is a read-only diagnostic path. Latch software control inhibition without
+            # sending disable or any other control frame as a side effect of a failed query.
+            self._latch_software_fault(f"Control-mode query failed: {e}")
+            raise
+
+    @check_if_not_connected
+    def write_control_mode(self, motor: NameOrID, mode: int) -> int:
+        """Write RID 10 only while disabled, then verify the value with a read-only double query."""
+        if self.canbus is None:
+            raise RuntimeError("CAN bus is not initialized.")
+        motor_name = self._get_motor_name(motor)
+        motor_id = self._get_motor_id(motor)
+        self._ensure_control_allowed()
+
+        try:
+            if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 4:
+                raise ValueError("Damiao control mode must be an integer within [0, 4]")
+
+            response = self._refresh_motor(motor, timeout=LONG_TIMEOUT_SEC)
+            if response is None:
+                raise MotorStateUnavailableError(
+                    f"No pre-write refresh feedback from motor '{motor_name}'"
+                )
+            state = self._decode_validated_response(motor_name, response)
+            self._cache_state(motor_name, state)
+            if state["status"] != 0:
+                raise MotorFeedbackError(
+                    f"Refusing to write control mode while motor '{motor_name}' has status "
+                    f"{state['status']}; expected disabled status 0"
+                )
+
+            self._drain_pending_messages()
+            self.canbus.send(
+                can.Message(
+                    arbitration_id=CAN_PARAM_ID,
+                    data=[motor_id & 0xFF, (motor_id >> 8) & 0xFF, 0x55, 0x0A, mode, 0, 0, 0],
+                    is_extended_id=False,
+                    is_fd=self.use_can_fd,
+                )
+            )
+            verified_mode = self.query_control_mode(motor)
+            if verified_mode != mode:
+                raise MotorFeedbackError(
+                    f"Control-mode verification failed for '{motor_name}': "
+                    f"wrote {mode}, read {verified_mode}"
+                )
+            return verified_mode
+        except Exception as e:
+            self._latch_software_fault(f"Control-mode write failed: {e}")
+            raise
 
     def _recv_motor_response(
         self, expected_recv_id: int | None = None, timeout: float = 0.001
@@ -462,6 +714,129 @@ class DamiaoMotorsBus(MotorsBusBase):
         data[7] = tau_uint & 0xFF
         return data
 
+    def _encode_posforce_packet(
+        self,
+        motor: NameOrID,
+        position_rad: float,
+        speed_rad_s: float,
+        current_pu: float,
+    ) -> bytes:
+        """Encode the official Damiao POS_FORCE payload with strict physical ranges."""
+        values = (position_rad, speed_rad_s, current_pu)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("POS_FORCE values must be finite")
+        motor_name = self._get_motor_name(motor)
+        pmax, _, _ = MOTOR_LIMIT_PARAMS[self._motor_types[motor_name]]
+        if not -pmax <= position_rad <= pmax:
+            raise ValueError(f"position_rad must be within [{-pmax}, {pmax}]")
+        if not 0.0 <= speed_rad_s <= 100.0:
+            raise ValueError("speed_rad_s must be within [0, 100]")
+        if not 0.0 <= current_pu <= 1.0:
+            raise ValueError("current_pu must be within [0, 1]")
+        return struct.pack("<fHH", position_rad, int(speed_rad_s * 100), int(current_pu * 10000))
+
+    @check_if_not_connected
+    def posforce_control(
+        self,
+        motor: NameOrID,
+        position_rad: float,
+        speed_rad_s: float,
+        current_pu: float,
+    ) -> MotorState:
+        """Send one official POS_FORCE command and return its validated feedback."""
+        self._ensure_control_allowed()
+        motor_name = self._get_motor_name(motor)
+        motor_id = self._get_motor_id(motor)
+        data = self._encode_posforce_packet(motor, position_rad, speed_rad_s, current_pu)
+        if self.canbus is None:
+            raise RuntimeError("CAN bus is not initialized.")
+
+        try:
+            self._drain_pending_messages()
+            msg = can.Message(
+                arbitration_id=motor_id + 0x300,
+                data=data,
+                is_extended_id=False,
+                is_fd=self.use_can_fd,
+            )
+            self.canbus.send(msg)
+            # A POS_FORCE reply shares the same USB adapter scheduling and
+            # Python receive latency as MIT feedback. A 1 ms window is too
+            # short when both independent PCAN channels dispatch together.
+            response = self._recv_motor_response(
+                expected_recv_id=self._get_motor_recv_id(motor),
+                timeout=MEDIUM_TIMEOUT_SEC,
+            )
+            if response is None:
+                raise MotorStateUnavailableError(
+                    f"No feedback from motor '{motor_name}' after POS_FORCE command"
+                )
+            state = self._process_response(motor_name, response)
+            if state["status"] != 1:
+                raise MotorFeedbackError(
+                    f"Motor '{motor_name}' returned status {state['status']} after POS_FORCE; "
+                    "expected enabled status 1"
+                )
+            return state
+        except Exception as e:
+            self._latch_fault(f"POS_FORCE control failed: {e}", [motor_name])
+            raise
+
+    @check_if_not_connected
+    def posforce_command(
+        self,
+        motor: NameOrID,
+        position_rad: float,
+        speed_rad_s: float,
+        current_pu: float,
+    ) -> None:
+        """Send an official POS_FORCE frame without blocking for its reply.
+
+        Normal follower ticks validate a complete J1-J8 state snapshot before
+        sending, so the next tick acts as the feedback watchdog. Arming keeps
+        using :meth:`posforce_control` for an immediate enabled-state check.
+        """
+        self._ensure_control_allowed()
+        motor_name = self._get_motor_name(motor)
+        motor_id = self._get_motor_id(motor)
+        data = self._encode_posforce_packet(motor, position_rad, speed_rad_s, current_pu)
+        if self.canbus is None:
+            raise RuntimeError("CAN bus is not initialized.")
+        try:
+            self._drain_pending_messages()
+            self.canbus.send(
+                can.Message(
+                    arbitration_id=motor_id + 0x300,
+                    data=data,
+                    is_extended_id=False,
+                    is_fd=self.use_can_fd,
+                )
+            )
+        except Exception as e:
+            self._latch_fault(f"POS_FORCE command failed: {e}", [motor_name])
+            raise
+
+    @check_if_not_connected
+    def mit_control(
+        self,
+        motor: NameOrID,
+        kp: float,
+        kd: float,
+        position_degrees: float,
+        velocity_deg_per_sec: float = 0.0,
+        torque: float = 0.0,
+    ) -> MotorState:
+        """Send one MIT command and return the feedback produced by that command."""
+        return self._mit_control(motor, kp, kd, position_degrees, velocity_deg_per_sec, torque)
+
+    @check_if_not_connected
+    def mit_control_batch(
+        self,
+        commands: dict[NameOrID, tuple[float, float, float, float, float]],
+    ) -> dict[str, MotorState]:
+        """Send a batch of MIT commands and return one fresh feedback state per motor."""
+        return self._mit_control_batch(commands)
+
     def _mit_control(
         self,
         motor: NameOrID,
@@ -470,29 +845,42 @@ class DamiaoMotorsBus(MotorsBusBase):
         position_degrees: float,
         velocity_deg_per_sec: float,
         torque: float,
-    ) -> None:
+    ) -> MotorState:
         """Send MIT control command to a motor."""
         motor_id = self._get_motor_id(motor)
         motor_name = self._get_motor_name(motor)
         motor_type = self._motor_types[motor_name]
+        self._ensure_control_allowed()
 
         if self.canbus is None:
             raise RuntimeError("CAN bus is not initialized.")
 
         data = self._encode_mit_packet(motor_type, kp, kd, position_degrees, velocity_deg_per_sec, torque)
-        msg = can.Message(arbitration_id=motor_id, data=data, is_extended_id=False, is_fd=self.use_can_fd)
-        self.canbus.send(msg)
+        try:
+            self._drain_pending_messages()
+            msg = can.Message(arbitration_id=motor_id, data=data, is_extended_id=False, is_fd=self.use_can_fd)
+            self.canbus.send(msg)
 
-        recv_id = self._get_motor_recv_id(motor)
-        if msg := self._recv_motor_response(expected_recv_id=recv_id):
-            self._process_response(motor_name, msg)
-        else:
-            logger.debug(f"No response from {motor_name} after MIT control command")
+            recv_id = self._get_motor_recv_id(motor)
+            if response := self._recv_motor_response(expected_recv_id=recv_id):
+                state = self._process_response(motor_name, response)
+                if state["status"] != 1:
+                    raise MotorFeedbackError(
+                        f"Motor '{motor_name}' returned status {state['status']} after MIT control; "
+                        "expected enabled status 1"
+                    )
+                return state
+            raise MotorStateUnavailableError(
+                f"No feedback from motor '{motor_name}' after MIT control command"
+            )
+        except Exception as e:
+            self._latch_fault(f"MIT control failed: {e}", [motor_name])
+            raise
 
     def _mit_control_batch(
         self,
         commands: dict[NameOrID, tuple[float, float, float, float, float]],
-    ) -> None:
+    ) -> dict[str, MotorState]:
         """
         Send MIT control commands to multiple motors in batch.
         Sends all commands first, then collects responses.
@@ -502,33 +890,68 @@ class DamiaoMotorsBus(MotorsBusBase):
                      Example: {'joint_1': (10.0, 0.5, 45.0, 0.0, 0.0), ...}
         """
         if not commands:
-            return
-
-        recv_id_to_motor: dict[int, str] = {}
+            return {}
 
         if self.canbus is None:
             raise RuntimeError("CAN bus is not initialized.")
+        self._ensure_control_allowed()
 
-        # Step 1: Send all MIT control commands
+        # Validate and encode the entire batch before sending its first frame. This avoids
+        # partially applying a batch when a later command is malformed or duplicated.
+        recv_id_to_motor: dict[int, str] = {}
+        messages: list[can.Message] = []
         for motor, (kp, kd, position_degrees, velocity_deg_per_sec, torque) in commands.items():
             motor_id = self._get_motor_id(motor)
             motor_name = self._get_motor_name(motor)
             motor_type = self._motor_types[motor_name]
+            recv_id = self._get_motor_recv_id(motor)
+            if recv_id in recv_id_to_motor:
+                raise ValueError(f"Duplicate MIT command for receive ID 0x{recv_id:02X}")
 
             data = self._encode_mit_packet(motor_type, kp, kd, position_degrees, velocity_deg_per_sec, torque)
-            msg = can.Message(arbitration_id=motor_id, data=data, is_extended_id=False, is_fd=self.use_can_fd)
-            self.canbus.send(msg)
+            recv_id_to_motor[recv_id] = motor_name
+            messages.append(
+                can.Message(arbitration_id=motor_id, data=data, is_extended_id=False, is_fd=self.use_can_fd)
+            )
 
-            recv_id_to_motor[self._get_motor_recv_id(motor)] = motor_name
+        target_motors = list(recv_id_to_motor.values())
+        try:
+            self._drain_pending_messages()
+            for msg in messages:
+                self.canbus.send(msg)
 
-        # Step 2: Collect responses and update state cache
-        responses = self._recv_all_responses(list(recv_id_to_motor.keys()), timeout=SHORT_TIMEOUT_SEC)
-        for recv_id, motor_name in recv_id_to_motor.items():
-            if msg := responses.get(recv_id):
-                self._process_response(motor_name, msg)
+            # A seven-motor burst fits on the wire quickly, but SocketCAN wakeup
+            # and Python scheduling on the target can exceed 1 ms. Use the same
+            # bounded 10 ms collection window as the full-state refresh path so
+            # later replies are not misclassified as missing feedback.
+            responses = self._recv_all_responses(list(recv_id_to_motor.keys()), timeout=MEDIUM_TIMEOUT_SEC)
+            states: dict[str, MotorState] = {}
+            missing_motors: list[str] = []
+            for recv_id, motor_name in recv_id_to_motor.items():
+                if msg := responses.get(recv_id):
+                    state = self._process_response(motor_name, msg)
+                    if state["status"] != 1:
+                        raise MotorFeedbackError(
+                            f"Motor '{motor_name}' returned status {state['status']} after MIT control; "
+                            "expected enabled status 1"
+                        )
+                    states[motor_name] = state
+                else:
+                    missing_motors.append(motor_name)
+
+            if missing_motors:
+                raise MotorStateUnavailableError(
+                    f"Missing MIT feedback from motors: {', '.join(missing_motors)}"
+                )
+            return states
+        except Exception as e:
+            self._latch_fault(f"MIT batch control failed: {e}", target_motors)
+            raise
 
     def _float_to_uint(self, x: float, x_min: float, x_max: float, bits: int) -> int:
         """Convert float to unsigned integer for CAN transmission."""
+        if not math.isfinite(x):
+            raise ValueError(f"MIT control value must be finite, got {x}")
         x = max(x_min, min(x_max, x))  # Clamp to range
         span = x_max - x_min
         data_norm = (x - x_min) / span
@@ -547,8 +970,8 @@ class DamiaoMotorsBus(MotorsBusBase):
         Decode motor state from CAN data.
         Returns: (position_deg, velocity_deg_s, torque, temp_mos, temp_rotor)
         """
-        if len(data) < 8:
-            raise ValueError("Invalid motor state data")
+        if len(data) != 8:
+            raise ValueError(f"Invalid motor feedback length: expected 8, got {len(data)}")
 
         # Extract encoded values
         q_uint = (data[1] << 8) | data[2]
@@ -567,21 +990,76 @@ class DamiaoMotorsBus(MotorsBusBase):
 
         return np.degrees(position_rad), np.degrees(velocity_rad_per_sec), torque, t_mos, t_rotor
 
-    def _process_response(self, motor: str, msg: can.Message) -> None:
-        """Decode a message and update the motor state cache."""
-        try:
-            motor_type = self._motor_types[motor]
-            pos, vel, torque, t_mos, t_rotor = self._decode_motor_state(msg.data, motor_type)
+    def _decode_validated_response(self, motor: str, msg: can.Message) -> MotorState:
+        """Strictly validate message metadata, embedded identity, status, and decoded values."""
+        if getattr(msg, "is_error_frame", False):
+            raise MotorFeedbackError(f"CAN error frame received for motor '{motor}'")
+        if getattr(msg, "is_remote_frame", False):
+            raise MotorFeedbackError(f"CAN remote frame received for motor '{motor}'")
+        if getattr(msg, "is_rx", True) is False:
+            raise MotorFeedbackError(f"Rejected transmit echo for motor '{motor}'")
 
-            self._last_known_states[motor] = {
-                "position": pos,
-                "velocity": vel,
-                "torque": torque,
-                "temp_mos": float(t_mos),
-                "temp_rotor": float(t_rotor),
-            }
+        expected_recv_id = self._get_motor_recv_id(motor)
+        if msg.arbitration_id != expected_recv_id:
+            raise MotorFeedbackError(
+                f"Feedback arbitration ID mismatch for '{motor}': "
+                f"expected 0x{expected_recv_id:X}, got 0x{msg.arbitration_id:X}"
+            )
+
+        data = msg.data
+        if len(data) != 8 or getattr(msg, "dlc", len(data)) != 8:
+            raise MotorFeedbackError(
+                f"Feedback DLC mismatch for '{motor}': expected 8, got {getattr(msg, 'dlc', len(data))}"
+            )
+        if not any(data):
+            raise MotorFeedbackError(f"Rejected all-zero feedback frame for motor '{motor}'")
+
+        expected_embedded_id = self._get_motor_id(motor) & 0x0F
+        embedded_id = data[0] & 0x0F
+        if embedded_id != expected_embedded_id:
+            raise MotorFeedbackError(
+                f"Embedded motor ID mismatch for '{motor}': "
+                f"expected {expected_embedded_id}, got {embedded_id}"
+            )
+
+        status = (data[0] >> 4) & 0x0F
+        if status not in VALID_MOTOR_STATUSES:
+            raise MotorFeedbackError(f"Motor '{motor}' reported fault/status code 0x{status:X}")
+
+        motor_type = self._motor_types[motor]
+        try:
+            pos, vel, torque, t_mos, t_rotor = self._decode_motor_state(data, motor_type)
         except Exception as e:
-            logger.warning(f"Failed to decode response from {motor}: {e}")
+            raise ValueError(f"Invalid feedback frame from motor '{motor}': {e}") from e
+
+        if not all(math.isfinite(value) for value in (pos, vel, torque, float(t_mos), float(t_rotor))):
+            raise MotorFeedbackError(f"Motor '{motor}' returned non-finite feedback")
+
+        state: MotorState = {
+            "status": status,
+            "position": pos,
+            "velocity": vel,
+            "torque": torque,
+            "temp_mos": float(t_mos),
+            "temp_rotor": float(t_rotor),
+        }
+        return state
+
+    def _cache_state(self, motor: str, state: MotorState) -> MotorState:
+        self._last_known_states[motor] = state
+        self._state_updated_at[motor] = time.monotonic()
+        return state.copy()
+
+    def _process_response(self, motor: str, msg: can.Message) -> MotorState:
+        """Decode a strictly validated message and update the motor state cache."""
+        try:
+            return self._cache_state(motor, self._decode_validated_response(motor, msg))
+        except Exception as e:
+            # A malformed state makes the mechanical state of the complete arm
+            # uncertain. Do not leave the other joints energized while control
+            # is inhibited by the bus-wide fault latch.
+            self._latch_fault(f"Invalid feedback from '{motor}': {e}", list(self.motors))
+            raise
 
     @check_if_not_connected
     def read(self, data_name: str, motor: str) -> Value:
@@ -592,18 +1070,20 @@ class DamiaoMotorsBus(MotorsBusBase):
         if msg is None:
             motor_id = self._get_motor_id(motor)
             recv_id = self._get_motor_recv_id(motor)
-            raise ConnectionError(
+            error = MotorStateUnavailableError(
                 f"No response from motor '{motor}' (send ID: 0x{motor_id:02X}, recv ID: 0x{recv_id:02X}). "
                 f"Check that: 1) Motor is powered (24V), 2) CAN wiring is correct, "
                 f"3) Motor IDs are configured correctly using Damiao Debugging Tools"
             )
+            self._latch_fault(str(error), [motor])
+            raise error
 
         self._process_response(motor, msg)
         return self._get_cached_value(motor, data_name)
 
     def _get_cached_value(self, motor: str, data_name: str) -> Value:
         """Retrieve a specific value from the cache."""
-        state = self._last_known_states[motor]
+        state = self._get_cached_state(motor)
         mapping: dict[str, Any] = {
             "Present_Position": state["position"],
             "Present_Velocity": state["velocity"],
@@ -614,6 +1094,49 @@ class DamiaoMotorsBus(MotorsBusBase):
         if data_name not in mapping:
             raise ValueError(f"Unknown data_name: {data_name}")
         return mapping[data_name]
+
+    def _get_cached_state(
+        self,
+        motor: str,
+        *,
+        max_age_s: float | None = None,
+        allow_stale: bool = False,
+    ) -> MotorState:
+        """Return cached feedback only when it exists and satisfies the requested freshness bound."""
+        if motor not in self._last_known_states or motor not in self._state_updated_at:
+            raise MotorStateUnavailableError(f"No feedback has been received from motor '{motor}'")
+
+        if not allow_stale:
+            age_limit = self.state_timeout_s if max_age_s is None else max_age_s
+            if age_limit <= 0:
+                raise ValueError("max_age_s must be greater than zero")
+            age_s = time.monotonic() - self._state_updated_at[motor]
+            if age_s > age_limit:
+                raise MotorStateUnavailableError(
+                    f"Cached feedback for motor '{motor}' is stale "
+                    f"(age={age_s:.6f}s, limit={age_limit:.6f}s)"
+                )
+
+        return self._last_known_states[motor].copy()
+
+    def get_cached_states(
+        self,
+        motors: str | list[str] | None = None,
+        *,
+        max_age_s: float | None = None,
+        allow_stale: bool = False,
+    ) -> dict[str, MotorState]:
+        """
+        Return cached feedback without CAN I/O.
+
+        By default, every requested motor must have feedback newer than ``state_timeout_s``.
+        ``allow_stale=True`` is an explicit opt-in for diagnostics that need historical data.
+        """
+        target_motors = self._get_motors_list(motors)
+        return {
+            motor: self._get_cached_state(motor, max_age_s=max_age_s, allow_stale=allow_stale)
+            for motor in target_motors
+        }
 
     @check_if_not_connected
     def write(
@@ -666,40 +1189,52 @@ class DamiaoMotorsBus(MotorsBusBase):
             Example: {'joint_1': {'position': 45.2, 'velocity': 1.3, 'torque': 0.5}, ...}
         """
         target_motors = self._get_motors_list(motors)
-        self._batch_refresh(target_motors)
+        return self._batch_refresh(target_motors, num_retry=num_retry)
 
-        result = {}
-        for motor in target_motors:
-            result[motor] = self._last_known_states[motor].copy()
-        return result
-
-    def _batch_refresh(self, motors: list[str]) -> None:
-        """Internal helper to refresh a list of motors and update cache."""
+    def _batch_refresh(self, motors: list[str], *, num_retry: int = 0) -> dict[str, MotorState]:
+        """Refresh all requested motors, failing if this refresh cycle misses any feedback."""
 
         if self.canbus is None:
             raise RuntimeError("CAN bus is not initialized.")
+        if num_retry < 0:
+            raise ValueError("num_retry must be non-negative")
 
-        # Send refresh commands
-        for motor in motors:
-            motor_id = self._get_motor_id(motor)
-            data = [motor_id & 0xFF, (motor_id >> 8) & 0xFF, CAN_CMD_REFRESH, 0, 0, 0, 0, 0]
-            msg = can.Message(
-                arbitration_id=CAN_PARAM_ID, data=data, is_extended_id=False, is_fd=self.use_can_fd
+        states: dict[str, MotorState] = {}
+        missing_motors = list(dict.fromkeys(motors))
+
+        for _ in range(num_retry + 1):
+            if not missing_motors:
+                break
+
+            self._drain_pending_messages()
+            for motor in missing_motors:
+                motor_id = self._get_motor_id(motor)
+                data = [motor_id & 0xFF, (motor_id >> 8) & 0xFF, CAN_CMD_REFRESH, 0, 0, 0, 0, 0]
+                msg = can.Message(
+                    arbitration_id=CAN_PARAM_ID, data=data, is_extended_id=False, is_fd=self.use_can_fd
+                )
+                self.canbus.send(msg)
+
+            expected_recv_ids = [self._get_motor_recv_id(m) for m in missing_motors]
+            responses = self._recv_all_responses(expected_recv_ids, timeout=MEDIUM_TIMEOUT_SEC)
+
+            still_missing: list[str] = []
+            for motor in missing_motors:
+                recv_id = self._get_motor_recv_id(motor)
+                msg = responses.get(recv_id)
+                if msg:
+                    states[motor] = self._process_response(motor, msg)
+                else:
+                    still_missing.append(motor)
+            missing_motors = still_missing
+
+        if missing_motors:
+            error = MotorStateUnavailableError(
+                f"Missing refresh feedback from motors: {', '.join(missing_motors)}"
             )
-            self.canbus.send(msg)
-
-        # Collect responses
-        expected_recv_ids = [self._get_motor_recv_id(m) for m in motors]
-        responses = self._recv_all_responses(expected_recv_ids, timeout=MEDIUM_TIMEOUT_SEC)
-
-        # Update cache
-        for motor in motors:
-            recv_id = self._get_motor_recv_id(motor)
-            msg = responses.get(recv_id)
-            if msg:
-                self._process_response(motor, msg)
-            else:
-                logger.warning(f"Packet drop: {motor} (ID: 0x{recv_id:02X}). Using last known state.")
+            self._latch_fault(str(error), list(dict.fromkeys(motors)))
+            raise error
+        return states
 
     @check_if_not_connected
     def sync_write(self, data_name: str, values: dict[str, Value]) -> None:
@@ -713,32 +1248,11 @@ class DamiaoMotorsBus(MotorsBusBase):
                 self._gains[motor][key] = float(val)
 
         elif data_name == "Goal_Position":
-            # Step 1: Send all MIT control commands
-            recv_id_to_motor: dict[int, str] = {}
-            if self.canbus is None:
-                raise RuntimeError("CAN bus is not initialized.")
-            for motor, value_degrees in values.items():
-                motor_id = self._get_motor_id(motor)
-                motor_name = self._get_motor_name(motor)
-                motor_type = self._motor_types[motor_name]
-
-                kp = self._gains[motor]["kp"]
-                kd = self._gains[motor]["kd"]
-
-                data = self._encode_mit_packet(motor_type, kp, kd, float(value_degrees), 0.0, 0.0)
-                msg = can.Message(
-                    arbitration_id=motor_id, data=data, is_extended_id=False, is_fd=self.use_can_fd
-                )
-                self.canbus.send(msg)
-                precise_sleep(PRECISE_TIMEOUT_SEC)
-
-                recv_id_to_motor[self._get_motor_recv_id(motor)] = motor_name
-
-            # Step 2: Collect responses and update state cache
-            responses = self._recv_all_responses(list(recv_id_to_motor.keys()), timeout=MEDIUM_TIMEOUT_SEC)
-            for recv_id, motor_name in recv_id_to_motor.items():
-                if msg := responses.get(recv_id):
-                    self._process_response(motor_name, msg)
+            commands = {
+                motor: (self._gains[motor]["kp"], self._gains[motor]["kd"], float(value), 0.0, 0.0)
+                for motor, value in values.items()
+            }
+            self._mit_control_batch(commands)
         else:
             # Fall back to individual writes
             for motor, value in values.items():
@@ -806,12 +1320,11 @@ class DamiaoMotorsBus(MotorsBusBase):
 
             time.sleep(LONG_TIMEOUT_SEC)
 
-        self.enable_torque(target_motors)
-
         for motor in target_motors:
             if (motor in mins) and (motor in maxes) and (int(abs(maxes[motor] - mins[motor])) < 5):
                 raise ValueError(f"Motor {motor} has insufficient range of motion (< 5 degrees)")
 
+        logger.info("Range recording complete; motors remain torque-disabled")
         return mins, maxes
 
     def _get_motors_list(self, motors: str | list[str] | None) -> list[str]:

@@ -16,10 +16,9 @@
 
 import logging
 import time
-from typing import Any
 
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
-from lerobot.motors.damiao import DamiaoMotorsBus
+from lerobot.motors.damiao import DamiaoMotorsBus, MotorState
 from lerobot.types import RobotAction
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
@@ -63,16 +62,21 @@ class OpenArmLeader(Teleoperator):
             bitrate=self.config.can_bitrate,
             data_bitrate=self.config.can_data_bitrate if self.config.use_can_fd else None,
         )
+        # Velocity, torque, status, and temperature are useful diagnostics,
+        # but they are observations rather than follower commands. Keep the
+        # most recent complete refresh separately from the position-only
+        # action contract.
+        self._last_motor_states: dict[str, MotorState] = {}
 
     @property
     def action_features(self) -> dict[str, type]:
-        """Features produced by this teleoperator."""
-        features: dict[str, type] = {}
-        for motor in self.bus.motors:
-            features[f"{motor}.pos"] = float
-            features[f"{motor}.vel"] = float
-            features[f"{motor}.torque"] = float
-        return features
+        """Position commands produced for an OpenArm follower."""
+        return {f"{motor}.pos": float for motor in self.bus.motors}
+
+    @property
+    def last_motor_states(self) -> dict[str, MotorState]:
+        """Copy of the full states captured by the latest action refresh."""
+        return {motor: state.copy() for motor, state in self._last_motor_states.items()}
 
     @property
     def feedback_features(self) -> dict[str, type]:
@@ -106,7 +110,7 @@ class OpenArmLeader(Teleoperator):
 
         self.configure()
 
-        if self.is_calibrated:
+        if self.config.set_zero_on_connect:
             self.bus.set_zero_position()
 
         logger.info(f"{self} connected.")
@@ -190,19 +194,17 @@ class OpenArmLeader(Teleoperator):
         This is the main method for teleoperators - it reads the current state
         of the leader arm and returns it as an action that can be sent to a follower.
 
-        Reads all motor states (pos/vel/torque) in one CAN refresh cycle.
+        Reads all motor states in one CAN refresh cycle. Only position is
+        emitted as an action; the complete refresh remains available through
+        :attr:`last_motor_states` for diagnostics.
         """
         start = time.perf_counter()
 
-        action_dict: dict[str, Any] = {}
-
-        # Use sync_read_all_states to get pos/vel/torque in one go
+        # Use one complete refresh so the action and diagnostics describe the
+        # same hardware sample.
         states = self.bus.sync_read_all_states()
-        for motor in self.bus.motors:
-            state = states.get(motor, {})
-            action_dict[f"{motor}.pos"] = state.get("position")
-            action_dict[f"{motor}.vel"] = state.get("velocity")
-            action_dict[f"{motor}.torque"] = state.get("torque")
+        self._last_motor_states = {motor: state.copy() for motor, state in states.items()}
+        action_dict = {f"{motor}.pos": float(states[motor]["position"]) for motor in self.bus.motors}
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")

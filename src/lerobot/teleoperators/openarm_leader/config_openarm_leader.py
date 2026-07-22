@@ -60,6 +60,10 @@ class OpenArmLeaderConfigBase:
     # When enabled, motors have torque disabled for manual movement
     manual_control: bool = True
 
+    # Rewriting the motor zero changes persistent hardware state. Keep it an
+    # explicit commissioning operation rather than a side effect of connect.
+    set_zero_on_connect: bool = False
+
     # TODO(Steven, Pepijn): Not used ... ?
     # MIT control parameters (used when manual_control=False for torque control)
     # List of 8 values: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, joint_7, gripper]

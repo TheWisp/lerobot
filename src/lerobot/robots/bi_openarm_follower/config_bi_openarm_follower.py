@@ -34,3 +34,8 @@ class BiOpenArmFollowerConfig(RobotConfig):
 
     # Top-level cameras shared across both arms.
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+
+    # MJCF differential-IK tuning. These are only used when a Cartesian
+    # teleoperator such as Quest VR is attached.
+    ik_max_iterations: int = 80
+    ik_damping: float = 0.05

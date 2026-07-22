@@ -15,32 +15,47 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from lerobot.cameras import CameraConfig
 
 from ..config import RobotConfig
 
 LEFT_DEFAULT_JOINTS_LIMITS: dict[str, tuple[float, float]] = {
-    "joint_1": (-75.0, 75.0),
-    "joint_2": (-90.0, 9.0),
-    "joint_3": (-85.0, 85.0),
-    "joint_4": (0.0, 135.0),
-    "joint_5": (-85.0, 85.0),
-    "joint_6": (-40.0, 40.0),
-    "joint_7": (-80.0, 80.0),
-    "gripper": (-65.0, 0.0),
+    "joint_1": (-200.0, 80.0),
+    "joint_2": (-190.0, 10.0),
+    "joint_3": (-90.0, 90.0),
+    "joint_4": (0.0, 140.0),
+    "joint_5": (-90.0, 90.0),
+    "joint_6": (-45.0, 45.0),
+    "joint_7": (-90.0, 90.0),
+    "gripper": (0.0, 45.0),
 }
 
 RIGHT_DEFAULT_JOINTS_LIMITS: dict[str, tuple[float, float]] = {
-    "joint_1": (-75.0, 75.0),
-    "joint_2": (-9.0, 90.0),
-    "joint_3": (-85.0, 85.0),
-    "joint_4": (0.0, 135.0),
-    "joint_5": (-85.0, 85.0),
-    "joint_6": (-40.0, 40.0),
-    "joint_7": (-80.0, 80.0),
-    "gripper": (-65.0, 0.0),
+    "joint_1": (-80.0, 200.0),
+    "joint_2": (-10.0, 190.0),
+    "joint_3": (-90.0, 90.0),
+    "joint_4": (0.0, 140.0),
+    "joint_5": (-90.0, 90.0),
+    "joint_6": (-45.0, 45.0),
+    "joint_7": (-90.0, 90.0),
+    "gripper": (-45.0, 0.0),
 }
+
+CONSERVATIVE_DEFAULT_JOINT_LIMITS: dict[str, tuple[float, float]] = {
+    "joint_1": (-5.0, 5.0),
+    "joint_2": (-5.0, 5.0),
+    "joint_3": (-5.0, 5.0),
+    "joint_4": (0.0, 5.0),
+    "joint_5": (-5.0, 5.0),
+    "joint_6": (-5.0, 5.0),
+    "joint_7": (-5.0, 5.0),
+    "gripper": (-5.0, 0.0),
+}
+
+DEFAULT_POSITION_KP: list[float] = [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0, 10.0]
+DEFAULT_POSITION_KD: list[float] = [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5, 0.2]
 
 
 @dataclass
@@ -63,12 +78,47 @@ class OpenArmFollowerConfigBase:
     can_bitrate: int = 1000000  # Nominal bitrate (1 Mbps)
     can_data_bitrate: int = 5000000  # Data bitrate for CAN FD (5 Mbps)
 
+    # Connection is transport-only by default. Motor configuration and torque
+    # enable are separate, explicit operations because both may move the arm.
+    handshake_on_connect: bool = False
+    configure_on_connect: bool = False
+    enable_torque_on_connect: bool = False
+
     # Whether to disable torque when disconnecting
     disable_torque_on_disconnect: bool = True
 
     # Safety limit for relative target positions
     # Set to a positive scalar for all motors, or a dict mapping motor names to limits
-    max_relative_target: float | dict[str, float] | None = None
+    max_relative_target: float | dict[str, float] | None = 0.2
+
+    # Motor encoders can rest a fraction of a degree beyond a nominal hard
+    # limit. This tolerance is only a recovery corridor: ordinary requested
+    # targets are still clipped to the nominal limits, and commands starting
+    # in the corridor may only hold or move back toward the valid range.
+    present_position_tolerance_deg: float = 2.0
+
+    # Arming requires two disabled, stationary, finite state snapshots before
+    # any enable frame. The hold command must receive enabled feedback within
+    # the bounded interval below or the whole arm is disabled again.
+    arming_sample_interval_s: float = 0.02
+    arming_max_position_delta_deg: float = 0.5
+    arming_max_velocity_deg_s: float = 2.0
+    arming_max_temperature_c: float = 70.0
+    arming_hold_timeout_s: float = 0.5
+
+    # Gravity feed-forward through the MIT torque slot. Disabled by default.
+    # When enabled, it is calculated from the OpenArm MJCF model; no URDF
+    # fallback is used.
+    gravity_ff_gain: float = 0.0
+    gravity_ff_xml: str | None = None
+
+    # Standard OpenArm 2 configures J8 in POS_FORCE mode. Keep MIT available
+    # only as an explicit compatibility choice for differently configured hardware.
+    gripper_control_mode: Literal["pos_force", "mit"] = "pos_force"
+    # Conservative first-run defaults. A used 50 rad/s and about 0.222 pu;
+    # those values can be restored explicitly after direction/load validation.
+    gripper_speed_rad_s: float = 5.0
+    gripper_torque_pu: float = 0.1
 
     # Camera configurations
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
@@ -95,25 +145,14 @@ class OpenArmFollowerConfigBase:
 
     # MIT control parameters for position control (used in send_action)
     # List of 8 values: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, joint_7, gripper]
-    position_kp: list[float] = field(
-        default_factory=lambda: [240.0, 240.0, 240.0, 240.0, 24.0, 31.0, 25.0, 25.0]
-    )
-    position_kd: list[float] = field(default_factory=lambda: [5.0, 5.0, 3.0, 5.0, 0.3, 0.3, 0.3, 0.3])
+    position_kp: list[float] = field(default_factory=lambda: list(DEFAULT_POSITION_KP))
+    position_kd: list[float] = field(default_factory=lambda: list(DEFAULT_POSITION_KD))
 
     # Values for joint limits. Can be overridden via CLI (for custom values) or by setting config.side to either 'left' or 'right'.
     # If config.side is left set to None and no CLI values are passed, the default joint limit values are small for safety.
-    joint_limits: dict[str, tuple[float, float]] = field(
-        default_factory=lambda: {
-            "joint_1": (-5.0, 5.0),
-            "joint_2": (-5.0, 5.0),
-            "joint_3": (-5.0, 5.0),
-            "joint_4": (0.0, 5.0),
-            "joint_5": (-5.0, 5.0),
-            "joint_6": (-5.0, 5.0),
-            "joint_7": (-5.0, 5.0),
-            "gripper": (-5.0, 0.0),
-        }
-    )
+    # None selects the side-specific defaults above (or conservative limits
+    # when side is None). An explicit mapping is always preserved.
+    joint_limits: dict[str, tuple[float, float]] | None = None
 
 
 @RobotConfig.register_subclass("openarm_follower")

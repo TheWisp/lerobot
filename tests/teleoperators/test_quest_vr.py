@@ -41,7 +41,9 @@ from lerobot.teleoperators.quest_vr.arm_controller import QuestArmController
 from lerobot.teleoperators.quest_vr.configuration_quest_vr import QuestVRTeleopConfig
 from lerobot.teleoperators.quest_vr.server import (
     QUEST_TO_ROBOT_M,
+    QuestServer,
     quest_delta_to_robot,
+    quest_to_robot_matrix,
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -331,6 +333,163 @@ def test_config_registers_under_quest_vr_type_string():
     assert QuestVRTeleopConfig().type == "quest_vr"
 
 
+def test_stream_timeout_forces_both_arms_idle(monkeypatch):
+    from lerobot.teleoperators.quest_vr import teleop_quest_vr as teleop_module
+
+    now = [100.0]
+    monkeypatch.setattr(teleop_module.time, "monotonic", lambda: now[0])
+
+    teleop = teleop_module.QuestVRTeleop(QuestVRTeleopConfig(frame_timeout_s=0.1))
+    left = _pose([0.0, 0.0, 0.0], clutch=1.0)
+    left["hand"] = "left"
+    right = _pose([0.0, 0.0, 0.0], clutch=1.0)
+    right["hand"] = "right"
+    teleop._on_frame({"poses": [left, right]})
+
+    fresh = teleop.get_action_raw()
+    assert fresh["left_enabled"] == 1.0
+    assert fresh["right_enabled"] == 1.0
+
+    now[0] += 0.11
+    stale = teleop.get_action_raw()
+    assert stale["left_enabled"] == 0.0
+    assert stale["right_enabled"] == 0.0
+    assert stale["left_reset"] == 0.0
+    assert stale["right_reset"] == 0.0
+
+
+def test_websocket_disconnect_drops_cached_control_lease():
+    from lerobot.teleoperators.quest_vr.teleop_quest_vr import QuestVRTeleop
+
+    teleop = QuestVRTeleop(QuestVRTeleopConfig())
+    left = _pose([0.0, 0.0, 0.0], clutch=1.0)
+    left["hand"] = "left"
+    right = _pose([0.0, 0.0, 0.0], clutch=1.0)
+    right["hand"] = "right"
+    teleop._on_frame({"poses": [left, right]})
+
+    teleop._on_client_disconnect()
+    idle = teleop.get_action_raw()
+    assert idle["left_enabled"] == 0.0
+    assert idle["right_enabled"] == 0.0
+
+
+def test_frame_timeout_must_be_positive():
+    from lerobot.teleoperators.quest_vr.teleop_quest_vr import QuestVRTeleop
+
+    with pytest.raises(ValueError, match="frame_timeout_s"):
+        QuestVRTeleop(QuestVRTeleopConfig(frame_timeout_s=0.0))
+
+
+@pytest.mark.parametrize(
+    "pose, match",
+    [
+        ({"pos": [0.0, 0.0], "rot": _IDENTITY_QUAT, "buttons": []}, "pos"),
+        ({"pos": [0.0, np.nan, 0.0], "rot": _IDENTITY_QUAT, "buttons": []}, "pos"),
+        ({"pos": [0.0, 0.0, 0.0], "rot": [0.0, 0.0, 0.0], "buttons": []}, "rot"),
+        ({"pos": [0.0, 0.0, 0.0], "rot": [0.0, 0.0, 0.0, 0.0], "buttons": []}, "non-zero"),
+        ({"pos": [0.0, 0.0, 0.0], "rot": _IDENTITY_QUAT, "buttons": [np.inf]}, "buttons"),
+        ({"pos": [0.0, 0.0, 0.0], "rot": _IDENTITY_QUAT, "buttons": [1.1]}, "button values"),
+    ],
+)
+def test_controller_rejects_malformed_untrusted_pose(pose, match):
+    with pytest.raises(ValueError, match=match):
+        _make_controller().process_pose(pose)
+
+
+def test_bad_frame_immediately_invalidates_cached_control_lease():
+    from lerobot.teleoperators.quest_vr.teleop_quest_vr import QuestVRTeleop
+
+    teleop = QuestVRTeleop(QuestVRTeleopConfig())
+    left = {"hand": "left", **_pose([0.0, 0.0, 0.0], clutch=1.0)}
+    right = {"hand": "right", **_pose([0.0, 0.0, 0.0], clutch=1.0)}
+    teleop._on_frame({"poses": [left, right]})
+    assert teleop.get_action_raw()["left_enabled"] == 1.0
+
+    bad_left = {"hand": "left", **_pose([0.0, 0.0, 0.0], clutch=1.0)}
+    bad_left["pos"] = [float("nan"), 0.0, 0.0]
+    with pytest.raises(ValueError, match="pos"):
+        teleop._on_frame({"poses": [bad_left, right]})
+
+    idle = teleop.get_action_raw()
+    assert idle["left_enabled"] == 0.0
+    assert idle["right_enabled"] == 0.0
+
+
+def test_old_server_generation_cannot_update_or_disconnect_new_lease():
+    from lerobot.teleoperators.quest_vr.teleop_quest_vr import QuestVRTeleop
+
+    teleop = QuestVRTeleop(QuestVRTeleopConfig())
+    teleop._server_generation = 2
+    left = {"hand": "left", **_pose([0.0, 0.0, 0.0], clutch=1.0)}
+    right = {"hand": "right", **_pose([0.0, 0.0, 0.0], clutch=1.0)}
+
+    teleop._on_frame({"poses": [left, right]}, generation=1)
+    assert teleop._cached_action is None
+
+    teleop._on_frame({"poses": [left, right]}, generation=2)
+    assert teleop.get_action_raw()["left_enabled"] == 1.0
+    teleop._on_client_disconnect(generation=1)
+    assert teleop.get_action_raw()["left_enabled"] == 1.0
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"port": 0}, "port"),
+        ({"clutch_button_index": -1}, "clutch_button_index"),
+        ({"clutch_button_index": 0, "gripper_button_index": 0}, "distinct"),
+        ({"position_scale": float("nan")}, "position_scale"),
+        ({"max_rot_step_rad_per_tick": -0.1}, "max_rot_step"),
+        ({"max_pos_step_m_per_tick": float("inf")}, "max_pos_step"),
+        ({"robot_forward_in_urdf": [0.0, 0.0, 0.0]}, "non-zero"),
+        ({"robot_up_in_urdf": [0.0, -2.0, 0.0]}, "parallel"),
+        ({"left_gripper_open_motor": float("nan")}, "left_gripper_open_motor"),
+    ],
+)
+def test_config_rejects_unsafe_values(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        QuestVRTeleopConfig(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "forward, up",
+    [
+        ([0.0, 0.0], [0.0, 0.0, 1.0]),
+        ([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        ([1.0, 0.0, 0.0], [2.0, 0.0, 0.0]),
+        ([1.0, float("nan"), 0.0], [0.0, 0.0, 1.0]),
+    ],
+)
+def test_axis_mapping_rejects_invalid_vectors(forward, up):
+    with pytest.raises(ValueError):
+        quest_to_robot_matrix(forward, up)
+
+
+def test_server_stop_retains_faulted_live_thread_references(tmp_path):
+    class StuckThread:
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            return None
+
+    server = QuestServer(
+        html_path=tmp_path / "unused.html",
+        port=8443,
+        cert_dir=tmp_path,
+        on_frame=lambda frame: None,
+    )
+    stuck = StuckThread()
+    server._thread = stuck
+
+    with pytest.raises(RuntimeError, match="did not exit"):
+        server.stop()
+
+    assert server._thread is stuck
+    assert isinstance(server.fault, RuntimeError)
+
+
 def test_served_html_substitutes_clutch_button_index():
     """The server replaces ``{{CLUTCH_BUTTON_INDEX}}`` with the configured
     index so the page-side haptic feedback fires on the right button. A
@@ -462,3 +621,156 @@ def test_config_clutch_and_gripper_button_defaults():
     # Default Quest 3 mapping: grip (1) = clutch, trigger (0) = gripper.
     assert cfg.clutch_button_index == 1
     assert cfg.gripper_button_index == 0
+
+
+# ── 8. Post-recovery settle window (ported from the dora OpenArm stack) ────
+
+
+def test_settle_window_keeps_clutch_released_after_recovery(monkeypatch):
+    """After a tracking dropout, a rediscovered controller reports OK while
+    its pose is still settling. For ``settle_secs`` the clutch must be
+    treated as RELEASED even while physically held, so the settle-snap never
+    becomes a teleop delta. Once the window lapses, a still-held clutch
+    re-anchors seamlessly (near-zero deltas)."""
+    import lerobot.teleoperators.quest_vr.arm_controller as ac_mod
+
+    fake_now = [100.0]
+    monkeypatch.setattr(ac_mod.time, "monotonic", lambda: fake_now[0])
+
+    ctrl = _make_controller(settle_secs=0.25)
+    # Engage at origin.
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    # Dropout, then re-acquire 40 cm away with the clutch still held.
+    ctrl.on_tracking_lost()
+    fake_now[0] += 0.5
+
+    a = ctrl.process_pose(_pose([0.4, 0.0, 0.0], clutch=1.0))
+    assert a["enabled"] == 0.0, "settle window must release the clutch on recovery"
+
+    # 100 ms later: still within the 250 ms window — still released, even
+    # though the hand jitters (the settling pose).
+    fake_now[0] += 0.1
+    a = ctrl.process_pose(_pose([0.35, 0.0, 0.0], clutch=1.0))
+    assert a["enabled"] == 0.0, "settle window ended early"
+
+    # Past the window: the clutch engages again, re-anchored at the current
+    # pose — the 35-40 cm of recovery motion must NOT appear as a delta.
+    fake_now[0] += 0.2
+    a = ctrl.process_pose(_pose([0.35, 0.0, 0.0], clutch=1.0))
+    assert a["enabled"] == 1.0
+    mag = float(np.linalg.norm([a["target_x"], a["target_y"], a["target_z"]]))
+    assert mag < 1e-9, f"|target| {mag} after settle — re-anchor did not follow the settling pose"
+
+
+def test_settle_window_zero_disables(monkeypatch):
+    """settle_secs=0 restores the pre-hardening behavior: immediate
+    re-engagement on the recovery frame."""
+    import lerobot.teleoperators.quest_vr.arm_controller as ac_mod
+
+    fake_now = [0.0]
+    monkeypatch.setattr(ac_mod.time, "monotonic", lambda: fake_now[0])
+
+    ctrl = _make_controller(settle_secs=0.0)
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    ctrl.on_tracking_lost()
+    a = ctrl.process_pose(_pose([0.4, 0.0, 0.0], clutch=1.0))
+    assert a["enabled"] == 1.0
+
+
+def test_settle_window_cleared_by_reset():
+    """A teleop-level reset (disconnect) must disarm the settle window."""
+    ctrl = _make_controller(settle_secs=0.25)
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    ctrl.on_tracking_lost()
+    ctrl.process_pose(_pose([0.4, 0.0, 0.0], clutch=1.0))
+    assert ctrl._recover_t is not None
+    ctrl.reset()
+    assert ctrl._recover_t is None
+
+
+# ── 9. Target jump guard (diagnostic log, ported from dora) ───────────────
+
+
+def test_jump_guard_logs_on_large_target_step(caplog):
+    """A > 20 mm emitted-target step in one tick must produce a warning —
+    the clamps bound the step, but a near-cap step means a snap likely
+    slipped through and should be visible in the run log."""
+    import logging
+
+    ctrl = _make_controller()  # max_pos_step_m_per_tick=1.0 (off) via helper
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))  # engage
+    with caplog.at_level(logging.WARNING, logger="lerobot.teleoperators.quest_vr.arm_controller"):
+        ctrl.process_pose(_pose([0.05, 0.0, 0.0], clutch=1.0))  # 50 mm step
+    assert "target step" in caplog.text
+
+
+def test_jump_guard_silent_on_normal_motion(caplog):
+    import logging
+
+    ctrl = _make_controller()
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    with caplog.at_level(logging.WARNING, logger="lerobot.teleoperators.quest_vr.arm_controller"):
+        for i in range(20):
+            # 5 mm/tick — normal teleop speed at 90 Hz.
+            ctrl.process_pose(_pose([0.005 * (i + 1), 0.0, 0.0], clutch=1.0))
+    assert "target step" not in caplog.text
+
+
+def test_jump_guard_does_not_compare_across_anchors(caplog):
+    """Re-engaging far from the previous anchor is legitimate (mouse-lift
+    style): the guard compares consecutive ENGAGED frames only."""
+    import logging
+
+    ctrl = _make_controller()
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    ctrl.process_pose(_pose([0.01, 0.0, 0.0], clutch=1.0))
+    ctrl.process_pose(_pose([0.5, 0.0, 0.0], clutch=0.0))  # release + move
+    with caplog.at_level(logging.WARNING, logger="lerobot.teleoperators.quest_vr.arm_controller"):
+        a = ctrl.process_pose(_pose([0.5, 0.0, 0.0], clutch=1.0))  # re-engage elsewhere
+    assert a["enabled"] == 1.0
+    assert "target step" not in caplog.text
+
+
+# ── 10. Configurable quest -> robot frame ─────────────────────────────────
+
+
+def test_config_frame_defaults_preserve_so107_mapping():
+    from lerobot.teleoperators.quest_vr.server import quest_to_robot_matrix
+
+    cfg = QuestVRTeleopConfig()
+    assert cfg.robot_forward_in_urdf == [0.0, -1.0, 0.0]
+    assert cfg.robot_up_in_urdf == [0.0, 0.0, 1.0]
+    np.testing.assert_allclose(
+        quest_to_robot_matrix(cfg.robot_forward_in_urdf, cfg.robot_up_in_urdf),
+        QUEST_TO_ROBOT_M,
+        atol=1e-12,
+    )
+
+
+def test_custom_frame_openarm_forward_plus_x():
+    """OpenArm 2.0 convention (forward = +X, up = +Z): pushing the controller
+    away from the user (Quest -z) must drive the EE target in +x, and a
+    rightward hand move (Quest +x) must drive -y."""
+    from lerobot.teleoperators.quest_vr.server import quest_to_robot_matrix
+
+    q2r = quest_to_robot_matrix([1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    ctrl = _make_controller(quest_to_robot_m=q2r)
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))  # engage at origin
+
+    # Push away from the user (Quest -z) -> robot forward (+x).
+    a = ctrl.process_pose(_pose([0.0, 0.0, -0.05], clutch=1.0))
+    np.testing.assert_allclose([a["target_x"], a["target_y"], a["target_z"]], [0.05, 0.0, 0.0], atol=1e-12)
+
+    # Re-anchor, then move the hand right (Quest +x) -> robot -y.
+    ctrl.reset()
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    a = ctrl.process_pose(_pose([0.05, 0.0, 0.0], clutch=1.0))
+    np.testing.assert_allclose([a["target_x"], a["target_y"], a["target_z"]], [0.0, -0.05, 0.0], atol=1e-12)
+
+
+def test_default_frame_so107_forward_minus_y():
+    """Same probe as above with the SO-107 default frame: push away -> -y."""
+    ctrl = _make_controller()  # quest_to_robot_m=None -> SO-107 module default
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+    a = ctrl.process_pose(_pose([0.0, 0.0, -0.05], clutch=1.0))
+    np.testing.assert_allclose([a["target_x"], a["target_y"], a["target_z"]], [0.0, -0.05, 0.0], atol=1e-12)

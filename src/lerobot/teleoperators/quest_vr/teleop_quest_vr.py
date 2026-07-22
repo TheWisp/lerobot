@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -36,9 +37,9 @@ from lerobot.utils.decorators import check_if_not_connected
 from lerobot.utils.import_utils import _pin_pink_available
 
 from ..teleoperator import Teleoperator
-from .arm_controller import QuestArmController
+from .arm_controller import QuestArmController, validate_quest_pose
 from .configuration_quest_vr import QuestVRTeleopConfig
-from .server import QuestServer
+from .server import QuestServer, quest_to_robot_matrix
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,14 @@ class QuestVRTeleop(Teleoperator):
         self.config: QuestVRTeleopConfig = config
         self._cache_lock = threading.Lock()
         self._cached_action: dict[str, float] | None = None
+        if config.frame_timeout_s <= 0:
+            raise ValueError("frame_timeout_s must be positive")
+        self._last_frame_monotonic: float | None = None
+        self._stream_stale = False
+        self._server_generation = 0
+        # Quest stage -> robot base rotation, built from the config's
+        # robot forward/up axes (SO-107 defaults; OpenArm 2.0: forward +X).
+        q2r = quest_to_robot_matrix(config.robot_forward_in_urdf, config.robot_up_in_urdf)
         self._left = QuestArmController(
             clutch_button_index=config.clutch_button_index,
             gripper_button_index=config.gripper_button_index,
@@ -94,6 +103,7 @@ class QuestVRTeleop(Teleoperator):
             gripper_open_motor=config.left_gripper_open_motor,
             gripper_closed_motor=config.left_gripper_closed_motor,
             key_prefix="left_",
+            quest_to_robot_m=q2r,
         )
         self._right = QuestArmController(
             clutch_button_index=config.clutch_button_index,
@@ -105,6 +115,7 @@ class QuestVRTeleop(Teleoperator):
             gripper_open_motor=config.right_gripper_open_motor,
             gripper_closed_motor=config.right_gripper_closed_motor,
             key_prefix="right_",
+            quest_to_robot_m=q2r,
         )
         self._server: QuestServer | None = None
         # Optional per-tick action transform, installed by a robot's
@@ -128,7 +139,7 @@ class QuestVRTeleop(Teleoperator):
 
     @property
     def is_connected(self) -> bool:
-        return self._server is not None and self._server.is_running
+        return self._server is not None and self._server.is_running and self._server.fault is None
 
     @property
     def is_calibrated(self) -> bool:
@@ -137,13 +148,29 @@ class QuestVRTeleop(Teleoperator):
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     def connect(self, calibrate: bool = True) -> None:
-        if self.is_connected:
-            return
-        self._server = QuestServer(
+        if self._server is not None:
+            if self.is_connected:
+                return
+            if self._server.is_running:
+                raise RuntimeError("Previous QuestServer generation is still running in a faulted state")
+            self._server.stop()
+            self._server = None
+
+        with self._cache_lock:
+            self._server_generation += 1
+            generation = self._server_generation
+            self._cached_action = None
+            self._last_frame_monotonic = None
+            self._stream_stale = False
+            self._left.reset()
+            self._right.reset()
+
+        server = QuestServer(
             html_path=HTML_PATH,
             port=self.config.port,
             cert_dir=CERT_DIR,
-            on_frame=self._on_frame,
+            on_frame=lambda frame, generation=generation: self._on_frame(frame, generation=generation),
+            on_disconnect=lambda generation=generation: self._on_client_disconnect(generation=generation),
             # ``{{KEY}}`` markers in the served HTML get these values
             # substituted at request time. Used for the haptic-feedback
             # path: the page fires a pulse on the rising/falling edge of
@@ -152,20 +179,38 @@ class QuestVRTeleop(Teleoperator):
             page_vars={"CLUTCH_BUTTON_INDEX": str(self.config.clutch_button_index)},
             get_hold_state=self._read_ik_hold_state,
         )
-        self._server.start()
+        self._server = server
+        try:
+            server.start()
+        except Exception:
+            with self._cache_lock:
+                if self._server_generation == generation:
+                    self._server_generation += 1
+                    self._force_idle_locked(reset_controllers=True)
+            try:
+                server.stop()
+            except Exception:
+                logger.exception("QuestServer cleanup failed after connect error")
+            else:
+                if self._server is server:
+                    self._server = None
+            raise
         logger.info(
-            f"QuestVRTeleop connected. Open {self._server.url} in the Quest 3 "
+            f"QuestVRTeleop connected. Open {server.url} in the Quest 3 "
             f"browser (accept the self-signed cert warning), then Connect + Enter VR."
         )
 
     def disconnect(self) -> None:
-        if self._server is not None:
-            self._server.stop()
-            self._server = None
         with self._cache_lock:
-            self._cached_action = None
-            self._left.reset()
-            self._right.reset()
+            self._server_generation += 1
+            self._force_idle_locked(reset_controllers=True)
+
+        server = self._server
+        if server is None:
+            return
+        server.stop()
+        if self._server is server:
+            self._server = None
 
     def calibrate(self) -> None:
         pass
@@ -186,6 +231,25 @@ class QuestVRTeleop(Teleoperator):
         would feed its own cached joint dict back into itself.
         """
         with self._cache_lock:
+            now = time.monotonic()
+            server_faulted = self._server is not None and (
+                self._server.fault is not None or not self._server.is_running
+            )
+            stale = (
+                server_faulted
+                or self._last_frame_monotonic is None
+                or (now - self._last_frame_monotonic > self.config.frame_timeout_s)
+            )
+            if stale:
+                if self._cached_action is not None and not self._stream_stale:
+                    logger.warning(
+                        "QuestVR control stream stale for more than %.3fs; forcing both arms idle",
+                        self.config.frame_timeout_s,
+                    )
+                self._stream_stale = True
+                idle = self._force_idle_locked()
+                return dict(idle)
+            self._stream_stale = False
             return self._idle_action() if self._cached_action is None else dict(self._cached_action)
 
     @check_if_not_connected
@@ -230,7 +294,20 @@ class QuestVRTeleop(Teleoperator):
         """Both arms idle (also the pre-first-frame default)."""
         return {**self._left.idle_action(), **self._right.idle_action()}
 
-    def _on_frame(self, frame: dict[str, Any]) -> None:
+    def _force_idle_locked(self, *, reset_controllers: bool = False) -> dict[str, float]:
+        """Invalidate the active control lease. Caller must hold ``_cache_lock``."""
+        if reset_controllers:
+            self._left.reset()
+            self._right.reset()
+            idle = self._idle_action()
+        else:
+            idle = {**self._left.on_tracking_lost(), **self._right.on_tracking_lost()}
+        self._cached_action = idle
+        self._last_frame_monotonic = None
+        self._stream_stale = True
+        return idle
+
+    def _on_frame(self, frame: dict[str, Any], *, generation: int | None = None) -> None:
         """Called from the server's asyncio thread per WebXR frame.
 
         Dispatches each hand's pose to its controller and merges the two
@@ -239,21 +316,54 @@ class QuestVRTeleop(Teleoperator):
         disengages that arm and re-anchors it on the next tracked frame —
         so a dropout cannot leak a stale-snapshot delta.
         """
-        poses = frame.get("poses") or []
-        left_pose = next((p for p in poses if p.get("hand") == "left"), None)
-        right_pose = next((p for p in poses if p.get("hand") == "right"), None)
-
         with self._cache_lock:
-            base = dict(self._cached_action) if self._cached_action is not None else self._idle_action()
-            base.update(
-                self._left.process_pose(left_pose) if left_pose is not None else self._left.on_tracking_lost()
-            )
-            base.update(
-                self._right.process_pose(right_pose)
-                if right_pose is not None
-                else self._right.on_tracking_lost()
-            )
+            if generation is not None and generation != self._server_generation:
+                return
+            try:
+                if not isinstance(frame, dict):
+                    raise ValueError("Quest control frame must be an object")
+                poses = frame.get("poses")
+                if not isinstance(poses, list):
+                    raise ValueError("Quest control frame poses must be a list")
+
+                by_hand: dict[str, dict[str, Any]] = {}
+                for raw_pose in poses:
+                    if not isinstance(raw_pose, dict):
+                        raise ValueError("Quest control frame poses must contain objects")
+                    hand = raw_pose.get("hand")
+                    if hand not in ("left", "right"):
+                        raise ValueError(f"Quest controller hand must be 'left' or 'right', got {hand!r}")
+                    if hand in by_hand:
+                        raise ValueError(f"Quest control frame contains duplicate {hand!r} controller pose")
+                    by_hand[hand] = validate_quest_pose(raw_pose)
+
+                left_pose = by_hand.get("left")
+                right_pose = by_hand.get("right")
+                base = dict(self._cached_action) if self._cached_action is not None else self._idle_action()
+                base.update(
+                    self._left.process_pose(left_pose)
+                    if left_pose is not None
+                    else self._left.on_tracking_lost()
+                )
+                base.update(
+                    self._right.process_pose(right_pose)
+                    if right_pose is not None
+                    else self._right.on_tracking_lost()
+                )
+            except Exception:
+                self._force_idle_locked()
+                raise
+
             self._cached_action = base
+            self._last_frame_monotonic = time.monotonic()
+            self._stream_stale = False
+
+    def _on_client_disconnect(self, *, generation: int | None = None) -> None:
+        """Drop the network control lease immediately when the WebSocket closes."""
+        with self._cache_lock:
+            if generation is not None and generation != self._server_generation:
+                return
+            self._force_idle_locked()
 
     # ── Diagnostics ───────────────────────────────────────────────────────
 

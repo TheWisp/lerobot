@@ -150,6 +150,9 @@ robstride = ["lerobot[can-dep]"]
 
 # Robots
 openarms = ["lerobot[damiao]"]
+# Optional MJCF gravity feed-forward for OpenArm followers. The physical
+# controller remains usable without these packages when gravity_ff_gain=0.
+openarm-ff = ["lerobot[openarms]", "mujoco>=3.2,<4", "openarm-mujoco>=2.0"]
 gamepad = ["lerobot[pygame-dep]", "hidapi>=0.14.0,<0.15.0"]
 hopejr = ["lerobot[feetech]", "lerobot[pygame-dep]"]
 lekiwi = ["lerobot[feetech]", "lerobot[pyzmq-dep]"]
@@ -355,6 +358,7 @@ lerobot-calibrate="lerobot.scripts.lerobot_calibrate:main"
 lerobot-find-cameras="lerobot.scripts.lerobot_find_cameras:main"
 lerobot-find-port="lerobot.scripts.lerobot_find_port:main"
 lerobot-record="lerobot.scripts.lerobot_record:main"
+lerobot-openarm2-record="lerobot.scripts.lerobot_openarm2_record:main"
 lerobot-replay="lerobot.scripts.lerobot_replay:main"
 lerobot-setup-motors="lerobot.scripts.lerobot_setup_motors:main"
 lerobot-teleoperate="lerobot.scripts.lerobot_teleoperate:main"

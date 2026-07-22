@@ -116,6 +116,7 @@ class QuestServer:
         port: int,
         cert_dir: Path,
         on_frame: Any,  # callable taking parsed frame dict
+        on_disconnect: Any = None,  # callable invoked when the active WS client leaves
         page_vars: dict[str, str] | None = None,
         get_hold_state: Any = None,  # callable () -> (left_holding, right_holding) | None
     ) -> None:
@@ -123,6 +124,7 @@ class QuestServer:
         self.port = port
         self.cert_dir = Path(cert_dir)
         self.on_frame = on_frame
+        self.on_disconnect = on_disconnect
         # ``{{KEY}}`` markers in the served HTML are substituted with these
         # values at request time. Used to pass per-session config (e.g.
         # ``clutch_button_index`` for the haptic-feedback path) into the
@@ -141,10 +143,19 @@ class QuestServer:
         self._stop_evt = threading.Event()
         self._started = threading.Event()
         self._last_rtt_ms: float | None = None
+        self._fault: BaseException | None = None
+        # Only one controller stream may own the teleoperator at a time.
+        # All websocket handlers run on the same asyncio event loop, so this
+        # flag is sufficient as a connection lease.
+        self._client_connected = False
 
     @property
     def last_rtt_ms(self) -> float | None:
         return self._last_rtt_ms
+
+    @property
+    def fault(self) -> BaseException | None:
+        return self._fault
 
     @property
     def url(self) -> str:
@@ -165,14 +176,29 @@ class QuestServer:
         require_package("aiohttp", "quest-vr")
         self._stop_evt.clear()
         self._started.clear()
+        self._fault = None
         self._thread = threading.Thread(target=self._run, name="quest_vr_server", daemon=True)
         self._thread.start()
         # Wait briefly for the loop to bind so callers know if start succeeded.
         if not self._started.wait(timeout=5.0):
+            startup_fault = self._fault
+            try:
+                self.stop()
+            except Exception:
+                logger.exception("QuestServer cleanup failed after startup timeout")
+            if startup_fault is not None:
+                raise RuntimeError("QuestServer failed to start") from startup_fault
             raise RuntimeError("QuestServer failed to start within 5s")
 
     def stop(self) -> None:
-        if self._thread is None or not self._thread.is_alive():
+        thread = self._thread
+        if thread is None:
+            return
+        if not thread.is_alive():
+            self._thread = None
+            self._loop = None
+            self._runner = None
+            self._client_connected = False
             return
         self._stop_evt.set()
         if self._loop is not None:
@@ -185,12 +211,19 @@ class QuestServer:
                 pass
             except Exception as e:
                 logger.warning(f"QuestServer shutdown coro raised: {type(e).__name__}: {e}")
-        self._thread.join(timeout=3.0)
-        if self._thread.is_alive():
-            logger.warning("QuestServer thread did not exit within 3s")
+        thread.join(timeout=3.0)
+        if thread.is_alive():
+            fault = RuntimeError("QuestServer thread did not exit within 3s")
+            self._fault = fault
+            logger.error(str(fault))
+            # Retain all lifecycle references. A later stop() may finish cleanup;
+            # clearing them here would let callers start a second server while
+            # this generation can still invoke callbacks.
+            raise fault
         self._thread = None
         self._loop = None
         self._runner = None
+        self._client_connected = False
 
     # ── Internal: async loop body ─────────────────────────────────────────
 
@@ -199,7 +232,8 @@ class QuestServer:
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._serve_forever())
-        except Exception:
+        except Exception as exc:
+            self._fault = exc
             logger.exception("QuestServer asyncio loop crashed")
         finally:
             # Cancel + gather any tasks still around (websocket handlers, ping
@@ -266,10 +300,31 @@ class QuestServer:
         from aiohttp import WSMsgType, web
 
         ws = web.WebSocketResponse(max_msg_size=64 * 1024)
-        await ws.prepare(request)
+        if self._client_connected:
+            await ws.prepare(request)
+            await ws.close(code=1008, message=b"QuestVR controller already connected")
+            return ws
+        self._client_connected = True
+        try:
+            await ws.prepare(request)
+        except Exception:
+            self._client_connected = False
+            raise
         logger.info(f"QuestVR client connected from {request.remote}")
 
         pending_pings: dict[int, float] = {}
+        lease_released = False
+
+        def release_control_lease() -> None:
+            nonlocal lease_released
+            if lease_released:
+                return
+            lease_released = True
+            if self.on_disconnect is not None:
+                try:
+                    self.on_disconnect()
+                except Exception:
+                    logger.exception("on_disconnect callback raised")
 
         async def ping_loop() -> None:
             seq = 0
@@ -305,6 +360,14 @@ class QuestServer:
                         self.on_frame(data)
                     except Exception:
                         logger.exception("on_frame callback raised")
+                        # An invalid/unprocessable control frame invalidates the
+                        # controller lease immediately. Closing with 1007 makes
+                        # the client reconnect and re-anchor instead of leaving
+                        # the previous enabled action cached until a timeout.
+                        release_control_lease()
+                        with contextlib.suppress(Exception):
+                            await ws.close(code=1007, message=b"Invalid QuestVR control frame")
+                        break
                     # Push a hold-state update if it changed since last send.
                     # Cheap (one bool-tuple read + at most one WS write per
                     # transition); rate-limited by client frame cadence.
@@ -320,11 +383,13 @@ class QuestServer:
                             last_hold_sent = current
         finally:
             ping_task.cancel()
+            self._client_connected = False
+            release_control_lease()
             logger.info("QuestVR client disconnected")
         return ws
 
 
-# Axis-mapping helper kept here (not in teleop module) since it relates to
+# Axis-mapping helpers kept here (not in teleop module) since they relate to
 # the WebXR frame -> robot-frame translation that happens server-side.
 
 # Quest local stage frame: +x = user right, +y = up, +z = toward user.
@@ -333,27 +398,61 @@ class QuestServer:
 # user is assumed to stand behind the robot facing the same direction the
 # arm reaches. ROBOT_FORWARD_IN_URDF + ROBOT_UP_IN_URDF below define what
 # "forward" / "up" are in URDF coords; the mapping is derived from them.
+# Per-robot values are configurable on QuestVRTeleopConfig
+# (``robot_forward_in_urdf`` / ``robot_up_in_urdf``); these module constants
+# keep the SO-107 defaults for backwards compatibility.
 ROBOT_FORWARD_IN_URDF = np.array([0.0, -1.0, 0.0])  # SO-107 default; arm reaches in -Y
 ROBOT_UP_IN_URDF = np.array([0.0, 0.0, 1.0])
-_ROBOT_LEFT_IN_URDF = np.cross(ROBOT_UP_IN_URDF, ROBOT_FORWARD_IN_URDF)
-
-# columns map (quest_x, quest_y, quest_z) unit vectors into URDF frame.
-QUEST_TO_ROBOT_M = np.column_stack(
-    [
-        -_ROBOT_LEFT_IN_URDF,  # quest_x = user_right  -> robot_right
-        +ROBOT_UP_IN_URDF,  # quest_y = user_up     -> robot_up
-        -ROBOT_FORWARD_IN_URDF,  # quest_z = user_back   -> robot_back
-    ]
-)
 
 
-def quest_delta_to_robot(delta_quest: np.ndarray) -> np.ndarray:
-    return QUEST_TO_ROBOT_M @ delta_quest
+def quest_to_robot_matrix(
+    forward: np.ndarray | list[float] = ROBOT_FORWARD_IN_URDF,
+    up: np.ndarray | list[float] = ROBOT_UP_IN_URDF,
+) -> np.ndarray:
+    """Build the 3x3 Quest-stage -> robot-base rotation from the robot's
+    forward / up axes expressed in URDF (robot base) coords.
+
+    Columns map the Quest (quest_x, quest_y, quest_z) unit vectors into the
+    robot frame: quest_x = user-right -> robot-right, quest_y = user-up ->
+    robot-up, quest_z = user-backward -> robot-backward. ``forward`` / ``up``
+    need not be exactly unit or orthogonal — they are normalized and ``up``
+    is orthogonalized against ``forward``.
+    """
+    f = np.asarray(forward, dtype=float)
+    u = np.asarray(up, dtype=float)
+    if f.shape != (3,) or u.shape != (3,) or not np.all(np.isfinite(f)) or not np.all(np.isfinite(u)):
+        raise ValueError("forward/up must be finite 3-vectors")
+    f_norm = float(np.linalg.norm(f))
+    if f_norm <= 1e-9:
+        raise ValueError("forward must be non-zero")
+    f = f / f_norm
+    u = u - f * float(np.dot(u, f))
+    u_norm = float(np.linalg.norm(u))
+    if u_norm <= 1e-9:
+        raise ValueError("up must be non-zero and not parallel to forward")
+    u = u / u_norm
+    left = np.cross(u, f)
+    return np.column_stack(
+        [
+            -left,  # quest_x = user_right  -> robot_right
+            +u,  # quest_y = user_up     -> robot_up
+            -f,  # quest_z = user_back   -> robot_back
+        ]
+    )
 
 
-def quest_rot_to_robot(quat_xyzw: list[float]):
+QUEST_TO_ROBOT_M = quest_to_robot_matrix(ROBOT_FORWARD_IN_URDF, ROBOT_UP_IN_URDF)
+
+
+def quest_delta_to_robot(delta_quest: np.ndarray, quest_to_robot_m: np.ndarray | None = None) -> np.ndarray:
+    m = QUEST_TO_ROBOT_M if quest_to_robot_m is None else quest_to_robot_m
+    return m @ delta_quest
+
+
+def quest_rot_to_robot(quat_xyzw: list[float], quest_to_robot_m: np.ndarray | None = None):
     """Quest controller quaternion -> robot-frame scipy Rotation."""
     from scipy.spatial.transform import Rotation
 
+    m = QUEST_TO_ROBOT_M if quest_to_robot_m is None else quest_to_robot_m
     r_quest = Rotation.from_quat(quat_xyzw).as_matrix()
-    return Rotation.from_matrix(QUEST_TO_ROBOT_M @ r_quest @ QUEST_TO_ROBOT_M.T)
+    return Rotation.from_matrix(m @ r_quest @ m.T)

@@ -82,6 +82,12 @@ _MAX_POS_VEL_DESC = (
     "Default 0.04 m/frame allows ~3.6 m/s at 90 Hz (faster than typical "
     "teleop, slower than tracking-teleport glitches). Set 0.0 to disable."
 )
+_FRAME_TIMEOUT_DESC = (
+    "Maximum age in seconds of the most recently received WebXR control frame. "
+    "When the stream is older than this, both arms are forced to their idle/hold "
+    "state before any robot-side transform runs. This is the network deadman; "
+    "keep it comfortably above the normal WebXR frame interval."
+)
 
 
 @TeleoperatorConfig.register_subclass("quest_vr")
@@ -145,6 +151,34 @@ class QuestVRTeleopConfig(TeleoperatorConfig):
     position_scale: float = field(default=1.0, metadata={"description": _POSITION_SCALE_DESC})
     max_rot_step_rad_per_tick: float = field(default=math.pi, metadata={"description": _MAX_ROT_DESC})
     max_pos_step_m_per_tick: float = field(default=0.04, metadata={"description": _MAX_POS_VEL_DESC})
+    frame_timeout_s: float = field(default=0.25, metadata={"description": _FRAME_TIMEOUT_DESC})
+    # Quest stage -> robot base frame mapping. The Quest stage frame is
+    # gravity-aligned and fixed to the playspace (it does NOT rotate with
+    # head yaw), so a constant rotation derived from the robot's forward /
+    # up axes is the whole mapping. Defaults preserve the SO-107 convention
+    # (arm reaches in -Y). For OpenArm 2.0 set robot_forward_in_urdf to
+    # [1, 0, 0] (the OpenArm URDF/MJCF base frame reaches in +X; up stays
+    # +Z — gravity-aligned, arms hang in -Z at zero).
+    robot_forward_in_urdf: list[float] = field(
+        default_factory=lambda: [0.0, -1.0, 0.0],
+        metadata={
+            "description": (
+                "Unit 3-vector: which URDF (robot base) direction the arms "
+                "reach in — i.e. where 'push the controller away from you' "
+                "should send the EE. SO-107: [0, -1, 0] (default). "
+                "OpenArm 2.0: [1, 0, 0]."
+            ),
+        },
+    )
+    robot_up_in_urdf: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 1.0],
+        metadata={
+            "description": (
+                "Unit 3-vector: which URDF (robot base) direction is up "
+                "(anti-gravity). [0, 0, 1] for both SO-107 and OpenArm 2.0."
+            ),
+        },
+    )
     # Per-arm gripper motor mapping. The bimanual SO-107 has OPPOSITE
     # motor-direction conventions between left and right (verified
     # empirically: with both at open=0/closed=80 the left arm felt
@@ -158,3 +192,76 @@ class QuestVRTeleopConfig(TeleoperatorConfig):
     left_gripper_closed_motor: float = field(default=90.0, metadata={"description": _GRIPPER_CLOSED_DESC})
     right_gripper_open_motor: float = field(default=50.0, metadata={"description": _GRIPPER_OPEN_DESC})
     right_gripper_closed_motor: float = field(default=10.0, metadata={"description": _GRIPPER_CLOSED_DESC})
+
+    def __post_init__(self) -> None:
+        if isinstance(self.port, bool) or not isinstance(self.port, int) or not 1 <= self.port <= 65535:
+            raise ValueError("port must be an integer in [1, 65535]")
+
+        button_indices = {
+            "clutch_button_index": self.clutch_button_index,
+            "gripper_button_index": self.gripper_button_index,
+            "reset_button_index": self.reset_button_index,
+        }
+        for name, value in button_indices.items():
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        if len(set(button_indices.values())) != len(button_indices):
+            raise ValueError("clutch, gripper and reset button indices must be distinct")
+
+        non_negative = {
+            "position_scale": self.position_scale,
+            "max_rot_step_rad_per_tick": self.max_rot_step_rad_per_tick,
+            "max_pos_step_m_per_tick": self.max_pos_step_m_per_tick,
+        }
+        for name, value in non_negative.items():
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise ValueError(f"{name} must be a finite number")
+            if float(value) < 0.0:
+                raise ValueError(f"{name} must be non-negative")
+        if (
+            isinstance(self.frame_timeout_s, bool)
+            or not isinstance(self.frame_timeout_s, (int, float))
+            or not math.isfinite(float(self.frame_timeout_s))
+            or float(self.frame_timeout_s) <= 0.0
+        ):
+            raise ValueError("frame_timeout_s must be a finite positive number")
+
+        gripper_values = {
+            "left_gripper_open_motor": self.left_gripper_open_motor,
+            "left_gripper_closed_motor": self.left_gripper_closed_motor,
+            "right_gripper_open_motor": self.right_gripper_open_motor,
+            "right_gripper_closed_motor": self.right_gripper_closed_motor,
+        }
+        for name, value in gripper_values.items():
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise ValueError(f"{name} must be a finite number")
+
+        forward = self._validate_axis("robot_forward_in_urdf", self.robot_forward_in_urdf)
+        up = self._validate_axis("robot_up_in_urdf", self.robot_up_in_urdf)
+        forward_norm = math.sqrt(sum(value * value for value in forward))
+        up_norm = math.sqrt(sum(value * value for value in up))
+        cosine = sum(f * u for f, u in zip(forward, up, strict=True)) / (forward_norm * up_norm)
+        if abs(cosine) > 1.0 - 1e-6:
+            raise ValueError("robot_forward_in_urdf and robot_up_in_urdf must not be parallel")
+
+    @staticmethod
+    def _validate_axis(name: str, value: object) -> tuple[float, float, float]:
+        if not isinstance(value, (list, tuple)) or len(value) != 3:
+            raise ValueError(f"{name} must contain exactly three numbers")
+        if any(
+            isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(float(item))
+            for item in value
+        ):
+            raise ValueError(f"{name} must contain exactly three finite numbers")
+        axis = tuple(float(item) for item in value)
+        if math.sqrt(sum(item * item for item in axis)) <= 1e-9:
+            raise ValueError(f"{name} must be non-zero")
+        return axis

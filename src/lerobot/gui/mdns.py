@@ -41,7 +41,9 @@ Two consequences worth documenting:
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+import os
 import socket
 from typing import Any
 
@@ -57,6 +59,20 @@ def detect_lan_ip() -> str | None:
     anything — the kernel just picks the route. Works even without
     internet access since UDP connect() is local-only.
     """
+    override = os.environ.get("LEROBOT_LAN_IP")
+    if override:
+        try:
+            parsed = ipaddress.ip_address(override)
+        except ValueError:
+            logger.warning("Ignoring invalid LEROBOT_LAN_IP=%s", override)
+        else:
+            if parsed.version == 4 and not parsed.is_loopback and not parsed.is_unspecified:
+                return str(parsed)
+            logger.warning(
+                "Ignoring unusable LEROBOT_LAN_IP=%s; expected a non-loopback IPv4 address",
+                override,
+            )
+
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         # The 8.8.8.8 address is convenient; any non-loopback target works.
