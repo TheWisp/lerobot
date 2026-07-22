@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .damiao import DamiaoMotorsBus, MotorState
+from .damiao import DamiaoMotorsBus, IncompleteMotorStateError, MotorState
 from .tables import *  # noqa: F403 — hardware constant tables
 
-__all__ = ["DamiaoMotorsBus", "MotorState"]
+__all__ = ["DamiaoMotorsBus", "IncompleteMotorStateError", "MotorState"]

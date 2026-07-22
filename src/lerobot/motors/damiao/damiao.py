@@ -62,9 +62,38 @@ logger = logging.getLogger(__name__)
 
 
 LONG_TIMEOUT_SEC = 0.1
+# Upstream LeRobot Damiao timing tier. For batch refresh this is a response
+# deadline, not a control-loop period and not a motor-motion completion wait.
 MEDIUM_TIMEOUT_SEC = 0.01
 SHORT_TIMEOUT_SEC = 0.001
 PRECISE_TIMEOUT_SEC = 0.0001
+
+
+class IncompleteMotorStateError(ConnectionError):
+    """Raised when a synchronized read cannot assemble one complete motor sample."""
+
+    def __init__(
+        self,
+        *,
+        port: str,
+        context: str,
+        missing_motors: list[str],
+        received_motors: list[str],
+        timeout: float,
+        total_ms: float,
+    ) -> None:
+        self.port = port
+        self.context = context
+        self.missing_motors = missing_motors
+        self.received_motors = received_motors
+        self.timeout = timeout
+        self.total_ms = total_ms
+        super().__init__(
+            f"Incomplete synchronized motor state on {port} during {context}: "
+            f"missing={missing_motors}, received={received_motors}, "
+            f"timeout_ms={timeout * 1e3:.3f}, total_ms={total_ms:.3f}. "
+            "Refusing to combine fresh and cached motor states."
+        )
 
 
 class MotorState(TypedDict):
@@ -395,7 +424,10 @@ class DamiaoMotorsBus(MotorsBusBase):
         return None
 
     def _recv_all_responses(
-        self, expected_recv_ids: list[int], timeout: float = 0.002
+        self,
+        expected_recv_ids: list[int],
+        timeout: float = 0.002,
+        diagnostics: dict[str, Any] | None = None,
     ) -> dict[int, can.Message]:
         """
         Efficiently receive responses from multiple motors at once.
@@ -410,21 +442,52 @@ class DamiaoMotorsBus(MotorsBusBase):
         """
         responses: dict[int, can.Message] = {}
         expected_set = set(expected_recv_ids)
-        start_time = time.time()
+        start_time = time.perf_counter()
+        first_response_ms: float | None = None
+        last_response_ms: float | None = None
+        arrival_ms_by_id: dict[int, float] = {}
+        messages_seen = 0
+        unexpected_ids: set[int] = set()
+        poll_calls = 0
 
         if self.canbus is None:
             raise RuntimeError("CAN bus is not initialized.")
 
         try:
-            while len(responses) < len(expected_recv_ids) and (time.time() - start_time) < timeout:
+            while len(responses) < len(expected_set) and (time.perf_counter() - start_time) < timeout:
                 # 100us poll timeout
+                poll_calls += 1
                 msg = self.canbus.recv(timeout=PRECISE_TIMEOUT_SEC)
+                if msg:
+                    messages_seen += 1
                 if msg and msg.arbitration_id in expected_set:
                     responses[msg.arbitration_id] = msg
-                    if len(responses) == len(expected_recv_ids):
+                    arrival_ms = (time.perf_counter() - start_time) * 1e3
+                    arrival_ms_by_id[msg.arbitration_id] = arrival_ms
+                    if first_response_ms is None:
+                        first_response_ms = arrival_ms
+                    last_response_ms = arrival_ms
+                    if len(responses) == len(expected_set):
                         break
+                elif msg:
+                    unexpected_ids.add(msg.arbitration_id)
         except Exception as e:
-            logger.debug(f"Error receiving responses: {e}")
+            logger.debug("Error receiving CAN responses on %s: %s", self.port, e)
+
+        if diagnostics is not None:
+            diagnostics.update(
+                {
+                    "receive_ms": (time.perf_counter() - start_time) * 1e3,
+                    "first_response_ms": first_response_ms,
+                    "last_response_ms": last_response_ms,
+                    "arrival_ms_by_id": arrival_ms_by_id,
+                    "messages_seen": messages_seen,
+                    "poll_calls": poll_calls,
+                    "unexpected_ids": sorted(unexpected_ids),
+                    "received_ids": sorted(responses),
+                    "missing_ids": sorted(expected_set - responses.keys()),
+                }
+            )
 
         return responses
 
@@ -744,16 +807,24 @@ class DamiaoMotorsBus(MotorsBusBase):
         motors: str | list[str] | None = None,
         *,
         num_retry: int = 0,
+        require_all: bool = True,
+        context: str = "sync_read_all_states",
+        timeout: float = MEDIUM_TIMEOUT_SEC,
     ) -> dict[str, MotorState]:
         """
         Read ALL motor states (position, velocity, torque) from multiple motors in ONE refresh cycle.
+
+        ``require_all=True`` prevents a caller from receiving a state mapping
+        assembled from different refresh generations. The upstream 10 ms
+        deadline remains bounded so a disconnected motor cannot hang a control
+        loop indefinitely.
 
         Returns:
             Dictionary mapping motor names to state dicts with keys: 'position', 'velocity', 'torque'
             Example: {'joint_1': {'position': 45.2, 'velocity': 1.3, 'torque': 0.5}, ...}
         """
         target_motors = self._get_motors_list(motors)
-        self._batch_refresh(target_motors)
+        self._batch_refresh(target_motors, require_all=require_all, context=context, timeout=timeout)
 
         result = {}
         for motor in target_motors:
@@ -770,12 +841,21 @@ class DamiaoMotorsBus(MotorsBusBase):
         """
         return {name: state.copy() for name, state in self._last_known_states.items()}
 
-    def _batch_refresh(self, motors: list[str]) -> None:
+    def _batch_refresh(
+        self,
+        motors: list[str],
+        *,
+        require_all: bool = False,
+        context: str = "batch_refresh",
+        timeout: float = MEDIUM_TIMEOUT_SEC,
+    ) -> None:
         """Internal helper to refresh a list of motors and update cache."""
 
         if self.canbus is None:
             raise RuntimeError("CAN bus is not initialized.")
 
+        refresh_start = time.perf_counter()
+        send_start = refresh_start
         # Send refresh commands
         for motor in motors:
             motor_id = self._get_motor_id(motor)
@@ -784,19 +864,68 @@ class DamiaoMotorsBus(MotorsBusBase):
                 arbitration_id=CAN_PARAM_ID, data=data, is_extended_id=False, is_fd=self.use_can_fd
             )
             self.canbus.send(msg)
+        send_ms = (time.perf_counter() - send_start) * 1e3
 
         # Collect responses
         expected_recv_ids = [self._get_motor_recv_id(m) for m in motors]
-        responses = self._recv_all_responses(expected_recv_ids, timeout=MEDIUM_TIMEOUT_SEC)
+        diagnostics: dict[str, Any] = {}
+        responses = self._recv_all_responses(expected_recv_ids, timeout=timeout, diagnostics=diagnostics)
 
         # Update cache
+        decode_start = time.perf_counter()
+        missing_motors: list[str] = []
+        received_motors: list[str] = []
         for motor in motors:
             recv_id = self._get_motor_recv_id(motor)
             msg = responses.get(recv_id)
             if msg:
                 self._process_response(motor, msg)
+                received_motors.append(motor)
             else:
-                logger.warning(f"Packet drop: {motor} (ID: 0x{recv_id:02X}). Using last known state.")
+                missing_motors.append(motor)
+        decode_ms = (time.perf_counter() - decode_start) * 1e3
+        total_ms = (time.perf_counter() - refresh_start) * 1e3
+        arrival_ms_by_motor = {
+            self._recv_id_to_motor.get(recv_id, f"0x{recv_id:02X}"): round(arrival_ms, 3)
+            for recv_id, arrival_ms in diagnostics.get("arrival_ms_by_id", {}).items()
+        }
+
+        metric_args = (
+            self.port,
+            context,
+            len(motors),
+            len(received_motors),
+            send_ms,
+            timeout * 1e3,
+            diagnostics.get("first_response_ms"),
+            diagnostics.get("last_response_ms"),
+            diagnostics.get("receive_ms", 0.0),
+            decode_ms,
+            total_ms,
+            missing_motors,
+            arrival_ms_by_motor,
+            diagnostics.get("messages_seen", 0),
+            diagnostics.get("poll_calls", 0),
+            [f"0x{recv_id:02X}" for recv_id in diagnostics.get("unexpected_ids", [])],
+        )
+        metric_format = (
+            "CAN_REFRESH port=%s context=%s expected=%d received=%d send_ms=%.3f timeout_ms=%.3f "
+            "first_response_ms=%s last_response_ms=%s receive_ms=%.3f decode_ms=%.3f "
+            "total_ms=%.3f missing=%s arrivals_ms=%s messages_seen=%d poll_calls=%d unexpected_ids=%s"
+        )
+        if missing_motors:
+            logger.warning(metric_format, *metric_args)
+            if require_all:
+                raise IncompleteMotorStateError(
+                    port=self.port,
+                    context=context,
+                    missing_motors=missing_motors,
+                    received_motors=received_motors,
+                    timeout=timeout,
+                    total_ms=total_ms,
+                )
+        else:
+            logger.debug(metric_format, *metric_args)
 
     @check_if_not_connected
     def sync_write(self, data_name: str, values: dict[str, Value]) -> None:
