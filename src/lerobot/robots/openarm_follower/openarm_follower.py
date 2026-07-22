@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import logging
+import math
 import time
 from functools import cached_property
 from typing import Any
@@ -58,6 +59,13 @@ class OpenArmFollower(Robot):
     def __init__(self, config: OpenArmFollowerConfig):
         super().__init__(config)
         self.config = config
+
+        if config.gripper_control_mode not in ("pos_force", "mit"):
+            raise ValueError("gripper_control_mode must be 'pos_force' or 'mit'")
+        if not math.isfinite(config.gripper_speed_rad_s) or not 0.0 <= config.gripper_speed_rad_s <= 100.0:
+            raise ValueError("gripper_speed_rad_s must be finite and in [0, 100]")
+        if not math.isfinite(config.gripper_torque_pu) or not 0.0 <= config.gripper_torque_pu <= 1.0:
+            raise ValueError("gripper_torque_pu must be finite and in [0, 1]")
 
         # Arm motors
         motors: dict[str, Motor] = {}
@@ -184,9 +192,6 @@ class OpenArmFollower(Robot):
             cam.connect()
 
         self.configure()
-
-        if self.is_calibrated:
-            self.bus.set_zero_position()
 
         self.bus.enable_torque()
 
@@ -401,9 +406,12 @@ class OpenArmFollower(Robot):
                 )
                 vff_deg_s[idx] = self.config.velocity_ff_gain * float(np.degrees(vel_rad_s))
 
-        # Use batch MIT control for arm (sends all commands, then collects responses)
+        # J1-J7 use MIT. OpenArm 2.0 configures J8 separately in POS_FORCE;
+        # retain MIT only as an explicit compatibility mode.
         commands = {}
         for motor_name, position_degrees in goal_pos.items():
+            if motor_name == "gripper" and self.config.gripper_control_mode == "pos_force":
+                continue
             idx = MOTOR_INDEX.get(motor_name, 0)
             # Use custom gains if provided, otherwise use config defaults
             if custom_kp is not None and motor_name in custom_kp:
@@ -426,6 +434,13 @@ class OpenArmFollower(Robot):
             commands[motor_name] = (kp, kd, position_degrees, float(vff_deg_s[idx]), torque)
 
         self.bus.mit_control_batch(commands)
+        if "gripper" in goal_pos and self.config.gripper_control_mode == "pos_force":
+            self.bus.posforce_control(
+                "gripper",
+                position_rad=math.radians(goal_pos["gripper"]),
+                speed_rad_s=self.config.gripper_speed_rad_s,
+                current_pu=self.config.gripper_torque_pu,
+            )
 
         # Merge so partial actions keep the previous positions of uncommanded motors.
         self._last_cmd_deg = {**self._last_cmd_deg, **goal_pos}

@@ -15,6 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from lerobot.cameras import CameraConfig
 
@@ -110,6 +111,12 @@ class OpenArmFollowerConfigBase:
     # target jumps more than this vs the last command, the jump is logged
     # (rate-limited, ~2 s) and the ramp rate-limits the move automatically.
     align_jump_threshold: float = 0.1
+
+    # OpenArm 2.0 configures J8 in POS_FORCE mode. MIT remains available as
+    # an explicit compatibility setting for differently configured hardware.
+    gripper_control_mode: Literal["pos_force", "mit"] = "pos_force"
+    gripper_speed_rad_s: float = 50.0
+    gripper_torque_pu: float = 1.0 / 4.5
 
     # Camera configurations
     cameras: dict[str, CameraConfig] = field(default_factory=dict)

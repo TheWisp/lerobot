@@ -17,6 +17,8 @@
 # https://github.com/cmjang/DM_Control_Python
 
 import logging
+import math
+import struct
 import time
 from contextlib import contextmanager
 from copy import deepcopy
@@ -461,6 +463,55 @@ class DamiaoMotorsBus(MotorsBusBase):
         data[6] = ((kd_uint & 0xF) << 4) | ((tau_uint >> 8) & 0xF)
         data[7] = tau_uint & 0xFF
         return data
+
+    def _encode_posforce_packet(
+        self,
+        motor: NameOrID,
+        position_rad: float,
+        speed_rad_s: float,
+        current_pu: float,
+    ) -> bytes:
+        """Encode the Damiao POS_FORCE payload using physical units."""
+        values = (position_rad, speed_rad_s, current_pu)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("POS_FORCE values must be finite")
+
+        motor_name = self._get_motor_name(motor)
+        pmax, _, _ = MOTOR_LIMIT_PARAMS[self._motor_types[motor_name]]
+        if not -pmax <= position_rad <= pmax:
+            raise ValueError(f"position_rad must be within [{-pmax}, {pmax}]")
+        if not 0.0 <= speed_rad_s <= 100.0:
+            raise ValueError("speed_rad_s must be within [0, 100]")
+        if not 0.0 <= current_pu <= 1.0:
+            raise ValueError("current_pu must be within [0, 1]")
+
+        return struct.pack("<fHH", position_rad, int(speed_rad_s * 100), int(current_pu * 10000))
+
+    @check_if_not_connected
+    def posforce_control(
+        self,
+        motor: NameOrID,
+        position_rad: float,
+        speed_rad_s: float,
+        current_pu: float,
+    ) -> None:
+        """Send one POS_FORCE command without blocking the control loop.
+
+        The official OpenArm driver receives state on its independent CAN
+        receive path; the next normal state refresh updates this bus cache.
+        """
+        motor_id = self._get_motor_id(motor)
+        data = self._encode_posforce_packet(motor, position_rad, speed_rad_s, current_pu)
+        if self.canbus is None:
+            raise RuntimeError("CAN bus is not initialized.")
+
+        msg = can.Message(
+            arbitration_id=motor_id + 0x300,
+            data=data,
+            is_extended_id=False,
+            is_fd=self.use_can_fd,
+        )
+        self.canbus.send(msg)
 
     def mit_control(
         self,
