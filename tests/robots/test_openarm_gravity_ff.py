@@ -30,7 +30,12 @@ from lerobot.utils.import_utils import _mujoco_available, _openarm_mujoco_availa
 if not (_mujoco_available and _openarm_mujoco_available):
     pytest.skip("mujoco / openarm-mujoco not available (extra: openarm-ff)", allow_module_level=True)
 
-from lerobot.robots.openarm_follower.gravity_ff import DOFS, GravityFF, default_bimanual_xml
+from lerobot.robots.openarm_follower.gravity_ff import (
+    DOFS,
+    GravityFF,
+    _find_distribution_model,
+    default_bimanual_xml,
+)
 
 FRONT_MID = {
     "right": [0.9007, -0.1745, 0.1079, 0.0, 0.1078, 0.7854, -0.2766],
@@ -44,6 +49,16 @@ def ff(request):
 
 
 class TestModelResolution:
+    def test_distribution_model_resolves_independently_of_interpreter_prefix(self, tmp_path):
+        module_file = tmp_path / "venv/lib/python3.12/site-packages/openarm_mujoco/v2/__init__.py"
+        module_file.parent.mkdir(parents=True)
+        module_file.touch()
+        expected = tmp_path / "venv/share/openarm_mujoco/v2/openarm_bimanual.xml"
+        expected.parent.mkdir(parents=True)
+        expected.touch()
+
+        assert _find_distribution_model(module_file) == expected
+
     def test_default_xml_resolves_from_package(self):
         xml = default_bimanual_xml()
         assert xml.endswith("openarm_bimanual.xml")
