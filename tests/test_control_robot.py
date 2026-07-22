@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -27,7 +27,7 @@ from lerobot.scripts.lerobot_record import RecordConfig, record
 from lerobot.scripts.lerobot_replay import DatasetReplayConfig, ReplayConfig, replay
 from lerobot.scripts.lerobot_teleoperate import TeleoperateConfig, teleoperate
 from tests.fixtures.constants import DUMMY_REPO_ID
-from tests.mocks.mock_robot import MockRobotConfig
+from tests.mocks.mock_robot import MockRobot, MockRobotConfig
 from tests.mocks.mock_teleop import MockTeleopConfig
 
 
@@ -46,6 +46,96 @@ def test_teleoperate():
         teleop_time_s=0.1,
     )
     teleoperate(cfg)
+
+
+def _teleoperate_config() -> TeleoperateConfig:
+    return TeleoperateConfig(
+        robot=MockRobotConfig(),
+        teleop=MockTeleopConfig(),
+        teleop_time_s=0.1,
+    )
+
+
+def test_teleoperate_cleans_up_when_robot_connect_fails():
+    teleop = MagicMock()
+    robot = MagicMock()
+    robot.get_observation_processor_steps.return_value = []
+    robot.connect.side_effect = RuntimeError("connect failed")
+
+    with (
+        patch(
+            "lerobot.scripts.lerobot_teleoperate.make_teleoperator_from_config",
+            return_value=teleop,
+        ),
+        patch("lerobot.scripts.lerobot_teleoperate.make_robot_from_config", return_value=robot),
+        patch("lerobot.scripts.lerobot_teleoperate.setup_run_logging"),
+        pytest.raises(RuntimeError, match="connect failed"),
+    ):
+        teleoperate(_teleoperate_config())
+
+    teleop.connect.assert_called_once_with()
+    robot.connect.assert_called_once_with()
+    robot.attach_teleop.assert_called_once_with(None)
+    teleop.disconnect.assert_called_once_with()
+    robot.disconnect.assert_called_once_with()
+
+
+def test_teleoperate_cleans_up_when_attach_fails():
+    teleop = MagicMock()
+    robot = MagicMock()
+    robot.get_observation_processor_steps.return_value = []
+    robot.attach_teleop.side_effect = [RuntimeError("attach failed"), None]
+
+    with (
+        patch(
+            "lerobot.scripts.lerobot_teleoperate.make_teleoperator_from_config",
+            return_value=teleop,
+        ),
+        patch("lerobot.scripts.lerobot_teleoperate.make_robot_from_config", return_value=robot),
+        patch("lerobot.scripts.lerobot_teleoperate.setup_run_logging"),
+        pytest.raises(RuntimeError, match="attach failed"),
+    ):
+        teleoperate(_teleoperate_config())
+
+    assert robot.attach_teleop.call_args_list == [call(teleop), call(None)]
+    teleop.disconnect.assert_called_once_with()
+    robot.disconnect.assert_called_once_with()
+
+
+def test_teleoperate_cleanup_steps_are_independent(caplog):
+    teleop = MagicMock()
+    robot = MagicMock()
+    robot.get_observation_processor_steps.return_value = []
+
+    def attach(value):
+        if value is None:
+            raise RuntimeError("detach failed")
+
+    robot.attach_teleop.side_effect = attach
+    teleop.disconnect.side_effect = RuntimeError("teleop disconnect failed")
+    robot.disconnect.side_effect = RuntimeError("robot disconnect failed")
+
+    with (
+        patch(
+            "lerobot.scripts.lerobot_teleoperate.make_teleoperator_from_config",
+            return_value=teleop,
+        ),
+        patch("lerobot.scripts.lerobot_teleoperate.make_robot_from_config", return_value=robot),
+        patch("lerobot.scripts.lerobot_teleoperate.setup_run_logging"),
+        patch(
+            "lerobot.scripts.lerobot_teleoperate.teleop_loop",
+            side_effect=ValueError("loop failed"),
+        ),
+        pytest.raises(ValueError, match="loop failed"),
+    ):
+        teleoperate(_teleoperate_config())
+
+    assert robot.attach_teleop.call_args_list == [call(teleop), call(None)]
+    teleop.disconnect.assert_called_once_with()
+    robot.disconnect.assert_called_once_with()
+    assert "Failed to detach teleoperator from robot" in caplog.text
+    assert "Failed to disconnect teleoperator" in caplog.text
+    assert "Failed to disconnect robot" in caplog.text
 
 
 def test_record_and_resume(tmp_path):
@@ -87,6 +177,34 @@ def test_record_and_resume(tmp_path):
     assert dataset.meta.total_episodes == dataset.num_episodes == 2
     assert dataset.meta.total_frames == dataset.num_frames == 6
     assert dataset.meta.total_tasks == 1
+
+
+def test_record_saves_action_returned_by_robot(tmp_path):
+    robot_cfg = MockRobotConfig(random_values=False, static_values=[0.0, 0.0, 0.0])
+    teleop_cfg = MockTeleopConfig(random_values=False, static_values=[25.0, 50.0, 75.0])
+    dataset_cfg = DatasetRecordConfig(
+        repo_id=DUMMY_REPO_ID,
+        single_task="Dummy task",
+        root=tmp_path / "record_sent_action",
+        num_episodes=1,
+        episode_time_s=0.1,
+        reset_time_s=0,
+        push_to_hub=False,
+    )
+    cfg = RecordConfig(
+        robot=robot_cfg,
+        dataset=dataset_cfg,
+        teleop=teleop_cfg,
+        play_sounds=False,
+    )
+
+    def clipped_action(_robot, action):
+        return dict.fromkeys(action, 7.0)
+
+    with patch.object(MockRobot, "send_action", autospec=True, side_effect=clipped_action):
+        dataset = record(cfg)
+
+    assert list(dataset.get_raw_item(0)["action"]) == pytest.approx([7.0, 7.0, 7.0])
 
 
 def test_record_and_replay(tmp_path):
