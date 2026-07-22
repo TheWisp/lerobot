@@ -176,7 +176,14 @@ class GuiScreenshotSession:
                 if self.post_close_sleep > 0:
                     time.sleep(self.post_close_sleep)
                 self.output_path.parent.mkdir(parents=True, exist_ok=True)
-                self._ffmpeg_capture()
+                try:
+                    self._ffmpeg_capture()
+                except Exception as e:  # noqa: BLE001
+                    # The screenshot is EVIDENCE, not the driven behavior — a capture-only
+                    # failure (e.g. x11grab blocked by the session's X auth) must not turn a
+                    # functionally-passing e2e run into a failure. Callers that need the file
+                    # check output_path themselves.
+                    _log(f"capture failed (evidence only, continuing): {e}")
         finally:
             self._cleanup()
 

@@ -63,6 +63,28 @@ finally:
 """
 
 
+# A state-only publisher (no cameras): SO-101-style `<motor>.pos` scalars so
+# `resolve_robot` matches a vendored URDF — the camera-less "URDF run" shape.
+_STATE_FEEDER_SRC = """
+import math, os, signal, time
+from lerobot.robots.obs_stream import ObservationStream
+K = os.environ["FEED_KEYS"].split(",")
+s = ObservationStream({k: 1 for k in K}, {}); _stop = False
+def _sig(*a):
+    global _stop; _stop = True
+signal.signal(signal.SIGINT, _sig); signal.signal(signal.SIGTERM, _sig)
+try:
+    while not _stop:
+        s.write_obs({k: math.sin(time.time()) for k in K}); time.sleep(0.1)
+finally:
+    s.cleanup()
+"""
+
+SO101_JOINT_KEYS = ",".join(
+    f"{m}.pos" for m in ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
+)
+
+
 def _free_port():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -108,15 +130,24 @@ def feeder(tmp_path, gui_url):
     script.write_text(_FEEDER_SRC)
     procs = []
 
-    def launch(keys="front,left_wrist,right_wrist,top"):
+    state_script = tmp_path / "feed_state.py"
+    state_script.write_text(_STATE_FEEDER_SRC)
+
+    def _spawn(path, keys):
         p = subprocess.Popen(
-            [sys.executable, str(script)],
+            [sys.executable, str(path)],
             env={**os.environ, "FEED_KEYS": keys, "LEROBOT_OBS_STREAM": "1"},
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         procs.append(p)
         return p
+
+    def launch(keys="front,left_wrist,right_wrist,top"):
+        return _spawn(script, keys)
+
+    def launch_state(keys=SO101_JOINT_KEYS):
+        return _spawn(state_script, keys)
 
     def stop(p):
         if p.poll() is None:
@@ -127,7 +158,15 @@ def feeder(tmp_path, gui_url):
                 p.kill()
 
     _clean_shm()
-    yield type("Feeder", (), {"launch": staticmethod(launch), "stop": staticmethod(stop)})
+    yield type(
+        "Feeder",
+        (),
+        {
+            "launch": staticmethod(launch),
+            "launch_state": staticmethod(launch_state),
+            "stop": staticmethod(stop),
+        },
+    )
     _http(gui_url + "api/overlays/live/stop", "POST", 10)
     for p in procs:
         stop(p)
@@ -264,3 +303,26 @@ def test_d_overlay_restart(gui_url, feeder, tmp_path):
         assert _poll(lambda: _n_rendered(s) == 0, 15), "overlay did not clear on deselect"
         _select_overlay(s)  # re-select with the stream still up
         assert _poll(lambda: _n_rendered(s) >= 1, 45), "overlay did not come back after reselect (D)"
+
+
+def test_e_urdf_tile_appears_when_stream_comes_up_late(gui_url, feeder, tmp_path):
+    """Regression guard (the 750a061ac probe-ordering bug): the URDF-viz probe must run AFTER
+    the stream wait. /api/run/urdf-viz is only answerable once the run's obs stream has data —
+    probing it up front latches urdfVizActive=false for every GUI-launched run and the
+    visualizer tile never renders. This drives the GUI-launched-run timing the other four
+    tests can't reach (their feeder is up BEFORE the viewer starts): viewer first, stream late.
+    """
+    with _session(gui_url, tmp_path) as s:
+        s.eval("switchTab('run')")
+        s.eval("_isRunning = true")  # a launched run whose robot hasn't connected yet
+        s.eval("startObsStreamViewer()")
+        s.sleep(3.0)  # the buggy ordering has already probed urdf-viz (false) by now
+        feeder.launch_state()  # the robot "connects": state-only stream, vendored-URDF joints
+        try:
+            assert _poll(lambda: bool(s.eval("!!document.querySelector('#rerun-viewer iframe')")), 30), (
+                "URDF tile never appeared for a late stream (probe-ordering regression)"
+            )
+        finally:
+            # Defensive: drop the iframe before further CDP traffic, then release the run flag.
+            s.eval("(document.querySelector('#rerun-viewer iframe')||{remove(){}}).remove()")
+            s.eval("_isRunning = false")
