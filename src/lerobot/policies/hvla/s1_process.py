@@ -21,7 +21,7 @@ from lerobot.types import ActionChunk
 
 logger = logging.getLogger(__name__)
 
-# Default S1→S2 camera key map for SO107 (override via --s2-camera-map)
+# hardcode-ok: SO107 default cam map; superseded by the config-driven S2 map in #47
 S2_CAM_KEY_MAP = {
     "front": "base_0_rgb",
     "top": "base_1_rgb",

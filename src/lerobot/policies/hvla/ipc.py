@@ -338,7 +338,7 @@ class SharedImageBuffer:
             self._state_block.unlink()
 
 
-# Default S1 → S2 camera key mapping for SO107 bimanual
+# hardcode-ok: SO107 default cam map; superseded by the config-driven S2 map in #47
 DEFAULT_S2_CAM_KEY_MAP = {
     "front": "base_0_rgb",
     "top": "base_1_rgb",

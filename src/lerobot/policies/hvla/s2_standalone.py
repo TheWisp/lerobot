@@ -39,6 +39,7 @@ def main():
     parser.add_argument("--checkpoint", required=True, help="Path to Pi0.5 model.safetensors")
     parser.add_argument("--task", required=True, help="High-level task prompt")
     parser.add_argument("--device", default="cuda")
+    # hardcode-ok: SO107 default slot order; made required (no default) in #47
     parser.add_argument(
         "--s2-image-keys",
         nargs="+",
