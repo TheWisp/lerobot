@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; }
+  #hint { position: absolute; top: 10px; left: 12px; color: #888; font: 13px system-ui; pointer-events: none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/static/vendor/three.module.js",
+  "gltf-loader": "/static/vendor/GLTFLoader.js"
+}}
+</script>
+</head>
+<body>
+<div id="hint">No scan yet — run a scan to see the 3D mesh.</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from '/static/vendor/OrbitControls.js';
+import { GLTFLoader } from 'gltf-loader';
+
+const hintEl = document.getElementById('hint');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a1a);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 100);
+camera.position.set(0.22, 0.18, 0.28);
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  hintEl.textContent = 'WebGL unavailable — the 3D viewer cannot render here (' + e.message + ')';
+  throw e;
+}
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.05, 0);
+controls.autoRotate = true;
+controls.autoRotateSpeed = 1.5;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x404040, 1.2));
+const key = new THREE.DirectionalLight(0xffffff, 1.0);
+key.position.set(1, 2, 1);
+scene.add(key);
+scene.add(new THREE.GridHelper(0.4, 8, 0x333333, 0x262626));
+
+const loader = new GLTFLoader();
+let obj = null, version = null;
+const hint = document.getElementById('hint');
+
+async function refresh() {
+  try {
+    const d = await (await fetch('/api/run/scan3d/object')).json();
+    if (!d.available) {
+      if (obj) { scene.remove(obj); obj = null; }
+      version = null; hint.style.display = '';
+      return;
+    }
+    if (obj && d.version === version) return;
+    loader.load('/api/run/scan3d/mesh?v=' + d.version, (gltf) => {
+      if (obj) scene.remove(obj);
+      obj = gltf.scene; version = d.version; hint.style.display = 'none';
+      obj.traverse(o => {
+        if (o.isMesh) {
+          o.geometry.computeVertexNormals();
+          o.material = new THREE.MeshStandardMaterial({ color: 0x4fc3f7, roughness: 0.6, emissive: 0x0a2030, side: THREE.DoubleSide });
+          o.frustumCulled = false;
+        }
+      });
+      const box = new THREE.Box3().setFromObject(obj);
+      const c = box.getCenter(new THREE.Vector3());
+      obj.position.sub(c);
+      obj.position.y += (box.max.y - box.min.y) / 2;  // rest on the grid
+      scene.add(obj);
+    });
+  } catch (e) { /* not ready */ }
+}
+refresh();
+setInterval(refresh, 1500);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+(function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); })();
+</script>
+</body>
+</html>
