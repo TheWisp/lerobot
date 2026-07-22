@@ -75,6 +75,9 @@ class BiOpenArmFollower(BimanualMixin, Robot):
             position_kd=config.left_arm_config.position_kd,
             position_kp=config.left_arm_config.position_kp,
             joint_limits=config.left_arm_config.joint_limits,
+            gripper_control_mode=config.left_arm_config.gripper_control_mode,
+            gripper_speed_rad_s=config.left_arm_config.gripper_speed_rad_s,
+            gripper_torque_pu=config.left_arm_config.gripper_torque_pu,
         )
 
         right_arm_config = OpenArmFollowerConfig(
@@ -99,6 +102,9 @@ class BiOpenArmFollower(BimanualMixin, Robot):
             position_kd=config.right_arm_config.position_kd,
             position_kp=config.right_arm_config.position_kp,
             joint_limits=config.right_arm_config.joint_limits,
+            gripper_control_mode=config.right_arm_config.gripper_control_mode,
+            gripper_speed_rad_s=config.right_arm_config.gripper_speed_rad_s,
+            gripper_torque_pu=config.right_arm_config.gripper_torque_pu,
         )
 
         self.left_arm = OpenArmFollower(left_arm_config)

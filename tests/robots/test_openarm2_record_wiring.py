@@ -185,6 +185,24 @@ def test_record_action_schema_contains_only_values_returned_by_send_action():
     assert frame[ACTION].shape == (len(action_names),)
 
 
+def test_nested_gripper_settings_reach_both_arm_controllers():
+    cfg = _parse(
+        _QUEST_VR_ARGS
+        + [
+            "--robot.left_arm_config.gripper_speed_rad_s=12",
+            "--robot.left_arm_config.gripper_torque_pu=0.3",
+            "--robot.right_arm_config.gripper_speed_rad_s=34",
+            "--robot.right_arm_config.gripper_torque_pu=0.4",
+        ]
+    )
+    robot = make_robot_from_config(cfg.robot)
+
+    assert robot.left_arm.config.gripper_speed_rad_s == pytest.approx(12.0)
+    assert robot.left_arm.config.gripper_torque_pu == pytest.approx(0.3)
+    assert robot.right_arm.config.gripper_speed_rad_s == pytest.approx(34.0)
+    assert robot.right_arm.config.gripper_torque_pu == pytest.approx(0.4)
+
+
 @pytest.mark.skipif(not _pin_pink_available, reason="pin-pink (optional) not installed")
 def test_attach_teleop_installs_ik_transform_with_send_action_keys():
     """attach_teleop on the real constructed pair: a synthetic action dict
