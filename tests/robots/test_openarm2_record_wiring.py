@@ -189,16 +189,20 @@ def test_nested_gripper_settings_reach_both_arm_controllers():
     cfg = _parse(
         _QUEST_VR_ARGS
         + [
+            "--robot.left_arm_config.gripper_control_mode=pos_force",
             "--robot.left_arm_config.gripper_speed_rad_s=12",
             "--robot.left_arm_config.gripper_torque_pu=0.3",
+            "--robot.right_arm_config.gripper_control_mode=mit",
             "--robot.right_arm_config.gripper_speed_rad_s=34",
             "--robot.right_arm_config.gripper_torque_pu=0.4",
         ]
     )
     robot = make_robot_from_config(cfg.robot)
 
+    assert robot.left_arm.config.gripper_control_mode == "pos_force"
     assert robot.left_arm.config.gripper_speed_rad_s == pytest.approx(12.0)
     assert robot.left_arm.config.gripper_torque_pu == pytest.approx(0.3)
+    assert robot.right_arm.config.gripper_control_mode == "mit"
     assert robot.right_arm.config.gripper_speed_rad_s == pytest.approx(34.0)
     assert robot.right_arm.config.gripper_torque_pu == pytest.approx(0.4)
 
