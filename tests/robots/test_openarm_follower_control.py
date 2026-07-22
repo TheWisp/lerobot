@@ -23,6 +23,7 @@ command so the MIT slots (kp, kd, pos, vel, torque) can be asserted.
 
 import logging
 import time
+from contextlib import nullcontext
 
 import numpy as np
 import pytest
@@ -56,6 +57,9 @@ class StubBus:
 
     def configure_motors(self):
         pass
+
+    def torque_disabled(self):
+        return nullcontext()
 
     def set_zero_position(self, motors=None):
         self.zero_calls += 1
