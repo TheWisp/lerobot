@@ -318,6 +318,16 @@ class QuestServer:
                             with contextlib.suppress(ConnectionError):
                                 await ws.send_json({"type": "hold", "left": current[0], "right": current[1]})
                             last_hold_sent = current
+                elif mtype == "diagnostic":
+                    event = str(data.get("event", "unknown"))[:80]
+                    details = data.get("details")
+                    if not isinstance(details, dict):
+                        details = {}
+                    logger.info(
+                        "QuestVR browser diagnostic event=%s details=%s",
+                        event,
+                        json.dumps(details, ensure_ascii=False, sort_keys=True)[:2000],
+                    )
         finally:
             ping_task.cancel()
             logger.info("QuestVR client disconnected")
