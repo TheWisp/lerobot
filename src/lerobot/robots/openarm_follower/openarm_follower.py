@@ -204,7 +204,9 @@ class OpenArmFollower(Robot):
                 try:
                     self.bus.disconnect(disable_torque=True)
                 except Exception:
-                    logger.exception("Failed to disable and disconnect CAN while rolling back OpenArm connection")
+                    logger.exception(
+                        "Failed to disable and disconnect CAN while rolling back OpenArm connection"
+                    )
             raise
 
         logger.info(f"{self} connected.")
@@ -288,7 +290,10 @@ class OpenArmFollower(Robot):
 
         obs_dict: dict[str, Any] = {}
 
-        states = self.bus.sync_read_all_states()
+        states = self.bus.sync_read_all_states(
+            require_all=True,
+            context=f"{self.id}.observation",
+        )
 
         for motor in self.bus.motors:
             state = states.get(motor, {})
@@ -374,7 +379,10 @@ class OpenArmFollower(Robot):
             step_deg = float(np.degrees(self.config.align_step_limit))
             if not self._last_cmd_deg:
                 # First command: ramp from the measured pose, not from zero.
-                states = self.bus.sync_read_all_states()
+                states = self.bus.sync_read_all_states(
+                    require_all=True,
+                    context=f"{self.id}.alignment",
+                )
                 self._last_cmd_deg = {m: s["position"] for m, s in states.items()}
             for motor_name, position in goal_pos.items():
                 if motor_name == "gripper" or motor_name not in self._last_cmd_deg:
@@ -398,7 +406,10 @@ class OpenArmFollower(Robot):
         tff = np.zeros(7)
         if self._gravity_ff is not None:
             if states is None:
-                states = self.bus.sync_read_all_states()
+                states = self.bus.sync_read_all_states(
+                    require_all=True,
+                    context=f"{self.id}.gravity_ff",
+                )
             q_meas_rad = np.radians([states[m]["position"] for m in ARM_JOINTS])
             tff = self._gravity_ff.torque(q_meas_rad)
         self._last_tff = tff
