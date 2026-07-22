@@ -43,6 +43,7 @@ Requires the `openarm-ff` extra (mujoco + openarm-mujoco model files):
 
 import logging
 import time
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -63,9 +64,20 @@ DOFS = {"left": list(range(0, 7)), "right": list(range(9, 16))}
 def default_bimanual_xml() -> str:
     """Resolve the openarm_bimanual.xml shipped by the `openarm-mujoco` package."""
     require_package("openarm-mujoco", extra="openarm-ff", import_name="openarm_mujoco")
-    from openarm_mujoco.v2 import openarm_bimanual_xml
+    import openarm_mujoco.v2 as model_module
 
-    return openarm_bimanual_xml()
+    model_path = Path(model_module.openarm_bimanual_xml()).resolve()
+    if model_path.is_file():
+        return str(model_path)
+
+    # ``pip/uv --target`` keeps package data beside the imported distribution,
+    # while openarm-mujoco resolves its default through the interpreter prefix.
+    # Use only that distribution-local share directory as a fallback.
+    distribution_root = Path(model_module.__file__).resolve().parents[2]
+    target_local = distribution_root / "share" / "openarm_mujoco" / "v2" / "openarm_bimanual.xml"
+    if target_local.is_file():
+        return str(target_local)
+    raise FileNotFoundError(f"openarm-mujoco returned a missing model path: {model_path}")
 
 
 class GravityFF:
