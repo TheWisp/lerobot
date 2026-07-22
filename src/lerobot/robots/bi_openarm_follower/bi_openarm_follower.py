@@ -147,7 +147,10 @@ class BiOpenArmFollower(BimanualMixin, Robot):
 
     @cached_property
     def action_features(self) -> dict[str, type]:
-        return self._motors_ft
+        return {
+            **{f"left_{k}": v for k, v in self.left_arm.action_features.items()},
+            **{f"right_{k}": v for k, v in self.right_arm.action_features.items()},
+        }
 
     def setup_motors(self) -> None:
         raise NotImplementedError(
