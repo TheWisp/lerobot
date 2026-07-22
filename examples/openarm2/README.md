@@ -16,7 +16,7 @@ export ROBOT_CAMERAS="{ left_wrist: {type: opencv, index_or_path: /dev/video0, w
 
 ## Setup
 
-- Follower arms on `can0` (left) and `can1` (right); leader arms on `can2` /
+- Standard follower arms on `can1` (left) and `can0` (right); leader arms on `can2` /
   `can3`. CAN FD is on by default (1 Mbps nominal / 5 Mbps data).
 - Gravity feedforward (`gravity_ff_gain=0.9`, validated) needs the
   `openarm-ff` extra (MuJoCo inverse dynamics on the OpenArm 2.0 MJCF):
@@ -41,11 +41,11 @@ the follower directly.
 lerobot-record \
     --robot.type=bi_openarm_follower \
     --robot.id=bi_openarm_follower \
-    --robot.left_arm_config.port=can0 \
+    --robot.left_arm_config.port=can1 \
     --robot.left_arm_config.side=left \
     --robot.left_arm_config.gravity_ff_gain=0.9 \
     --robot.left_arm_config.use_velocity_and_torque=true \
-    --robot.right_arm_config.port=can1 \
+    --robot.right_arm_config.port=can0 \
     --robot.right_arm_config.side=right \
     --robot.right_arm_config.gravity_ff_gain=0.9 \
     --robot.right_arm_config.use_velocity_and_torque=true \
@@ -80,11 +80,11 @@ OpenArm 2.0 specifics vs the SO-107 defaults:
 lerobot-record \
     --robot.type=bi_openarm_follower \
     --robot.id=bi_openarm_follower \
-    --robot.left_arm_config.port=can0 \
+    --robot.left_arm_config.port=can1 \
     --robot.left_arm_config.side=left \
     --robot.left_arm_config.gravity_ff_gain=0.9 \
     --robot.left_arm_config.use_velocity_and_torque=true \
-    --robot.right_arm_config.port=can1 \
+    --robot.right_arm_config.port=can0 \
     --robot.right_arm_config.side=right \
     --robot.right_arm_config.gravity_ff_gain=0.9 \
     --robot.right_arm_config.use_velocity_and_torque=true \

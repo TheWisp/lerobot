@@ -52,11 +52,11 @@ from lerobot.utils.import_utils import _pin_pink_available
 _LEADER_ARGS = [
     "--robot.type=bi_openarm_follower",
     "--robot.id=bi_openarm_follower",
-    "--robot.left_arm_config.port=can0",
+    "--robot.left_arm_config.port=can1",
     "--robot.left_arm_config.side=left",
     "--robot.left_arm_config.gravity_ff_gain=0.9",
     "--robot.left_arm_config.use_velocity_and_torque=true",
-    "--robot.right_arm_config.port=can1",
+    "--robot.right_arm_config.port=can0",
     "--robot.right_arm_config.side=right",
     "--robot.right_arm_config.gravity_ff_gain=0.9",
     "--robot.right_arm_config.use_velocity_and_torque=true",
@@ -75,11 +75,11 @@ _LEADER_ARGS = [
 _QUEST_VR_ARGS = [
     "--robot.type=bi_openarm_follower",
     "--robot.id=bi_openarm_follower",
-    "--robot.left_arm_config.port=can0",
+    "--robot.left_arm_config.port=can1",
     "--robot.left_arm_config.side=left",
     "--robot.left_arm_config.gravity_ff_gain=0.9",
     "--robot.left_arm_config.use_velocity_and_torque=true",
-    "--robot.right_arm_config.port=can1",
+    "--robot.right_arm_config.port=can0",
     "--robot.right_arm_config.side=right",
     "--robot.right_arm_config.gravity_ff_gain=0.9",
     "--robot.right_arm_config.use_velocity_and_torque=true",
@@ -110,7 +110,7 @@ def _parse(args: list[str]) -> RecordConfig:
 
 def _assert_bi_openarm_follower(cfg: RecordConfig) -> None:
     assert isinstance(cfg.robot, BiOpenArmFollowerConfig)
-    for side_name, port in (("left", "can0"), ("right", "can1")):
+    for side_name, port in (("left", "can1"), ("right", "can0")):
         arm = getattr(cfg.robot, f"{side_name}_arm_config")
         assert arm.port == port
         assert arm.side == side_name
