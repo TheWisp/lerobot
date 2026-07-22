@@ -817,10 +817,8 @@ def record_loop(
         # dropped (next start_iter() resets), which is the right behavior.
         latency_session.add_span("process_action", process_action_t0)
 
-        # Send action to robot
-        # Action can eventually be clipped using `max_relative_target`,
-        # so action actually sent is saved in the dataset. action = postprocessor.process(action)
-        # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
+        # Send action to robot. For ordinary dict actions, the robot's
+        # return value below is the post-safety action persisted to the dataset.
         # Chunk-aware path: if the teleop publishes a future horizon, the
         # chunk goes to the robot verbatim so chunk-aware robots can do
         # exact-lookup motor-τ compensation. The dict-shaped
@@ -829,12 +827,22 @@ def record_loop(
         # Only applies when teleop is a single Teleoperator (the policy /
         # composite-teleop branches don't have a teleop instance to query).
         action_to_send = robot_action_to_send
+        is_horizon_action = False
         if isinstance(teleop, Teleoperator):
             horizon = teleop.get_action_with_horizon()
             if horizon is not None:
                 action_to_send = horizon
+                is_horizon_action = True
         with latency_session.span("action_send"):
-            _sent_action = robot.send_action(action_to_send)
+            sent_action = robot.send_action(action_to_send)
+
+        # A normal dict action may be clipped or otherwise adjusted by the
+        # robot's final safety layer. Persist the value the robot reports it
+        # actually accepted, not the pre-safety intent. Horizon publishers
+        # keep their existing contract: ``action_values`` is frames[0], while
+        # the full chunk is owned and scheduled by the robot.
+        if not is_horizon_action:
+            action_values = sent_action
 
         # Write to dataset (only on real policy frames, not interpolated-only iterations)
         if dataset is not None and is_record_frame:

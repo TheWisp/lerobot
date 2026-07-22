@@ -71,6 +71,7 @@ lerobot-teleoperate \
 
 import logging
 import time
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pprint import pformat
 
@@ -365,42 +366,37 @@ def teleoperate(cfg: TeleoperateConfig):
         motion_logger = MotionLogger(cfg.latency_output_dir)
         logging.info("Motion logging enabled; trace → %s", motion_logger.path)
 
-    teleop.connect()
-    robot.connect()
-
-    # Chunk-aware / predictive robots can poll the teleop directly at
-    # their own control rate (e.g. 200 Hz) instead of waiting for
-    # send_action pushes from the 30 Hz loop. Default Robot.attach_teleop
-    # is a no-op for non-predictive robots, so this is unconditionally
-    # safe to call. The loop's send_action path still runs for dataset
-    # recording — when the teleop is bound, send_action's intent is
-    # ignored by the controller, but the dict return value is still
-    # what the dataset writer records.
-    robot.attach_teleop(teleop)
-
     try:
-        teleop_loop(
-            teleop=teleop,
-            robot=robot,
-            fps=cfg.fps,
-            display_data=cfg.display_data,
-            display_mode=cfg.display_mode,
-            duration=cfg.teleop_time_s,
-            teleop_action_processor=teleop_action_processor,
-            robot_action_processor=robot_action_processor,
-            robot_observation_processor=robot_observation_processor,
-            display_compressed_images=display_compressed_images,
-            obs_stream_steps=obs_stream_steps,
-            latency_session=latency_session,
-            motion_logger=motion_logger,
-        )
-    except KeyboardInterrupt:
-        pass
+        teleop.connect()
+        robot.connect()
+
+        # Chunk-aware / predictive robots can poll the teleop directly at
+        # their own control rate (e.g. 200 Hz) instead of waiting for
+        # send_action pushes from the 30 Hz loop. Default Robot.attach_teleop
+        # is a no-op for non-predictive robots, so this is unconditionally
+        # safe to call. The loop's send_action path still runs for dataset
+        # recording — when the teleop is bound, send_action's intent is
+        # ignored by the controller, but the dict return value is still
+        # what the dataset writer records.
+        robot.attach_teleop(teleop)
+
+        with suppress(KeyboardInterrupt):
+            teleop_loop(
+                teleop=teleop,
+                robot=robot,
+                fps=cfg.fps,
+                display_data=cfg.display_data,
+                display_mode=cfg.display_mode,
+                duration=cfg.teleop_time_s,
+                teleop_action_processor=teleop_action_processor,
+                robot_action_processor=robot_action_processor,
+                robot_observation_processor=robot_observation_processor,
+                display_compressed_images=display_compressed_images,
+                obs_stream_steps=obs_stream_steps,
+                latency_session=latency_session,
+                motion_logger=motion_logger,
+            )
     finally:
-        if motion_logger is not None:
-            motion_logger.close()
-        if cfg.display_data:
-            shutdown_visualization(cfg.display_mode)
         # Detach the teleop from the robot BEFORE disconnecting it. On a
         # chunk-aware / predictive robot, ``attach_teleop`` wires the
         # 200 Hz controller thread to ``teleop.get_action()``. If we
@@ -410,10 +406,31 @@ def teleoperate(cfg: TeleoperateConfig):
         # ``DeviceNotConnectedError`` from the closed teleop bus, logged
         # as a noisy ERROR per tick. Detaching first makes shutdown
         # silent. No-op for non-predictive robots (base ``attach_teleop``
-        # is empty).
-        robot.attach_teleop(None)
-        teleop.disconnect()
-        robot.disconnect()
+        # is empty). Every cleanup is isolated so one failure cannot leave
+        # a later resource, especially the robot torque, active.
+        cleanups = (
+            ("detach teleoperator from robot", lambda: robot.attach_teleop(None)),
+            ("disconnect robot", robot.disconnect),
+            ("disconnect teleoperator", teleop.disconnect),
+        )
+        for label, cleanup in cleanups:
+            try:
+                cleanup()
+            except Exception:
+                logging.exception("Failed to %s during teleoperation cleanup", label)
+
+        # Non-hardware cleanup runs after the robot disconnect attempt and
+        # remains best-effort for the same reason.
+        if motion_logger is not None:
+            try:
+                motion_logger.close()
+            except Exception:
+                logging.exception("Failed to close motion logger during teleoperation cleanup")
+        if cfg.display_data:
+            try:
+                shutdown_visualization(cfg.display_mode)
+            except Exception:
+                logging.exception("Failed to stop visualization during teleoperation cleanup")
 
 
 def main():
