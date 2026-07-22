@@ -35,6 +35,7 @@ let ws = null, xrSession = null, refSpace = null;
 let gl = null, xrCanvas = null;
 let lastRTT = NaN, sentCount = 0;
 let wantConnected = false, reconnectTimer = null;
+let lastDiagAt = 0;
 // Last frame's clutch state, keyed by controller handedness. Used to
 // detect the rising/falling edge for haptic feedback. Initially unset
 // (no controller -> no edge), populated on first observed frame.
@@ -89,10 +90,34 @@ function connect() {
   _openWS();
 }
 
+function sendDiagnostic(event, details = {}) {
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({type: "diagnostic", event, details}));
+}
+
+function describeInputSources() {
+  if (!xrSession) return [];
+  return Array.from(xrSession.inputSources).map(src => ({
+    hand: src.handedness || "none",
+    target_ray_mode: src.targetRayMode || "unknown",
+    has_grip_space: !!src.gripSpace,
+    has_gamepad: !!src.gamepad,
+    button_count: src.gamepad ? src.gamepad.buttons.length : 0,
+  }));
+}
+
 function _openWS() {
   if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
   ws = new WebSocket(WS_URL);
-  ws.onopen = () => { log("ws open"); updateStats(); };
+  ws.onopen = () => {
+    log("ws open");
+    updateStats();
+    sendDiagnostic("browser_connected", {
+      secure_context: window.isSecureContext,
+      webxr_available: !!navigator.xr,
+      user_agent: navigator.userAgent,
+    });
+  };
   ws.onerror = e => log("ws error");
   ws.onclose = () => {
     log("ws closed");
@@ -124,8 +149,13 @@ function _openWS() {
 }
 
 async function enterSession(mode) {
-  if (!navigator.xr) { log("navigator.xr unavailable"); return; }
+  if (!navigator.xr) {
+    log("navigator.xr unavailable");
+    sendDiagnostic("xr_unavailable");
+    return;
+  }
   const ok = await navigator.xr.isSessionSupported(mode);
+  sendDiagnostic("xr_support", {mode, supported: ok});
   if (!ok) { log(mode + " not supported"); return; }
   try {
     xrCanvas = document.createElement("canvas");
@@ -135,6 +165,13 @@ async function enterSession(mode) {
     xrSession = await navigator.xr.requestSession(mode);
     await xrSession.updateRenderState({ baseLayer: new XRWebGLLayer(xrSession, gl) });
     refSpace = await xrSession.requestReferenceSpace("local");
+    xrSession.addEventListener("inputsourceschange", ev => {
+      sendDiagnostic("input_sources_changed", {
+        added: ev.added.length,
+        removed: ev.removed.length,
+        sources: describeInputSources(),
+      });
+    });
     xrSession.requestAnimationFrame(onXRFrame);
     xrSession.addEventListener("end", () => {
       xrSession = null;
@@ -142,9 +179,15 @@ async function enterSession(mode) {
       updateStats();
     });
     log(mode + " session started");
+    sendDiagnostic("xr_session_started", {
+      mode,
+      environment_blend_mode: xrSession.environmentBlendMode,
+      sources: describeInputSources(),
+    });
     updateStats();
   } catch (e) {
     log(mode + " failed: " + e.message);
+    sendDiagnostic("xr_session_failed", {mode, name: e.name, message: e.message});
   }
 }
 
@@ -161,10 +204,11 @@ function onXRFrame(time, frame) {
   }
   if (!ws || ws.readyState !== 1) return;
   const poses = [];
+  let missingGripSpace = 0, missingPose = 0;
   for (const src of frame.session.inputSources) {
-    if (!src.gripSpace) continue;
+    if (!src.gripSpace) { missingGripSpace++; continue; }
     const pose = frame.getPose(src.gripSpace, refSpace);
-    if (!pose) continue;
+    if (!pose) { missingPose++; continue; }
     const p = pose.transform.position, o = pose.transform.orientation;
     const buttons = src.gamepad ? src.gamepad.buttons.map(b => +b.value.toFixed(3)) : [];
     // Per-controller haptic on clutch edge. Engage = crisp pulse,
@@ -198,6 +242,16 @@ function onXRFrame(time, frame) {
     poses,
   }));
   sentCount++;
+  if (time - lastDiagAt >= 1000) {
+    lastDiagAt = time;
+    sendDiagnostic("xr_frame_summary", {
+      input_source_count: frame.session.inputSources.length,
+      emitted_pose_count: poses.length,
+      missing_grip_space: missingGripSpace,
+      missing_pose: missingPose,
+      sources: describeInputSources(),
+    });
+  }
   if ((sentCount & 31) === 0) updateStats();
 }
 
