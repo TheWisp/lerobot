@@ -51,12 +51,17 @@ class StubBus:
         self.sent: list[dict] = []
         self.posforce_sent: list[dict] = []
         self.zero_calls = 0
+        self.disconnect_calls: list[bool] = []
 
     def connect(self, handshake=True):
         self.is_connected = True
 
     def configure_motors(self):
         pass
+
+    def disconnect(self, disable_torque=True):
+        self.disconnect_calls.append(disable_torque)
+        self.is_connected = False
 
     def torque_disabled(self):
         return nullcontext()
@@ -141,10 +146,34 @@ def test_default_sends_zero_feedforward(tmp_path, monkeypatch):
 def test_connect_does_not_rewrite_motor_zero(tmp_path, monkeypatch):
     follower = make_follower(tmp_path, monkeypatch)
     follower.bus.is_connected = False
+    follower.bus.is_calibrated = False
 
-    follower.connect(calibrate=False)
+    follower.connect()
 
     assert follower.bus.zero_calls == 0
+
+
+def test_connect_calibrates_only_when_explicitly_requested(tmp_path, monkeypatch):
+    follower = make_follower(tmp_path, monkeypatch)
+    follower.bus.is_connected = False
+    follower.bus.is_calibrated = False
+    calls = []
+    monkeypatch.setattr(follower, "calibrate", lambda: calls.append(True))
+
+    follower.connect(calibrate=True)
+
+    assert calls == [True]
+
+
+def test_connect_failure_disables_and_disconnects_bus(tmp_path, monkeypatch):
+    follower = make_follower(tmp_path, monkeypatch)
+    follower.bus.is_connected = False
+    monkeypatch.setattr(follower, "configure", lambda: (_ for _ in ()).throw(RuntimeError("configure")))
+
+    with pytest.raises(RuntimeError, match="configure"):
+        follower.connect()
+
+    assert follower.bus.disconnect_calls == [True]
 
 
 def test_explicit_mit_gripper_compatibility_mode(tmp_path, monkeypatch):

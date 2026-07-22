@@ -20,7 +20,7 @@ from typing import Any
 
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.bimanual import BimanualMixin
-from lerobot.utils.decorators import check_if_not_connected
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..openarm_follower import OpenArmFollower, OpenArmFollowerConfig
 from ..robot import Robot
@@ -204,6 +204,18 @@ class BiOpenArmFollower(BimanualMixin, Robot):
         )
         teleop.set_action_transform(transform)
         logger.info("%s: installed Cartesian-IK transform into %s", self.name, type(teleop).__name__)
+
+    @check_if_already_connected
+    def connect(self, calibrate: bool = False) -> None:
+        self.left_arm.connect(calibrate)
+        try:
+            self.right_arm.connect(calibrate)
+        except Exception:
+            try:
+                self.left_arm.disconnect()
+            except Exception:
+                logger.exception("Failed to disconnect left arm while rolling back bimanual connection")
+            raise
 
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:

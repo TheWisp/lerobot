@@ -169,7 +169,7 @@ class OpenArmFollower(Robot):
         return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
 
     @check_if_already_connected
-    def connect(self, calibrate: bool = True) -> None:
+    def connect(self, calibrate: bool = False) -> None:
         """
         Connect to the robot and optionally calibrate.
 
@@ -177,23 +177,35 @@ class OpenArmFollower(Robot):
         and torque can be safely disabled to run calibration if needed.
         """
 
-        # Connect to CAN bus
         logger.info(f"Connecting arm on {self.config.port}...")
-        self.bus.connect()
+        connected_cameras = []
+        try:
+            self.bus.connect()
 
-        # Run calibration if needed
-        if not self.is_calibrated and calibrate:
-            logger.info(
-                "Mismatch between calibration values in the motor and the calibration file or no calibration file found"
-            )
-            self.calibrate()
+            if not self.is_calibrated and calibrate:
+                logger.info(
+                    "Mismatch between calibration values in the motor and the calibration file or no calibration file found"
+                )
+                self.calibrate()
 
-        for cam in self.cameras.values():
-            cam.connect()
+            for cam in self.cameras.values():
+                cam.connect()
+                connected_cameras.append(cam)
 
-        self.configure()
-
-        self.bus.enable_torque()
+            self.configure()
+            self.bus.enable_torque()
+        except Exception:
+            for cam in reversed(connected_cameras):
+                try:
+                    cam.disconnect()
+                except Exception:
+                    logger.exception("Failed to disconnect camera while rolling back OpenArm connection")
+            if self.bus.is_connected:
+                try:
+                    self.bus.disconnect(disable_torque=True)
+                except Exception:
+                    logger.exception("Failed to disable and disconnect CAN while rolling back OpenArm connection")
+            raise
 
         logger.info(f"{self} connected.")
 
