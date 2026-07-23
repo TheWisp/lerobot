@@ -22,11 +22,13 @@ with the right runs_dir. See :func:`init_state` and :func:`get_state`.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import importlib
 import pkgutil
 import typing
+from collections import deque
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -911,3 +913,176 @@ def list_policies() -> list[dict]:
         external = {k: v for k, v in entry.items() if not k.startswith("_")}
         schemas.append(external)
     return schemas
+
+
+# ============================================================================
+# Training image: status (provenance + freshness) and local build
+# ============================================================================
+
+# The training worker runs code baked into a docker image, NOT the checkout
+# the GUI serves (see docker/Dockerfile.training: COPY src/ + uv sync). The
+# image the run will use is a hand-bumped constant (recipes.DEFAULT_IMAGE),
+# so it silently drifts behind the checkout. These endpoints make the image
+# and its staleness visible, and let local dev build/select an image from
+# the current checkout instead.
+
+LOCAL_DEV_IMAGE_TAG = "lerobot-training:dev-local"
+
+
+def _git(args: list[str], cwd: Path) -> str | None:
+    """Run a git command, returning stdout.strip() or None on any failure."""
+    import subprocess
+
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _repo_root() -> Path | None:
+    """Repo root when the GUI serves from a git checkout, else None.
+
+    Freshness comparison is only meaningful on the dev machine; a pip-installed
+    GUI (no .git) must not show "N commits behind" — there is no local history
+    to be behind relative to.
+    """
+    import lerobot
+
+    root = Path(lerobot.__file__).resolve().parent.parent.parent
+    return root if (root / ".git").exists() else None
+
+
+def _local_image_created(tag: str) -> str | None:
+    """ISO creation date of a locally-present docker image, None when absent/unavailable."""
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            ["docker", "image", "inspect", tag, "--format", "{{.Created}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return r.stdout.strip() if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def get_image_status() -> dict[str, Any]:
+    """Effective training image + provenance + freshness vs the local checkout.
+
+    ``git`` is None when the GUI is not served from a git checkout (e.g. a
+    pip install on a robot host) — the frontend hides the freshness section
+    in that case, per design: without local history there is nothing sensible
+    to compare against.
+    """
+    from lerobot.gui.training.recipes import DEFAULT_IMAGE
+
+    status: dict[str, Any] = {
+        "image": DEFAULT_IMAGE,
+        "local_image": {"tag": LOCAL_DEV_IMAGE_TAG, "created": _local_image_created(LOCAL_DEV_IMAGE_TAG)},
+        "git": None,
+    }
+
+    root = _repo_root()
+    if root is None:
+        return status
+
+    git_info: dict[str, Any] = {
+        "branch": _git(["rev-parse", "--abbrev-ref", "HEAD"], root),
+        "head": _git(["rev-parse", "--short=8", "HEAD"], root),
+        "head_date": _git(["show", "-s", "--format=%cI", "HEAD"], root),
+    }
+
+    # CI tags are "<branch-slug>-<short-sha>" (docker/metadata-action in
+    # docker_publish_fork_training.yml). Parse and compare against local
+    # history when the commit is known here; it may legitimately be absent
+    # (image built from a since-deleted branch state).
+    import re
+
+    tag = DEFAULT_IMAGE.rsplit(":", 1)[-1]
+    m = re.match(r"^(?P<branch>.+)-(?P<sha>[0-9a-f]{7,8})$", tag)
+    if m:
+        git_info["image_branch"] = m.group("branch")
+        git_info["image_commit"] = m.group("sha")
+        if _git(["cat-file", "-t", m.group("sha")], root) == "commit":
+            git_info["image_commit_date"] = _git(["show", "-s", "--format=%cI", m.group("sha")], root)
+            behind = _git(["rev-list", "--count", f"{m.group('sha')}..HEAD"], root)
+            git_info["commits_behind"] = int(behind) if behind and behind.isdigit() else None
+        else:
+            git_info["commits_behind"] = None  # provenance not in local history
+    status["git"] = git_info
+    return status
+
+
+@router.get("/image-status")
+async def image_status() -> dict:
+    return get_image_status()
+
+
+# ── Local image build (background task + polled progress) ─────────────────
+
+_build_task: asyncio.Task | None = None
+_build_lines: deque = deque(maxlen=300)
+_build_exit: int | None = None
+
+
+async def _run_image_build(repo_root: Path) -> None:
+    global _build_exit
+    _build_exit = None
+    proc = await asyncio.create_subprocess_exec(
+        "docker",
+        "build",
+        "-f",
+        "docker/Dockerfile.training",
+        "-t",
+        LOCAL_DEV_IMAGE_TAG,
+        ".",
+        cwd=str(repo_root),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    assert proc.stdout is not None
+    async for raw in proc.stdout:
+        _build_lines.append(raw.decode("utf-8", errors="replace").rstrip())
+    _build_exit = await proc.wait()
+
+
+@router.post("/build-image")
+async def build_image() -> dict:
+    """Build the training image from the current checkout (local dev path).
+
+    Long-running (tens of minutes on first build); progress is polled via
+    GET /build-image/status. Requires a git checkout to build from and a
+    working docker daemon.
+    """
+    global _build_task, _build_exit
+    from lerobot.gui.training.recipes import docker_available
+
+    if _build_task is not None and not _build_task.done():
+        raise HTTPException(409, "An image build is already running")
+    if not docker_available():
+        raise HTTPException(409, "docker is not installed on this host")
+    root = _repo_root()
+    if root is None:
+        raise HTTPException(409, "GUI is not served from a git checkout — nothing to build from")
+
+    _build_lines.clear()
+    _build_exit = None
+    _build_task = asyncio.create_task(_run_image_build(root))
+    return {"status": "started", "tag": LOCAL_DEV_IMAGE_TAG}
+
+
+@router.get("/build-image/status")
+async def build_image_status() -> dict:
+    running = _build_task is not None and not _build_task.done()
+    error = None
+    if _build_task is not None and _build_task.done() and _build_task.exception() is not None:
+        error = str(_build_task.exception())
+    return {
+        "running": running,
+        "exit_code": _build_exit,
+        "error": error,
+        "lines": list(_build_lines)[-50:],
+    }
