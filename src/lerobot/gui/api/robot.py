@@ -538,6 +538,18 @@ def cleanup_in_process_resources() -> None:
 @router.post("/detect-cameras")
 async def detect_cameras() -> list[dict]:
     """Detect available cameras and open them for preview."""
+    # While a run subprocess is alive it owns the cameras: opening previews
+    # now would grab the V4L2 nodes and the subprocess's camera connect then
+    # fails (S_FMT returns EBUSY, surfaced as "failed to set fourcc/width").
+    # The run launch path releases previews that are already open; this guard
+    # closes the race of previews being (re)opened mid-run.
+    from lerobot.gui.api.run import is_run_active
+
+    if is_run_active():
+        raise HTTPException(
+            409,
+            "A run is in progress and owns the cameras. Stop it before opening previews.",
+        )
     loop = asyncio.get_event_loop()
     cameras = await loop.run_in_executor(None, _detect_and_open_cameras)
     return cameras
