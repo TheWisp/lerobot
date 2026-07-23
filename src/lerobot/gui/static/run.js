@@ -47,9 +47,9 @@ async function runTabInit() {
     // close racing with the `done` event, browser tab backgrounded, etc.)
     // the frontend can be left thinking a long-dead subprocess is still
     // running. A low-frequency poll closes that gap without user
-    // intervention; cost is one tiny GET every 5 s.
+    // intervention; cost is one tiny GET every second.
     if (!window._runStatusPollTimer) {
-        window._runStatusPollTimer = setInterval(pollRunStatus, 5000);
+        window._runStatusPollTimer = setInterval(pollRunStatus, 1000);
     }
 }
 
@@ -1215,11 +1215,10 @@ function renderRunForm() {
     // "resetting" / ...). Fed by pollRunStatus from /api/run/status.
     html += '<div class="form-section-title">Episode control <span id="run-phase" class="run-phase-badge"></span></div>';
     html += '<div class="episode-control-row">';
-    html += '<button id="run-ctrl-next" class="btn-small secondary" onclick="sendRunControl(\'exit_early\')" disabled title="End the current phase early and keep the episode (hotkey: N)">Next episode</button>';
+    html += '<button id="run-ctrl-next" class="btn-small secondary" onclick="sendRunControl(\'exit_early\')" disabled title="End the current phase early (hotkey: N)">Next episode</button>';
     html += '<button id="run-ctrl-rerecord" class="btn-small secondary" onclick="sendRunControl(\'rerecord_episode\')" disabled title="Discard the current episode and re-record it (hotkey: R)">Re-record</button>';
-    html += '<button id="run-ctrl-stop" class="btn-small secondary" onclick="sendRunControl(\'stop_recording\')" disabled title="Stop the whole recording session (hotkey: Q)">Stop recording</button>';
     html += '</div>';
-    html += '<div class="form-hint" style="margin-top:6px;">Active while a subprocess is running. Hotkeys: N next episode · R re-record · Q stop recording</div>';
+    html += '<div class="form-hint" style="margin-top:6px;">Active while a subprocess is running. Stopping a run uses the main Stop button above. Hotkeys: N next · R re-record</div>';
     html += '</div>';
 
     form.innerHTML = html;
@@ -1705,7 +1704,7 @@ function _bindRunControlHotkeys() {
         if (!_isRunning) return;
         const target = e.target;
         if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return;
-        const cmd = { n: 'exit_early', r: 'rerecord_episode', q: 'stop_recording' }[e.key.toLowerCase()];
+        const cmd = { n: 'exit_early', r: 'rerecord_episode' }[e.key.toLowerCase()];
         if (!cmd) return;
         e.preventDefault();
         sendRunControl(cmd);
@@ -2013,8 +2012,26 @@ async function pollRunStatus() {
         // ("recording episode 3" / "resetting" / ...). Empty when idle or
         // before the first phase transition.
         const phaseEl = document.getElementById('run-phase');
+        const phase = status.running ? (status.phase || '') : '';
         if (phaseEl) {
-            phaseEl.textContent = status.running && status.phase ? status.phase : '';
+            phaseEl.textContent = phase;
+        }
+
+        // "Next episode" means different things per phase: while recording it
+        // ENDS the episode early (and keeps it), during reset it SKIPS the
+        // remaining reset time and starts the next episode. Say which.
+        const nextBtn = document.getElementById('run-ctrl-next');
+        if (nextBtn) {
+            if (phase.startsWith('recording episode')) {
+                nextBtn.textContent = 'End episode → reset';
+                nextBtn.title = 'Finish and keep the current episode now, then enter the reset phase (hotkey: N)';
+            } else if (phase === 'resetting') {
+                nextBtn.textContent = 'Start next episode';
+                nextBtn.title = 'Skip the rest of the reset phase and start recording the next episode (hotkey: N)';
+            } else {
+                nextBtn.textContent = 'Next episode';
+                nextBtn.title = 'End the current phase early (hotkey: N)';
+            }
         }
 
         // If running but no SSE, reconnect
@@ -2041,7 +2058,7 @@ function updateRunUI(isRunning) {
 
     // Episode-control buttons only work while a subprocess is running
     // (the /api/run/control endpoint 409s otherwise).
-    for (const id of ['run-ctrl-next', 'run-ctrl-rerecord', 'run-ctrl-stop']) {
+    for (const id of ['run-ctrl-next', 'run-ctrl-rerecord']) {
         const btn = document.getElementById(id);
         if (btn) btn.disabled = !isRunning;
     }
