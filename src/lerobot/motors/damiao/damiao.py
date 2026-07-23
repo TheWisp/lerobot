@@ -151,6 +151,9 @@ class DamiaoMotorsBus(MotorsBusBase):
             for name in self.motors
         }
         self._last_state_update_monotonic: dict[str, float | None] = dict.fromkeys(self.motors)
+        # Last time the all-healthy CAN_REFRESH debug line was emitted, keyed
+        # by (port, context) — used to rate-limit it (see _log_refresh below).
+        self._last_healthy_refresh_log: dict[tuple[str, str], float] = {}
 
         # Dynamic gains storage
         # Defaults: Kp=10.0 (Stiffness), Kd=0.5 (Damping)
@@ -890,7 +893,17 @@ class DamiaoMotorsBus(MotorsBusBase):
         if missing_motors:
             logger.warning(metric_format, *metric_args)
         else:
-            logger.debug(metric_format, *metric_args)
+            # Rate-limit the all-healthy line: it fires per refresh per
+            # context (observation + gravity_ff, per arm) — hundreds of lines
+            # per second at 30 Hz, which alone measurably starves the record
+            # loop (and produces multi-hundred-thousand-line log files).
+            # 1 Hz per (port, context) keeps the timing data available for
+            # postmortems. The warning path above stays per-occurrence.
+            key = (self.port, context)
+            now_mono = time.monotonic()
+            if now_mono - self._last_healthy_refresh_log.get(key, 0.0) >= 1.0:
+                self._last_healthy_refresh_log[key] = now_mono
+                logger.debug(metric_format, *metric_args)
 
     @check_if_not_connected
     def sync_write(self, data_name: str, values: dict[str, Value]) -> None:
