@@ -102,52 +102,55 @@ def main():
         if not args.decode_subtask:
             logger.warning("--inject requires --decode-subtask, enabling it")
             args.decode_subtask = True
-        try:
-            from pynput import keyboard
 
-            def on_press(key):
-                nonlocal inject_latent
-                try:
-                    # Number keys 1-9: inject corresponding subtask
-                    if hasattr(key, "char") and key.char and key.char.isdigit():
-                        idx = int(key.char)
-                        bank = getattr(run_s2, "subtask_bank", {})
-                        order = getattr(run_s2, "subtask_order", [])
-                        if 1 <= idx <= len(order):
-                            label = order[idx - 1]
-                            with inject_lock:
-                                inject_latent = bank[label].clone()
-                            inject_active.set()
-                            logger.info(
-                                '>>> INJECT [%d] "%s" (norm=%.1f)', idx, label, inject_latent.norm().item()
+        # Shared display-independent backend: pynput on X11/macOS/Windows, terminal
+        # listener on Wayland/headless-with-TTY, honours LEROBOT_KEYBOARD_LISTENER=0.
+        from lerobot.utils.keyboard_input import create_key_listener
+
+        def on_key(name: str):
+            nonlocal inject_latent
+            try:
+                # Number keys 1-9: inject corresponding subtask
+                if name.isdigit():
+                    idx = int(name)
+                    bank = getattr(run_s2, "subtask_bank", {})
+                    order = getattr(run_s2, "subtask_order", [])
+                    if 1 <= idx <= len(order):
+                        label = order[idx - 1]
+                        with inject_lock:
+                            inject_latent = bank[label].clone()
+                        inject_active.set()
+                        logger.info(
+                            '>>> INJECT [%d] "%s" (norm=%.1f)', idx, label, inject_latent.norm().item()
+                        )
+                    else:
+                        if order:
+                            logger.warning(
+                                "No subtask [%d] — available: %s",
+                                idx,
+                                " | ".join(f"[{i + 1}] {l}" for i, l in enumerate(order)),
                             )
                         else:
-                            if order:
-                                logger.warning(
-                                    "No subtask [%d] — available: %s",
-                                    idx,
-                                    " | ".join(f"[{i + 1}] {l}" for i, l in enumerate(order)),
-                                )
-                            else:
-                                logger.warning("No subtasks captured yet — wait for S2 to detect some")
+                            logger.warning("No subtasks captured yet — wait for S2 to detect some")
 
-                    # SPACE: return to normal S2
-                    elif key == keyboard.Key.space:
-                        with inject_lock:
-                            inject_latent = None
-                        inject_active.clear()
-                        logger.info(">>> NORMAL MODE (S2 VLM active)")
+                # SPACE: return to normal S2
+                elif name == "space":
+                    with inject_lock:
+                        inject_latent = None
+                    inject_active.clear()
+                    logger.info(">>> NORMAL MODE (S2 VLM active)")
 
-                except Exception as e:
-                    logger.warning("Key handler error: %s", e)
+            except Exception as e:
+                logger.warning("Key handler error: %s", e)
 
-            kb_listener = keyboard.Listener(on_press=on_press)
-            kb_listener.start()
+        kb_listener = create_key_listener(on_key, controls_help="1-9 = inject subtask, SPACE = normal")
+        if kb_listener is not None:
             logger.info("Keyboard injection enabled: press 1-9 to inject subtask, SPACE for normal")
-
-        except ImportError:
-            logger.warning("pynput not available — keyboard injection disabled")
-            kb_listener = None
+        else:
+            logger.warning(
+                "Keyboard injection unavailable: no usable keyboard backend "
+                "(Wayland/headless without TTY, or disabled via LEROBOT_KEYBOARD_LISTENER=0)."
+            )
     else:
         kb_listener = None
 

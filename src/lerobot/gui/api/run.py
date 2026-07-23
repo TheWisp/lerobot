@@ -409,6 +409,11 @@ async def _launch_subprocess(
         pass
 
     env = {**__import__("os").environ, "LEROBOT_OBS_STREAM": "1"}
+    # The GUI owns flow control for every subprocess it launches (via POST
+    # /api/run/control -> subprocess stdin), so suppress the subprocesses' local
+    # keyboard listeners: single source of truth, and avoids the X11 footgun of
+    # a global pynput listener firing on keypresses meant for other windows.
+    env["LEROBOT_KEYBOARD_LISTENER"] = "0"
     if extra_env:
         env.update(extra_env)
     cmd_str = " ".join(args)
@@ -418,6 +423,7 @@ async def _launch_subprocess(
 
     _active_process = await asyncio.create_subprocess_exec(
         *args,
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
@@ -1007,6 +1013,40 @@ async def set_rlt_config(body: dict) -> dict:
     except Exception as e:
         logger.warning("RLT config write failed: %s", e)
         raise HTTPException(500, str(e)) from e
+
+
+class ControlRequest(BaseModel):
+    """Flow-control command forwarded to the active subprocess's stdin.
+
+    The command vocabulary matches the stdin control protocol consumed by
+    ``lerobot.utils.keyboard_input.StdinControlListener`` — the same events the
+    record loop's right/left/esc keyboard controls set.
+    """
+
+    cmd: str
+
+
+_CONTROL_COMMANDS = {"exit_early", "rerecord_episode", "stop_recording"}
+
+
+@router.post("/control")
+async def send_control(req: ControlRequest) -> dict:
+    """Write one JSON control line to the active subprocess's stdin."""
+    if req.cmd not in _CONTROL_COMMANDS:
+        raise HTTPException(400, f"Unknown control command {req.cmd!r}; expected one of {sorted(_CONTROL_COMMANDS)}")
+    if _active_process is None or _active_process.returncode is not None:
+        raise HTTPException(409, "No active process to control")
+    if _active_process.stdin is None:
+        raise HTTPException(409, "Active process has no control channel")
+
+    line = json.dumps({"v": 1, "cmd": req.cmd}) + "\n"
+    try:
+        _active_process.stdin.write(line.encode())
+        await _active_process.stdin.drain()
+    except (BrokenPipeError, ConnectionResetError) as e:
+        raise HTTPException(409, f"Control channel broken: {e}") from e
+    logger.info(f"Control channel: {req.cmd} forwarded to PID {_active_process.pid}")
+    return {"status": "sent", "cmd": req.cmd, "pid": _active_process.pid}
 
 
 @router.post("/stop")

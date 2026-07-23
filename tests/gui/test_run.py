@@ -1193,3 +1193,55 @@ class TestLaunchLockSerializes:
             run_module._active_command = None
 
         asyncio.run(run())
+
+
+class TestControlEndpoint:
+    """Tests for POST /api/run/control — the GUI -> subprocess stdin control channel."""
+
+    def test_unknown_command_rejected(self):
+        from lerobot.gui.api.run import ControlRequest, send_control
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(send_control(ControlRequest(cmd="explode")))
+        assert exc_info.value.status_code == 400
+
+    def test_no_active_process(self):
+        from lerobot.gui.api.run import ControlRequest, send_control
+
+        with patch("lerobot.gui.api.run._active_process", None):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(send_control(ControlRequest(cmd="exit_early")))
+        assert exc_info.value.status_code == 409
+
+    def test_exited_process(self):
+        from lerobot.gui.api.run import ControlRequest, send_control
+
+        proc = AsyncMock()
+        proc.returncode = 0
+        with patch("lerobot.gui.api.run._active_process", proc):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(send_control(ControlRequest(cmd="exit_early")))
+        assert exc_info.value.status_code == 409
+
+    def test_writes_json_line_to_stdin(self):
+        from lerobot.gui.api.run import ControlRequest, send_control
+
+        written = []
+
+        class FakeStdin:
+            def write(self, data):
+                written.append(data)
+
+            async def drain(self):
+                pass
+
+        proc = AsyncMock()
+        proc.returncode = None
+        proc.stdin = FakeStdin()
+        proc.pid = 1234
+        with patch("lerobot.gui.api.run._active_process", proc):
+            result = asyncio.run(send_control(ControlRequest(cmd="rerecord_episode")))
+
+        assert result["status"] == "sent"
+        assert result["cmd"] == "rerecord_episode"
+        assert written == [b'{"v": 1, "cmd": "rerecord_episode"}\n']

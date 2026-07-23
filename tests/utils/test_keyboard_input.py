@@ -178,12 +178,27 @@ def test_init_selects_terminal_when_pynput_cannot_capture(monkeypatch):
     _set_tty(monkeypatch, is_tty=True)
     monkeypatch.setattr(TerminalKeyListener, "start", lambda self: None)  # avoid touching termios
     listener, _ = init_keyboard_listener()
-    assert isinstance(listener, TerminalKeyListener)
+    # The keyboard backend comes back wrapped in the composite (stdin source is
+    # inactive here because stdin is a TTY).
+    assert isinstance(listener, ki._CompositeControlListener)
+    assert any(isinstance(src, TerminalKeyListener) for src in listener._listeners)
 
 
-def test_init_returns_none_without_tty(monkeypatch):
+def test_init_activates_stdin_channel_when_not_tty(monkeypatch):
+    """Piped stdin (GUI launches, CI) activates the JSON control channel."""
     monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
     _set_tty(monkeypatch, is_tty=False)
+    listener, _ = init_keyboard_listener()
+    assert isinstance(listener, ki._CompositeControlListener)
+    assert any(isinstance(src, ki.StdinControlListener) for src in listener._listeners)
+    listener.stop()
+
+
+def test_init_returns_none_when_no_source_available(monkeypatch):
+    """TTY stdin but no usable keyboard backend and capture disabled -> no listener."""
+    monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
+    monkeypatch.setenv(ki.KEYBOARD_LISTENER_ENV_VAR, "0")
+    _set_tty(monkeypatch, is_tty=True)
     listener, _ = init_keyboard_listener()
     assert listener is None
 
@@ -198,8 +213,70 @@ def test_init_terminal_key_routing(monkeypatch, key, flag):
     _set_tty(monkeypatch, is_tty=True)
     monkeypatch.setattr(TerminalKeyListener, "start", lambda self: None)
     listener, events = init_keyboard_listener()
-    listener._on_key(key)
+    terminal = next(src for src in listener._listeners if isinstance(src, TerminalKeyListener))
+    terminal._on_key(key)
     assert events[flag] is True
+
+
+# --- stdin control channel (GUI -> subprocess) -------------------------------
+def _set_stdin_content(monkeypatch, text):
+    stdin = io.StringIO(text)
+    stdin.isatty = lambda: False
+    monkeypatch.setattr(sys, "stdin", stdin)
+
+
+def _drain_stdin(listener):
+    """Wait for the composite's stdin reader to consume the scripted input (it exits at EOF)."""
+    stdin_listener = next(src for src in listener._listeners if isinstance(src, ki.StdinControlListener))
+    stdin_listener._thread.join(timeout=2.0)
+    assert not stdin_listener._thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    ("cmd", "expected_flags"),
+    [
+        ("exit_early", {"exit_early": True}),
+        ("rerecord_episode", {"rerecord_episode": True, "exit_early": True}),
+        ("stop_recording", {"stop_recording": True, "exit_early": True}),
+    ],
+)
+def test_stdin_command_routing(monkeypatch, cmd, expected_flags):
+    """JSON control lines drive the same events-dict flags as the keyboard keys."""
+    monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
+    _set_stdin_content(monkeypatch, f'{{"v": 1, "cmd": "{cmd}"}}\n')
+    listener, events = init_keyboard_listener()
+    _drain_stdin(listener)
+    for flag, value in expected_flags.items():
+        assert events[flag] is value
+    listener.stop()
+
+
+def test_stdin_malformed_lines_ignored(monkeypatch, caplog):
+    """Garbage, wrong protocol version, and unknown commands set no flags."""
+    monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
+    _set_stdin_content(
+        monkeypatch,
+        "garbage\n"
+        '{"v": 2, "cmd": "exit_early"}\n'
+        '{"v": 1}\n'
+        '{"v": 1, "cmd": "explode"}\n',
+    )
+    listener, events = init_keyboard_listener()
+    _drain_stdin(listener)
+    assert events == {"exit_early": False, "rerecord_episode": False, "stop_recording": False}
+    listener.stop()
+
+
+def test_keyboard_listener_disabled_env(monkeypatch):
+    """LEROBOT_KEYBOARD_LISTENER=0 suppresses local capture but not the stdin channel."""
+    monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
+    monkeypatch.setenv(ki.KEYBOARD_LISTENER_ENV_VAR, "0")
+    _set_stdin_content(monkeypatch, "")
+    assert create_key_listener(lambda name: None) is None
+    listener, _ = init_keyboard_listener()
+    assert isinstance(listener, ki._CompositeControlListener)
+    assert all(isinstance(src, ki.StdinControlListener) for src in listener._listeners)
+    listener.stop()
 
 
 # --- Shared factory + pynput key resolver -----------------------------------
