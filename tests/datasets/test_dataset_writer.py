@@ -29,7 +29,7 @@ from lerobot.configs import VideoEncoderConfig
 from lerobot.datasets.dataset_writer import _encode_video_worker
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import DEFAULT_IMAGE_PATH
-from tests.fixtures.constants import DEFAULT_FPS, DUMMY_REPO_ID
+from tests.fixtures.constants import DEFAULT_FPS, DUMMY_REPO_ID, DUMMY_VIDEO_FEATURES
 
 SIMPLE_FEATURES = {
     "state": {"dtype": "float32", "shape": (6,), "names": None},
@@ -187,6 +187,28 @@ def test_save_multiple_episodes(tmp_path):
 
     assert dataset.meta.total_episodes == 3
     assert dataset.meta.total_frames == total_frames
+
+
+# ── video recording path ─────────────────────────────────────────────
+
+
+def test_video_episode_recording_produces_mp4(tmp_path):
+    """Recording an episode with a video feature must initialize encoders and write an .mp4.
+
+    Regression: after the depth-maps refactor moved ``vcodec`` under
+    ``rgb_encoder``, ``_init_video_encoders`` still read the never-defined
+    ``self._vcodec`` and raised AttributeError on any video recording.
+    """
+    pytest.importorskip("av", reason="av is required for video encoding (install lerobot[dataset])")
+    dataset = LeRobotDataset.create(
+        repo_id=DUMMY_REPO_ID, fps=DEFAULT_FPS, features=DUMMY_VIDEO_FEATURES, root=tmp_path / "ds"
+    )
+    for _ in range(4):
+        dataset.add_frame(_make_frame(DUMMY_VIDEO_FEATURES))
+    dataset.save_episode()
+
+    mp4_files = list((tmp_path / "ds" / "videos").rglob("*.mp4"))
+    assert len(mp4_files) > 0
 
 
 # ── clear / lifecycle ────────────────────────────────────────────────
