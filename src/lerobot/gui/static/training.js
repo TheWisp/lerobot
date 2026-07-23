@@ -243,6 +243,23 @@ async function trainingInit() {
   await trainingLoadHosts();
   await trainingRefreshRuns();
   trainingSchedulePoll();
+  _bindErrorCopy();
+}
+
+// Error fields re-render every TRAINING_POLL_MS (3 s), which wipes any
+// in-progress text selection mid-drag. Make them click-to-copy instead:
+// one click puts the full message on the clipboard before the next render.
+function _bindErrorCopy() {
+  document.addEventListener("click", (e) => {
+    const el = e.target.closest(".training-error, .training-image-banner.failed");
+    if (!el) return;
+    const text = el.textContent.trim();
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(
+      () => { if (typeof showToast === "function") showToast("Copied", "Error copied to clipboard", "info"); },
+      () => { /* clipboard API unavailable (insecure context) — fall back to manual selection */ }
+    );
+  });
 }
 
 function trainingSchedulePoll() {

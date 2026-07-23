@@ -1672,6 +1672,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     border-radius: 4px;
     margin-top: 12px;
     font-size: 12px;
+    user-select: text;
+    cursor: copy; /* click copies the message (see training.js _bindErrorCopy) */
 }
 
 /* Form */
