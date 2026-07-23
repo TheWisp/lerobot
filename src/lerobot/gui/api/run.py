@@ -111,6 +111,7 @@ def _get_known_fields(profile_type: str, prefix: str) -> set[str] | None:
     config_cls = choices.get(profile_type)
     if config_cls is None:
         return None
+
     def leaf_paths(cls: type, path_prefix: str = "") -> set[str]:
         try:
             import typing
@@ -1133,7 +1134,9 @@ _CONTROL_COMMANDS = {"exit_early", "rerecord_episode", "stop_recording"}
 async def send_control(req: ControlRequest) -> dict:
     """Write one JSON control line to the active subprocess's stdin."""
     if req.cmd not in _CONTROL_COMMANDS:
-        raise HTTPException(400, f"Unknown control command {req.cmd!r}; expected one of {sorted(_CONTROL_COMMANDS)}")
+        raise HTTPException(
+            400, f"Unknown control command {req.cmd!r}; expected one of {sorted(_CONTROL_COMMANDS)}"
+        )
     if _active_process is None or _active_process.returncode is not None:
         raise HTTPException(409, "No active process to control")
     if _active_process.stdin is None:
@@ -1367,6 +1370,12 @@ async def urdf_viz_meta() -> dict:
         "available": True,
         "name": spec.name,
         "urdf": f"/urdf-assets/{spec.urdf_url_path}",
+        # Mirrored-arm robots (e.g. OpenArm) ship a separate right-arm URDF;
+        # None means both arms load ``urdf``.
+        "urdf_right": f"/urdf-assets/{spec.urdf_url_path_right}" if spec.urdf_url_path_right else None,
+        # Per-arm base offsets (URDF world frame) from the description;
+        # None lets the frontend use its default side-by-side spacing.
+        "base_offsets": spec.base_offsets,
         "bimanual": len(spec.arms) == 2,
         "sources": sources,
         # ee_link is None for descriptions that didn't declare one; the

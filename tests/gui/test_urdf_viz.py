@@ -36,6 +36,8 @@ SO107_MOTORS = (
     "wrist_roll",
     "gripper",
 )
+# bi_openarm_follower exposes seven arm joints plus a gripper per side.
+OPENARM_MOTORS = tuple(f"joint_{i}" for i in range(1, 8)) + ("gripper",)
 
 
 def _pos_keys(motors, prefix=""):
@@ -171,6 +173,52 @@ class TestComputeJointAngles:
         # gripper (URDF joint S7): left is (+1, -90), right is (-1, 0).
         assert angles["left_"]["S7"] == pytest.approx(math.radians(-90.0))
         assert angles["right_"]["S7"] == pytest.approx(math.radians(0.0))
+
+
+class TestResolveRobotOpenArm:
+    """OpenArm 2.0 (bi_openarm_follower): mirrored per-arm viz URDFs."""
+
+    def test_resolves_from_bimanual_state_names(self):
+        # The dataset records <motor>.pos/.vel/.torque per side; resolution
+        # matches on the .pos keys.
+        keys = [
+            f"{side}{m}.{suffix}"
+            for side in ("left_", "right_")
+            for m in OPENARM_MOTORS
+            for suffix in ("pos", "vel", "torque")
+        ]
+        spec = resolve_robot(keys)
+        assert spec is not None
+        assert spec.name == "OpenArm 2.0"
+        assert {a.obs_prefix for a in spec.arms} == {"left_", "right_"}
+        assert spec.urdf_url_path == "openarm_description/urdf/openarm_left_viz.urdf"
+        assert spec.urdf_url_path_right == "openarm_description/urdf/openarm_right_viz.urdf"
+        # Physical arm-base offsets (y=±0.031 m) ship with the description.
+        assert spec.base_offsets["left_"][1] == pytest.approx(0.031)
+        assert spec.base_offsets["right_"][1] == pytest.approx(-0.031)
+
+    def test_action_names_alone_resolve(self):
+        # The action stream carries only <motor>.pos keys.
+        keys = _pos_keys(OPENARM_MOTORS, "left_") + _pos_keys(OPENARM_MOTORS, "right_")
+        spec = resolve_robot(keys)
+        assert spec is not None
+        assert spec.name == "OpenArm 2.0"
+
+    def test_identity_mapping_includes_gripper(self):
+        keys = _pos_keys(OPENARM_MOTORS, "left_") + _pos_keys(OPENARM_MOTORS, "right_")
+        spec = resolve_robot(keys)
+        obs = dict.fromkeys(keys, 0.0)
+        obs["left_gripper.pos"] = 45.0
+        obs["right_gripper.pos"] = -45.0
+        angles = compute_joint_angles(spec, obs)
+        # Zero pose maps to zero radians everywhere (identity alignment).
+        assert angles["left_"]["joint1"] == 0.0
+        assert angles["right_"]["joint7"] == 0.0
+        # The gripper maps 1:1 (deg->rad) onto finger_joint1: the left opens
+        # toward +45 deg, the right toward -45 deg (mirrored finger ranges).
+        # finger_joint2 follows via the URDF <mimic>, not a second motor.
+        assert angles["left_"]["finger_joint1"] == pytest.approx(math.radians(45.0))
+        assert angles["right_"]["finger_joint1"] == pytest.approx(math.radians(-45.0))
 
 
 # ============================================================================
@@ -454,10 +502,15 @@ def test_vendored_descriptions_are_discovered():
     names = {pkg for pkg, _ in _DESCRIPTIONS}
     assert "so101_description" in names
     assert "so107_description" in names
+    assert "openarm_description" in names
 
 
 def _urdf_path(pkg_name):
-    return importlib.import_module(f"lerobot.robots.{pkg_name}").get_urdf_path()
+    mod = importlib.import_module(f"lerobot.robots.{pkg_name}")
+    # A package whose kinematics URDFs differ from the visualization URDF
+    # (openarm_description) exposes the viz file through its own accessor.
+    get_viz = getattr(mod, "get_viz_urdf_path", None)
+    return get_viz() if get_viz is not None else mod.get_urdf_path()
 
 
 @pytest.mark.parametrize(
@@ -500,3 +553,57 @@ class TestDescriptionAssets:
         spec = resolve_robot([f"{m}.pos" for m in viz_spec["motors"]])
         assert spec is not None
         assert spec.name == viz_spec["name"]
+
+
+class TestOpenArmVizUrdfs:
+    """Both per-arm OpenArm viz URDFs (the generic class above only covers
+    the package-default file — the left arm — via ``get_viz_urdf_path()``)."""
+
+    @pytest.mark.parametrize("side", ["left", "right"])
+    def test_declared_joints_and_meshes(self, side):
+        from lerobot.robots import openarm_description
+
+        urdf = openarm_description.get_viz_urdf_path(side)
+        root = ET.parse(urdf).getroot()
+        joint_names = {j.get("name") for j in root.iter("joint")}
+        for jn in openarm_description.VIZ_SPEC["urdf_joints"]:
+            assert jn in joint_names, f"VIZ_SPEC joint {jn!r} is absent from {urdf.name}"
+        # The gripper's second finger is driven by a URDF mimic, not a motor.
+        assert root.find(".//joint[@name='finger_joint2']/mimic").get("joint") == "finger_joint1"
+        mesh_files = [m.get("filename") for m in root.iter("mesh")]
+        assert mesh_files, f"{urdf.name} references no meshes"
+        for fn in mesh_files:
+            resolved = (urdf.parent / fn).resolve()
+            assert resolved.exists(), f"mesh {fn!r} referenced by {urdf.name} is missing at {resolved}"
+
+    def test_arms_are_mirrored(self):
+        """Left/right viz URDFs share names but mirror joint axes and meshes."""
+        from lerobot.robots import openarm_description
+
+        def joints_by_name(side):
+            root = ET.parse(openarm_description.get_viz_urdf_path(side)).getroot()
+            return {j.get("name"): j for j in root.iter("joint")}
+
+        left, right = joints_by_name("left"), joints_by_name("right")
+        assert left.keys() == right.keys()
+        # Shoulder pan: mirrored axis and mirrored joint-origin y.
+        assert left["joint1"].find("axis").get("xyz") == "0 1 0"
+        assert right["joint1"].find("axis").get("xyz") == "0 -1 0"
+        ly = float(left["joint1"].find("origin").get("xyz").split()[1])
+        ry = float(right["joint1"].find("origin").get("xyz").split()[1])
+        assert ly == pytest.approx(-ry) and ly > 0
+
+        # Left meshes are the right meshes mirrored (scale 1 -1 1) except
+        # the symmetric link3/link4.
+        def scales(side):
+            root = ET.parse(openarm_description.get_viz_urdf_path(side)).getroot()
+            return {
+                link.get("name"): link.find("visual/geometry/mesh").get("scale") for link in root.iter("link")
+            }
+
+        left_scales, right_scales = scales("left"), scales("right")
+        assert set(right_scales.values()) == {"1 1 1"}
+        for link in ("base_link", "link1", "link2", "link5", "link6", "ee_base_link", "ee_link1", "ee_link2"):
+            assert left_scales[link] == "1 -1 1", link
+        for link in ("link3", "link4"):
+            assert left_scales[link] == "1 1 1", link

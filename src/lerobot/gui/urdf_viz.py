@@ -36,11 +36,20 @@ need not import this GUI module):
         "urdf_joints": tuple[str, ...],   # URDF joint name per motor (parallel)
         "urdf_file":   str,               # URDF filename within urdf/
         "alignment":   {prefix: {motor: (sign, offset_deg)}} | None,
+        # optional:
+        "urdf_file_right": str,           # right-arm URDF when it differs (mirrored hardware)
+        "base_offsets":    {prefix: (x, y, z)},  # per-arm base offsets, URDF world frame
     }
 
 ``alignment`` is layer 2 of the motor->URDF mapping
 (``urdf_deg = sign * pos + offset_deg``); ``None`` means identity — correct
 for a URDF authored to match the motor calibration.
+
+``urdf_file_right`` is for bimanual robots whose two arms are mirrored
+rather than identical (one URDF per side); when absent, both arms load
+``urdf_file``. ``base_offsets`` places each arm's base in the scene (the
+viewer maps the URDF-world (x, y, z) to (x, z, -y)); when absent, the
+viewer falls back to its default side-by-side spacing.
 """
 
 from __future__ import annotations
@@ -99,17 +108,26 @@ class RobotVizSpec:
     Attributes:
         name: Human-facing display name (from the description's ``VIZ_SPEC``).
         urdf_url_path: Path of the URDF *within* the ``/urdf-assets/`` mount,
-            e.g. ``so107_description/urdf/SO107.urdf``.
+            e.g. ``so107_description/urdf/SO107.urdf``. For a bimanual robot
+            with mirrored arms this is the *left* arm's URDF.
+        urdf_url_path_right: Right-arm URDF path when the arms are mirrored
+            (the description declared ``urdf_file_right``); ``None`` when both
+            arms share ``urdf_url_path``.
         arms: One :class:`ArmSpec` (unimanual) or two (bimanual: left, right).
         ee_link: URDF link name to read the world position from for
             trajectory visualization. ``None`` when the description package
             didn't declare one — no polyline will be drawn for this robot.
+        base_offsets: ``obs_prefix -> (x, y, z)`` base offsets in the URDF
+            world frame, when the description declares them. ``None`` lets
+            the viewer fall back to its default side-by-side arm spacing.
     """
 
     name: str
     urdf_url_path: str
     arms: list[ArmSpec]
     ee_link: str | None = None
+    urdf_url_path_right: str | None = None
+    base_offsets: dict[str, tuple[float, float, float]] | None = None
 
 
 @functools.cache
@@ -179,11 +197,15 @@ def resolve_robot(obs_keys: Iterable[str]) -> RobotVizSpec | None:
 
     for arm in arms:
         assert arm.joints, f"resolved arm {arm.obs_prefix!r} has no joints"
+    urdf_file_right = viz_spec.get("urdf_file_right")
+    base_offsets = viz_spec.get("base_offsets")
     return RobotVizSpec(
         name=viz_spec.get("name") or pkg_name.removesuffix("_description"),
         urdf_url_path=f"{pkg_name}/urdf/{viz_spec['urdf_file']}",
         arms=arms,
         ee_link=viz_spec.get("ee_link"),
+        urdf_url_path_right=f"{pkg_name}/urdf/{urdf_file_right}" if urdf_file_right else None,
+        base_offsets={p: tuple(xyz) for p, xyz in base_offsets.items()} if base_offsets else None,
     )
 
 

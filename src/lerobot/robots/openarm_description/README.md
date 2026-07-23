@@ -1,9 +1,43 @@
-# OpenArm 2.0 robot description (kinematics-only)
+# OpenArm 2.0 robot description (kinematics + visualization)
 
 The runtime OpenArm Cartesian path is `mink_ik.py`: one shared bimanual
 MJCF/Mink solver from the official `openarm-control` package. The per-arm
 URDF/Pink files in this directory are retained for provenance and offline
 comparison; `bi_openarm_follower` does not use them for Quest control.
+
+Two URDF flavours live under `urdf/`:
+
+- `openarm_{left,right}.urdf` — kinematics-only (for pinocchio FK/IK);
+- `openarm_{left,right}_viz.urdf` — same kinematics plus visual geometry
+  and the gripper finger subtree, for the GUI's in-browser URDF viewer
+  (`VIZ_SPEC` in `__init__.py` is what the viewer's robot resolution
+  matches against). The viz files drop the `openarm_{side}_` name prefix:
+  the viewer loads one copy per arm, so unprefixed joint names let one
+  `VIZ_SPEC["urdf_joints"]` list serve both arms.
+
+The viz URDFs are generated mechanically from the kinematics-only ones
+(joint origins/axes/limits verbatim — FK-checked identical with pinocchio):
+inertials and `ros2_control` blocks are stripped, names unprefixed, then
+`<visual>` elements referencing the upstream `.dae` meshes are added, plus
+`finger_joint1/2` + finger links from the upstream pinch-gripper config
+(`finger_joint2` mimics `finger_joint1`, multiplier 1). Mirrored links of
+the left arm reference the same meshes with `scale="1 -1 1"` (link3/link4
+are symmetric and stay unmirrored — the upstream
+`config/robot_presets/default_bimanual.yaml` reflect-include list). The
+gripper-base visual sits at `+0.0205 x` (upstream `ee_mount_point`), and
+finger joint origins are the upstream config shifted into this URDF's
+merged `ee_base_link` frame — identical to the MuJoCo model's finger body
+positions.
+
+## Meshes
+
+`meshes/visual/*.dae` are the upstream visual meshes, vendored unmodified
+from `assets/robot/openarm_v2.0/meshes/arm/visual/` and
+`assets/end_effector/pinch_gripper/meshes/visual/`. Unlike the SO
+descriptions they are COLLADA (`.dae`), not STL — the viewer's mesh loader
+dispatches on file extension. The arm meshes carry a baked R_x(+90°) scene
+transform (raw vertex data is Y-up; the collada nodes rotate it into the
+Z-up link frame), so URDF visual origins are identity.
 
 ## Provenance
 

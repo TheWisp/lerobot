@@ -43,7 +43,8 @@
 <script type="module">
 // Thin renderer over a uniform source API:
 //
-//   meta endpoint  -> {name, urdf, bimanual, sources: ["state", "action", ...]}
+//   meta endpoint  -> {name, urdf, bimanual, sources: ["state", "action", ...],
+//                      urdf_right?, base_offsets?}
 //   source endpoint(source=X) -> {arms: [{prefix, frames: [{joints}, ...], fps?}]}
 //
 // The frontend speaks only the meta- + source- vocabulary. It doesn't know
@@ -61,6 +62,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from '/static/vendor/OrbitControls.js';
 import { STLLoader } from '/static/vendor/STLLoader.js';
+import { ColladaLoader } from '/static/vendor/ColladaLoader.js';
 import URDFLoader from 'urdf-loader';
 
 const PARAMS = new URLSearchParams(location.search);
@@ -161,11 +163,27 @@ animate();
 // on so users who never enable the overlay don't pay STL + scene cost.
 // Each arm also has (lazily) one THREE.Line trajLine — the EE-path polyline
 // drawn when the overlay source returns more than one frame.
-let _meta = null;             // {name, urdf, bimanual, sources, ee_link}
-let _arms = [];               // [{prefix, baseX, state, ghost, trajLine, _lastGhost}]
+let _meta = null;             // {name, urdf, urdf_right, base_offsets, bimanual, sources, ee_link}
+let _arms = [];               // [{prefix, basePos, state, ghost, trajLine, _lastGhost}]
 let _datasetCtx = null;       // dataset mode only: {dataset, episode, frame}
 
-function _loadRobot(urdfUrl, baseX, color, opts = {}) {
+// The description can override which URDF each arm loads (mirrored arms
+// ship one URDF per side) — the right arm gets its own file when declared.
+const _urdfFor = (prefix) => (prefix === 'right_' && _meta.urdf_right) ? _meta.urdf_right : _meta.urdf;
+
+// Per-arm base placement. meta.base_offsets are physical offsets in the
+// URDF world frame (x forward, y left, z up); map them with the same
+// rotation the robot itself gets below: (x, y, z) -> (x, z, -y). Without
+// them, fall back to the SO-arm layout: arm copies side by side at
+// ±BIMANUAL_X along screen X.
+function _basePos(prefix, idx) {
+  const off = _meta.base_offsets && _meta.base_offsets[prefix];
+  if (off) return new THREE.Vector3(off[0], off[2], -off[1]);
+  if (!_meta.bimanual) return new THREE.Vector3(0, 0, 0);
+  return new THREE.Vector3(idx === 0 ? BIMANUAL_X : -BIMANUAL_X, 0, 0);
+}
+
+function _loadRobot(urdfUrl, basePos, color, opts = {}) {
   const transparent = !!opts.transparent;
   const matOpts = { color };
   if (transparent) {
@@ -179,6 +197,29 @@ function _loadRobot(urdfUrl, baseX, color, opts = {}) {
   return new Promise((resolve, reject) => {
     const loader = new URDFLoader();
     loader.loadMeshCb = (path, manager, done) => {
+      // Mesh format is the description package's choice (SO arms: STL,
+      // OpenArm: COLLADA) — dispatch on the file extension.
+      if (path.toLowerCase().endsWith('.dae')) {
+        new ColladaLoader(manager).load(
+          path,
+          (collada) => {
+            // Paint every mesh with our material so state vs ghost stay
+            // distinguishable. Safe to do before done(): URDFLoader only
+            // force-applies the URDF <material> when the result is a single
+            // Mesh, and a COLLADA scene is a Group.
+            collada.scene.traverse((o) => {
+              if (o.isMesh) {
+                o.material = mat;
+                if (transparent) o.renderOrder = 1;
+              }
+            });
+            done(collada.scene);
+          },
+          undefined,
+          () => done(null),
+        );
+        return;
+      }
       new STLLoader(manager).load(
         path,
         (geom) => {
@@ -199,7 +240,7 @@ function _loadRobot(urdfUrl, baseX, color, opts = {}) {
       if (!robot) { reject(new Error('URDF failed to load: ' + urdfUrl)); return; }
       for (const name in robot.joints) robot.joints[name].ignoreLimits = true;
       robot.rotation.x = -Math.PI / 2;
-      robot.position.x = baseX;
+      robot.position.copy(basePos);
       scene.add(robot);
       resolve(robot);
     });
@@ -212,7 +253,7 @@ async function _ensureGhost(armEntry) {
   // the init's apply) share one URDFLoader run rather than racing and
   // orphaning a duplicate ghost in the scene.
   if (!armEntry._ghostLoading) {
-    armEntry._ghostLoading = _loadRobot(_meta.urdf, armEntry.baseX, GHOST_COLOR, { transparent: true })
+    armEntry._ghostLoading = _loadRobot(_urdfFor(armEntry.prefix), armEntry.basePos, GHOST_COLOR, { transparent: true })
       .then((robot) => { armEntry.ghost = robot; return robot; });
   }
   await armEntry._ghostLoading;
@@ -689,12 +730,12 @@ async function init() {
   _meta = await _waitForMeta();
   if (!_meta) { setStatus('no robot to visualize'); return; }
 
-  const baseXs = _meta.bimanual
-    ? [{prefix: 'left_', x: BIMANUAL_X}, {prefix: 'right_', x: -BIMANUAL_X}]
-    : [{prefix: '', x: 0}];
-  for (const {prefix, x} of baseXs) {
-    const stateRobot = await _loadRobot(_meta.urdf, x, STATE_COLOR);
-    _arms.push({ prefix, baseX: x, state: stateRobot, ghost: null, _lastGhost: null });
+  const prefixes = _meta.bimanual ? ['left_', 'right_'] : [''];
+  for (let i = 0; i < prefixes.length; i++) {
+    const prefix = prefixes[i];
+    const basePos = _basePos(prefix, i);
+    const stateRobot = await _loadRobot(_urdfFor(prefix), basePos, STATE_COLOR);
+    _arms.push({ prefix, basePos, state: stateRobot, ghost: null, _lastGhost: null });
   }
 
   // Initial fetch — fills state immediately so the user sees the pose
