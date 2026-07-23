@@ -155,7 +155,12 @@ pygame-dep = ["pygame>=2.5.1,<2.7.0"]
 # There is no cmeel-urdfdom 5.x; <5 selects the 4.x ABI the placo/pin wheels are built against.
 placo-dep = ["placo>=0.9.6,<0.9.16", "cmeel-urdfdom>=4,<5", "cmeel-tinyxml2<11"]
 # pin-pink is fork-only (Quest WebXR Cartesian IK, pink_kinematics.py); upstream dropped it.
-pink-dep = ["pin-pink>=4.2,<5", "qpsolvers[proxqp]>=4.12,<5"]
+# NOTE: qpsolvers is floored at 4.11 (not 4.12) and proxsuite is named directly
+# instead of via qpsolvers[proxqp]: qpsolvers only gained the [proxqp] extra in
+# 4.12, but its 4.11 releases drive the proxsuite backend identically. The 4.11
+# floor keeps this extra compatible with openarm-ik (openarm-control pins
+# daqp==0.7.2, while qpsolvers[daqp]>=4.12 requires daqp>=0.8.2).
+pink-dep = ["pin-pink>=4.2,<5", "qpsolvers>=4.11,<5", "proxsuite>=0.7,<1"]
 transformers-dep = ["transformers>=5.4.0,<5.6.0"]
 grpcio-dep = ["grpcio>=1.73.1,<2.0.0", "protobuf>=6.31.1,<8.0.0"]
 accelerate-dep = ["accelerate>=1.14.0,<2.0.0"]
@@ -357,11 +362,10 @@ all = [
     "lerobot[hopejr]",
     "lerobot[lekiwi]",
     "lerobot[openarms]",
-    # openarm-ff (mujoco + openarm-mujoco, needed by gravity FF) has no declared
-    # conflict with `all` — include it so `--extra all` really is everything.
-    # openarm-ik is deliberately NOT here: it conflicts with kinematics/pink-dep
-    # (openarm-control pins daqp==0.7.2; qpsolvers[daqp]>=4.12 needs daqp>=0.8.2).
-    "lerobot[openarm-ff]",
+    # openarm-ik includes openarm-ff (mujoco + openarm-mujoco for gravity FF) plus
+    # openarm-control (Mink Cartesian IK). It can live in `all` because pink-dep
+    # floors qpsolvers at 4.11 and names proxsuite directly — see pink-dep above.
+    "lerobot[openarm-ik]",
     "lerobot[reachy2]",
     "lerobot[rebot]",
     "lerobot[kinematics]",
@@ -483,20 +487,6 @@ override-dependencies = [
     # ("failed to set fourcc/width"). Null out the transitive package with an
     # unsatisfiable marker — headless provides cv2 for every consumer.
     "opencv-python; sys_platform == 'never'",
-]
-conflicts = [
-    [
-        { extra = "openarm-ik" },
-        { extra = "pink-dep" },
-    ],
-    [
-        { extra = "openarm-ik" },
-        { extra = "kinematics" },
-    ],
-    [
-        { extra = "openarm-ik" },
-        { extra = "all" },
-    ],
 ]
 
 [[tool.uv.index]]
