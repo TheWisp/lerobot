@@ -18,8 +18,10 @@ Mirrors tests/robots/test_cartesian_ik.py (SO-107). Most tests use a stub
 kinematics and need no optional dependency — they exercise the controller
 wiring with OpenArm motor names, the bimanual split/merge, the teleop->IK
 key contract, and ``BiOpenArmFollower.attach_teleop``'s branching. The
-real-IK tests build ``PinkKinematics`` from the vendored per-arm OpenArm
-URDFs and are skipped without ``pin-pink``.
+per-arm real-IK tests build ``PinkKinematics`` from the vendored per-arm
+OpenArm URDFs and are skipped without ``pin-pink``; the attach_teleop
+install test uses the production shared MuJoCo/Mink solver and is skipped
+without ``openarm-ik`` / ``openarm-mujoco``.
 """
 
 from __future__ import annotations
@@ -39,7 +41,14 @@ from lerobot.robots.openarm_description.cartesian_ik import (
     make_openarm_arm_ik_controller,
 )
 from lerobot.robots.so107_description.cartesian_ik import CartesianIKController
-from lerobot.utils.import_utils import _pin_pink_available
+from lerobot.utils.import_utils import _pin_pink_available, is_package_available
+
+# The production Cartesian-IK path (BiOpenArmFollower.attach_teleop) uses the
+# shared bimanual MuJoCo/Mink solver from ``openarm_control`` plus the MJCF
+# shipped by ``openarm-mujoco``.
+_openarm_ik_available = is_package_available("openarm_control") and is_package_available(
+    "openarm-mujoco", import_name="openarm_mujoco"
+)
 
 # The nine keys a Quest controller emits and a CartesianIKController reads.
 _IK_INPUT_KEYS = {
@@ -232,7 +241,7 @@ def test_is_openarm_bimanual_cartesian_teleop_structural_check():
     assert not is_openarm_bimanual_cartesian_teleop(SimpleNamespace(action_features=None))
 
 
-@pytest.mark.skipif(not _pin_pink_available, reason="pin-pink (optional) not installed")
+@pytest.mark.skipif(not _openarm_ik_available, reason="openarm-ik / openarm-mujoco (optional) not installed")
 def test_attach_teleop_installs_ik_for_cartesian_teleop():
     class _FakeArm:
         def __init__(self, seed):
@@ -245,14 +254,12 @@ def test_attach_teleop_installs_ik_for_cartesian_teleop():
     robot = _bare_follower()
     robot.left_arm = _FakeArm(LEFT_READY_DEG)
     robot.right_arm = _FakeArm(RIGHT_READY_DEG)
-    # __init__ is bypassed here, so pre-build the kinematics it normally
-    # would (see BiOpenArmFollower.__init__).
-    from lerobot.robots.openarm_description.cartesian_ik import make_openarm_arm_kinematics
+    # __init__ is bypassed here, so pre-build the shared bimanual solver it
+    # normally would (see BiOpenArmFollower.__init__).
+    from lerobot.robots.openarm_description.mink_ik import make_openarm_mink_kinematics
+    from lerobot.robots.openarm_follower.gravity_ff import default_bimanual_xml
 
-    robot._ik_kinematics = {
-        "left": make_openarm_arm_kinematics("left"),
-        "right": make_openarm_arm_kinematics("right"),
-    }
+    robot._ik_kinematics = make_openarm_mink_kinematics(xml=default_bimanual_xml())
 
     teleop = _FakeTeleop(names={"left_target_x": 0, "right_target_x": 1})
     robot.attach_teleop(teleop)
@@ -267,20 +274,20 @@ def test_attach_teleop_installs_ik_for_cartesian_teleop():
             assert joints[f"{side}_{m}.pos"] == pytest.approx(seed[i], abs=1e-6)
 
 
-def test_attach_teleop_warns_and_noops_when_kinematics_unavailable(caplog):
-    import logging
-
+def test_attach_teleop_raises_when_kinematics_unavailable():
+    """When the shared MJCF/Mink solver failed to build in ``__init__`` (e.g.
+    ``lerobot[openarm-ik]`` missing), ``attach_teleop`` must fail loudly on a
+    Cartesian teleop instead of silently running without IK."""
     robot = _bare_follower()
     robot.left_arm = SimpleNamespace(is_connected=True)
     robot.right_arm = SimpleNamespace(is_connected=True)
-    robot._ik_kinematics = None  # e.g. pin-pink missing at __init__
+    robot._ik_kinematics = None  # e.g. openarm-ik missing at __init__
 
     teleop = _FakeTeleop(names={"left_target_x": 0, "right_target_x": 1})
-    with caplog.at_level(logging.WARNING, logger="lerobot.robots.bi_openarm_follower.bi_openarm_follower"):
+    with pytest.raises(RuntimeError, match="shared MJCF/Mink solver failed to initialize"):
         robot.attach_teleop(teleop)
 
     assert teleop.installed == "<unset>"
-    assert "IK kinematics are unavailable" in caplog.text
 
 
 # ── Factory plumbing for the IK config knobs ──────────────────────────────
@@ -300,18 +307,22 @@ def test_make_openarm_arm_kinematics_passes_tuning_kwargs_to_pink():
     assert kwargs["joint_names"] == [f"openarm_left_joint{i}" for i in range(1, 8)]
 
 
-def test_make_openarm_arm_kinematics_defaults_match_biopenarm_config():
-    """The factory defaults are visible config — BiOpenArmFollowerConfig's
-    ``ik_posture_cost`` / ``ik_max_iters`` defaults must mirror them."""
-    from unittest.mock import patch
+def test_make_openarm_mink_kinematics_defaults_match_biopenarm_config():
+    """The shared-solver factory defaults are visible config —
+    BiOpenArmFollowerConfig's ``ik_posture_cost`` / ``ik_max_iters`` /
+    ``ik_damping`` defaults must mirror them (``BiOpenArmFollower.__init__``
+    forwards all three). Reads the factory signature, so no ``openarm-ik``
+    import is needed."""
+    import inspect
 
     from lerobot.robots.bi_openarm_follower.config_bi_openarm_follower import BiOpenArmFollowerConfig
-    from lerobot.robots.openarm_description import cartesian_ik
+    from lerobot.robots.openarm_description.mink_ik import make_openarm_mink_kinematics
     from lerobot.robots.openarm_follower.config_openarm_follower import OpenArmFollowerConfigBase
 
-    with patch("lerobot.model.pink_kinematics.PinkKinematics") as mock_pk:
-        cartesian_ik.make_openarm_arm_kinematics("right")
-    factory_defaults = mock_pk.call_args.kwargs
+    factory_defaults = {
+        name: param.default
+        for name, param in inspect.signature(make_openarm_mink_kinematics).parameters.items()
+    }
 
     config_default = BiOpenArmFollowerConfig(
         left_arm_config=OpenArmFollowerConfigBase(port="can0"),
@@ -319,6 +330,7 @@ def test_make_openarm_arm_kinematics_defaults_match_biopenarm_config():
     )
     assert factory_defaults["posture_cost"] == config_default.ik_posture_cost
     assert factory_defaults["max_iters"] == config_default.ik_max_iters
+    assert factory_defaults["damping"] == config_default.ik_damping
 
 
 # ── Real kinematics: zero pose, FK/IK round-trip (needs pin-pink) ─────────
