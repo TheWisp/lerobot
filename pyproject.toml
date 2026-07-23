@@ -466,6 +466,17 @@ lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
 # To use a different CUDA variant, reinstall torch with an explicit index, e.g.:
 #   uv pip install --force-reinstall torch torchvision \
 #       --index-url https://download.pytorch.org/whl/cu130
+[tool.uv]
+override-dependencies = [
+    # opencv-python (transitive: gym-pusht, hf-libero, reachy2-sdk, robosuite)
+    # and opencv-python-headless (our direct dep) install the SAME cv2 module;
+    # whichever lands last wins. The winning 4.13 opencv-python build has no
+    # V4L2 backend, so cameras silently open via FFMPEG and every set() fails
+    # ("failed to set fourcc/width"). Null out the transitive package with an
+    # unsatisfiable marker — headless provides cv2 for every consumer.
+    "opencv-python; sys_platform == 'never'",
+]
+
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
