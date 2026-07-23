@@ -1,0 +1,151 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="openarm_left_viz">
+  <!-- Visualization URDF for the in-browser viewer (gui/static/urdf_viz.html),
+  generated from urdf/openarm_left.urdf (kinematics verbatim) plus upstream
+  enactic/openarm_description v2.0 .dae visuals (Apache-2.0, see LICENSE.txt).
+  Names are unprefixed: the viewer loads one copy per arm. See README.md. -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/visual/base_link.dae" scale="1 -1 1" />
+      </geometry>
+    </visual>
+  </link>
+  <link name="link1">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/visual/link1.dae" scale="1 -1 1" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint1" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0.0625 0" />
+    <parent link="base_link" />
+    <child link="link1" />
+    <axis xyz="0 1 0" />
+    <limit effort="40" lower="-3.4907" upper="1.3963" velocity="16.755" />
+  </joint>
+  <link name="link2">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/visual/link2.dae" scale="1 -1 1" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint2" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0.0600000000000001 0" />
+    <parent link="link1" />
+    <child link="link2" />
+    <axis xyz="-1 0 0" />
+    <limit effort="40" lower="-3.3161" upper="0.17453" velocity="16.755" />
+  </joint>
+  <link name="link3">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/visual/link3.dae" scale="1 1 1" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint3" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 -0.0662500000000008" />
+    <parent link="link2" />
+    <child link="link3" />
+    <axis xyz="0 0 -1" />
+    <limit effort="27" lower="-1.5708" upper="1.5708" velocity="5.4454" />
+  </joint>
+  <link name="link4">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/visual/link4.dae" scale="1 1 1" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint4" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 -0.15375" />
+    <parent link="link3" />
+    <child link="link4" />
+    <axis xyz="0 -1 0" />
+    <limit effort="27" lower="0" upper="2.4435" velocity="5.4454" />
+  </joint>
+  <link name="link5">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/visual/link5.dae" scale="1 -1 1" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint5" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 -0.0955000000000005" />
+    <parent link="link4" />
+    <child link="link5" />
+    <axis xyz="0 0 -1" />
+    <limit effort="7" lower="-1.5708" upper="1.5708" velocity="20.944" />
+  </joint>
+  <link name="link6">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/visual/link6.dae" scale="1 -1 1" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="joint6" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 -0.120499999999998" />
+    <parent link="link5" />
+    <child link="link6" />
+    <axis xyz="0 -1 0" />
+    <limit effort="7" lower="-0.7854" upper="0.7854" velocity="20.944" />
+  </joint>
+  <joint name="joint7" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0" />
+    <parent link="link6" />
+    <child link="ee_base_link" />
+    <axis xyz="1 0 0" />
+    <limit effort="7" lower="-0.7854" upper="0.7854" velocity="20.944" />
+  </joint>
+  <link name="ee_base_link">
+    <visual>
+      <origin xyz="0.0205 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/visual/ee_base_link.dae" scale="1 -1 1" />
+      </geometry>
+    </visual>
+  </link>
+  <link name="ee_link1">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/visual/finger_inner.dae" scale="1 -1 1" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="finger_joint1" type="revolute">
+    <origin xyz="-0.00143 -0.018 -0.068" rpy="0 0 0" />
+    <parent link="ee_base_link" />
+    <child link="ee_link1" />
+    <axis xyz="-1 0 0" />
+    <limit effort="7" lower="0.0" upper="0.7854" velocity="5" />
+  </joint>
+  <link name="ee_link2">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/visual/finger_outer.dae" scale="1 -1 1" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="finger_joint2" type="revolute">
+    <origin xyz="-0.00143 0.018 -0.068" rpy="0 0 0" />
+    <parent link="ee_base_link" />
+    <child link="ee_link2" />
+    <axis xyz="1 0 0" />
+    <limit effort="7" lower="0.0" upper="0.7854" velocity="5" />
+    <mimic joint="finger_joint1" multiplier="1" offset="0" />
+  </joint>
+</robot>
