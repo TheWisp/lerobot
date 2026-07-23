@@ -1810,3 +1810,23 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     justify-self: start;
     accent-color: #4fc3f7;
 }
+
+/* Training image section (start form): local-build actions + build log tail. */
+.training-image-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+.training-image-build-log {
+    background: #0d2137;
+    border: 1px solid #1a3a6a;
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 11px;
+    max-height: 140px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 8px 0 0;
+}

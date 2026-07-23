@@ -11,6 +11,8 @@
 // - GET /api/training/runs/{id}                  → detail (progress, checkpoints, log)
 // - POST /api/training/runs/{id}/stop            → user-initiated stop
 // - GET /api/datasets/sources + .../datasets     → populate the dataset dropdown
+// - GET /api/training/image-status               → training-image section (default tag + freshness)
+// - POST /api/training/build-image + .../status  → local image build with polled progress
 
 const TRAINING_POLL_MS = 3000;
 let _trainingHosts = [];
@@ -244,6 +246,8 @@ async function trainingInit() {
   await trainingRefreshRuns();
   trainingSchedulePoll();
   _bindErrorCopy();
+  // Not awaited: the image section renders lazily once the start form opens.
+  trainingLoadImageStatus();
 }
 
 // Error fields re-render every TRAINING_POLL_MS (3 s), which wipes any
@@ -841,6 +845,204 @@ function trainingConfigCardHtml(r) {
   `;
 }
 
+// ── Training image (CI default vs local build) ──────────────────────────────
+//
+// Backs the "Training image" section of the start form. Data comes from
+// GET /api/training/image-status: the effective CI-default tag, the local
+// dev image (built from this checkout), and git provenance used to show how
+// stale the CI image is relative to the checked-out branch. When the GUI is
+// not served from a git checkout (git === null) the freshness line is hidden
+// entirely — there is no local history to compare against.
+//
+// Choosing anything but the CI default sends args["__image__"] with the run
+// request (see trainingSubmitStart); the backend honors it as a per-run
+// image override.
+
+let _trainingImageStatus = null;     // last GET /api/training/image-status, null until loaded
+let _trainingImageChoice = "";       // "", "local" or "custom" — survives form re-renders
+let _trainingImageCustomTag = "";    // free-text custom tag — survives section re-renders
+let _trainingBuildPollTimer = null;  // active build-image/status interval
+let _trainingBuildRunning = false;
+let _trainingBuildNote = null;       // {text, color} shown next to the Build button
+let _trainingBuildTail = [];         // last docker build output lines (kept across re-renders)
+
+async function trainingLoadImageStatus() {
+  try {
+    const resp = await fetch("/api/training/image-status");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    _trainingImageStatus = await resp.json();
+  } catch (e) {
+    console.error("training: failed to load image status", e);
+  }
+  trainingRenderImageSection();
+}
+
+// ISO timestamp → "YYYY-MM-DD" (docker Created + git commit dates are RFC3339).
+function _trainingFmtDate(iso) {
+  return iso ? String(iso).slice(0, 10) : "";
+}
+
+function trainingRenderImageSection() {
+  const el = document.getElementById("training-image-section");
+  if (!el) return; // start form not open
+  // Preserve the free-text tag across re-renders (build polls re-render).
+  const prevTag = el.querySelector("input[name=image_custom_tag]");
+  if (prevTag) _trainingImageCustomTag = prevTag.value;
+  const st = _trainingImageStatus;
+  if (!st) {
+    el.innerHTML =
+      '<div class="training-empty-hint">Image status unavailable — the run will use the backend default.</div>';
+    return;
+  }
+  const git = st.git || null;
+  const local = st.local_image || {};
+
+  // Freshness line: only when served from a git checkout.
+  let freshness = "";
+  if (git) {
+    const from =
+      git.image_branch && git.image_commit
+        ? `built from <span class="training-mono">${escapeHtml(git.image_branch)}@${escapeHtml(git.image_commit)}</span>`
+        : "";
+    let staleness;
+    if (git.image_commit && git.commits_behind != null) {
+      staleness =
+        git.commits_behind === 0
+          ? `<span style="color:#98c379;">up to date with ${escapeHtml(git.branch)}</span>`
+          : `<span style="color:#e5c07b;">${git.commits_behind} commit${git.commits_behind === 1 ? "" : "s"} behind ${escapeHtml(git.branch)}</span>`;
+    } else if (git.image_commit) {
+      const d = _trainingFmtDate(git.image_commit_date);
+      staleness = `<span style="color:#e5c07b;">provenance not in local history${d ? ` (built ${escapeHtml(d)})` : ""}</span>`;
+    } else {
+      staleness = '<span style="color:#888;">tag carries no commit provenance</span>';
+    }
+    freshness = `<div class="training-field-hint">${from}${from ? " · " : ""}${staleness}</div>`;
+  }
+
+  const localTag = local.tag || "";
+  const localInfo = local.created
+    ? `<span style="color:#98c379;">exists — built ${escapeHtml(_trainingFmtDate(local.created))}</span>`
+    : '<span style="color:#e5c07b;">not built yet</span>';
+  const note = _trainingBuildNote
+    ? `<span id="training-image-build-status" class="training-field-hint" style="color:${_trainingBuildNote.color};">${escapeHtml(_trainingBuildNote.text)}</span>`
+    : '<span id="training-image-build-status" class="training-field-hint"></span>';
+  const logShown = _trainingBuildTail.length > 0 || _trainingBuildRunning;
+
+  el.innerHTML = `
+    <label class="training-field">
+      <span class="training-field-label">Default image</span>
+      <span class="training-mono" style="grid-column: 2; word-break: break-all;">${escapeHtml(st.image)}</span>
+      ${freshness}
+    </label>
+    <label class="training-field">
+      <span class="training-field-label">Use image</span>
+      <select name="image_choice" onchange="trainingImageChoiceChanged()">
+        <option value="">CI default</option>
+        <option value="local"${_trainingImageChoice === "local" ? " selected" : ""}>Local build (this checkout)</option>
+        <option value="custom"${_trainingImageChoice === "custom" ? " selected" : ""}>Custom tag…</option>
+      </select>
+      <span class="training-field-hint">Which docker image the run trains in. The CI default is built from the latest published branch state; a local build picks up this checkout as-is.</span>
+    </label>
+    <div id="training-image-custom" style="display:none;">
+      <label class="training-field">
+        <span class="training-field-label">Custom tag</span>
+        <input type="text" name="image_custom_tag" placeholder="ghcr.io/org/image:tag" value="${escapeHtml(_trainingImageCustomTag)}" />
+      </label>
+    </div>
+    <div id="training-image-local" style="display:none;">
+      <div class="training-field-hint"><span class="training-mono">${escapeHtml(localTag)}</span> — ${localInfo}</div>
+      <div class="training-image-actions">
+        <button type="button" id="training-image-build-btn" class="btn-small secondary" onclick="trainingBuildImage()" ${_trainingBuildRunning ? "disabled" : ""}>Build now</button>
+        ${note}
+      </div>
+      <pre id="training-image-build-log" class="training-image-build-log" style="display:${logShown ? "block" : "none"};">${escapeHtml(_trainingBuildTail.join("\n"))}</pre>
+    </div>
+  `;
+  trainingImageChoiceChanged(); // sync custom/local sub-block visibility
+}
+
+function trainingImageChoiceChanged() {
+  const sel = document.querySelector("#training-start-form select[name=image_choice]");
+  const v = sel ? sel.value : "";
+  _trainingImageChoice = v;
+  const custom = document.getElementById("training-image-custom");
+  if (custom) custom.style.display = v === "custom" ? "block" : "none";
+  const local = document.getElementById("training-image-local");
+  if (local) local.style.display = v === "local" ? "block" : "none";
+}
+
+// POST /api/training/build-image, then poll build-image/status every
+// TRAINING_POLL_MS while the build runs. The button stays disabled for the
+// whole build; the tail of the docker output streams into the log box.
+async function trainingBuildImage() {
+  const btn = document.getElementById("training-image-build-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const resp = await fetch("/api/training/build-image", { method: "POST" });
+    if (!resp.ok) {
+      // 409: already building / no docker / not a checkout — surface the detail.
+      const detail = await resp.json().catch(() => ({}));
+      _trainingBuildNote = {
+        text: detail.detail || `Build failed to start (HTTP ${resp.status}).`,
+        color: "#e06c75",
+      };
+      trainingRenderImageSection();
+      return;
+    }
+    _trainingBuildRunning = true;
+    _trainingBuildNote = { text: "Building… (first build can take tens of minutes)", color: "#e5c07b" };
+    _trainingBuildTail = [];
+    if (_trainingBuildPollTimer) clearInterval(_trainingBuildPollTimer);
+    _trainingBuildPollTimer = setInterval(trainingCheckBuildStatus, TRAINING_POLL_MS);
+    trainingRenderImageSection();
+    trainingCheckBuildStatus(); // first tick immediately
+  } catch (e) {
+    _trainingBuildNote = { text: `Build failed to start: ${e.message || e}`, color: "#e06c75" };
+    trainingRenderImageSection();
+  }
+}
+
+async function trainingCheckBuildStatus() {
+  let st;
+  try {
+    const resp = await fetch("/api/training/build-image/status");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    st = await resp.json();
+  } catch (e) {
+    console.error("training: failed to poll build status", e);
+    return; // transient — keep polling
+  }
+  if (Array.isArray(st.lines) && st.lines.length) {
+    _trainingBuildTail = st.lines.slice(-8);
+    const logEl = document.getElementById("training-image-build-log");
+    if (logEl) {
+      logEl.style.display = "block";
+      logEl.textContent = _trainingBuildTail.join("\n");
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
+  if (st.running) return;
+
+  if (_trainingBuildPollTimer) {
+    clearInterval(_trainingBuildPollTimer);
+    _trainingBuildPollTimer = null;
+  }
+  _trainingBuildRunning = false;
+  const failed = !!st.error || st.exit_code !== 0;
+  _trainingBuildNote = failed
+    ? {
+        text: `Build failed${st.exit_code != null ? ` (exit ${st.exit_code})` : ""}${st.error ? `: ${st.error}` : ""}`,
+        color: "#e06c75",
+      }
+    : { text: "✓ Build complete.", color: "#98c379" };
+  if (!failed) {
+    // Refresh local_image.created (and the freshness line); re-renders the section.
+    await trainingLoadImageStatus();
+  } else {
+    trainingRenderImageSection();
+  }
+}
+
 // ── Start form ────────────────────────────────────────────────────────────────
 
 async function trainingShowStartForm(prefill) {
@@ -1047,6 +1249,11 @@ function trainingRenderStartForm(prefill) {
           </div>
         </details>
 
+        <details class="training-section" open>
+          <summary class="training-section-summary">Training image</summary>
+          <div id="training-image-section"><div class="training-empty-hint">Loading image status…</div></div>
+        </details>
+
         <div class="training-form-actions">
           <button type="submit" class="btn-small">Start training</button>
           <button type="button" class="btn-small secondary" onclick="trainingCancelForm()">Cancel</button>
@@ -1060,6 +1267,13 @@ function trainingRenderStartForm(prefill) {
   const initialPolicy =
     trainingPolicyFromArgs(prefill?.args) || _trainingPolicyCatalog[0]?.type_name || "";
   trainingRenderPolicyFields(initialPolicy);
+  // Image section: render from cache when we have it, otherwise fetch (the
+  // fetch re-renders the section when it lands).
+  if (_trainingImageStatus === null) {
+    trainingLoadImageStatus();
+  } else {
+    trainingRenderImageSection();
+  }
   if (prefill) trainingApplyPrefill(prefill, initialPolicy);
 }
 
@@ -1124,6 +1338,24 @@ function trainingApplyPrefill(prefill, policyType) {
       input.checked = !!args[f.key];
     } else {
       input.value = String(args[f.key]);
+    }
+  }
+
+  // Training-image choice: restore the selector from the run's __image__.
+  // A match against the local dev tag selects "Local build"; anything else
+  // is shown as a custom tag.
+  const img = args["__image__"];
+  if (typeof img === "string" && img) {
+    const choiceSel = form.querySelector("select[name=image_choice]");
+    if (choiceSel) {
+      const localTag = _trainingImageStatus?.local_image?.tag;
+      choiceSel.value = localTag && img === localTag ? "local" : "custom";
+      trainingImageChoiceChanged();
+      if (choiceSel.value === "custom") {
+        _trainingImageCustomTag = img;
+        const tagInput = form.querySelector("input[name=image_custom_tag]");
+        if (tagInput) tagInput.value = img;
+      }
     }
   }
 }
@@ -1236,6 +1468,17 @@ async function trainingSubmitStart(ev) {
   for (const f of TRAINING_FIELDS) {
     const v = formValue(fd, form, f);
     if (v !== undefined) args[f.key] = v;
+  }
+
+  // Training image override: only sent when the user picked something other
+  // than the CI default. The backend honors args["__image__"] as a per-run
+  // image override; the CI-default path leaves the key out entirely.
+  const imageChoice = fd.get("image_choice");
+  if (imageChoice === "local" && _trainingImageStatus?.local_image?.tag) {
+    args.__image__ = _trainingImageStatus.local_image.tag;
+  } else if (imageChoice === "custom") {
+    const customTag = (fd.get("image_custom_tag") || "").trim();
+    if (customTag) args.__image__ = customTag;
   }
 
   // Auto-generate a label if user didn't provide one
@@ -1353,3 +1596,5 @@ window.trainingRenderPolicyFields = trainingRenderPolicyFields;
 window.trainingDuplicateRun = trainingDuplicateRun;
 window.trainingDeleteRun = trainingDeleteRun;
 window.trainingClearCompleted = trainingClearCompleted;
+window.trainingImageChoiceChanged = trainingImageChoiceChanged;
+window.trainingBuildImage = trainingBuildImage;
