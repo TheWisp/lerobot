@@ -20,6 +20,7 @@ async function runTabInit() {
         return;
     }
     runTabInitialized = true;
+    _bindRunControlHotkeys();
 
     // Ensure profiles are loaded (Robot tab may not have been visited yet)
     if (typeof robotProfiles !== 'undefined' && !robotProfiles.length) {
@@ -1200,6 +1201,24 @@ function renderRunForm() {
     html += '</div>'; // end standard fields
     html += '</div>'; // end policy section
 
+    // ---- Episode control (active while a record subprocess runs) ----
+    // Sends episode-transition commands to the running lerobot-record
+    // subprocess via POST /api/run/control — mirrors the keyboard events
+    // the CLI listens for (right-arrow / left-arrow / ESC). Applies to any
+    // workflow that launches a record subprocess (teleop record, policy
+    // record, HVLA), so it lives outside the per-workflow sections.
+    // Buttons start disabled; updateRunUI enables them while a subprocess
+    // runs (the endpoint 409s otherwise).
+    html += '<div class="form-section">';
+    html += '<div class="form-section-title">Episode control</div>';
+    html += '<div class="episode-control-row">';
+    html += '<button id="run-ctrl-next" class="btn-small secondary" onclick="sendRunControl(\'exit_early\')" disabled title="End the current phase early and keep the episode (hotkey: N)">Next episode</button>';
+    html += '<button id="run-ctrl-rerecord" class="btn-small secondary" onclick="sendRunControl(\'rerecord_episode\')" disabled title="Discard the current episode and re-record it (hotkey: R)">Re-record</button>';
+    html += '<button id="run-ctrl-stop" class="btn-small secondary" onclick="sendRunControl(\'stop_recording\')" disabled title="Stop the whole recording session (hotkey: Q)">Stop recording</button>';
+    html += '</div>';
+    html += '<div class="form-hint" style="margin-top:6px;">Active while a subprocess is running. Hotkeys: N next episode · R re-record · Q stop recording</div>';
+    html += '</div>';
+
     form.innerHTML = html;
     _toggleHvlaRecordFields();
     // Refresh debug-model state after the form is in the DOM. Without this,
@@ -1639,6 +1658,58 @@ async function stopRun() {
 }
 
 // ============================================================================
+// Episode control (episode transitions during an active record run)
+// ============================================================================
+
+// Human-readable labels for toasts, keyed by the command sent to
+// POST /api/run/control.
+const _RUN_CONTROL_LABELS = {
+    exit_early: 'Next episode',
+    rerecord_episode: 'Re-record episode',
+    stop_recording: 'Stop recording',
+};
+
+async function sendRunControl(cmd) {
+    try {
+        const res = await fetch('/api/run/control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cmd }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            showToast('Episode control', err.detail || `Command "${cmd}" failed`, 'error');
+            return;
+        }
+        showToast('Episode control', `${_RUN_CONTROL_LABELS[cmd] || cmd} sent`, 'info');
+    } catch (e) {
+        showToast('Error', e.message, 'error');
+    }
+}
+
+// Hotkeys mirror the record CLI's own keyboard controls. Bound once from
+// runTabInit; active only while the Run tab is visible and a subprocess is
+// running, and never while typing in a form field.
+let _runControlHotkeysBound = false;
+
+function _bindRunControlHotkeys() {
+    if (_runControlHotkeysBound) return;
+    _runControlHotkeysBound = true;
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        const activeTab = document.querySelector('.tab.active')?.dataset.tab;
+        if (activeTab !== 'run') return;
+        if (!_isRunning) return;
+        const target = e.target;
+        if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return;
+        const cmd = { n: 'exit_early', r: 'rerecord_episode', q: 'stop_recording' }[e.key.toLowerCase()];
+        if (!cmd) return;
+        e.preventDefault();
+        sendRunControl(cmd);
+    });
+}
+
+// ============================================================================
 // SSE output streaming
 // ============================================================================
 
@@ -1956,6 +2027,13 @@ function updateRunUI(isRunning) {
     const workflowBtns = document.querySelectorAll('.workflow-btn');
 
     if (stopBtn) stopBtn.disabled = !isRunning;
+
+    // Episode-control buttons only work while a subprocess is running
+    // (the /api/run/control endpoint 409s otherwise).
+    for (const id of ['run-ctrl-next', 'run-ctrl-rerecord', 'run-ctrl-stop']) {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = !isRunning;
+    }
 
     formInputs.forEach(el => el.disabled = isRunning);
     workflowBtns.forEach(el => el.disabled = isRunning);
