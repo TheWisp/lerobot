@@ -357,6 +357,10 @@ all = [
     "lerobot[hopejr]",
     "lerobot[lekiwi]",
     "lerobot[openarms]",
+    # openarm-ff (mujoco + openarm-mujoco, needed by gravity FF) has no declared
+    # conflict with `all` — include it so `--extra all` really is everything.
+    # openarm-ik is deliberately NOT here: it conflicts with kinematics/pink-dep.
+    "lerobot[openarm-ff]",
     "lerobot[reachy2]",
     "lerobot[rebot]",
     "lerobot[kinematics]",
