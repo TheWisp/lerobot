@@ -108,6 +108,10 @@ def init_logging(
         logger.addHandler(file_handler)
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    # python-can logs every raw CAN frame at DEBUG (socketcan.py) — hundreds
+    # of thousands of lines per minute at 30 Hz, which alone measurably
+    # starves the control loop and makes log files unusable.
+    logging.getLogger("can").setLevel(logging.INFO)
 
 
 def _install_exception_logging() -> None:
