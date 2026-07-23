@@ -1545,9 +1545,36 @@
             return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${lines.join("")}</svg>`;
         }
         if (Array.isArray(series[0])) {
-            // Very large vector (> MULTI_LINE_CAP dims): drop to L2 norm.
-            // This is honest about the visualization being lossy — overlaying
-            // 50+ overlapping lines is unreadable anyway.
+            // Very large vector (> MULTI_LINE_CAP dims). A single L2-norm
+            // line is dominated by whichever dims swing widest — on a 48-dim
+            // bimanual state (16 pos + 16 vel + 16 torque) it looked like
+            // "only the gripper is plotted". Draw one L2-norm line per
+            // name-suffix group (.pos / .vel / .torque / ...) when the names
+            // group cleanly, so each channel family stays visible.
+            const names = ft.names || [];
+            const groups = new Map();
+            for (let d = 0; d < series[0].length; d++) {
+                const n = names[d] || "";
+                const dot = n.lastIndexOf(".");
+                const suffix = dot >= 0 ? n.slice(dot + 1) : "";
+                if (!groups.has(suffix)) groups.set(suffix, []);
+                groups.get(suffix).push(d);
+            }
+            if (groups.size > 1 && groups.size <= 8) {
+                const palette = ["#5b8def", "#d97757", "#4caf50", "#b58900", "#9b59b6", "#16a085", "#e74c3c", "#7f8c8d"];
+                const lines = [];
+                let gi = 0;
+                for (const idxs of groups.values()) {
+                    const norms = series.map(row => {
+                        let s = 0;
+                        for (const d of idxs) s += (typeof row[d] === "number" ? row[d] * row[d] : 0);
+                        return Math.sqrt(s);
+                    });
+                    lines.push(numericLinePath(norms, length, palette[gi % palette.length]));
+                    gi++;
+                }
+                return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${lines.join("")}</svg>`;
+            }
             const norms = series.map(row => {
                 let s = 0;
                 for (const x of row) s += (typeof x === "number") ? x * x : 0;
