@@ -47,6 +47,7 @@ from lerobot.gui.training.providers import get_provider
 from lerobot.gui.training.providers.protocol import HostHandle
 from lerobot.gui.training.recipes import (
     build_lerobot_train_command,
+    docker_available,
     is_fake_recipe,
     output_subdir_in_run,
     resolve_host_placeholders,
@@ -665,6 +666,22 @@ class Orchestrator:
                 self._maybe_teardown_ephemeral(run, paths)
                 return
             self._emit_event(local, paths.events_jsonl, "prereqs_ready", host_id=host.id)
+            # The local transport's ensure_prereqs() is a documented no-op
+            # (it won't apt-install on the user's own machine), so probe the
+            # docker binary explicitly here. Without this, a missing daemon
+            # only surfaces as an opaque FileNotFoundError('docker') from
+            # Popen deep inside _launch_worker.
+            if isinstance(client, SubprocessClient) and not docker_available():
+                run.error = (
+                    "docker is not installed on this host — the training worker "
+                    "launches via `docker run`; install docker (and "
+                    "nvidia-container-toolkit for GPU training) and retry"
+                )
+                run.advance(RunState.FAILED)
+                self._runs.save(run)
+                self._emit_event(local, paths.events_jsonl, "prereqs_failed", error=run.error)
+                self._maybe_teardown_ephemeral(run, paths)
+                return
         try:
             cmd = self._build_command(run, paths)
             image = _extract_image_from_docker_argv(cmd)
