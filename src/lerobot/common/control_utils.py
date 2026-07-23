@@ -84,16 +84,39 @@ def predict_action(
         torch.autocast(device_type=device.type) if device.type == "cuda" and use_amp else nullcontext(),
     ):
         # Convert to pytorch format: channel first and float32 in [0,1] with batch dimension
+        _prep_t0 = time.perf_counter()
         observation = prepare_observation_for_inference(observation, device, task, robot_type)
         observation = preprocessor(observation)
+        _prep_ms = (time.perf_counter() - _prep_t0) * 1e3
 
         # Compute the next action with the policy
         # based on the current observation
+        _fwd_t0 = time.perf_counter()
         action = policy.select_action(observation)
+        _fwd_ms = (time.perf_counter() - _fwd_t0) * 1e3
 
         action = postprocessor(action)
 
+        # 1 Hz breakdown log: the "infer" span in latency snapshots bundles
+        # CPU-side observation preparation with the actual GPU forward, and
+        # on full-resolution multi-camera setups the prep dominates (tens of
+        # ms) while the forward is sub-ms — this makes the split visible in
+        # the run log instead of requiring offline profiling.
+        global _last_infer_breakdown_log_t
+        now = time.perf_counter()
+        if now - _last_infer_breakdown_log_t >= 1.0:
+            _last_infer_breakdown_log_t = now
+            logging.info(
+                "infer breakdown: obs_prep %.1fms · forward %.1fms (device=%s)",
+                _prep_ms,
+                _fwd_ms,
+                device,
+            )
+
     return action
+
+
+_last_infer_breakdown_log_t = 0.0
 
 
 def sanity_check_dataset_name(repo_id, policy_cfg):
