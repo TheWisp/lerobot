@@ -804,7 +804,7 @@ class DatasetWriter:
         if not self._meta.video_keys:
             return
         for video_key in self._meta.video_keys:
-            self.video_encoders[video_key] = OurStreamingVideoEncoder(fps=self._meta.fps, vcodec=self._vcodec)
+            self.video_encoders[video_key] = OurStreamingVideoEncoder(fps=self._meta.fps, vcodec=self._rgb_encoder.vcodec)
         self._start_video_encoders()
 
     def _start_video_encoders(self) -> None:
