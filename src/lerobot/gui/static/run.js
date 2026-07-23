@@ -1210,16 +1210,15 @@ function renderRunForm() {
     // Buttons start disabled; updateRunUI enables them while a subprocess
     // runs (the endpoint 409s otherwise).
     html += '<div class="form-section">';
-    html += '<div class="form-section-title">Episode control</div>';
+    // Live phase readout sits right in the section title so the operator can
+    // see what a "Next episode" click will interrupt ("recording episode 3" /
+    // "resetting" / ...). Fed by pollRunStatus from /api/run/status.
+    html += '<div class="form-section-title">Episode control <span id="run-phase" class="run-phase-badge"></span></div>';
     html += '<div class="episode-control-row">';
     html += '<button id="run-ctrl-next" class="btn-small secondary" onclick="sendRunControl(\'exit_early\')" disabled title="End the current phase early and keep the episode (hotkey: N)">Next episode</button>';
     html += '<button id="run-ctrl-rerecord" class="btn-small secondary" onclick="sendRunControl(\'rerecord_episode\')" disabled title="Discard the current episode and re-record it (hotkey: R)">Re-record</button>';
     html += '<button id="run-ctrl-stop" class="btn-small secondary" onclick="sendRunControl(\'stop_recording\')" disabled title="Stop the whole recording session (hotkey: Q)">Stop recording</button>';
     html += '</div>';
-    // Live phase readout ("recording episode 3" / "resetting" / ...) fed by
-    // pollRunStatus from /api/run/status — sits next to the buttons so the
-    // operator can see what a "Next episode" click will interrupt.
-    html += '<div class="form-hint" id="run-phase" style="margin-top:4px;"></div>';
     html += '<div class="form-hint" style="margin-top:6px;">Active while a subprocess is running. Hotkeys: N next episode · R re-record · Q stop recording</div>';
     html += '</div>';
 
@@ -2015,7 +2014,7 @@ async function pollRunStatus() {
         // before the first phase transition.
         const phaseEl = document.getElementById('run-phase');
         if (phaseEl) {
-            phaseEl.textContent = status.running && status.phase ? `Current: ${status.phase}` : '';
+            phaseEl.textContent = status.running && status.phase ? status.phase : '';
         }
 
         // If running but no SSE, reconnect
