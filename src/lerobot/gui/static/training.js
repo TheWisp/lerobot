@@ -247,13 +247,19 @@ async function trainingInit() {
 }
 
 // Error fields re-render every TRAINING_POLL_MS (3 s), which wipes any
-// in-progress text selection mid-drag. Make them click-to-copy instead:
-// one click puts the full message on the clipboard before the next render.
+// in-progress text selection mid-drag. Every error field carries an
+// explicit Copy button (see _errorHtml); clicking anywhere on the field
+// copies too, as a fallback.
+function _errorHtml(text) {
+  return `<div class="training-error"><span class="training-error-text">${escapeHtml(text)}</span><button type="button" class="training-copy-btn">Copy</button></div>`;
+}
+
 function _bindErrorCopy() {
   document.addEventListener("click", (e) => {
     const el = e.target.closest(".training-error, .training-image-banner.failed");
     if (!el) return;
-    const text = el.textContent.trim();
+    const textEl = el.querySelector(".training-error-text");
+    const text = (textEl ? textEl.textContent : el.textContent).trim();
     if (!text) return;
     navigator.clipboard.writeText(text).then(
       () => { if (typeof showToast === "function") showToast("Copied", "Error copied to clipboard", "info"); },
@@ -596,7 +602,7 @@ async function trainingRefreshDetail(runId) {
     const cloneBtn = document.getElementById(`training-clone-${runId}`);
     if (cloneBtn) cloneBtn.onclick = () => trainingDuplicateRun(runId);
   } catch (e) {
-    el.innerHTML = `<div class="training-error">Failed to load run: ${escapeHtml(e.message)}</div>`;
+    el.innerHTML = _errorHtml(`Failed to load run: ${e.message}`);
   }
 }
 
@@ -796,7 +802,7 @@ function trainingRenderDetailHtml(snap) {
 
       ${trainingConfigCardHtml(r)}
 
-      ${r.error ? `<div class="training-error">Error: ${escapeHtml(r.error)}</div>` : ""}
+      ${r.error ? _errorHtml(`Error: ${r.error}`) : ""}
     </div>
   `;
 }
@@ -912,7 +918,7 @@ function trainingImageStatusHtml(run, events) {
       return `<div class="training-image-banner ok">Image: pulled in ${dur}${size} · <span class="training-mono">${escapeHtml(last.image)}</span></div>`;
     }
     case "image_pull_failed":
-      return `<div class="training-image-banner failed">Image pull failed: <span class="training-mono">${escapeHtml(last.error || "(no error tail)")}</span></div>`;
+      return `<div class="training-image-banner failed"><span class="training-error-text">Image pull failed: <span class="training-mono">${escapeHtml(last.error || "(no error tail)")}</span></span><button type="button" class="training-copy-btn">Copy</button></div>`;
     default:
       return "";
   }
@@ -1275,8 +1281,8 @@ async function trainingSubmitStart(ev) {
     // Switch to detail view of the new run
     trainingSelectRun(run.run_id);
   } catch (e) {
-    errEl.style.display = "block";
-    errEl.textContent = e.message || String(e);
+    errEl.style.display = "flex";
+    errEl.innerHTML = `<span class="training-error-text">${escapeHtml(e.message || String(e))}</span><button type="button" class="training-copy-btn">Copy</button>`;
   } finally {
     if (submitBtn) submitBtn.disabled = false;
   }
