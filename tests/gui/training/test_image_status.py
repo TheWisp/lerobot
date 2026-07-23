@@ -21,14 +21,18 @@ def test_image_status_without_git_checkout(monkeypatch):
 
 
 def test_image_status_unknown_image_commit(monkeypatch):
-    """Image sha not in local history (e.g. deleted branch): commits_behind
-    must be None, not a bogus number."""
+    """Image sha not in local history and no local image to recover it from:
+    commits_behind must be None, not a bogus number."""
+    from lerobot.gui.training import recipes
+
+    # A tag whose sha cannot exist in history, and no local image (no OCI
+    # revision label to fetch by).
+    monkeypatch.setattr(recipes, "DEFAULT_IMAGE", "ghcr.io/x/lerobot-training:gone-branch-deadbeef")
+    monkeypatch.setattr(training_mod, "_docker_image_inspect", lambda tag: {})
     monkeypatch.setattr(training_mod, "_local_image_created", lambda tag: None)
     status = training_mod.get_image_status()
-    # The current DEFAULT_IMAGE tag's sha (e6bf147) is not in this repo.
-    assert status["git"]["image_commit"] is not None
+    assert status["git"]["image_commit"] == "deadbeef"
     assert status["git"]["commits_behind"] is None
-    assert status["git"]["branch"] is not None
 
 
 def test_image_status_known_image_commit(monkeypatch):

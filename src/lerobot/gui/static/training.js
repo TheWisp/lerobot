@@ -905,13 +905,15 @@ function trainingRenderImageSection() {
         ? `built from <span class="training-mono">${escapeHtml(git.image_branch)}@${escapeHtml(git.image_commit)}</span>`
         : "";
     let staleness;
+    const builtDate = _trainingFmtDate(st.image_created);
+    const builtSuffix = builtDate ? ` · built ${escapeHtml(builtDate)}` : "";
     if (git.image_commit && git.commits_behind != null) {
       staleness =
         git.commits_behind === 0
           ? `<span style="color:#98c379;">up to date with ${escapeHtml(git.branch)}</span>`
-          : `<span style="color:#e5c07b;">${git.commits_behind} commit${git.commits_behind === 1 ? "" : "s"} behind ${escapeHtml(git.branch)}</span>`;
+          : `<span style="color:#e5c07b;">${git.commits_behind} commit${git.commits_behind === 1 ? "" : "s"} behind ${escapeHtml(git.branch)}${builtSuffix}</span>`;
     } else if (git.image_commit) {
-      const d = _trainingFmtDate(git.image_commit_date);
+      const d = _trainingFmtDate(git.image_commit_date) || builtDate;
       staleness = `<span style="color:#e5c07b;">provenance not in local history${d ? ` (built ${escapeHtml(d)})` : ""}</span>`;
     } else {
       staleness = '<span style="color:#888;">tag carries no commit provenance</span>';
