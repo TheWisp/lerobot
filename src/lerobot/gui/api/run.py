@@ -388,6 +388,24 @@ async def _launch_subprocess(
     args: list[str], command: str, config: dict, extra_env: dict[str, str] | None = None
 ) -> None:
     """Launch a subprocess and start reading its output."""
+    # TODO(gui-hardware): Manage SocketCAN interface lifecycle here before
+    # launching hardware subprocesses. Kernel CAN interfaces lose their
+    # config (bitrate / FD mode / up state) on reboot or link-down, and
+    # nothing on a stock system re-arms them — today the operator must run
+    # `ip link set canX type can bitrate ... fd on up` manually after every
+    # reboot (see docs/source/damiao.mdx), and a forgotten bring-up surfaces
+    # only as a late "Network is down" ConnectionError deep inside robot
+    # connect. The GUI should instead: (1) parse the required CAN channels
+    # from the robot profile (e.g. left/right_arm_config.port for
+    # bi_openarm_follower), (2) check each interface's state via
+    # `ip -details -j link show canX`, (3) bring it up with the right
+    # bitrate/FD settings when down or misconfigured, and (4) report the
+    # action in the run terminal. Privilege design is the open question:
+    # `ip link` needs CAP_NET_ADMIN — options are a narrowly-scoped sudoers
+    # entry for the exact commands, pkexec, or a tiny privileged helper
+    # service (systemd/D-Bus); running the whole GUI as root is NOT
+    # acceptable. Until this lands, the interim fix is persistent host
+    # config via systemd-networkd (.netdev with BitRate/DataBitRate/FDMode).
     global _active_process, _active_command, _active_config, _output_lines, _stream_tasks
 
     _output_lines = []
