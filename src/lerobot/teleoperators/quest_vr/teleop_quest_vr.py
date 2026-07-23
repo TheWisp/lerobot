@@ -164,6 +164,18 @@ class QuestVRTeleop(Teleoperator):
         )
 
     def disconnect(self) -> None:
+        # TODO(quest-persistence): the WS server lives and dies with each
+        # teleop session, which in GUI mode means with each record/teleop
+        # subprocess — the headset loses the connection at the end of every
+        # run. The page already auto-reconnects (1s retry), so recovery on
+        # the next launch is automatic in principle, but the between-runs
+        # window shows "no connection" and XR-session continuity across runs
+        # is unverified. True persistence (keep VR connected across launches)
+        # needs the server to outlive the per-run process — e.g. hosted by
+        # the long-lived GUI server process or a standalone daemon, with
+        # teleop sessions attaching/detaching. Bigger architectural change;
+        # tracked here so it isn't mistaken for a regression (this lifecycle
+        # has existed since PR #18).
         if self._server is not None:
             self._server.stop()
             self._server = None

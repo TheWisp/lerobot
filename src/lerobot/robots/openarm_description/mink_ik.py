@@ -227,6 +227,7 @@ class BimanualOpenArmMinkIKTransform:
             self._hold = (True, True)
             return self._output()
         candidates = {"right": solved_deg[:8], "left": solved_deg[8:]}
+        hold = {"left": False, "right": False}
         for side in ("left", "right"):
             # A clutch-released arm is a strict joint hold. The shared QP's
             # posture task may otherwise move redundant joints while keeping
@@ -238,17 +239,30 @@ class BimanualOpenArmMinkIKTransform:
             if np.any(candidates[side][:7] < lower - 1e-6) or np.any(
                 candidates[side][:7] > upper + 1e-6
             ):
-                self._hold = (True, True)
-                return self._output()
-            if float(np.max(np.abs(candidates[side][:7] - self._q_last[side][:7]))) > _MAX_JOINT_STEP_DEG:
-                self._hold = (True, True)
-                return self._output()
+                # Out-of-bounds solve: hold THIS arm at its last joint
+                # positions; the other arm keeps tracking.
+                candidates[side][:7] = self._q_last[side][:7]
+                hold[side] = True
+                continue
+            joint_step = candidates[side][:7] - self._q_last[side][:7]
+            step_mag = float(np.max(np.abs(joint_step)))
+            if step_mag > _MAX_JOINT_STEP_DEG:
+                # Clamp the per-tick joint step instead of freezing BOTH
+                # arms. A full freeze deadlocks against a moving target —
+                # every subsequent tick trips the same guard until the
+                # operator re-anchors (reported as "arm unresponsive until
+                # both controllers are wiggled"). Clamped progress keeps the
+                # same per-tick velocity bound but converges on the target.
+                candidates[side][:7] = self._q_last[side][:7] + joint_step * (
+                    _MAX_JOINT_STEP_DEG / step_mag
+                )
+                hold[side] = True
 
         self._q_last = {side: candidates[side].copy() for side in ("left", "right")}
         for side in ("left", "right"):
             if self._previous_enabled[side]:
                 self._last_pos[side] = targets[side][:3, 3].copy()
-        self._hold = (False, False)
+        self._hold = (hold["left"], hold["right"])
         return self._output()
 
     def _output(self) -> dict[str, float]:
