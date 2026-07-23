@@ -37,7 +37,7 @@ _ACTION_KEYS = (
     "gripper_pos",
 )
 _MAX_EE_STEP_M = 0.10
-_MAX_JOINT_STEP_DEG = 20.0
+_MAX_JOINT_STEP_DEG = 10.0
 _RESET_RATE_DEG_S = 30.0
 _RESET_DT_CAP_S = 0.1
 
