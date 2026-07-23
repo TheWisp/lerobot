@@ -1245,3 +1245,40 @@ class TestControlEndpoint:
         assert result["status"] == "sent"
         assert result["cmd"] == "rerecord_episode"
         assert written == [b'{"v": 1, "cmd": "rerecord_episode"}\n']
+
+
+class TestRunPhaseTracking:
+    """The Run tab's phase readout is parsed from subprocess stdout (brittle, see TODO)."""
+
+    def setup_method(self):
+        import lerobot.gui.api.run as run_mod
+
+        run_mod._active_phase = None
+
+    def test_phase_transitions(self):
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.api.run import _append_output
+
+        _append_output("INFO 2026-07-23 12:44:53 t_record.py:1166 Recording episode 3")
+        assert run_mod._active_phase == "recording episode 3"
+        _append_output("INFO 2026-07-23 12:45:20 t_record.py:1127 Reset the environment")
+        assert run_mod._active_phase == "resetting"
+        _append_output("INFO 2026-07-23 12:45:21 t_record.py:1210 Re-record episode")
+        assert run_mod._active_phase == "re-recording"
+        _append_output("some unrelated line")
+        assert run_mod._active_phase == "re-recording"  # unchanged
+
+    def test_status_includes_phase(self):
+        from lerobot.gui.api._run_core import get_run_status
+
+        proc = AsyncMock()
+        proc.returncode = None
+        proc.pid = 4321
+        with (
+            patch("lerobot.gui.api.run._active_process", proc),
+            patch("lerobot.gui.api.run._active_command", "record"),
+            patch("lerobot.gui.api.run._active_phase", "recording episode 3"),
+        ):
+            status = get_run_status()
+        assert status["running"] is True
+        assert status["phase"] == "recording episode 3"

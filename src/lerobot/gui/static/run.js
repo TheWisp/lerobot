@@ -1216,6 +1216,10 @@ function renderRunForm() {
     html += '<button id="run-ctrl-rerecord" class="btn-small secondary" onclick="sendRunControl(\'rerecord_episode\')" disabled title="Discard the current episode and re-record it (hotkey: R)">Re-record</button>';
     html += '<button id="run-ctrl-stop" class="btn-small secondary" onclick="sendRunControl(\'stop_recording\')" disabled title="Stop the whole recording session (hotkey: Q)">Stop recording</button>';
     html += '</div>';
+    // Live phase readout ("recording episode 3" / "resetting" / ...) fed by
+    // pollRunStatus from /api/run/status — sits next to the buttons so the
+    // operator can see what a "Next episode" click will interrupt.
+    html += '<div class="form-hint" id="run-phase" style="margin-top:4px;"></div>';
     html += '<div class="form-hint" style="margin-top:6px;">Active while a subprocess is running. Hotkeys: N next episode · R re-record · Q stop recording</div>';
     html += '</div>';
 
@@ -2005,6 +2009,14 @@ async function pollRunStatus() {
         const res = await fetch('/api/run/status');
         const status = await res.json();
         updateRunUI(status.running);
+
+        // Live record-phase readout next to the episode-control buttons
+        // ("recording episode 3" / "resetting" / ...). Empty when idle or
+        // before the first phase transition.
+        const phaseEl = document.getElementById('run-phase');
+        if (phaseEl) {
+            phaseEl.textContent = status.running && status.phase ? `Current: ${status.phase}` : '';
+        }
 
         // If running but no SSE, reconnect
         if (status.running && !runEventSource) {
