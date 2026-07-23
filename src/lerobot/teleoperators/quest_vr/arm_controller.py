@@ -303,6 +303,17 @@ class QuestArmController:
             self._quest_pos_at_engage = quest_pos.copy()
             self._quest_rot_at_engage = quest_rot_to_robot(quest_quat, self._q2r)
             self._quest_pos_prev = quest_pos.copy()
+        if engaged != self._engaged:
+            # Per-side visibility for "one arm won't follow" reports: an arm
+            # only moves while ENGAGED, so asymmetry between these log lines
+            # and arm motion isolates the failure to upstream (clutch /
+            # tracking / settle window) vs downstream (IK / CAN).
+            logger.info(
+                "Quest %s clutch %s — arm %s",
+                self._label,
+                "ENGAGED" if engaged else "released",
+                "following teleop" if engaged else "holding position",
+            )
         self._engaged = engaged
 
         p = self.key_prefix

@@ -32,6 +32,7 @@ exception.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import json
 import logging
@@ -141,6 +142,12 @@ class QuestServer:
         self._stop_evt = threading.Event()
         self._started = threading.Event()
         self._last_rtt_ms: float | None = None
+        # Live WebSocket connections, closed explicitly at shutdown so their
+        # handlers exit via the normal close path instead of being cancelled
+        # mid-request (which makes aiohttp log ERROR "Unhandled exception /
+        # InvalidStateError" on every run exit). Only mutated from the
+        # server thread's event loop.
+        self._active_ws: set = set()
 
     @property
     def last_rtt_ms(self) -> float | None:
@@ -178,10 +185,12 @@ class QuestServer:
         if self._loop is not None:
             try:
                 asyncio.run_coroutine_threadsafe(self._shutdown(), self._loop).result(timeout=3.0)
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, concurrent.futures.CancelledError):
                 # Expected — the loop cancelling its own pending tasks at
                 # shutdown propagates here as the scheduled coro racing the
-                # loop close. Not an error.
+                # loop close. run_coroutine_threadsafe surfaces that as
+                # concurrent.futures.CancelledError; a bare loop cancel as
+                # asyncio.CancelledError. Neither is an error.
                 pass
             except Exception as e:
                 logger.warning(f"QuestServer shutdown coro raised: {type(e).__name__}: {e}")
@@ -245,6 +254,13 @@ class QuestServer:
             await asyncio.sleep(0.1)
 
     async def _shutdown(self) -> None:
+        # Close live websockets first: their handlers then exit the
+        # `async for msg in ws` loop through the normal close path. Letting
+        # the loop drain cancel them mid-request instead makes aiohttp log
+        # ERROR "Unhandled exception / InvalidStateError" on every exit.
+        for ws in list(self._active_ws):
+            with contextlib.suppress(Exception):
+                await ws.close()
         # Cleanup tears down the listening socket and waits for in-flight
         # requests / WS sessions to drain. Wrapped in suppress because
         # aiohttp can raise during cleanup if the Quest disconnects rudely.
@@ -267,6 +283,7 @@ class QuestServer:
 
         ws = web.WebSocketResponse(max_msg_size=64 * 1024)
         await ws.prepare(request)
+        self._active_ws.add(ws)
         logger.info(f"QuestVR client connected from {request.remote}")
 
         pending_pings: dict[int, float] = {}
@@ -330,6 +347,7 @@ class QuestServer:
                     )
         finally:
             ping_task.cancel()
+            self._active_ws.discard(ws)
             logger.info("QuestVR client disconnected")
         return ws
 
