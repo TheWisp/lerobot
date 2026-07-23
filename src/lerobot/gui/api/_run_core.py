@@ -90,6 +90,11 @@ def get_run_status() -> dict[str, Any]:
         "running": True,
         "command": run_mod._active_command,
         "pid": proc.pid,
+        # Current record phase parsed from subprocess stdout (see
+        # _RUN_PHASE_RULES in run.py; None for non-record runs or before
+        # the first transition line). Shown next to the Run tab's
+        # flow-control buttons.
+        "phase": run_mod._active_phase,
     }
 
 

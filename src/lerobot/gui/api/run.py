@@ -8,6 +8,7 @@ import ctypes
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import time
@@ -253,6 +254,34 @@ _OUTPUT_MAX_LINES = 2000
 
 _overlay_state: dict | None = None  # {"text": "...", "color": "..."}
 
+# Current record-phase shown next to the Run tab's flow-control buttons.
+# TODO(run-state): this is parsed from subprocess stdout text, which is
+# brittle — any rewording of the log_say messages in lerobot_record breaks
+# it silently. Replace with a structured run_state.json published by the
+# subprocess (the RLT metrics.json pattern: writer in lerobot_record,
+# reader here, polled by the frontend).
+_active_phase: str | None = None
+
+# Ordered (pattern, phase-label) rules; first match wins. The {episode}
+# placeholder is filled from the capture group when present.
+_RUN_PHASE_RULES: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"Recording episode (\d+)"), "recording episode {episode}"),
+    (re.compile(r"Re-record episode"), "re-recording"),
+    (re.compile(r"Reset the environment"), "resetting"),
+    (re.compile(r"Auto-reset: moving to trajectory start"), "resetting"),
+    (re.compile(r"Stopping data recording"), "stopping"),
+]
+
+
+def _track_run_phase(line: str) -> None:
+    """Update _active_phase when a subprocess stdout line marks a phase transition."""
+    global _active_phase
+    for pattern, label in _RUN_PHASE_RULES:
+        m = pattern.search(line)
+        if m:
+            _active_phase = label.format(episode=m.group(1) if m.groups() else "")
+            return
+
 
 def _append_output(line: str) -> None:
     """Append a line to the output buffer and notify SSE waiters.
@@ -262,6 +291,7 @@ def _append_output(line: str) -> None:
     the camera-feed overlay by printing this format to stdout.
     """
     global _output_lines, _overlay_state
+    _track_run_phase(line)
     if line.startswith("##OVERLAY:"):
         parts = line.strip().strip("#").split(":")
         # OVERLAY:text or OVERLAY:text:color
@@ -406,11 +436,12 @@ async def _launch_subprocess(
     # service (systemd/D-Bus); running the whole GUI as root is NOT
     # acceptable. Until this lands, the interim fix is persistent host
     # config via systemd-networkd (.netdev with BitRate/DataBitRate/FDMode).
-    global _active_process, _active_command, _active_config, _output_lines, _stream_tasks
+    global _active_process, _active_command, _active_config, _output_lines, _stream_tasks, _active_phase
 
     _output_lines = []
     _active_command = command
     _active_config = config
+    _active_phase = None
 
     # Close stale obs reader — the new process will create fresh shared memory
     # segments; any existing reader is mapped to old (possibly unlinked) segments.
@@ -1069,7 +1100,7 @@ async def send_control(req: ControlRequest) -> dict:
 
 @router.post("/stop")
 async def stop_process() -> dict:
-    global _active_process, _active_command, _active_config
+    global _active_process, _active_command, _active_config, _active_phase
 
     if _active_process is None:
         raise HTTPException(409, "No active process to stop")
@@ -1089,6 +1120,7 @@ async def stop_process() -> dict:
     _active_process = None
     _active_command = None
     _active_config = None
+    _active_phase = None
     _close_obs_reader()
     # NOTE: debug model is NOT stopped here — it stays warm for reuse
     return {"status": "stopped", "pid": pid}
