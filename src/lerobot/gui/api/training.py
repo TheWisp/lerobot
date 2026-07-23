@@ -955,18 +955,34 @@ def _repo_root() -> Path | None:
 
 def _local_image_created(tag: str) -> str | None:
     """ISO creation date of a locally-present docker image, None when absent/unavailable."""
+    return _docker_image_inspect(tag).get("created")
+
+
+def _docker_image_inspect(tag: str) -> dict:
+    """{'created': ISO date, 'revision': full git sha from OCI label} for a
+    locally-present image; empty dict when absent or docker unavailable."""
     import subprocess
 
     try:
         r = subprocess.run(
-            ["docker", "image", "inspect", tag, "--format", "{{.Created}}"],
+            [
+                "docker",
+                "image",
+                "inspect",
+                tag,
+                "--format",
+                '{{.Created}} {{index .Config.Labels "org.opencontainers.image.revision"}}',
+            ],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        return r.stdout.strip() if r.returncode == 0 else None
+        if r.returncode != 0:
+            return {}
+        parts = r.stdout.strip().split()
+        return {"created": parts[0] if parts else None, "revision": parts[1] if len(parts) > 1 else None}
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        return {}
 
 
 def get_image_status() -> dict[str, Any]:
@@ -997,18 +1013,32 @@ def get_image_status() -> dict[str, Any]:
 
     # CI tags are "<branch-slug>-<short-sha>" (docker/metadata-action in
     # docker_publish_fork_training.yml). Parse and compare against local
-    # history when the commit is known here; it may legitimately be absent
-    # (image built from a since-deleted branch state).
+    # history when the commit is known here. If the short sha is not in local
+    # history, the OCI revision label on a locally-pulled image gives the
+    # FULL sha — GitHub accepts fetching dangling commits by full sha, which
+    # brings the commit into local history and enables the count. The fetch
+    # is attempted at most once per sha (it persists in .git afterwards).
     import re
+
+    image_meta = _docker_image_inspect(DEFAULT_IMAGE)
+    status["image_created"] = image_meta.get("created")
+    status["image_revision"] = image_meta.get("revision")
 
     tag = DEFAULT_IMAGE.rsplit(":", 1)[-1]
     m = re.match(r"^(?P<branch>.+)-(?P<sha>[0-9a-f]{7,8})$", tag)
     if m:
         git_info["image_branch"] = m.group("branch")
         git_info["image_commit"] = m.group("sha")
-        if _git(["cat-file", "-t", m.group("sha")], root) == "commit":
-            git_info["image_commit_date"] = _git(["show", "-s", "--format=%cI", m.group("sha")], root)
-            behind = _git(["rev-list", "--count", f"{m.group('sha')}..HEAD"], root)
+        sha = m.group("sha")
+        known = _git(["cat-file", "-t", sha], root) == "commit"
+        if not known and image_meta.get("revision"):
+            _git(["fetch", "origin", image_meta["revision"]], root)
+            sha = image_meta["revision"]
+            known = _git(["cat-file", "-t", sha], root) == "commit"
+        if known:
+            git_info["image_commit"] = sha
+            git_info["image_commit_date"] = _git(["show", "-s", "--format=%cI", sha], root)
+            behind = _git(["rev-list", "--count", f"{sha}..HEAD"], root)
             git_info["commits_behind"] = int(behind) if behind and behind.isdigit() else None
         else:
             git_info["commits_behind"] = None  # provenance not in local history
