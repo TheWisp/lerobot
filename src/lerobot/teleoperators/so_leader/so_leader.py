@@ -312,19 +312,28 @@ class SO107Leader(SOLeader):
         return True
 
     def _start_keyboard_listener(self) -> None:
-        """Start keyboard listener for intervention detection (space key)."""
-        import time as _time
+        """Start keyboard listener for intervention detection (space key).
 
-        from pynput import keyboard
+        Uses the shared display-independent backend: ``pynput`` global capture on
+        X11/macOS/Windows, the terminal listener on Wayland/headless-with-TTY, and
+        honouring ``LEROBOT_KEYBOARD_LISTENER=0`` when the GUI owns flow control.
+        """
+        from lerobot.utils.keyboard_input import create_key_listener
 
-        def on_press(key):
-            if key != keyboard.Key.space:
-                return
-            self._try_toggle_intervention(_time.monotonic())
+        def on_key(name: str) -> None:
+            if name == "space":
+                self._try_toggle_intervention(time.monotonic())
 
-        self._keyboard_listener = keyboard.Listener(on_press=on_press)
-        self._keyboard_listener.start()
-        logger.info("Intervention enabled: Press SPACE to toggle between policy and teleop")
+        self._keyboard_listener = create_key_listener(
+            on_key, controls_help="SPACE = toggle policy/teleop intervention"
+        )
+        if self._keyboard_listener is not None:
+            logger.info("Intervention enabled: Press SPACE to toggle between policy and teleop")
+        else:
+            logger.warning(
+                "Intervention toggle unavailable: no usable keyboard backend "
+                "(Wayland/headless without TTY, or disabled via LEROBOT_KEYBOARD_LISTENER=0)."
+            )
 
     def set_intervention_transition_lock(self, locked: bool) -> None:
         """Lock or unlock SPACE toggling during a transition.

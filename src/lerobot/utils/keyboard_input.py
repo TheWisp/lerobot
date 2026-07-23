@@ -21,10 +21,16 @@ This module centralizes everything related to *discrete* keyboard controls
   :func:`pynput_can_capture` (the single predicate every call-site should use to
   decide whether ``pynput`` can actually capture keys here);
 * a shared key mapping — :func:`apply_recording_control`; and
-* two interchangeable backends behind one ``(listener, events)`` contract:
-  the ``pynput`` global listener (X11 / trusted-macOS / Windows) and a
+* interchangeable backends behind one ``(listener, events)`` contract:
+  the ``pynput`` global listener (X11 / trusted-macOS / Windows), a
   standard-library :class:`TerminalKeyListener` that reads the controlling TTY
-  (Wayland / headless-SSH-with-TTY / macOS without Accessibility permission).
+  (Wayland / headless-SSH-with-TTY / macOS without Accessibility permission),
+  and a :class:`StdinControlListener` that accepts JSON control lines from a
+  parent process (e.g. the LeRobot GUI) when stdin is piped instead of a TTY.
+
+Set ``LEROBOT_KEYBOARD_LISTENER=0`` to disable all *local keyboard* capture
+(the GUI does this for subprocesses it launches, making the stdin channel the
+single control source). The stdin channel itself is not affected by the flag.
 
 NOTE: *continuous* key-state teleoperation ("hold a key to keep moving") is
 deliberately NOT served here. A terminal in cbreak mode delivers only key-down
@@ -37,6 +43,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import json
 import logging
 import os
 import platform
@@ -168,6 +175,99 @@ def apply_recording_control(control: str, events: dict) -> None:
         print("Escape key pressed. Stopping data recording...")
         events["stop_recording"] = True
         events["exit_early"] = True
+
+
+KEYBOARD_LISTENER_ENV_VAR = "LEROBOT_KEYBOARD_LISTENER"
+
+# stdin control protocol commands (GUI → subprocess) mapped onto the keyboard
+# control names understood by apply_recording_control.
+_STDIN_COMMAND_TO_CONTROL = {
+    "exit_early": "right",  # end current phase early, keep the episode
+    "rerecord_episode": "left",  # discard and re-record the current episode
+    "stop_recording": "esc",  # stop the whole session
+}
+
+
+def keyboard_listener_disabled() -> bool:
+    """True when local keyboard capture is disabled via ``LEROBOT_KEYBOARD_LISTENER=0``.
+
+    The GUI sets this for subprocesses it launches: flow control then arrives
+    exclusively through the stdin channel (single source of truth — and the only
+    channel that works at all on Wayland, where global capture is unavailable).
+    """
+    return os.environ.get(KEYBOARD_LISTENER_ENV_VAR, "").lower() in ("0", "false", "off")
+
+
+class StdinControlListener:
+    """Read JSON control commands from stdin on a daemon thread.
+
+    The piped-stdin counterpart of the keyboard backends: a parent process (e.g.
+    the LeRobot GUI) writes lines of ``{"v": 1, "cmd": "<name>"}`` to the
+    subprocess's stdin. Active only when stdin is *not* a TTY — when it is, the
+    terminal keyboard backend owns stdin instead, so the two never compete for
+    bytes. ``on_command`` receives each validated ``cmd`` string; malformed lines
+    are logged and skipped.
+
+    The reader thread is a daemon and ``stop()`` only flags it: a blocked
+    ``readline`` cannot be interrupted portably. That is acceptable because the
+    subprocess lifetime is the recording-session lifetime (and the GUI arms
+    ``pdeathsig`` on its children).
+    """
+
+    def __init__(self, on_command: Callable[[str], None]):
+        self._on_command = on_command
+        self._running = False
+        self._thread: threading.Thread | None = None
+
+    @property
+    def is_active(self) -> bool:
+        return self._thread is not None
+
+    def _run(self) -> None:
+        while self._running:
+            line = sys.stdin.readline()
+            if not line:  # EOF: the parent closed the pipe
+                break
+            line = line.strip()
+            if not line:
+                continue
+            cmd = None
+            with contextlib.suppress(ValueError, AttributeError):
+                msg = json.loads(line)
+                if msg.get("v") == 1 and isinstance(msg.get("cmd"), str):
+                    cmd = msg["cmd"]
+            if cmd is None:
+                logger.warning("Stdin control: ignoring malformed line: %.120r", line)
+                continue
+            try:
+                self._on_command(cmd)
+            except Exception as e:  # never let a handler error kill the reader thread
+                logger.debug("Stdin control handler error: %s", e)
+
+    def start(self) -> None:
+        """Start reading. No-op when stdin is a TTY (the terminal backend owns it)."""
+        if sys.stdin.isatty():
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        logger.info("Stdin control channel active (JSON lines on stdin).")
+
+    def stop(self) -> None:
+        self._running = False
+
+
+class _CompositeControlListener:
+    """Bundle the active control sources behind the single ``.stop()`` contract
+    that callers of :func:`init_keyboard_listener` already use."""
+
+    def __init__(self, *listeners):
+        self._listeners = [listener for listener in listeners if listener is not None]
+
+    def stop(self) -> None:
+        for listener in self._listeners:
+            with contextlib.suppress(Exception):
+                listener.stop()
 
 
 # Terminal arrow keys arrive as a 3-byte escape sequence whose *final* byte identifies
@@ -358,6 +458,14 @@ def create_key_listener(dispatch: Callable[[str], None], *, controls_help: str =
     """
     suffix = f" ({controls_help})" if controls_help else ""
 
+    if keyboard_listener_disabled():
+        logger.info(
+            "Keyboard listener disabled via %s=0 — control arrives via the stdin channel only.%s",
+            KEYBOARD_LISTENER_ENV_VAR,
+            suffix,
+        )
+        return None
+
     if pynput_can_capture() and keyboard is not None:
 
         def on_press(key):
@@ -412,10 +520,16 @@ def init_keyboard_listener():
     reliable choice over high-latency SSH/VNC links, where arrow-key escape sequences can
     be split, delayed, or intercepted by the terminal.
 
+    Independently of the keyboard backends, when stdin is piped (not a TTY) a
+    :class:`StdinControlListener` accepts JSON control lines
+    ``{"v": 1, "cmd": "exit_early" | "rerecord_episode" | "stop_recording"}`` — this is
+    the channel the GUI uses, and the only one available on Wayland GUI launches.
+
     Returns:
         A tuple ``(listener, events)`` where ``listener`` exposes ``.stop()`` or is
-        ``None``, and ``events`` is the dict of flags (``exit_early``,
-        ``rerecord_episode``, ``stop_recording``) set by key presses.
+        ``None`` (no source available), and ``events`` is the dict of flags
+        (``exit_early``, ``rerecord_episode``, ``stop_recording``) set by key presses
+        or stdin commands.
     """
     events = {
         "exit_early": False,
@@ -436,5 +550,21 @@ def init_keyboard_listener():
             apply_recording_control("esc", events)
         # other keys (incl. up/down) are intentionally ignored
 
+    # stdin control protocol (GUI → subprocess): {"v": 1, "cmd": "<name>"} where the
+    # command names are semantic (what the operator wants); each maps onto the same
+    # events-dict flags the corresponding keyboard key sets.
+    def on_stdin_command(cmd: str) -> None:
+        control = _STDIN_COMMAND_TO_CONTROL.get(cmd)
+        if control is None:
+            logger.warning(
+                "Stdin control: unknown command %r (expected one of %s)", cmd, sorted(_STDIN_COMMAND_TO_CONTROL)
+            )
+            return
+        apply_recording_control(control, events)
+
     listener = create_key_listener(on_key, controls_help="Right/Left/Esc, or n=next, r=re-record, q=quit")
-    return listener, events
+    stdin_listener = StdinControlListener(on_stdin_command)
+    stdin_listener.start()
+    if listener is None and not stdin_listener.is_active:
+        return None, events
+    return _CompositeControlListener(listener, stdin_listener), events
