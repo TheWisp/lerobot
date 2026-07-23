@@ -557,7 +557,9 @@ def init_keyboard_listener():
         control = _STDIN_COMMAND_TO_CONTROL.get(cmd)
         if control is None:
             logger.warning(
-                "Stdin control: unknown command %r (expected one of %s)", cmd, sorted(_STDIN_COMMAND_TO_CONTROL)
+                "Stdin control: unknown command %r (expected one of %s)",
+                cmd,
+                sorted(_STDIN_COMMAND_TO_CONTROL),
             )
             return
         apply_recording_control(control, events)

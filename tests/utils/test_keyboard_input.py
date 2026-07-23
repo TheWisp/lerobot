@@ -256,10 +256,7 @@ def test_stdin_malformed_lines_ignored(monkeypatch, caplog):
     monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
     _set_stdin_content(
         monkeypatch,
-        "garbage\n"
-        '{"v": 2, "cmd": "exit_early"}\n'
-        '{"v": 1}\n'
-        '{"v": 1, "cmd": "explode"}\n',
+        'garbage\n{"v": 2, "cmd": "exit_early"}\n{"v": 1}\n{"v": 1, "cmd": "explode"}\n',
     )
     listener, events = init_keyboard_listener()
     _drain_stdin(listener)

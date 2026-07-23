@@ -324,3 +324,32 @@ class TestMaybeStartPrefetch:
         ds_mod._maybe_start_prefetch("test_ds", 0, ep_length, start_frame=200)
 
         assert ds_mod._prefetch_generation > gen_before
+
+
+class TestPrefetchVanishingEpisode:
+    """A concurrently-recorded dataset can lose an episode mid-prefetch (re-record
+    discards it). The prefetcher must abort quietly, not spam tracebacks."""
+
+    @patch("lerobot.datasets.video_utils.VideoDecoderCache")
+    @patch("lerobot.datasets.video_utils.decode_video_frames_torchcodec")
+    def test_vanished_episode_aborts_quietly(self, mock_decode, _mock_cache_cls, caplog):
+        import logging
+
+        cameras = ["cam_a"]
+        ep_length = 5
+        app_state, _ = _make_mock_app_state(cameras, ep_length)
+        ds_mod = _setup_prefetch_module(app_state)
+
+        # Episode disappears before the first batch: get_video_file_path raises
+        # IndexError, as when a re-record discards the in-progress episode.
+        app_state.datasets["test_ds"].meta.get_video_file_path = MagicMock(
+            side_effect=IndexError("Episode index 0 out of range. Episodes: 0")
+        )
+
+        with caplog.at_level(logging.INFO):
+            ds_mod._prefetch_generation = 1
+            ds_mod._prefetch_episode("test_ds", 0, ep_length, generation=1)  # must not raise
+
+        assert mock_decode.call_count == 0
+        assert any("no longer exists" in r.message for r in caplog.records)
+        assert not any(r.levelno >= logging.WARNING for r in caplog.records)

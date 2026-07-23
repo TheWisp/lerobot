@@ -454,6 +454,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 /* Episode-control buttons (run.js "Episode control" section). Neutral
  * secondary style — these are mid-run nudges, not launch/stop actions. */
 .episode-control-row { display: flex; gap: 8px; }
+.run-phase-badge { margin-left: 8px; padding: 2px 8px; border-radius: 3px; background: #16213e; color: #7fd4ff; font-weight: 600; font-size: 11px; text-transform: none; letter-spacing: 0; }
+.run-phase-badge:empty { display: none; }
 
 /* Run tab main area */
 .run-main-split { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
