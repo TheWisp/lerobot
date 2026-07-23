@@ -490,6 +490,10 @@ def record_loop(
     action_keys = sorted(robot.action_features) if use_interpolation else []
 
     no_action_count = 0
+    # Rate-limit the slow-loop warning to 1 Hz (it otherwise fires every
+    # iteration when the loop persistently overruns, e.g. 65 ms policy
+    # inference against a 33 ms budget — thousands of lines per run).
+    last_slow_warn_t = 0.0
 
     # Reset intervention state for new episode
     if teleop is not None and hasattr(teleop, "reset_intervention"):
@@ -803,7 +807,10 @@ def record_loop(
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
         else:
             no_action_count += 1
-            if no_action_count == 1 or no_action_count % 10 == 0:
+            # Log once per record_loop invocation: this is the EXPECTED path
+            # during a human reset phase (no teleop attached), so every-Nth
+            # repetition is pure noise (thousands of lines per run).
+            if no_action_count == 1:
                 logging.warning(
                     "No policy or teleoperator provided, skipping action generation. "
                     "This is likely to happen when resetting the environment without a teleop device. "
@@ -868,9 +875,12 @@ def record_loop(
 
         sleep_time_s: float = control_interval - dt_s
         if sleep_time_s < 0:
-            logging.warning(
-                f"Record loop is running slower ({1 / dt_s:.1f} Hz) than the target FPS ({fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
-            )
+            now = time.perf_counter()
+            if now - last_slow_warn_t >= 1.0:
+                last_slow_warn_t = now
+                logging.warning(
+                    f"Record loop is running slower ({1 / dt_s:.1f} Hz) than the target FPS ({fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
+                )
 
         precise_sleep(max(sleep_time_s, 0.0))
 
