@@ -208,20 +208,23 @@ def test_solver_failure_holds_previous_joints_and_updates_grippers(monkeypatch):
     assert transform.hold_per_arm == (True, True)
 
 
-def test_out_of_bounds_solution_holds_both_arms(monkeypatch):
+def test_out_of_bounds_solution_holds_only_the_violating_side(monkeypatch):
+    """Out-of-bounds solve: the violating arm holds its last joints while the
+    other arm keeps tracking (per-side hold, not a full freeze)."""
     right_deg = np.zeros(8)
-    right_deg[0] = 11.0
-    solver = _FakeMinkKinematics(_solution(right_deg, np.zeros(8)))
+    right_deg[0] = 11.0  # violates bound_deg=10 for the right arm
+    left_deg = np.full(8, 5.0)
+    solver = _FakeMinkKinematics(_solution(right_deg, left_deg))
     transform = _transform(monkeypatch, solver, bound_deg=10.0)
 
     output = transform(_action(left_gripper=7.0, right_gripper=-8.0))
 
-    for side in ("left", "right"):
-        for motor in MOTOR_NAMES[:7]:
-            assert output[f"{side}_{motor}.pos"] == pytest.approx(0.0)
+    for motor in MOTOR_NAMES[:7]:
+        assert output[f"right_{motor}.pos"] == pytest.approx(0.0)  # held
+        assert output[f"left_{motor}.pos"] == pytest.approx(5.0)  # follows
     assert output["left_gripper.pos"] == pytest.approx(7.0)
     assert output["right_gripper.pos"] == pytest.approx(-8.0)
-    assert transform.hold_per_arm == (True, True)
+    assert transform.hold_per_arm == (False, True)
 
 
 def test_reset_ramps_in_degrees_without_calling_solver(monkeypatch):

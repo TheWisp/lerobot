@@ -804,7 +804,13 @@ class DatasetWriter:
         if not self._meta.video_keys:
             return
         for video_key in self._meta.video_keys:
-            self.video_encoders[video_key] = OurStreamingVideoEncoder(fps=self._meta.fps, vcodec=self._rgb_encoder.vcodec)
+            # Depth streams use the depth encoder config (hevc/gray12le), RGB
+            # streams the RGB encoder — same conditional as every other
+            # encoder call site in this class.
+            encoder_cfg = self._depth_encoder if video_key in self._meta.depth_keys else self._rgb_encoder
+            self.video_encoders[video_key] = OurStreamingVideoEncoder(
+                fps=self._meta.fps, vcodec=encoder_cfg.vcodec
+            )
         self._start_video_encoders()
 
     def _start_video_encoders(self) -> None:
