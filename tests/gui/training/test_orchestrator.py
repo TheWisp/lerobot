@@ -1589,3 +1589,19 @@ def test_factory_called_with_provider_id_only_for_spawn(tmp_path: Path):
     # No vendor credential should ever be serialized to run.json.
     raw = (RunPaths.for_run(run.run_id, rr.runs_dir).run_json).read_text()
     assert "private-key" not in raw and "subject-credentials" not in raw
+
+
+def test_start_fails_cleanly_when_docker_missing(orch: Orchestrator, monkeypatch) -> None:
+    """Local docker recipe on a docker-less host must fail with a clear error,
+    not an opaque FileNotFoundError('docker') from Popen."""
+    monkeypatch.setattr("lerobot.gui.training.orchestrator.docker_available", lambda: False)
+    req = StartRequest(
+        host_id="test-host",
+        recipe_name="real-mode",
+        dataset_id="lerobot/pusht",
+        args={"policy.type": "act"},  # NOT __fake__ → docker recipe path
+    )
+    run = orch.start(req)
+    snap = _wait_until_state(orch, run.run_id, RunState.FAILED)
+    assert "docker is not installed" in snap.run.error
+    assert snap.run.session_id is None  # never reached launch
