@@ -27,6 +27,21 @@ DEVICE=cuda make test-end-to-end                      # All E2E tests
 pre-commit run --all-files                           # Lint + format (ruff, typos, bandit, etc.)
 ```
 
+## Commit Messages
+
+Commit messages are durable review and handoff documentation, not just labels for
+the diff. For every non-trivial change, use an imperative summary followed by a
+body that lets a future reviewer understand the decision without reconstructing
+the conversation or reverse-engineering the patch. The body must explain:
+
+- the concrete problem or failure mode that motivated the change;
+- the behavior or invariant chosen, and why;
+- important compatibility implications, tradeoffs, and risks; and
+- the verification performed, when it adds useful evidence.
+
+Do not merely restate which files or symbols changed. A subject-only message is
+acceptable only for genuinely mechanical, self-explanatory changes.
+
 ## Architecture (`src/lerobot/`)
 
 - **`scripts/`** — CLI entry points (`lerobot-train`, `lerobot-eval`, `lerobot-record`, etc.), mapped in `pyproject.toml [project.scripts]`.
