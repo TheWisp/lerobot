@@ -553,8 +553,8 @@ class TestIdentifyArmCompatibility:
         assert _supports_feetech_wiggle("so101_follower", "/dev/ttyACM0") is True
 
     def test_endpoint_does_not_call_wiggle_for_openarm(self):
-        request = IdentifyArmRequest(port="can0", profile_type="bi_openarm_follower")
-        with patch("lerobot.gui.api.robot._wiggle_shoulder") as wiggle:
+        request = IdentifyArmRequest(port="can0", profile={"type": "bi_openarm_follower"})
+        with patch("lerobot.gui.api.robot._wiggle_first_motor") as wiggle:
             result = asyncio.run(identify_arm(request))
 
         assert result["status"] == "error"
