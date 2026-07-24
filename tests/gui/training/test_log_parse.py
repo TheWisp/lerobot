@@ -13,7 +13,7 @@ import math
 
 import pytest
 
-from lerobot.common.training_log import format_training_log_record
+from lerobot.common.training_log import TrainingHealthTracker, format_training_log_record
 from lerobot.gui.training.log_parse import (
     ProgressSample,
     parse_metric_sample,
@@ -154,6 +154,28 @@ def test_metric_sample_structured_record():
         "mem_gb": pytest.approx(7.8),
         "step_time_ms": 242.0,
     }
+
+
+def test_custom_trainer_health_record_round_trips_through_parser():
+    timestamps = iter((10.0, 12.0))
+    tracker = TrainingHealthTracker(
+        batch_size=8,
+        total_steps=100,
+        clock=lambda: next(timestamps),
+        peak_memory_gb=lambda: 4.5,
+    )
+    tracker.step()
+
+    sample = tracker.sample(step=1, values={"loss": 0.25, "grdn": 1.5, "lr": 1e-5})
+    bag = parse_metric_sample(sample.record)
+
+    assert bag is not None
+    assert bag["step"] == 1
+    assert bag["total_steps"] == 100
+    assert bag["loss"] == pytest.approx(0.25)
+    assert bag["grdn"] == pytest.approx(1.5)
+    assert bag["samples_per_s"] == pytest.approx(4.0)
+    assert bag["mem_gb"] == pytest.approx(4.5)
 
 
 def test_metric_sample_legacy_hvla_step_record():
