@@ -1324,12 +1324,40 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
+.training-state-badge:focus-visible {
+    outline: 2px solid #80ccff;
+    outline-offset: 2px;
+}
 .training-state-pending    { background: #4a4a4a; color: #ccc; }
 .training-state-running    { background: #2a4a5a; color: #80ccff; }
 .training-state-completing { background: #5a4a2a; color: #f0c040; }
 .training-state-completed  { background: #2a5a2a; color: #80f080; }
+.training-state-stopped    { background: #5a4a2a; color: #f0c040; }
 .training-state-failed     { background: #5a2a2a; color: #f08080; }
-.training-state-aborted    { background: #4a4a4a; color: #aaa; }
+.training-state-tooltip {
+    position: fixed;
+    z-index: 10050;
+    width: max-content;
+    max-width: min(300px, calc(100vw - 16px));
+    padding: 8px 10px;
+    border: 1px solid #3b4b70;
+    border-radius: 6px;
+    background: #11182b;
+    color: #d8deee;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    font-size: 12px;
+    line-height: 1.4;
+    text-transform: none;
+    letter-spacing: normal;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 100ms ease;
+}
+.training-state-tooltip.visible {
+    opacity: 1;
+    visibility: visible;
+}
 .training-run-row:hover { background: #1a2640; }
 
 /* ── Training panel — sidebar row + detail pane ───────────────────────────── */

@@ -121,6 +121,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
 # host paths to these.
 CONTAINER_RUNS_MOUNT = "/runs"
 CONTAINER_OUTPUT_SUBDIR = "output"  # /runs/output — lerobot-train writes here
+CONTAINER_RESUME_CHECKPOINT = "/resume-checkpoint"
 # Mounted at container root, NOT inside the image user's home: the path
 # walk to a target under /home/user_lerobot crosses image-baked dirs owned
 # by uid 1000 with no world-x, so any other host uid gets EACCES before it
@@ -272,7 +273,12 @@ _DEFAULT_LOG_FREQ = 200
 _TARGET_LOG_POINTS = 20
 
 
-def _docker_argv_base(image: str, paths: RunPaths) -> list[str]:
+def _docker_argv_base(
+    image: str,
+    paths: RunPaths,
+    *,
+    resume_checkpoint: str | None = None,
+) -> list[str]:
     """The docker-run prefix shared by every recipe: GPU passthrough,
     host-identity placeholders, the arbitrary-uid env overrides, and the
     two bind mounts. One seam so the GPU-smoke lessons can't drift apart
@@ -285,7 +291,7 @@ def _docker_argv_base(image: str, paths: RunPaths) -> list[str]:
     # block above) — never expanduser() here, this code runs on the GUI
     # server while the mount source lives on the training host.
     hf_cache_host = f"{HOST_HOME_TOKEN}/.cache/huggingface"
-    return [
+    argv = [
         "docker",
         "run",
         "--rm",
@@ -334,12 +340,16 @@ def _docker_argv_base(image: str, paths: RunPaths) -> list[str]:
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
         f"{paths.root}:{CONTAINER_RUNS_MOUNT}",
-        image,
     ]
+    if resume_checkpoint is not None:
+        argv.extend(["-v", f"{resume_checkpoint}:{CONTAINER_RESUME_CHECKPOINT}:ro"])
+    argv.append(image)
+    return argv
 
 
 def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[str, str]]:
     image = run.args.get("__image__") or DEFAULT_IMAGE
+    resume_checkpoint = run.args.get("__resume_checkpoint__")
 
     # Translate Run.args → lerobot-train --key=value flags
     train_args: list[str] = []
@@ -374,9 +384,16 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
             steps = 0
         if steps > 0:
             train_args.append(f"--log_freq={max(1, min(_DEFAULT_LOG_FREQ, steps // _TARGET_LOG_POINTS))}")
+    if resume_checkpoint is not None:
+        train_args.extend(
+            [
+                f"--config_path={CONTAINER_RESUME_CHECKPOINT}/pretrained_model/train_config.json",
+                "--resume=true",
+            ]
+        )
 
     docker_argv = [
-        *_docker_argv_base(image, paths),
+        *_docker_argv_base(image, paths, resume_checkpoint=resume_checkpoint),
         "lerobot-train",
         *train_args,
     ]
@@ -417,6 +434,7 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
     form today; would need an upstream extension).
     """
     image = run.args.get("__image__") or DEFAULT_IMAGE
+    resume_checkpoint = run.args.get("__resume_checkpoint__")
 
     # Translate the form's flat snake_case args dict → HVLA's dashed CLI flags.
     train_args: list[str] = []
@@ -454,9 +472,11 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
     if "--s2-latent-path" in train_args:
         idx = train_args.index("--s2-latent-path")
         del train_args[idx : idx + 2]
+    if resume_checkpoint is not None:
+        train_args.extend(["--resume", CONTAINER_RESUME_CHECKPOINT])
 
     docker_argv = [
-        *_docker_argv_base(image, paths),
+        *_docker_argv_base(image, paths, resume_checkpoint=resume_checkpoint),
         *HVLA_FLOW_S1_ENTRYPOINT,
         *train_args,
     ]

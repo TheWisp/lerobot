@@ -194,7 +194,7 @@ def test_start_run_reports_host_busy(mcp):
 
 
 def test_stop_run_delegates(mcp):
-    orch = _orch_returning(stop=_run("r9", state=RunState.ABORTED))
+    orch = _orch_returning(stop=_run("r9", state=RunState.STOPPED))
     with patch.object(training_api, "get_state", return_value=(orch, MagicMock())):
         out = _call(mcp, "training_stop_run", {"run_id": "r9"})
     assert out["run_id"] == "r9"

@@ -17,12 +17,17 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from lerobot.configs import parser
+from lerobot.configs.default import DatasetConfig
+from lerobot.configs.train import TrainPipelineConfig
 from lerobot.gui.training.recipes import (
     CONTAINER_HF_CACHE,
     CONTAINER_OUTPUT_SUBDIR,
+    CONTAINER_RESUME_CHECKPOINT,
     CONTAINER_RUNS_MOUNT,
     DEFAULT_IMAGE,
     FAKE_RECIPE_MARKER,
@@ -38,6 +43,7 @@ from lerobot.gui.training.recipes import (
     resolve_host_placeholders,
 )
 from lerobot.gui.training.runs import Run, RunPaths, RunState, new_run_id
+from lerobot.policies.act.configuration_act import ACTConfig
 
 
 def _make_run(args: dict) -> Run:
@@ -150,6 +156,79 @@ def test_docker_recipe_bind_mounts(tmp_path: Path) -> None:
     assert f"{HOST_HOME_TOKEN}/.cache/huggingface:{CONTAINER_HF_CACHE}" in cmd
     # Run dir mount
     assert f"{paths.root}:{CONTAINER_RUNS_MOUNT}" in cmd
+
+
+def test_lerobot_recipe_resumes_from_read_only_checkpoint(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("resume-standard", runs_dir=tmp_path)
+    paths.ensure_exists()
+    checkpoint = tmp_path / "source" / "output" / "checkpoints" / "000200"
+    run = _make_run(
+        {
+            "policy.type": "act",
+            "steps": 500,
+            "__resume_checkpoint__": str(checkpoint),
+        }
+    )
+
+    cmd = _docker_cmd(run, paths)
+
+    assert f"{checkpoint}:{CONTAINER_RESUME_CHECKPOINT}:ro" in cmd
+    assert f"--config_path={CONTAINER_RESUME_CHECKPOINT}/pretrained_model/train_config.json" in cmd
+    assert "--resume=true" in cmd
+
+
+def test_generated_resume_command_is_accepted_by_lerobot_train_parser(tmp_path: Path) -> None:
+    """Exercise the exact post-``lerobot-train`` argv emitted by the GUI.
+
+    Docker path translation is the only substitution: the parser runs on the
+    host, so its config path points at the source side of the read-only mount.
+    No dataset, model, or training process is started.
+    """
+    paths = RunPaths.for_run("resume-parser", runs_dir=tmp_path)
+    paths.ensure_exists()
+    checkpoint = tmp_path / "source" / "output" / "checkpoints" / "000200"
+    pretrained = checkpoint / "pretrained_model"
+    pretrained.mkdir(parents=True)
+    (checkpoint / "training_state").mkdir()
+    source_cfg = TrainPipelineConfig(
+        dataset=DatasetConfig(repo_id="lerobot/pusht"),
+        policy=ACTConfig(device="cpu", push_to_hub=False),
+        output_dir=tmp_path / "source" / "output",
+        steps=500,
+    )
+    source_cfg._save_pretrained(pretrained)
+    run = _make_run(
+        {
+            "policy.type": "act",
+            "policy.device": "cpu",
+            "dataset.repo_id": "lerobot/pusht",
+            "steps": 500,
+            "__resume_checkpoint__": str(checkpoint),
+        }
+    )
+
+    command = _docker_cmd(run, paths)
+    train_index = command.index("lerobot-train")
+    train_args = command[train_index + 1 :]
+    container_config = f"{CONTAINER_RESUME_CHECKPOINT}/pretrained_model/train_config.json"
+    host_config = str(pretrained / "train_config.json")
+    train_args = [arg.replace(container_config, host_config) for arg in train_args]
+
+    def parse_only(cfg):
+        cfg.validate()
+        return cfg
+
+    # parser.wrap reads the decorated function's runtime annotation. Assign it
+    # explicitly because this test module uses postponed annotations.
+    parse_only.__annotations__["cfg"] = TrainPipelineConfig
+    parse_generated_command = parser.wrap()(parse_only)
+    with patch("sys.argv", ["lerobot-train", *train_args]):
+        parsed = parse_generated_command()
+
+    assert parsed.resume is True
+    assert parsed.checkpoint_path == checkpoint
+    assert parsed.output_dir == Path(CONTAINER_RUNS_MOUNT) / CONTAINER_OUTPUT_SUBDIR
+    assert parsed.steps == 500
 
 
 def test_docker_recipe_forces_safety_flags(tmp_path: Path) -> None:
@@ -343,6 +422,25 @@ def test_hvla_recipe_forces_output_dir_into_bind_mount(tmp_path: Path) -> None:
     assert len(indices) == 1, "should not emit --output-dir twice"
     assert cmd2[indices[0] + 1] == forced
     assert "/somewhere/else" not in cmd2
+
+
+def test_hvla_recipe_resumes_from_read_only_checkpoint(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("resume-hvla", runs_dir=tmp_path)
+    paths.ensure_exists()
+    checkpoint = tmp_path / "source" / "output" / "checkpoints" / "checkpoint-200"
+    cmd = _docker_cmd(
+        _hvla_run(
+            {
+                "steps": 500,
+                "__resume_checkpoint__": str(checkpoint),
+            }
+        ),
+        paths,
+    )
+
+    assert f"{checkpoint}:{CONTAINER_RESUME_CHECKPOINT}:ro" in cmd
+    resume_index = cmd.index("--resume")
+    assert cmd[resume_index + 1] == CONTAINER_RESUME_CHECKPOINT
 
 
 def test_hvla_recipe_omits_s2_latent_path_by_default(tmp_path: Path) -> None:

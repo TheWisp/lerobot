@@ -39,8 +39,10 @@ from pydantic import BaseModel, Field
 from lerobot.gui.training.hosts import WORKSTATION_HOST_ID, HostRegistry, profile_to_training_host
 from lerobot.gui.training.jobs import HOSTS_DIR, HostProfile
 from lerobot.gui.training.orchestrator import (
+    CheckpointNotResumableError,
     HostBusyError,
     Orchestrator,
+    ResumeNotSupportedError,
     RunNotTerminalError,
     RunSnapshot,
     StartRequest,
@@ -162,6 +164,11 @@ class StartRunBody(BaseModel):
     idempotency_key: str | None = None
 
 
+class ResumeRunBody(BaseModel):
+    checkpoint_step: int | None = Field(default=None, gt=0)
+    idempotency_key: str | None = None
+
+
 class RunDTO(BaseModel):
     run_id: str
     host_id: str
@@ -195,6 +202,9 @@ class RunSnapshotDTO(BaseModel):
     # logged step, each an auto-captured {key: value} bag (loss/lr/grdn/…).
     # The dashboard charts these; distinct from `progress` (position).
     metrics: list[dict[str, float]] = []
+    # Model checkpoints and resumable training checkpoints are distinct:
+    # only these steps have validated optimizer/scheduler state + train config.
+    resumable_checkpoint_steps: list[int] = Field(default_factory=list)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -218,6 +228,7 @@ def _snapshot_to_dto(snap: RunSnapshot) -> RunSnapshotDTO:
         stderr_tail=snap.stderr_tail,
         events=list(snap.events),
         metrics=list(snap.metrics),
+        resumable_checkpoint_steps=list(snap.resumable_checkpoint_steps),
     )
 
 
@@ -406,6 +417,18 @@ def start_run(body: StartRunBody) -> RunDTO:
     service-account connection (see the ``/nebius/connection`` endpoints);
     no per-request credential is passed.
     """
+    internal_resume_keys = {
+        "__resume_checkpoint__",
+        "__resumed_from_run__",
+        "__resumed_from_step__",
+    }
+    forbidden = sorted(internal_resume_keys.intersection(body.args))
+    if forbidden:
+        raise HTTPException(
+            status_code=422,
+            detail=f"reserved internal training arguments: {', '.join(forbidden)}",
+        )
+
     orch, _ = get_state()
     try:
         run = orch.start(
@@ -437,6 +460,27 @@ def get_run(run_id: str) -> RunSnapshotDTO:
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return _snapshot_to_dto(snap)
+
+
+@router.post("/runs/{run_id}/resume", response_model=RunDTO, status_code=201)
+def resume_run(run_id: str, body: ResumeRunBody) -> RunDTO:
+    """Start a new tracked run from a complete local checkpoint."""
+    orch, _ = get_state()
+    try:
+        run = orch.resume(
+            run_id,
+            checkpoint_step=body.checkpoint_step,
+            idempotency_key=body.idempotency_key,
+        )
+    except UnknownRunError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except HostBusyError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except RunNotTerminalError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except (CheckpointNotResumableError, ResumeNotSupportedError, UnknownHostError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _run_to_dto(run)
 
 
 @router.post("/runs/{run_id}/stop", response_model=RunDTO)
@@ -471,7 +515,7 @@ def delete_run(run_id: str) -> DeleteRunResponse:
     Metadata-only delete: removes the run row from the Training list but
     keeps ``output/checkpoints/`` so the trained model continues to show
     up in the Models tab. If the run produced no model (failed pull,
-    aborted before first save), the whole dir is removed.
+    stopped before first save), the whole dir is removed.
 
     Returns 409 if the run is still active (caller must Stop first).
     Returns 404 if the run id is unknown.

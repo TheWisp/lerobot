@@ -17,6 +17,98 @@
 const TRAINING_POLL_MS = 3000;
 let _trainingHosts = [];
 
+// The three user-facing terminal outcomes keep process details out of the
+// user's mental model. Operational states still appear while work is active.
+// A stopped run may or may not be resumable; checkpoint validation controls
+// whether the Resume action is offered.
+const TRAINING_STATE_HELP = Object.freeze({
+  pending: "Preparing the training environment. No trainer is running yet.",
+  running: "Training is currently running.",
+  completing: "A stop was requested. Waiting for the trainer to exit safely.",
+  completed: "Training ended cleanly, including a deliberate early stop.",
+  stopped: "Training ended before completion, by choice or interruption. Resume is offered when a valid checkpoint exists.",
+  failed: "Training could not complete and no safe resume checkpoint is available.",
+});
+
+function trainingStateBadge(state) {
+  const normalized = String(state || "unknown");
+  const help = TRAINING_STATE_HELP[normalized] || "Training state reported by the backend.";
+  return `<span class="training-state-badge training-state-${escapeHtml(normalized)} training-state-help-target" ` +
+    `tabindex="0" aria-label="${escapeHtml(normalized)}: ${escapeHtml(help)}" ` +
+    `data-state-help="${escapeHtml(help)}">${escapeHtml(normalized)}</span>`;
+}
+
+let _trainingStateTooltipTarget = null;
+function trainingStateTooltipElement() {
+  let tooltip = document.getElementById("training-state-tooltip");
+  if (!tooltip) {
+    tooltip = document.createElement("div");
+    tooltip.id = "training-state-tooltip";
+    tooltip.className = "training-state-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    document.body.appendChild(tooltip);
+  }
+  return tooltip;
+}
+
+function trainingShowStateTooltip(target) {
+  if (!target?.classList?.contains("training-state-help-target")) return;
+  const tooltip = trainingStateTooltipElement();
+  tooltip.textContent = target.dataset.stateHelp || "";
+  tooltip.classList.add("visible");
+  target.setAttribute("aria-describedby", tooltip.id);
+  _trainingStateTooltipTarget = target;
+
+  const rect = target.getBoundingClientRect();
+  const margin = 8;
+  const width = tooltip.offsetWidth;
+  const height = tooltip.offsetHeight;
+  const left = Math.max(margin, Math.min(window.innerWidth - width - margin, rect.left + rect.width / 2 - width / 2));
+  const below = rect.bottom + margin;
+  const top = below + height <= window.innerHeight - margin
+    ? below
+    : Math.max(margin, rect.top - height - margin);
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.round(top)}px`;
+}
+
+function trainingHideStateTooltip(target = null) {
+  if (target && target !== _trainingStateTooltipTarget) return;
+  const tooltip = document.getElementById("training-state-tooltip");
+  if (tooltip) tooltip.classList.remove("visible");
+  if (_trainingStateTooltipTarget) {
+    _trainingStateTooltipTarget.removeAttribute("aria-describedby");
+  }
+  _trainingStateTooltipTarget = null;
+}
+
+// Delegation keeps dynamically-rendered sidebar/detail badges accessible:
+// hover for a mouse, focus for keyboard users, and tap to toggle on touch.
+document.addEventListener("pointerover", (event) => {
+  const badge = event.target.closest?.(".training-state-help-target");
+  if (badge) trainingShowStateTooltip(badge);
+});
+document.addEventListener("pointerout", (event) => {
+  const badge = event.target.closest?.(".training-state-help-target");
+  if (badge && !badge.contains(event.relatedTarget)) trainingHideStateTooltip(badge);
+});
+document.addEventListener("focusin", (event) => {
+  const badge = event.target.closest?.(".training-state-help-target");
+  if (badge) trainingShowStateTooltip(badge);
+});
+document.addEventListener("focusout", (event) => {
+  const badge = event.target.closest?.(".training-state-help-target");
+  if (badge) trainingHideStateTooltip(badge);
+});
+document.addEventListener("click", (event) => {
+  const badge = event.target.closest?.(".training-state-help-target");
+  if (!badge) {
+    trainingHideStateTooltip();
+  } else {
+    trainingShowStateTooltip(badge);
+  }
+});
+
 // ── Nebius connection (server-held service-account credential) ──────────────
 // One service-account key for the whole GUI server, configured once via the
 // Nebius-connection modal. The server stores the key (0600) and uses it for
@@ -440,7 +532,7 @@ function trainingRenderRunsList(runs) {
     row.innerHTML = `
       <div class="training-run-row-top">
         <span class="training-run-name">${escapeHtml(r.recipe_name)}</span>
-        <span class="training-state-badge training-state-${r.state}">${r.state}</span>
+        ${trainingStateBadge(r.state)}
       </div>
       <div class="training-run-row-sub">${escapeHtml(r.dataset_id)}</div>
     `;
@@ -458,7 +550,7 @@ function trainingRenderRunsList(runs) {
   }
 }
 
-const TERMINAL_STATES = new Set(["completed", "failed", "aborted"]);
+const TERMINAL_STATES = new Set(["completed", "stopped", "failed"]);
 
 // One floating context-menu element shared across rows; created on first
 // use, hidden by default, repositioned on each show. "Delete this run" is
@@ -556,7 +648,7 @@ async function trainingClearCompleted() {
     return;
   }
   const ok = window.confirm(
-    `Drop ${terminal.length} completed/failed/aborted run(s) from training history? ` +
+    `Drop ${terminal.length} completed/stopped/failed run(s) from training history? ` +
       `Trained models (if any) stay in the Models tab — only the run records disappear.`,
   );
   if (!ok) return;
@@ -591,6 +683,7 @@ function trainingShowMain(mode) {
 }
 
 function trainingSelectRun(runId) {
+  trainingHideStateTooltip();
   _trainingSelectedRunId = runId;
   trainingShowMain("detail");
   trainingRefreshDetail(runId);
@@ -602,6 +695,7 @@ function trainingSelectRun(runId) {
 // the model view. Symmetric to trainingShowMain() hiding model containers
 // when the user enters training mode.
 function trainingLeaveView() {
+  trainingHideStateTooltip();
   const td = document.getElementById("training-detail");
   if (td) td.style.display = "none";
   _trainingMode = "empty";
@@ -645,6 +739,10 @@ async function trainingRefreshDetail(runId) {
     if (stopBtn) stopBtn.onclick = () => trainingStopRun(runId);
     const cloneBtn = document.getElementById(`training-clone-${runId}`);
     if (cloneBtn) cloneBtn.onclick = () => trainingDuplicateRun(runId);
+    const resumeBtn = document.getElementById(`training-resume-${runId}`);
+    if (resumeBtn) {
+      resumeBtn.onclick = () => trainingResumeRun(runId, Number(resumeBtn.dataset.step));
+    }
   } catch (e) {
     el.innerHTML = _errorHtml(`Failed to load run: ${e.message}`);
   }
@@ -812,7 +910,7 @@ function trainingRenderDetailHtml(snap) {
   const progress = snap.progress || {};
   const checkpoints = snap.checkpoints || [];
   const events = snap.events || [];
-  const isActive = !["completed", "failed", "aborted"].includes(r.state);
+  const isActive = !TERMINAL_STATES.has(r.state);
 
   // Position comes from progress.json (parsed from the tqdm bar by the
   // orchestrator). The training-signal series (loss/lr/grdn) comes from
@@ -867,6 +965,14 @@ function trainingRenderDetailHtml(snap) {
   // runs (peek at the config), terminal runs (clone-and-adjust), and
   // failed runs (fix-and-retry).
   const cloneBtn = `<button class="btn-small secondary" id="training-clone-${r.run_id}" title="Open the start form pre-filled with this run's settings">Run with same config</button>`;
+  const resumableSteps = snap.resumable_checkpoint_steps || [];
+  const resumeStep = resumableSteps.length
+    ? Math.max(...resumableSteps.map((checkpointStep) => Number(checkpointStep) || 0))
+    : 0;
+  const resumeBtn =
+    !isActive && resumeStep > 0
+      ? `<button class="btn-small primary" id="training-resume-${r.run_id}" data-step="${resumeStep}" title="Create a new run from checkpoint step ${resumeStep}">Resume from ${resumeStep}</button>`
+      : "";
 
   // Image-prep status banner: when state=PENDING (background prep thread is
   // running), surface the most recent image-* event so the user sees what's
@@ -889,7 +995,8 @@ function trainingRenderDetailHtml(snap) {
           </div>
         </div>
         <div class="training-detail-actions">
-          <span class="training-state-badge training-state-${r.state}">${r.state}</span>
+          ${trainingStateBadge(r.state)}
+          ${resumeBtn}
           ${cloneBtn}
           ${stopBtn}
         </div>
@@ -971,6 +1078,8 @@ function trainingConfigCardHtml(r) {
   // image was used.
   const recipeMarker = args["__recipe__"] || "lerobot-train";
   const imageMarker = args["__image__"] || "(default)";
+  const resumedFromRun = args["__resumed_from_run__"];
+  const resumedFromStep = args["__resumed_from_step__"];
   return `
     <section class="training-card">
       <details class="training-section" open>
@@ -978,6 +1087,11 @@ function trainingConfigCardHtml(r) {
         <table class="training-args-table">
           <tr><th>Recipe</th><td class="training-mono">${escapeHtml(recipeMarker)}</td></tr>
           <tr><th>Image</th><td class="training-mono">${escapeHtml(imageMarker)}</td></tr>
+          ${
+            resumedFromRun
+              ? `<tr><th>Resumed from</th><td class="training-mono">${escapeHtml(resumedFromRun)} · step ${escapeHtml(String(resumedFromStep))}</td></tr>`
+              : ""
+          }
           ${rows.join("")}
         </table>
         <div class="training-field-hint">Click <strong>Run with same config</strong> above to open the start form pre-filled with these values.</div>
@@ -1225,6 +1339,36 @@ async function trainingDuplicateRun(runId) {
     args: r.args || {},
     recipe_name: r.recipe_name ? `${r.recipe_name} (copy)` : "",
   });
+}
+
+async function trainingResumeRun(runId, checkpointStep) {
+  if (
+    !confirm(
+      `Resume from checkpoint step ${checkpointStep}? ` +
+        "This creates a new run and keeps the source checkpoint unchanged.",
+    )
+  ) {
+    return;
+  }
+  const idempotencyKey = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    const resp = await fetch(`/api/training/runs/${runId}/resume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        checkpoint_step: checkpointStep,
+        idempotency_key: idempotencyKey,
+      }),
+    });
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }));
+      throw new Error(detail.detail || `HTTP ${resp.status}`);
+    }
+    const resumed = await resp.json();
+    trainingSelectRun(resumed.run_id);
+  } catch (e) {
+    alert(`Failed to resume training: ${e.message}`);
+  }
 }
 
 // ── Image-prep status banner ──────────────────────────────────────────────────
@@ -1737,6 +1881,7 @@ window.trainingSaveNebiusConnection = trainingSaveNebiusConnection;
 window.trainingClearNebiusConnection = trainingClearNebiusConnection;
 window.trainingRenderPolicyFields = trainingRenderPolicyFields;
 window.trainingDuplicateRun = trainingDuplicateRun;
+window.trainingResumeRun = trainingResumeRun;
 window.trainingDeleteRun = trainingDeleteRun;
 window.trainingClearCompleted = trainingClearCompleted;
 window.trainingImageChoiceChanged = trainingImageChoiceChanged;

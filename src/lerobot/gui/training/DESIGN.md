@@ -253,23 +253,28 @@ The start form — same shape for every host mode, dropdowns swap by host:
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Run state machine — the same six states regardless of host mode:
+Run state machine — the same six states regardless of host mode. The three
+terminal outcomes are intentionally simple: `COMPLETED` for a clean exit
+(including deliberate early stopping), `STOPPED` for a user stop or an
+unexpected interruption with safe recovery state, and `FAILED` when the run
+cannot be resumed safely.
 
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING: POST /runs
     PENDING --> RUNNING: prep done + worker spawned
     PENDING --> FAILED: image_pull_failed / prep error
-    PENDING --> ABORTED: user clicked Stop before launch
+    PENDING --> STOPPED: user clicked Stop before launch
     RUNNING --> COMPLETING: user clicked Stop (SIGTERM)
     RUNNING --> COMPLETED: worker wrote completed_naturally
-    RUNNING --> FAILED: worker crashed / lost contact
-    COMPLETING --> ABORTED: worker wrote aborted_by_user
+    RUNNING --> STOPPED: interrupted + resumable checkpoint
+    RUNNING --> FAILED: unrecoverable error
+    COMPLETING --> STOPPED: worker wrote aborted_by_user
     COMPLETING --> COMPLETED: finished cleanly before SIGTERM took
-    COMPLETING --> FAILED: worker crashed before responding
+    COMPLETING --> FAILED: unrecoverable error before responding
     COMPLETED --> [*]
+    STOPPED --> [*]
     FAILED --> [*]
-    ABORTED --> [*]
 ```
 
 Transitions are gated server-side (you cannot go `RUNNING → PENDING`), so a stale duplicate request cannot re-run a finished run. The orchestrator's image-prep daemon thread (see Threading) drives `PENDING → RUNNING`; everything else is event-driven from the worker.
@@ -428,7 +433,7 @@ Liveness comes from two independent signals: a process probe (`pgrep` over SSH; 
 
 Why not Wandb-style HTTP heartbeats from the training script? Those require the pod to reach the GUI server — often blocked by NAT/firewall. Our setup is the inverse (GUI server reaches the pod), so we use the channel we already have.
 
-**Completion signal.** The worker writes a final `events.jsonl` line before exiting — `completed_naturally{exit_code,final_step}`, `aborted_by_user{final_step}`, or `crashed{exit_code,error}`. The GUI reads this — not "process is gone" — as canonical, so the UI labels outcomes correctly and Ephemeral destroy proceeds with the right framing.
+**Completion signal.** The worker writes a final `events.jsonl` line before exiting — `completed_naturally{exit_code,final_step}` or `aborted_by_user{final_step}`. When a process disappears without one, the orchestrator records either `stopped{final_step,error}` after validating resumable state, or `crashed{exit_code,error}` when safe continuation is unavailable. The event log is canonical; checkpoint presence controls recovery actions independently. This keeps a usable inference model from being mistaken for resumable optimizer/scheduler state.
 
 **Connection resilience.** The poll scheduler uses exponential backoff (5/10/20/40/60 s, ~5 min before give-up). Transient errors retry; permanent errors (auth, bad host key) give up immediately. Transitions surface as events and a connection-quality indicator.
 

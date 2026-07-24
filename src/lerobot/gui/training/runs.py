@@ -19,7 +19,7 @@ recipe + dataset, click Start. The Run lives in
 - ``checkpoints/<step>/`` — actual checkpoint files (worker writes)
 
 The state machine matches DESIGN.md § Concurrency:
-``pending → running → completing → completed / failed / aborted``.
+``pending → running → completing → completed / stopped / failed``.
 
 Transitions are gated; you can't go back from a terminal state. Concurrency
 defense: the registry's per-host index makes the per-host single-active-run
@@ -64,23 +64,23 @@ class RunState(str, enum.Enum):
     PENDING = "pending"  # created, worker not yet launched
     RUNNING = "running"  # worker process is alive
     COMPLETING = "completing"  # SIGTERM sent, awaiting final events
-    COMPLETED = "completed"  # worker exited cleanly (worker wrote completed_naturally)
-    FAILED = "failed"  # worker exited unexpectedly (crash)
-    ABORTED = "aborted"  # user-initiated stop, completed cleanly
+    COMPLETED = "completed"  # training ended cleanly, including deliberate early stopping
+    STOPPED = "stopped"  # interrupted, but a resumable checkpoint is available
+    FAILED = "failed"  # unrecoverable: no safe checkpoint to resume from
 
 
-TERMINAL_STATES = frozenset({RunState.COMPLETED, RunState.FAILED, RunState.ABORTED})
+TERMINAL_STATES = frozenset({RunState.COMPLETED, RunState.STOPPED, RunState.FAILED})
 
 # Allowed transitions. Anything not in this set raises in advance() — the
 # state machine prevents stale duplicate "start" requests re-running a finished
 # run (DESIGN.md § Concurrency).
 _ALLOWED: dict[RunState, frozenset[RunState]] = {
-    RunState.PENDING: frozenset({RunState.RUNNING, RunState.FAILED, RunState.ABORTED}),
-    RunState.RUNNING: frozenset({RunState.COMPLETING, RunState.COMPLETED, RunState.FAILED, RunState.ABORTED}),
-    RunState.COMPLETING: frozenset({RunState.COMPLETED, RunState.FAILED, RunState.ABORTED}),
+    RunState.PENDING: frozenset({RunState.RUNNING, RunState.STOPPED, RunState.FAILED}),
+    RunState.RUNNING: frozenset({RunState.COMPLETING, RunState.COMPLETED, RunState.STOPPED, RunState.FAILED}),
+    RunState.COMPLETING: frozenset({RunState.COMPLETED, RunState.STOPPED, RunState.FAILED}),
     RunState.COMPLETED: frozenset(),
+    RunState.STOPPED: frozenset(),
     RunState.FAILED: frozenset(),
-    RunState.ABORTED: frozenset(),
 }
 
 
@@ -106,7 +106,7 @@ class Run:
     # a JSON string; clients parse on use.
     session_id: str | None = None
     idempotency_key: str | None = None  # client-supplied, defends against double-clicks
-    error: str | None = None  # short reason for FAILED state
+    error: str | None = None  # short reason for STOPPED or FAILED state
     # Ephemeral (provider-spawned) runs only. Persisted so the orchestrator
     # can tear the VM down on every terminal transition — including after a
     # GUI-server restart, where the in-memory handle would be lost. Stored as
@@ -124,6 +124,11 @@ class Run:
     @classmethod
     def from_json(cls, raw: str) -> Run:
         d = json.loads(raw)
+        # Pre-three-outcome records called an intentional stop "aborted".
+        # Keep old run histories readable while exposing the clearer
+        # completed / stopped / failed vocabulary everywhere else.
+        if d.get("state") == "aborted":
+            d["state"] = RunState.STOPPED.value
         d["state"] = RunState(d["state"])
         # Legacy records (pre-SSH transport) persisted session_id as the
         # raw subprocess PID (int). The Protocol widened it to str; coerce
@@ -303,7 +308,10 @@ def append_event(events_path: Path, type_: str, **fields: Any) -> None:
 
     - ``started``                 — worker launched (orchestrator)
     - ``completed_naturally``     — recipe finished (worker)
-    - ``aborted_by_user``         — Stop button (worker, after SIGTERM)
+    - ``aborted_by_user``         — Stop button (worker, after SIGTERM);
+                                    maps to the user-facing ``stopped`` state
+    - ``stopped``                 — unexpected interruption with a validated
+                                    resumable checkpoint
     - ``crashed``                 — unexpected exit (orchestrator on detection)
     - ``connect`` / ``disconnect`` / ``retry`` / ``lost_contact`` — transport
     """

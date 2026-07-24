@@ -198,6 +198,23 @@ See [docs/model_tab.md](docs/model_tab.md) for the (older) browse/inspect design
 - [ ] Phase 2: Training — subprocess launch/stop/status, training form, terminal output, resume
 - [ ] Phase 3: Run Tab Integration — "Use in Run tab" passes checkpoint path to policy workflow
 - [ ] Phase 4: Metrics & Polish — WandB embed, training curves, model comparison, HF Hub model sync
+- [High] **Aggregate resumed attempts under one logical training job.** Keep each process invocation
+  as an immutable attempt with its own host/image/config, timestamps, logs, terminal reason, and output
+  directory—the isolation protects the last known-good checkpoint and preserves failure evidence—but
+  stop exposing every attempt as an unrelated top-level run. Add a stable logical training ID plus
+  parent/attempt metadata; group attempts in the API and sidebar; show an attempt timeline/selector;
+  derive the job status from the latest attempt; combine active elapsed time; and merge metrics and
+  checkpoints with visible attempt boundaries (when steps overlap after rollback, the newer attempt
+  owns its displayed range, but the older attempt remains available). A rollback must branch from a
+  read-only source checkpoint into a new attempt namespace; never overwrite or proactively delete a
+  newer source checkpoint merely because the new attempt reaches the same step. Migrate legacy
+  records as single-attempt jobs and define delete-job versus delete-attempt behavior.
+
+  Keep the user-facing state model to exactly three outcomes: **completed** (successful target or
+  explicit early-stop criterion), **stopped** (intentional or accidental termination), and **failed**
+  (an unrecoverable error). Show the detailed stop/failure reason and checkpoint resumability
+  separately rather than multiplying badge states. Every state badge needs one floating explanation
+  available on pointer hover, keyboard focus, and touch/click—not hover alone.
 
 ### Cloud-GPU training pipeline
 
