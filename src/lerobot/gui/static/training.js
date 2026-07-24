@@ -245,7 +245,7 @@ async function trainingInit() {
   await trainingLoadHosts();
   await trainingRefreshRuns();
   trainingSchedulePoll();
-  _bindErrorCopy();
+  _bindTrainingCopy();
   // Not awaited: the image section renders lazily once the start form opens.
   trainingLoadImageStatus();
 }
@@ -258,17 +258,57 @@ function _errorHtml(text) {
   return `<div class="training-error"><span class="training-error-text">${escapeHtml(text)}</span><button type="button" class="training-copy-btn">Copy</button></div>`;
 }
 
-function _bindErrorCopy() {
+function _copyTrainingText(text, successMessage) {
+  const notify = (ok) => {
+    if (typeof showToast !== "function") return;
+    showToast(
+      ok ? "Copied" : "Copy failed",
+      ok ? successMessage : "Select the text and copy it manually",
+      ok ? "info" : "error",
+    );
+  };
+  const fallback = () => {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch (_) {
+      ok = false;
+    }
+    area.remove();
+    return ok;
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(
+      () => notify(true),
+      () => notify(fallback()),
+    );
+  } else {
+    notify(fallback());
+  }
+}
+
+function _bindTrainingCopy() {
   document.addEventListener("click", (e) => {
+    const logBtn = e.target.closest(".training-log-copy");
+    if (logBtn) {
+      const log = logBtn.closest(".training-card")?.querySelector(".training-log");
+      const text = log?.textContent || "";
+      if (text) _copyTrainingText(text, "Training log copied to clipboard");
+      return;
+    }
+
     const el = e.target.closest(".training-error, .training-image-banner.failed");
     if (!el) return;
     const textEl = el.querySelector(".training-error-text");
     const text = (textEl ? textEl.textContent : el.textContent).trim();
     if (!text) return;
-    navigator.clipboard.writeText(text).then(
-      () => { if (typeof showToast === "function") showToast("Copied", "Error copied to clipboard", "info"); },
-      () => { /* clipboard API unavailable (insecure context) — fall back to manual selection */ }
-    );
+    _copyTrainingText(text, "Error copied to clipboard");
   });
 }
 
@@ -637,6 +677,88 @@ function trainingWandbUrl(text) {
   return m ? m[0] : null;
 }
 
+// Browser-side compatibility for an HVLA process already running with an old
+// image while the GUI backend has not been restarted. This is deliberately
+// isolated from the primary protocol: new images emit versioned
+// LEROBOT_TRAINING_JSON records and the backend supplies indexed metrics.
+function trainingLegacySamplesFromLog(text) {
+  const samples = [];
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const position = line.match(/\bstep\s+(\d+)\s*\/\s*(\d+)\b/i);
+    if (!position) continue;
+    const sample = {
+      step: Number(position[1]),
+      total_steps: Number(position[2]),
+    };
+    for (const field of line.matchAll(
+      /\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?\d[\d,]*\.?\d*(?:[eE][+-]?\d+)?)(?=\s|\||$)/g,
+    )) {
+      const value = Number(field[2].replaceAll(",", ""));
+      if (Number.isFinite(value)) sample[field[1]] = value;
+    }
+    const stepTime = line.match(/\|\s*(\d+(?:\.\d+)?)ms(?:\s*\||\s*$)/i);
+    if (stepTime) sample.step_time_ms = Number(stepTime[1]);
+    const timestamp = line.match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2}),(\d{3})/,
+    );
+    if (timestamp) {
+      sample.timestamp_ms = Date.UTC(
+        Number(timestamp[1]),
+        Number(timestamp[2]) - 1,
+        Number(timestamp[3]),
+        Number(timestamp[4]),
+        Number(timestamp[5]),
+        Number(timestamp[6]),
+        Number(timestamp[7]),
+      );
+    }
+    if (Number.isFinite(sample.loss)) samples.push(sample);
+  }
+  return samples;
+}
+
+function trainingEtaFromSamples(samples) {
+  if (!samples.length) return null;
+  const latest = samples[samples.length - 1];
+  const rates = [];
+  for (let i = Math.max(1, samples.length - 10); i < samples.length; i++) {
+    const previous = samples[i - 1];
+    const current = samples[i];
+    const steps = current.step - previous.step;
+    const elapsedMs = current.timestamp_ms - previous.timestamp_ms;
+    if (steps > 0 && elapsedMs > 0 && Number.isFinite(elapsedMs)) {
+      rates.push(elapsedMs / steps);
+    }
+  }
+  let msPerStep = null;
+  if (rates.length) {
+    rates.sort((a, b) => a - b);
+    const middle = Math.floor(rates.length / 2);
+    msPerStep =
+      rates.length % 2 ? rates[middle] : (rates[middle - 1] + rates[middle]) / 2;
+  } else if (Number.isFinite(latest.step_time_ms) && latest.step_time_ms > 0) {
+    msPerStep = latest.step_time_ms;
+  }
+  if (msPerStep == null) return null;
+  return (Math.max(0, latest.total_steps - latest.step) * msPerStep) / 1000;
+}
+
+function trainingProgressFromLog(text) {
+  const samples = trainingLegacySamplesFromLog(text);
+  if (!samples.length) return null;
+  const latest = samples[samples.length - 1];
+  return {
+    step: latest.step,
+    total_steps: latest.total_steps,
+    eta_seconds: trainingEtaFromSamples(samples),
+  };
+}
+
+function trainingMetricSeries(snap) {
+  const indexed = (snap.metrics || []).filter((m) => typeof m.step === "number");
+  return indexed.length ? indexed : trainingLegacySamplesFromLog(snap.stderr_tail);
+}
+
 // Curated default metric charts (loss, lr). These reuse the SAME canvas
 // primitive (`drawChart` in charts.js) as the RLT + performance panels so the
 // app's charts look and behave consistently — including hover/crosshair. The
@@ -670,7 +792,7 @@ function trainingMetricsCardHtml(series, isActive) {
 // (charts.js); the 'training' sync group gives loss + lr a shared crosshair.
 function trainingDrawDetailCharts(snap) {
   if (typeof drawChart !== "function") return; // provided by charts.js
-  const series = (snap.metrics || []).filter((m) => typeof m.step === "number");
+  const series = trainingMetricSeries(snap);
   const latestStep = series.length ? series[series.length - 1].step : 0;
   for (const c of TRAINING_CHART_KEYS) {
     const data = series.map((m) => m[c.key]).filter((v) => typeof v === "number" && isFinite(v));
@@ -701,11 +823,26 @@ function trainingRenderDetailHtml(snap) {
   //
   // Checkpoint step uses max-by-step, not last entry: the scanner sorts dirs
   // alphabetically, so HVLA's ``checkpoint-10`` can land before ``checkpoint-5``.
-  const metricsSeries = (snap.metrics || []).filter((m) => typeof m.step === "number");
-  const latest = metricsSeries.length ? metricsSeries[metricsSeries.length - 1] : {};
+  const rawMetrics = snap.metrics || [];
+  const metricsSeries = trainingMetricSeries(snap);
+  // Older GUI backends parsed HVLA loss/lr but omitted its space-separated
+  // step field. Keep the latest tiles live while the log fallback supplies
+  // position; structured records make all future series fully step-indexed.
+  const latest = metricsSeries.length
+    ? metricsSeries[metricsSeries.length - 1]
+    : rawMetrics.length
+      ? rawMetrics[rawMetrics.length - 1]
+      : {};
+  const logProgress = trainingProgressFromLog(snap.stderr_tail);
   const lastCkptStep = checkpoints.length ? Math.max(...checkpoints.map((c) => c.step)) : 0;
-  const step = progress.step ?? latest.step ?? lastCkptStep;
-  const total = progress.total_steps ?? progress.num_steps ?? r.args?.num_steps ?? r.args?.steps ?? 0;
+  const step = progress.step ?? latest.step ?? logProgress?.step ?? lastCkptStep;
+  const total =
+    progress.total_steps ??
+    progress.num_steps ??
+    logProgress?.total_steps ??
+    r.args?.num_steps ??
+    r.args?.steps ??
+    0;
   const pct = total > 0 ? Math.min(100, Math.round((step / total) * 100)) : 0;
   // loss/lr/grad: prefer the parsed metric series; fall back to the fake
   // runner's progress.loss so legacy/test runs still show a value.
@@ -713,7 +850,8 @@ function trainingRenderDetailHtml(snap) {
   const loss = lossVal != null ? trainingFmtMetric(lossVal) : "—";
   const lr = latest.lr != null ? trainingFmtMetric(latest.lr) : "—";
   const grdn = latest.grdn != null ? trainingFmtMetric(latest.grdn) : "—";
-  const eta = progress.eta_seconds != null ? trainingFmtDuration(progress.eta_seconds) : "—";
+  const etaSeconds = progress.eta_seconds ?? logProgress?.eta_seconds;
+  const eta = etaSeconds != null ? trainingFmtDuration(etaSeconds) : "—";
   // Running but no step parsed yet → tqdm hasn't printed its first bar.
   const warming = isActive && step === 0;
   const wandbUrl = trainingWandbUrl(snap.stderr_tail);
@@ -800,7 +938,10 @@ function trainingRenderDetailHtml(snap) {
       </section>
 
       <section class="training-card">
-        <h3 class="training-card-heading">Log tail</h3>
+        <div class="training-card-heading-row">
+          <h3 class="training-card-heading">Training log <span class="training-muted">(last 16 KiB)</span></h3>
+          <button type="button" class="btn-small secondary training-log-copy">Copy log</button>
+        </div>
         <pre class="training-log">${escapeHtml(snap.stderr_tail || "(no output yet)")}</pre>
       </section>
 
@@ -940,10 +1081,10 @@ function trainingRenderImageSection() {
       <span class="training-field-label">Use image</span>
       <select name="image_choice" onchange="trainingImageChoiceChanged()">
         <option value="">CI default</option>
-        <option value="local"${_trainingImageChoice === "local" ? " selected" : ""}>Local build (this checkout)</option>
+        <option value="local"${_trainingImageChoice === "local" ? " selected" : ""}>Local image (rebuild after code changes)</option>
         <option value="custom"${_trainingImageChoice === "custom" ? " selected" : ""}>Custom tag…</option>
       </select>
-      <span class="training-field-hint">Which docker image the run trains in. The CI default is built from the latest published branch state; a local build picks up this checkout as-is.</span>
+      <span class="training-field-hint">Which Docker image the run trains in. Selecting the local image reuses its existing tag; click <strong>Build now</strong> after source changes to bake the current checkout into it.</span>
     </label>
     <div id="training-image-custom" style="display:none;">
       <label class="training-field">

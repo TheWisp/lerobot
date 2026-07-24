@@ -1543,6 +1543,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     letter-spacing: 0.5px;
     font-weight: 600;
 }
+.training-card-heading-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+.training-card-heading-row .training-card-heading {
+    margin-bottom: 0;
+}
 
 /* Stats row inside a card */
 .training-stats-row {
