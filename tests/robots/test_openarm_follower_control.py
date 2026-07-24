@@ -28,6 +28,7 @@ from contextlib import nullcontext
 import numpy as np
 import pytest
 
+from lerobot.motors.damiao.tables import ControlMode
 from lerobot.robots.openarm_follower import openarm_follower as of
 from lerobot.robots.openarm_follower.config_openarm_follower import OpenArmFollowerConfig
 from lerobot.utils.import_utils import _mujoco_available, _openarm_mujoco_available
@@ -50,6 +51,7 @@ class StubBus:
         }
         self.sent: list[dict] = []
         self.posforce_sent: list[dict] = []
+        self.control_modes: list[tuple[str, ControlMode]] = []
         self.zero_calls = 0
         self.disconnect_calls: list[bool] = []
         self.sync_reads: list[str] = []
@@ -59,6 +61,9 @@ class StubBus:
 
     def configure_motors(self):
         pass
+
+    def set_control_mode(self, motor, mode):
+        self.control_modes.append((motor, mode))
 
     def disconnect(self, disable_torque=True):
         self.disconnect_calls.append(disable_torque)
@@ -161,6 +166,24 @@ def test_connect_does_not_rewrite_motor_zero(tmp_path, monkeypatch):
     follower.connect()
 
     assert follower.bus.zero_calls == 0
+
+
+def test_connect_configures_default_gripper_for_posforce(tmp_path, monkeypatch):
+    follower = make_follower(tmp_path, monkeypatch)
+    follower.bus.is_connected = False
+
+    follower.connect()
+
+    assert follower.bus.control_modes == [("gripper", ControlMode.TORQUE_POS)]
+
+
+def test_connect_configures_compatibility_gripper_for_mit(tmp_path, monkeypatch):
+    follower = make_follower(tmp_path, monkeypatch, gripper_control_mode="mit")
+    follower.bus.is_connected = False
+
+    follower.connect()
+
+    assert follower.bus.control_modes == [("gripper", ControlMode.MIT)]
 
 
 def test_connect_calibrates_only_when_explicitly_requested(tmp_path, monkeypatch):

@@ -30,7 +30,16 @@ import can
 
 from lerobot.motors import Motor, MotorNormMode
 from lerobot.motors.damiao import DamiaoMotorsBus
-from lerobot.motors.damiao.tables import MIT_KD_RANGE, MIT_KP_RANGE, MOTOR_LIMIT_PARAMS, MotorType
+from lerobot.motors.damiao.tables import (
+    CAN_CMD_WRITE_PARAM,
+    CAN_PARAM_ID,
+    MIT_KD_RANGE,
+    MIT_KP_RANGE,
+    MOTOR_LIMIT_PARAMS,
+    ControlMode,
+    MotorType,
+    MotorVariable,
+)
 
 PMAX, VMAX, TMAX = MOTOR_LIMIT_PARAMS[MotorType.DM8009]
 
@@ -134,7 +143,9 @@ def test_handshake_processes_received_status_frame(bus, monkeypatch):
 
     processed = []
     bus.canbus = FakeCanBus()
-    monkeypatch.setattr(bus, "_process_response", lambda motor_name, message: processed.append((motor_name, message)))
+    monkeypatch.setattr(
+        bus, "_process_response", lambda motor_name, message: processed.append((motor_name, message))
+    )
 
     bus._handshake()
 
@@ -187,3 +198,60 @@ def test_posforce_control_uses_offset_arbitration_id(bus, monkeypatch):
     assert len(fake.sent) == 1
     assert fake.sent[0].arbitration_id == 0x301
     assert bytes(fake.sent[0].data) == bus._encode_posforce_packet("joint_1", 0.25, 5.0, 0.1)
+
+
+def test_set_control_mode_writes_volatile_ctrl_mode_register(bus, monkeypatch):
+    class FakeCanBus:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, message):
+            self.sent.append(message)
+
+    fake = FakeCanBus()
+    bus.canbus = fake
+    monkeypatch.setattr(bus, "_recv_motor_response", lambda **_kwargs: None)
+
+    bus.set_control_mode("joint_1", ControlMode.TORQUE_POS)
+
+    assert len(fake.sent) == 1
+    assert fake.sent[0].arbitration_id == CAN_PARAM_ID
+    assert bytes(fake.sent[0].data) == bytes(
+        [
+            0x01,
+            0x00,
+            CAN_CMD_WRITE_PARAM,
+            int(MotorVariable.CTRL_MODE),
+            int(ControlMode.TORQUE_POS),
+            0,
+            0,
+            0,
+        ]
+    )
+
+
+def test_set_control_mode_accepts_matching_acknowledgement(bus, monkeypatch):
+    class FakeCanBus:
+        def send(self, _message):
+            pass
+
+    bus.canbus = FakeCanBus()
+    response = can.Message(
+        arbitration_id=0x11,
+        data=bytes(
+            [
+                0x01,
+                0x00,
+                CAN_CMD_WRITE_PARAM,
+                int(MotorVariable.CTRL_MODE),
+                int(ControlMode.TORQUE_POS),
+                0,
+                0,
+                0,
+            ]
+        ),
+        is_extended_id=False,
+    )
+    monkeypatch.setattr(bus, "_recv_motor_response", lambda **_kwargs: response)
+
+    bus.set_control_mode("joint_1", ControlMode.TORQUE_POS)

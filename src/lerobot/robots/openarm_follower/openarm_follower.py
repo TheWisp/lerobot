@@ -25,6 +25,7 @@ import numpy as np
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.damiao import DamiaoMotorsBus, MotorState
+from lerobot.motors.damiao.tables import ControlMode
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
@@ -271,6 +272,10 @@ class OpenArmFollower(Robot):
         """Configure motors with appropriate settings."""
         # TODO(Steven, Pepijn): Slightly different from what it is happening in the leader
         with self.bus.torque_disabled():
+            gripper_mode = (
+                ControlMode.TORQUE_POS if self.config.gripper_control_mode == "pos_force" else ControlMode.MIT
+            )
+            self.bus.set_control_mode("gripper", gripper_mode)
             self.bus.configure_motors()
 
     def setup_motors(self) -> None:

@@ -49,13 +49,16 @@ from .tables import (
     CAN_CMD_ENABLE,
     CAN_CMD_REFRESH,
     CAN_CMD_SET_ZERO,
+    CAN_CMD_WRITE_PARAM,
     CAN_PARAM_ID,
     DEFAULT_BAUDRATE,
     DEFAULT_TIMEOUT_MS,
     MIT_KD_RANGE,
     MIT_KP_RANGE,
     MOTOR_LIMIT_PARAMS,
+    ControlMode,
     MotorType,
+    MotorVariable,
 )
 
 logger = logging.getLogger(__name__)
@@ -283,6 +286,56 @@ class DamiaoMotorsBus(MotorsBusBase):
         for motor in self.motors:
             self._send_simple_command(motor, CAN_CMD_ENABLE)
             time.sleep(MEDIUM_TIMEOUT_SEC)
+
+    def set_control_mode(self, motor: NameOrID, mode: ControlMode) -> None:
+        """Set a motor's volatile CTRL_MODE register without saving to flash."""
+        motor_id = self._get_motor_id(motor)
+        recv_id = self._get_motor_recv_id(motor)
+        mode = ControlMode(mode)
+        data = [
+            motor_id & 0xFF,
+            (motor_id >> 8) & 0xFF,
+            CAN_CMD_WRITE_PARAM,
+            int(MotorVariable.CTRL_MODE),
+            int(mode),
+            0,
+            0,
+            0,
+        ]
+        if self.canbus is None:
+            raise RuntimeError("CAN bus is not initialized.")
+
+        msg = can.Message(
+            arbitration_id=CAN_PARAM_ID,
+            data=data,
+            is_extended_id=False,
+            is_fd=self.use_can_fd,
+        )
+        self.canbus.send(msg)
+
+        # Consume the parameter acknowledgement so the next state operation
+        # cannot decode it as motor feedback.
+        response = self._recv_motor_response(expected_recv_id=recv_id, timeout=MEDIUM_TIMEOUT_SEC)
+        if response is None:
+            logger.warning(
+                "No CTRL_MODE acknowledgement from %s after requesting %s",
+                self._get_motor_name(motor),
+                mode.name,
+            )
+            return
+
+        payload = bytes(response.data)
+        acknowledged = (
+            len(payload) >= 8
+            and payload[2] == CAN_CMD_WRITE_PARAM
+            and payload[3] == int(MotorVariable.CTRL_MODE)
+            and int.from_bytes(payload[4:8], byteorder="little") == int(mode)
+        )
+        if not acknowledged:
+            raise RuntimeError(
+                f"Motor {self._get_motor_name(motor)} returned an invalid CTRL_MODE acknowledgement: "
+                f"{payload.hex()}"
+            )
 
     def _send_simple_command(self, motor: NameOrID, command_byte: int) -> None:
         """Helper to send simple 8-byte commands (Enable, Disable, Zero)."""
