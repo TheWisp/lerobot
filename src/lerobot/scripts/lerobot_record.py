@@ -494,6 +494,8 @@ def record_loop(
     # iteration when the loop persistently overruns, e.g. 65 ms policy
     # inference against a 33 ms budget — thousands of lines per run).
     last_slow_warn_t = 0.0
+    # Rate-limit the policy action debug log (below) to 1 Hz.
+    last_policy_action_log_t = 0.0
 
     # Reset intervention state for new episode
     if teleop is not None and hasattr(teleop, "reset_intervention"):
@@ -663,6 +665,24 @@ def record_loop(
                 # Applies a pipeline to the action, default is IdentityProcessor
                 robot_action_to_send = robot_action_processor((act_processed_policy, obs))
                 action_values = robot_action_to_send
+
+            # 1 Hz action debug (policy-driven path): per-joint commanded
+            # position minus current state position. Near-zero deltas every
+            # second mean the POLICY itself is commanding a static pose
+            # ("moves a frame then holds still"); varying deltas with a
+            # motionless arm mean an execution-side problem instead.
+            now = time.perf_counter()
+            if now - last_policy_action_log_t >= 1.0:
+                last_policy_action_log_t = now
+                keys = sorted(k for k in robot_action_to_send if k in obs)
+                if keys:
+                    delta = np.array([robot_action_to_send[k] for k in keys]) - np.array(
+                        [float(obs[k]) for k in keys]
+                    )
+                    logging.info(
+                        "policy action − state (deg): %s",
+                        np.array2string(delta, precision=1, suppress_small=True, max_line_width=200),
+                    )
 
             # Inverse-follow: send follower position to leader, compensating for
             # servo tracking error so the leader is always close to the follower.
