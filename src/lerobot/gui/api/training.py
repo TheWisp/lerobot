@@ -857,7 +857,34 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
         "arg_key_prefix": "",  # HVLA's keys are bare snake_case
         "fields": [
             {"name": "chunk_size", "label": "Chunk size", "type": "int", "default": 50},
-            {"name": "num_inference_steps", "label": "Inference steps", "type": "int", "default": 15},
+            {
+                "name": "num_inference_steps",
+                "label": "Denoise steps",
+                "type": "int",
+                "default": 15,
+                "description": "Flow-matching solver steps saved in the S1 checkpoint.",
+            },
+            {
+                "name": "rtc_max_delay",
+                "label": "RTC max delay (frames)",
+                "type": "int",
+                "default": 6,
+                "description": "Largest simulated inference delay used by training-time RTC.",
+            },
+            {
+                "name": "rtc_drop_prob",
+                "label": "RTC drop probability",
+                "type": "float",
+                "default": 0.2,
+                "description": "Probability of training without a conditioned action prefix.",
+            },
+            {
+                "name": "resize_images",
+                "label": "Resize images",
+                "type": "string",
+                "default": "224x224",
+                "description": "Model input image size as HxW.",
+            },
             {"name": "hidden_dim", "label": "Hidden dim", "type": "int", "default": 768},
             {"name": "num_decoder_layers", "label": "Decoder layers", "type": "int", "default": 6},
             {"name": "num_workers", "label": "Data workers", "type": "int", "default": 4},

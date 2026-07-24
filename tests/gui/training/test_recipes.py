@@ -294,7 +294,18 @@ def test_hvla_output_subdir_is_output() -> None:
 def test_hvla_recipe_entrypoint_and_dashed_cli(tmp_path: Path) -> None:
     paths = RunPaths.for_run("h1", runs_dir=tmp_path)
     paths.ensure_exists()
-    run = _hvla_run({"steps": 200, "batch_size": 8, "chunk_size": 50})
+    run = _hvla_run(
+        {
+            "steps": 200,
+            "batch_size": 8,
+            "chunk_size": 50,
+            "num_workers": 3,
+            "num_inference_steps": 12,
+            "rtc_max_delay": 7,
+            "rtc_drop_prob": 0.15,
+            "resize_images": "192x256",
+        }
+    )
     cmd = _docker_cmd(run, paths)
     # Entrypoint module
     assert "python" in cmd
@@ -308,6 +319,11 @@ def test_hvla_recipe_entrypoint_and_dashed_cli(tmp_path: Path) -> None:
         ("--steps", "200"),
         ("--batch-size", "8"),
         ("--chunk-size", "50"),
+        ("--num-workers", "3"),
+        ("--num-inference-steps", "12"),
+        ("--rtc-max-delay", "7"),
+        ("--rtc-drop-prob", "0.15"),
+        ("--resize-images", "192x256"),
     ]:
         idx = cmd.index(flag)
         assert cmd[idx + 1] == expected, f"{flag} expected to be followed by {expected}"

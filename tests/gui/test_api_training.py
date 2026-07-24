@@ -370,14 +370,29 @@ def test_list_policies_act_entry_has_renderable_fields(client: TestClient) -> No
 
 
 def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None:
-    """HVLA's manual entry should declare its recipe marker + bare
-    (no-prefix) arg keys."""
+    """The manual S1-without-S2 entry exposes its complete training contract."""
     catalog = client.get("/api/training/policies").json()
     hvla = next(p for p in catalog if p["type_name"] == "hvla_flow_s1")
     assert hvla["recipe"] == "hvla_flow_s1"
     assert hvla["arg_key_prefix"] == ""
-    field_names = {f["name"] for f in hvla["fields"]}
-    assert {"chunk_size", "num_inference_steps", "hidden_dim"} <= field_names
+    fields = {f["name"]: f for f in hvla["fields"]}
+    expected = {
+        "chunk_size",
+        "num_inference_steps",
+        "rtc_max_delay",
+        "rtc_drop_prob",
+        "resize_images",
+        "hidden_dim",
+        "num_decoder_layers",
+        "num_workers",
+    }
+    assert expected <= fields.keys()
+    assert fields["num_inference_steps"]["label"] == "Denoise steps"
+    assert fields["num_inference_steps"]["default"] == 15
+    assert fields["rtc_max_delay"]["default"] == 6
+    assert fields["rtc_drop_prob"]["default"] == 0.2
+    assert fields["resize_images"]["default"] == "224x224"
+    assert "max_delay" not in fields  # S2 latent delay is irrelevant to this no-S2 recipe.
 
 
 def test_list_policies_skips_complex_fields(client: TestClient) -> None:
