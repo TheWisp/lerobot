@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenArm2"
+  short_description: "OpenArm2 sources and safe CAN diagnostics"
+  default_prompt: "Use $openarm2 to diagnose an OpenArm2 motor or integration issue from authoritative sources."
