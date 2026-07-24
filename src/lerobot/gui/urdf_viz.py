@@ -105,6 +105,22 @@ class ArmSpec:
 class RobotVizSpec:
     """Resolved viz spec for a live robot.
 
+    TODO(viz-chains): generalize this to a set of independent URDF instances
+    instead of arm-specific fields. The viewer only needs, per chain: URDF
+    URL, base offset, and which observation keys drive which joints — whether
+    a chain is an arm, a leg, or a base is irrelevant to rendering. Replace
+    ``urdf_url_path`` + ``urdf_url_path_right`` + the ``bimanual`` flag and
+    the arm-shaped ``base_offsets`` semantics with::
+
+        chains: list[ChainSpec]  # {urdf_url_path, base_offset, joints, calibration}
+
+    (two arms = 2 chains; arm+leg+base = 3). The joint-to-observation mapping
+    stays per-description-package in VIZ_SPEC. Do this when a third kinematic
+    chain appears (full-body OpenArm, quadruped, mobile base); until then the
+    current shape is a tolerable wart. Also touch: resolve_robot, both
+    urdf-viz meta endpoints (run.py / datasets.py), urdf_viz.html chain
+    loading, and tests/gui/test_urdf_viz.py.
+
     Attributes:
         name: Human-facing display name (from the description's ``VIZ_SPEC``).
         urdf_url_path: Path of the URDF *within* the ``/urdf-assets/`` mount,
