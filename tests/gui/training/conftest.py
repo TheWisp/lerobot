@@ -44,6 +44,18 @@ _SSH_LOOPBACK_DISABLED_REASON = (
 )
 
 
+# SAFETY: Keep the real SSH/tmux loopback suite disabled until the process-group
+# teardown in SshClient.stop() has been redesigned and verified in an isolated
+# VM/container.  On an Ubuntu GNOME workstation, running this suite has
+# repeatedly created tmux-spawn scopes and then caused the user's systemd
+# manager to activate exit.target, terminating the entire graphical session.
+# Availability of sshd/tmux is therefore NOT sufficient permission to run it.
+_SSH_LOOPBACK_DISABLED_REASON = (
+    "disabled for workstation safety: real SSH/tmux teardown can terminate "
+    "the entire systemd user session (GNOME exit.target)"
+)
+
+
 def _loopback_prereqs_present() -> tuple[bool, str]:
     """Quick precheck: are the binaries + sshd reachable?
 
