@@ -3,7 +3,7 @@
 import asyncio
 import json
 import sys
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -150,7 +150,7 @@ class TestProfileToCliArgs:
         with patch("lerobot.gui.api.run._get_known_fields", return_value={"joint_limits"}):
             args = _profile_to_cli_args(profile, "robot")
 
-        assert f'--robot.joint_limits={json.dumps(profile["fields"]["joint_limits"])}' in args
+        assert f"--robot.joint_limits={json.dumps(profile['fields']['joint_limits'])}" in args
 
     def test_unknown_fields_filtered_with_warning(self):
         """Fields not in the config class are silently skipped."""
@@ -712,6 +712,23 @@ class TestObsReaderCleanupOnLaunch:
 
         # Cleanup
         run_module._obs_reader_meta_ino = None
+
+    def test_torn_camera_read_reuses_last_coherent_jpeg(self):
+        import lerobot.gui.api.run as run_module
+
+        reader = MagicMock()
+        reader.image_seq.return_value = 2
+        reader.read_image.return_value = None
+        run_module._jpeg_cache["top"] = (1, b"last-good-jpeg")
+
+        try:
+            with patch("lerobot.gui.api.run._get_obs_reader", return_value=reader):
+                response = asyncio.run(run_module.obs_stream_image("top"))
+        finally:
+            run_module._jpeg_cache.clear()
+
+        assert response.body == b"last-good-jpeg"
+        assert response.headers["x-lerobot-frame-stale"] == "1"
 
 
 # ============================================================================

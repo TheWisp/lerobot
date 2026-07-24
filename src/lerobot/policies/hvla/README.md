@@ -110,6 +110,31 @@ Flow matching S1 implements [Training-Time Action Conditioning for Efficient Rea
 - No S2 latent delay augmentation or age embedding (matching old ACT setup that worked)
 - v6: curated dataset + bidirectional attention (v5 used causal)
 
+### 3. The S2 camera map (read this once)
+
+The S2 checkpoint was trained on **named views** — e.g. pi05-style checkpoints expect
+`base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb, base_1_rgb`, in that order. Your robot's
+cameras have **their own names** (`front`, `top`, ...). The bridge is one flag:
+
+```
+robot cameras ──["cam:slot,..."]──► shm image slots ──► S2 VLM input
+(your names)    --s2-camera-map     (checkpoint's view names, in order)
+```
+
+- `--s2-camera-map "front:base_0_rgb,left_wrist:left_wrist_0_rgb,right_wrist:right_wrist_0_rgb,top:base_1_rgb"`
+  says: _my_ `front` camera is what the checkpoint knows as `base_0_rgb`, and so on.
+  **Entry order = the order views are fed to the model** (must match training). There is no
+  default: only you know which physical view corresponds to which training view.
+- `s2_standalone` has no robot, so it takes the slot side only: `--s2-image-keys base_0_rgb left_wrist_0_rgb ...`
+  (same names, same order as your map's slot values).
+- The GUI/teleop observation processor can mirror frames into S2's distinct
+  `hvla_img_*` `SharedImageBuffer`; it reads the same mapping from the
+  `LEROBOT_S2_CAM_KEY_MAP` env var, using the same `"cam:slot,..."` syntax.
+  S2 does **not** read the best-effort `lerobot_obs_*` GUI telemetry stream.
+
+Wrong slot names fail loudly (shared-memory attach error); a missing map is a startup error —
+never a silent wrong-camera.
+
 ### 3a. Inference — ACT (default)
 
 ```bash
@@ -256,6 +281,39 @@ Typical S1 loop interval: ~34ms (~29Hz). Inference spikes to ~59ms under S2 GPU 
 ## TODO
 
 ### High priority
+
+- [ ] **[CRITICAL][IPC] Make S1↔S2 shared memory safe for inference and online training.**
+      `SharedBlock.read()` currently returns a potentially torn array after three failed sequence
+      checks; `SharedImageBuffer` publishes cameras and state without one committed observation
+      generation; missing or wrong-shaped cameras silently retain stale/zero contents; and S1 can
+      attach to orphaned segments or continue after S2 dies. Before relying on S2 conditioning for
+      robot control: never return failed reads; make camera + state snapshots generation-coherent;
+      validate schema, camera presence, and shape; add heartbeat/liveness with a bounded explicit
+      stop-or-degrade policy; and cover concurrent reads, S2 crashes, orphaned SHM, stale latents, and
+      shape mismatches with regression tests.
+
+      Treat performance as part of this design, not an afterthought. Today the control process can
+      copy almost the same full-resolution image set into both `lerobot_obs_*` and `hvla_img_*` at
+      30 Hz even though S2 consumes at roughly 4–15 Hz, so many S2 writes are overwritten unread.
+      Extra copies also consume memory bandwidth, add control-loop jitter, and multiply `/dev/shm`
+      capacity (especially if coherent double buffering is introduced). Instrument per-stream write
+      time, bytes/sec, produced-versus-consumed generations, and SHM footprint before choosing the
+      implementation. Prefer one generation-tagged authoritative snapshot with strict S2 reads and
+      non-blocking telemetry sampling when it can preserve lifecycle isolation; retain separate
+      streams only when measured cost is acceptable or representation/lifecycle genuinely differs.
+      Visualization IPC may remain best-effort unless it explicitly adopts the stricter contract.
+
+- [ ] **[IPC][TECH DEBT] Move the S2 image publisher out of generic observation telemetry.**
+      `robots/obs_stream.py::ObservationStreamWriterStep` still contains the optional
+      `LEROBOT_S2_IMAGE_BUFFER` → `hvla_img_*` bridge as a historical teleop/debug shortcut. This is
+      a layering violation, not part of the generic `lerobot_obs_*` contract: S2 publication is
+      implicitly gated by `LEROBOT_OBS_STREAM` because the writer step is otherwise not installed,
+      while full S1 inference also writes `SharedImageBuffer` directly and can therefore create
+      duplicate writes when both paths are enabled. Extract an HVLA-owned S2 image writer step,
+      enable it explicitly at the HVLA/debug launch sites, give the buffer one unambiguous producer
+      and lifecycle owner, and leave `ObservationStreamWriterStep` responsible only for
+      `lerobot_obs_*`. Preserve the critical torn-read and performance requirements above during
+      that separation.
 
 - [x] **[CRITICAL] RLT state normalization mismatch** — fixed in 480efb41c via `FlowMatchingS1Policy.prepare_batch_for_encode_observations`. Parity test `test_policy_prepare_batch_normalizes_state` locks in the invariant. Old actor/critic checkpoint renamed to `latest.buggy_pre_fixes_20260423/` for safekeeping; fresh Phase-2 training required.
 - [x] **[RLT] Image preprocessing parity** — fixed in 78da63e8d. `obs_to_s1_batch` now uses `TF.resize(bilinear, antialias=True)` matching `FlowMatchingDataset`. Policy-owned preprocessing refactor still pending (ACT-VLM has a different training pipeline — xfail-tagged).

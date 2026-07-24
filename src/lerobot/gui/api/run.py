@@ -1370,7 +1370,16 @@ async def obs_stream_image(cam_key: str) -> Response:
 
     result = reader.read_image(cam_key)
     if result is None:
-        raise HTTPException(404, f"No image for camera '{cam_key}'")
+        # A large frame may be overwritten during all bounded read attempts.
+        # Keep displaying the last coherent JPEG instead of encoding bytes
+        # that failed the shared-memory sequence check.
+        if cached is not None:
+            return Response(
+                content=cached[1],
+                media_type="image/jpeg",
+                headers={"Cache-Control": "no-store", "X-Lerobot-Frame-Stale": "1"},
+            )
+        raise HTTPException(503, f"No coherent image available yet for camera '{cam_key}'")
     img, _ts = result
 
     import cv2

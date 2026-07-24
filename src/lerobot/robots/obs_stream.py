@@ -1,4 +1,4 @@
-"""Observable robot state via shared memory (zero-copy).
+"""Best-effort robot observation telemetry via shared memory.
 
 Activated by setting LEROBOT_OBS_STREAM=1.  Robot subclasses are
 automatically wrapped (via __init_subclass__ in robot.py) so that
@@ -9,6 +9,26 @@ step appended to the end of robot_observation_processor pipeline, so the
 stream receives post-processed observations (with overlays etc.).
 
 Any process can read the latest state by constructing an ObservationStreamReader.
+
+Criticality contract
+--------------------
+``lerobot_obs_*`` is a latest-value telemetry channel for GUI display,
+visualization overlays, and debugging.  It is deliberately best-effort: readers
+can miss intermediate samples, temporarily receive ``None`` during a concurrent
+write, or remain attached to stale data after an unclean writer exit until
+liveness/restart handling catches up.
+
+Under the current protocol, never use this channel as input to a robot policy,
+action/control loop, safety decision, or authoritative recording path.  Those
+paths must use the direct robot observation or a purpose-built transport with
+explicit freshness, liveness, and failure semantics.  An overlay worker may run
+a vision model on a streamed frame only to produce non-critical visualization;
+its result must not feed robot inference or control.
+
+This constrains the current ``lerobot_obs_*`` implementation, not the future
+architecture: a later observation bus may serve both critical and non-critical
+consumers after it explicitly adds and tests the stricter critical-path
+contract.
 
 Layout (all created dynamically based on observation_features/action_features):
   - meta block:  JSON descriptor (feature names, image dims) — written once
@@ -164,7 +184,12 @@ class _Block:
         return struct.unpack_from("<q", self._shm.buf, 8)[0]  # seq_done
 
     def read(self) -> tuple[bytes, float] | None:
-        """Read with torn-read detection.  Returns (data, timestamp) or None."""
+        """Return one coherent snapshot, or ``None`` while a write is racing.
+
+        Never expose the bytes copied during a failed sequence check: for
+        large camera frames those bytes can contain horizontal regions from
+        different frames. Callers may retry or retain their last good sample.
+        """
         buf = self._shm.buf
         for _ in range(3):
             s1, d1, ts = _HDR.unpack_from(buf, 0)
@@ -174,7 +199,7 @@ class _Block:
             s2, d2, _ = _HDR.unpack_from(buf, 0)
             if s1 == d1 == s2 == d2:
                 return data, ts
-        return data, ts  # best-effort
+        return None
 
     def cleanup(self) -> None:
         with contextlib.suppress(Exception):
@@ -200,7 +225,13 @@ class _Block:
 
 
 class ObservationStream:
-    """Publishes robot observations and actions to shared memory."""
+    """Publish non-critical observation/action telemetry to ``lerobot_obs_*``.
+
+    The current protocol is a best-effort, single-slot latest-value stream for
+    GUI display, visualization, and debugging.  It provides neither delivery
+    nor freshness guarantees and must not be used to drive policy inference,
+    robot control, safety logic, or authoritative recording.
+    """
 
     def __init__(self, obs_features: dict, action_features: dict):
         self.obs_scalar_keys: list[str] = sorted(
@@ -277,7 +308,14 @@ class ObservationStream:
 
 
 class ObservationStreamReader:
-    """Attaches to an existing observation stream (read-only, any process)."""
+    """Read non-critical, best-effort telemetry from ``lerobot_obs_*``.
+
+    Reads may skip samples, return ``None`` while a write is racing, or remain
+    stale across a writer failure until the caller detects stream recreation.
+    Consumers must tolerate all three.  Under the current protocol, never use
+    values from this reader as robot-policy input or in control, safety, or
+    authoritative data paths.
+    """
 
     def __init__(self):
         self._meta = _Block(f"{SHM_PREFIX}meta", 0, create=False)
@@ -348,13 +386,19 @@ class ObservationStreamReader:
 
 
 class ObservationStreamWriterStep:
-    """Processor step that writes observations to shared memory stream(s).
+    """Processor step that writes observations to the shared telemetry stream.
 
     Append this as the LAST step in robot_observation_processor so the stream
     receives post-processed observations (with overlays etc.), not raw.
 
-    Automatically also writes to HVLA's SharedImageBuffer if the
-    LEROBOT_S2_IMAGE_BUFFER env var is set (for debug S2 model alongside teleop).
+    Publication to ``lerobot_obs_*`` is a side-effect-only, best-effort telemetry
+    path: failures are suppressed and the original observation is returned
+    unchanged.  No policy, control, safety, or recording path may depend on that
+    publication succeeding.
+
+    A legacy policy-specific image-buffer mirror also remains in this class.
+    It is not part of the ``ObservationStreamReader`` protocol or this module's
+    telemetry contract and should be moved into a policy-owned processor step.
 
     Follows the ObservationProcessorStep interface (observation() method)
     but does not subclass it to avoid importing the processor module at
@@ -364,6 +408,9 @@ class ObservationStreamWriterStep:
     def __init__(self):
         self._s2_buffer = None
         self._s2_joint_names = None
+        # TODO: Move this legacy policy-specific publisher into its owning
+        # policy. Its lifecycle and enablement should not depend on the generic
+        # telemetry writer being installed.
         # Lazily create S2 shared image buffer if env var is set
         if os.environ.get("LEROBOT_S2_IMAGE_BUFFER"):
             self._s2_enabled = True
