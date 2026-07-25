@@ -228,10 +228,10 @@ def main():
         episode_ends[ep] = i + 1
 
     # Load policy
-    from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Config, FlowMatchingS1Policy
+    from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Policy
 
-    config = FlowMatchingS1Config()
-    policy = FlowMatchingS1Policy.from_pretrained(args.checkpoint, config=config)
+    policy = FlowMatchingS1Policy.from_pretrained(args.checkpoint)
+    config = policy.config
     policy.to(device).eval()
     image_keys = list(config.image_features.keys())
 

@@ -102,11 +102,35 @@ def migrate_run(run_dir: Path, dry_run: bool = False):
                     # safe-destruct: explicit migration script
                     shutil.move(str(src), str(dst))
 
+        # This migrator is intentionally for the known bimanual SO-107
+        # prototype layout. Recording the verified order here is safer than
+        # teaching the normal checkpoint loader to guess every 14-D model.
+        feature_names = [
+            "left_shoulder_pan.pos",
+            "left_shoulder_lift.pos",
+            "left_elbow_flex.pos",
+            "left_forearm_roll.pos",
+            "left_wrist_flex.pos",
+            "left_wrist_roll.pos",
+            "left_gripper.pos",
+            "right_shoulder_pan.pos",
+            "right_shoulder_lift.pos",
+            "right_elbow_flex.pos",
+            "right_forearm_roll.pos",
+            "right_wrist_flex.pos",
+            "right_wrist_roll.pos",
+            "right_gripper.pos",
+        ]
+
         # Create config.json
         config = {
             "type": "hvla_flow_s1",
+            "feature_contract_version": 1,
             "action_dim": 14,
+            "action_feature_names": feature_names,
+            "robot_state_feature": True,
             "state_dim": 14,
+            "state_feature_names": feature_names,
             "chunk_size": 50,
             "hidden_dim": 768,
             "num_heads": 8,
@@ -122,6 +146,7 @@ def migrate_run(run_dir: Path, dry_run: bool = False):
                 "observation.images.right_wrist": 224,
                 "observation.images.top": 224,
             },
+            "image_resize_shape": [224, 224],
             "dino_model": "dinov2_vits14",
         }
         config_path = pretrained_dir / "config.json"

@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 
 def load_s1_policy(checkpoint_dir: str, device: str):
-    from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
     from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
 
     ckpt_dir = Path(checkpoint_dir)
@@ -36,8 +35,7 @@ def load_s1_policy(checkpoint_dir: str, device: str):
         safetensors_path = Path(checkpoint_dir)
         ckpt_dir = safetensors_path.parent
 
-    config = FlowMatchingS1Config()
-    policy = FlowMatchingS1Policy.from_pretrained(str(safetensors_path), config)
+    policy = FlowMatchingS1Policy.from_pretrained(str(safetensors_path))
     policy.to(device)
     policy.eval()
     return policy

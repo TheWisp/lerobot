@@ -181,15 +181,7 @@ def main():
     from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
     from lerobot.policies.hvla.s1.flow_matching.train import FlowMatchingDataset
 
-    config = FlowMatchingS1Config(
-        chunk_size=ckpt_cfg["chunk_size"],
-        hidden_dim=ckpt_cfg["hidden_dim"],
-        num_decoder_layers=ckpt_cfg["num_decoder_layers"],
-        num_inference_steps=ckpt_cfg["num_inference_steps"],
-        rtc_max_delay=ckpt_cfg["rtc_max_delay"],
-        rtc_drop_prob=ckpt_cfg["rtc_drop_prob"],
-    )
-    config.image_features = ckpt_cfg["image_features"]
+    config = FlowMatchingS1Config.from_checkpoint_dict(ckpt_cfg)
 
     # Eval dataset
     logger.info("Loading eval dataset: %s", args.eval_repo_id)
