@@ -1094,9 +1094,9 @@ function renderRunForm() {
     const _hvlaQueryIntervalDesc = "How often S1 (chunk policy) runs new inference, measured in policy steps. Default 2 = inference every 2 steps (15 Hz at fps=30) — small enough that motion stays responsive but big enough that S1 latency doesn't bottleneck the loop. Set to 1 for max responsiveness at higher compute cost.";
     html += `<label title="${_hvlaQueryIntervalDesc}">Query Interval (steps between S1 inference, default 2)</label>`;
     html += `<input type="number" id="run-hvla-query-interval" placeholder="2" min="0" title="${_hvlaQueryIntervalDesc}">`;
-    const _hvlaDenoiseStepsDesc = "Number of flow-matching ODE solver steps per S1 inference. Higher → more accurate chunks but slower (each step is one full S1 forward pass). Default 10 is the trained-time setting; lowering to 5 cuts latency by ~50% at small accuracy cost.";
-    html += `<label title="${_hvlaDenoiseStepsDesc}">Denoise Steps (default 10)</label>`;
-    html += `<input type="number" id="run-hvla-denoise-steps" placeholder="10" min="1" title="${_hvlaDenoiseStepsDesc}">`;
+    const _hvlaDenoiseStepsDesc = "Optional runtime override for the flow-matching ODE solver steps per S1 inference. Higher values cost more latency. Leave empty to use the value saved in the checkpoint.";
+    html += `<label title="${_hvlaDenoiseStepsDesc}">Denoise Steps (checkpoint default)</label>`;
+    html += `<input type="number" id="run-hvla-denoise-steps" placeholder="checkpoint" min="1" title="${_hvlaDenoiseStepsDesc}">`;
     html += `<label title="How the policy frame is sent to the robot each tick. 'chunk' (default) packs the remaining chunk frames as an ActionChunk → predictive robots use the exact-lookup path for zero-estimation-error lookahead. 'dict' sends only the current frame → predictive robots fall back to velocity-LSQ extrapolation (rate-agnostic post-fix but still has EMA residual). Use 'dict' for A/B comparison or as rollback. Non-predictive robots are unaffected.">Action Send Shape</label>`;
     html += `<select id="run-hvla-send-action-shape" title="Default 'chunk' is the recommended best-perf path. Switch to 'dict' for A/B comparison against pre-fix behaviour.">`;
     html += `<option value="chunk">chunk (default — predictive exact-lookup)</option>`;
