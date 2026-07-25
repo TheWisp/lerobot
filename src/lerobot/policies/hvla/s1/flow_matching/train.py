@@ -57,11 +57,18 @@ def configure_from_dataset_features(
     if len(action_shape) != 1 or action_shape[0] <= 0:
         raise ValueError(f"HVLA Flow S1 requires a 1-D action feature, got shape={action_shape}")
     config.action_dim = int(action_shape[0])
+    config.action_feature_names = list(action_feature.get("names") or [])
+    if len(config.action_feature_names) != config.action_dim:
+        raise ValueError(
+            "Action metadata must provide one ordered name per value: "
+            f"{len(config.action_feature_names)} names for {config.action_dim} values"
+        )
 
     state_feature = features.get("observation.state")
     if state_feature is None:
         config.robot_state_feature = False
         config.state_dim = 0
+        config.state_feature_names = []
     else:
         state_shape = tuple(state_feature.get("shape", ()))
         if len(state_shape) != 1 or state_shape[0] <= 0:
@@ -70,6 +77,12 @@ def configure_from_dataset_features(
             )
         config.robot_state_feature = True
         config.state_dim = int(state_shape[0])
+        config.state_feature_names = list(state_feature.get("names") or [])
+        if len(config.state_feature_names) != config.state_dim:
+            raise ValueError(
+                "State metadata must provide one ordered name per value: "
+                f"{len(config.state_feature_names)} names for {config.state_dim} values"
+            )
 
     image_keys = [
         key
@@ -86,7 +99,7 @@ def configure_from_dataset_features(
     image_size = resize_to[0] if resize_to is not None else None
     config.image_features = dict.fromkeys(image_keys, image_size)
     config.image_resize_shape = resize_to
-    config.validate_feature_contract()
+    config.validate_feature_contract(require_names=True)
 
 
 class FlowMatchingDataset(torch.utils.data.Dataset):
@@ -428,9 +441,12 @@ def train(args):
         # config.json — identifies this as an HVLA checkpoint
         policy_config = {
             "type": "hvla_flow_s1",
+            "feature_contract_version": FlowMatchingS1Config.FEATURE_CONTRACT_VERSION,
             "action_dim": config.action_dim,
+            "action_feature_names": config.action_feature_names,
             "robot_state_feature": config.robot_state_feature,
             "state_dim": config.state_dim,
+            "state_feature_names": config.state_feature_names,
             "chunk_size": config.chunk_size,
             "hidden_dim": config.hidden_dim,
             "num_heads": config.num_heads,

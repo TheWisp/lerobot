@@ -18,6 +18,31 @@ from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
 
 
+def _checkpoint_config(**overrides):
+    config = {
+        "type": "hvla_flow_s1",
+        "feature_contract_version": 1,
+        "action_dim": 4,
+        "action_feature_names": ["a0", "a1", "a2", "a3"],
+        "robot_state_feature": True,
+        "state_dim": 4,
+        "state_feature_names": ["s0", "s1", "s2", "s3"],
+        "image_features": {},
+        "image_resize_shape": None,
+        "chunk_size": 10,
+        "hidden_dim": 64,
+        "num_heads": 4,
+        "dim_feedforward": 128,
+        "num_encoder_layers": 1,
+        "num_decoder_layers": 1,
+        "s2_latent_dim": 32,
+        "s2_proj_hidden": 16,
+        "use_dino_backbone": False,
+    }
+    config.update(overrides)
+    return config
+
+
 @pytest.fixture
 def small_config():
     """Minimal config for fast tests (no DINOv2)."""
@@ -30,8 +55,10 @@ def small_config():
         num_decoder_layers=1,
         dim_feedforward=128,
         action_dim=4,
+        action_feature_names=["a0", "a1", "a2", "a3"],
         robot_state_feature=True,
         state_dim=4,
+        state_feature_names=["s0", "s1", "s2", "s3"],
         chunk_size=10,
         s2_latent_dim=32,
         s2_proj_hidden=16,
@@ -59,21 +86,7 @@ class TestStandardCheckpointFormat:
             {"action_mean": torch.zeros(4), "action_std": torch.ones(4)},
             str(pretrained_dir / "norm_stats.pt"),
         )
-        (pretrained_dir / "config.json").write_text(
-            json.dumps(
-                {
-                    "type": "hvla_flow_s1",
-                    "action_dim": 4,
-                    "state_dim": 4,
-                    "chunk_size": 10,
-                    "hidden_dim": 64,
-                    "num_heads": 4,
-                    "num_encoder_layers": 1,
-                    "num_decoder_layers": 1,
-                    "s2_latent_dim": 32,
-                }
-            )
-        )
+        (pretrained_dir / "config.json").write_text(json.dumps(_checkpoint_config()))
         (training_state_dir / "training_step.json").write_text(json.dumps({"step": 100}))
 
         # Verify structure
@@ -94,24 +107,7 @@ class TestStandardCheckpointFormat:
             {"action_mean": torch.zeros(4), "action_std": torch.ones(4)},
             str(pretrained_dir / "norm_stats.pt"),
         )
-        (pretrained_dir / "config.json").write_text(
-            json.dumps(
-                {
-                    "type": "hvla_flow_s1",
-                    "action_dim": 4,
-                    "state_dim": 4,
-                    "chunk_size": 10,
-                    "hidden_dim": 64,
-                    "num_heads": 4,
-                    "dim_feedforward": 128,
-                    "num_encoder_layers": 1,
-                    "num_decoder_layers": 1,
-                    "s2_latent_dim": 32,
-                    "s2_proj_hidden": 16,
-                    "use_dino_backbone": False,
-                }
-            )
-        )
+        (pretrained_dir / "config.json").write_text(json.dumps(_checkpoint_config()))
 
         # Load by passing the parent directory
         loaded = FlowMatchingS1Policy.from_pretrained(str(tmp_path))
@@ -155,22 +151,14 @@ class TestStandardCheckpointFormat:
         sft.save_file(dict(policy.state_dict()), str(pretrained_dir / "model.safetensors"))
         (pretrained_dir / "config.json").write_text(
             json.dumps(
-                {
-                    "type": "hvla_flow_s1",
-                    "action_dim": 4,
-                    "state_dim": 4,
-                    "chunk_size": 10,
-                    "hidden_dim": 64,
-                    "num_heads": 4,
-                    "dim_feedforward": 128,
-                    "num_encoder_layers": 1,
-                    "num_decoder_layers": 1,
-                    "s2_latent_dim": 32,
-                    "s2_proj_hidden": 16,
-                    "use_dino_backbone": False,
-                    "num_inference_steps": 5,
-                    "rtc_max_delay": 3,
-                }
+                _checkpoint_config(
+                    num_inference_steps=5,
+                    rtc_max_delay=3,
+                    robot_state_feature=False,
+                    state_dim=0,
+                    state_feature_names=[],
+                    image_resize_shape=[192, 256],
+                )
             )
         )
 
@@ -178,6 +166,104 @@ class TestStandardCheckpointFormat:
         loaded = FlowMatchingS1Policy.from_pretrained(str(tmp_path))
         assert loaded.config.num_inference_steps == 5
         assert loaded.config.rtc_max_delay == 3
+        assert loaded.config.action_feature_names == ["a0", "a1", "a2", "a3"]
+        assert loaded.config.robot_state_feature is False
+        assert loaded.config.state_feature_names == []
+        assert loaded.config.image_resize_shape == (192, 256)
+
+    def test_visual_checkpoint_without_camera_metadata_fails(self, tmp_path):
+        pretrained_dir = tmp_path / "pretrained_model"
+        pretrained_dir.mkdir()
+        (pretrained_dir / "config.json").write_text(json.dumps(_checkpoint_config(use_dino_backbone=True)))
+
+        with pytest.raises(ValueError, match="does not record any image features"):
+            FlowMatchingS1Policy.from_pretrained(str(tmp_path))
+
+    def test_stateless_checkpoint_rejects_state_feature_names(self, tmp_path):
+        pretrained_dir = tmp_path / "pretrained_model"
+        pretrained_dir.mkdir()
+        (pretrained_dir / "config.json").write_text(
+            json.dumps(
+                _checkpoint_config(
+                    robot_state_feature=False,
+                    state_dim=0,
+                    state_feature_names=["joint.pos"],
+                )
+            )
+        )
+
+        with pytest.raises(ValueError, match="non-empty state contract"):
+            FlowMatchingS1Policy.from_pretrained(str(tmp_path))
+
+    def test_complete_unversioned_checkpoint_remains_loadable(self, tmp_path):
+        pretrained_dir = tmp_path / "pretrained_model"
+        pretrained_dir.mkdir()
+        config = _checkpoint_config()
+        config.pop("feature_contract_version")
+        config.pop("robot_state_feature")
+        (pretrained_dir / "config.json").write_text(json.dumps(config))
+
+        loaded = FlowMatchingS1Config.from_checkpoint_dict(config)
+
+        assert loaded.robot_state_feature is True
+        assert loaded.state_dim == 4
+
+    def test_ambiguous_unversioned_checkpoint_requires_verified_migration(self, tmp_path):
+        config = _checkpoint_config()
+        config.pop("feature_contract_version")
+        config.pop("robot_state_feature")
+        config["state_feature_names"] = []
+
+        with pytest.raises(ValueError, match="ambiguous or missing"):
+            FlowMatchingS1Config.from_checkpoint_dict(config)
+
+    def test_early_stateless_checkpoint_drops_its_unused_state_dimension(self):
+        config = _checkpoint_config(
+            feature_contract_version=None,
+            robot_state_feature=False,
+            state_dim=14,
+            state_feature_names=[],
+        )
+
+        loaded = FlowMatchingS1Config.from_checkpoint_dict(config)
+
+        assert loaded.robot_state_feature is False
+        assert loaded.state_dim == 0
+
+    def test_unsupported_contract_version_requires_migration(self):
+        config = _checkpoint_config(feature_contract_version=999)
+
+        with pytest.raises(ValueError, match="unsupported feature_contract_version"):
+            FlowMatchingS1Config.from_checkpoint_dict(config)
+
+    def test_checkpoint_without_action_names_does_not_guess_runtime_order(self, tmp_path):
+        pretrained_dir = tmp_path / "pretrained_model"
+        pretrained_dir.mkdir()
+        (pretrained_dir / "config.json").write_text(json.dumps(_checkpoint_config(action_feature_names=[])))
+
+        with pytest.raises(ValueError, match="ordered action feature names"):
+            FlowMatchingS1Policy.from_pretrained(str(tmp_path))
+
+    def test_checkpoint_without_config_requires_explicit_contract(self, tmp_path):
+        import safetensors.torch as sft
+
+        policy = FlowMatchingS1Policy(
+            FlowMatchingS1Config(
+                action_dim=4,
+                robot_state_feature=True,
+                state_dim=4,
+                hidden_dim=64,
+                num_heads=4,
+                dim_feedforward=128,
+                num_encoder_layers=1,
+                num_decoder_layers=1,
+                use_dino_backbone=False,
+            )
+        )
+        sft.save_file(dict(policy.state_dict()), str(tmp_path / "model.safetensors"))
+
+        with pytest.raises(ValueError, match="does not contain config.json"):
+            FlowMatchingS1Policy.from_pretrained(str(tmp_path))
 
     def test_roundtrip_weights(self, small_config, tmp_path):
         """Weights should be identical after save → load roundtrip."""
@@ -192,24 +278,7 @@ class TestStandardCheckpointFormat:
         pretrained_dir = tmp_path / "pretrained_model"
         pretrained_dir.mkdir()
         sft.save_file(dict(policy.state_dict()), str(pretrained_dir / "model.safetensors"))
-        (pretrained_dir / "config.json").write_text(
-            json.dumps(
-                {
-                    "type": "hvla_flow_s1",
-                    "action_dim": 4,
-                    "state_dim": 4,
-                    "chunk_size": 10,
-                    "hidden_dim": 64,
-                    "num_heads": 4,
-                    "dim_feedforward": 128,
-                    "num_encoder_layers": 1,
-                    "num_decoder_layers": 1,
-                    "s2_latent_dim": 32,
-                    "s2_proj_hidden": 16,
-                    "use_dino_backbone": False,
-                }
-            )
-        )
+        (pretrained_dir / "config.json").write_text(json.dumps(_checkpoint_config()))
 
         loaded = FlowMatchingS1Policy.from_pretrained(str(tmp_path))
         for (name, p_orig), (_, p_loaded) in zip(

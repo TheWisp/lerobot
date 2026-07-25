@@ -59,8 +59,9 @@ def _resolve_policy_feature_order(
     """Resolve a checkpoint tensor's columns against the connected robot.
 
     Named checkpoints are matched by name and retain their training order.
-    Named checkpoints retain their saved order. Checkpoints without names use
-    the robot's declared order only when the dimensions agree exactly.
+    Flow checkpoints must provide names. Other policy formats that do not yet
+    persist them may opt into runtime order, but only when dimensions agree
+    exactly; guessing a subset would silently command/read wrong joints.
     """
     if checkpoint_names:
         if len(checkpoint_names) != expected_dim:
@@ -796,7 +797,7 @@ def run_s1(
         runtime_names=runtime_action_names,
         expected_dim=expected_action_dim,
         feature_kind="action",
-        allow_unnamed_runtime_order=True,
+        allow_unnamed_runtime_order=s1_type != "flow",
     )
     if state_feature is False:
         state_feature_names = []
@@ -811,7 +812,7 @@ def run_s1(
             runtime_names=runtime_state_names,
             expected_dim=expected_state_dim,
             feature_kind="state",
-            allow_unnamed_runtime_order=True,
+            allow_unnamed_runtime_order=s1_type != "flow",
         )
     missing_cameras = [
         key for key in s1_image_keys if key.removeprefix("observation.images.") not in camera_keys

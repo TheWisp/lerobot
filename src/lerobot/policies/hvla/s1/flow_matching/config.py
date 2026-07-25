@@ -21,6 +21,7 @@ References:
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
+from typing import ClassVar
 
 
 @dataclass
@@ -33,11 +34,14 @@ class FlowMatchingS1Config:
     - Action+timestep fusion via concat → MLP(SiLU) (matching Pi0/SmolVLA)
     """
 
-    # --- Dataset-derived tensor layout ---
+    FEATURE_CONTRACT_VERSION: ClassVar[int] = 1
+
+    # --- Dataset-derived feature contract ---
     # These fields are resolved from dataset metadata during training and
     # persisted in config.json. They are model-shape metadata, not user-facing
     # hyperparameters.
     action_dim: int | None = None
+    action_feature_names: list[str] = field(default_factory=list)
     chunk_size: int = 50  # predict 50 future actions (~1.67s at 30Hz)
     n_action_steps: int = 50  # execute full chunk (RTC handles continuity)
 
@@ -85,6 +89,7 @@ class FlowMatchingS1Config:
     # --- Robot state ---
     robot_state_feature: bool | None = None
     state_dim: int | None = None
+    state_feature_names: list[str] = field(default_factory=list)
 
     # --- Training ---
     # LR references: Pi0=2.5e-5, ACT=1e-5, SmolVLA=1e-4, Pi0.5+LoRA=1.2e-4
@@ -97,18 +102,46 @@ class FlowMatchingS1Config:
     def num_images(self) -> int:
         return len(self.image_features)
 
-    def validate_feature_contract(self) -> None:
-        """Reject unresolved or internally inconsistent tensor dimensions."""
+    def validate_feature_contract(self, *, require_names: bool = False) -> None:
+        """Reject unresolved or internally inconsistent tensor metadata."""
         if type(self.action_dim) is not int or self.action_dim <= 0:
             raise ValueError("Flow S1 action_dim must be resolved from a dataset or checkpoint")
+        if (
+            not isinstance(self.action_feature_names, list)
+            or any(not isinstance(name, str) or not name for name in self.action_feature_names)
+            or len(set(self.action_feature_names)) != len(self.action_feature_names)
+        ):
+            raise ValueError("Flow S1 action feature names must be unique, non-empty strings")
+        if self.action_feature_names and len(self.action_feature_names) != self.action_dim:
+            raise ValueError(
+                f"Flow S1 records {len(self.action_feature_names)} action names "
+                f"for action_dim={self.action_dim}"
+            )
+        if require_names and not self.action_feature_names:
+            raise ValueError("Flow S1 requires ordered action feature names; dimensions alone are unsafe")
 
         if type(self.robot_state_feature) is not bool:
             raise ValueError("Flow S1 robot_state_feature must be resolved from a dataset or checkpoint")
         if self.robot_state_feature:
             if type(self.state_dim) is not int or self.state_dim <= 0:
                 raise ValueError("Flow S1 state_dim must be positive when observation.state is enabled")
-        elif self.state_dim not in (None, 0):
-            raise ValueError("Flow S1 disables observation.state but records a non-zero state_dim")
+            if (
+                not isinstance(self.state_feature_names, list)
+                or any(not isinstance(name, str) or not name for name in self.state_feature_names)
+                or len(set(self.state_feature_names)) != len(self.state_feature_names)
+            ):
+                raise ValueError("Flow S1 state feature names must be unique, non-empty strings")
+            if self.state_feature_names and len(self.state_feature_names) != self.state_dim:
+                raise ValueError(
+                    f"Flow S1 records {len(self.state_feature_names)} state names "
+                    f"for state_dim={self.state_dim}"
+                )
+            if require_names and not self.state_feature_names:
+                raise ValueError(
+                    "Flow S1 requires ordered state feature names when observation.state is enabled"
+                )
+        elif self.state_dim not in (None, 0) or self.state_feature_names:
+            raise ValueError("Flow S1 disables observation.state but records a non-empty state contract")
 
         if not isinstance(self.image_features, dict) or any(
             not isinstance(name, str) or not name.startswith("observation.images.")
@@ -124,13 +157,54 @@ class FlowMatchingS1Config:
 
     @classmethod
     def from_checkpoint_dict(cls, data: dict) -> FlowMatchingS1Config:
-        """Restore the tensor dimensions and cameras saved by training."""
+        """Load a complete feature contract without embodiment guesses."""
         data = dict(data)
+        version = data.get("feature_contract_version")
+        if version is not None and version != cls.FEATURE_CONTRACT_VERSION:
+            raise ValueError(
+                f"HVLA checkpoint uses unsupported feature_contract_version={version!r}. "
+                "Migrate it after verifying action/state order and camera metadata."
+            )
+
+        # Checkpoints produced by the first feature-contract implementation
+        # predate the version marker and robot_state_feature flag, but already
+        # carry complete ordered state metadata. This inference is exact: no
+        # robot identity or runtime feature order is involved.
         if "robot_state_feature" not in data:
             state_dim = data.get("state_dim")
-            data["robot_state_feature"] = type(state_dim) is int and state_dim > 0
-        if data.get("robot_state_feature") is False:
+            state_names = data.get("state_feature_names")
+            if (
+                type(state_dim) is int
+                and state_dim > 0
+                and isinstance(state_names, list)
+                and len(state_names) == state_dim
+            ):
+                data["robot_state_feature"] = True
+            elif state_dim in (None, 0) and state_names == []:
+                data["robot_state_feature"] = False
+
+        # Early stateless checkpoints retained an unused state_proj and its
+        # old dimension even though robot_state_feature was explicitly false.
+        # The ordered empty state contract is authoritative; normalize away
+        # the unused layer instead of feeding state at inference.
+        if data.get("robot_state_feature") is False and data.get("state_feature_names") == []:
             data["state_dim"] = 0
+
+        required = {
+            "action_dim",
+            "action_feature_names",
+            "robot_state_feature",
+            "state_dim",
+            "state_feature_names",
+            "image_features",
+            "image_resize_shape",
+        }
+        missing = sorted(required - data.keys())
+        if missing:
+            raise ValueError(
+                f"HVLA checkpoint feature contract is ambiguous or missing fields: {missing}. "
+                "Migrate it with verified action/state order and camera metadata."
+            )
 
         init_fields = {item.name for item in fields(cls) if item.init}
         values = {key: value for key, value in data.items() if key in init_fields}
@@ -138,7 +212,7 @@ class FlowMatchingS1Config:
         if resize is not None:
             values["image_resize_shape"] = tuple(resize)
         config = cls(**values)
-        config.validate_feature_contract()
+        config.validate_feature_contract(require_names=True)
         if config.use_dino_backbone and not config.image_features:
             raise ValueError("HVLA visual checkpoint does not record any image features")
         return config
