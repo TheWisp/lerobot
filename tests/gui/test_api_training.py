@@ -450,6 +450,8 @@ def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None
     assert fields["rtc_max_delay"]["default"] == 6
     assert fields["rtc_drop_prob"]["default"] == 0.2
     assert fields["resize_images"]["default"] == "224x224"
+    assert fields["resize_images"]["label"] == "Image input resolution"
+    assert all(field["advanced"] is True for field in fields.values())
     assert "max_delay" not in fields  # S2 latent delay is irrelevant to this no-S2 recipe.
 
 

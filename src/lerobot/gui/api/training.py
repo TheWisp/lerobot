@@ -900,19 +900,28 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
         "recipe": HVLA_FLOW_S1_RECIPE,
         "arg_key_prefix": "",  # HVLA's keys are bare snake_case
         "fields": [
-            {"name": "chunk_size", "label": "Chunk size", "type": "int", "default": 50},
+            {
+                "name": "chunk_size",
+                "label": "Action horizon (frames)",
+                "type": "int",
+                "default": 50,
+                "advanced": True,
+                "description": "Number of future actions per chunk; 50 frames is about 1.67 s at 30 FPS.",
+            },
             {
                 "name": "num_inference_steps",
                 "label": "Denoise steps",
                 "type": "int",
                 "default": 15,
-                "description": "Flow-matching solver steps saved in the S1 checkpoint.",
+                "advanced": True,
+                "description": "Flow-matching solver steps saved in the checkpoint; higher costs more latency.",
             },
             {
                 "name": "rtc_max_delay",
                 "label": "RTC max delay (frames)",
                 "type": "int",
                 "default": 6,
+                "advanced": True,
                 "description": "Largest simulated inference delay used by training-time RTC.",
             },
             {
@@ -920,18 +929,44 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "label": "RTC drop probability",
                 "type": "float",
                 "default": 0.2,
+                "advanced": True,
                 "description": "Probability of training without a conditioned action prefix.",
             },
             {
                 "name": "resize_images",
-                "label": "Resize images",
+                "label": "Image input resolution",
                 "type": "string",
                 "default": "224x224",
-                "description": "Model input image size as HxW.",
+                "advanced": True,
+                "description": (
+                    "Resolution seen by the DINOv2-S/14 encoder as HxW. "
+                    "224x224 is the current recommended balance of detail and compute."
+                ),
             },
-            {"name": "hidden_dim", "label": "Hidden dim", "type": "int", "default": 768},
-            {"name": "num_decoder_layers", "label": "Decoder layers", "type": "int", "default": 6},
-            {"name": "num_workers", "label": "Data workers", "type": "int", "default": 4},
+            {
+                "name": "hidden_dim",
+                "label": "Transformer width",
+                "type": "int",
+                "default": 768,
+                "advanced": True,
+                "description": "Model capacity; keep the tested default unless running a controlled experiment.",
+            },
+            {
+                "name": "num_decoder_layers",
+                "label": "Decoder layers",
+                "type": "int",
+                "default": 6,
+                "advanced": True,
+                "description": "Model capacity; keep the tested default unless running a controlled experiment.",
+            },
+            {
+                "name": "num_workers",
+                "label": "Data workers",
+                "type": "int",
+                "default": 4,
+                "advanced": True,
+                "description": "Parallel data loading; affects input throughput, not the learned model.",
+            },
         ],
         # Make explicit which form keys map to the trainer's CLI; the
         # frontend doesn't need to know but it's useful in tests + docs.

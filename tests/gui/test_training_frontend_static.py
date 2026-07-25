@@ -86,3 +86,11 @@ def test_training_terminal_states_have_accessible_explanations() -> None:
     assert 'tabindex="0"' in training_js
     assert 'tooltip.setAttribute("role", "tooltip")' in training_js
     assert ".training-state-tooltip.visible" in style_css
+
+
+def test_training_policy_advanced_fields_use_progressive_disclosure() -> None:
+    training_js = (_STATIC_DIR / "training.js").read_text()
+
+    assert "fields.filter((f) => !f.advanced)" in training_js
+    assert "fields.filter((f) => f.advanced)" in training_js
+    assert "Advanced policy and performance settings" in training_js

@@ -1505,7 +1505,7 @@ function formatBytes(n) {
 //
 // One adapter helper: each catalog entry is
 // ``{type_name, label, recipe, arg_key_prefix, fields: [{name, label,
-// type, default, choices?, description?}]}``. The frontend prepends
+// type, default, choices?, description?, advanced?}]}``. The frontend prepends
 // ``arg_key_prefix`` (``"policy."`` for draccus recipes, ``""`` for HVLA)
 // to each field's ``name`` when building the args dict that POST
 // /api/training/runs receives.
@@ -1736,7 +1736,20 @@ function trainingRenderPolicyFields(policyType) {
     ...f,
     key: trainingFormKey(policy, f),
   }));
-  container.innerHTML = `<div class="training-field-row">${fields.map(fieldHtml).join("")}</div>`;
+  const primaryFields = fields.filter((f) => !f.advanced);
+  const advancedFields = fields.filter((f) => f.advanced);
+  const primaryHtml = primaryFields.length
+    ? `<div class="training-field-row">${primaryFields.map(fieldHtml).join("")}</div>`
+    : "";
+  const advancedHtml = advancedFields.length
+    ? `
+      <details class="training-policy-advanced">
+        <summary>Advanced policy and performance settings</summary>
+        <div class="training-field-row">${advancedFields.map(fieldHtml).join("")}</div>
+      </details>
+    `
+    : "";
+  container.innerHTML = primaryHtml + advancedHtml;
 }
 
 function fieldHtml(f) {

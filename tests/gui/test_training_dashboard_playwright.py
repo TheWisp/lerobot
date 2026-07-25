@@ -232,6 +232,29 @@ def test_training_dashboard_metrics_repair_and_resume(training_gui_server):
         page.wait_for_function("typeof switchTab === 'function'")
         page.evaluate("switchTab('model')")
         page.wait_for_function("typeof trainingSelectRun === 'function'")
+        page.wait_for_function("_trainingHosts.length > 0")
+
+        # HVLA's implementation-level knobs remain available without making
+        # the default form look like an architecture manifest.
+        page.evaluate("trainingShowStartForm()")
+        page.wait_for_selector("#training-start-form")
+        page.select_option('select[name="policy_type"]', "hvla_flow_s1")
+        advanced = page.locator(".training-policy-advanced")
+        assert advanced.count() == 1
+        assert advanced.get_attribute("open") is None
+        assert not page.is_visible("#training-arg-resize_images")
+        assert (
+            page.evaluate(
+                "Object.fromEntries(new FormData(document.querySelector('#training-start-form'))).resize_images"
+            )
+            == "224x224"
+        )
+        advanced.locator("summary").click()
+        assert page.is_visible("#training-arg-resize_images")
+        assert page.text_content("label:has(#training-arg-resize_images) .training-field-label") == (
+            "Image input resolution"
+        )
+
         page.evaluate("(runId) => trainingSelectRun(runId)", source_run.run_id)
         page.wait_for_selector(".training-detail-pane")
 
