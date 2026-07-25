@@ -36,7 +36,11 @@ def main():
     parser.add_argument("--robot-config", default=None)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--resize-images", default="224x224")
+    parser.add_argument(
+        "--resize-images",
+        default=None,
+        help="Override the S1 checkpoint image input resolution as HxW; leave unset to use checkpoint metadata",
+    )
     parser.add_argument("--temporal-ensemble-coeff", type=float, default=None)
     parser.add_argument("--n-action-steps", type=int, default=None)
     parser.add_argument("--decode-subtask", action="store_true")

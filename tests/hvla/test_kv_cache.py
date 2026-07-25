@@ -21,6 +21,9 @@ def device():
 @pytest.fixture
 def model(device):
     config = FlowMatchingS1Config(
+        action_dim=14,
+        robot_state_feature=True,
+        state_dim=14,
         chunk_size=50,
         hidden_dim=768,
         num_heads=8,
@@ -213,7 +216,12 @@ class TestWeightRemapping:
 
     def test_old_key_format(self, device):
         """Keys with 'action_decoder.layers' should remap to 'decoder_layers'."""
-        config = FlowMatchingS1Config(num_decoder_layers=2)
+        config = FlowMatchingS1Config(
+            action_dim=14,
+            robot_state_feature=True,
+            state_dim=14,
+            num_decoder_layers=2,
+        )
         model = FlowMatchingS1Model(config).to(device)
 
         # Simulate old checkpoint keys

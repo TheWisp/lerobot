@@ -48,6 +48,47 @@ def _camera_keys_from_robot(robot) -> list[str]:
     return [k for k, v in robot.observation_features.items() if isinstance(v, tuple)]
 
 
+def _resolve_policy_feature_order(
+    *,
+    checkpoint_names: list[str],
+    runtime_names: list[str],
+    expected_dim: int,
+    feature_kind: str,
+    allow_unnamed_runtime_order: bool = False,
+) -> list[str]:
+    """Resolve a checkpoint tensor's columns against the connected robot.
+
+    Named checkpoints are matched by name and retain their training order.
+    Named checkpoints retain their saved order. Checkpoints without names use
+    the robot's declared order only when the dimensions agree exactly.
+    """
+    if checkpoint_names:
+        if len(checkpoint_names) != expected_dim:
+            raise ValueError(
+                f"{feature_kind} checkpoint metadata has {len(checkpoint_names)} names "
+                f"but the model expects {expected_dim} values"
+            )
+        missing = [name for name in checkpoint_names if name not in runtime_names]
+        if missing:
+            raise ValueError(
+                f"Connected robot is missing {feature_kind} features required by the checkpoint: {missing}"
+            )
+        return list(checkpoint_names)
+
+    if not allow_unnamed_runtime_order:
+        raise ValueError(
+            f"{feature_kind} checkpoint does not record ordered feature names. "
+            "Migrate it with a verified feature contract; runtime order is not a safe substitute."
+        )
+    if len(runtime_names) != expected_dim:
+        raise ValueError(
+            f"Checkpoint has no {feature_kind} feature names and expects {expected_dim} values, "
+            f"but the connected robot exposes {len(runtime_names)}. Retrain or migrate the checkpoint "
+            "with ordered feature names; inferring a subset is unsafe."
+        )
+    return list(runtime_names)
+
+
 def _compute_chunk_index(t_now: float, t_origin: float, fps: int, chunk_len: int) -> int:
     """Time-based index into current action chunk."""
     elapsed = t_now - t_origin
@@ -319,6 +360,7 @@ def obs_to_s1_batch(
     device: torch.device,
     joint_names: list[str],
     resize_to: tuple[int, int] | None = None,
+    state_feature_names: list[str] | None = None,
 ) -> dict:
     """Convert robot observation to S1 input batch.
 
@@ -347,8 +389,13 @@ def obs_to_s1_batch(
                 )
             batch[key] = img_tensor.unsqueeze(0).to(device)
 
-    state = [float(robot_obs[name]) for name in joint_names]
-    batch["observation.state"] = torch.tensor([state], dtype=torch.float32, device=device)
+    state_names = state_feature_names if state_feature_names is not None else joint_names
+    if state_names:
+        missing_state = [name for name in state_names if name not in robot_obs]
+        if missing_state:
+            raise KeyError(f"Robot observation is missing checkpoint state features: {missing_state}")
+        state = [float(robot_obs[name]) for name in state_names]
+        batch["observation.state"] = torch.tensor([state], dtype=torch.float32, device=device)
 
     if shared_cache is not None:
         latent, age_seconds = shared_cache.read_with_age()
@@ -368,7 +415,7 @@ def _warmup_s1(
     s1_image_keys,
     device,
     resize_to,
-    state_dim: int = 14,
+    state_dim: int,
     s2_latent_dim: int = 2048,
     use_s2: bool = True,
 ):
@@ -383,7 +430,8 @@ def _warmup_s1(
     dummy_batch = {}
     for key in s1_image_keys:
         dummy_batch[key] = torch.randn(1, 3, h, w, device=device)
-    dummy_batch["observation.state"] = torch.zeros(1, state_dim, device=device)
+    if state_dim > 0:
+        dummy_batch["observation.state"] = torch.zeros(1, state_dim, device=device)
     if use_s2:
         dummy_batch["observation.s2_latent"] = torch.zeros(1, s2_latent_dim, device=device)
         dummy_batch["observation.s2_latent_age"] = torch.zeros(1, 1, device=device)
@@ -521,7 +569,7 @@ def run_s1(
     robot_config_path: str | None = None,
     fps: int = 30,
     device: str = "cuda",
-    resize_images: tuple[int, int] | None = (224, 224),
+    resize_images: tuple[int, int] | None = None,
     temporal_ensemble_coeff: float | None = None,
     n_action_steps: int | None = None,
     compile_s1: bool = False,
@@ -621,10 +669,19 @@ def run_s1(
     logger.info("S1: Loading %s policy from %s", s1_type, s1_checkpoint)
 
     if s1_type == "flow":
-        from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Config, FlowMatchingS1Policy
+        from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Policy
 
-        config = FlowMatchingS1Config()
-        policy = FlowMatchingS1Policy.from_pretrained(s1_checkpoint, config=config)
+        policy = FlowMatchingS1Policy.from_pretrained(s1_checkpoint)
+        config = policy.config
+        if resize_images is None:
+            resize_images = config.image_resize_shape
+        elif resize_images != config.image_resize_shape:
+            logger.warning(
+                "S1 image input override %s differs from checkpoint training resolution %s; "
+                "this changes the policy input distribution.",
+                resize_images,
+                config.image_resize_shape,
+            )
 
         def preprocessor(batch):
             return batch  # flow matching handles its own normalization
@@ -638,6 +695,8 @@ def run_s1(
         from lerobot.policies.factory import make_pre_post_processors
 
         policy = ACTWithVLMPolicy.from_pretrained(pretrained_name_or_path=s1_checkpoint)
+        if resize_images is None:
+            resize_images = (224, 224)
 
         if temporal_ensemble_coeff is not None:
             policy.config.temporal_ensemble_coeff = temporal_ensemble_coeff
@@ -677,13 +736,21 @@ def run_s1(
         inner = policy.model if hasattr(policy, "model") else policy
         inner.denoise_step = torch.compile(inner.denoise_step, mode="default")
         logger.info("S1: Warming up compiled model...")
+        state_feature = getattr(policy.config, "robot_state_feature", None)
+        warmup_state_dim = (
+            (config.state_dim if config.robot_state_feature else 0)
+            if s1_type == "flow"
+            else state_feature.shape[0]
+            if state_feature is not None
+            else 0
+        )
         _warmup_s1(
             policy,
             preprocessor,
             s1_image_keys,
             device,
             resize_images,
-            state_dim=config.action_dim if s1_type == "flow" else 14,
+            state_dim=warmup_state_dim,
             s2_latent_dim=config.s2_latent_dim if s1_type == "flow" else 2048,
             use_s2=shared_cache is not None,
         )
@@ -710,11 +777,52 @@ def run_s1(
     robot.connect()
     logger.info("S1: Robot connected")
 
-    # Derive joint names and camera keys from the robot (robot-agnostic)
-    joint_names = _joint_names_from_robot(robot)
+    # Resolve policy feature order against the robot. Checkpoint metadata is
+    # authoritative because tensor columns are positional.
+    runtime_action_names = _joint_names_from_robot(robot)
+    runtime_state_names = [
+        key for key, value in robot.observation_features.items() if not isinstance(value, tuple)
+    ]
     camera_keys = _camera_keys_from_robot(robot)
-    action_dim = len(joint_names)
-    logger.info("S1: Robot joints (%d): %s", action_dim, joint_names)
+    action_feature = getattr(policy.config, "action_feature", None)
+    expected_action_dim = getattr(policy.config, "action_dim", None)
+    if expected_action_dim is None:
+        if action_feature is None:
+            raise ValueError("S1 checkpoint config does not declare an action feature")
+        expected_action_dim = action_feature.shape[0]
+    state_feature = getattr(policy.config, "robot_state_feature", None)
+    joint_names = _resolve_policy_feature_order(
+        checkpoint_names=list(getattr(policy.config, "action_feature_names", [])),
+        runtime_names=runtime_action_names,
+        expected_dim=expected_action_dim,
+        feature_kind="action",
+        allow_unnamed_runtime_order=True,
+    )
+    if state_feature is False:
+        state_feature_names = []
+    else:
+        expected_state_dim = getattr(policy.config, "state_dim", None)
+        if expected_state_dim is None:
+            if state_feature is None:
+                raise ValueError("S1 checkpoint config does not declare an observation.state feature")
+            expected_state_dim = state_feature.shape[0]
+        state_feature_names = _resolve_policy_feature_order(
+            checkpoint_names=list(getattr(policy.config, "state_feature_names", [])),
+            runtime_names=runtime_state_names,
+            expected_dim=expected_state_dim,
+            feature_kind="state",
+            allow_unnamed_runtime_order=True,
+        )
+    missing_cameras = [
+        key for key in s1_image_keys if key.removeprefix("observation.images.") not in camera_keys
+    ]
+    if missing_cameras:
+        raise ValueError(
+            "Connected robot is missing cameras required by the checkpoint: "
+            f"{missing_cameras}; available robot cameras: {camera_keys}"
+        )
+    logger.info("S1: Robot actions (%d): %s", len(joint_names), joint_names)
+    logger.info("S1: Robot state (%d): %s", len(state_feature_names), state_feature_names)
     logger.info("S1: Robot cameras: %s", camera_keys)
 
     # Apply observation processor steps (e.g., depth edge overlay for RealSense)
@@ -1116,6 +1224,7 @@ def run_s1(
         s2_latent_key=S2_LATENT_KEY,
         s1_image_keys=s1_image_keys,
         joint_names=joint_names,
+        state_feature_names=state_feature_names,
         device=device,
         resize_to=resize_images,
         fps=fps,

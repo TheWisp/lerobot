@@ -30,6 +30,7 @@ def small_config():
         num_decoder_layers=1,
         dim_feedforward=128,
         action_dim=4,
+        robot_state_feature=True,
         state_dim=4,
         chunk_size=10,
         s2_latent_dim=32,

@@ -68,6 +68,7 @@ class FlowMatchingS1Model(nn.Module):
 
     def __init__(self, config: FlowMatchingS1Config):
         super().__init__()
+        config.validate_feature_contract()
         self.config = config
         d = config.hidden_dim
 
@@ -84,7 +85,7 @@ class FlowMatchingS1Model(nn.Module):
             self.image_proj = None
 
         # --- State projection ---
-        self.state_proj = nn.Linear(config.state_dim, d)
+        self.state_proj = nn.Linear(config.state_dim, d) if config.robot_state_feature else None
 
         # --- S2 latent projection + age embedding ---
         self.s2_proj = nn.Sequential(
@@ -184,7 +185,7 @@ class FlowMatchingS1Model(nn.Module):
                     tokens.append(self.image_proj(per_cam[i]))
 
         # State token
-        if OBS_STATE in batch:
+        if self.state_proj is not None and OBS_STATE in batch:
             state_token = self.state_proj(batch[OBS_STATE]).unsqueeze(1)  # [B, 1, D]
             tokens.append(state_token)
 
@@ -643,31 +644,13 @@ class FlowMatchingS1Policy(nn.Module):
         if config is None:
             config_file = norm_dir / "config.json"
             if config_file.exists():
-                cfg_data = json.loads(config_file.read_text())
-                config = FlowMatchingS1Config(
-                    action_dim=cfg_data.get("action_dim", 14),
-                    state_dim=cfg_data.get("state_dim", 14),
-                    chunk_size=cfg_data.get("chunk_size", 50),
-                    hidden_dim=cfg_data.get("hidden_dim", 768),
-                    num_heads=cfg_data.get("num_heads", 8),
-                    num_encoder_layers=cfg_data.get("num_encoder_layers", 4),
-                    num_decoder_layers=cfg_data.get("num_decoder_layers", 6),
-                    dim_feedforward=cfg_data.get("dim_feedforward", 2048),
-                    s2_latent_dim=cfg_data.get("s2_latent_dim", 2048),
-                    s2_proj_hidden=cfg_data.get("s2_proj_hidden", 1024),
-                    num_inference_steps=cfg_data.get("num_inference_steps", 10),
-                    rtc_max_delay=cfg_data.get("rtc_max_delay", 6),
-                    rtc_drop_prob=cfg_data.get("rtc_drop_prob", 0.2),
-                    use_dino_backbone=cfg_data.get("use_dino_backbone", True),
-                    backbone_dim=cfg_data.get("backbone_dim", 384),
-                    freeze_backbone=cfg_data.get("freeze_backbone", False),
-                )
-                if "image_features" in cfg_data:
-                    config.image_features = cfg_data["image_features"]
-                if "dino_model" in cfg_data:
-                    config.dino_model = cfg_data["dino_model"]
+                config = FlowMatchingS1Config.from_checkpoint_dict(json.loads(config_file.read_text()))
             else:
-                config = FlowMatchingS1Config()
+                raise ValueError(
+                    "HVLA checkpoint does not contain config.json. Pass an explicit "
+                    "FlowMatchingS1Config after verifying its feature contract; inference "
+                    "will not guess cameras, state usage, or tensor layouts."
+                )
 
         policy = cls(config)
 

@@ -21,6 +21,9 @@ def device():
 @pytest.fixture
 def model(device):
     config = FlowMatchingS1Config(
+        action_dim=14,
+        robot_state_feature=True,
+        state_dim=14,
         chunk_size=50,
         hidden_dim=768,
         num_heads=8,
