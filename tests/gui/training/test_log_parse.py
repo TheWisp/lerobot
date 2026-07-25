@@ -119,13 +119,24 @@ def test_metric_sample_real_lerobot_line():
     assert bag["lr"] == pytest.approx(1e-5)
 
 
+def test_metric_sample_captures_lerobot_throughput_name():
+    bag = parse_metric_sample("step:100 loss:0.2 updt_s:0.12 data_s:0.01 smp/s:61")
+
+    assert bag["smp/s"] == pytest.approx(61)
+
+
 def test_metric_sample_structured_record():
     record = format_training_log_record(
         step=600,
         total_steps=50_000,
         loss=0.5179,
         flow_loss=0.5179,
+        grdn=1.234,
         lr=1.5e-05,
+        updt_s=0.2,
+        data_s=0.042,
+        samples_per_s=66.1,
+        mem_gb=7.8,
         step_time_ms=242.0,
     )
     bag = parse_metric_sample(f"2026-07-24 06:34:18,471 [INFO] readable text | {record}")
@@ -135,7 +146,12 @@ def test_metric_sample_structured_record():
         "total_steps": 50_000.0,
         "loss": pytest.approx(0.5179),
         "flow_loss": pytest.approx(0.5179),
+        "grdn": pytest.approx(1.234),
         "lr": pytest.approx(1.5e-05),
+        "updt_s": pytest.approx(0.2),
+        "data_s": pytest.approx(0.042),
+        "samples_per_s": pytest.approx(66.1),
+        "mem_gb": pytest.approx(7.8),
         "step_time_ms": 242.0,
     }
 

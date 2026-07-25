@@ -53,7 +53,7 @@ _LEGACY_HVLA_STEP_TIME_RE = re.compile(r"\|\s*(\d+(?:\.\d+)?)ms(?:\s*\||\s*$)", 
 # onto the metric line: ``(?<!\.)`` drops ``file.py:611``; ``(?=\s|$)`` drops
 # ``Training: 39%`` and tqdm ``00:17`` times.
 _KV_RE = re.compile(
-    r"(?<!\.)\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?\d[\d,]*\.?\d*(?:[eE][+-]?\d+)?)([KMBTQ])?(?=\s|$)"
+    r"(?<!\.)\b([A-Za-z_][A-Za-z0-9_/]*)\s*:\s*(-?\d[\d,]*\.?\d*(?:[eE][+-]?\d+)?)([KMBTQ])?(?=\s|$)"
 )
 
 _MAGNITUDE = {"K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12, "Q": 1e15}

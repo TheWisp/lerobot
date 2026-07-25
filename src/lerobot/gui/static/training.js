@@ -854,17 +854,59 @@ function trainingProgressFromLog(text) {
 
 function trainingMetricSeries(snap) {
   const indexed = (snap.metrics || []).filter((m) => typeof m.step === "number");
-  return indexed.length ? indexed : trainingLegacySamplesFromLog(snap.stderr_tail);
+  const legacy = trainingLegacySamplesFromLog(snap.stderr_tail);
+  if (!indexed.length) return legacy;
+  if (!legacy.length) return indexed;
+
+  // A GUI/backend built before a trainer learned a metric may have persisted
+  // only part of each sample. Merge the raw-log fallback by step so fields
+  // such as legacy HVLA's trailing `263ms` can still populate the timing
+  // chart without replacing the backend's authoritative values.
+  const legacyByStep = new Map(legacy.map((sample) => [sample.step, sample]));
+  return indexed.map((sample) => ({
+    ...(legacyByStep.get(sample.step) || {}),
+    ...sample,
+  }));
 }
 
-// Curated default metric charts (loss, lr). These reuse the SAME canvas
+// Curated default metric charts. These reuse the SAME canvas
 // primitive (`drawChart` in charts.js) as the RLT + performance panels so the
-// app's charts look and behave consistently — including hover/crosshair. The
-// canvases are drawn post-render by trainingDrawDetailCharts(). grad_norm +
-// other auto-captured keys live in the stat tiles / a future metric picker.
-const TRAINING_CHART_KEYS = [
-  { key: "loss", label: "Loss", color: "#34d399", logY: true }, // spans orders of magnitude
-  { key: "lr", label: "Learning rate", color: "#fb923c" },
+// app's charts look and behave consistently — including hover/crosshair.
+// Keep this deliberately small: these are the LeRobot signals that answer
+// "is it learning?" and "is the training loop healthy?" across our policies.
+const TRAINING_CHARTS = [
+  {
+    key: "loss",
+    label: "Loss",
+    logY: true,
+    lines: [{ key: "loss", label: "Loss", color: "#34d399" }],
+  },
+  {
+    key: "grdn",
+    label: "Gradient norm",
+    logY: true,
+    lines: [{ key: "grdn", label: "Grad norm", color: "#60a5fa" }],
+  },
+  {
+    key: "lr",
+    label: "Learning rate",
+    lines: [{ key: "lr", label: "LR", color: "#fb923c" }],
+  },
+  {
+    key: "memory",
+    label: "Peak GPU allocation (GB)",
+    lines: [{ key: "mem_gb", label: "Peak allocated", color: "#22d3ee" }],
+  },
+  {
+    key: "timing",
+    label: "Step time (ms)",
+    wide: true,
+    lines: [
+      { key: "step_time_ms", label: "Total", color: "#c084fc" },
+      { key: "updt_s", label: "Update", color: "#f472b6", scale: 1000 },
+      { key: "data_s", label: "Data", color: "#facc15", scale: 1000 },
+    ],
+  },
 ];
 
 function trainingMetricsCardHtml(series, isActive) {
@@ -873,33 +915,54 @@ function trainingMetricsCardHtml(series, isActive) {
       ? '<section class="training-card"><div class="training-empty-hint">Metrics will appear once training logs its first step…</div></section>'
       : "";
   }
-  const card = (c) =>
-    `<div class="training-chart">
-       <div class="training-chart-title">${c.label}</div>
-       <canvas id="training-chart-${c.key}" class="training-chart-canvas"></canvas>
+  const card = (chart) => {
+    const hasData = chart.lines.some((line) =>
+      series.some((sample) => Number.isFinite(Number(sample[line.key]))),
+    );
+    return `<div class="training-chart${chart.wide ? " training-chart-wide" : ""}">
+       <div class="training-chart-title">${chart.label}</div>
+       ${
+         hasData
+           ? `<canvas id="training-chart-${chart.key}" class="training-chart-canvas"></canvas>`
+           : '<div class="training-chart-empty">Not logged by this run</div>'
+       }
      </div>`;
+  };
   return `
     <section class="training-card">
       <h3 class="training-card-heading">Metrics</h3>
-      <div class="training-charts">${TRAINING_CHART_KEYS.map(card).join("")}</div>
+      <div class="training-charts">${TRAINING_CHARTS.map(card).join("")}</div>
     </section>`;
 }
 
 // Draw the metric canvases after the detail HTML is in the DOM (canvas needs
 // layout for its getBoundingClientRect). Uses the shared drawChart primitive
-// (charts.js); the 'training' sync group gives loss + lr a shared crosshair.
+// (charts.js); the 'training' sync group gives all visible charts a shared
+// crosshair.
 function trainingDrawDetailCharts(snap) {
   if (typeof drawChart !== "function") return; // provided by charts.js
+  clearChartGroup("training");
   const series = trainingMetricSeries(snap);
   const latestStep = series.length ? series[series.length - 1].step : 0;
-  for (const c of TRAINING_CHART_KEYS) {
-    const data = series.map((m) => m[c.key]).filter((v) => typeof v === "number" && isFinite(v));
-    if (data.length) {
-      drawChart(`training-chart-${c.key}`, {
-        series: [{ data, color: c.color, label: c.label }],
+  for (const chart of TRAINING_CHARTS) {
+    const lines = chart.lines
+      .map((line) => ({
+        data: series
+          .map((sample) => {
+            const value = Number(sample[line.key]) * (line.scale || 1);
+            return Number.isFinite(value) ? value : null;
+          }),
+        color: line.color,
+        label: line.label,
+      }))
+      .filter((line) => line.data.some((value) => value != null));
+    if (lines.length) {
+      drawChart(`training-chart-${chart.key}`, {
+        series: lines,
         syncGroup: "training",
         latestStep,
-        logY: !!c.logY,
+        xValues: series.map((sample) => sample.step),
+        logY: !!chart.logY,
       });
     }
   }
@@ -948,6 +1011,9 @@ function trainingRenderDetailHtml(snap) {
   const loss = lossVal != null ? trainingFmtMetric(lossVal) : "—";
   const lr = latest.lr != null ? trainingFmtMetric(latest.lr) : "—";
   const grdn = latest.grdn != null ? trainingFmtMetric(latest.grdn) : "—";
+  const samplesPerS = latest.samples_per_s ?? latest["smp/s"];
+  const speed = samplesPerS != null ? `${trainingFmtMetric(samplesPerS)} samples/s` : "—";
+  const memory = latest.mem_gb != null ? `${trainingFmtMetric(latest.mem_gb)} GB` : "—";
   const etaSeconds = progress.eta_seconds ?? logProgress?.eta_seconds;
   const eta = etaSeconds != null ? trainingFmtDuration(etaSeconds) : "—";
   // Running but no step parsed yet → tqdm hasn't printed its first bar.
@@ -1010,9 +1076,10 @@ function trainingRenderDetailHtml(snap) {
           <div class="training-stat"><div class="training-stat-label">Loss</div><div class="training-stat-value">${loss}</div></div>
           <div class="training-stat"><div class="training-stat-label">LR</div><div class="training-stat-value">${lr}</div></div>
           <div class="training-stat"><div class="training-stat-label">Grad norm</div><div class="training-stat-value">${grdn}</div></div>
+          <div class="training-stat"><div class="training-stat-label">Throughput</div><div class="training-stat-value training-stat-value-compact">${speed}</div></div>
+          <div class="training-stat"><div class="training-stat-label">Peak GPU alloc.</div><div class="training-stat-value">${memory}</div></div>
           <div class="training-stat"><div class="training-stat-label">ETA</div><div class="training-stat-value">${eta}</div></div>
           <div class="training-stat"><div class="training-stat-label">Elapsed</div><div class="training-stat-value">${trainingFmtDuration(elapsedSec)}</div></div>
-          <div class="training-stat"><div class="training-stat-label">Checkpoints</div><div class="training-stat-value">${checkpoints.length}</div></div>
         </div>
         <div class="training-progress-bar">
           <div class="training-progress-fill" style="width: ${pct}%"></div>

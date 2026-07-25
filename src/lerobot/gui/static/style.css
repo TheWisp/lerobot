@@ -1601,6 +1601,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     color: #e8e8e8;
     margin-top: 2px;
 }
+.training-stat-value-compact {
+    font-size: 15px;
+    line-height: 22px;
+    white-space: nowrap;
+}
 .training-progress-bar {
     position: relative;
     height: 18px;
@@ -1625,17 +1630,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
-/* Metric charts (hand-rolled inline SVG; no charting dependency) */
+/* Metric charts (shared canvas renderer; no charting dependency) */
 .training-charts {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
 }
 .training-chart {
     background: var(--bg-primary, #252526);
     border: 1px solid #1a3a6a;
     border-radius: 6px;
     padding: 8px 10px;
+}
+.training-chart-wide {
+    grid-column: 1 / -1;
 }
 .training-chart-title {
     font-size: 11px;
@@ -1654,12 +1662,31 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     height: 96px;
     display: block;
 }
+.training-chart-empty {
+    height: 96px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #666;
+    font-size: 12px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.08);
+}
 .training-chart-axis {
     display: flex;
     justify-content: space-between;
     font-size: 10px;
     color: #666;
     margin-top: 2px;
+}
+
+@media (max-width: 760px) {
+    .training-charts {
+        grid-template-columns: 1fr;
+    }
+    .training-chart-wide {
+        grid-column: auto;
+    }
 }
 
 /* Checkpoints list */

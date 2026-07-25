@@ -47,6 +47,21 @@ def test_hvla_progress_has_live_log_compatibility_fallback() -> None:
     assert "const series = trainingMetricSeries(snap)" in training_js
 
 
+def test_training_dashboard_curates_health_metrics() -> None:
+    training_js = (_STATIC_DIR / "training.js").read_text()
+    charts_js = (_STATIC_DIR / "charts.js").read_text()
+
+    assert 'label: "Gradient norm"' in training_js
+    assert 'label: "Peak GPU allocation (GB)"' in training_js
+    assert 'label: "Step time (ms)"' in training_js
+    assert 'latest.samples_per_s ?? latest["smp/s"]' in training_js
+    assert "Peak GPU alloc." in training_js
+    assert "Not logged by this run" in training_js
+    assert "legacyByStep.get(sample.step)" in training_js
+    assert "xValues: series.map((sample) => sample.step)" in training_js
+    assert "function _chartStepAtIndex(group, index)" in charts_js
+
+
 def test_training_dashboard_exposes_checkpoint_resume() -> None:
     training_js = (_STATIC_DIR / "training.js").read_text()
     model_js = (_STATIC_DIR / "model.js").read_text()
