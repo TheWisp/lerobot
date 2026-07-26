@@ -72,6 +72,41 @@ def _seed(arm: Any) -> np.ndarray:
     return values
 
 
+class _SeedPostureKinematics:
+    """Keep the posture objective aligned with the state that seeds each solve.
+
+    ``openarm-control==0.1.0`` initializes its posture target once from the
+    MJCF keyframe. Its public ``sync`` method updates the solver state but not
+    that target, so a redundant arm can be pulled toward the startup posture
+    when the clutch is re-engaged. Pink-based LeRobot IK instead regularizes
+    each solve toward its current joint seed.
+
+    This compatibility adapter gives the pinned OpenArm solver the same
+    continuity behavior. The private access is deliberately isolated here and
+    fails loudly if a future ``openarm-control`` release changes that API;
+    replace it with an upstream public posture-target method when available.
+    """
+
+    def __init__(self, kinematics: Any) -> None:
+        self._kinematics = kinematics
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._kinematics, name)
+
+    def sync(self, values: Sequence[float]) -> None:
+        self._kinematics.sync(values)
+        try:
+            solver = self._kinematics._ik
+            posture_task = solver._posture_task
+            configuration = solver._config
+        except AttributeError as exc:
+            raise RuntimeError(
+                "The installed openarm-control version does not expose the "
+                "pinned 0.1.0 posture-task interface"
+            ) from exc
+        posture_task.set_target_from_configuration(configuration)
+
+
 class BimanualOpenArmMinkIKTransform:
     """Convert Quest EE deltas to 16 motor positions using one shared Mink QP."""
 
@@ -203,6 +238,11 @@ class BimanualOpenArmMinkIKTransform:
             self._hold = (False, False)
             return self._output()
         if not any(values[f"{side}_enabled"] > 0.5 for side in ("left", "right")):
+            # This shared-solver fast path bypasses _target_for_side(), so it
+            # must still record both falling edges. Otherwise the next press
+            # reuses the stale pre-release reference instead of latching FK at
+            # the held joints, turning even a zero Quest delta into a jump.
+            self._previous_enabled = {"left": False, "right": False}
             self._hold = (False, False)
             return self._output()
 
@@ -305,7 +345,7 @@ def make_openarm_mink_kinematics(
         dt=0.1,
         max_iters=max_iters,
     )
-    return Kinematics(setup, params), setup
+    return _SeedPostureKinematics(Kinematics(setup, params)), setup
 
 
 def build_openarm_mink_transform(

@@ -60,6 +60,45 @@ class _FakeMinkKinematics:
         return None if solution is None else np.asarray(solution, dtype=float).copy()
 
 
+def test_seed_posture_adapter_retargets_after_sync_and_delegates() -> None:
+    events: list[tuple[str, object]] = []
+    configuration = object()
+
+    class _PostureTask:
+        def set_target_from_configuration(self, value: object) -> None:
+            events.append(("posture", value))
+
+    class _Kinematics:
+        delegated_value = "delegated"
+
+        def __init__(self) -> None:
+            self._ik = SimpleNamespace(
+                _posture_task=_PostureTask(),
+                _config=configuration,
+            )
+
+        def sync(self, values: np.ndarray) -> None:
+            events.append(("sync", np.asarray(values).copy()))
+
+    adapter = mink_ik._SeedPostureKinematics(_Kinematics())
+    state = np.arange(16, dtype=float)
+
+    adapter.sync(state)
+
+    assert events[0][0] == "sync"
+    np.testing.assert_array_equal(events[0][1], state)
+    assert events[1] == ("posture", configuration)
+    assert adapter.delegated_value == "delegated"
+
+
+def test_seed_posture_adapter_fails_loudly_if_pinned_api_changes() -> None:
+    inner = SimpleNamespace(sync=lambda _values: None, _ik=SimpleNamespace())
+    adapter = mink_ik._SeedPostureKinematics(inner)
+
+    with pytest.raises(RuntimeError, match="openarm-control version"):
+        adapter.sync(np.zeros(16))
+
+
 def _action(
     *,
     enabled: float = 1.0,
@@ -190,6 +229,38 @@ def test_disabled_side_is_a_strict_joint_hold(monkeypatch):
     for index, motor in enumerate(MOTOR_NAMES[:7]):
         assert output[f"right_{motor}.pos"] == pytest.approx(right_seed[index])
         assert output[f"left_{motor}.pos"] == pytest.approx(-6.0)
+
+
+def test_reengage_after_both_clutches_released_relatches_current_fk(monkeypatch):
+    first_right = np.r_[np.full(7, 10.0), 0.0]
+    first_left = np.r_[np.full(7, -10.0), 0.0]
+    second_right = np.r_[np.full(7, 11.0), 0.0]
+    second_left = np.r_[np.full(7, -11.0), 0.0]
+
+    class _JointDependentFK(_FakeMinkKinematics):
+        def fk_bimanual(self, right: np.ndarray, left: np.ndarray):
+            self.fk_calls.append((np.asarray(right).copy(), np.asarray(left).copy()))
+
+            def _pose(joints: np.ndarray) -> np.ndarray:
+                return np.array([joints[0], 0.0, -0.30, 1.0, 0.0, 0.0, 0.0])
+
+            return _pose(right), _pose(left)
+
+    solver = _JointDependentFK(
+        _solution(first_right, first_left),
+        _solution(second_right, second_left),
+    )
+    transform = _transform(monkeypatch, solver)
+
+    transform(_action(right_target_x=0.02, left_target_x=-0.03))
+    transform(_action(enabled=0.0))
+    transform(_action(right_target_x=0.0, left_target_x=0.0))
+
+    # The new reference is FK at the last command (±10 degrees), not the
+    # attach-time zero pose retained from before the clutch release.
+    targets = dict(solver.target_calls[-2:])
+    assert targets["right"][0] == pytest.approx(np.deg2rad(10.0))
+    assert targets["left"][0] == pytest.approx(np.deg2rad(-10.0))
 
 
 def test_solver_failure_holds_previous_joints_and_updates_grippers(monkeypatch):
