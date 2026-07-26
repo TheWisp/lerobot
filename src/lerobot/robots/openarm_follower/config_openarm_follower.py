@@ -117,6 +117,9 @@ class OpenArmFollowerConfigBase:
     # validates the allowed values during construction.
     gripper_control_mode: str = "pos_force"
     gripper_speed_rad_s: float = 50.0
+    # "pu" (per-unit) is a dimensionless [0, 1] fraction of the motor's
+    # torque-producing current limit, not N·m or fingertip force. This follows:
+    # https://github.com/enactic/openarm_can/blob/main/include/openarm/can/socket/gripper_component.hpp
     gripper_torque_pu: float = 1.0 / 4.5
 
     # Camera configurations
