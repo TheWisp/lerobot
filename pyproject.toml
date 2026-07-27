@@ -488,6 +488,7 @@ default.extend-ignore-re = [
 ]
 default.extend-ignore-identifiers-re = [
     # Add individual words here to ignore them
+    "estimater",  # FoundationPose's module name (NVlabs estimater.py), not a typo for "estimator"
     "2nd",
     "pn",
     "PN",  # uppercase: occurs in "PNGs" (file format) in async-video docs

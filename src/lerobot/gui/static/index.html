@@ -13,6 +13,7 @@
         <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
+        <button class="tab" data-tab="scanner" onclick="switchTab('scanner')">3D Scanner</button>
         <span id="hf-auth-indicator" style="margin-left:auto; font-size:11px; color:var(--text-secondary, #666); padding-right:12px; cursor:default;" title="HuggingFace Hub login status"></span>
         <!-- Transfers indicator: always visible so the user can find their
              Hub transfers without remembering a hidden trigger. Click toggles
@@ -596,6 +597,51 @@ nebius iam auth-public-key generate \
         </div>
     </div>
 
+    <div class="tab-content" id="tab-scanner">
+        <div style="display:flex; height:100%;">
+            <div style="width:340px; min-width:300px; padding:16px; overflow-y:auto; border-right:1px solid var(--border,#333);">
+                <h2 style="margin-top:0;">3D Scanner</h2>
+                <p style="color:var(--text-secondary,#888); font-size:13px; line-height:1.5;">
+                    Segment an object and reconstruct it to a 3D mesh (for FoundationPose tracking).
+                    Place the object at varying angles and re-scan until the mesh is good enough.
+                </p>
+                <label style="display:block; margin:12px 0 4px; font-size:13px;">Camera</label>
+                <div style="display:flex; gap:8px;">
+                    <select id="scanner-camera" style="flex:1;"></select>
+                    <button onclick="scannerDetectCameras()">Detect</button>
+                </div>
+                <label style="display:block; margin:12px 0 4px; font-size:13px;">Object prompt</label>
+                <input id="scanner-prompt" value="object" placeholder="cylinder . green ring" style="width:100%; box-sizing:border-box;" />
+                <div style="display:flex; gap:8px; margin-top:12px;">
+                    <button onclick="scannerCapture()" style="flex:1;">Capture frame</button>
+                    <button onclick="scannerScan()" id="scanner-scan-btn" style="flex:1;">Scan → 3D</button>
+                </div>
+                <button onclick="scannerScanStatic()" style="width:100%; margin-top:8px;">Test with static image</button>
+                <div style="margin-top:14px;">
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                        <div style="font-size:12px; color:var(--text-secondary,#888); flex:1;">
+                            Capture set <span id="scanner-set-count"></span></div>
+                        <button onclick="scannerAddToSet()" style="font-size:12px;">+ Add photo</button>
+                        <button onclick="scannerClearSet()" style="font-size:12px;">Clear</button>
+                    </div>
+                    <div style="font-size:11px; color:var(--text-secondary,#666); margin-bottom:6px;">
+                        One photo per placement/angle — the multi-view input for mesh fusion (WIP).
+                    </div>
+                    <div id="scanner-set" style="display:grid; grid-template-columns:repeat(3,1fr); gap:6px;"></div>
+                </div>
+                <div style="margin-top:14px;">
+                    <div style="font-size:12px; color:var(--text-secondary,#888); margin-bottom:4px;">Captured frame</div>
+                    <img id="scanner-preview" src="/api/run/scan3d/capture/preview" onerror="this.style.opacity=0.25"
+                         style="width:100%; border:1px solid var(--border,#333); border-radius:4px; background:#111; display:block;" />
+                </div>
+                <pre id="scanner-status" style="margin-top:12px; font-size:11px; white-space:pre-wrap; color:var(--text-secondary,#888); max-height:200px; overflow-y:auto;"></pre>
+            </div>
+            <div style="flex:1; position:relative; min-width:0;">
+                <iframe id="scanner-viewer" src="/static/scanner_viewer.html?v=2" style="width:100%; height:100%; border:none; display:block;"></iframe>
+            </div>
+        </div>
+    </div>
+
     <!-- Bug report modal -->
     <div id="bug-report-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
         <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:420px; max-width:560px;">
@@ -662,6 +708,7 @@ nebius iam auth-public-key generate \
     <script src="/static/run.js?v=49"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/overlays.js?v=37"></script>
+    <script src="/static/scanner.js?v=2"></script>
     <script src="/static/model.js?v=5"></script>
     <script src="/static/training.js?v=23"></script>
     <script src="/static/add_host_dialog.js?v=4"></script>

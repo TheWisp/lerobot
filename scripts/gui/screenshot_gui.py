@@ -121,12 +121,18 @@ class GuiScreenshotSession:
         post_close_sleep: float = 8.0,
         app_js_ready_expr: str = _APP_JS_READY,
         boot_timeout_s: float = 30.0,
+        extra_chrome_args: list[str] | None = None,
     ):
         self.output_path = Path(output_path)
         self.window_size = window_size
         self.post_close_sleep = post_close_sleep
         self.app_js_ready_expr = app_js_ready_expr
         self.boot_timeout_s = boot_timeout_s
+        # WebGL pages: pass ["--use-gl=angle", "--use-angle=swiftshader",
+        # "--enable-unsafe-swiftshader"] — hardware GL in the automation chrome
+        # can come up broken (context creation returns null) while the desktop
+        # browser is fine; software GL renders stills reliably.
+        self.extra_chrome_args = list(extra_chrome_args or [])
 
         self._start_gui = start_gui
         self._gui_port = gui_port if gui_port is not None else _free_port()
@@ -267,6 +273,7 @@ class GuiScreenshotSession:
                 "--no-default-browser-check",
                 f"--window-size={w},{h}",
                 "--window-position=0,0",
+                *self.extra_chrome_args,
                 self._url,
             ],
             stdout=subprocess.DEVNULL,
