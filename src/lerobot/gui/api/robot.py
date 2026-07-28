@@ -7,7 +7,9 @@ import contextlib
 import dataclasses
 import json
 import logging
+import os
 import platform
+import shlex
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -403,6 +405,146 @@ async def rename_teleop_profile(name: str, req: RenameRequest) -> dict:
 # ============================================================================
 
 
+def _linux_video_capture_candidates() -> list[dict[str, Any]]:
+    """Return one GUI candidate per Linux V4L2 capture device.
+
+    UVC cameras commonly expose both an image node (``index=0``) and a
+    metadata node (``index=1``). OpenCV silently returns ``isOpened=False``
+    for inaccessible devices, so its normal discovery result cannot explain
+    permission failures. Keep the candidates here so the GUI can render one
+    diagnostic card per physical camera when opening fails.
+    """
+    if platform.system() != "Linux":
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    for device in sorted(Path("/dev").glob("video*"), key=lambda path: path.name):
+        sysfs_dir = Path("/sys/class/video4linux") / device.name
+        index_path = sysfs_dir / "index"
+        try:
+            if index_path.exists() and int(index_path.read_text().strip()) != 0:
+                continue
+        except (OSError, ValueError):
+            # If sysfs is incomplete, retain the node rather than hiding a
+            # potentially usable camera from the diagnostics.
+            pass
+
+        name = f"OpenCV Camera @ {device}"
+        name_path = sysfs_dir / "name"
+        try:
+            if name_path.exists():
+                name = f"{name_path.read_text().strip()} @ {device}"
+        except OSError:
+            pass
+
+        candidates.append({"name": name, "type": "OpenCV", "id": str(device)})
+
+    return candidates
+
+
+def _camera_permission_remediation(camera_id: str) -> dict[str, str]:
+    """Return an actionable fix for the account and group owning a V4L2 node."""
+    fallback = {
+        "error_action": (
+            "Give the GUI server account read/write access to the camera, "
+            "then sign out and back in and restart LeRobot GUI."
+        )
+    }
+    try:
+        import grp
+        import pwd
+
+        username = pwd.getpwuid(os.geteuid()).pw_name
+        group = grp.getgrgid(Path(camera_id).stat().st_gid).gr_name
+    except (ImportError, KeyError, OSError):
+        return fallback
+
+    return {
+        "error_action": "Run this on the GUI server, then sign out and back in and restart LeRobot GUI:",
+        "error_command": f"sudo usermod -aG {shlex.quote(group)} {shlex.quote(username)}",
+    }
+
+
+def _camera_open_error_details(error: str, camera_id: str | None = None) -> dict[str, str]:
+    """Classify a camera-open failure into stable frontend behavior."""
+    normalized = error.casefold()
+    if "permission denied" in normalized:
+        details = {
+            "error_code": "permission_denied",
+            "error_summary": "Camera access denied",
+        }
+        if camera_id and camera_id.startswith("/dev/"):
+            details.update(_camera_permission_remediation(camera_id))
+        else:
+            details["error_action"] = "Give the GUI server account access to the camera, then retry."
+        return details
+    if any(marker in normalized for marker in ("device or resource busy", "resource busy", "ebusy")):
+        return {
+            "error_code": "busy",
+            "error_summary": "Camera busy",
+            "error_action": (
+                "Stop the active LeRobot run or close the other app using this camera, "
+                "then select Detect Cameras again."
+            ),
+        }
+    if any(marker in normalized for marker in ("disconnected", "no such device", "enodev")):
+        return {
+            "error_code": "disconnected",
+            "error_summary": "Camera disconnected",
+            "error_action": "Reconnect the camera, wait a few seconds, then select Detect Cameras again.",
+        }
+    if any(marker in normalized for marker in ("not supported", "unsupported")):
+        return {
+            "error_code": "unsupported",
+            "error_summary": "Camera unsupported",
+            "error_action": (
+                "Try a supported camera format or install the camera backend required by this device, "
+                "then select Detect Cameras again."
+            ),
+        }
+    return {
+        "error_code": "open_failed",
+        "error_summary": "Camera unavailable",
+        "error_action": (
+            "Reconnect the camera and close other apps using it, then select Detect Cameras again."
+        ),
+    }
+
+
+def _merge_opencv_discovery_errors(discovered: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge successful OpenCV probes with per-device Linux failures."""
+    candidates = _linux_video_capture_candidates()
+    if not candidates:
+        return discovered
+
+    discovered_by_id = {str(camera.get("id")): camera for camera in discovered}
+    results: list[dict[str, Any]] = []
+    candidate_ids: set[str] = set()
+
+    for candidate in candidates:
+        camera_id = str(candidate["id"])
+        candidate_ids.add(camera_id)
+        if camera_id in discovered_by_id:
+            results.append(discovered_by_id[camera_id])
+            continue
+
+        if not os.access(camera_id, os.R_OK | os.W_OK):
+            error = f"Permission denied for {camera_id}."
+            error_details = _camera_open_error_details(error, camera_id)
+        else:
+            error = (
+                f"Could not open {camera_id}. The camera may be busy, disconnected, "
+                "or unsupported by this OpenCV build."
+            )
+            error_details = _camera_open_error_details(error, camera_id)
+        results.append({**candidate, "error": error, **error_details})
+
+    # Preserve unusual successful devices that do not have a normal Linux
+    # video-index=0 sysfs entry.
+    results.extend(camera for camera in discovered if str(camera.get("id")) not in candidate_ids)
+    return results
+
+
 def _detect_and_open_cameras() -> list[dict]:
     """Detect cameras and open them for live preview. Runs in thread pool.
 
@@ -440,14 +582,22 @@ def _detect_and_open_cameras() -> list[dict]:
                 )
                 camera = RealSenseCamera(config)
                 camera.connect(warmup=True)
+                preview_info = {**cam_info, "preview_index": len(_preview_cameras)}
                 _preview_cameras.append(camera)
-                _preview_camera_info.append(cam_info)
-                all_cameras.append(cam_info)
+                _preview_camera_info.append(preview_info)
+                all_cameras.append(preview_info)
                 camera = None  # ownership transferred
                 logger.info(f"Opened preview camera: RealSense {cam_id}")
             except Exception as e:
                 logger.warning(f"Failed to open RealSense {cam_id}: {e}")
-                all_cameras.append(cam_info)
+                error = f"{type(e).__name__}: {e}"
+                all_cameras.append(
+                    {
+                        **cam_info,
+                        "error": error,
+                        **_camera_open_error_details(error, str(cam_id)),
+                    }
+                )
             finally:
                 if camera is not None:
                     with contextlib.suppress(Exception):
@@ -462,8 +612,11 @@ def _detect_and_open_cameras() -> list[dict]:
         from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
         from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 
-        opencv_cams = OpenCVCamera.find_cameras()
-        logger.info(f"Found {len(opencv_cams)} OpenCV camera(s)")
+        opencv_cams = _merge_opencv_discovery_errors(OpenCVCamera.find_cameras())
+        available_count = sum("error" not in camera for camera in opencv_cams)
+        logger.info(
+            f"Found {available_count} usable OpenCV camera(s), {len(opencv_cams) - available_count} unavailable"
+        )
 
         for cam_info in opencv_cams:
             cam_id = cam_info.get("id")
@@ -476,6 +629,10 @@ def _detect_and_open_cameras() -> list[dict]:
                     if "RealSense" in hw_name:
                         logger.debug(f"Skipping {cam_id} (RealSense V4L2 node: {hw_name})")
                         continue
+            if error := cam_info.get("error"):
+                logger.warning(f"OpenCV camera {cam_id} unavailable: {error}")
+                all_cameras.append(cam_info)
+                continue
             # Same ownership-transfer pattern as the RealSense branch above —
             # `camera` is disconnected by the finally clause unless registered.
             camera = None
@@ -486,13 +643,22 @@ def _detect_and_open_cameras() -> list[dict]:
                 )
                 camera = OpenCVCamera(config)
                 camera.connect(warmup=True)
+                preview_info = {**cam_info, "preview_index": len(_preview_cameras)}
                 _preview_cameras.append(camera)
-                _preview_camera_info.append(cam_info)
-                all_cameras.append(cam_info)
+                _preview_camera_info.append(preview_info)
+                all_cameras.append(preview_info)
                 camera = None  # ownership transferred
                 logger.info(f"Opened preview camera: OpenCV {cam_id}")
             except Exception as e:
                 logger.warning(f"Failed to open OpenCV {cam_id}: {e}")
+                error = f"{type(e).__name__}: {e}"
+                all_cameras.append(
+                    {
+                        **cam_info,
+                        "error": error,
+                        **_camera_open_error_details(error, str(cam_id)),
+                    }
+                )
             finally:
                 if camera is not None:
                     with contextlib.suppress(Exception):

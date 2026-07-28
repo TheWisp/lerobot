@@ -6,6 +6,7 @@ uses an ownership-transfer try/finally so any error between `connect()` and
 successful registration triggers `disconnect()`.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,7 +19,10 @@ def _reset_preview_state():
     """Ensure module-level preview lists are clean around each test."""
     robot_module._preview_cameras.clear()
     robot_module._preview_camera_info.clear()
-    yield
+    # Unit tests provide their own synthetic camera inventory. Do not merge in
+    # the host running pytest's real /dev/video* nodes.
+    with patch.object(robot_module, "_linux_video_capture_candidates", return_value=[]):
+        yield
     robot_module._preview_cameras.clear()
     robot_module._preview_camera_info.clear()
 
@@ -82,10 +86,22 @@ def test_opencv_connect_failure_invokes_disconnect():
             MagicMock(),
         ),
     ):
-        robot_module._detect_and_open_cameras()
+        result = robot_module._detect_and_open_cameras()
 
     assert len(opencv_instances) == 1
     opencv_instances[0].disconnect.assert_called_once()
+    assert result == [
+        {
+            "id": 0,
+            "name": "test-cam",
+            "error": "RuntimeError: warmup failed",
+            "error_code": "open_failed",
+            "error_summary": "Camera unavailable",
+            "error_action": (
+                "Reconnect the camera and close other apps using it, then select Detect Cameras again."
+            ),
+        }
+    ]
     # The leaked camera must NOT remain in the preview list.
     assert robot_module._preview_cameras == []
     assert robot_module._preview_camera_info == []
@@ -117,10 +133,22 @@ def test_realsense_connect_failure_invokes_disconnect():
             MagicMock(),
         ),
     ):
-        robot_module._detect_and_open_cameras()
+        result = robot_module._detect_and_open_cameras()
 
     assert len(rs_instances) == 1
     rs_instances[0].disconnect.assert_called_once()
+    assert result == [
+        {
+            "id": "123456789",
+            "name": "D435",
+            "error": "RuntimeError: librealsense init failed",
+            "error_code": "open_failed",
+            "error_summary": "Camera unavailable",
+            "error_action": (
+                "Reconnect the camera and close other apps using it, then select Detect Cameras again."
+            ),
+        }
+    ]
     assert robot_module._preview_cameras == []
 
 
@@ -160,12 +188,13 @@ def test_successful_connect_does_not_disconnect():
             MagicMock(),
         ),
     ):
-        robot_module._detect_and_open_cameras()
+        result = robot_module._detect_and_open_cameras()
 
     assert len(opencv_instances) == 2
     for inst in opencv_instances:
         inst.disconnect.assert_not_called()
     assert len(robot_module._preview_cameras) == 2
+    assert [camera["preview_index"] for camera in result] == [0, 1]
 
 
 def test_cleanup_in_process_resources_releases_everything():
@@ -272,7 +301,7 @@ def test_partial_failure_does_not_leak_other_cameras():
             MagicMock(),
         ),
     ):
-        robot_module._detect_and_open_cameras()
+        result = robot_module._detect_and_open_cameras()
 
     assert len(opencv_instances) == 3
     # The two successful cameras are registered and NOT disconnected.
@@ -281,3 +310,107 @@ def test_partial_failure_does_not_leak_other_cameras():
     # The failing camera IS disconnected.
     opencv_instances[1].disconnect.assert_called_once()
     assert len(robot_module._preview_cameras) == 2
+    assert result == [
+        {"id": 0, "name": "ok-1", "preview_index": 0},
+        {
+            "id": 1,
+            "name": "bad",
+            "error": "RuntimeError: cam 2 failed",
+            "error_code": "open_failed",
+            "error_summary": "Camera unavailable",
+            "error_action": (
+                "Reconnect the camera and close other apps using it, then select Detect Cameras again."
+            ),
+        },
+        {"id": 2, "name": "ok-2", "preview_index": 1},
+    ]
+
+
+def test_linux_permission_errors_return_one_card_per_capture_camera():
+    """Inaccessible V4L2 nodes remain visible as per-camera GUI errors.
+
+    The candidate helper has already filtered out UVC metadata nodes
+    (video-index1), so these two entries represent two physical cameras.
+    """
+    mock_opencv_stub = MagicMock()
+    mock_opencv_stub.find_cameras = MagicMock(return_value=[])
+
+    mock_realsense_stub = MagicMock()
+    mock_realsense_stub.find_cameras = MagicMock(return_value=[])
+
+    candidates = [
+        {"id": "/dev/video0", "name": "Arducam A @ /dev/video0", "type": "OpenCV"},
+        {"id": "/dev/video2", "name": "Arducam B @ /dev/video2", "type": "OpenCV"},
+    ]
+
+    with (
+        patch.object(robot_module, "_linux_video_capture_candidates", return_value=candidates),
+        patch.object(robot_module.os, "access", return_value=False),
+        patch.object(
+            robot_module,
+            "_camera_permission_remediation",
+            return_value={
+                "error_action": "Restart after granting access.",
+                "error_command": "sudo usermod -aG video gui-user",
+            },
+        ),
+        patch(
+            "lerobot.cameras.opencv.camera_opencv.OpenCVCamera",
+            mock_opencv_stub,
+        ),
+        patch(
+            "lerobot.cameras.opencv.configuration_opencv.OpenCVCameraConfig",
+            MagicMock(),
+        ),
+        patch(
+            "lerobot.cameras.realsense.camera_realsense.RealSenseCamera",
+            mock_realsense_stub,
+        ),
+        patch(
+            "lerobot.cameras.realsense.configuration_realsense.RealSenseCameraConfig",
+            MagicMock(),
+        ),
+    ):
+        result = robot_module._detect_and_open_cameras()
+
+    assert [camera["id"] for camera in result] == ["/dev/video0", "/dev/video2"]
+    assert all("Permission denied" in camera["error"] for camera in result)
+    assert all(camera["error_summary"] == "Camera access denied" for camera in result)
+    assert all(camera["error_code"] == "permission_denied" for camera in result)
+    assert all(camera["error_action"] == "Restart after granting access." for camera in result)
+    assert all(camera["error_command"] == "sudo usermod -aG video gui-user" for camera in result)
+    assert robot_module._preview_cameras == []
+    assert robot_module._preview_camera_info == []
+
+
+def test_camera_permission_remediation_names_server_user_and_device_group():
+    with (
+        patch.object(robot_module.os, "geteuid", return_value=1001),
+        patch.object(robot_module.Path, "stat", return_value=SimpleNamespace(st_gid=44)),
+        patch("pwd.getpwuid", return_value=SimpleNamespace(pw_name="gui-user")),
+        patch("grp.getgrgid", return_value=SimpleNamespace(gr_name="video")),
+    ):
+        remediation = robot_module._camera_permission_remediation("/dev/video0")
+
+    assert remediation == {
+        "error_action": "Run this on the GUI server, then sign out and back in and restart LeRobot GUI:",
+        "error_command": "sudo usermod -aG video gui-user",
+    }
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_code", "expected_summary"),
+    [
+        ("Permission denied", "permission_denied", "Camera access denied"),
+        ("Device or resource busy", "busy", "Camera busy"),
+        ("Device disconnected (ENODEV)", "disconnected", "Camera disconnected"),
+        ("Format is not supported", "unsupported", "Camera unsupported"),
+        ("Open failed without details", "open_failed", "Camera unavailable"),
+    ],
+)
+def test_camera_open_errors_have_stable_types(error, expected_code, expected_summary):
+    details = robot_module._camera_open_error_details(error)
+
+    assert details["error_code"] == expected_code
+    assert details["error_summary"] == expected_summary
+    assert details["error_action"]

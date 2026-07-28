@@ -594,7 +594,9 @@ async function detectCameras() {
 
     try {
         const res = await fetch('/api/robot/detect-cameras', { method: 'POST' });
-        detectedCameras = await res.json();
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload.detail || `HTTP ${res.status}`);
+        detectedCameras = payload;
         renderCameraPreview();
         startCameraPreview();
     } catch (e) {
@@ -623,41 +625,170 @@ function renderCameraPreview() {
         if (camId) assignedRoles[camId] = role;
     }
 
-    grid.innerHTML = detectedCameras.map((cam, i) => {
+    function errorSummary(cam, error) {
+        if (cam.error_summary) return String(cam.error_summary);
+        const summariesByCode = {
+            permission_denied: 'Camera access denied',
+            busy: 'Camera busy',
+            disconnected: 'Camera disconnected',
+            unsupported: 'Camera unsupported',
+            open_failed: 'Camera unavailable',
+            preview_failed: 'Preview unavailable',
+        };
+        if (cam.error_code && summariesByCode[cam.error_code]) return summariesByCode[cam.error_code];
+        if (/permission denied/i.test(error)) return 'Camera access denied';
+        if (/\bbusy\b/i.test(error)) return 'Camera busy';
+        return 'Camera unavailable';
+    }
+
+    const seenRemediations = new Set();
+    const remediationHtml = detectedCameras.map(cam => {
+        const action = cam.error_action ? String(cam.error_action) : '';
+        const command = cam.error_command ? String(cam.error_command) : '';
+        if (!action) return '';
+        const key = `${action}\n${command}`;
+        if (seenRemediations.has(key)) return '';
+        seenRemediations.add(key);
+        return `<div class="camera-remediation" role="note">
+            <span>${esc(action)}</span>
+            ${command ? `<code>${esc(command)}</code>
+                <button type="button" class="camera-command-copy"
+                        data-command="${esc(command)}" onclick="copyCameraCommand(this)">Copy</button>` : ''}
+        </div>`;
+    }).join('');
+
+    const cardsHtml = detectedCameras.map((cam, i) => {
         const profile = cam.default_stream_profile || {};
         // Build identifier: serial number for RealSense, path for OpenCV
         const camId = String(cam.id || '');
         const identifier = cam.type === 'RealSense' ? `S/N: ${camId}` : camId;
         // Check if this camera is already assigned to a role
         const currentRole = assignedRoles[camId] || '';
-
-        return `<div class="camera-preview-card">
-            <img id="preview-cam-${i}" src="" alt="${esc(cam.name || 'Camera')}">
-            <div class="camera-preview-info">
-                <div>${esc(cam.name || `Camera ${i}`)}</div>
-                <div class="cam-meta">${esc(cam.type)} | ${esc(identifier)} | ${profile.width || '?'}x${profile.height || '?'} @ ${Math.round(profile.fps) || '?'}fps</div>
-                <select id="cam-role-${i}" onchange="assignCameraRole(${i}, this.value)">
+        const error = cam.error ? String(cam.error) : '';
+        const summary = error ? errorSummary(cam, error) : '';
+        const preview = error
+            ? `<div class="camera-preview-placeholder camera-preview-error">
+                    <div class="camera-preview-status" role="status" tabindex="0"
+                         title="${esc(error)}" aria-label="${esc(`${summary}: ${error}`)}">${esc(summary)}</div>
+               </div>`
+            : `<img id="preview-cam-${i}" alt="${esc(cam.name || 'Camera')}"
+                    onload="handleCameraPreviewLoaded(${i})" onerror="handleCameraPreviewError(${i})">`;
+        const rolePicker = error
+            ? ''
+            : `<select id="cam-role-${i}" onchange="assignCameraRole(${i}, this.value)">
                     <option value="">-- assign role --</option>
                     ${roles.map(r => `<option value="${r}" ${currentRole === r ? 'selected' : ''}>${r}</option>`).join('')}
                     <option value="__custom" ${currentRole && !roles.includes(currentRole) ? 'selected' : ''}>custom...</option>
-                </select>
+               </select>`;
+        const metadata = error
+            ? `${esc(cam.type)} | ${esc(identifier)}`
+            : `${esc(cam.type)} | ${esc(identifier)} | ${profile.width || '?'}x${profile.height || '?'} @ ${Math.round(profile.fps) || '?'}fps`;
+
+        return `<div class="camera-preview-card">
+            ${preview}
+            <div class="camera-preview-info">
+                <div>${esc(cam.name || `Camera ${i}`)}</div>
+                <div class="cam-meta">${metadata}</div>
+                ${rolePicker}
             </div>
         </div>`;
     }).join('');
+    grid.innerHTML = remediationHtml + cardsHtml;
+}
+
+function copyCameraCommand(button) {
+    const command = button?.dataset?.command || '';
+    if (!command) return;
+
+    const copied = () => {
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = 'Copy'; }, 1200);
+    };
+    const fallback = () => {
+        const textarea = document.createElement('textarea');
+        textarea.value = command;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        document.body.removeChild(textarea);
+        if (ok) copied();
+    };
+
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(command).then(copied).catch(fallback);
+    } else {
+        fallback();
+    }
 }
 
 function startCameraPreview() {
     stopCameraPreview();
-    previewInterval = setInterval(() => {
-        detectedCameras.forEach((_, i) => {
+    const previewable = detectedCameras.filter(
+        cam => !cam.error && !cam.preview_error_pending && Number.isInteger(cam.preview_index)
+    );
+    if (previewable.length === 0) return;
+
+    const requestFrames = () => {
+        detectedCameras.forEach((cam, i) => {
+            if (cam.error || cam.preview_error_pending || !Number.isInteger(cam.preview_index)) return;
             const img = document.getElementById(`preview-cam-${i}`);
-            if (img) {
-                img.src = `/api/robot/camera-frame/${i}?t=${Date.now()}`;
+            // Keep one request in flight per camera. Replacing src while the
+            // previous JPEG is loading can cancel it and fire a false onerror.
+            if (img && img.dataset.loading !== 'true') {
+                img.dataset.loading = 'true';
+                img.src = `/api/robot/camera-frame/${cam.preview_index}?t=${Date.now()}`;
             }
         });
-    }, 100); // ~10fps
+    };
+    requestFrames();
+    previewInterval = setInterval(requestFrames, 100); // up to ~10fps
     const stopBtn = document.getElementById('stop-cameras-btn');
     if (stopBtn) stopBtn.style.display = 'inline-block';
+}
+
+function handleCameraPreviewLoaded(cameraIndex) {
+    const img = document.getElementById(`preview-cam-${cameraIndex}`);
+    if (img) img.dataset.loading = 'false';
+}
+
+async function handleCameraPreviewError(cameraIndex) {
+    const cam = detectedCameras[cameraIndex];
+    const img = document.getElementById(`preview-cam-${cameraIndex}`);
+    // An <img> without a requested frame is not a camera failure. This guard
+    // also ignores stale events from a card removed during re-detection.
+    if (
+        !img || !img.getAttribute('src') ||
+        !cam || cam.error || cam.preview_error_pending || !Number.isInteger(cam.preview_index)
+    ) return;
+    img.dataset.loading = 'false';
+
+    // Stop the 10 Hz loop from repeatedly replacing the broken image while a
+    // one-shot fetch reads FastAPI's useful JSON error detail.
+    cam.preview_error_pending = true;
+    let message = `Could not display preview frames from ${cam.id || 'this camera'}.`;
+    try {
+        const res = await fetch(`/api/robot/camera-frame/${cam.preview_index}?diagnostic=${Date.now()}`);
+        if (!res.ok) {
+            const payload = await res.json().catch(() => null);
+            message = payload?.detail || `Camera frame request failed with HTTP ${res.status}.`;
+        } else {
+            message += ' The frame response could not be decoded as an image.';
+        }
+    } catch (e) {
+        message += ` ${e.message}`;
+    }
+
+    cam.error = message;
+    cam.error_code = 'preview_failed';
+    cam.error_summary = 'Preview unavailable';
+    cam.error_action = 'Select Detect Cameras to reopen the preview. If it fails again, reconnect the camera.';
+    delete cam.preview_error_pending;
+    renderCameraPreview();
+    startCameraPreview();
 }
 
 function stopCameraPreview() {
@@ -681,6 +812,7 @@ async function stopAllCameras() {
 
 function assignCameraRole(cameraIndex, role) {
     if (!currentProfile || !detectedCameras[cameraIndex]) return;
+    if (detectedCameras[cameraIndex].error) return;
 
     if (role === '__custom') {
         role = prompt('Camera role name:');
