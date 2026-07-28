@@ -111,14 +111,84 @@ Background Transfers tray + subprocess-worker pipeline landed in PR #15
 (merged 2026-05-26). Design: [docs/hub_transfers.md](docs/hub_transfers.md).
 
 - [x] `GET /api/hub/auth-status` — check login state
+- [x] **Keep synchronous Hub probes off uvicorn's event loop** (2026-07-28).
+  `auth-status`, repo-info, diff metadata, and upload/download preflight now run
+  in worker threads. Regression coverage deliberately stalls `HfApi.whoami()`
+  and proves an unrelated dataset request still completes. This is containment,
+  not a complete outage policy: the caller remains pending and the worker
+  thread remains occupied until the underlying HTTP call returns.
 - [x] `POST /api/datasets/{id}/hub/download` — pull from Hub (with completeness check + confirm_force override)
 - [x] `POST /api/datasets/{id}/hub/upload` — push to Hub via PR (atomic merge to main)
 - [x] Frontend: auth indicator in header, Hub Upload / Hub Download per-dataset entry points
 - [x] **Background Transfers tray** — pill in top-right, popover with one card per job, real progress, Cancel / Retry / Discard / Hide actions. Multi-tab consistent (server holds state), workers survive server restart, multi-dataset parallel.
+- [High] **Bound and coalesce the startup auth probe.** `checkHubAuth()` runs
+  once per full browser document load. When Hub networking is blackholed, the
+  GUI now remains usable but the header indicator stays blank until the kernel
+  TCP timeout, and every reload can consume another default-executor thread.
+  Show `HF: checking…` immediately; distinguish `unavailable` from `not logged
+  in`; cache/single-flight concurrent probes; and configure a short timeout in
+  the Hub HTTP client itself. `asyncio.wait_for(asyncio.to_thread(...))` alone
+  is insufficient because cancelling the await does not stop the already
+  running worker thread.
+- [High] **Offload remote dataset open/download construction.**
+  `POST /api/datasets` still constructs `LeRobotDataset(repo_id)` inline, and
+  confirmed incomplete-local-cache opens can also enter `snapshot_download`.
+  A stalled Hub therefore still freezes the whole GUI through this separate
+  route. Extract the synchronous load/verify work into a worker call, then
+  publish the returned dataset into `AppState` on the event-loop thread. Avoid
+  racing the process-global `datasets.disable_caching()` toggle across
+  concurrent opens.
+- [High] **Finish the Hub request-path audit.** Upload retry discovery still
+  calls `get_discussion_details()` inline, and failed/cancelled-job dismissal
+  calls both `get_discussion_details()` and `change_discussion_status()` inline.
+  Offload only the network portions; keep `AppState`/PR-ownership mutations on
+  the event-loop thread so Retry and Discard cannot race.
 - [ ] **Stale-PR sweep** ([open question in design doc](docs/hub_transfers.md#open-questions)) — failed uploads leave draft PRs; surface them on Upload-modal-open so the user sees stale attempts.
 - [ ] **Re-enable `super_squash_history`** ([open question](docs/hub_transfers.md#open-questions)) — currently disabled; main accumulates N commits per upload (cosmetic only — atomicity and throughput unaffected). Need correct HF API usage or post-merge squash-on-main.
 - [ ] **Retry budget UX** — third-strike retries should surface differently ("Failed 3× — check connection") rather than repeating the latest error.
 - [ ] **`POST /api/hub/login`** — currently delegated to `huggingface-cli login` (out-of-band terminal flow). Add an in-GUI login form only if the standalone GUI runtime (no terminal) is supported.
+
+### Async Request-Path Blocking Audit
+
+The Hub outage exposed a general invariant: an `async def` FastAPI handler
+still runs ordinary Python calls on uvicorn's event-loop thread. Any synchronous
+network, subprocess, device, filesystem, Parquet, or CPU-heavy call inside it
+can stall static files, websockets, SSE, and every other endpoint. Converting a
+handler to plain `def` lets FastAPI run the whole handler in its thread pool;
+handlers that need async locks/state should instead offload the blocking slice
+and perform shared-state mutations back on the event-loop thread.
+
+- [High] **Training image status must not run subprocess/network probes inline.**
+  `/api/training/image-status` is started on every full GUI load and currently
+  runs several `git`/`docker` subprocesses, including a possible `git fetch`,
+  with individual 5–10 second timeouts. Make it a thread-backed/cached probe,
+  and remove network fetches from the passive GET path.
+- [High] **Offload dataset mutation pipelines while retaining dataset locks.**
+  Schema add/default migration/remove and Apply Edits synchronously rewrite
+  Parquet shards, recompute stats, reload metadata, and verify the dataset;
+  large datasets can hold the event loop for minutes. Keep the async
+  per-dataset lock, execute the disk pipeline in a worker, then invalidate and
+  replace shared state on the loop.
+- [Med] **Move camera preview read + JPEG encode off-loop.** The nominally
+  `async_read()` camera API is synchronous and may wait 200 ms; the frontend
+  calls `/api/robot/camera-frame/{index}` at 10 Hz per camera. Offload the
+  combined wait/encode operation or switch the endpoint to a nonblocking
+  `read_latest()` snapshot with explicit stale-frame behavior.
+- [Med] **Remove `nvidia-smi` from overlay status request paths.** Live/data
+  status is polled every 500 ms, while `_proc_sm()` can synchronously run
+  `nvidia-smi pmon` with a 3 second timeout. Sample GPU utilization in one
+  background task and serve its cached value.
+- [Med] **Offload remaining dataset read hot paths.** Cold `DatasetInfo`
+  construction scans Parquet shards for per-episode-feature inference;
+  frame-feature reads use `dataset[i]`; URDF trajectory and feature-series
+  endpoints synchronously call `pd.read_parquet`; Hub diff recursively scans
+  the local tree after its network call. Cache or thread these reads, especially
+  the endpoints driven by scrubbing/polling.
+- [Low] **Move bounded diagnostics/file scans out of async handlers.** Bug
+  report submission runs two Git subprocesses and may decode/write a 16 MiB
+  screenshot; model checkpoint inspection and full overlay-log reads can also
+  become slow on large trees/files. Prefer synchronous route declarations or
+  focused worker calls.
 
 ## Model Tab
 
