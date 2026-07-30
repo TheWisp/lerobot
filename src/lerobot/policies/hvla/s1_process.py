@@ -21,6 +21,22 @@ from lerobot.types import ActionChunk
 
 logger = logging.getLogger(__name__)
 
+# Maps our robot's camera names -> the image "views" the S2 checkpoint expects.
+# S2 is a borrowed external pi05 checkpoint (openpi): its view names
+# (base_0_rgb / base_1_rgb / left+right wrist) and input order were fixed when it
+# was trained elsewhere, are not recorded in the checkpoint, and differ from our
+# camera names -- so this correspondence cannot be derived from the robot config.
+# It is a fixed property of the current SO107 + pi05 pairing and stays hardcoded
+# until S2 is trained inside this stack on our own robot data (no such pipeline
+# yet); at that point views carry our camera names and the map becomes identity.
+# hardcode-ok: external pi05 S2 view convention; not derivable until S2 trains in-stack
+S2_CAM_KEY_MAP = {
+    "front": "base_0_rgb",
+    "top": "base_1_rgb",
+    "left_wrist": "left_wrist_0_rgb",
+    "right_wrist": "right_wrist_0_rgb",
+}
+
 
 def _joint_names_from_robot(robot) -> list[str]:
     """Derive joint names from a connected LeRobot Robot instance."""
@@ -503,7 +519,6 @@ def run_s1(
     shared_images: SharedImageBuffer,
     task: str,
     robot_config_path: str | None = None,
-    s2_camera_map: dict[str, str] | None = None,
     fps: int = 30,
     device: str = "cuda",
     resize_images: tuple[int, int] | None = (224, 224),
@@ -701,13 +716,6 @@ def run_s1(
     action_dim = len(joint_names)
     logger.info("S1: Robot joints (%d): %s", action_dim, joint_names)
     logger.info("S1: Robot cameras: %s", camera_keys)
-
-    if shared_images is not None and not s2_camera_map:
-        raise ValueError(
-            "S2 image buffer is enabled but no s2_camera_map was provided. Pass "
-            "--s2-camera-map 'robot_cam:s2_slot,...' mapping this robot's cameras "
-            f"{camera_keys} to the S2 model's image slots."
-        )
 
     # Apply observation processor steps (e.g., depth edge overlay for RealSense)
     obs_processor_steps = (
@@ -1164,7 +1172,7 @@ def run_s1(
     logger.info("S1: Capturing initial observation...")
     init_obs = robot.get_observation()
     if shared_images is not None:
-        shared_images.write_images(init_obs, s2_camera_map, joint_names)
+        shared_images.write_images(init_obs, S2_CAM_KEY_MAP, joint_names)
     infer_thread.publish_obs(init_obs, time.perf_counter())
 
     # Wait for S2 (skip if running without S2)
@@ -1596,7 +1604,7 @@ def run_s1(
                 with main_session.span("publish_obs"):
                     infer_thread.publish_obs(obs_copy, t_now)
                     if shared_images is not None:
-                        shared_images.write_images(obs, s2_camera_map, joint_names)
+                        shared_images.write_images(obs, S2_CAM_KEY_MAP, joint_names)
 
                 # Check intervention state
                 is_intervention = False
