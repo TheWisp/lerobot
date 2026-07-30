@@ -60,6 +60,39 @@ rates. Specify the contract between them:
 A 500 Hz controller has a 2 ms cycle budget, so it cannot contain a 10 ms
 blocking receive deadline or synchronous disk logging.
 
+## P0 — Replace the uniform IK joint-step clamp with per-joint limits
+
+The shared Mink transform currently clamps every arm joint to the same 10°
+maximum change per application-loop tick. Keep that clamp as an emergency
+backstop until its replacement is validated, but do not treat 10° as a
+physical limit: at the current loop rate it is too permissive for slower
+shoulder joints and unnecessarily restrictive for faster wrist joints.
+
+An offline counterfactual replay of a physical Quest trace captured nine
+in-bounds Mink proposals above 10° on one arm. The largest was a 20.06° J1
+proposal in one 31.7 ms tick; the existing guard reduced it to 10°, which is
+still above the current upstream J1 rate limit. This establishes the need for
+a safety limiter, not the correctness of the uniform threshold.
+
+Replace it deliberately:
+
+- persist the raw pre-guard Mink proposal, offending joint, loop interval,
+  applied limit, and guard reason in the motion trace;
+- derive per-joint velocity limits from the active OpenArm configuration
+  (the official control package exposes
+  [joint velocity caps and Mink `VelocityLimit` support](https://github.com/enactic/openarm_control/blob/main/src/openarm_control/config.py));
+- scale limits by the measured controller interval and account for Mink's
+  internal iteration count rather than assuming a fixed application rate;
+- add acceleration and command-versus-measured following-error bounds so a
+  valid sequence of individually limited commands cannot run far ahead of the
+  physical arm;
+- retain a separate fail-safe for non-finite, out-of-bounds, or grossly
+  implausible solver output;
+- validate with counterfactual replay across representative traces, then
+  low-speed hardware tests. Do not remove the 10° backstop on hardware until
+  the replacement demonstrates bounded commands without reintroducing
+  clutch-edge jumps or per-side unresponsiveness.
+
 ## P1 — Measure and choose the production state contract
 
 Run representative 5-minute Quest sessions and report:
