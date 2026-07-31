@@ -895,6 +895,22 @@ def record_loop(
 
 @parser.wrap()
 def record(cfg: RecordConfig) -> LeRobotDataset:
+    # Fail here rather than ~90 lines into dataset creation. `cfg.dataset` is
+    # annotated as the fork's DatasetRecordConfig, but the annotation is not
+    # enforced: constructing RecordConfig with upstream's base class from
+    # lerobot.configs.dataset succeeds and only blows up at the first
+    # `cfg.dataset.record_images` read, mid-run, as a bare AttributeError.
+    # The CLI never hits this (draccus builds the subclass from the
+    # annotation); programmatic callers and tests do.
+    missing = [f for f in ("record_images", "rename_map") if not hasattr(cfg.dataset, f)]
+    if missing:
+        raise TypeError(
+            f"cfg.dataset is missing fork-only field(s) {missing}: got "
+            f"{type(cfg.dataset).__module__}.{type(cfg.dataset).__qualname__}. "
+            "Import DatasetRecordConfig from lerobot.scripts.lerobot_record, not "
+            "from lerobot.configs.dataset (that is upstream's base class)."
+        )
+
     setup_run_logging(cfg.latency_output_dir, "record")
     logging.info(pformat(asdict(cfg)))
     if cfg.display_data:

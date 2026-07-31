@@ -21,9 +21,11 @@ import pytest
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
 pytest.importorskip("deepdiff", reason="deepdiff is required (install lerobot[hardware])")
 
-from lerobot.configs.dataset import DatasetRecordConfig
 from lerobot.scripts.lerobot_calibrate import CalibrateConfig, calibrate
-from lerobot.scripts.lerobot_record import RecordConfig, record
+
+# The fork's subclass, NOT lerobot.configs.dataset.DatasetRecordConfig — record()
+# reads fork-only fields (record_images, rename_map) that the base class lacks.
+from lerobot.scripts.lerobot_record import DatasetRecordConfig, RecordConfig, record
 from lerobot.scripts.lerobot_replay import DatasetReplayConfig, ReplayConfig, replay
 from lerobot.scripts.lerobot_teleoperate import TeleoperateConfig, teleoperate
 from tests.fixtures.constants import DUMMY_REPO_ID
@@ -46,6 +48,30 @@ def test_teleoperate():
         teleop_time_s=0.1,
     )
     teleoperate(cfg)
+
+
+def test_record_rejects_upstream_base_dataset_config():
+    """record() must refuse upstream's base config up front, not mid-run.
+
+    RecordConfig.dataset is annotated with the fork's DatasetRecordConfig, but a
+    dataclass annotation is not enforced — passing upstream's base class from
+    lerobot.configs.dataset constructs fine and used to survive until the first
+    `cfg.dataset.record_images` read, roughly 90 lines into dataset creation,
+    where it surfaced as a bare AttributeError with no hint about the cause.
+    That is exactly how the 2026-07 upstream sync broke this file.
+
+    Post: raises TypeError naming the missing fields and the correct import,
+    before any robot, teleoperator, or dataset is constructed.
+    """
+    from lerobot.configs.dataset import DatasetRecordConfig as UpstreamBaseConfig
+
+    cfg = RecordConfig(
+        robot=MockRobotConfig(),
+        teleop=MockTeleopConfig(),
+        dataset=UpstreamBaseConfig(repo_id=DUMMY_REPO_ID, single_task="dummy", num_episodes=1),
+    )
+    with pytest.raises(TypeError, match=r"record_images.*lerobot\.scripts\.lerobot_record"):
+        record(cfg)
 
 
 def test_record_and_resume(tmp_path):
