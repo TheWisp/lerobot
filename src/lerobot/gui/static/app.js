@@ -865,6 +865,9 @@ document.addEventListener('DOMContentLoaded', () => {
 // Keyboard controls
 // Tab switching
 function switchTab(tabName) {
+    // Captured before the active classes are cleared below — the camera release
+    // hook at the end of this function needs to know which tab we are leaving.
+    const previousTab = document.querySelector('.tab.active')?.dataset.tab || null;
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
@@ -892,12 +895,15 @@ function switchTab(tabName) {
     // for its own devices. stopAllCameras() also POSTs /api/robot/stop-cameras.
     // Guarded on something actually being held so a normal tab switch does not
     // fire a POST on every click.
+    // The backend decides what it actually holds — do not gate this on frontend
+    // state like detectedCameras.length, which desyncs (page reload, direct API
+    // call) and then silently skips the release.
     if (typeof CameraRelease !== 'undefined'
-        && CameraRelease.shouldReleaseCameras(tabName, typeof detectedCameras !== 'undefined' ? detectedCameras.length : 0)
+        && CameraRelease.shouldReleaseCameras(previousTab, tabName)
         && typeof stopAllCameras === 'function') {
         stopAllCameras();
     } else if (tabName !== 'robot' && typeof stopCameraPreview === 'function') {
-        // Nothing held — just make sure the polling loop is not left running.
+        // Fallback if the module failed to load: at least stop the polling loop.
         stopCameraPreview();
     }
     // Disconnect SSE when leaving run tab (but don't kill process)
