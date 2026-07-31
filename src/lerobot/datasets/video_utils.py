@@ -327,18 +327,56 @@ class VideoDecoderCache:
             entry = (decoder, file_handle, Lock())
             self._cache[video_path] = entry
 
-            # Evict LRU entries until we are back under the cap. We close
-            # evicted file handles immediately; the associated ``VideoDecoder``
-            # is released to the GC when its last reference goes away.
-            if self.max_size is not None:
-                while len(self._cache) > self.max_size:
-                    _evicted_path, (_evicted_decoder, evicted_handle, _evicted_lock) = self._cache.popitem(
-                        last=False
-                    )
-                    with contextlib.suppress(Exception):
-                        evicted_handle.close()
-
+            self._evict_unused(protect=video_path)
             return entry[0], entry[2]
+
+    def _evict_unused(self, *, protect: str) -> None:
+        """Trim to ``max_size``, never evicting an entry another thread is using.
+
+        Caller must hold ``self._lock``.
+
+        Eviction closes the entry's file handle, but the per-path lock — the
+        thing that makes concurrent decoding safe — is a *different* lock, and a
+        decoding thread holds only that one. Closing a handle purely because its
+        entry is least-recently-used can therefore pull the file out from under
+        an in-flight ``get_frames_at``, which is a segfault rather than an
+        exception. Neither parent of the 2026-07 merge had this: the fork's
+        cache was unbounded so nothing was ever evicted, and upstream's had no
+        per-path locking because nothing decoded concurrently.
+
+        A non-blocking acquire is used purely as an "is anyone using this?"
+        probe. ``protect`` is the entry the caller is about to return and has
+        not locked yet, so it must be excluded or it could be evicted before
+        first use.
+
+        Post: the cache may transiently exceed ``max_size`` when every eviction
+        candidate is busy. That is bounded by the number of concurrent decodes
+        and resolves as they finish — preferable to closing a handle in use.
+        """
+        if self.max_size is None:
+            return
+        while len(self._cache) > self.max_size:
+            victim = None
+            # OrderedDict iterates least- to most-recently-used.
+            for path, (_decoder, handle, lock) in self._cache.items():
+                if path == protect:
+                    continue
+                if lock.acquire(blocking=False):
+                    victim = (path, handle, lock)
+                    break
+            if victim is None:
+                logger.debug(
+                    "Video decoder cache is over capacity (%d > %d) but every entry is in use; "
+                    "deferring eviction until a decode finishes.",
+                    len(self._cache),
+                    self.max_size,
+                )
+                return
+            path, handle, lock = victim
+            del self._cache[path]
+            lock.release()
+            with contextlib.suppress(Exception):
+                handle.close()
 
     def get_decoder(self, video_path: str):
         """Get a cached decoder, creating it if needed (evicting LRU if at capacity).

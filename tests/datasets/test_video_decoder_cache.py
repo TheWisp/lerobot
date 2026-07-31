@@ -22,6 +22,7 @@ unbounded growth when iterating over datasets with many distinct video files
 """
 
 import shutil
+import threading
 from pathlib import Path
 
 import pytest
@@ -138,3 +139,70 @@ class TestVideoDecoderCacheBounded:
         for p in paths:
             cache.get_decoder(p)
         assert cache.size() == 3
+
+
+class TestVideoDecoderCacheEvictionSafety:
+    """Eviction must never close a decoder another thread is still using.
+
+    The per-path lock that makes concurrent decoding safe is a *different* lock
+    from the one guarding the cache, so LRU eviction could close a file handle
+    out from under an in-flight ``get_frames_at`` — a segfault rather than an
+    exception. Neither parent of the 2026-07 upstream merge had this: the fork's
+    cache was unbounded so nothing was ever evicted, and upstream's had no
+    per-path locking because nothing decoded concurrently.
+    """
+
+    def test_in_use_entry_is_not_evicted(self, tmp_path):
+        """A decoder held by another thread survives pressure from new entries."""
+        paths = _make_distinct_clips(tmp_path, n=3)
+        cache = VideoDecoderCache(max_size=2)
+
+        entered = threading.Event()
+        may_finish = threading.Event()
+        still_open = []
+
+        def holder():
+            with cache.decoder_for(str(paths[0])):
+                entered.set()
+                may_finish.wait(timeout=10)
+                # Read the entry's handle directly: if eviction closed it, this
+                # is what an in-flight decode would have been reading through.
+                entry = cache._cache.get(str(paths[0]))
+                still_open.append(entry is not None and not entry[1].closed)
+
+        t = threading.Thread(target=holder)
+        t.start()
+        assert entered.wait(timeout=10), "holder thread never started decoding"
+
+        # Age the held entry to LRU and push the cache over capacity.
+        cache.get_decoder(paths[1])
+        cache.get_decoder(paths[2])
+
+        may_finish.set()
+        t.join(timeout=10)
+
+        assert still_open == [True], "an in-use decoder's file handle was closed by eviction"
+
+    def test_capacity_is_still_enforced_when_nothing_is_held(self, tmp_path):
+        """Skipping busy entries must not disable eviction for idle ones."""
+        paths = _make_distinct_clips(tmp_path, n=5)
+        cache = VideoDecoderCache(max_size=2)
+        for p in paths:
+            with cache.decoder_for(str(p)):
+                pass
+        assert cache.size() == 2, "eviction stopped working for unheld entries"
+
+    def test_freshly_created_entry_is_not_evicted_before_use(self, tmp_path):
+        """The entry a caller is about to receive must survive its own insertion.
+
+        It is not locked yet at insertion time, so a naive "evict anything
+        unlocked" rule could discard and close it before the caller decodes.
+        """
+        paths = _make_distinct_clips(tmp_path, n=3)
+        cache = VideoDecoderCache(max_size=1)
+        for p in paths:
+            with cache.decoder_for(str(p)) as decoder:
+                assert decoder is not None
+                entry = cache._cache.get(str(p))
+                assert entry is not None, "the just-created entry was evicted before use"
+                assert not entry[1].closed, "the just-created entry's handle was closed before use"
