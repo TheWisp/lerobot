@@ -300,3 +300,54 @@ def test_create_key_listener_none_without_tty(monkeypatch):
     monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
     _set_tty(monkeypatch, is_tty=False)
     assert create_key_listener(lambda name: None) is None
+
+
+class TestCompositeListenerDelegation:
+    """The composite must not break call-sites that reach into the keyboard listener.
+
+    Before the stdin channel existed, ``init_keyboard_listener`` returned the
+    keyboard listener itself, and callers hook it — ``s1_process`` wraps
+    ``listener.on_press`` to add the RLT reward hotkeys (R = success,
+    LEFT = abort). Interposing a wrapper without delegation turns that into an
+    AttributeError partway through an RLT rollout.
+    """
+
+    def test_delegates_unknown_attributes_to_the_keyboard_listener(self):
+        from lerobot.utils.keyboard_input import _CompositeControlListener
+
+        class FakeKeyboardListener:
+            def __init__(self):
+                self.stopped = False
+
+            def on_press(self, key):
+                return "original-handler"
+
+            def stop(self):
+                self.stopped = True
+
+        kb = FakeKeyboardListener()
+        composite = _CompositeControlListener(kb, None)
+
+        assert composite.on_press(None) == "original-handler"
+
+    def test_stop_is_not_delegated_and_reaches_every_listener(self):
+        from lerobot.utils.keyboard_input import _CompositeControlListener
+
+        class Recorder:
+            def __init__(self):
+                self.stopped = False
+
+            def stop(self):
+                self.stopped = True
+
+        kb, stdin = Recorder(), Recorder()
+        _CompositeControlListener(kb, stdin).stop()
+        assert kb.stopped and stdin.stopped, "stop() must reach both sources, not delegate to one"
+
+    def test_missing_keyboard_backend_raises_an_actionable_attribute_error(self):
+        """With no keyboard backend the hook genuinely cannot exist — say why."""
+        from lerobot.utils.keyboard_input import _CompositeControlListener
+
+        composite = _CompositeControlListener(None, object())
+        with pytest.raises(AttributeError, match="no keyboard backend is active"):
+            _ = composite.on_press

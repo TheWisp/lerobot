@@ -1250,6 +1250,58 @@ class TestControlEndpoint:
         assert result["cmd"] == "rerecord_episode"
         assert written == [b'{"v": 1, "cmd": "rerecord_episode"}\n']
 
+    def test_endpoint_and_subprocess_agree_on_the_command_vocabulary(self):
+        """The two ends of the protocol must accept exactly the same commands.
+
+        `_CONTROL_COMMANDS` here and `_STDIN_COMMAND_TO_CONTROL` in
+        keyboard_input are maintained by hand in different files. A command
+        added to only one side fails asymmetrically and quietly: the endpoint
+        returns 200 "sent" while the subprocess logs "unknown command" and does
+        nothing, so the button appears to work and the robot ignores it.
+        """
+        from lerobot.gui.api.run import _CONTROL_COMMANDS
+        from lerobot.utils.keyboard_input import _STDIN_COMMAND_TO_CONTROL
+
+        assert set(_STDIN_COMMAND_TO_CONTROL) == _CONTROL_COMMANDS, (
+            "control vocabulary drifted between the GUI endpoint and the stdin listener: "
+            f"endpoint-only={_CONTROL_COMMANDS - set(_STDIN_COMMAND_TO_CONTROL)}, "
+            f"listener-only={set(_STDIN_COMMAND_TO_CONTROL) - _CONTROL_COMMANDS}"
+        )
+
+    def test_process_swapped_mid_drain_returns_409_not_500(self):
+        """A concurrent /stop during `drain()` must not turn into a 500.
+
+        `drain()` is the one await in the handler. Re-reading the
+        `_active_process` global after it — as the code did — hits None when a
+        stop landed in between, and `None.pid` surfaces as a 500 rather than the
+        409 this actually is. Binding the process once before the await fixes it.
+        """
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.api.run import ControlRequest, send_control
+
+        class StopMidDrainStdin:
+            def write(self, data):
+                pass
+
+            async def drain(self):
+                # Simulate /stop completing while we were suspended.
+                run_mod._active_process = None
+
+        proc = AsyncMock()
+        proc.returncode = None
+        proc.stdin = StopMidDrainStdin()
+        proc.pid = 4321
+
+        original = run_mod._active_process
+        try:
+            run_mod._active_process = proc
+            result = asyncio.run(send_control(ControlRequest(cmd="exit_early")))
+        finally:
+            run_mod._active_process = original
+
+        assert result["status"] == "sent"
+        assert result["pid"] == 4321
+
 
 class TestRunPhaseTracking:
     """The Run tab's phase readout is parsed from subprocess stdout (brittle, see TODO)."""

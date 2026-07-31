@@ -1101,19 +1101,23 @@ async def send_control(req: ControlRequest) -> dict:
         raise HTTPException(
             400, f"Unknown control command {req.cmd!r}; expected one of {sorted(_CONTROL_COMMANDS)}"
         )
-    if _active_process is None or _active_process.returncode is not None:
+    # Bind the process once. `drain()` yields, and a concurrent /stop clears
+    # _active_process — re-reading the global after the await would raise
+    # AttributeError on None and surface as a 500 instead of the 409 this is.
+    proc = _active_process
+    if proc is None or proc.returncode is not None:
         raise HTTPException(409, "No active process to control")
-    if _active_process.stdin is None:
+    if proc.stdin is None:
         raise HTTPException(409, "Active process has no control channel")
 
     line = json.dumps({"v": 1, "cmd": req.cmd}) + "\n"
     try:
-        _active_process.stdin.write(line.encode())
-        await _active_process.stdin.drain()
+        proc.stdin.write(line.encode())
+        await proc.stdin.drain()
     except (BrokenPipeError, ConnectionResetError) as e:
         raise HTTPException(409, f"Control channel broken: {e}") from e
-    logger.info(f"Control channel: {req.cmd} forwarded to PID {_active_process.pid}")
-    return {"status": "sent", "cmd": req.cmd, "pid": _active_process.pid}
+    logger.info(f"Control channel: {req.cmd} forwarded to PID {proc.pid}")
+    return {"status": "sent", "cmd": req.cmd, "pid": proc.pid}
 
 
 @router.post("/stop")

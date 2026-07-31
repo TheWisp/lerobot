@@ -259,15 +259,42 @@ class StdinControlListener:
 
 class _CompositeControlListener:
     """Bundle the active control sources behind the single ``.stop()`` contract
-    that callers of :func:`init_keyboard_listener` already use."""
+    that callers of :func:`init_keyboard_listener` already use.
 
-    def __init__(self, *listeners):
-        self._listeners = [listener for listener in listeners if listener is not None]
+    Attribute access other than ``stop`` is delegated to the wrapped keyboard
+    listener. Before this class existed ``init_keyboard_listener`` returned that
+    listener directly, and call-sites reach into it — ``s1_process`` wraps
+    ``listener.on_press`` to add the RLT reward hotkeys. Without delegation,
+    interposing this wrapper turns those into ``AttributeError``.
+
+    Delegation does not make them portable: ``on_press`` is a ``pynput``
+    attribute, so such hooks were already inert under the terminal backend and
+    remain so. It only preserves the behaviour that existed before the stdin
+    channel was added.
+    """
+
+    def __init__(self, keyboard_listener, stdin_listener):
+        self._keyboard_listener = keyboard_listener
+        self._listeners = [
+            listener for listener in (keyboard_listener, stdin_listener) if listener is not None
+        ]
 
     def stop(self) -> None:
         for listener in self._listeners:
             with contextlib.suppress(Exception):
                 listener.stop()
+
+    def __getattr__(self, name: str):
+        # Only reached for attributes not found normally, so `stop` and the
+        # private fields never land here and cannot recurse.
+        keyboard_listener = self.__dict__.get("_keyboard_listener")
+        if keyboard_listener is None:
+            raise AttributeError(
+                f"{type(self).__name__} has no attribute {name!r}: no keyboard backend is active "
+                f"(headless, Wayland without a TTY, or {KEYBOARD_LISTENER_ENV_VAR}=0). "
+                "Control flow arrives over the stdin channel instead."
+            )
+        return getattr(keyboard_listener, name)
 
 
 # Terminal arrow keys arrive as a 3-byte escape sequence whose *final* byte identifies
