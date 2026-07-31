@@ -86,21 +86,31 @@ a refactor is the one thing a reviewer will look for.>
 
 ## Sync / merge
 
+Main text stays short; the per-defect detail is what appendices are for.
+
 ```markdown
-## What this brings
+<Problem: how far behind, and what that was costing. One short paragraph.>
 
-<Scope of the incoming change, and the highlights that matter to this repo.>
+<Solution: what the sync brings, and the scope boundary — what was split out
+and why. A few lines.>
 
-## How the merge was verified
+<Confidence: the audit performed and its result, as a table of check → result.
+Then, in one or two lines: how many defects were found, that each has a
+guardrail, and that nothing outstanding is attributable to the merge. Detail
+goes below.>
 
-<The audit performed, as a table of check → result. Conflict-free is not the
-same as correct; say what you did beyond resolving conflicts.>
+---
 
 ## Regressions found and fixed
 
-<Each defect: what broke, why it survived the merge, how it was fixed. This
-section is the point of the PR — a sync with no findings usually means nobody
-looked.>
+<One entry per defect: what broke, why it survived the merge, how it was
+fixed, and which test now pins it. A sync with no findings usually means
+nobody looked — but this belongs here, not in the summary.>
+
+## Known limitations
+
+<Deferred work, coexisting designs, environment constraints the reviewer will
+hit.>
 
 ## Follow-ups (not in this PR)
 

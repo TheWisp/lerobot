@@ -48,13 +48,54 @@ as judgment; scope discovered in review reads as an omission.
 
 ## Length
 
-Succinct, not thin. Most PRs here land between roughly 2,000 and 4,000
-characters of body. Use tables to enumerate states, behaviours, or
-before/after pairs — they compress well and are skimmable. Prose is for the
-problem statement and the reasoning; tables are for the surface area.
+Budget the **main text**, not the whole body. The main text is everything
+before the first appendix heading, and it should stay short enough to read in
+one pass — a screen or so. Appendices can be as long as the change deserves,
+because a reader chooses whether to open them.
+
+What that buys: a reviewer who trusts you reads the summary and approves; a
+reviewer who wants the receipts scrolls. Neither is punished for the other's
+needs.
+
+Use tables to enumerate states, behaviours, or before/after pairs — they
+compress well and skim well. Prose is for the problem and the reasoning.
 
 Cut: file-by-file walkthroughs, restatements of the diff, changelog-style
 bullet dumps, and anything the reader can see in the Files tab.
+
+## Shape: problem → solution → confidence, then appendices
+
+The main text answers three questions in this order, and nothing else:
+
+1. **Problem** — why this change exists. What was broken, missing, or costly.
+2. **Solution** — what the change actually is. The shape of it, not its history.
+3. **Confidence** — why the reviewer can believe it works. Evidence and
+   guardrails, stated as conclusions.
+
+Everything else is an appendix: per-regression detail, known limitations,
+follow-ups, links to related branches, reproduction notes. Put it under clear
+headings after the summary so it can be skipped or skimmed.
+
+Do **not** write "how it went". A PR is not a lab notebook. The order you
+discovered things, the hypotheses you discarded, the environment that misled
+you — none of that belongs in the main text, and most of it belongs nowhere.
+The reviewer wants the current state of the code, not the path that produced
+it. Where a discovery genuinely informs future work — a defect class that will
+recur, a trap the next person will hit — state it once as a finding in an
+appendix, not as a narrative.
+
+## Tone
+
+Plain and factual. The change has to be judged on what it does, so let the
+facts carry it.
+
+Avoid drama. No "silently", "entirely", "outright", "took N tests with it", no
+bolded warnings, no build-up before a reveal. Emphasis used everywhere is
+emphasis nowhere, and a body that sounds urgent invites a reviewer to discount
+it. A serious defect reads as more serious in flat prose.
+
+Titles describe the change, not its excitement. "sync upstream through
+`<sha>`" beats "sync upstream and fix what it hid".
 
 ## Honesty
 
@@ -70,7 +111,10 @@ has not been run.
 
 ## Checklist before opening
 
-- Problem stated before solution, in the first paragraph
+- Main text is problem → solution → confidence, and stops there
+- Main text readable in one pass; everything else moved under appendix headings
+- No narrative of how the work went — no discovery order, no discarded theories
+- Tone is flat; no dramatic verbs, no bolded alarm
 - Evidence matching the change type is present and actually shows the claim
 - Guardrails named by file and contract, with no test counts
 - Out-of-scope work and follow-ups called out
