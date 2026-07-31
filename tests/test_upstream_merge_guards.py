@@ -82,16 +82,24 @@ def _iter_lerobot_imports() -> list[tuple[Path, int, str, str]]:
     return found
 
 
-def _missing_optional_dep(exc: BaseException) -> bool:
-    """True when `exc` is a module failing to import for want of a THIRD-PARTY dep.
+def _module_source_exists(module: str) -> bool:
+    """True when ``module``'s source file is still present in this checkout.
 
-    Optional extras (``lerobot[pi]``, ``lerobot[groot]``, …) are expected to be
-    absent in a base test env, and their absence is not merge damage. A missing
-    *lerobot* module, by contrast, is exactly what this guard is looking for, so
-    it must not be swallowed here.
+    This is the discriminator between "the env lacks an optional extra" and
+    "the merge deleted the module". Deliberately filesystem-based rather than
+    exception-based: ``require_package`` raises a bare ``ImportError`` with no
+    ``name`` attribute, and several packages (``lerobot.datasets``,
+    ``lerobot.async_inference``) call it at import time. Keying off the
+    exception would therefore flag a lean CI env — where those extras are
+    legitimately absent — as merge damage, failing the build for no reason.
+
+    A module whose file is on disk but won't import is an environment problem
+    and not this guard's business. A module whose file is gone is exactly what
+    this guard exists to catch.
     """
-    name = getattr(exc, "name", None) or ""
-    return bool(name) and not name.startswith("lerobot")
+    rel = Path(*module.split("."))
+    src = REPO_ROOT / "src"
+    return (src / rel).with_suffix(".py").is_file() or (src / rel / "__init__.py").is_file()
 
 
 def test_every_lerobot_import_resolves():
@@ -111,12 +119,12 @@ def test_every_lerobot_import_resolves():
             try:
                 module_cache[module] = importlib.import_module(module)
             except ImportError as exc:
-                # Optional extra missing → not our problem. A missing lerobot
-                # module IS our problem, so record it rather than skipping.
+                # Source still on disk → the env lacks an optional extra, which
+                # is expected in a base test env. Source gone → merge damage.
                 module_cache[module] = None
-                if not _missing_optional_dep(exc):
+                if not _module_source_exists(module):
                     dangling.append(
-                        f"{path.relative_to(REPO_ROOT)}:{lineno}: cannot import module '{module}' ({exc})"
+                        f"{path.relative_to(REPO_ROOT)}:{lineno}: module '{module}' no longer exists ({exc})"
                     )
             except Exception:
                 # Import-time side effects (hardware probes, GPU init) are not
@@ -201,10 +209,18 @@ def test_dataset_io_helper_survives_somewhere(name: str):
     callers are dangling; restore it or port them.
     """
     candidates = ("lerobot.datasets.io_utils", "lerobot.datasets.utils", "lerobot.datasets")
+    any_imported = False
     for module in candidates:
         try:
-            if hasattr(importlib.import_module(module), name):
-                return
+            mod = importlib.import_module(module)
         except ImportError:
             continue
+        any_imported = True
+        if hasattr(mod, name):
+            return
+    # None of the candidates would import at all — the env is missing a dataset
+    # extra, not the symbol. Skip rather than fail: a lean CI runner must not be
+    # told the merge deleted something when it simply cannot load the package.
+    if not any_imported:
+        pytest.skip(f"none of {candidates} importable in this env; cannot judge '{name}'")
     pytest.fail(f"'{name}' no longer exists in any of {candidates} — fork callers depend on it")
