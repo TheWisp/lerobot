@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pull request"
+  short_description: "PR structure, required evidence per change type, and link/image mechanics"
+  default_prompt: "Use $pull-request to write or review a PR body for this repository."

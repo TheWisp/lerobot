@@ -176,7 +176,12 @@ outputs/
 *.urdf
 *.xml
 *.part
-.claude/
+# Keep personal Claude settings ignored, but allow the shared project skill
+# adapters. Their targets live in .agents/skills so there is one canonical copy.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/pull-request
 
 # Vendored robot descriptions are the sanctioned home for URDF + meshes;
 # keep them tracked even though the extensions are ignored above.
