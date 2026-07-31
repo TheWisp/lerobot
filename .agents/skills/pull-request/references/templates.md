@@ -25,9 +25,15 @@ the same seam. Scope stated here reads as judgment.>
 
 ### Proof
 
-<Screenshots / GIF / video showing it working. One per meaningful state, each
-under a heading that says what the state is. For non-visual features, a
-rendered artefact or a captured transcript.>
+<A Mermaid diagram if the design has a shape worth seeing — which path is
+taken, what talks to what, what order. It replaces the paragraph explaining it.
+
+Then screenshots / GIF / video showing it working. One per meaningful state,
+each under a heading that says what the state is, cropped to the component. For
+non-visual features, a rendered artefact or a captured transcript.
+
+Name any state you could not capture rather than faking it. See
+references/evidence.md.>
 
 ### Guardrails
 
@@ -57,8 +63,10 @@ a workaround, say so and link the follow-up.>
 
 ### Evidence
 
-<The bug not happening: before/after screenshots, or the scenario now covered
-by a test. For anything visual, show it.>
+<The bug not happening. For anything visual, a before/after pair beats a
+description — the broken state and the fixed one, each labelled. Otherwise the
+failing command's output before and after. A diagram helps when the bug was a
+control-flow or ordering problem: draw the path that was wrong.>
 
 ### Guardrails
 

@@ -29,6 +29,26 @@ of files changed.
 | Refactor | Behaviour is unchanged. Name the tests that pin the old behaviour and still pass; if you had to change a test, say why   |
 | Perf     | A measurement, with the setup stated. "Faster" without numbers is not a claim                                            |
 
+**Prefer a diagram to a paragraph.** If you are explaining in prose _why the
+design is shaped this way_ — which of three paths is taken, what talks to what,
+what order things happen in — that is a diagram, and it will be shorter and
+clearer. GitHub renders Mermaid directly in a PR body, so a diagram costs no
+image hosting, no commit pinning, and stays diffable. Keep it to five to eight
+nodes: a diagram that needs study is worse than the paragraph it replaced.
+
+**Screenshots show one state each, cropped to the component.** Not a full
+desktop, not a whole browser window with unrelated panels — the thing you
+changed, with just enough surroundings to locate it. Give each shot a heading
+naming the state it shows. Several small, labelled shots beat one busy one.
+
+**Say what you could not capture.** If a state needs hardware, a long training
+run, or a live subprocess you do not have, show what you can and state plainly
+which state is missing. Never synthesise a screenshot by injecting fake state
+into the UI — a fabricated shot of a state you never observed is worse than no
+shot, because it looks like proof.
+
+See [references/evidence.md](references/evidence.md) for how to produce both.
+
 **Name guardrails, do not count them.** State _what_ is now protected and
 _where_ the test lives — `tests/gui/test_overlays.py` covers the publisher
 no-op contract and the lifecycle state machine. Do **not** write "45 tests
@@ -116,6 +136,9 @@ has not been run.
 - No narrative of how the work went — no discovery order, no discarded theories
 - Tone is flat; no dramatic verbs, no bolded alarm
 - Evidence matching the change type is present and actually shows the claim
+- Anything with a UI has an image; anything explaining a shape has a diagram
+- Screenshots cropped to the component, one state each, nothing else on screen
+- States you could not capture are named as gaps, not faked
 - Guardrails named by file and contract, with no test counts
 - Out-of-scope work and follow-ups called out
 - Known limitations stated
