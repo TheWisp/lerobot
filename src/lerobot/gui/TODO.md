@@ -112,11 +112,11 @@ Background Transfers tray + subprocess-worker pipeline landed in PR #15
 
 - [x] `GET /api/hub/auth-status` — check login state
 - [x] **Keep synchronous Hub probes off uvicorn's event loop** (2026-07-28).
-  `auth-status`, repo-info, diff metadata, and upload/download preflight now run
-  in worker threads. Regression coverage deliberately stalls `HfApi.whoami()`
-  and proves an unrelated dataset request still completes. This is containment,
-  not a complete outage policy: the caller remains pending and the worker
-  thread remains occupied until the underlying HTTP call returns.
+      `auth-status`, repo-info, diff metadata, and upload/download preflight now run
+      in worker threads. Regression coverage deliberately stalls `HfApi.whoami()`
+      and proves an unrelated dataset request still completes. This is containment,
+      not a complete outage policy: the caller remains pending and the worker
+      thread remains occupied until the underlying HTTP call returns.
 - [x] `POST /api/datasets/{id}/hub/download` — pull from Hub (with completeness check + confirm_force override)
 - [x] `POST /api/datasets/{id}/hub/upload` — push to Hub via PR (atomic merge to main)
 - [x] Frontend: auth indicator in header, Hub Upload / Hub Download per-dataset entry points
@@ -126,7 +126,7 @@ Background Transfers tray + subprocess-worker pipeline landed in PR #15
   GUI now remains usable but the header indicator stays blank until the kernel
   TCP timeout, and every reload can consume another default-executor thread.
   Show `HF: checking…` immediately; distinguish `unavailable` from `not logged
-  in`; cache/single-flight concurrent probes; and configure a short timeout in
+in`; cache/single-flight concurrent probes; and configure a short timeout in
   the Hub HTTP client itself. `asyncio.wait_for(asyncio.to_thread(...))` alone
   is insufficient because cancelling the await does not stop the already
   running worker thread.

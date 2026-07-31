@@ -760,7 +760,13 @@ def handle_recompute_stats(cfg: EditDatasetConfig) -> None:
             backup_path = output_root.with_name(output_root.name + "_old")
             logging.warning(f"Output directory {output_root} already exists. Moving to {backup_path}")
             if backup_path.exists():
+                # Only one generation of backup is kept, not two: a second run
+                # against the same output_root discards the first run's original.
+                # safe-destruct: drops only a previous "_old" rotation, warned above
                 shutil.rmtree(backup_path)
+            # Rotates the existing output dir aside rather than deleting it; the
+            # copytree below repopulates output_root.
+            # safe-destruct: move (not delete) of a path the user pointed us at
             shutil.move(output_root, backup_path)
         shutil.copytree(input_root, output_root)
         dataset = LeRobotDataset(output_repo_id, root=output_root)
@@ -820,7 +826,13 @@ def handle_reencode_videos(cfg: EditDatasetConfig) -> None:
             backup_path = output_root.with_name(output_root.name + "_old")
             logging.warning(f"Output directory {output_root} already exists. Moving to {backup_path}")
             if backup_path.exists():
+                # Only one generation of backup is kept, not two: a second run
+                # against the same output_root discards the first run's original.
+                # safe-destruct: drops only a previous "_old" rotation, warned above
                 shutil.rmtree(backup_path)
+            # Rotates the existing output dir aside rather than deleting it; the
+            # copytree below repopulates output_root.
+            # safe-destruct: move (not delete) of a path the user pointed us at
             shutil.move(output_root, backup_path)
         shutil.copytree(input_root, output_root)
         dataset = LeRobotDataset(output_repo_id, root=output_root)

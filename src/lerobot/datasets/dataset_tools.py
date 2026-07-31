@@ -48,6 +48,18 @@ from lerobot.configs import (
     rgb_encoder_defaults,
 )
 from lerobot.configs.video import DEPTH_ENCODER_INFO_FIELD_NAMES
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.utils import (
+    DATA_DIR,
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_DATA_FILE_SIZE_IN_MB,
+    DEFAULT_DATA_PATH,
+    DEFAULT_EPISODES_PATH,
+    DEPTH_FILE_PATTERN,
+    IMAGE_FILE_PATTERN,
+    VIDEO_DIR,
+    update_chunk_file_indices,
+)
 from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_IMAGE, OBS_STATE
 from lerobot.utils.utils import flatten_dict
 
@@ -73,18 +85,6 @@ from .io_utils import (
     write_info,
     write_stats,
     write_tasks,
-)
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import (
-    DATA_DIR,
-    DEFAULT_CHUNK_SIZE,
-    DEFAULT_DATA_FILE_SIZE_IN_MB,
-    DEFAULT_DATA_PATH,
-    DEFAULT_EPISODES_PATH,
-    DEPTH_FILE_PATTERN,
-    IMAGE_FILE_PATTERN,
-    VIDEO_DIR,
-    update_chunk_file_indices,
 )
 from .video_utils import (
     encode_video_frames,
@@ -220,7 +220,6 @@ def _recompute_episode_stats_from_data(
         episode_index: Index of the episode to recompute stats for
         features: The dataset's features dict
     """
-    from lerobot.utils.utils import flatten_dict
 
     # Load the episode's data from data parquet
     data_dir = local_dir / DATA_DIR
@@ -1545,7 +1544,6 @@ def _add_new_feature_stats_to_episodes(
     overwritten; columns that don't exist are added.
     """
     from lerobot.datasets.compute_stats import compute_episode_stats
-    from lerobot.utils.utils import flatten_dict
 
     work_root = Path(dataset_root)
     data_dir = work_root / DATA_DIR
@@ -2097,7 +2095,6 @@ def _copy_and_reindex_episodes_metadata(
         data_metadata: Dict mapping new episode index to its data file metadata
         video_metadata: Optional dict mapping new episode index to its video metadata
     """
-    from lerobot.utils.utils import flatten_dict
 
     if src_dataset.meta.episodes is None:
         src_dataset.meta.episodes = load_episodes(src_dataset.meta.root)

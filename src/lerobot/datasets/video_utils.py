@@ -675,8 +675,10 @@ def reencode_video(
                 if packet:
                     dst.mux(packet)
 
+        # safe-destruct: atomic publish of a temp file this function created
         shutil.move(tmp_output_video_path, output_video_path)
     except Exception:
+        # safe-destruct: our own temp file, abandoned because encoding failed
         Path(tmp_output_video_path).unlink(missing_ok=True)
         raise
     finally:
@@ -1332,8 +1334,10 @@ class VideoEncodingManager:
         if img_dir.exists():
             png_files = list(img_dir.rglob("*.png"))
             tiff_files = list(img_dir.rglob("*.tiff"))
-            # safe-destruct: video encode: drop temp images after encoding
             if len(png_files) == 0 and len(tiff_files) == 0:
+                # Guarded by the emptiness check above, so no frame that failed
+                # to encode is ever removed.
+                # safe-destruct: video encode: drop temp images after encoding
                 shutil.rmtree(img_dir)
                 logger.debug("Cleaned up empty images directory")
             else:

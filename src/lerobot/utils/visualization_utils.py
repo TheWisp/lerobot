@@ -27,14 +27,15 @@ from lerobot.types import RobotAction, RobotObservation
 
 from .foxglove_visualization import init_foxglove, log_foxglove_data, shutdown_foxglove
 from .import_utils import require_package
-from .rerun_visualization import log_rerun_data, shutdown_rerun
-from .rerun_visualization import init_rerun as _init_rerun
+from .rerun_visualization import init_rerun as _init_rerun, log_rerun_data, shutdown_rerun
 
 # Visualization backends selectable at runtime via a display-mode string (e.g. a --display_mode flag).
 VISUALIZATION_MODES = ("rerun", "foxglove")
 
 
-def init_rerun(session_name: str = "lerobot_control_loop", ip: str | None = None, port: int | None = None) -> None:
+def init_rerun(
+    session_name: str = "lerobot_control_loop", ip: str | None = None, port: int | None = None
+) -> None:
     """Initializes the Rerun SDK, honoring the fork's ``LEROBOT_RERUN_SERVE_PORT`` override.
 
     Delegates to :func:`lerobot.utils.rerun_visualization.init_rerun` normally.
