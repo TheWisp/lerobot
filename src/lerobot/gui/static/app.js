@@ -885,8 +885,19 @@ function switchTab(tabName) {
     if (tabName === 'model' && typeof modelTabInit === 'function') {
         modelTabInit();
     }
-    // Stop camera preview when leaving robot tab
-    if (tabName !== 'robot' && typeof stopCameraPreview === 'function') {
+    // Leaving the robot tab must RELEASE the cameras, not just stop drawing them.
+    // stopCameraPreview() only clears the polling interval and hides the Stop
+    // Preview button; the backend keeps a V4L2 / librealsense handle per camera,
+    // invisibly, and a run launched from another tab then competes with the GUI
+    // for its own devices. stopAllCameras() also POSTs /api/robot/stop-cameras.
+    // Guarded on something actually being held so a normal tab switch does not
+    // fire a POST on every click.
+    if (typeof CameraRelease !== 'undefined'
+        && CameraRelease.shouldReleaseCameras(tabName, typeof detectedCameras !== 'undefined' ? detectedCameras.length : 0)
+        && typeof stopAllCameras === 'function') {
+        stopAllCameras();
+    } else if (tabName !== 'robot' && typeof stopCameraPreview === 'function') {
+        // Nothing held — just make sure the polling loop is not left running.
         stopCameraPreview();
     }
     // Disconnect SSE when leaving run tab (but don't kill process)
