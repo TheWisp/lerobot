@@ -990,6 +990,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         else:
             # Create empty dataset or load existing saved episodes
             sanity_check_dataset_name(cfg.dataset.repo_id, cfg.policy)
+            # Upstream behaviour: give each recording session a unique name.
+            # LeRobotDataset.create() opens the root with exist_ok=False, so
+            # without this a second session under the same name fails with
+            # FileExistsError and the operator has to rename by hand. Only on
+            # the create path — a resumed dataset keeps the name it already has.
+            cfg.dataset.stamp_repo_id()
             dataset = LeRobotDataset.create(
                 cfg.dataset.repo_id,
                 cfg.dataset.fps,
