@@ -292,6 +292,58 @@ def test_rgb_and_depth_episode_saves_on_the_default_record_path(tmp_path):
     assert any("depth" in name for name in written), f"no depth video written, got {sorted(written)}"
 
 
+def test_rerecord_discards_buffered_depth_frames(tmp_path):
+    """Re-recording must drop the abandoned take's depth frames.
+
+    Regression: ``clear_episode_buffer`` deleted temp image dirs for
+    ``meta.image_keys`` only — the ``dtype="image"`` features. Depth is
+    ``dtype="video"`` and, having no streaming encoder, is buffered to disk like
+    an image. Its frames therefore survived a discard, and the next take encoded
+    them alongside its own: a re-recorded episode silently containing frames from
+    the take the operator threw away.
+
+    Post: after a discard, only the second take's frames are on disk.
+    """
+    pytest.importorskip("av", reason="av is required for video encoding (install lerobot[dataset])")
+    features = {
+        "observation.images.depth": {
+            "dtype": "video",
+            "shape": (32, 32, 1),
+            "names": ["h", "w", "c"],
+            "info": {"is_depth_map": True},
+        },
+        "state": {"dtype": "float32", "shape": (6,), "names": None},
+    }
+    dataset = LeRobotDataset.create(
+        repo_id=DUMMY_REPO_ID, fps=DEFAULT_FPS, features=features, root=tmp_path / "ds"
+    )
+
+    def add(n):
+        for _ in range(n):
+            dataset.add_frame(
+                {
+                    "task": "Dummy task",
+                    "observation.images.depth": np.random.randint(0, 4096, (32, 32, 1), dtype=np.uint16),
+                    "state": torch.zeros(6),
+                }
+            )
+
+    def buffered_depth_frames():
+        d = dataset.writer._get_image_file_dir(0, "observation.images.depth")
+        return sorted(d.glob("*")) if d.is_dir() else []
+
+    add(5)
+    assert len(buffered_depth_frames()) == 5
+
+    dataset.clear_episode_buffer()
+    assert buffered_depth_frames() == [], "discarded take left depth frames behind"
+
+    add(3)
+    assert len(buffered_depth_frames()) == 3, (
+        "second take sees frames from the discarded one — the re-recorded episode would be corrupt"
+    )
+
+
 # ── clear / lifecycle ────────────────────────────────────────────────
 
 

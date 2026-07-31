@@ -484,7 +484,9 @@ class DatasetWriter:
                 self._episodes_since_last_encoding = 0
 
         if episode_data is None:
-            self.clear_episode_buffer(delete_images=len(self._meta.image_keys) > 0)
+            # The episode was saved, not abandoned: buffered video frames may be
+            # awaiting batch encoding, so leave them alone.
+            self.clear_episode_buffer(delete_images=len(self._meta.image_keys) > 0, drop_buffered_video=False)
 
     def _batch_save_episode_video(self, start_episode: int, end_episode: int | None = None) -> None:
         """Batch save videos for multiple episodes."""
@@ -678,12 +680,18 @@ class DatasetWriter:
         }
         return metadata
 
-    def clear_episode_buffer(self, delete_images: bool = True) -> None:
+    def clear_episode_buffer(self, delete_images: bool = True, *, drop_buffered_video: bool = True) -> None:
         """Discard the current episode buffer and optionally delete temp images.
 
         Args:
             delete_images: If ``True``, remove temporary image directories
                 written for the current episode.
+            drop_buffered_video: Also remove the temp frames of video keys that
+                were buffered to disk rather than streamed. True when the take is
+                being *abandoned* (re-record), because those frames must not leak
+                into the next one. False when called after a successful
+                ``save_episode``, where under batched encoding the frames are
+                deliberately retained until the batch is encoded.
         """
         # Discard in-progress per-camera encoders and restart for fresh episode
         if self.video_encoders:
@@ -700,7 +708,16 @@ class DatasetWriter:
             # save_episode() mutates the buffer. Handle both types here.
             if isinstance(episode_index, np.ndarray):
                 episode_index = episode_index.item() if episode_index.size == 1 else episode_index[0]
-            for cam_key in self._meta.image_keys:
+            # On an abandoned take, also drop the frames of video keys that were
+            # buffered to disk rather than streamed — depth always, and every
+            # video key under batched encoding. Deleting only the dtype="image"
+            # keys left those behind for the next take to encode, so a
+            # re-recorded episode silently contained frames from the take the
+            # operator threw away.
+            buffered_keys = list(self._meta.image_keys)
+            if drop_buffered_video:
+                buffered_keys += [k for k in self._meta.video_keys if k not in self.video_encoders]
+            for cam_key in buffered_keys:
                 img_dir = self._get_image_file_dir(episode_index, cam_key)
                 if img_dir.is_dir():
                     # safe-destruct: clear_episode_buffer: drop our episode temp images
