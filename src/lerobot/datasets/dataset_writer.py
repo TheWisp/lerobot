@@ -814,7 +814,18 @@ class DatasetWriter:
 
         TODO(depth-streaming): teach OurStreamingVideoEncoder to quantize and
         emit gray12le so depth gets the same near-instant save_episode() as RGB.
-        Until then depth recording keeps the slower buffered behaviour.
+        Until then depth recording keeps the slower buffered behaviour. When
+        that lands, the per-key codec selection from ``codex/openarm2-consolidate``
+        (commit e892002f3) is the piece to restore here::
+
+            encoder_cfg = self._depth_encoder if key in self._meta.depth_keys else self._rgb_encoder
+
+        That branch reached the same diagnosis independently and fixed codec
+        selection, but kept depth in the streaming map, so the rgb24 crash
+        survived. Excluding depth is what actually makes the tests pass; the
+        conditional above is only correct once the encoder can emit gray12le.
+        Expect a conflict here when openarm2-consolidate rebases — this
+        version supersedes it.
         """
         self.video_encoders = {}
         rgb_video_keys = [k for k in self._meta.video_keys if k not in self._meta.depth_keys]
