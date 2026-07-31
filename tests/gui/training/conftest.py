@@ -14,14 +14,11 @@ key), then verifies ``ssh <alias>`` works **without ``-i``**. Tests
 then construct :class:`SshTransport` with just the alias — no
 ``key_path`` field, matching the design.
 
-On any precondition failure it ``pytest.skip()``s the test cleanly —
-CI runners without sshd, hosts without tmux/ssh-keygen, etc. all
-degrade gracefully.
-
 Tests opt in via ``@pytest.mark.requires_ssh_loopback`` (registered in
-pyproject.toml). The collection hook below pre-filters by checking the
-fastest preconditions (binary availability) so dependent tests skip
-quickly without spinning up the fixture only to skip there.
+pyproject.toml). The collection hook below currently quarantines every
+such test because the tmux teardown path can terminate the host's
+entire graphical user session. Keep the fixture for future isolated
+VM/container coverage, but do not enable it on a developer workstation.
 """
 
 from __future__ import annotations
@@ -34,6 +31,17 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+# SAFETY: Keep the real SSH/tmux loopback suite disabled until the process-group
+# teardown in SshClient.stop() has been redesigned and verified in an isolated
+# VM/container.  On an Ubuntu GNOME workstation, running this suite has
+# repeatedly created tmux-spawn scopes and then caused the user's systemd
+# manager to activate exit.target, terminating the entire graphical session.
+# Availability of sshd/tmux is therefore NOT sufficient permission to run it.
+_SSH_LOOPBACK_DISABLED_REASON = (
+    "disabled for workstation safety: real SSH/tmux teardown can terminate "
+    "the entire systemd user session (GNOME exit.target)"
+)
 
 
 def _loopback_prereqs_present() -> tuple[bool, str]:
@@ -179,14 +187,12 @@ def ssh_loopback(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict]:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip ``requires_ssh_loopback`` items when the cheap prereqs aren't
-    met. The fixture itself will also skip on a per-test basis if the
-    handshake fails — this just avoids spinning up the fixture for tests
-    we already know will skip."""
-    ok, why = _loopback_prereqs_present()
-    if ok:
-        return
-    skip = pytest.mark.skip(reason=f"ssh loopback unavailable: {why}")
+    """Unconditionally quarantine real SSH/tmux loopback tests.
+
+    Do not weaken this to an availability check: these tests have repeatedly
+    terminated the host's graphical user session during tmux teardown.
+    """
+    skip = pytest.mark.skip(reason=_SSH_LOOPBACK_DISABLED_REASON)
     for item in items:
         if "requires_ssh_loopback" in item.keywords:
             item.add_marker(skip)

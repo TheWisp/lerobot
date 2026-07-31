@@ -31,6 +31,10 @@ transport:
 
 This is "shaped like ``test_end_to_end_natural_completion`` from
 ``test_orchestrator.py`` but with an SSH host."
+
+SAFETY: this module is quarantined by ``conftest.py``. It shares the
+real SSH/tmux teardown path that can terminate the host's entire
+systemd user session; do not re-enable it on a developer workstation.
 """
 
 from __future__ import annotations

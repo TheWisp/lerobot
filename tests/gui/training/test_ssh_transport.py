@@ -9,10 +9,11 @@
 ``ssh feit@127.0.0.1`` with a throwaway key (set up by the ``ssh_loopback``
 fixture in conftest.py).
 
-Skipped automatically when sshd / tmux / ssh-keygen aren't available
-locally — see the ``requires_ssh_loopback`` marker in pyproject.toml.
-CI runners need ``sudo systemctl start ssh`` before pytest; absent that
-these tests skip cleanly.
+SAFETY: this module is quarantined by ``conftest.py`` even when sshd,
+tmux, and ssh-keygen are available. Its real tmux teardown path has
+repeatedly terminated an Ubuntu workstation's entire systemd user
+session (including GNOME). Run it only after that teardown is fixed and
+the suite is moved to an isolated VM/container.
 
 These are the **unit-level** SSH tests (one method at a time). The
 contract-level orchestrator-over-SSH tests live in

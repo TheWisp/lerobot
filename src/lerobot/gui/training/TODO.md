@@ -2,6 +2,52 @@
 
 Tracked follow-ups for the training subsystem. Colocated with [`DESIGN.md`](DESIGN.md) so the rationale and the open work live next to each other.
 
+## HIGH PRIORITY — `SshClient.stop()` can terminate the developer's login session
+
+The real-SSH/tmux loopback suite (`test_ssh_transport.py`, `test_orchestrator_ssh.py`) is
+**quarantined unconditionally** in `tests/gui/training/conftest.py`. It is not a flaky-test
+skip: running it repeatedly killed the entire GNOME session on this workstation.
+
+Observed on 2026-07-30, three times in one day. Each time the systemd **user** manager
+activated `exit.target`, which tears down every process in the graphical session —
+editors, browsers, and any long-running job. Journal signature:
+
+```
+systemd[<user-mgr-pid>]: Activating special unit exit.target...
+systemd[<user-mgr-pid>]: Reached target exit.target - Exit the Session.
+gdm-x-session[...]: (II) Server terminated successfully (0). Closing log file.
+```
+
+Suspected mechanism — **not yet proven**, and deliberately not investigated on a live
+desktop, because reproducing it means destroying the session under test:
+
+1. `stop()` runs `tmux list-panes -F '#{pane_pid}' | xargs -r -I{} kill -TERM -{}`.
+   The leading `-` makes each argument a **process-group** ID, not a PID.
+2. Over ssh-to-`127.0.0.1` the remote host _is_ the developer's machine, so the tmux
+   server is the user's own default-socket server, parented under `systemd --user`.
+3. Signalling those process groups appears to cascade into the user session's scopes,
+   and systemd concludes the session has ended.
+
+Proposed fix, in order of confidence — **must be validated in a container or throwaway
+VM, never on a workstation**:
+
+- Give the fork its own tmux socket (`tmux -L lerobot-runs …`) on all four call sites in
+  `ssh_transport.py` (`new-session`, `has-session`, `list-panes`, `kill-session`). This
+  alone removes the shared-server blast radius and is worth doing for real remote hosts
+  too. Note it is a **migration**: sessions already running on the default socket become
+  invisible to `has-session`, so ship it with a one-time drain or a fallback probe.
+- Stop signalling process groups. Prefer `tmux kill-session` (tmux already SIGHUPs its
+  panes), or send to the specific pane PID without the `-` prefix. The process-group
+  broadcast exists so `docker run` forwards the signal to the container — verify that
+  requirement still holds before removing it, and if it does, scope it by confirming the
+  PID's PGID actually equals the PID first.
+- Only after both land, and after the suite has run green ≥10× in an isolated
+  container, consider re-enabling. Availability of `sshd`/`tmux` is **not** permission
+  to run it — that was the original guard, and it is what let this fire.
+
+Until then `pytest tests` is safe, but treat `tests/gui/training/` as hazardous and
+assume no CI-green signal covers this path.
+
 ## Recently fixed
 
 - **Form-pane scroll** — picking SmolVLA (38 scalar fields) made the form taller than the viewport with no scrollbar; the bottom of the form (Start / Cancel buttons) was clipped. Root cause: `#training-detail` inherited the parent `.tab-content { overflow: hidden }` and didn't add its own `overflow-y: auto`. Sibling `.model-detail` did this correctly; `#training-detail` was the new container I added and missed the pattern. Fixed by mirroring `.model-detail`'s rule.
