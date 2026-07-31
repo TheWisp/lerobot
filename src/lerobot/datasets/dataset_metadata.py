@@ -39,6 +39,7 @@ from .io_utils import (
     load_episodes,
     load_info,
     load_stats,
+    load_subtasks,
     load_tasks,
     write_info,
     write_stats,
@@ -180,6 +181,10 @@ class LeRobotDatasetMetadata:
         self.info = load_info(self.root)
         check_version_compatibility(self.repo_id, self._version, CODEBASE_VERSION)
         self.tasks = load_tasks(self.root)
+        # fork: None for datasets without a subtask lookup table, which is most
+        # of them. Consumers (GUI feature editor, set_feature_values) treat None
+        # as "no subtasks" rather than an error.
+        self.subtasks = load_subtasks(self.root)
         self.episodes = load_episodes(self.root)
         self.stats = load_stats(self.root)
 
@@ -783,6 +788,7 @@ class LeRobotDatasetMetadata:
         _validate_feature_names(features)
 
         obj.tasks = None
+        obj.subtasks = None  # fork: populated lazily once subtask edits are saved
         obj.episodes = None
         obj.stats = None
         obj.info = create_empty_dataset_info(

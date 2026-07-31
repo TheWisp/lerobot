@@ -38,6 +38,7 @@ from .language import LANGUAGE_COLUMNS
 from .utils import (
     DEFAULT_DATA_FILE_SIZE_IN_MB,
     DEFAULT_EPISODES_PATH,
+    DEFAULT_SUBTASKS_PATH,
     DEFAULT_TASKS_PATH,
     EPISODES_DIR,
     INFO_PATH,
@@ -199,6 +200,22 @@ def load_tasks(local_dir: Path) -> pandas.DataFrame:
     tasks = pd.read_parquet(local_dir / DEFAULT_TASKS_PATH)
     tasks.index.name = "task"
     return tasks
+
+
+def load_subtasks(local_dir: Path) -> pandas.DataFrame | None:
+    """Load the ``subtask_index`` lookup table, or None when the dataset has none.
+
+    fork-only. Most datasets carry no subtasks, so a missing file is the normal
+    case and returns None rather than raising — callers treat None as "this
+    dataset does not use subtasks".
+
+    Pre: ``local_dir`` is a dataset root.
+    Post: returns the ``meta/subtasks.parquet`` frame, or None if absent.
+    """
+    subtasks_path = local_dir / DEFAULT_SUBTASKS_PATH
+    if subtasks_path.exists():
+        return pd.read_parquet(subtasks_path)
+    return None
 
 
 def write_episodes(episodes: Dataset, local_dir: Path) -> None:

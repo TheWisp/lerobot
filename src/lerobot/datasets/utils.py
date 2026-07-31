@@ -92,6 +92,12 @@ CHUNK_FILE_PATTERN = "chunk-{chunk_index:03d}/file-{file_index:03d}"
 IMAGE_FILE_PATTERN = "frame-{frame_index:06d}.png"
 DEPTH_FILE_PATTERN = "frame-{frame_index:06d}.tiff"
 DEFAULT_TASKS_PATH = "meta/tasks.parquet"
+# fork: lookup table backing the per-frame ``subtask_index`` feature the GUI's
+# feature editor reads and writes. Upstream replaced this design with the
+# ``language_persistent`` column in ``datasets/language.py``; until the editor is
+# ported (see gui/TODO.md), both models coexist and this one stays authoritative
+# for ``subtask_index``.
+DEFAULT_SUBTASKS_PATH = "meta/subtasks.parquet"
 DEFAULT_EPISODES_PATH = EPISODES_DIR + "/" + CHUNK_FILE_PATTERN + ".parquet"
 DEFAULT_DATA_PATH = DATA_DIR + "/" + CHUNK_FILE_PATTERN + ".parquet"
 DEFAULT_VIDEO_PATH = VIDEO_DIR + "/{video_key}/" + CHUNK_FILE_PATTERN + ".mp4"
