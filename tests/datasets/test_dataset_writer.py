@@ -245,6 +245,53 @@ def test_depth_keys_are_excluded_from_streaming_encoders(tmp_path):
     )
 
 
+def test_rgb_and_depth_episode_saves_on_the_default_record_path(tmp_path):
+    """A mixed RGB + depth dataset must record end to end, not just construct.
+
+    Regression: excluding depth from the streaming encoders is only half the
+    change. save_episode's per-camera branch iterates every ``meta.video_keys``
+    but reads ``per_camera_temp_paths``, which now holds RGB only — so depth
+    raised ``KeyError`` at save time on the default record path
+    (``use_per_camera_streaming`` defaults on for ordinary recording).
+
+    The structural test above passed throughout that bug because it never
+    called ``save_episode()``. This one drives the whole path.
+
+    Post: both an .mp4 for the RGB key and one for the depth key exist.
+    """
+    pytest.importorskip("av", reason="av is required for video encoding (install lerobot[dataset])")
+    features = {
+        "observation.images.rgb": {"dtype": "video", "shape": (32, 32, 3), "names": ["h", "w", "c"]},
+        "observation.images.depth": {
+            "dtype": "video",
+            "shape": (32, 32, 1),
+            "names": ["h", "w", "c"],
+            "info": {"is_depth_map": True},
+        },
+        "state": {"dtype": "float32", "shape": (6,), "names": None},
+    }
+    dataset = LeRobotDataset.create(
+        repo_id=DUMMY_REPO_ID, fps=DEFAULT_FPS, features=features, root=tmp_path / "ds"
+    )
+    assert dataset.writer.video_encoders, "expected the per-camera streaming path to be active"
+
+    for _ in range(4):
+        dataset.add_frame(
+            {
+                "task": "Dummy task",
+                "observation.images.rgb": np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8),
+                "observation.images.depth": np.random.randint(0, 4096, (32, 32, 1), dtype=np.uint16),
+                "state": torch.zeros(6),
+            }
+        )
+    dataset.save_episode()
+
+    videos = list((tmp_path / "ds" / "videos").rglob("*.mp4"))
+    written = {p.parent.parent.name for p in videos} | {p.parent.name for p in videos}
+    assert any("rgb" in name for name in written), f"no RGB video written, got {sorted(written)}"
+    assert any("depth" in name for name in written), f"no depth video written, got {sorted(written)}"
+
+
 # ── clear / lifecycle ────────────────────────────────────────────────
 
 

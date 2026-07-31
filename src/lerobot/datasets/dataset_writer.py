@@ -407,11 +407,14 @@ class DatasetWriter:
 
         if use_per_camera:
             for video_key in self._meta.video_keys:
-                ep_metadata.update(
-                    self._save_episode_video(
-                        video_key, episode_index, temp_path=per_camera_temp_paths[video_key]
-                    )
-                )
+                # Only RGB keys have a streaming encoder, so only they have a
+                # finished temp file here. Depth was buffered to PNG/TIFF by
+                # add_frame and still needs encoding, with the depth encoder —
+                # which _save_episode_video picks when temp_path is None.
+                # Indexing per_camera_temp_paths unconditionally raises KeyError
+                # on any RGB+depth dataset recorded on the default path.
+                temp_path = per_camera_temp_paths.get(video_key)
+                ep_metadata.update(self._save_episode_video(video_key, episode_index, temp_path=temp_path))
             tmp_videos_root = self._root / "tmp_videos"
             if tmp_videos_root.exists():
                 with contextlib.suppress(OSError):
