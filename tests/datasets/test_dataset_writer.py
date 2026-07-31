@@ -211,6 +211,40 @@ def test_video_episode_recording_produces_mp4(tmp_path):
     assert len(mp4_files) > 0
 
 
+def test_depth_keys_are_excluded_from_streaming_encoders(tmp_path):
+    """Depth video keys must not get a per-camera streaming encoder.
+
+    Regression from the 2026-07 upstream sync: ``meta.video_keys`` includes
+    depth features, so ``_init_video_encoders`` handed depth frames to the
+    fork's RGB-only streaming encoder. That encoder calls
+    ``av.VideoFrame.from_ndarray(frame, format="rgb24")`` and rejects depth's
+    ``(H, W, 1)`` arrays with ``Unexpected numpy array shape``, and it has no
+    notion of the meters->12-bit quantization depth requires.
+
+    Post: RGB keys get a streaming encoder, depth keys do not, and depth still
+    records through the buffered path.
+    """
+    pytest.importorskip("av", reason="av is required for video encoding (install lerobot[dataset])")
+    features = {
+        "observation.images.rgb": {"dtype": "video", "shape": (32, 32, 3), "names": ["h", "w", "c"]},
+        "observation.images.depth": {
+            "dtype": "video",
+            "shape": (32, 32, 1),
+            "names": ["h", "w", "c"],
+            "info": {"is_depth_map": True},
+        },
+    }
+    dataset = LeRobotDataset.create(
+        repo_id=DUMMY_REPO_ID, fps=DEFAULT_FPS, features=features, root=tmp_path / "ds"
+    )
+
+    encoders = dataset.writer.video_encoders
+    assert "observation.images.rgb" in encoders, "RGB keys must keep the streaming encoder"
+    assert "observation.images.depth" not in encoders, (
+        "depth key was handed to the RGB-only streaming encoder — it will fail on (H, W, 1)"
+    )
+
+
 # ── clear / lifecycle ────────────────────────────────────────────────
 
 

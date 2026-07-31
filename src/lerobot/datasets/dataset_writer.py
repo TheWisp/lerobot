@@ -313,8 +313,10 @@ class DatasetWriter:
                     f"An element of the frame is not in the features. '{key}' not in '{self._meta.features.keys()}'."
                 )
 
-            if self._meta.features[key]["dtype"] == "video" and self.video_encoders:
-                # Per-camera streaming encoder (HEAD's path); skip recording in episode_buffer
+            if self._meta.features[key]["dtype"] == "video" and key in self.video_encoders:
+                # Per-camera streaming encoder (HEAD's path); skip recording in episode_buffer.
+                # Depth keys are deliberately absent from video_encoders (see
+                # _init_video_encoders) and fall through to the buffered path below.
                 self.video_encoders[key].push_frame(frame[key])
                 continue
             elif self._meta.features[key]["dtype"] == "video" and self._streaming_encoder is not None:
@@ -799,11 +801,26 @@ class DatasetWriter:
         return tmp_dir / f"{video_key}.mp4"
 
     def _init_video_encoders(self) -> None:
-        """Initialize and start per-camera streaming video encoders for video keys."""
+        """Initialize and start per-camera streaming video encoders for RGB video keys.
+
+        Depth keys are excluded on purpose. ``meta.video_keys`` covers every
+        feature stored as video, depth included, but the fork's streaming
+        encoder is RGB-only: it calls ``av.VideoFrame.from_ndarray(frame,
+        format="rgb24")``, which rejects the ``(H, W, 1)`` arrays depth
+        produces. Depth also needs the meters->12-bit quantization step in
+        ``depth_utils.quantize_depth`` that the RGB path has no notion of.
+        Leaving depth out routes it through the buffered encode path, which
+        already applies the depth encoder config correctly.
+
+        TODO(depth-streaming): teach OurStreamingVideoEncoder to quantize and
+        emit gray12le so depth gets the same near-instant save_episode() as RGB.
+        Until then depth recording keeps the slower buffered behaviour.
+        """
         self.video_encoders = {}
-        if not self._meta.video_keys:
+        rgb_video_keys = [k for k in self._meta.video_keys if k not in self._meta.depth_keys]
+        if not rgb_video_keys:
             return
-        for video_key in self._meta.video_keys:
+        for video_key in rgb_video_keys:
             self.video_encoders[video_key] = OurStreamingVideoEncoder(
                 fps=self._meta.fps, vcodec=self._rgb_encoder.vcodec
             )
