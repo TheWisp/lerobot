@@ -504,6 +504,27 @@ def _close_preview_cameras() -> None:
     _preview_camera_info.clear()
 
 
+def release_preview_cameras() -> int:
+    """Release every preview camera handle. Returns how many were held.
+
+    The Robot tab opens a V4L2 / librealsense handle per previewed camera and
+    keeps it for the lifetime of the GUI. A subprocess launched while previews
+    are open then competes for the same device: opening ``/dev/videoN`` a second
+    time at a different resolution fails outright with ConnectionError, and on
+    some UVC hardware the kernel drops and re-enumerates the device, after which
+    every read on the original handle returns ``status=False``.
+
+    Callers: the server shutdown hook, and the run launch path — anything about
+    to hand a camera to another process.
+
+    Post: no preview handles remain open; the count released is returned so the
+    caller can say so in a log line.
+    """
+    held = len(_preview_cameras)
+    _close_preview_cameras()
+    return held
+
+
 def cleanup_in_process_resources() -> None:
     """Disconnect every in-process hardware resource the robot router holds.
 

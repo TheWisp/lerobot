@@ -394,6 +394,20 @@ async def _launch_subprocess(
     _active_command = command
     _active_config = config
 
+    # Release camera previews before the subprocess opens the same devices.
+    # The Robot tab holds a V4L2 / librealsense handle per previewed camera for
+    # as long as the GUI runs — nothing closed them except server shutdown — so a
+    # run launched with previews open competed with the GUI for its own cameras.
+    # The complementary guard (refusing to *open* a preview while a run is
+    # active) already exists on /api/robot/detect-cameras; this is the other
+    # half. Imported here rather than at module scope because robot.py imports
+    # is_run_active from this module.
+    from lerobot.gui.api.robot import release_preview_cameras
+
+    released = release_preview_cameras()
+    if released:
+        logger.info(f"Released {released} camera preview(s) before launching {command}")
+
     # Close stale obs reader — the new process will create fresh shared memory
     # segments; any existing reader is mapped to old (possibly unlinked) segments.
     _close_obs_reader()
