@@ -106,6 +106,10 @@ async def test_record_then_replay_round_trip(tmp_path: Path):
             reset_time_s=1,
             fps=30,
             video=True,
+            # No audio: a test must not depend on the host having working TTS,
+            # and must not make noise on someone's machine. say() is bounded
+            # now, but this keeps the flow under test to the data path.
+            play_sounds=False,
         )
     )
     rc = await _wait_for_exit(timeout_s=180)
