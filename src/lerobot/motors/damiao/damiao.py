@@ -906,10 +906,13 @@ class DamiaoMotorsBus(MotorsBusBase):
         total_ms = (time.perf_counter() - refresh_start) * 1e3
         now = time.monotonic()
         stale_age_ms = {
+            # Bind the timestamp once so mypy can narrow the None guard — the
+            # double dict access defeated narrowing and failed the strict
+            # lerobot.motors mypy gate, blocking every commit on this branch.
             motor: (
                 None
-                if self._last_state_update_monotonic[motor] is None
-                else round((now - self._last_state_update_monotonic[motor]) * 1e3, 3)
+                if (ts := self._last_state_update_monotonic[motor]) is None
+                else round((now - ts) * 1e3, 3)
             )
             for motor in missing_motors
         }
