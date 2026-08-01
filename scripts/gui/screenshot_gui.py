@@ -334,7 +334,13 @@ class GuiScreenshotSession:
 
     def _ffmpeg_capture(self) -> None:
         w, h = self.window_size
-        _log(f"ffmpeg x11grab {w}x{h} -> {self.output_path}")
+        # Grab the display Chrome was actually told to render on. Hardcoding
+        # ":0.0" fails outright on any session that is not display :0 — a
+        # second GNOME login, a nested Xephyr, or a machine whose session was
+        # restarted onto :1 — with "Cannot open display :0.0".
+        display = os.environ.get("DISPLAY", ":0")
+        screen = display if "." in display.rpartition(":")[2] else f"{display}.0"
+        _log(f"ffmpeg x11grab {w}x{h} on {screen} -> {self.output_path}")
         subprocess.run(
             [
                 "ffmpeg",
@@ -346,7 +352,7 @@ class GuiScreenshotSession:
                 "-video_size",
                 f"{w}x{h}",
                 "-i",
-                ":0.0+0,0",
+                f"{screen}+0,0",
                 "-frames:v",
                 "1",
                 str(self.output_path),
