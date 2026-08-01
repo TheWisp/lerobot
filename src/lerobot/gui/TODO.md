@@ -179,6 +179,8 @@ Active workstream tracked in [`training/DESIGN.md`](training/DESIGN.md). Phased 
 
 ## Run Tab
 
+- [High] **Sticky last-used Run form selections.** Long-standing pain point. The Robot dropdown (and the rest of the Run form) resets to defaults on every page load, and the default is whatever profile sorts first alphabetically — today that is `virtual_so107_follower`, which sorts before `white`. In two separate real sessions the operator launched against the virtual robot without noticing, burning a run and a debugging round each time. The Dataset selector no longer moves on its own (fixed — only the user changes it), but nothing remembers the user's choices across reloads. Persist the last-used selections (robot, teleop, FPS, dataset mode, task) — server-side beats localStorage so it survives browser changes; a small `run_form_defaults.json` next to the profile store would do. A hardware profile must never be silently substituted with the virtual one, and vice versa.
+
 - [Low] Text output freezes after a while — teleoperate uses ANSI cursor-up in piped stdout
 - [Low] Rerun web viewer has ~200ms visual lag (Rerun 0.26 limitation)
 - [Low] Replay FPS setting doesn't seem to affect playback speed — remove if not useful
