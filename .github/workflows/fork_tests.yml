@@ -1,0 +1,108 @@
+# Fork-side test suite for TheWisp/lerobot.
+#
+# Upstream's fast_tests.yml is gated to huggingface/lerobot for two reasons
+# that used to be fatal here and are both addressed in this workflow:
+#
+#   1. Hub auth: upstream's job logs into HF with an org token. This fork's
+#      suite excludes `hub_live` tests by default (pyproject addopts) and the
+#      rest run anonymously, so no token is required.
+#   2. LFS bandwidth: test fixtures are ~181 MB of LFS objects, and the free
+#      LFS bandwidth quota (1 GB/month) dies after a handful of uncached
+#      checkouts. LFS objects are therefore cached in the Actions cache and
+#      quota is only spent when the fixture set actually changes.
+#
+# Scope: base + test + gui extras, plus playwright (overlaid, since it is not
+# a declared dependency yet). This runs the fork's guardrail suites — CLI
+# contract, e2e Run-tab flows on the virtual robot, operator sequences,
+# import-integrity/merge guards — that otherwise only run on developer
+# machines. Runner is CPU-only: CUDA-gated tests skip here and remain covered
+# by local runs.
+name: Fork Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/fork_tests.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/fork_tests.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.8.0"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  fork-pytest:
+    if: github.repository == 'TheWisp/lerobot'
+    name: Fork Pytest (cpu, test+gui extras)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          lfs: false
+
+      # LFS via Actions cache: spend bandwidth quota only when fixtures change.
+      - name: Build LFS asset id
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+
+      - name: Cache LFS objects
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+
+      - name: Pull LFS objects (cache miss only downloads)
+        run: |
+          git lfs pull
+          git lfs checkout
+
+      - name: Install apt dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y build-essential git \
+          curl libglib2.0-0 libegl1-mesa-dev ffmpeg \
+          libusb-1.0-0-dev speech-dispatcher libgeos-dev portaudio19-dev
+
+      - name: Setup uv and Python
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install (base + test + gui, playwright overlay)
+        run: |
+          uv sync --locked --extra test --extra gui
+          uv run --with playwright python -m playwright install chromium --with-deps
+
+      # tests/policies is excluded: the policy suites accumulate loaded VLA
+      # models in one pytest process (~39 GB RSS measured locally — it OOM-kills
+      # a workstation, and the 7 GB GitHub runner has no chance). Those suites
+      # are upstream's to run on their infrastructure; this workflow covers the
+      # fork's surfaces: gui, datasets, robots, scripts, utils, mcp, hvla.
+      - name: Run suite
+        env:
+          HF_TOKEN: ""
+          HUGGING_FACE_HUB_TOKEN: ""
+        run: |
+          uv run --with playwright python -m pytest tests --ignore=tests/policies \
+            -q --durations=15 -p no:cacheprovider
