@@ -643,6 +643,15 @@ async def scan_ports() -> list[dict]:
     return ports
 
 
+# Cache for _probe_motor_spec, keyed on the profile's content.
+#
+# Deriving the probe motor means constructing a whole robot object, which for a
+# bimanual SO-107 measures ~1.1 s — paid before the motor moves, on every Wiggle
+# click. The answer is a pure function of the profile, so it is cached. Keyed on
+# content rather than robot type so editing a profile cannot serve a stale spec.
+_MOTOR_SPEC_CACHE: dict[str, tuple[type, str, object]] = {}
+
+
 def _probe_motor_spec(profile: dict) -> tuple[type, str, object]:
     """Derive the port-probe motor from the robot's own definition.
 
@@ -654,12 +663,21 @@ def _probe_motor_spec(profile: dict) -> tuple[type, str, object]:
     may be unassigned mid-setup (identifying ports is why the user is here) —
     they are dummy-filled for construction; no hardware is touched.
     """
+    import copy
     import dataclasses
 
     import draccus
 
     from lerobot.robots.config import RobotConfig
     from lerobot.robots.utils import make_robot_from_config
+
+    cache_key = json.dumps(profile, sort_keys=True, default=str)
+    cached = _MOTOR_SPEC_CACHE.get(cache_key)
+    if cached is not None:
+        bus_cls, motor_name, motor = cached
+        # Hand out a copy: the caller passes the motor into a bus constructor,
+        # and a shared instance would leak any mutation into later probes.
+        return bus_cls, motor_name, copy.deepcopy(motor)
 
     _ensure_configs_loaded()
 
@@ -681,7 +699,8 @@ def _probe_motor_spec(profile: dict) -> tuple[type, str, object]:
         raise ValueError(f"Robot type {profile['type']!r} has no motor bus to probe")
 
     motor_name, motor = next(iter(bus.motors.items()))
-    return type(bus), motor_name, motor
+    _MOTOR_SPEC_CACHE[cache_key] = (type(bus), motor_name, motor)
+    return type(bus), motor_name, copy.deepcopy(motor)
 
 
 def _wiggle_first_motor(port: str, profile: dict) -> dict:

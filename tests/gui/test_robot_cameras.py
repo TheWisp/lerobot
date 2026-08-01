@@ -99,3 +99,72 @@ class TestPreviewReleaseOnLaunch:
         assert robot_mod._preview_camera_info == []
         # Idempotent: a second call on an empty set is a no-op, not an error.
         assert release_preview_cameras() == 0
+
+
+class TestProbeMotorSpecCache:
+    """Wiggle must not rebuild a whole robot before every motor twitch.
+
+    _probe_motor_spec needs only the bus class and the first motor, but derived
+    them by constructing the entire robot via make_robot_from_config — measured
+    at ~1.1s for a bimanual SO-107, paid before the motor moves on every Wiggle
+    click. Not a regression (identical on main), just slow on an interactive
+    path, and the answer is a pure function of the profile.
+    """
+
+    def _profile(self):
+        return {
+            "type": "bi_so107_follower",
+            "fields": {"left_arm_port": "/dev/ttyACM0", "right_arm_port": "/dev/ttyACM1"},
+        }
+
+    def test_repeat_probe_is_served_from_cache(self):
+        import lerobot.gui.api.robot as robot_mod
+        from lerobot.gui.api.robot import _probe_motor_spec
+
+        robot_mod._MOTOR_SPEC_CACHE.clear()
+        profile = self._profile()
+        try:
+            first = _probe_motor_spec(profile)
+        except Exception as e:  # robot extra not installed in this env
+            pytest.skip(f"bi_so107_follower unavailable here: {type(e).__name__}")
+
+        assert len(robot_mod._MOTOR_SPEC_CACHE) == 1, "first probe did not populate the cache"
+
+        with patch("lerobot.robots.utils.make_robot_from_config") as never_called:
+            second = _probe_motor_spec(profile)
+            assert not never_called.called, "second probe rebuilt the robot instead of using the cache"
+
+        assert second[0] is first[0], "bus class changed between probes"
+        assert second[1] == first[1], "motor name changed between probes"
+
+    def test_edited_profile_is_not_served_a_stale_spec(self):
+        """Keyed on content, so changing a field must miss the cache."""
+        import lerobot.gui.api.robot as robot_mod
+        from lerobot.gui.api.robot import _probe_motor_spec
+
+        robot_mod._MOTOR_SPEC_CACHE.clear()
+        profile = self._profile()
+        try:
+            _probe_motor_spec(profile)
+        except Exception as e:
+            pytest.skip(f"bi_so107_follower unavailable here: {type(e).__name__}")
+
+        edited = {**profile, "fields": {**profile["fields"], "left_arm_port": "/dev/ttyACM9"}}
+        _probe_motor_spec(edited)
+        assert len(robot_mod._MOTOR_SPEC_CACHE) == 2, (
+            "an edited profile reused the previous entry — a stale motor spec would be probed"
+        )
+
+    def test_cached_motor_is_a_copy(self):
+        """The caller hands the motor to a bus constructor; sharing would leak mutation."""
+        import lerobot.gui.api.robot as robot_mod
+        from lerobot.gui.api.robot import _probe_motor_spec
+
+        robot_mod._MOTOR_SPEC_CACHE.clear()
+        profile = self._profile()
+        try:
+            first = _probe_motor_spec(profile)
+        except Exception as e:
+            pytest.skip(f"bi_so107_follower unavailable here: {type(e).__name__}")
+        second = _probe_motor_spec(profile)
+        assert first[2] is not second[2], "probes share one Motor instance"
