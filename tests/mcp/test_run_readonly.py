@@ -169,7 +169,18 @@ class TestGetLatencyMetrics:
 
 
 class TestGetRltMetrics:
-    def test_no_active_run_returns_idle_stub(self, mcp):
+    def test_no_active_run_returns_idle_stub(self, mcp, monkeypatch, tmp_path):
+        # load_metrics_from_file(None) falls back to the rlt metrics module's
+        # global _metrics_path (left set by any earlier RLT test in the same
+        # process, pointing at that test's still-existing tmp file) and then
+        # to outputs/rlt_online/metrics.json in the CWD. Both fallbacks must
+        # miss for "no active run" to mean anything — without this the test
+        # reads whatever a previous test left behind and fails suite-order-
+        # dependently (observed: mode == "DEPLOY" from an earlier RLT test).
+        from lerobot.policies.hvla.rlt import metrics as rlt_metrics
+
+        monkeypatch.setattr(rlt_metrics, "_metrics_path", None, raising=False)
+        monkeypatch.chdir(tmp_path)
         with patch.object(run_module, "_active_config", None):
             result = _call(mcp, "get_rlt_metrics", {})
         assert result["mode"] == "IDLE"
