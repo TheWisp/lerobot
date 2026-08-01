@@ -41,6 +41,7 @@ PolicyAction = torch.Tensor
 RobotAction = dict[str, Any]
 EnvAction = np.ndarray
 RobotObservation = dict[str, Any]
+BatchType = dict[str, Any]
 
 
 @dataclass(frozen=True)
