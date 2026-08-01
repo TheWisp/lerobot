@@ -926,29 +926,20 @@ function refreshRunDatasetSelects() {
     // Refresh teleop record dataset selector
     const recordSel = document.getElementById('run-teleop-record-dataset');
     if (recordSel) {
+        // Restore the user's selection verbatim, like every other select here.
+        //
+        // This used to special-case "__new__": after a recording it tried to
+        // re-point the selector at the dataset that now exists, falling back to
+        // "None (pure teleop)" when it couldn't find it. Two things made that
+        // wrong. The match was dead code — repo_ids are date-stamped at
+        // creation, so the typed name never matches what got created. And the
+        // fallback silently changed the NEXT launch from record to teleop: a
+        // user who aborted a take, fixed their robot selection and hit Launch
+        // again got a teleop session with no recording, no phases and no audio,
+        // with nothing telling them the mode had changed. The selector is the
+        // record/teleop mode switch, so only the user moves it.
         const prev = recordSel.value;
         recordSel.innerHTML = _recordDatasetOptions();
-        // If user was creating a new dataset, the recording is done — check if it
-        // now exists as an opened dataset, otherwise reset to "None"
-        if (prev === '__new__') {
-            const newName = document.getElementById('run-teleop-new-dataset-name')?.value?.trim();
-            let matched = false;
-            if (newName) {
-                const ds = window.datasets || {};
-                for (const id of Object.keys(ds)) {
-                    if (ds[id].repo_id === newName || ds[id].repo_id?.endsWith('/' + newName)) {
-                        recordSel.value = `existing:${id}`;
-                        matched = true;
-                        break;
-                    }
-                }
-            }
-            if (!matched) {
-                recordSel.value = '';  // Reset to "None (pure teleop)"
-            }
-            _onRecordDatasetChange();
-            return;
-        }
         recordSel.value = prev;
     }
     // Refresh policy dataset selector
