@@ -169,7 +169,17 @@ def format_big_number(num, precision=0):
     return num
 
 
+# Longest a spoken cue may delay a run. Generous for real speech, short enough
+# that a host without working TTS is not held up noticeably.
+SAY_BLOCKING_TIMEOUT_S = 10
+
+
 def say(text: str, blocking: bool = False):
+    """Speak `text`, if the host can. Never raises, never blocks indefinitely.
+
+    Postcondition: returns within ``SAY_BLOCKING_TIMEOUT_S`` when ``blocking``,
+    whether or not speech actually happened.
+    """
     system = platform.system()
 
     if system == "Darwin":
@@ -192,7 +202,17 @@ def say(text: str, blocking: bool = False):
         raise RuntimeError("Unsupported operating system for text-to-speech.")
 
     if blocking:
-        subprocess.run(cmd, check=True)
+        # Bounded and non-fatal on purpose. `spd-say --wait` blocks until the
+        # utterance finishes, which never happens on a host with no working
+        # speech-dispatcher — a headless CI runner, a fresh machine, a container.
+        # The two blocking call sites are both end-of-run announcements
+        # ("Stop recording", "Replaying episode"), so an unbounded wait there
+        # hangs a finished recording forever instead of letting it exit.
+        # A spoken cue is a nicety; never let it decide whether a run terminates.
+        try:
+            subprocess.run(cmd, check=True, timeout=SAY_BLOCKING_TIMEOUT_S)
+        except (subprocess.SubprocessError, OSError) as e:
+            logging.debug(f"Text-to-speech unavailable, continuing without it: {e}")
     else:
         subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if system == "Windows" else 0)
 
