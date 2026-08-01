@@ -174,6 +174,11 @@ def feeder(tmp_path, gui_url):
 
 
 # --- CDP helpers -------------------------------------------------------------
+# screenshot_gui drives Chrome over CDP via websocket-client, which is a
+# hand-installed dev tool, not a declared dependency — on a bare CI env the
+# module-level import fails collection for the whole file. Skip instead:
+# these tests need a real X display and Chrome anyway.
+pytest.importorskip("websocket", reason="websocket-client not installed (screenshot_gui CDP dependency)")
 from screenshot_gui import GuiScreenshotSession  # noqa: E402
 
 
