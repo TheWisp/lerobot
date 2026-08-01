@@ -182,6 +182,7 @@ def test_test_button_flips_state_during_probe(page):
     pg, probe_box = page
     probe_box["delay_s"] = 1.0  # slow enough to observe the pending state
     pg.click("#training-add-host-btn")
+    pg.fill("#add-host-name", "example-host")  # Save also gates on a valid Name
     pg.fill("#add-host-host", "user@example-host")
     pg.click("#add-host-test-btn")
     # While the probe is in flight: label flipped, button disabled.
@@ -212,6 +213,7 @@ def test_failed_probe_keeps_save_disabled(page):
 def test_editing_after_green_probe_invalidates(page):
     pg, _ = page
     pg.click("#training-add-host-btn")
+    pg.fill("#add-host-name", "example-host")  # Save also gates on a valid Name
     pg.fill("#add-host-host", "user@example-host")
     pg.click("#add-host-test-btn")
     pg.wait_for_selector(".probe-check.ok", timeout=5_000)
@@ -227,14 +229,14 @@ def test_save_adds_host_to_sidebar(page, tmp_path):
     pg.click("#training-add-host-btn")
     pg.fill("#add-host-name", "lab-test")
     pg.fill("#add-host-host", "user@example-host")
-    pg.fill("#add-host-display-name", "Lab Test Box")
     pg.click("#add-host-test-btn")
     pg.wait_for_selector(".probe-check.ok", timeout=5_000)
     pg.click("#add-host-save-btn")
-    # Dialog closes; sidebar host list refreshes with the new entry.
+    # Dialog closes; sidebar host list refreshes with the new entry, labelled by
+    # Name — the dialog dropped its separate display-name field.
     pg.wait_for_selector("#add-host-overlay", state="hidden", timeout=5_000)
     pg.wait_for_function(
-        "document.getElementById('training-hosts-info').textContent.includes('Lab Test Box')",
+        "document.getElementById('training-hosts-info').textContent.includes('lab-test')",
         timeout=5_000,
     )
     # Backed by a real file in the (tmp) HOSTS_DIR.
@@ -274,13 +276,14 @@ def test_ephemeral_host_form_toggles_and_saves(page, tmp_path):
     pg, _ = page
     pg.click("#training-add-host-btn")
     pg.select_option("#add-host-type", value="ephemeral")
-    # SSH host field + Test button hidden; ephemeral fields shown; Save live.
+    # SSH host field + Test button hidden; ephemeral fields shown.
     assert not pg.is_visible("#add-host-ssh-fields")
     assert not pg.is_visible("#add-host-test-btn")
     assert pg.is_visible("#add-host-ephemeral-fields")
-    assert not pg.is_disabled("#add-host-save-btn")
 
     pg.fill("#add-host-name", "neb-l40s")
+    # Save goes live on the Name alone — ephemeral hosts skip the probe gate.
+    assert not pg.is_disabled("#add-host-save-btn")
     pg.select_option("#add-host-gpu", value="L40S")
     pg.fill("#add-host-ttl", "12")
     pg.click("#add-host-save-btn")
