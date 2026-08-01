@@ -1645,7 +1645,11 @@ async function stopRun() {
             showToast('Error', err.detail || 'Failed to stop', 'error');
             return;
         }
-        showToast('Stopped', 'Process stopped', 'info');
+        const data = await res.json().catch(() => ({}));
+        // A graceful stop means the record subprocess saved the buffered
+        // episode before exiting; say so, because the operator's next question
+        // after stopping mid-reset is whether their episode survived.
+        showToast('Stopped', data.graceful ? 'Episode saved, recorder exited cleanly' : 'Process stopped', 'info');
         stopObsStreamViewer();
         updateRunUI(false);
     } catch (e) {

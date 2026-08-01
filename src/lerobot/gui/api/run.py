@@ -1120,23 +1120,64 @@ async def send_control(req: ControlRequest) -> dict:
     return {"status": "sent", "cmd": req.cmd, "pid": proc.pid}
 
 
+# How long Stop waits for a record run to save and exit on its own before
+# escalating to SIGINT. Save runs AFTER the reset phase, so at the moment the
+# operator clicks Stop a finished episode is usually still only in memory;
+# killing before save_episode() completes silently discards it. The window
+# must cover a buffered video encode of one episode.
+STOP_GRACE_S = 30.0
+
+# True while a graceful stop is waiting on the subprocess. A second Stop click
+# during the wait escalates to SIGINT immediately instead of queueing another
+# grace period — the operator pressing Stop twice means "kill it".
+_graceful_stop_inflight = False
+
+
 @router.post("/stop")
 async def stop_process() -> dict:
-    global _active_process, _active_command, _active_config, _active_phase
+    global _active_process, _active_command, _active_config, _active_phase, _graceful_stop_inflight
 
-    if _active_process is None:
+    # Bind once: every await below yields, and the globals can be cleared by a
+    # concurrent caller in the meantime (same race send_control guards against).
+    proc = _active_process
+    if proc is None:
         raise HTTPException(409, "No active process to stop")
+    pid = proc.pid
 
-    pid = _active_process.pid
-    try:
-        _active_process.send_signal(signal.SIGINT)
+    # Record runs get a graceful stop first. The subprocess's stop_recording
+    # command skips the reset phase, SAVES the buffered episode and exits
+    # cleanly — whereas SIGINT during the reset phase discards an episode the
+    # operator already finished recording. Observed in the field: record one
+    # episode, press Stop during reset, dataset ends up empty.
+    graceful = False
+    if (
+        _active_command == "record"
+        and proc.stdin is not None
+        and proc.returncode is None
+        and not _graceful_stop_inflight
+    ):
+        _graceful_stop_inflight = True
         try:
-            await asyncio.wait_for(_active_process.wait(), timeout=5.0)
-        except _TIMEOUT_EXCS:
-            _active_process.kill()
-            await _active_process.wait()
-    except ProcessLookupError:
-        pass
+            proc.stdin.write((json.dumps({"v": 1, "cmd": "stop_recording"}) + "\n").encode())
+            await proc.stdin.drain()
+            _append_output(f"\n--- Stop requested: finishing save, then exiting (PID {pid}) ---\n")
+            await asyncio.wait_for(proc.wait(), timeout=STOP_GRACE_S)
+            graceful = True
+        except (*_TIMEOUT_EXCS, BrokenPipeError, ConnectionResetError, OSError) as e:
+            logger.warning(f"Graceful stop failed for PID {pid} ({e}); escalating to SIGINT")
+        finally:
+            _graceful_stop_inflight = False
+
+    if proc.returncode is None:
+        try:
+            proc.send_signal(signal.SIGINT)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except _TIMEOUT_EXCS:
+                proc.kill()
+                await proc.wait()
+        except ProcessLookupError:
+            pass
 
     _append_output(f"\n--- Process stopped (PID {pid}) ---\n")
     _active_process = None
@@ -1145,7 +1186,7 @@ async def stop_process() -> dict:
     _active_phase = None
     _close_obs_reader()
     # NOTE: debug model is NOT stopped here — it stays warm for reuse
-    return {"status": "stopped", "pid": pid}
+    return {"status": "stopped", "pid": pid, "graceful": graceful}
 
 
 @router.get("/status")
