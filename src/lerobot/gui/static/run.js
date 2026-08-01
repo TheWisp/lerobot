@@ -165,6 +165,9 @@ const _WORKFLOW_VALIDATORS = {
 };
 
 let _isRunning = false;
+// Kind of the active subprocess ('record', 'teleoperate', ...); null when idle.
+// Episode controls and their hotkeys are record-only.
+let _runCommand = null;
 
 function _validateLaunch() {
     if (_isRunning) {
@@ -1614,7 +1617,7 @@ async function launchRun() {
         }
         const data = await res.json();
         showToast('Started', `${data.command} started (PID ${data.pid})`, 'success');
-        updateRunUI(true);
+        updateRunUI(true, data.command);
         connectOutputSSE();
         if (body?.rlt_mode) {
             _startRLTPoll();
@@ -1692,7 +1695,9 @@ function _bindRunControlHotkeys() {
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         const activeTab = document.querySelector('.tab.active')?.dataset.tab;
         if (activeTab !== 'run') return;
-        if (!_isRunning) return;
+        // Same gate as the buttons: during a teleop run, N would not advance
+        // an episode — it would end the whole session.
+        if (!episodeControlsAvailable(_isRunning, _runCommand)) return;
         const target = e.target;
         if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return;
         const cmd = { n: 'exit_early', r: 'rerecord_episode' }[e.key.toLowerCase()];
@@ -1997,7 +2002,7 @@ async function pollRunStatus() {
     try {
         const res = await fetch('/api/run/status');
         const status = await res.json();
-        updateRunUI(status.running);
+        updateRunUI(status.running, status.command);
 
         // Live record-phase readout next to the episode-control buttons
         // ("recording episode 3" / "resetting" / ...). Empty when idle or
@@ -2039,19 +2044,27 @@ async function pollRunStatus() {
 // UI state management
 // ============================================================================
 
-function updateRunUI(isRunning) {
+// Episode flow control only exists in lerobot-record. Enabling the buttons
+// for any other run kind hands the operator a live "Next episode" during a
+// teleop session — where exit_early doesn't advance an episode, it ends the
+// whole run.
+function episodeControlsAvailable(isRunning, command) {
+    return !!isRunning && command === 'record';
+}
+
+function updateRunUI(isRunning, command = null) {
     _isRunning = isRunning;  // mirror for _validateLaunch
+    _runCommand = command;  // mirror for the N/R hotkey gate
     const stopBtn = document.getElementById('run-stop-btn');
     const formInputs = document.querySelectorAll('#run-form input, #run-form select');
     const workflowBtns = document.querySelectorAll('.workflow-btn');
 
     if (stopBtn) stopBtn.disabled = !isRunning;
 
-    // Episode-control buttons only work while a subprocess is running
-    // (the /api/run/control endpoint 409s otherwise).
+    const controlsLive = episodeControlsAvailable(isRunning, command);
     for (const id of ['run-ctrl-next', 'run-ctrl-rerecord']) {
         const btn = document.getElementById(id);
-        if (btn) btn.disabled = !isRunning;
+        if (btn) btn.disabled = !controlsLive;
     }
 
     formInputs.forEach(el => el.disabled = isRunning);
