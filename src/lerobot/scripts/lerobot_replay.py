@@ -83,6 +83,7 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     so_follower_predictive,
     unitree_g1,
+    virtual_bi_so107,
 )
 from lerobot.utils.constants import ACTION
 from lerobot.utils.import_utils import register_third_party_plugins
