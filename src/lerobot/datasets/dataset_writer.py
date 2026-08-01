@@ -31,6 +31,15 @@ import PIL.Image
 import pyarrow.parquet as pq
 import torch
 
+from lerobot.configs import (
+    DepthEncoderConfig,
+    RGBEncoderConfig,
+    VideoEncoderConfig,
+    depth_encoder_defaults,
+    infer_depth_unit,
+    rgb_encoder_defaults,
+)
+
 from .compute_stats import compute_episode_stats, get_feature_stats
 from .dataset_metadata import LeRobotDatasetMetadata
 from .feature_utils import (
@@ -47,6 +56,7 @@ from .io_utils import (
     write_info,
 )
 from .utils import (
+    DEFAULT_DEPTH_PATH,
     DEFAULT_EPISODES_PATH,
     DEFAULT_IMAGE_PATH,
     update_chunk_file_indices,
@@ -114,14 +124,24 @@ def _encode_video_worker(
     episode_index: int,
     root: Path,
     fps: int,
-    vcodec: str = "libsvtav1",
+    video_encoder: VideoEncoderConfig | None = None,
     encoder_threads: int | None = None,
 ) -> Path:
     temp_path = Path(tempfile.mkdtemp(dir=root)) / f"{video_key}_{episode_index:03d}.mp4"
-    fpath = DEFAULT_IMAGE_PATH.format(image_key=video_key, episode_index=episode_index, frame_index=0)
+    path_template = (
+        DEFAULT_DEPTH_PATH
+        if video_encoder is not None and isinstance(video_encoder, DepthEncoderConfig)
+        else DEFAULT_IMAGE_PATH
+    )
+    fpath = path_template.format(image_key=video_key, episode_index=episode_index, frame_index=0)
     img_dir = (root / fpath).parent
     encode_video_frames(
-        img_dir, temp_path, fps, vcodec=vcodec, overwrite=True, encoder_threads=encoder_threads
+        img_dir,
+        temp_path,
+        fps,
+        video_encoder=video_encoder,
+        encoder_threads=encoder_threads,
+        overwrite=True,
     )
     # safe-destruct: video encode worker: clean up its own temp img dir
     shutil.rmtree(img_dir)
@@ -139,7 +159,8 @@ class DatasetWriter:
         self,
         meta: LeRobotDatasetMetadata,
         root: Path,
-        vcodec: str,
+        rgb_encoder: RGBEncoderConfig | None,
+        depth_encoder: DepthEncoderConfig | None,
         encoder_threads: int | None,
         batch_encoding_size: int,
         streaming_encoder: StreamingVideoEncoder | None = None,
@@ -147,14 +168,19 @@ class DatasetWriter:
         record_images: bool = True,
         use_per_camera_streaming: bool = False,
     ):
-        """Initialize the writer with metadata, codec, and encoding config.
+        """Initialize the writer with metadata, codec, and encoder config.
 
         Args:
             meta: Dataset metadata instance (used for feature schema, chunk
                 settings, and episode persistence).
             root: Local dataset root directory.
-            vcodec: Video codec for encoding (e.g. ``'libsvtav1'``, ``'h264'``).
-            encoder_threads: Threads per encoder instance. ``None`` for auto.
+            rgb_encoder: Video encoder settings applied to RGB cameras. When
+                ``None``, :func:`~lerobot.configs.video.rgb_encoder_defaults` is used.
+            depth_encoder: Video encoder settings applied to depth cameras, including
+                the quantization parameters. When ``None``,
+                :func:`~lerobot.configs.video.depth_encoder_defaults` is used.
+            encoder_threads: Number of encoder threads (global). ``None``
+                lets the codec decide.
             batch_encoding_size: Number of episodes to accumulate before
                 batch-encoding videos.
             streaming_encoder: Optional pre-built :class:`StreamingVideoEncoder`
@@ -174,7 +200,8 @@ class DatasetWriter:
 
         self._meta = meta
         self._root = root
-        self._vcodec = vcodec
+        self._rgb_encoder = rgb_encoder or rgb_encoder_defaults()
+        self._depth_encoder = depth_encoder or depth_encoder_defaults()
         self._encoder_threads = encoder_threads
         self._batch_encoding_size = batch_encoding_size
         self._streaming_encoder = streaming_encoder
@@ -205,7 +232,8 @@ class DatasetWriter:
         return ep_buffer
 
     def _get_image_file_path(self, episode_index: int, image_key: str, frame_index: int) -> Path:
-        fpath = DEFAULT_IMAGE_PATH.format(
+        path_template = DEFAULT_DEPTH_PATH if image_key in self._meta.depth_keys else DEFAULT_IMAGE_PATH
+        fpath = path_template.format(
             image_key=image_key, episode_index=episode_index, frame_index=frame_index
         )
         return self._root / fpath
@@ -261,10 +289,20 @@ class DatasetWriter:
         self.episode_buffer["timestamp"].append(timestamp)
         self.episode_buffer["task"].append(frame.pop("task"))
 
+        # Record each depth feature's input unit once, inferred from the first frame's dtype.
+        if frame_index == 0:
+            for depth_key in self._meta.depth_keys:
+                if depth_key not in frame:
+                    continue
+                info = self._meta.features[depth_key].setdefault("info", {})
+                if info.get("depth_unit") is None:
+                    info["depth_unit"] = infer_depth_unit(np.asarray(frame[depth_key]).dtype)
+
         # Start streaming encoder on first frame of episode
         if frame_index == 0 and self._streaming_encoder is not None:
             self._streaming_encoder.start_episode(
                 video_keys=list(self._meta.video_keys),
+                depth_video_keys=list(self._meta.depth_keys),
                 temp_dir=self._root,
             )
 
@@ -275,8 +313,10 @@ class DatasetWriter:
                     f"An element of the frame is not in the features. '{key}' not in '{self._meta.features.keys()}'."
                 )
 
-            if self._meta.features[key]["dtype"] == "video" and self.video_encoders:
-                # Per-camera streaming encoder (HEAD's path); skip recording in episode_buffer
+            if self._meta.features[key]["dtype"] == "video" and key in self.video_encoders:
+                # Per-camera streaming encoder (HEAD's path); skip recording in episode_buffer.
+                # Depth keys are deliberately absent from video_encoders (see
+                # _init_video_encoders) and fall through to the buffered path below.
                 self.video_encoders[key].push_frame(frame[key])
                 continue
             elif self._meta.features[key]["dtype"] == "video" and self._streaming_encoder is not None:
@@ -324,7 +364,14 @@ class DatasetWriter:
         for key, ft in self._meta.features.items():
             if key in ["index", "episode_index", "task_index"] or ft["dtype"] in ["image", "video"]:
                 continue
-            episode_buffer[key] = np.stack(episode_buffer[key])
+            stacked_values = np.stack(episode_buffer[key])
+
+            # `shape=(1,)` numeric features are serialized as `datasets.Value`, which expects scalars.
+            # Normalizing to `(N,)` keeps save semantics stable across dependency versions.
+            if tuple(ft["shape"]) == (1,) and ft["dtype"] != "string":
+                stacked_values = stacked_values.reshape(episode_length)
+
+            episode_buffer[key] = stacked_values
 
         # Wait for image writer to end, so that episode stats over images can be computed
         self._wait_image_writer()
@@ -360,11 +407,14 @@ class DatasetWriter:
 
         if use_per_camera:
             for video_key in self._meta.video_keys:
-                ep_metadata.update(
-                    self._save_episode_video(
-                        video_key, episode_index, temp_path=per_camera_temp_paths[video_key]
-                    )
-                )
+                # Only RGB keys have a streaming encoder, so only they have a
+                # finished temp file here. Depth was buffered to PNG/TIFF by
+                # add_frame and still needs encoding, with the depth encoder —
+                # which _save_episode_video picks when temp_path is None.
+                # Indexing per_camera_temp_paths unconditionally raises KeyError
+                # on any RGB+depth dataset recorded on the default path.
+                temp_path = per_camera_temp_paths.get(video_key)
+                ep_metadata.update(self._save_episode_video(video_key, episode_index, temp_path=temp_path))
             tmp_videos_root = self._root / "tmp_videos"
             if tmp_videos_root.exists():
                 with contextlib.suppress(OSError):
@@ -376,10 +426,13 @@ class DatasetWriter:
         elif use_streaming:
             streaming_results = self._streaming_encoder.finish_episode()
             for video_key in self._meta.video_keys:
+                normalization_factor = 255.0 if video_key not in self._meta.depth_keys else 1.0
                 temp_path, video_stats = streaming_results[video_key]
                 if video_stats is not None:
                     ep_stats[video_key] = {
-                        k: v if k == "count" else np.squeeze(v.reshape(1, -1, 1, 1) / 255.0, axis=0)
+                        k: v
+                        if k == "count"
+                        else np.squeeze(v.reshape(1, -1, 1, 1) / normalization_factor, axis=0)
                         for k, v in video_stats.items()
                     }
                 ep_metadata.update(self._save_episode_video(video_key, episode_index, temp_path=temp_path))
@@ -394,7 +447,7 @@ class DatasetWriter:
                             episode_index,
                             self._root,
                             self._meta.fps,
-                            self._vcodec,
+                            self._depth_encoder if video_key in self._meta.depth_keys else self._rgb_encoder,
                             self._encoder_threads,
                         ): video_key
                         for video_key in self._meta.video_keys
@@ -431,7 +484,9 @@ class DatasetWriter:
                 self._episodes_since_last_encoding = 0
 
         if episode_data is None:
-            self.clear_episode_buffer(delete_images=len(self._meta.image_keys) > 0)
+            # The episode was saved, not abandoned: buffered video frames may be
+            # awaiting batch encoding, so leave them alone.
+            self.clear_episode_buffer(delete_images=len(self._meta.image_keys) > 0, drop_buffered_video=False)
 
     def _batch_save_episode_video(self, start_episode: int, end_episode: int | None = None) -> None:
         """Batch save videos for multiple episodes."""
@@ -608,7 +663,12 @@ class DatasetWriter:
 
         # Update video info (only needed when first episode is encoded)
         if episode_index == 0:
-            self._meta.update_video_info(video_key)
+            self._meta.update_video_info(
+                video_key,
+                video_encoder=self._depth_encoder
+                if video_key in self._meta.depth_keys
+                else self._rgb_encoder,
+            )
             write_info(self._meta.info, self._meta.root)
 
         metadata = {
@@ -620,12 +680,18 @@ class DatasetWriter:
         }
         return metadata
 
-    def clear_episode_buffer(self, delete_images: bool = True) -> None:
+    def clear_episode_buffer(self, delete_images: bool = True, *, drop_buffered_video: bool = True) -> None:
         """Discard the current episode buffer and optionally delete temp images.
 
         Args:
             delete_images: If ``True``, remove temporary image directories
                 written for the current episode.
+            drop_buffered_video: Also remove the temp frames of video keys that
+                were buffered to disk rather than streamed. True when the take is
+                being *abandoned* (re-record), because those frames must not leak
+                into the next one. False when called after a successful
+                ``save_episode``, where under batched encoding the frames are
+                deliberately retained until the batch is encoded.
         """
         # Discard in-progress per-camera encoders and restart for fresh episode
         if self.video_encoders:
@@ -642,7 +708,16 @@ class DatasetWriter:
             # save_episode() mutates the buffer. Handle both types here.
             if isinstance(episode_index, np.ndarray):
                 episode_index = episode_index.item() if episode_index.size == 1 else episode_index[0]
-            for cam_key in self._meta.image_keys:
+            # On an abandoned take, also drop the frames of video keys that were
+            # buffered to disk rather than streamed — depth always, and every
+            # video key under batched encoding. Deleting only the dtype="image"
+            # keys left those behind for the next take to encode, so a
+            # re-recorded episode silently contained frames from the take the
+            # operator threw away.
+            buffered_keys = list(self._meta.image_keys)
+            if drop_buffered_video:
+                buffered_keys += [k for k in self._meta.video_keys if k not in self.video_encoders]
+            for cam_key in buffered_keys:
                 img_dir = self._get_image_file_dir(episode_index, cam_key)
                 if img_dir.is_dir():
                     # safe-destruct: clear_episode_buffer: drop our episode temp images
@@ -679,9 +754,15 @@ class DatasetWriter:
             self.image_writer.wait_until_done()
 
     def _encode_temporary_episode_video(self, video_key: str, episode_index: int) -> Path:
-        """Use ffmpeg to convert frames stored as png into mp4 videos."""
+        """Use ffmpeg to convert frames stored as png/tiff into mp4 videos."""
+        is_depth = video_key in self._meta.depth_keys
         return _encode_video_worker(
-            video_key, episode_index, self._root, self._meta.fps, self._vcodec, self._encoder_threads
+            video_key,
+            episode_index,
+            self._root,
+            self._meta.fps,
+            self._depth_encoder if is_depth else self._rgb_encoder,
+            self._encoder_threads,
         )
 
     def close_writer(self) -> None:
@@ -740,12 +821,40 @@ class DatasetWriter:
         return tmp_dir / f"{video_key}.mp4"
 
     def _init_video_encoders(self) -> None:
-        """Initialize and start per-camera streaming video encoders for video keys."""
+        """Initialize and start per-camera streaming video encoders for RGB video keys.
+
+        Depth keys are excluded on purpose. ``meta.video_keys`` covers every
+        feature stored as video, depth included, but the fork's streaming
+        encoder is RGB-only: it calls ``av.VideoFrame.from_ndarray(frame,
+        format="rgb24")``, which rejects the ``(H, W, 1)`` arrays depth
+        produces. Depth also needs the meters->12-bit quantization step in
+        ``depth_utils.quantize_depth`` that the RGB path has no notion of.
+        Leaving depth out routes it through the buffered encode path, which
+        already applies the depth encoder config correctly.
+
+        TODO(depth-streaming): teach OurStreamingVideoEncoder to quantize and
+        emit gray12le so depth gets the same near-instant save_episode() as RGB.
+        Until then depth recording keeps the slower buffered behaviour. When
+        that lands, the per-key codec selection from ``codex/openarm2-consolidate``
+        (commit e892002f3) is the piece to restore here::
+
+            encoder_cfg = self._depth_encoder if key in self._meta.depth_keys else self._rgb_encoder
+
+        That branch reached the same diagnosis independently and fixed codec
+        selection, but kept depth in the streaming map, so the rgb24 crash
+        survived. Excluding depth is what actually makes the tests pass; the
+        conditional above is only correct once the encoder can emit gray12le.
+        Expect a conflict here when openarm2-consolidate rebases — this
+        version supersedes it.
+        """
         self.video_encoders = {}
-        if not self._meta.video_keys:
+        rgb_video_keys = [k for k in self._meta.video_keys if k not in self._meta.depth_keys]
+        if not rgb_video_keys:
             return
-        for video_key in self._meta.video_keys:
-            self.video_encoders[video_key] = OurStreamingVideoEncoder(fps=self._meta.fps, vcodec=self._vcodec)
+        for video_key in rgb_video_keys:
+            self.video_encoders[video_key] = OurStreamingVideoEncoder(
+                fps=self._meta.fps, vcodec=self._rgb_encoder.vcodec
+            )
         self._start_video_encoders()
 
     def _start_video_encoders(self) -> None:

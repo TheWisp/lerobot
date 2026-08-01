@@ -713,7 +713,9 @@ async def start_record(req: RecordRequest) -> dict:
         args.append(f"--dataset.num_episodes={req.num_episodes}")
         args.append(f"--dataset.video={'true' if req.video else 'false'}")
         args.append("--dataset.push_to_hub=false")
-        args.append(f"--dataset.vcodec={req.vcodec}")
+        # Upstream moved the codec under the nested rgb_encoder config; the flat
+        # --dataset.vcodec this used to emit is no longer a recognised argument.
+        args.append(f"--dataset.rgb_encoder.vcodec={req.vcodec}")
         args.append(f"--play_sounds={'true' if req.play_sounds else 'false'}")
         if req.resume:
             args.append("--resume=true")

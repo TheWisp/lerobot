@@ -52,6 +52,17 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The no-setup-hardcode hook lints only fork-authored files and decides
+      # ownership by asking whether a path exists in upstream/main. Without the
+      # remote it cannot tell, falls back to scanning everything, and flags
+      # upstream policies the fork does not own — so the hook passes locally
+      # (where the remote is fetched) and fails here. Fetch the ref so both
+      # environments make the same decision. Shallow: only the tree is needed.
+      - name: Fetch upstream ref for ownership-aware lint
+        run: |
+          git remote add upstream https://github.com/huggingface/lerobot.git 2>/dev/null || true
+          git fetch --depth=1 --no-tags upstream main:refs/remotes/upstream/main
+
       - name: Run pre-commit hooks
         uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # v3.0.1
         with:

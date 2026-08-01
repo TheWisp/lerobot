@@ -111,14 +111,84 @@ Background Transfers tray + subprocess-worker pipeline landed in PR #15
 (merged 2026-05-26). Design: [docs/hub_transfers.md](docs/hub_transfers.md).
 
 - [x] `GET /api/hub/auth-status` — check login state
+- [x] **Keep synchronous Hub probes off uvicorn's event loop** (2026-07-28).
+      `auth-status`, repo-info, diff metadata, and upload/download preflight now run
+      in worker threads. Regression coverage deliberately stalls `HfApi.whoami()`
+      and proves an unrelated dataset request still completes. This is containment,
+      not a complete outage policy: the caller remains pending and the worker
+      thread remains occupied until the underlying HTTP call returns.
 - [x] `POST /api/datasets/{id}/hub/download` — pull from Hub (with completeness check + confirm_force override)
 - [x] `POST /api/datasets/{id}/hub/upload` — push to Hub via PR (atomic merge to main)
 - [x] Frontend: auth indicator in header, Hub Upload / Hub Download per-dataset entry points
 - [x] **Background Transfers tray** — pill in top-right, popover with one card per job, real progress, Cancel / Retry / Discard / Hide actions. Multi-tab consistent (server holds state), workers survive server restart, multi-dataset parallel.
+- [High] **Bound and coalesce the startup auth probe.** `checkHubAuth()` runs
+  once per full browser document load. When Hub networking is blackholed, the
+  GUI now remains usable but the header indicator stays blank until the kernel
+  TCP timeout, and every reload can consume another default-executor thread.
+  Show `HF: checking…` immediately; distinguish `unavailable` from `not logged
+in`; cache/single-flight concurrent probes; and configure a short timeout in
+  the Hub HTTP client itself. `asyncio.wait_for(asyncio.to_thread(...))` alone
+  is insufficient because cancelling the await does not stop the already
+  running worker thread.
+- [High] **Offload remote dataset open/download construction.**
+  `POST /api/datasets` still constructs `LeRobotDataset(repo_id)` inline, and
+  confirmed incomplete-local-cache opens can also enter `snapshot_download`.
+  A stalled Hub therefore still freezes the whole GUI through this separate
+  route. Extract the synchronous load/verify work into a worker call, then
+  publish the returned dataset into `AppState` on the event-loop thread. Avoid
+  racing the process-global `datasets.disable_caching()` toggle across
+  concurrent opens.
+- [High] **Finish the Hub request-path audit.** Upload retry discovery still
+  calls `get_discussion_details()` inline, and failed/cancelled-job dismissal
+  calls both `get_discussion_details()` and `change_discussion_status()` inline.
+  Offload only the network portions; keep `AppState`/PR-ownership mutations on
+  the event-loop thread so Retry and Discard cannot race.
 - [ ] **Stale-PR sweep** ([open question in design doc](docs/hub_transfers.md#open-questions)) — failed uploads leave draft PRs; surface them on Upload-modal-open so the user sees stale attempts.
 - [ ] **Re-enable `super_squash_history`** ([open question](docs/hub_transfers.md#open-questions)) — currently disabled; main accumulates N commits per upload (cosmetic only — atomicity and throughput unaffected). Need correct HF API usage or post-merge squash-on-main.
 - [ ] **Retry budget UX** — third-strike retries should surface differently ("Failed 3× — check connection") rather than repeating the latest error.
 - [ ] **`POST /api/hub/login`** — currently delegated to `huggingface-cli login` (out-of-band terminal flow). Add an in-GUI login form only if the standalone GUI runtime (no terminal) is supported.
+
+### Async Request-Path Blocking Audit
+
+The Hub outage exposed a general invariant: an `async def` FastAPI handler
+still runs ordinary Python calls on uvicorn's event-loop thread. Any synchronous
+network, subprocess, device, filesystem, Parquet, or CPU-heavy call inside it
+can stall static files, websockets, SSE, and every other endpoint. Converting a
+handler to plain `def` lets FastAPI run the whole handler in its thread pool;
+handlers that need async locks/state should instead offload the blocking slice
+and perform shared-state mutations back on the event-loop thread.
+
+- [High] **Training image status must not run subprocess/network probes inline.**
+  `/api/training/image-status` is started on every full GUI load and currently
+  runs several `git`/`docker` subprocesses, including a possible `git fetch`,
+  with individual 5–10 second timeouts. Make it a thread-backed/cached probe,
+  and remove network fetches from the passive GET path.
+- [High] **Offload dataset mutation pipelines while retaining dataset locks.**
+  Schema add/default migration/remove and Apply Edits synchronously rewrite
+  Parquet shards, recompute stats, reload metadata, and verify the dataset;
+  large datasets can hold the event loop for minutes. Keep the async
+  per-dataset lock, execute the disk pipeline in a worker, then invalidate and
+  replace shared state on the loop.
+- [Med] **Move camera preview read + JPEG encode off-loop.** The nominally
+  `async_read()` camera API is synchronous and may wait 200 ms; the frontend
+  calls `/api/robot/camera-frame/{index}` at 10 Hz per camera. Offload the
+  combined wait/encode operation or switch the endpoint to a nonblocking
+  `read_latest()` snapshot with explicit stale-frame behavior.
+- [Med] **Remove `nvidia-smi` from overlay status request paths.** Live/data
+  status is polled every 500 ms, while `_proc_sm()` can synchronously run
+  `nvidia-smi pmon` with a 3 second timeout. Sample GPU utilization in one
+  background task and serve its cached value.
+- [Med] **Offload remaining dataset read hot paths.** Cold `DatasetInfo`
+  construction scans Parquet shards for per-episode-feature inference;
+  frame-feature reads use `dataset[i]`; URDF trajectory and feature-series
+  endpoints synchronously call `pd.read_parquet`; Hub diff recursively scans
+  the local tree after its network call. Cache or thread these reads, especially
+  the endpoints driven by scrubbing/polling.
+- [Low] **Move bounded diagnostics/file scans out of async handlers.** Bug
+  report submission runs two Git subprocesses and may decode/write a 16 MiB
+  screenshot; model checkpoint inspection and full overlay-log reads can also
+  become slow on large trees/files. Prefer synchronous route declarations or
+  focused worker calls.
 
 ## Model Tab
 
@@ -465,6 +535,10 @@ is the spec.
       gripper on its previous arm with max=952.
 
 ## Architecture
+
+- [High] **Shrink the fork's divergence in `scripts/lerobot_record.py`.** Upstream's is 550 lines; the fork's is 1326 — **+886 / −110** against upstream, the single largest modification the fork makes to an upstream file. Every sync pays for it: this file produced the most conflict hunks in the 2026-07 merge, it is where the `record_images` type mismatch hid, and it is where `stamp_repo_id()` was lost as collateral while resolving an unrelated region three lines away. The additions are real features — policy-in-record, `LatencySession`, episode health metadata, intervention datasets, `rename_map` — but they live inline in a file upstream also rewrites. The goal is to make this file close to a thin fork of upstream's: move each addition behind a seam the fork owns (a subclassed config, a processor step, a strategy object, a separate module `record()` imports), so upstream's version can be taken almost verbatim. Worth costing before the next sync rather than after. Related: upstream split policy deployment into `lerobot-rollout`, which the fork does not use — deciding whether to adopt that split would remove a large share of the divergence on its own.
+
+- [High] **Migrate the feature editor's subtask storage to upstream's `language` columns.** The 2026-07 upstream sync replaced the subtask design wholesale. Upstream now stores language annotations as `language_persistent` / `language_events` pyarrow-struct columns (`datasets/language.py`, rows carrying `role`/`content`/`style`/`timestamp`/`camera`/`tool_calls`, with `style="subtask"`); the fork's editor still uses the older model of a per-frame `subtask_index` int64 plus a `meta/subtasks.parquet` lookup table. The merge deleted the fork's layer outright — `DEFAULT_SUBTASKS_PATH`, `io_utils.load_subtasks()`, and `LeRobotDatasetMetadata.subtasks` all vanished with no conflict, taking 19 tests with them. They were **restored as-is** so the sync would not regress the editor, which means two subtask models now coexist in the tree. That is deliberate but temporary: the fork's model is authoritative for `subtask_index`, upstream's for everything written by `lerobot-annotate`. Datasets produced by the two paths are not interchangeable, and every future upstream sync will re-litigate this. Porting means teaching `feature_value_edits.py` and `gui/api/datasets.py` to read and write the `language_persistent` column, plus a migration for existing datasets that carry `meta/subtasks.parquet`.
 
 - [**Critical**] **Reactive UI state management**: the current imperative DOM manipulation (innerHTML + manual toggle/refresh calls scattered across functions) is fundamentally broken. Field state (disabled, visible, selected) must be called at every possible code path that reveals the element, leading to endless monkey-patching. Migrate to a reactive pattern where UI state is derived from data (React, Preact, or even a minimal reactive store + render loop). This blocks every new UI feature.
 - [High] **Coherent GUI-wide persistence policy.** Persistence is currently ad-hoc, per-feature: opened datasets live in `opened.json`; model sources in `model_sources.json`; robot/teleop profiles under `~/.config/lerobot/`; per-feature view state in scattered LocalStorage keys; **launch settings (Run tab, Model Debugger, RLT mode, episode counts, robot/teleop profile choice, etc.) aren't persisted at all and reset to defaults every session**. The result is two distinct failure modes for users:

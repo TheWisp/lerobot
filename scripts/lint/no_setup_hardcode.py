@@ -325,8 +325,14 @@ def _upstream_paths(paths: list[Path]) -> set[str]:
     """Repo-relative paths (of `paths`) that exist in upstream lerobot.
 
     Best-effort: one batched `git ls-tree`. If the upstream ref or git is
-    unavailable (e.g. CI without the remote fetched), returns empty set so we
-    fall back to scanning everything (upstream code is clean under this ruleset).
+    unavailable, returns an empty set and every file gets linted, including
+    upstream's.
+
+    That fallback used to be silent, on the assumption that upstream code is
+    clean under this ruleset. It is not: the 2026-07 sync brought policies
+    (lingbot_va, fastwam) that hardcode qualified image keys. The result was a
+    hook that passed for anyone with the remote fetched and failed in CI, which
+    reads as a flaky check rather than a missing ref. Say so instead.
     """
     if not paths:
         return set()
@@ -338,6 +344,13 @@ def _upstream_paths(paths: list[Path]) -> set[str]:
             check=True,
         ).stdout
     except (subprocess.CalledProcessError, FileNotFoundError):
+        print(
+            f"warning: '{UPSTREAM_REF}' is not available, so fork-authored files cannot be "
+            "distinguished from upstream's. Linting everything, which may report findings in "
+            "upstream code that you do not own and did not introduce. Fetch the ref with:\n"
+            "    git fetch --depth=1 --no-tags upstream main:refs/remotes/upstream/main",
+            file=sys.stderr,
+        )
         return set()
     return {line.strip() for line in out.splitlines() if line.strip()}
 

@@ -2798,10 +2798,18 @@ async def visualize_episode(dataset_id: str, episode_idx: int) -> dict[str, str]
 
 @router.get("/hub/auth-status")
 async def hub_auth_status():
-    """Check if the user is logged in to HuggingFace Hub."""
+    """Check if the user is logged in to HuggingFace Hub.
+
+    Runs in a worker thread: ``whoami()`` is a synchronous network call,
+    and when the Hub is unreachable (DNS poisoning, firewall blackhole)
+    the TCP connect hangs until kernel timeouts — which would freeze the
+    whole event loop (static files, websockets, everything) if done inline.
+    """
+    import asyncio
+
     from lerobot.gui.api._hub_core import get_auth_status
 
-    return get_auth_status()
+    return await asyncio.to_thread(get_auth_status)
 
 
 @router.post("/hub/open-job-folder")
@@ -2840,10 +2848,16 @@ async def hub_open_job_folder() -> dict:
 
 @router.get("/hub/repo-info")
 async def hub_repo_info(repo_id: str):
-    """Get info about a dataset repo on HuggingFace Hub."""
+    """Get info about a dataset repo on HuggingFace Hub.
+
+    Threaded for the same reason as ``/hub/auth-status`` — the sync HF
+    call must not block the event loop when the network stalls.
+    """
+    import asyncio
+
     from lerobot.gui.api._hub_core import get_repo_info
 
-    return get_repo_info(repo_id)
+    return await asyncio.to_thread(get_repo_info, repo_id)
 
 
 @router.get("/{dataset_id:path}/hub/diff")
@@ -2862,10 +2876,14 @@ async def hub_diff(dataset_id: str, repo_id: str | None = None):
     root = dataset.root
 
     try:
+        import asyncio
+
         from huggingface_hub import HfApi
 
         api = HfApi()
-        info = api.dataset_info(target_repo_id, files_metadata=True)
+        # Threaded: sync network call; a stalled Hub connection must not
+        # freeze the event loop.
+        info = await asyncio.to_thread(api.dataset_info, target_repo_id, files_metadata=True)
     except Exception:
         return {"status": "error", "message": f"Repo not found: {target_repo_id}"}
 
@@ -3248,7 +3266,11 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
                 detail={"message": "A Hub transfer is already in progress", "job_id": active.job_id},
             )
 
-        _verify_hub_auth()
+        import asyncio
+
+        # Threaded: whoami() is a sync network call that can hang for
+        # minutes when the Hub is unreachable; never block the event loop.
+        await asyncio.to_thread(_verify_hub_auth)
 
         # Upload-time completeness check: defends against download-fail-then-upload
         # corruption. If local is missing files that exist on the remote, warn the
@@ -3256,7 +3278,7 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
         confirm_force = request.confirm_force if request else False
         if not confirm_force:
             try:
-                missing = check_upload_completeness(Path(dataset.root), repo_id)
+                missing = await asyncio.to_thread(check_upload_completeness, Path(dataset.root), repo_id)
             except Exception as e:  # noqa: BLE001 — completeness check is best-effort
                 logger.warning("Completeness check failed for %s vs %s: %s", dataset_id, repo_id, e)
                 missing = {"missing_locally": [], "incomplete_locally": []}
@@ -3325,7 +3347,11 @@ async def hub_download(dataset_id: str, request: HubDownloadRequest | None = Non
                 detail={"message": "A Hub transfer is already in progress", "job_id": active.job_id},
             )
 
-        _verify_hub_auth()
+        import asyncio
+
+        # Threaded: whoami() is a sync network call that can hang for
+        # minutes when the Hub is unreachable; never block the event loop.
+        await asyncio.to_thread(_verify_hub_auth)
 
         job = make_job(dataset_id=dataset_id, direction="download", repo_id=repo_id)
         _app_state.hub_jobs[job.job_id] = job

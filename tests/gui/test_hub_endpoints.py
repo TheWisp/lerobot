@@ -14,6 +14,7 @@
 """End-to-end tests for the /hub/* HTTP endpoints.
 
 What this file covers:
+  * A stalled Hub auth probe does not block unrelated GUI requests
   * POST /hub/upload + /hub/download return job_id without blocking
   * GET /hub/jobs returns sorted list with merged worker progress
   * GET /hub/progress/{id} same shape for one job
@@ -33,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import time
 import types
 from unittest.mock import patch
@@ -111,6 +113,70 @@ def reset_fake_popen():
     _FakePopen.instances.clear()
     yield
     _FakePopen.instances.clear()
+
+
+# ── GET /hub/auth-status ────────────────────────────────────────────────────
+
+
+class TestHubAuthEndpoint:
+    def test_stalled_auth_probe_does_not_block_other_requests(self, app_with_state):
+        """A stuck synchronous ``whoami`` must not freeze the ASGI event loop.
+
+        The watchdog makes this test terminate against the old inline-call
+        implementation: there, the datasets request cannot run until the
+        watchdog releases ``whoami``, and the ordering assertion fails.
+        """
+        app, _, monkeypatch, _ = app_with_state
+        auth_started = threading.Event()
+        auth_release = threading.Event()
+        watchdog_released = threading.Event()
+
+        import huggingface_hub
+
+        class _BlockingApi:
+            def whoami(self):
+                auth_started.set()
+                auth_release.wait()
+                return {"name": "test"}
+
+        monkeypatch.setattr(huggingface_hub, "HfApi", _BlockingApi)
+
+        def release_from_watchdog() -> None:
+            watchdog_released.set()
+            auth_release.set()
+
+        watchdog = threading.Timer(2.0, release_from_watchdog)
+        watchdog.daemon = True
+        watchdog.start()
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                auth_request = asyncio.create_task(client.get("/api/datasets/hub/auth-status"))
+                datasets_request = asyncio.create_task(client.get("/api/datasets"))
+                try:
+                    while not auth_started.is_set() and not auth_request.done():
+                        await asyncio.sleep(0)
+                    assert auth_started.is_set(), "the auth request exited before calling whoami()"
+                    response = await datasets_request
+                    assert response.status_code == 200
+                    assert response.json() == []
+                    assert not watchdog_released.is_set(), (
+                        "the unrelated datasets request only completed after the "
+                        "watchdog released the stalled Hub auth call"
+                    )
+                finally:
+                    auth_release.set()
+                    auth_response = await auth_request
+                    assert auth_response.status_code == 200
+                    assert auth_response.json() == {"logged_in": True, "username": "test"}
+
+        try:
+            asyncio.run(run())
+        finally:
+            auth_release.set()
+            watchdog.cancel()
 
 
 # ── POST /hub/upload, /hub/download ─────────────────────────────────────────

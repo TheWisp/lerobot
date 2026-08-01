@@ -25,10 +25,11 @@ from PIL import Image
 
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
 
+from lerobot.configs import VideoEncoderConfig
 from lerobot.datasets.dataset_writer import _encode_video_worker
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import DEFAULT_IMAGE_PATH
-from tests.fixtures.constants import DEFAULT_FPS, DUMMY_REPO_ID
+from tests.fixtures.constants import DEFAULT_FPS, DUMMY_REPO_ID, DUMMY_VIDEO_FEATURES
 
 SIMPLE_FEATURES = {
     "state": {"dtype": "float32", "shape": (6,), "names": None},
@@ -52,8 +53,8 @@ def _make_frame(features: dict, task: str = "Dummy task") -> dict:
 # ── Existing encode_video_worker tests ───────────────────────────────
 
 
-def test_encode_video_worker_forwards_vcodec(tmp_path):
-    """_encode_video_worker correctly forwards the vcodec parameter."""
+def test_encode_video_worker_forwards_video_encoder(tmp_path):
+    """_encode_video_worker forwards video_encoder to encode_video_frames."""
     video_key = "observation.images.laptop"
     fpath = DEFAULT_IMAGE_PATH.format(image_key=video_key, episode_index=0, frame_index=0)
     img_dir = tmp_path / Path(fpath).parent
@@ -68,13 +69,21 @@ def test_encode_video_worker_forwards_vcodec(tmp_path):
         Path(video_path).touch()
 
     with patch("lerobot.datasets.dataset_writer.encode_video_frames", side_effect=mock_encode):
-        _encode_video_worker(video_key, 0, tmp_path, fps=30, vcodec="h264")
+        _encode_video_worker(
+            video_key,
+            0,
+            tmp_path,
+            fps=30,
+            video_encoder=VideoEncoderConfig(vcodec="h264", preset=None),
+            encoder_threads=4,
+        )
 
-    assert captured_kwargs["vcodec"] == "h264"
+    assert captured_kwargs["video_encoder"].vcodec == "h264"
+    assert captured_kwargs["encoder_threads"] == 4
 
 
-def test_encode_video_worker_default_vcodec(tmp_path):
-    """_encode_video_worker uses libsvtav1 as the default codec."""
+def test_encode_video_worker_default_video_encoder(tmp_path):
+    """_encode_video_worker passes None video_encoder which encode_video_frames defaults."""
     video_key = "observation.images.laptop"
     fpath = DEFAULT_IMAGE_PATH.format(image_key=video_key, episode_index=0, frame_index=0)
     img_dir = tmp_path / Path(fpath).parent
@@ -91,7 +100,8 @@ def test_encode_video_worker_default_vcodec(tmp_path):
     with patch("lerobot.datasets.dataset_writer.encode_video_frames", side_effect=mock_encode):
         _encode_video_worker(video_key, 0, tmp_path, fps=30)
 
-    assert captured_kwargs["vcodec"] == "libsvtav1"
+    assert captured_kwargs["video_encoder"] is None
+    assert captured_kwargs["encoder_threads"] is None
 
 
 # ── add_frame contracts ──────────────────────────────────────────────
@@ -177,6 +187,161 @@ def test_save_multiple_episodes(tmp_path):
 
     assert dataset.meta.total_episodes == 3
     assert dataset.meta.total_frames == total_frames
+
+
+# ── video recording path ─────────────────────────────────────────────
+
+
+def test_video_episode_recording_produces_mp4(tmp_path):
+    """Recording an episode with a video feature must initialize encoders and write an .mp4.
+
+    Regression: after the depth-maps refactor moved ``vcodec`` under
+    ``rgb_encoder``, ``_init_video_encoders`` still read the never-defined
+    ``self._vcodec`` and raised AttributeError on any video recording.
+    """
+    pytest.importorskip("av", reason="av is required for video encoding (install lerobot[dataset])")
+    dataset = LeRobotDataset.create(
+        repo_id=DUMMY_REPO_ID, fps=DEFAULT_FPS, features=DUMMY_VIDEO_FEATURES, root=tmp_path / "ds"
+    )
+    for _ in range(4):
+        dataset.add_frame(_make_frame(DUMMY_VIDEO_FEATURES))
+    dataset.save_episode()
+
+    mp4_files = list((tmp_path / "ds" / "videos").rglob("*.mp4"))
+    assert len(mp4_files) > 0
+
+
+def test_depth_keys_are_excluded_from_streaming_encoders(tmp_path):
+    """Depth video keys must not get a per-camera streaming encoder.
+
+    Regression from the 2026-07 upstream sync: ``meta.video_keys`` includes
+    depth features, so ``_init_video_encoders`` handed depth frames to the
+    fork's RGB-only streaming encoder. That encoder calls
+    ``av.VideoFrame.from_ndarray(frame, format="rgb24")`` and rejects depth's
+    ``(H, W, 1)`` arrays with ``Unexpected numpy array shape``, and it has no
+    notion of the meters->12-bit quantization depth requires.
+
+    Post: RGB keys get a streaming encoder, depth keys do not, and depth still
+    records through the buffered path.
+    """
+    pytest.importorskip("av", reason="av is required for video encoding (install lerobot[dataset])")
+    features = {
+        "observation.images.rgb": {"dtype": "video", "shape": (32, 32, 3), "names": ["h", "w", "c"]},
+        "observation.images.depth": {
+            "dtype": "video",
+            "shape": (32, 32, 1),
+            "names": ["h", "w", "c"],
+            "info": {"is_depth_map": True},
+        },
+    }
+    dataset = LeRobotDataset.create(
+        repo_id=DUMMY_REPO_ID, fps=DEFAULT_FPS, features=features, root=tmp_path / "ds"
+    )
+
+    encoders = dataset.writer.video_encoders
+    assert "observation.images.rgb" in encoders, "RGB keys must keep the streaming encoder"
+    assert "observation.images.depth" not in encoders, (
+        "depth key was handed to the RGB-only streaming encoder — it will fail on (H, W, 1)"
+    )
+
+
+def test_rgb_and_depth_episode_saves_on_the_default_record_path(tmp_path):
+    """A mixed RGB + depth dataset must record end to end, not just construct.
+
+    Regression: excluding depth from the streaming encoders is only half the
+    change. save_episode's per-camera branch iterates every ``meta.video_keys``
+    but reads ``per_camera_temp_paths``, which now holds RGB only — so depth
+    raised ``KeyError`` at save time on the default record path
+    (``use_per_camera_streaming`` defaults on for ordinary recording).
+
+    The structural test above passed throughout that bug because it never
+    called ``save_episode()``. This one drives the whole path.
+
+    Post: both an .mp4 for the RGB key and one for the depth key exist.
+    """
+    pytest.importorskip("av", reason="av is required for video encoding (install lerobot[dataset])")
+    features = {
+        "observation.images.rgb": {"dtype": "video", "shape": (32, 32, 3), "names": ["h", "w", "c"]},
+        "observation.images.depth": {
+            "dtype": "video",
+            "shape": (32, 32, 1),
+            "names": ["h", "w", "c"],
+            "info": {"is_depth_map": True},
+        },
+        "state": {"dtype": "float32", "shape": (6,), "names": None},
+    }
+    dataset = LeRobotDataset.create(
+        repo_id=DUMMY_REPO_ID, fps=DEFAULT_FPS, features=features, root=tmp_path / "ds"
+    )
+    assert dataset.writer.video_encoders, "expected the per-camera streaming path to be active"
+
+    for _ in range(4):
+        dataset.add_frame(
+            {
+                "task": "Dummy task",
+                "observation.images.rgb": np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8),
+                "observation.images.depth": np.random.randint(0, 4096, (32, 32, 1), dtype=np.uint16),
+                "state": torch.zeros(6),
+            }
+        )
+    dataset.save_episode()
+
+    videos = list((tmp_path / "ds" / "videos").rglob("*.mp4"))
+    written = {p.parent.parent.name for p in videos} | {p.parent.name for p in videos}
+    assert any("rgb" in name for name in written), f"no RGB video written, got {sorted(written)}"
+    assert any("depth" in name for name in written), f"no depth video written, got {sorted(written)}"
+
+
+def test_rerecord_discards_buffered_depth_frames(tmp_path):
+    """Re-recording must drop the abandoned take's depth frames.
+
+    Regression: ``clear_episode_buffer`` deleted temp image dirs for
+    ``meta.image_keys`` only — the ``dtype="image"`` features. Depth is
+    ``dtype="video"`` and, having no streaming encoder, is buffered to disk like
+    an image. Its frames therefore survived a discard, and the next take encoded
+    them alongside its own: a re-recorded episode silently containing frames from
+    the take the operator threw away.
+
+    Post: after a discard, only the second take's frames are on disk.
+    """
+    pytest.importorskip("av", reason="av is required for video encoding (install lerobot[dataset])")
+    features = {
+        "observation.images.depth": {
+            "dtype": "video",
+            "shape": (32, 32, 1),
+            "names": ["h", "w", "c"],
+            "info": {"is_depth_map": True},
+        },
+        "state": {"dtype": "float32", "shape": (6,), "names": None},
+    }
+    dataset = LeRobotDataset.create(
+        repo_id=DUMMY_REPO_ID, fps=DEFAULT_FPS, features=features, root=tmp_path / "ds"
+    )
+
+    def add(n):
+        for _ in range(n):
+            dataset.add_frame(
+                {
+                    "task": "Dummy task",
+                    "observation.images.depth": np.random.randint(0, 4096, (32, 32, 1), dtype=np.uint16),
+                    "state": torch.zeros(6),
+                }
+            )
+
+    def buffered_depth_frames():
+        d = dataset.writer._get_image_file_dir(0, "observation.images.depth")
+        return sorted(d.glob("*")) if d.is_dir() else []
+
+    add(5)
+    assert len(buffered_depth_frames()) == 5
+
+    dataset.clear_episode_buffer()
+    assert buffered_depth_frames() == [], "discarded take left depth frames behind"
+
+    add(3)
+    assert len(buffered_depth_frames()) == 3, (
+        "second take sees frames from the discarded one — the re-recorded episode would be corrupt"
+    )
 
 
 # ── clear / lifecycle ────────────────────────────────────────────────
