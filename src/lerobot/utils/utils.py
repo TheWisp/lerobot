@@ -171,14 +171,43 @@ def format_big_number(num, precision=0):
 
 # Longest a spoken cue may delay a run. Generous for real speech, short enough
 # that a host without working TTS is not held up noticeably.
+# Longest a spoken cue may delay a run. Generous for real speech, short enough
+# that a host without working TTS is not held up noticeably.
 SAY_BLOCKING_TIMEOUT_S = 10
+
+# Warn once per process, not once per cue. `say` is called at every episode
+# boundary, so warning each time would bury the loop-health lines an operator
+# is actually reading during a recording session.
+_tts_warned = False
+
+
+def _warn_tts_unavailable(reason: str) -> None:
+    global _tts_warned
+    if _tts_warned:
+        return
+    _tts_warned = True
+    hint = (
+        "install the `speech-dispatcher` system package"
+        if platform.system() == "Linux"
+        else "no text-to-speech backend is available for this platform"
+    )
+    logging.warning(
+        f"Spoken cues are unavailable ({reason}); continuing without audio. "
+        f"To enable them, {hint}. To silence this, pass --play_sounds=false."
+    )
 
 
 def say(text: str, blocking: bool = False):
-    """Speak `text`, if the host can. Never raises, never blocks indefinitely.
+    """Speak `text` if the host can, and otherwise carry on.
 
-    Postcondition: returns within ``SAY_BLOCKING_TIMEOUT_S`` when ``blocking``,
-    whether or not speech actually happened.
+    Text-to-speech is a convenience cue, never a precondition for work: the
+    backend is an OS package (`spd-say` on Linux, and *not* a Python dependency,
+    so `uv sync` does not provide it), which means a container, a CI runner or a
+    fresh machine may have no working TTS at all.
+
+    Postconditions: never raises, and returns within ``SAY_BLOCKING_TIMEOUT_S``
+    when ``blocking`` — whether or not speech actually happened. The first
+    failure logs a warning; later ones are silent.
     """
     system = platform.system()
 
@@ -199,22 +228,24 @@ def say(text: str, blocking: bool = False):
         ]
 
     else:
-        raise RuntimeError("Unsupported operating system for text-to-speech.")
+        _warn_tts_unavailable(f"unsupported operating system {system!r}")
+        return
 
-    if blocking:
-        # Bounded and non-fatal on purpose. `spd-say --wait` blocks until the
-        # utterance finishes, which never happens on a host with no working
-        # speech-dispatcher — a headless CI runner, a fresh machine, a container.
-        # The two blocking call sites are both end-of-run announcements
-        # ("Stop recording", "Replaying episode"), so an unbounded wait there
-        # hangs a finished recording forever instead of letting it exit.
-        # A spoken cue is a nicety; never let it decide whether a run terminates.
-        try:
+    try:
+        if blocking:
+            # `spd-say --wait` blocks until the utterance finishes, which never
+            # happens when speech-dispatcher cannot start. Both blocking call
+            # sites are end-of-run announcements, so an unbounded wait there
+            # hangs a finished recording — data already safely on disk — instead
+            # of letting the process exit.
             subprocess.run(cmd, check=True, timeout=SAY_BLOCKING_TIMEOUT_S)
-        except (subprocess.SubprocessError, OSError) as e:
-            logging.debug(f"Text-to-speech unavailable, continuing without it: {e}")
-    else:
-        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if system == "Windows" else 0)
+        else:
+            # Popen raises immediately when the binary is absent, and this path
+            # runs at every episode boundary — unguarded, a host without
+            # `spd-say` loses the recording mid-session rather than at the end.
+            subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if system == "Windows" else 0)
+    except (subprocess.SubprocessError, OSError) as e:
+        _warn_tts_unavailable(f"{type(e).__name__}: {e}")
 
 
 def log_say(text: str, play_sounds: bool = True, blocking: bool = False):
