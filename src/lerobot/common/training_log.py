@@ -11,7 +11,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Versioned machine-readable records embedded in human training logs."""
+"""Versioned machine-readable records embedded in human training logs.
+
+This is the emitter half of the GUI's training-health pipeline, and only
+trainers with their OWN logging need it: anything trained through
+``lerobot-train`` is parsed from its existing output with no integration at
+all. See ``lerobot/gui/training/DESIGN.md`` § "Integrating a trainer with
+training health" for the three ingestion grades and the decision rule.
+"""
 
 from __future__ import annotations
 

@@ -2,6 +2,9 @@
 
 Tracked follow-ups for the training subsystem. Colocated with [`DESIGN.md`](DESIGN.md) so the rationale and the open work live next to each other.
 
+- [Known limitation] **Trainers outside the three ingestion grades are metrics-blind.** Training health covers: (1) anything trained via `lerobot-train` — parsed from its stock output, zero integration; (2) own-logging trainers that emit `LEROBOT_TRAINING_JSON` records (HVLA S1 today); (3) unmodifiable trainers via legacy regex fallback in `log_parse.py`. A trainer that is none of these runs fine but charts nothing. No such trainer exists in-tree; if a third-party trainer gets a recipe, integrate per DESIGN.md § "Integrating a trainer with training health" (grade 2: one `format_training_log_record` call).
+- [Known limitation] **Trainers outside the three ingestion grades are metrics-blind.** Training health covers: (1) anything trained via `lerobot-train` — parsed from its stock output, zero integration; (2) own-logging trainers that emit `LEROBOT_TRAINING_JSON` records (HVLA S1 today); (3) unmodifiable trainers via legacy regex fallback in `log_parse.py`. A trainer that is none of these runs fine but charts nothing. No such trainer exists in-tree; if a third-party trainer gets a recipe, integrate per DESIGN.md § "Integrating a trainer with training health" (grade 2: one `format_training_log_record` call).
+
 ## HIGH PRIORITY — `SshClient.stop()` can terminate the developer's login session
 
 The real-SSH/tmux loopback suite (`test_ssh_transport.py`, `test_orchestrator_ssh.py`) is
