@@ -163,6 +163,11 @@ def pad_vector(vector, new_dim):
         return vector
     shape = list(vector.shape)
     current_dim = shape[-1]
+    if current_dim > new_dim:
+        raise ValueError(
+            f"Cannot pad a {current_dim}-value vector to smaller dimension {new_dim}. "
+            "Resolve max_state_dim/max_action_dim from the dataset before constructing the model."
+        )
     shape[-1] = new_dim
     new_vector = torch.zeros(*shape, dtype=vector.dtype, device=vector.device)
     new_vector[..., :current_dim] = vector

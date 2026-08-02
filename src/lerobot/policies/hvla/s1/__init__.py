@@ -25,10 +25,15 @@ def load_act_policy(checkpoint_path: str):
 
 def load_flow_matching_policy(checkpoint_path: str, config_overrides: dict | None = None):
     """Load Flow Matching S1 policy."""
-    from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Config, FlowMatchingS1Policy
+    from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Policy
 
-    config = FlowMatchingS1Config(**(config_overrides or {}))
-    return FlowMatchingS1Policy.from_pretrained(checkpoint_path, config=config)
+    if config_overrides:
+        raise ValueError(
+            "Partial Flow S1 config overrides are unsafe because tensor shapes and feature order "
+            "belong to the checkpoint contract. Load the checkpoint normally and change only "
+            "documented runtime controls."
+        )
+    return FlowMatchingS1Policy.from_pretrained(checkpoint_path)
 
 
 __all__ = [

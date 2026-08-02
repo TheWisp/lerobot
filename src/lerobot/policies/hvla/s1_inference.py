@@ -140,6 +140,7 @@ class InferenceThread:
         device: torch.device,
         resize_to: tuple[int, int] | None,
         fps: int,
+        state_feature_names: list[str] | None = None,
         num_denoise_steps: int | None = None,
         query_interval_steps: int = 0,
         grip_drop_save_dir: str | None = None,
@@ -167,6 +168,9 @@ class InferenceThread:
         self._s2_latent_key = s2_latent_key
         self._s1_image_keys = s1_image_keys
         self._joint_names = joint_names
+        # None means "legacy caller: state follows action order"; an explicit
+        # empty list means the checkpoint was trained without robot state.
+        self._state_feature_names = joint_names if state_feature_names is None else state_feature_names
         # Policy-internal overlay ("attention map"): publishing, demand-gating, cadence, and
         # method dispatch all live in SaliencyPublisher (overlays/saliency_publisher.py) — the
         # inference thread only calls publish(batch) once per inference. Keys: s1_image_keys
@@ -837,6 +841,7 @@ class InferenceThread:
                     self._device,
                     joint_names=self._joint_names,
                     resize_to=self._resize_to,
+                    state_feature_names=self._state_feature_names,
                 )
                 batch = self._preprocessor(batch)
 

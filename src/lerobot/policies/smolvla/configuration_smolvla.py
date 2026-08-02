@@ -121,6 +121,15 @@ class SmolVLAConfig(PreTrainedConfig):
             )
 
     def validate_features(self) -> None:
+        # These are padding widths, not robot-layout constants. Grow them to
+        # the dataset contract before the projection layers are constructed.
+        # Keeping the legacy value as a floor preserves pretrained configs
+        # while allowing robots with richer telemetry or more actuators.
+        if self.robot_state_feature is not None:
+            self.max_state_dim = max(self.max_state_dim, self.robot_state_feature.shape[0])
+        if self.action_feature is not None:
+            self.max_action_dim = max(self.max_action_dim, self.action_feature.shape[0])
+
         for i in range(self.empty_cameras):
             key = f"{OBS_IMAGES}.empty_camera_{i}"
             empty_camera = PolicyFeature(

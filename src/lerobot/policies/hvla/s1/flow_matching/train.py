@@ -37,6 +37,109 @@ from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
 logger = logging.getLogger(__name__)
 
 
+def checkpoint_config_dict(config: FlowMatchingS1Config) -> dict:
+    """Serialize a config into what a checkpoint's ``config.json`` must contain.
+
+    Postcondition: the result satisfies
+    :meth:`FlowMatchingS1Config.from_checkpoint_dict`, which is what makes a
+    checkpoint loadable. Lives at module level rather than inside ``train()``
+    so a test can hold the writer and the reader against each other; while it
+    was a closure, dropping a contract field here would have shipped
+    unloadable checkpoints with the whole suite still green.
+    """
+    return {
+        "type": "hvla_flow_s1",
+        "feature_contract_version": FlowMatchingS1Config.FEATURE_CONTRACT_VERSION,
+        "action_dim": config.action_dim,
+        "action_feature_names": config.action_feature_names,
+        "robot_state_feature": config.robot_state_feature,
+        "state_dim": config.state_dim,
+        "state_feature_names": config.state_feature_names,
+        "chunk_size": config.chunk_size,
+        "hidden_dim": config.hidden_dim,
+        "num_heads": config.num_heads,
+        "num_encoder_layers": config.num_encoder_layers,
+        "num_decoder_layers": config.num_decoder_layers,
+        "dim_feedforward": config.dim_feedforward,
+        "s2_latent_dim": config.s2_latent_dim,
+        "s2_proj_hidden": config.s2_proj_hidden,
+        "num_inference_steps": config.num_inference_steps,
+        "rtc_max_delay": config.rtc_max_delay,
+        "rtc_drop_prob": config.rtc_drop_prob,
+        "use_dino_backbone": config.use_dino_backbone,
+        "backbone_dim": config.backbone_dim,
+        "freeze_backbone": config.freeze_backbone,
+        "image_features": config.image_features,
+        "image_resize_shape": config.image_resize_shape,
+        "dino_model": config.dino_model,
+    }
+
+
+def configure_from_dataset_features(
+    config: FlowMatchingS1Config,
+    features: dict,
+    *,
+    resize_to: tuple[int, int] | None,
+) -> None:
+    """Resolve the S1 input/output contract from LeRobot dataset metadata.
+
+    The metadata is the only source of truth here: robot type, motor count,
+    state layout, and camera names are deliberately not inferred from names.
+    """
+    try:
+        action_feature = features["action"]
+    except KeyError as exc:
+        raise ValueError("HVLA Flow S1 training requires an 'action' feature") from exc
+
+    action_shape = tuple(action_feature.get("shape", ()))
+    if len(action_shape) != 1 or action_shape[0] <= 0:
+        raise ValueError(f"HVLA Flow S1 requires a 1-D action feature, got shape={action_shape}")
+    config.action_dim = int(action_shape[0])
+    config.action_feature_names = list(action_feature.get("names") or [])
+    if len(config.action_feature_names) != config.action_dim:
+        raise ValueError(
+            "Action metadata must provide one ordered name per value: "
+            f"{len(config.action_feature_names)} names for {config.action_dim} values"
+        )
+
+    state_feature = features.get("observation.state")
+    if state_feature is None:
+        config.robot_state_feature = False
+        config.state_dim = 0
+        config.state_feature_names = []
+    else:
+        state_shape = tuple(state_feature.get("shape", ()))
+        if len(state_shape) != 1 or state_shape[0] <= 0:
+            raise ValueError(
+                f"HVLA Flow S1 requires a 1-D observation.state feature, got shape={state_shape}"
+            )
+        config.robot_state_feature = True
+        config.state_dim = int(state_shape[0])
+        config.state_feature_names = list(state_feature.get("names") or [])
+        if len(config.state_feature_names) != config.state_dim:
+            raise ValueError(
+                "State metadata must provide one ordered name per value: "
+                f"{len(config.state_feature_names)} names for {config.state_dim} values"
+            )
+
+    image_keys = [
+        key
+        for key, feature in features.items()
+        if key.startswith("observation.images.")
+        and len(tuple(feature.get("shape", ()))) == 3
+        and feature.get("dtype") in {"image", "video"}
+    ]
+    if not image_keys:
+        raise ValueError(
+            "HVLA Flow S1 training requires at least one visual feature under observation.images.*"
+        )
+
+    image_size = resize_to[0] if resize_to is not None else None
+    config.image_features = dict.fromkeys(image_keys, image_size)
+    config.image_resize_shape = resize_to
+    config.validate_feature_contract(require_names=True)
+
+
 class FlowMatchingDataset(torch.utils.data.Dataset):
     """Dataset with S2 latent loading and delay augmentation.
 
@@ -74,7 +177,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                     self._episode_starts[i] = start
                     self._episode_ends[i] = end
 
-        # Preload all actions into memory (10MB for 186k × 14 float32)
+        # Preload all actions into memory.
         # Avoids calling dataset[i] 50 times per sample for chunk construction
         import logging as _log
 
@@ -192,6 +295,12 @@ def train(args):
 
     logger.info("Command: %s", " ".join(sys.argv))
 
+    # Parse resize before resolving the feature contract.
+    resize_to = None
+    if args.resize_images:
+        h, w = (int(x) for x in args.resize_images.split("x"))
+        resize_to = (h, w)
+
     # Load config
     config = FlowMatchingS1Config(
         chunk_size=args.chunk_size,
@@ -201,12 +310,21 @@ def train(args):
         hidden_dim=args.hidden_dim,
         num_decoder_layers=args.num_decoder_layers,
     )
-    if args.resize_images:
-        h, w = (int(x) for x in args.resize_images.split("x"))
-        config.image_features = dict.fromkeys(config.image_features, h)
+    # Load dataset
+    logger.info("Loading dataset: %s", args.dataset_repo_id)
+    lerobot_dataset = LeRobotDataset(args.dataset_repo_id)
+    configure_from_dataset_features(
+        config,
+        lerobot_dataset.meta.features,
+        resize_to=resize_to,
+    )
 
     logger.info(
-        "Config: chunk=%d, hidden=%d, dec_layers=%d, rtc_max_delay=%d, rtc_drop=%.2f, denoise_steps=%d",
+        "Config: action=%d, state=%d, cameras=%s, chunk=%d, hidden=%d, "
+        "dec_layers=%d, rtc_max_delay=%d, rtc_drop=%.2f, denoise_steps=%d",
+        config.action_dim,
+        config.state_dim,
+        list(config.image_features),
         config.chunk_size,
         config.hidden_dim,
         config.num_decoder_layers,
@@ -214,10 +332,6 @@ def train(args):
         config.rtc_drop_prob,
         config.num_inference_steps,
     )
-
-    # Load dataset
-    logger.info("Loading dataset: %s", args.dataset_repo_id)
-    lerobot_dataset = LeRobotDataset(args.dataset_repo_id)
 
     # Load S2 latents (optional — train without S2 conditioning if omitted)
     s2_latents = None
@@ -227,12 +341,6 @@ def train(args):
         logger.info("S2 latents shape: %s", s2_latents.shape)
     else:
         logger.info("No S2 latent path provided — training without S2 conditioning")
-
-    # Parse resize
-    resize_to = None
-    if args.resize_images:
-        h, w = (int(x) for x in args.resize_images.split("x"))
-        resize_to = (h, w)
 
     # Wrap dataset
     dataset = FlowMatchingDataset(
@@ -369,28 +477,7 @@ def train(args):
         torch.save(norm_stats, str(pretrained_dir / "norm_stats.pt"))
 
         # config.json — identifies this as an HVLA checkpoint
-        policy_config = {
-            "type": "hvla_flow_s1",
-            "action_dim": config.action_dim,
-            "state_dim": config.state_dim,
-            "chunk_size": config.chunk_size,
-            "hidden_dim": config.hidden_dim,
-            "num_heads": config.num_heads,
-            "num_encoder_layers": config.num_encoder_layers,
-            "num_decoder_layers": config.num_decoder_layers,
-            "dim_feedforward": config.dim_feedforward,
-            "s2_latent_dim": config.s2_latent_dim,
-            "s2_proj_hidden": config.s2_proj_hidden,
-            "num_inference_steps": config.num_inference_steps,
-            "rtc_max_delay": config.rtc_max_delay,
-            "rtc_drop_prob": config.rtc_drop_prob,
-            "use_dino_backbone": config.use_dino_backbone,
-            "backbone_dim": config.backbone_dim,
-            "freeze_backbone": config.freeze_backbone,
-            "image_features": config.image_features,
-            "dino_model": config.dino_model,
-        }
-        (pretrained_dir / "config.json").write_text(json.dumps(policy_config, indent=2))
+        (pretrained_dir / "config.json").write_text(json.dumps(checkpoint_config_dict(config), indent=2))
 
         # train_config.json — training args for reproducibility
         train_config = {

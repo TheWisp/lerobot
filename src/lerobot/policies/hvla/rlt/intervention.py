@@ -50,15 +50,15 @@ class InterventionRecorder:
         policy: Any,  # S1 policy (for normalization stats)
         device: torch.device,
         chunk_length: int,
-        joint_names: list[str],
+        state_feature_names: list[str],
     ):
         assert chunk_length > 0, f"chunk_length must be positive, got {chunk_length}"
-        assert len(joint_names) > 0, "joint_names must not be empty"
+        assert len(state_feature_names) > 0, "state_feature_names must not be empty"
         self._replay = replay
         self._policy = policy
         self._device = device
         self._C = chunk_length
-        self._joint_names = joint_names
+        self._state_feature_names = state_feature_names
         self._frame_count: int = 0
         self._chunks_stored: int = 0
         self._chunk_buf: list[Tensor] = []
@@ -141,8 +141,8 @@ class InterventionRecorder:
               intervention (so prev-pair state isn't stale).
             * ``current_z_rl is not None`` (asserted) — the upstream
               inference thread must be exposing a fresh z_rl.
-            * ``current_obs`` contains every joint listed in
-              ``joint_names``.
+            * ``current_obs`` contains every feature listed in
+              ``state_feature_names``.
 
         Postconditions:
             * ``frames_observed`` is incremented by 1.
@@ -192,7 +192,7 @@ class InterventionRecorder:
 
     def _extract_state(self, obs: dict) -> Tensor:
         state_np = np.array(
-            [float(obs[j]) for j in self._joint_names],
+            [float(obs[j]) for j in self._state_feature_names],
             dtype=np.float32,
         )
         state_t = torch.from_numpy(state_np).to(self._device)
@@ -278,8 +278,8 @@ class InterventionRecorder:
         Preconditions:
             * ``current_z_rl is not None`` if a transition will be
               written (asserted; same failure mode as ``on_frame``).
-            * ``current_obs`` contains every joint listed in
-              ``joint_names``.
+            * ``current_obs`` contains every feature listed in
+              ``state_feature_names``.
 
         Postconditions:
             * If ``_prev_chunk`` is set: one transition is appended to
