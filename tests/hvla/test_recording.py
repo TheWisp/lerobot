@@ -60,11 +60,15 @@ class TestCreateRecordingDataset:
         """Dataset features should reflect robot's joints and cameras."""
         from lerobot.policies.hvla.s1_process import _create_recording_dataset
 
+        # The layouts are the checkpoint's contract; here they match the robot.
+        layout = [k for k, v in mock_robot.action_features.items() if not isinstance(v, tuple)]
         dataset = _create_recording_dataset(
             repo_id="test_user/test_dataset",
             fps=30,
             robot=mock_robot,
             task="test task",
+            action_names=layout,
+            state_names=layout,
         )
 
         try:
@@ -102,7 +106,9 @@ class TestCreateRecordingDataset:
             "camera": (224, 224, 3),
         }
 
-        dataset = _create_recording_dataset("test_user/single_arm", 30, robot, "test")
+        dataset = _create_recording_dataset(
+            "test_user/single_arm", 30, robot, "test", joint_names, joint_names
+        )
         try:
             assert dataset.features["observation.state"]["shape"] == (7,)
             assert dataset.features["action"]["shape"] == (7,)
