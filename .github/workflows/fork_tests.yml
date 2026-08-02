@@ -95,9 +95,9 @@ jobs:
       # and the e2e record round trip dies on missing action keys), scipy-dep
       # (rotation math in the quest/cartesian tests), can-dep (python-can —
       # without it every tests/motors/test_damiao*.py module skips at import,
-      # so the CAN wire-protocol contract went unchecked in CI). Chosen so the
-      # tests RUN here rather than skip — skipping would un-cover exactly the
-      # paths this workflow exists to cover.
+      # so the CAN driver went entirely unchecked in CI). Chosen so the tests
+      # RUN here rather than skip — skipping would un-cover exactly the paths
+      # this workflow exists to cover.
       - name: Install (test+gui+feetech+quest-vr+scipy+can, playwright overlay)
         run: |
           uv sync --locked --extra test --extra gui --extra feetech --extra quest-vr --extra scipy-dep --extra can-dep
