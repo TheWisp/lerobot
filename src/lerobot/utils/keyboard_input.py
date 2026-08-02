@@ -37,6 +37,19 @@ deliberately NOT served here. A terminal in cbreak mode delivers only key-down
 bytes — there is no key-release event — so the held-key model cannot be
 reproduced. Those teleoperators stay on ``pynput`` and use
 :func:`pynput_can_capture` to warn instead of silently doing nothing.
+
+Adding a control command
+------------------------
+
+Four touch points, one vocabulary; a parity test pins the ends together.
+Full design, the double-fire hazard the kill switch prevents, UX
+semantics and a worked example live in ``lerobot/gui/CONTROLS.md``.
+
+1. ``_STDIN_COMMAND_TO_CONTROL`` here + the control's effect on ``events``.
+2. ``_CONTROL_COMMANDS`` in ``lerobot/gui/api/run.py``.
+3. Button + hotkey in ``run.js``, both behind the same gating predicate.
+4. A consumer of the events dict — via a supported hook, never by
+   monkeypatching ``listener.on_press`` (pynput-only; stranded RLT).
 """
 
 from __future__ import annotations
