@@ -83,7 +83,7 @@ def main():
         "--denoise-steps",
         type=int,
         default=None,
-        help="Number of flow matching denoising steps (default: 10 from config)",
+        help="Override the flow-matching denoising steps; unset uses the checkpoint's trained value",
     )
     parser.add_argument(
         "--s1-query-interval",

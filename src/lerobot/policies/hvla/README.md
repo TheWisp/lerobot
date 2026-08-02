@@ -134,7 +134,7 @@ python -m lerobot.policies.hvla.launch \
 
 No `--temporal-ensemble-coeff` needed — RTC provides chunk continuity natively. Key flags:
 
-- `--denoise-steps N`: override denoising steps (default 10, min usable ~5, max quality ~15)
+- `--denoise-steps N`: override denoising steps (unset = the checkpoint's trained value, currently 15 for new runs; min usable ~5)
 - `--s1-query-interval N`: re-query every N actions (default 2, ~67ms). Lower = fresher chunks, higher = more of each chunk executed
 - `--no-compile-s1`: disable torch.compile if needed (on by default, ~2ms savings)
 - `--save-grip-drops DIR`: save observations when gripper drops detected (debugging)
