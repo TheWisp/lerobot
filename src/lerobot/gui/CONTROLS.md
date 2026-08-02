@@ -115,6 +115,48 @@ channel") and the stdin-only dispatch; the field evidence is the first log
 line of any GUI-launched record on this X11 workstation, which states the
 suppression explicitly.
 
+## Generalization roadmap — from episode-flow channel to generic hotkeys
+
+The transport is already generic: `/api/run/control` validates an opaque
+command string and writes one JSON line to the active subprocess's stdin,
+whatever that subprocess runs. What is hardcoded today is everything wrapped
+around the pipe, in three layers:
+
+1. **Vocabulary** — `_CONTROL_COMMANDS` is a flat set of three episode-flow
+   commands, with no notion of which run kinds a command is valid for;
+   validity-per-kind lives only in the frontend predicate.
+2. **Consumer** — the subprocess side hardwires every control into
+   `apply_recording_control` and the record loop's events dict; there is no
+   `subscribe(control, callback)` hook, which is exactly why the RLT reward
+   keys are stranded.
+3. **Frontend** — the key map is an inline literal in
+   `_bindRunControlHotkeys`, the gate is the record-only predicate, and the
+   scope is hardcoded to the Run tab.
+
+Target state, and the order it should arrive in (each step lands with its
+first real user, never speculatively):
+
+- **Step 1 — per-kind vocabulary + subscribe hook** (arrives with the RLT
+  migration, which forces both): the flat set becomes a registry of
+  `command → allowed run kinds`, checked against the active run's command
+  server-side; the composite listener grows
+  `subscribe(control, callback)`, with `apply_recording_control` as its
+  first subscriber. `reward_success`/`reward_abort` are valid only for the
+  `hvla` run kind, so per-kind gating cannot be deferred past this step.
+  The vocabulary-parity test generalizes with the registry.
+- **Step 2 — declarative frontend registry** (arrives with the second or
+  third migrated consumer — SPACE intervention, S2 injection): entries of
+  `{key, command, runKinds, label}` drive both button rendering and the
+  keydown handler, so a hotkey and its button stay two doors into one entry
+  by construction instead of by review discipline.
+- **Step 3 — customization** (only if ever actually wanted): persisted
+  per-user overrides. Stays a single-point change because bindings live in
+  one map (step 2's registry).
+
+The endpoint itself never needs renaming or redesigning — "control the
+active run" is already the right abstraction; hotkeys are scoped per run
+kind, not per tab.
+
 ## Known gaps (tracked in `TODO.md`)
 
 GUI-launched runs currently carry only episode flow (`exit_early`,
