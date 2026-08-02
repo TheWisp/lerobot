@@ -1212,9 +1212,21 @@ def run_s1(
         events = {"exit_early": False, "stop_recording": False}
         listener = None
 
-    # RLT: hook R key into existing keyboard listener for reward signal
-    if rlt_mode and rlt_state is not None and listener is not None:
-        _orig_on_press = listener.on_press
+    # RLT: hook R key into existing keyboard listener for reward signal.
+    # `on_press` is a pynput attribute, so this hook is inert under the terminal
+    # backend (Wayland / headless TTY) and absent entirely when local keyboard
+    # capture is disabled — which the GUI does for subprocesses it launches, so
+    # a GUI-driven RLT run currently has no transport for the reward keys at
+    # all. Degrade loudly rather than raising AttributeError mid-rollout; see
+    # the RLT reward-transport TODO in gui/TODO.md.
+    _orig_on_press = getattr(listener, "on_press", None) if listener is not None else None
+    if rlt_mode and rlt_state is not None and _orig_on_press is None:
+        logger.warning(
+            "RLT: reward hotkeys (R = success, LEFT = abort) are unavailable — the active "
+            "keyboard backend exposes no on_press hook. Episodes will still run, but terminal "
+            "reward must be signalled another way."
+        )
+    if rlt_mode and rlt_state is not None and _orig_on_press is not None:
 
         def _rlt_on_press(key, *args):
             try:
