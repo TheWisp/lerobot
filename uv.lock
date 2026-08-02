@@ -3,34 +3,37 @@ revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "(python_full_version >= '3.14' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version >= '3.14' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'linux'",
     "(python_full_version == '3.13.*' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version == '3.13.*' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
-    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'linux'",
     "(python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version < '3.13' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "(python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "(python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "python_full_version >= '3.14' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'linux'",
+    "python_full_version == '3.13.*' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'linux'",
+    "python_full_version < '3.13' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'linux'",
-    "(python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version >= '3.14' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "(python_full_version >= '3.14' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "(python_full_version == '3.13.*' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "(python_full_version < '3.13' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "(python_full_version == '3.13.*' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "(python_full_version < '3.13' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'emscripten'",
-    "(python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'win32'",
-    "(python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'win32'",
-    "(python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'win32'",
 ]
 
@@ -1087,6 +1090,40 @@ wheels = [
 ]
 
 [[package]]
+name = "daqp"
+version = "0.7.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/17/9d3409165ad752dab54af5779fdd77757957587fe2a3404f92a4fbd4cea3/daqp-0.7.2.tar.gz", hash = "sha256:195855763331d6fc15d54b2354f91b0888e84cf43e1e9ee62f01cdce11f555e7", size = 178815, upload-time = "2025-08-11T21:51:34.578Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/7a/14d99758ee8dd30a4a9872cd9335a39f132300a89a85ce0babf95abf58e1/daqp-0.7.2-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:128e069af356d058c3118835f54a17a44ec2c2b9892693ba4328129717649608", size = 113417, upload-time = "2025-08-11T21:52:41.539Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/08/041461120e16bab05ea163afdb88fab452aefa9cbeadb9b91b3ec4f23635/daqp-0.7.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:9da7a69e89b5d26302cbfb049f132981fe1c2f2a59a788e46a7b53df242b4828", size = 102660, upload-time = "2025-07-29T13:01:04.352Z" },
+    { url = "https://files.pythonhosted.org/packages/97/84/f8a89433fd182a850aa8db9c0cfffc9d2ebf7347b34eb5e203c8488459a2/daqp-0.7.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7d27e010ef42405f5979a93ca75c2c2f323a2b34247aacb4328fb446c61058d3", size = 630535, upload-time = "2025-08-11T21:51:27.509Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/2a/b0a896f1aa8618fae09acf508f0bb0192022383dbf73bea76143345167c8/daqp-0.7.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:5bc97b1f8b9ecd3bc1e5b8c0edc839314e6fd9e13061637a664d003e9b7ef7db", size = 584167, upload-time = "2025-07-29T13:41:43.828Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/e2/1f1d0ea885665adc0447089e2c5d803162e81a90499ab2bdcbaebbefd368/daqp-0.7.2-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:61cb14d6738d64369a1224820514039550c14f3c40054d78c0cb303012002066", size = 602219, upload-time = "2025-07-29T13:41:45.316Z" },
+    { url = "https://files.pythonhosted.org/packages/10/bc/975c5ea099706d49fcb09e3612bbaca6477fe6d343468ebf0b91d2408fce/daqp-0.7.2-cp312-cp312-win32.whl", hash = "sha256:1f384048ae28884ef9264cce3183c74269ee2cd3cbd7c184fe765358c0fc1ba2", size = 79852, upload-time = "2025-08-11T21:58:49.538Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/72/3bbbb5c5da4b982f420000ee4465b46b35d802bfbc73c1f3b772585c8b86/daqp-0.7.2-cp312-cp312-win_amd64.whl", hash = "sha256:49d66d0c92f309eda5acbbbb3b970f2ff90ec93e0f7450ced75fd2df83c12e3b", size = 97974, upload-time = "2025-08-11T21:58:50.415Z" },
+    { url = "https://files.pythonhosted.org/packages/50/4f/f132cd1c0e81e2bfee0bc6d96d86d12be2e5de3f9f603b5e0561f8fa8ab3/daqp-0.7.2-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:1ee1df0fd2ae40921e3ee52a737de2410a2d9cd65ff49e206ea431e9b8c2483a", size = 112182, upload-time = "2025-08-11T21:52:42.363Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/8d/f651cb2df6e4e132bbce46a4e48d7a6b3098fd35aae8b54471ea553fd147/daqp-0.7.2-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:296b4c81a452f2972dc4882743c3c60ae6523dff0a7928960c40356efd33961b", size = 101728, upload-time = "2025-07-29T13:01:05.439Z" },
+    { url = "https://files.pythonhosted.org/packages/58/df/0b06a1df719ba762d64b3f838714ca94785199fee2258e60518937b23d54/daqp-0.7.2-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:25bb856f1d4bbedea7cd3203a567caee59e3d3c1964641c4988bcd0ce547afed", size = 622317, upload-time = "2025-08-11T21:51:28.954Z" },
+    { url = "https://files.pythonhosted.org/packages/89/b4/5883da044d0b8cedb0c578ae30eade3f0bfb3e6b0b6140a94025799404d3/daqp-0.7.2-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1ed193429633df4c4eba9a553920fa574ad15ad3947848106cb487233d181741", size = 576669, upload-time = "2025-07-29T13:41:46.687Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/56/1c3c718097944546f0de541b477f770bd53bd6525db88ecbdd1fc3e8aa2f/daqp-0.7.2-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:7ada42dac9b5f72d1cc8673ec742197ec7573e7ec4c47f81345b9423388be500", size = 598175, upload-time = "2025-07-29T13:41:49.651Z" },
+    { url = "https://files.pythonhosted.org/packages/68/26/5a40dce966a4803c2b817f090fcfae7266dc0e56826c584b6b7df115ad0d/daqp-0.7.2-cp313-cp313-win32.whl", hash = "sha256:35441fa3df9dfd2d7bab35a686b093c11b92bf7a27297e0a1013a12b18bf8a45", size = 79687, upload-time = "2025-08-11T21:58:51.313Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/b8/84176537fa47765fb92f0f3c6f364bdb5f2fe389b448206daf18050a3963/daqp-0.7.2-cp313-cp313-win_amd64.whl", hash = "sha256:d837854c897435f6a2aa44b76e449d04c96987a621476eccc147361e30c937d5", size = 97779, upload-time = "2025-08-11T21:58:52.094Z" },
+    { url = "https://files.pythonhosted.org/packages/13/04/8f8f7d1bdffa642f81ae8f71c8bb4d1a5420013a6942fe1729f6f1733fa0/daqp-0.7.2-cp314-cp314-macosx_10_13_x86_64.whl", hash = "sha256:7ce7ef7b1155312d4d6f9eaac6ee11229a585b1ce1bcb88e474bc3b64e5060ad", size = 112376, upload-time = "2025-08-11T21:52:43.152Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/b0/816a3a9aa89ecd56baac9e6a2d39badfdd115588bdeb235ecde08dfaff45/daqp-0.7.2-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:14ec3183dcfebdd294e87de88aae135488aa2abf54181a26b1f6ab7017a58c68", size = 121498, upload-time = "2026-03-17T21:39:03.022Z" },
+    { url = "https://files.pythonhosted.org/packages/82/60/a5a20788aab6e58bc4bd6eace552cf5713a33ea6bd77faf3f0f3bff1ef47/daqp-0.7.2-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:c07d80d0fcf808f5af2dd5fbf8dcc1d6aefac0ed7a116f92d9f52351166f4095", size = 102357, upload-time = "2025-08-11T21:51:56.628Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/68/e11eb12a0e1a80891cbd899d85317f0f47ef4b6f4f3d04ea6669392f8048/daqp-0.7.2-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:cfb5e97cb29be3734069782b6edc395bc836b6cd4dfac43db40f8a7f0235e83c", size = 615029, upload-time = "2025-08-11T21:51:30.295Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/dd/486a78040e59cdb85bd2de5c05472697e88565abffa317f00464f78fbe0e/daqp-0.7.2-cp314-cp314-win32.whl", hash = "sha256:74aa9bb146a5e212ebdb0f0d11c5271347f95cc4261597da1597f869eb46d216", size = 82354, upload-time = "2025-08-11T21:58:52.902Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/a1/15b7d2b6a6c6c3575c5354829eeffcf831e20ee0f066c9e2a6d133bfeb8f/daqp-0.7.2-cp314-cp314-win_amd64.whl", hash = "sha256:a2b498bc6fd27b26851d80f2bfc96ae5b2cd38f0e2ee1cdc13b99b2ac6ba1757", size = 100216, upload-time = "2025-08-11T21:58:53.674Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/13/4376faa7041bb89978aa7a3a620dab56f44e19f3196a6adf524d4c43d1cf/daqp-0.7.2-cp314-cp314t-macosx_10_13_x86_64.whl", hash = "sha256:43d1c1b8c245f7889c6337f2ac720d034bdc75f75b6bc6d17f7b26f4b924e788", size = 118006, upload-time = "2025-08-11T21:52:44.187Z" },
+    { url = "https://files.pythonhosted.org/packages/69/b4/ba87ef5d597fc95b9207911c2732dea98a63141dfc94f2a2b32e373494c5/daqp-0.7.2-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:d15cb9650b53b9041df73be88b6f99601df75abf2b10bd8202e46ac89c5cde5f", size = 127358, upload-time = "2026-03-17T21:39:04.086Z" },
+    { url = "https://files.pythonhosted.org/packages/00/68/ad156f98564237fbedec214dbf9f3967c0456470069f83253ebf86713eab/daqp-0.7.2-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:2b5f40821a7a9604263d4531b7d77412d546b99e06a8934fdc033dbc4864c91d", size = 109361, upload-time = "2025-08-11T21:51:57.45Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/f2/d749678272b41802a72dedf54ea6cced8050bd1e6ac601f95ae02813c496/daqp-0.7.2-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:182a80054c73f92519400e91a1c9c483bc212cd76783f6a0ef3cf4525a20fec0", size = 627476, upload-time = "2025-08-11T21:51:31.355Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/4d/719c9248aafcfc8dd151367e84d99bf12997d9e508c31081a1c55b8b3a48/daqp-0.7.2-cp314-cp314t-win32.whl", hash = "sha256:035aa7b180cc2eabaea356808839b28c8c5da7ebaf9babb3ada1e7c4ce97ac32", size = 92811, upload-time = "2025-08-11T21:58:54.84Z" },
+    { url = "https://files.pythonhosted.org/packages/71/f9/04cf36d8a01af947aece4ce4f8f8f1a285f1d7bdab83dbc9fa2e69ecf126/daqp-0.7.2-cp314-cp314t-win_amd64.whl", hash = "sha256:429457545c9fcc55e07b4943933a94c83737713d91f69d3d60d620a8f798ac35", size = 115405, upload-time = "2025-08-11T21:58:55.692Z" },
+]
+
+[[package]]
 name = "datasets"
 version = "4.8.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1268,14 +1305,15 @@ version = "0.1.9"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "(python_full_version >= '3.14' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version >= '3.14' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "(python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "python_full_version >= '3.14' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'linux'",
-    "(python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version >= '3.14' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "(python_full_version >= '3.14' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'emscripten'",
-    "(python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'win32'",
 ]
 dependencies = [
@@ -1305,24 +1343,26 @@ version = "0.1.10"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "(python_full_version == '3.13.*' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version == '3.13.*' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
-    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'linux'",
     "(python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version < '3.13' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "(python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "python_full_version == '3.13.*' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'linux'",
+    "python_full_version < '3.13' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'linux'",
-    "(python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version == '3.13.*' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "(python_full_version == '3.13.*' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "(python_full_version < '3.13' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "(python_full_version < '3.13' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'emscripten'",
-    "(python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'win32'",
-    "(python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'win32'",
 ]
 dependencies = [
@@ -2643,7 +2683,7 @@ dependencies = [
     { name = "nbformat" },
     { name = "packaging" },
     { name = "prometheus-client" },
-    { name = "pywinpty", marker = "os_name == 'nt' and sys_platform != 'linux'" },
+    { name = "pywinpty", marker = "(os_name == 'nt' and platform_machine != 'arm64' and sys_platform == 'darwin') or (os_name == 'nt' and sys_platform != 'darwin' and sys_platform != 'linux')" },
     { name = "pyzmq" },
     { name = "send2trash" },
     { name = "terminado" },
@@ -2661,7 +2701,7 @@ name = "jupyter-server-terminals"
 version = "0.5.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pywinpty", marker = "os_name == 'nt' and sys_platform != 'linux'" },
+    { name = "pywinpty", marker = "(os_name == 'nt' and platform_machine != 'arm64' and sys_platform == 'darwin') or (os_name == 'nt' and sys_platform != 'darwin' and sys_platform != 'linux')" },
     { name = "terminado" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f4/a7/bcd0a9b0cbba88986fe944aaaf91bfda603e5a50bda8ed15123f381a3b2f/jupyter_server_terminals-0.5.4.tar.gz", hash = "sha256:bbda128ed41d0be9020349f9f1f2a4ab9952a73ed5f5ac9f1419794761fb87f5", size = 31770, upload-time = "2026-01-14T16:53:20.213Z" }
@@ -2935,14 +2975,18 @@ all = [
     { name = "mock-serial", marker = "sys_platform != 'win32'" },
     { name = "motorbridge" },
     { name = "motorbridge-smart-servo" },
+    { name = "mujoco" },
     { name = "mypy" },
     { name = "num2words" },
+    { name = "openarm-control" },
+    { name = "openarm-mujoco" },
     { name = "pandas" },
     { name = "peft" },
     { name = "pin-pink" },
     { name = "placo" },
     { name = "pre-commit" },
     { name = "protobuf" },
+    { name = "proxsuite" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pygame" },
@@ -2958,7 +3002,7 @@ all = [
     { name = "python-can" },
     { name = "python-multipart" },
     { name = "pyzmq" },
-    { name = "qpsolvers", extra = ["proxqp"] },
+    { name = "qpsolvers" },
     { name = "qwen-vl-utils" },
     { name = "reachy2-sdk" },
     { name = "rerun-sdk" },
@@ -3176,7 +3220,8 @@ kinematics = [
     { name = "cmeel-urdfdom" },
     { name = "pin-pink" },
     { name = "placo" },
-    { name = "qpsolvers", extra = ["proxqp"] },
+    { name = "proxsuite" },
+    { name = "qpsolvers" },
 ]
 lekiwi = [
     { name = "deepdiff" },
@@ -3248,6 +3293,17 @@ notebook = [
     { name = "ipykernel" },
     { name = "jupyter" },
 ]
+openarm-ff = [
+    { name = "mujoco" },
+    { name = "openarm-mujoco" },
+    { name = "python-can" },
+]
+openarm-ik = [
+    { name = "mujoco" },
+    { name = "openarm-control" },
+    { name = "openarm-mujoco" },
+    { name = "python-can" },
+]
 openarms = [
     { name = "python-can" },
 ]
@@ -3270,7 +3326,8 @@ pi = [
 ]
 pink-dep = [
     { name = "pin-pink" },
-    { name = "qpsolvers", extra = ["proxqp"] },
+    { name = "proxsuite" },
+    { name = "qpsolvers" },
 ]
 placo-dep = [
     { name = "cmeel-tinyxml2" },
@@ -3302,8 +3359,6 @@ pyzmq-dep = [
 ]
 quest-vr = [
     { name = "aiohttp" },
-    { name = "pin-pink" },
-    { name = "qpsolvers", extra = ["proxqp"] },
 ]
 qwen-vl-utils-dep = [
     { name = "qwen-vl-utils" },
@@ -3544,7 +3599,10 @@ requires-dist = [
     { name = "lerobot", extras = ["multi-task-dit"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["multi-task-dit"], marker = "extra == 'training-image'" },
     { name = "lerobot", extras = ["notebook"], marker = "extra == 'dev'" },
+    { name = "lerobot", extras = ["openarm-ff"], marker = "extra == 'openarm-ik'" },
+    { name = "lerobot", extras = ["openarm-ik"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["openarms"], marker = "extra == 'all'" },
+    { name = "lerobot", extras = ["openarms"], marker = "extra == 'openarm-ff'" },
     { name = "lerobot", extras = ["peft"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["peft-dep"], marker = "extra == 'groot'" },
     { name = "lerobot", extras = ["peft-dep"], marker = "extra == 'molmoact2'" },
@@ -3555,7 +3613,6 @@ requires-dist = [
     { name = "lerobot", extras = ["pi"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["pi"], marker = "extra == 'training-image'" },
     { name = "lerobot", extras = ["pink-dep"], marker = "extra == 'kinematics'" },
-    { name = "lerobot", extras = ["pink-dep"], marker = "extra == 'quest-vr'" },
     { name = "lerobot", extras = ["placo-dep"], marker = "extra == 'hilserl'" },
     { name = "lerobot", extras = ["placo-dep"], marker = "extra == 'kinematics'" },
     { name = "lerobot", extras = ["pusht"], marker = "extra == 'all'" },
@@ -3632,6 +3689,7 @@ requires-dist = [
     { name = "mock-serial", marker = "sys_platform != 'win32' and extra == 'test'", specifier = ">=0.0.1,<0.1.0" },
     { name = "motorbridge", marker = "extra == 'motorbridge-dep'", specifier = ">=0.3.2,<0.4.0" },
     { name = "motorbridge-smart-servo", marker = "extra == 'motorbridge-smart-servo-dep'", specifier = ">=0.0.4,<0.1.0" },
+    { name = "mujoco", marker = "extra == 'openarm-ff'", specifier = ">=3.6,<4" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.19.1" },
     { name = "nebius", marker = "extra == 'nebius'", specifier = ">=0.3,<0.4" },
     { name = "num2words", marker = "extra == 'smolvla'", specifier = ">=0.5.14,<0.6.0" },
@@ -3639,6 +3697,8 @@ requires-dist = [
     { name = "onnx", marker = "extra == 'unitree-g1'", specifier = ">=1.16.0,<2.0.0" },
     { name = "onnxruntime", marker = "extra == 'unitree-g1'", specifier = ">=1.16.0,<2.0.0" },
     { name = "openai", marker = "extra == 'annotations'", specifier = ">=1.40,<2.0" },
+    { name = "openarm-control", marker = "extra == 'openarm-ik'", specifier = "==0.1.0" },
+    { name = "openarm-mujoco", marker = "extra == 'openarm-ff'", specifier = ">=2.0" },
     { name = "opencv-python-headless", specifier = ">=4.9.0,<4.14.0" },
     { name = "packaging", specifier = ">=24.2,<26.0" },
     { name = "pandas", marker = "extra == 'dataset'", specifier = ">=2.0.0,<3.0.0" },
@@ -3650,6 +3710,7 @@ requires-dist = [
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7.0,<5.0.0" },
     { name = "protobuf", marker = "extra == 'grpcio-dep'", specifier = ">=6.31.1,<8.0.0" },
     { name = "protobuf", marker = "extra == 'reachy2'", specifier = "<=6.32.0" },
+    { name = "proxsuite", marker = "extra == 'pink-dep'", specifier = ">=0.7,<1" },
     { name = "pyarrow", marker = "extra == 'dataset'", specifier = ">=21.0.0,<30.0.0" },
     { name = "pydantic", marker = "extra == 'gui'", specifier = ">=2.0.0,<3.0.0" },
     { name = "pydantic", marker = "extra == 'sarm'", specifier = ">=2.0.0,<3.0.0" },
@@ -3666,7 +3727,7 @@ requires-dist = [
     { name = "python-can", marker = "extra == 'can-dep'", specifier = ">=4.2.0,<5.0.0" },
     { name = "python-multipart", marker = "extra == 'gui'", specifier = ">=0.0.9,<1.0.0" },
     { name = "pyzmq", marker = "extra == 'pyzmq-dep'", specifier = ">=26.2.1,<28.0.0" },
-    { name = "qpsolvers", extras = ["proxqp"], marker = "extra == 'pink-dep'", specifier = ">=4.12,<5" },
+    { name = "qpsolvers", marker = "extra == 'pink-dep'", specifier = ">=4.11,<5" },
     { name = "qwen-vl-utils", marker = "extra == 'qwen-vl-utils-dep'", specifier = ">=0.0.11,<0.1.0" },
     { name = "reachy2-sdk", marker = "extra == 'reachy2'", specifier = ">=1.0.15,<1.1.0" },
     { name = "requests", specifier = ">=2.32.0,<3.0.0" },
@@ -3698,7 +3759,7 @@ requires-dist = [
     { name = "websockets", marker = "extra == 'gui'", specifier = ">=13.0,<17.0" },
     { name = "zeroconf", marker = "extra == 'gui'", specifier = ">=0.130,<1.0" },
 ]
-provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "pink-dep", "transformers-dep", "grpcio-dep", "accelerate-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "motorbridge-dep", "motorbridge-smart-servo-dep", "timm-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "rebot", "kinematics", "intelrealsense", "phone", "quest-vr", "diffusion", "wallx", "pi", "molmoact2", "smolvla", "multi-task-dit", "groot", "sarm", "robometer", "topreward", "xvla", "eo1", "fastwam", "evo1", "hilserl", "vla-jepa", "lingbot-va", "hvla", "async", "peft", "gui", "mcp", "annotations", "dev", "notebook", "test", "video-benchmark", "aloha", "pusht", "libero", "metaworld", "all", "training-image", "nebius"]
+provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "pink-dep", "transformers-dep", "grpcio-dep", "accelerate-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "motorbridge-dep", "motorbridge-smart-servo-dep", "timm-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "openarm-ff", "openarm-ik", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "rebot", "kinematics", "intelrealsense", "phone", "quest-vr", "diffusion", "wallx", "pi", "molmoact2", "smolvla", "multi-task-dit", "groot", "sarm", "robometer", "topreward", "xvla", "eo1", "fastwam", "evo1", "hilserl", "vla-jepa", "lingbot-va", "hvla", "async", "peft", "gui", "mcp", "annotations", "dev", "notebook", "test", "video-benchmark", "aloha", "pusht", "libero", "metaworld", "all", "training-image", "nebius"]
 
 [[package]]
 name = "librt"
@@ -4102,6 +4163,36 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8e/ea/ee112af5a58de09a1fdf33e8ba11cd38327c9b7a11049325a62055a66e37/metaworld-3.0.0.tar.gz", hash = "sha256:5f30950a5c71e4054c3d6d0293da13eddda9806a43f85cf576cf9632efd2cc87", size = 36452617, upload-time = "2025-06-14T01:44:35.873Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/29/e1/c758357e82c2deb2401a7214fbfbc6ddf09b5453371dee1b7a2da0aab274/metaworld-3.0.0-py3-none-any.whl", hash = "sha256:f1dd9f8a1bcceab34a5f3c20113724dd90d21984ae89df98c21c842eb3ece137", size = 36660341, upload-time = "2025-06-14T01:44:32.171Z" },
+]
+
+[[package]]
+name = "mink"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mujoco" },
+    { name = "qpsolvers", extra = ["daqp"] },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b9/66/e09aa0a8a689eaee797f91415ea6133b3d1e4fa5ee5bd1504315e5d56b37/mink-1.1.0.tar.gz", hash = "sha256:2480fdd42ec2a28ffd4361e6fc5a7c7bc353caffffb8343d9c5bf7089c15ca5e", size = 51211, upload-time = "2026-02-19T22:23:39.574Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0e/7a/dba5e7dd311b5fd5ac2f83a2baf20c203857e901fe21c6656331c787314a/mink-1.1.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:58090c5cece086a1149616d94a220918680ef2eab76737e0ab0f0384b80f8ca1", size = 69196, upload-time = "2026-02-19T22:51:55.714Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/3d/97e4b9736f7d983d87f872eb80bbdc256a903ae1e4481f24bf3c317e376e/mink-1.1.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:de76f557b2f667abbd1305a5074f051a6e66d439df53e48ada5359915e122fc1", size = 67759, upload-time = "2026-02-19T22:51:56.742Z" },
+    { url = "https://files.pythonhosted.org/packages/15/6f/64c5dd93f1d19de05709e5c6ac66f6abe89d280838b434e9075f94e30b65/mink-1.1.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:3d11676be6d08ccf7943be6c8afa1ff64fa6be3fbab633fcc2e3f1cd1ef004b1", size = 70482, upload-time = "2026-02-19T22:51:57.937Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/71/3b219f6563b5a1a4e7bda894d7314b9eea1a5ec53d5cc3975b7951c6e84a/mink-1.1.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9b1f8426e6e39976a9863e832680583945a9ccb644d6f96c7fa40462d7859965", size = 69613, upload-time = "2026-02-19T22:51:59.093Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/2c/e0baaa2757f36382ac02a06caa163c8b617ff444149dad7616cc5bbff247/mink-1.1.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:3dad64095cd401da7f99f16eca8dde1d9802f0915207e097d63371abc58c5b9e", size = 69612, upload-time = "2026-02-19T22:52:00.628Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/f1/17b76e508e27ca1c5de2f5284a3ca24fce701cb18803f20dd32322dd72e1/mink-1.1.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:5dd7ea03a464ceba19f43e8fab8a4ca5d872febcb3a17527a6944db65b18b9e7", size = 70650, upload-time = "2026-02-19T22:52:01.668Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/fc/8ead0efa16391ae2a39bc9101ae3f9ec5e29fd0edbbd8153efc00017c64c/mink-1.1.0-cp312-cp312-win32.whl", hash = "sha256:93556fedc3dd9f98dc6e3272d938ec71da2a4706e58668a587b620bc15194b7e", size = 71561, upload-time = "2026-02-19T22:52:03.721Z" },
+    { url = "https://files.pythonhosted.org/packages/99/7f/cfba1085a845ce188259d25c72d3180c4f7431c566125f6b171f2fd62d06/mink-1.1.0-cp312-cp312-win_amd64.whl", hash = "sha256:22efa22b554d8e1076890afbb3a7223d2ca249fae97d631d10fbbf71bc2c3c56", size = 72320, upload-time = "2026-02-19T22:52:05.702Z" },
+    { url = "https://files.pythonhosted.org/packages/98/ff/d71fd73ee6506a647c18abc80bd1669f98b9f8eb3012f14e560c81c7bd51/mink-1.1.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:18f8fd87e5200d7c0ece7f7144647f882b6125147df4e49a20896e51ef2a01b9", size = 69190, upload-time = "2026-02-19T22:52:06.929Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/df/b79cef8fd2e6a84698be343333fd12a9add8c757c54b00c0705c099f9d64/mink-1.1.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:15ed3b3662cf794e05729c748906d87080a2633b1e82bc1a6365a68313eeae58", size = 67764, upload-time = "2026-02-19T22:52:08.12Z" },
+    { url = "https://files.pythonhosted.org/packages/34/9c/7ff76edecaa94551d28bd3864bcd867b81f5e72bc60292fea768ca2f6314/mink-1.1.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:4ae80916d3bd25003d214b488a313781385ad577b9085b715b2b0bc37d014ff5", size = 66867, upload-time = "2026-02-19T22:23:40.934Z" },
+    { url = "https://files.pythonhosted.org/packages/36/bc/fb1a26dae8a96f1997e62cdbd64fa64a3ab91607687bc3ab036d5d547b49/mink-1.1.0-cp313-cp313-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:7338119f6e5b5ce8c3464f6c908f2dbdba5780682bdf49387512cf16b597ea89", size = 70469, upload-time = "2026-02-19T22:52:10.269Z" },
+    { url = "https://files.pythonhosted.org/packages/20/7e/eea61521375432f63b18d83d3d941a7a85f855814d95c4b302df5ec1f643/mink-1.1.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ab440637caa215b4aeb5720111d1eb23d2ff2349814e756851ab777dea7d901a", size = 69614, upload-time = "2026-02-19T22:52:11.486Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/8a/2000a2101dac173639d111668ce5359806bde8fd14b581e618627a52f514/mink-1.1.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:db9269d97e674a9668dcedd063e522ebff3532e61c57f25efedfd6596599353d", size = 69602, upload-time = "2026-02-19T22:52:12.498Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/59/942b4798a8d861926ff8529cba3661ec5dc54d1932c4c9ddbffc3b726ba2/mink-1.1.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:0e1167a0d5ebb3791e177a0502c91cf6b937719f0b2aa49194398be37484a4b8", size = 70645, upload-time = "2026-02-19T22:52:13.668Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/c8/166fcf4e9e2936f2aa237572cbe8263cc42aa322b9607f7ba0937c189358/mink-1.1.0-cp313-cp313-win32.whl", hash = "sha256:1c7a214a8dc748eb7308b25dc6c7f124ad746c4977c87d0a02a63c0c29be9ff6", size = 71547, upload-time = "2026-02-19T22:52:14.918Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/6f/57709a92ff4b9c6f0be36bf6bc62ddd8c697f9263cb560bb9e9dbdd0a766/mink-1.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:0bdf77a25834a5cf8e8b855abfc702df12c1adff5305dec00f61272b2abd0747", size = 72316, upload-time = "2026-02-19T22:52:16.224Z" },
 ]
 
 [[package]]
@@ -4832,6 +4923,29 @@ sdist = { url = "https://files.pythonhosted.org/packages/c6/a1/a303104dc55fc546a
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1d/2a/7dd3d207ec669cacc1f186fd856a0f61dbc255d24f6fdc1a6715d6051b0f/openai-1.109.1-py3-none-any.whl", hash = "sha256:6bcaf57086cf59159b8e27447e4e7dd019db5d29a438072fbd49c290c7e65315", size = 948627, upload-time = "2025-09-24T13:00:50.754Z" },
 ]
+
+[[package]]
+name = "openarm-control"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "daqp" },
+    { name = "mink" },
+    { name = "mujoco" },
+    { name = "numpy" },
+    { name = "openarm-mujoco" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/85/f256547069d99aab0b5875a6445971fdf9c4519b1c63f60e86e78f1352f6/openarm_control-0.1.0.tar.gz", hash = "sha256:e735394534d9fe03a14f9bd616a29564a3b97efa71cf46d48a13ea9d2cca0b22", size = 12499, upload-time = "2026-06-03T06:53:44.188Z" }
+
+[[package]]
+name = "openarm-mujoco"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mujoco" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2f/9d/f2d5aca5aa433d1c92e5b063108d399f99d1f29257a655bc13301d68960e/openarm_mujoco-2.0.0.tar.gz", hash = "sha256:7cf378b66c87e64e3f2a84f5683c3b144a6a1872ecda0617d438b8cc7e8f7711", size = 5685294, upload-time = "2026-06-03T05:21:34.231Z" }
 
 [[package]]
 name = "opencv-python"
@@ -6034,20 +6148,20 @@ wheels = [
 
 [[package]]
 name = "qpsolvers"
-version = "4.12.0"
+version = "4.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "scipy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b9/35/fc1f8b033b7ba6ecede5db093741df6a3adba6059346a586550f46254315/qpsolvers-4.12.0.tar.gz", hash = "sha256:2ec9c46294ae02bdac8969352726d2c2d5ed85f00c096881b27909e4f103ca7c", size = 235173, upload-time = "2026-05-08T09:18:06.925Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/20/8d/d90b0aebb793d0e5093e7ed6b8b7c61bac0779a475e2c44ff312d30de871/qpsolvers-4.11.0.tar.gz", hash = "sha256:c6c036c775fb4f1048f586217412bbe67b5c128ece525ea2fe237b96eb3e29f2", size = 242117, upload-time = "2026-03-16T15:59:53.419Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/68/c6e6f378f79dff83584ed18acae88c1de1ea56afc5ba9a2831ad3716083d/qpsolvers-4.12.0-py3-none-any.whl", hash = "sha256:30545f3eba98655a3c9410a071c70bb016e320a8d80a0c1a854aba00963b9b7f", size = 106752, upload-time = "2026-05-08T09:18:02.366Z" },
+    { url = "https://files.pythonhosted.org/packages/48/36/bb438a1ab5270be8a0d294a2734b31ebfabe8b1b41fde08f43966118b7e2/qpsolvers-4.11.0-py3-none-any.whl", hash = "sha256:02ced5690e17036802662f9054dcd8270fc8f4b8c3bddffbfcecd71a6353db00", size = 101875, upload-time = "2026-03-16T15:59:51.054Z" },
 ]
 
 [package.optional-dependencies]
-proxqp = [
-    { name = "proxsuite" },
+daqp = [
+    { name = "daqp" },
 ]
 
 [[package]]
@@ -6908,7 +7022,7 @@ version = "0.18.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ptyprocess", marker = "os_name != 'nt'" },
-    { name = "pywinpty", marker = "os_name == 'nt' and sys_platform != 'linux'" },
+    { name = "pywinpty", marker = "(os_name == 'nt' and platform_machine != 'arm64' and sys_platform == 'darwin') or (os_name == 'nt' and sys_platform != 'darwin' and sys_platform != 'linux')" },
     { name = "tornado" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8a/11/965c6fd8e5cc254f1fe142d547387da17a8ebfd75a3455f637c663fb38a0/terminado-0.18.1.tar.gz", hash = "sha256:de09f2c4b85de4765f7714688fff57d3e75bad1f909b589fde880460c753fd2e", size = 32701, upload-time = "2024-03-12T14:34:39.026Z" }
@@ -7018,23 +7132,26 @@ name = "torch"
 version = "2.10.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "(python_full_version >= '3.14' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "(python_full_version >= '3.14' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "(python_full_version == '3.13.*' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "(python_full_version < '3.13' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "(python_full_version == '3.13.*' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "(python_full_version < '3.13' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'emscripten'",
-    "(python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'win32'",
-    "(python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'win32'",
-    "(python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'win32'",
 ]
 dependencies = [
@@ -7067,17 +7184,17 @@ version = "2.11.0+cu128"
 source = { registry = "https://download.pytorch.org/whl/cu128" }
 resolution-markers = [
     "(python_full_version >= '3.14' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version >= '3.14' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'linux'",
     "(python_full_version == '3.13.*' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version == '3.13.*' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
-    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'linux'",
     "(python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version < '3.13' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "(python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "(python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "python_full_version >= '3.14' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'linux'",
+    "python_full_version == '3.13.*' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'linux'",
+    "python_full_version < '3.13' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'linux'",
-    "(python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'armv7l' and sys_platform == 'linux')",
 ]
 dependencies = [
     { name = "cuda-bindings" },
@@ -7113,14 +7230,14 @@ name = "torchcodec"
 version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "(python_full_version >= '3.14' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "(python_full_version == '3.13.*' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "(python_full_version < '3.13' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "(python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'win32'",
-    "(python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'win32'",
-    "(python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'win32'",
 ]
 wheels = [
@@ -7140,9 +7257,9 @@ resolution-markers = [
     "(python_full_version >= '3.14' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'linux')",
     "(python_full_version == '3.13.*' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'linux')",
     "(python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "(python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'armv7l' and sys_platform == 'linux')",
+    "(python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "(python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux')",
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4b/85/3b41034b0f1289423745f918ace2a1e1e86b9c578c2e2461b6afcbb5354a/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:f1aee486a84247fcaa67870ac5005aa8d382a9839e91e476fa71b5b3d9fda9b7", size = 2397532, upload-time = "2026-04-14T18:24:53.368Z" },
@@ -7172,23 +7289,26 @@ name = "torchvision"
 version = "0.25.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "(python_full_version >= '3.14' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "(python_full_version >= '3.14' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "(python_full_version == '3.13.*' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "(python_full_version < '3.13' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "(python_full_version == '3.13.*' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "(python_full_version < '3.13' and platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'emscripten'",
-    "(python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'win32'",
-    "(python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'win32'",
-    "(python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'win32')",
+    "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'win32'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'win32'",
 ]
 dependencies = [
@@ -7215,17 +7335,17 @@ version = "0.26.0+cu128"
 source = { registry = "https://download.pytorch.org/whl/cu128" }
 resolution-markers = [
     "(python_full_version >= '3.14' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version >= '3.14' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'linux'",
     "(python_full_version == '3.13.*' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version == '3.13.*' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
-    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'linux'",
     "(python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')",
-    "python_full_version < '3.13' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "(python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "(python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux')",
+    "python_full_version >= '3.14' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'linux'",
+    "python_full_version == '3.13.*' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
+    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'linux'",
+    "python_full_version < '3.13' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'linux'",
     "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'linux'",
-    "(python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'armv7l' and sys_platform == 'linux')",
-    "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'armv7l' and sys_platform == 'linux')",
 ]
 dependencies = [
     { name = "numpy" },

@@ -111,7 +111,26 @@ def _get_known_fields(profile_type: str, prefix: str) -> set[str] | None:
     config_cls = choices.get(profile_type)
     if config_cls is None:
         return None
-    return {f.name for f in dataclasses.fields(config_cls)}
+
+    def leaf_paths(cls: type, path_prefix: str = "") -> set[str]:
+        try:
+            import typing
+
+            type_hints = typing.get_type_hints(cls)
+        except Exception:
+            type_hints = {}
+
+        result = set()
+        for field in dataclasses.fields(cls):
+            path = f"{path_prefix}.{field.name}" if path_prefix else field.name
+            resolved_type = type_hints.get(field.name, field.type)
+            if dataclasses.is_dataclass(resolved_type):
+                result.update(leaf_paths(resolved_type, path))
+            else:
+                result.add(path)
+        return result
+
+    return leaf_paths(config_cls)
 
 
 def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bool = True) -> list[str]:
@@ -129,7 +148,21 @@ def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bo
     args = [f"--{prefix}.type={profile_data['type']}"]
     known_fields = _get_known_fields(profile_data["type"], prefix)
 
-    for key, value in profile_data.get("fields", {}).items():
+    def iter_values(values: dict, path_prefix: str = ""):
+        for key, value in values.items():
+            path = f"{path_prefix}.{key}" if path_prefix else key
+            # Only recurse when the config schema says this mapping is a
+            # nested dataclass. Dict-valued leaf fields (joint limits, motor
+            # config, etc.) must remain one JSON CLI value.
+            is_nested_config = known_fields is not None and any(
+                field.startswith(f"{path}.") for field in known_fields
+            )
+            if isinstance(value, dict) and is_nested_config:
+                yield from iter_values(value, path)
+            else:
+                yield path, value
+
+    for key, value in iter_values(profile_data.get("fields", {})):
         if value is None:
             continue
         if known_fields is not None and key not in known_fields:
@@ -140,6 +173,8 @@ def _profile_to_cli_args(profile_data: dict, prefix: str, *, include_cameras: bo
             continue
         if isinstance(value, bool):
             args.append(f"--{prefix}.{key}={str(value).lower()}")
+        elif isinstance(value, (dict, list)):
+            args.append(f"--{prefix}.{key}={json.dumps(value)}")
         else:
             args.append(f"--{prefix}.{key}={value}")
 
@@ -615,6 +650,13 @@ _debug_lock = asyncio.Lock()  # prevent concurrent load/unload
 _launch_lock = asyncio.Lock()
 
 
+async def _release_preview_cameras() -> None:
+    """Release Robot-tab preview devices before a hardware subprocess starts."""
+    from lerobot.gui.api.robot import _close_preview_cameras
+
+    await asyncio.get_running_loop().run_in_executor(None, _close_preview_cameras)
+
+
 def _is_debug_loaded() -> bool:
     return _debug_process is not None and _debug_process.returncode is None
 
@@ -719,8 +761,12 @@ async def debug_subtask() -> dict:
 async def start_teleoperate(req: TeleoperateRequest) -> dict:
     async with _launch_lock:
         _ensure_no_active_process()
+        await _release_preview_cameras()
 
-        args = ["lerobot-teleoperate"]
+        # Use the interpreter running the GUI instead of relying on console
+        # scripts being discoverable on PATH. This also preserves the GUI's
+        # active virtual environment and editable source tree.
+        args = [sys.executable, "-m", "lerobot.scripts.lerobot_teleoperate"]
         args.extend(_profile_to_cli_args(req.robot, "robot"))
         args.extend(_profile_to_cli_args(req.teleop, "teleop"))
         args.append(f"--fps={req.fps}")
@@ -748,11 +794,12 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
 async def start_record(req: RecordRequest) -> dict:
     async with _launch_lock:
         _ensure_no_active_process()
+        await _release_preview_cameras()
 
         if req.teleop is None and req.policy_path is None:
             raise HTTPException(400, "Either teleop or policy_path must be provided")
 
-        args = ["lerobot-record"]
+        args = [sys.executable, "-m", "lerobot.scripts.lerobot_record"]
         args.extend(_profile_to_cli_args(req.robot, "robot"))
         if req.teleop is not None:
             args.extend(_profile_to_cli_args(req.teleop, "teleop"))
@@ -798,11 +845,12 @@ async def start_record(req: RecordRequest) -> dict:
 async def start_replay(req: ReplayRequest) -> dict:
     async with _launch_lock:
         _ensure_no_active_process()
+        await _release_preview_cameras()
 
         # Note: --dataset.fps is intentionally omitted — `lerobot-replay` declares
         # it as config but ignores it (the loop paces by `dataset.fps` directly),
         # so passing it from the GUI was dead wiring.
-        args = ["lerobot-replay"]
+        args = [sys.executable, "-m", "lerobot.scripts.lerobot_replay"]
         args.extend(_profile_to_cli_args(req.robot, "robot"))
         args.append(f"--dataset.repo_id={req.repo_id}")
         if req.root:
@@ -820,6 +868,7 @@ async def start_hvla(req: HVLARunRequest) -> dict:
 
     async with _launch_lock:
         _ensure_no_active_process()
+        await _release_preview_cameras()
 
         # Write robot profile to temp file (HVLA launch reads robot config from file)
         robot_config = dict(req.robot)
@@ -1379,6 +1428,12 @@ async def urdf_viz_meta() -> dict:
         "available": True,
         "name": spec.name,
         "urdf": f"/urdf-assets/{spec.urdf_url_path}",
+        # Mirrored-arm robots (e.g. OpenArm) ship a separate right-arm URDF;
+        # None means both arms load ``urdf``.
+        "urdf_right": f"/urdf-assets/{spec.urdf_url_path_right}" if spec.urdf_url_path_right else None,
+        # Per-arm base offsets (URDF world frame) from the description;
+        # None lets the frontend use its default side-by-side spacing.
+        "base_offsets": spec.base_offsets,
         "bimanual": len(spec.arms) == 2,
         "sources": sources,
         # ee_link is None for descriptions that didn't declare one; the
@@ -1452,7 +1507,16 @@ async def obs_stream_image(cam_key: str) -> Response:
 
     result = reader.read_image(cam_key)
     if result is None:
-        raise HTTPException(404, f"No image for camera '{cam_key}'")
+        # A large frame may be overwritten during all bounded read attempts.
+        # Keep displaying the last coherent JPEG instead of encoding bytes
+        # that failed the shared-memory sequence check.
+        if cached is not None:
+            return Response(
+                content=cached[1],
+                media_type="image/jpeg",
+                headers={"Cache-Control": "no-store", "X-Lerobot-Frame-Stale": "1"},
+            )
+        raise HTTPException(503, f"No coherent image available yet for camera '{cam_key}'")
     img, _ts = result
 
     import cv2

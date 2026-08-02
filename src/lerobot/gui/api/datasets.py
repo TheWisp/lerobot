@@ -2411,6 +2411,12 @@ async def get_urdf_viz_dataset_meta(dataset_id: str, episode_idx: int) -> dict:
         "available": True,
         "name": spec.name,
         "urdf": f"/urdf-assets/{spec.urdf_url_path}",
+        # Mirrored-arm robots (e.g. OpenArm) ship a separate right-arm URDF;
+        # None means both arms load ``urdf``.
+        "urdf_right": f"/urdf-assets/{spec.urdf_url_path_right}" if spec.urdf_url_path_right else None,
+        # Per-arm base offsets (URDF world frame) from the description;
+        # None lets the frontend use its default side-by-side spacing.
+        "base_offsets": spec.base_offsets,
         "bimanual": len(spec.arms) == 2,
         "sources": sources,
         # ee_link is None for descriptions that didn't declare one; the

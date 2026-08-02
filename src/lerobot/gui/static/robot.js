@@ -183,7 +183,7 @@ function renderEditor() {
     html += '</select>';
     if (schema) {
         for (const field of schema.fields) {
-            const value = currentProfile.data.fields?.[field.name] ?? field.default ?? '';
+            const value = _getNestedField(currentProfile.data.fields || {}, field.name) ?? field.default ?? '';
             html += renderFormField(field, value);
         }
     }
@@ -302,6 +302,48 @@ function _serializeProfile(data) {
     });
 }
 
+function _getNestedField(data, dottedPath) {
+    let value = data;
+    for (const part of dottedPath.split('.')) {
+        if (value === null || typeof value !== 'object' || !(part in value)) return undefined;
+        value = value[part];
+    }
+    return value;
+}
+
+function _setNestedField(data, dottedPath, value) {
+    const parts = dottedPath.split('.');
+    let target = data;
+    for (const part of parts.slice(0, -1)) {
+        if (target[part] === null || typeof target[part] !== 'object' || Array.isArray(target[part])) {
+            target[part] = {};
+        }
+        target = target[part];
+    }
+    target[parts[parts.length - 1]] = value;
+}
+
+function _deleteNestedField(data, dottedPath) {
+    const parts = dottedPath.split('.');
+    const parents = [];
+    let target = data;
+    for (const part of parts.slice(0, -1)) {
+        if (target === null || typeof target !== 'object' || !(part in target)) return;
+        parents.push([target, part]);
+        target = target[part];
+    }
+    if (target === null || typeof target !== 'object') return;
+    delete target[parts[parts.length - 1]];
+    // Remove empty containers created solely for nested GUI fields.
+    for (const [parent, key] of parents.reverse()) {
+        if (parent[key] && typeof parent[key] === 'object' && Object.keys(parent[key]).length === 0) {
+            delete parent[key];
+        } else {
+            break;
+        }
+    }
+}
+
 function _collectFormFields() {
     const schemas = currentProfile.kind === 'robot' ? robotSchemas : teleopSchemas;
     const schema = schemas?.find(s => s.type_name === currentProfile.data.type);
@@ -310,12 +352,16 @@ function _collectFormFields() {
     // fields from the editing UI but they still need to round-trip through
     // save / launch. Starting from `{}` here would silently drop them and
     // any subsequent save would erase the JSON's calibration_dir.
-    const fields = { ...(currentProfile?.data?.fields || {}) };
+    const fields = JSON.parse(JSON.stringify(currentProfile?.data?.fields || {}));
     if (schema) {
         for (const field of schema.fields) {
             const input = document.getElementById(`field-${field.name}`);
             if (!input) continue;
-            fields[field.name] = parseFieldValue(field, input.value);
+            const value = parseFieldValue(field, input.value);
+            // Omit blank/None values so dataclass defaults and default_factory
+            // values remain effective when draccus decodes the profile.
+            if (value === null) _deleteNestedField(fields, field.name);
+            else _setNestedField(fields, field.name, value);
         }
     }
     return fields;
@@ -548,7 +594,9 @@ async function detectCameras() {
 
     try {
         const res = await fetch('/api/robot/detect-cameras', { method: 'POST' });
-        detectedCameras = await res.json();
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload.detail || `HTTP ${res.status}`);
+        detectedCameras = payload;
         renderCameraPreview();
         startCameraPreview();
     } catch (e) {
@@ -577,41 +625,170 @@ function renderCameraPreview() {
         if (camId) assignedRoles[camId] = role;
     }
 
-    grid.innerHTML = detectedCameras.map((cam, i) => {
+    function errorSummary(cam, error) {
+        if (cam.error_summary) return String(cam.error_summary);
+        const summariesByCode = {
+            permission_denied: 'Camera access denied',
+            busy: 'Camera busy',
+            disconnected: 'Camera disconnected',
+            unsupported: 'Camera unsupported',
+            open_failed: 'Camera unavailable',
+            preview_failed: 'Preview unavailable',
+        };
+        if (cam.error_code && summariesByCode[cam.error_code]) return summariesByCode[cam.error_code];
+        if (/permission denied/i.test(error)) return 'Camera access denied';
+        if (/\bbusy\b/i.test(error)) return 'Camera busy';
+        return 'Camera unavailable';
+    }
+
+    const seenRemediations = new Set();
+    const remediationHtml = detectedCameras.map(cam => {
+        const action = cam.error_action ? String(cam.error_action) : '';
+        const command = cam.error_command ? String(cam.error_command) : '';
+        if (!action) return '';
+        const key = `${action}\n${command}`;
+        if (seenRemediations.has(key)) return '';
+        seenRemediations.add(key);
+        return `<div class="camera-remediation" role="note">
+            <span>${esc(action)}</span>
+            ${command ? `<code>${esc(command)}</code>
+                <button type="button" class="camera-command-copy"
+                        data-command="${esc(command)}" onclick="copyCameraCommand(this)">Copy</button>` : ''}
+        </div>`;
+    }).join('');
+
+    const cardsHtml = detectedCameras.map((cam, i) => {
         const profile = cam.default_stream_profile || {};
         // Build identifier: serial number for RealSense, path for OpenCV
         const camId = String(cam.id || '');
         const identifier = cam.type === 'RealSense' ? `S/N: ${camId}` : camId;
         // Check if this camera is already assigned to a role
         const currentRole = assignedRoles[camId] || '';
-
-        return `<div class="camera-preview-card">
-            <img id="preview-cam-${i}" src="" alt="${esc(cam.name || 'Camera')}">
-            <div class="camera-preview-info">
-                <div>${esc(cam.name || `Camera ${i}`)}</div>
-                <div class="cam-meta">${esc(cam.type)} | ${esc(identifier)} | ${profile.width || '?'}x${profile.height || '?'} @ ${Math.round(profile.fps) || '?'}fps</div>
-                <select id="cam-role-${i}" onchange="assignCameraRole(${i}, this.value)">
+        const error = cam.error ? String(cam.error) : '';
+        const summary = error ? errorSummary(cam, error) : '';
+        const preview = error
+            ? `<div class="camera-preview-placeholder camera-preview-error">
+                    <div class="camera-preview-status" role="status" tabindex="0"
+                         title="${esc(error)}" aria-label="${esc(`${summary}: ${error}`)}">${esc(summary)}</div>
+               </div>`
+            : `<img id="preview-cam-${i}" alt="${esc(cam.name || 'Camera')}"
+                    onload="handleCameraPreviewLoaded(${i})" onerror="handleCameraPreviewError(${i})">`;
+        const rolePicker = error
+            ? ''
+            : `<select id="cam-role-${i}" onchange="assignCameraRole(${i}, this.value)">
                     <option value="">-- assign role --</option>
                     ${roles.map(r => `<option value="${r}" ${currentRole === r ? 'selected' : ''}>${r}</option>`).join('')}
                     <option value="__custom" ${currentRole && !roles.includes(currentRole) ? 'selected' : ''}>custom...</option>
-                </select>
+               </select>`;
+        const metadata = error
+            ? `${esc(cam.type)} | ${esc(identifier)}`
+            : `${esc(cam.type)} | ${esc(identifier)} | ${profile.width || '?'}x${profile.height || '?'} @ ${Math.round(profile.fps) || '?'}fps`;
+
+        return `<div class="camera-preview-card">
+            ${preview}
+            <div class="camera-preview-info">
+                <div>${esc(cam.name || `Camera ${i}`)}</div>
+                <div class="cam-meta">${metadata}</div>
+                ${rolePicker}
             </div>
         </div>`;
     }).join('');
+    grid.innerHTML = remediationHtml + cardsHtml;
+}
+
+function copyCameraCommand(button) {
+    const command = button?.dataset?.command || '';
+    if (!command) return;
+
+    const copied = () => {
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = 'Copy'; }, 1200);
+    };
+    const fallback = () => {
+        const textarea = document.createElement('textarea');
+        textarea.value = command;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        document.body.removeChild(textarea);
+        if (ok) copied();
+    };
+
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(command).then(copied).catch(fallback);
+    } else {
+        fallback();
+    }
 }
 
 function startCameraPreview() {
     stopCameraPreview();
-    previewInterval = setInterval(() => {
-        detectedCameras.forEach((_, i) => {
+    const previewable = detectedCameras.filter(
+        cam => !cam.error && !cam.preview_error_pending && Number.isInteger(cam.preview_index)
+    );
+    if (previewable.length === 0) return;
+
+    const requestFrames = () => {
+        detectedCameras.forEach((cam, i) => {
+            if (cam.error || cam.preview_error_pending || !Number.isInteger(cam.preview_index)) return;
             const img = document.getElementById(`preview-cam-${i}`);
-            if (img) {
-                img.src = `/api/robot/camera-frame/${i}?t=${Date.now()}`;
+            // Keep one request in flight per camera. Replacing src while the
+            // previous JPEG is loading can cancel it and fire a false onerror.
+            if (img && img.dataset.loading !== 'true') {
+                img.dataset.loading = 'true';
+                img.src = `/api/robot/camera-frame/${cam.preview_index}?t=${Date.now()}`;
             }
         });
-    }, 100); // ~10fps
+    };
+    requestFrames();
+    previewInterval = setInterval(requestFrames, 100); // up to ~10fps
     const stopBtn = document.getElementById('stop-cameras-btn');
     if (stopBtn) stopBtn.style.display = 'inline-block';
+}
+
+function handleCameraPreviewLoaded(cameraIndex) {
+    const img = document.getElementById(`preview-cam-${cameraIndex}`);
+    if (img) img.dataset.loading = 'false';
+}
+
+async function handleCameraPreviewError(cameraIndex) {
+    const cam = detectedCameras[cameraIndex];
+    const img = document.getElementById(`preview-cam-${cameraIndex}`);
+    // An <img> without a requested frame is not a camera failure. This guard
+    // also ignores stale events from a card removed during re-detection.
+    if (
+        !img || !img.getAttribute('src') ||
+        !cam || cam.error || cam.preview_error_pending || !Number.isInteger(cam.preview_index)
+    ) return;
+    img.dataset.loading = 'false';
+
+    // Stop the 10 Hz loop from repeatedly replacing the broken image while a
+    // one-shot fetch reads FastAPI's useful JSON error detail.
+    cam.preview_error_pending = true;
+    let message = `Could not display preview frames from ${cam.id || 'this camera'}.`;
+    try {
+        const res = await fetch(`/api/robot/camera-frame/${cam.preview_index}?diagnostic=${Date.now()}`);
+        if (!res.ok) {
+            const payload = await res.json().catch(() => null);
+            message = payload?.detail || `Camera frame request failed with HTTP ${res.status}.`;
+        } else {
+            message += ' The frame response could not be decoded as an image.';
+        }
+    } catch (e) {
+        message += ` ${e.message}`;
+    }
+
+    cam.error = message;
+    cam.error_code = 'preview_failed';
+    cam.error_summary = 'Preview unavailable';
+    cam.error_action = 'Select Detect Cameras to reopen the preview. If it fails again, reconnect the camera.';
+    delete cam.preview_error_pending;
+    renderCameraPreview();
+    startCameraPreview();
 }
 
 function stopCameraPreview() {
@@ -635,6 +812,7 @@ async function stopAllCameras() {
 
 function assignCameraRole(cameraIndex, role) {
     if (!currentProfile || !detectedCameras[cameraIndex]) return;
+    if (detectedCameras[cameraIndex].error) return;
 
     if (role === '__custom') {
         role = prompt('Camera role name:');
@@ -795,7 +973,7 @@ function renderPortList(ports, allAssignments) {
     const list = document.getElementById('port-list');
     if (!list) return;
     if (ports.length === 0) {
-        list.innerHTML = '<div style="color: #666; font-size: 13px; padding: 8px;">No serial ports found</div>';
+        list.innerHTML = '<div style="color: #666; font-size: 13px; padding: 8px;">No serial or SocketCAN ports found</div>';
         return;
     }
     const portFields = _getPortFields();
@@ -806,7 +984,7 @@ function renderPortList(ports, allAssignments) {
     const curFields = (currentProfile && currentProfile.data.fields) || {};
     const curPortToField = {};
     for (const f of portFields) {
-        const v = curFields[f.name];
+        const v = _getNestedField(curFields, f.name);
         if (typeof v === 'string' && v.trim()) curPortToField[v.trim()] = f.name;
     }
 
@@ -832,6 +1010,7 @@ function renderPortList(ports, allAssignments) {
         const meta = [p.name || ''];
         if (p.manufacturer) meta.push(p.manufacturer);
         if (p.vid_pid) meta.push(p.vid_pid);
+        if (p.state) meta.push(p.state);
 
         const claimedBy = usedByOthers[p.path];
 
@@ -860,10 +1039,14 @@ function renderPortList(ports, allAssignments) {
             }
         }
 
+        const canWiggle = _supportsFeetechWiggle(p.path);
+        const wiggleButton = canWiggle
+            ? `<button class="btn-small" onclick="identifyArm('${esc(p.path)}', this)">Wiggle</button>`
+            : '<button class="btn-small" disabled title="Feetech identification is unavailable for OpenArm/Damiao and SocketCAN devices">Wiggle unavailable</button>';
         return `<div class="port-item">
             <span class="port-path">${esc(p.path)}</span>
             <span class="port-name">${esc(meta.join(' | '))}</span>
-            <button class="btn-small" onclick="identifyArm('${esc(p.path)}', this)">Wiggle</button>
+            ${wiggleButton}
             ${assignHtml}
             ${claimedHtml}
         </div>`;
@@ -881,7 +1064,7 @@ function assignPort(port, fieldName, claimedByProfile, claimedByKind) {
     }
     if (!fieldName) return;
     if (!currentProfile.data.fields) currentProfile.data.fields = {};
-    currentProfile.data.fields[fieldName] = port;
+    _setNestedField(currentProfile.data.fields, fieldName, port);
     _rerender();
     _updateDirtyState();
     showToast('Port set', `${fieldName} = ${port}`, 'info');
@@ -891,8 +1074,8 @@ function unassignPort(port) {
     if (!currentProfile || !currentProfile.data.fields) return;
     const portFields = _getPortFields();
     for (const f of portFields) {
-        if (currentProfile.data.fields[f.name] === port) {
-            delete currentProfile.data.fields[f.name];
+        if (_getNestedField(currentProfile.data.fields, f.name) === port) {
+            _deleteNestedField(currentProfile.data.fields, f.name);
         }
     }
     _rerender();
@@ -931,6 +1114,17 @@ async function identifyArm(port, btn) {
             btn.disabled = false;
         }
     }
+}
+
+function _supportsFeetechWiggle(port) {
+    const profileType = (currentProfile?.data?.type || '').toLowerCase();
+    const portName = String(port || '').split('/').pop().toLowerCase();
+    return !(
+        profileType.includes('openarm') ||
+        profileType.includes('damiao') ||
+        portName.startsWith('can') ||
+        portName.startsWith('vcan')
+    );
 }
 
 // ============================================================================

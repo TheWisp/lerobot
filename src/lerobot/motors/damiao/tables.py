@@ -206,4 +206,21 @@ CAN_CMD_WRITE_PARAM = 0x55
 CAN_CMD_SAVE_PARAM = 0xAA
 
 # CAN ID for parameter operations
+#
+# Frame map — which arbitration ID carries what, and in which direction:
+#
+#   host -> motor   motor_id            MIT control frame
+#                   motor_id + 0x300    POS_FORCE control frame
+#                   CAN_PARAM_ID        parameter read/write (motor addressed
+#                                       by the first two payload bytes)
+#   motor -> host   master ID           state feedback AND parameter
+#                                       acknowledgements
+#
+# The last line is the non-obvious one and it has already misled a reviewer: a
+# parameter write goes out on the broadcast CAN_PARAM_ID, but the firmware
+# replies on the motor's master ID, multiplexed with ordinary state feedback.
+# Reading set_control_mode alone it therefore looks like it waits on the wrong
+# ID. It does not — that is simply where the ack arrives. Pinned against
+# hardware-captured frames in tests/motors/test_damiao_protocol.py; change that
+# fixture, with a fresh capture, if a firmware revision ever moves it.
 CAN_PARAM_ID = 0x7FF

@@ -155,7 +155,12 @@ pygame-dep = ["pygame>=2.5.1,<2.7.0"]
 # There is no cmeel-urdfdom 5.x; <5 selects the 4.x ABI the placo/pin wheels are built against.
 placo-dep = ["placo>=0.9.6,<0.9.16", "cmeel-urdfdom>=4,<5", "cmeel-tinyxml2<11"]
 # pin-pink is fork-only (Quest WebXR Cartesian IK, pink_kinematics.py); upstream dropped it.
-pink-dep = ["pin-pink>=4.2,<5", "qpsolvers[proxqp]>=4.12,<5"]
+# NOTE: qpsolvers is floored at 4.11 (not 4.12) and proxsuite is named directly
+# instead of via qpsolvers[proxqp]: qpsolvers only gained the [proxqp] extra in
+# 4.12, but its 4.11 releases drive the proxsuite backend identically. The 4.11
+# floor keeps this extra compatible with openarm-ik (openarm-control pins
+# daqp==0.7.2, while qpsolvers[daqp]>=4.12 requires daqp>=0.8.2).
+pink-dep = ["pin-pink>=4.2,<5", "qpsolvers>=4.11,<5", "proxsuite>=0.7,<1"]
 transformers-dep = ["transformers>=5.4.0,<5.6.0"]
 grpcio-dep = ["grpcio>=1.73.1,<2.0.0", "protobuf>=6.31.1,<8.0.0"]
 accelerate-dep = ["accelerate>=1.14.0,<2.0.0"]
@@ -181,6 +186,10 @@ robstride = ["lerobot[can-dep]"]
 
 # Robots
 openarms = ["lerobot[damiao]"]
+# Gravity feedforward for OpenArm followers: MuJoCo inverse dynamics on the
+# bimanual OpenArm 2.0 model (model files ship with the openarm-mujoco package).
+openarm-ff = ["lerobot[openarms]", "mujoco>=3.6,<4", "openarm-mujoco>=2.0"]
+openarm-ik = ["lerobot[openarm-ff]", "openarm-control==0.1.0"]
 gamepad = ["lerobot[pygame-dep]", "hidapi>=0.14.0,<0.15.0"]
 hopejr = ["lerobot[feetech]", "lerobot[pygame-dep]"]
 lekiwi = ["lerobot[feetech]", "lerobot[pyzmq-dep]"]
@@ -210,10 +219,9 @@ intelrealsense = [
     "pyrealsense2-macosx>=2.54,<2.57.0 ; sys_platform == 'darwin'",
 ]
 phone = ["hebi-py>=2.8.0,<2.12.0", "teleop>=0.1.0,<0.2.0", "fastapi<1.0", "lerobot[scipy-dep]"]
-# Quest 3 WebXR teleop (fork-only). aiohttp serves the WebXR page over a
-# daemon-thread HTTPS server; the Cartesian IK a robot installs for this
-# teleop in attach_teleop needs pin-pink (see lerobot[pink-dep]).
-quest-vr = ["aiohttp>=3.9,<4.0", "lerobot[pink-dep]"]
+# Quest 3 WebXR transport (fork-only). Select the robot's IK separately:
+# OpenArm2 uses openarm-ik; SO-107 and other Pink robots use kinematics.
+quest-vr = ["aiohttp>=3.9,<4.0"]
 
 # Policies
 diffusion = ["lerobot[diffusers-dep]"]
@@ -358,6 +366,10 @@ all = [
     "lerobot[hopejr]",
     "lerobot[lekiwi]",
     "lerobot[openarms]",
+    # openarm-ik includes openarm-ff (mujoco + openarm-mujoco for gravity FF) plus
+    # openarm-control (Mink Cartesian IK). It can live in `all` because pink-dep
+    # floors qpsolvers at 4.11 and names proxsuite directly — see pink-dep above.
+    "lerobot[openarm-ik]",
     "lerobot[reachy2]",
     "lerobot[rebot]",
     "lerobot[kinematics]",
@@ -495,6 +507,7 @@ lerobot = ["envs/*.json", "annotations/steerable_pipeline/prompts/*.txt"]
 "lerobot.gui" = ["static/*.html", "static/*.css", "static/*.js"]
 "lerobot.robots.so101_description" = ["urdf/*.urdf", "meshes/*.stl"]
 "lerobot.robots.so107_description" = ["urdf/*.urdf", "meshes/*.stl"]
+"lerobot.robots.openarm_description" = ["urdf/*.urdf", "LICENSE.txt", "README.md"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

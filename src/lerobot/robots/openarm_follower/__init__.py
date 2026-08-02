@@ -15,6 +15,14 @@
 # limitations under the License.
 
 from .config_openarm_follower import OpenArmFollowerConfig, OpenArmFollowerConfigBase
+from .gravity_ff import GravityFF
 from .openarm_follower import OpenArmFollower
+from .telemetry import FollowerTelemetry
 
-__all__ = ["OpenArmFollower", "OpenArmFollowerConfig", "OpenArmFollowerConfigBase"]
+__all__ = [
+    "FollowerTelemetry",
+    "GravityFF",
+    "OpenArmFollower",
+    "OpenArmFollowerConfig",
+    "OpenArmFollowerConfigBase",
+]

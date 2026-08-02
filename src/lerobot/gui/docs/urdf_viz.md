@@ -46,8 +46,12 @@ with a playback fps. The frontend doesn't know which.
 
 The frontend speaks two endpoints:
 
-- `GET .../urdf-viz/meta` → `{name, urdf, bimanual, sources: ["state", "action", ...]}`.
+- `GET .../urdf-viz/meta` → `{name, urdf, bimanual, sources: ["state", "action", ...], urdf_right, base_offsets}`.
   Fetched once at iframe mount. Determines which sources to expose in the UI.
+  `urdf_right` is a second URDF URL for bimanual robots with mirrored arms
+  (OpenArm 2.0); `null` means both arms load `urdf`. `base_offsets` is a
+  per-arm `{prefix: [x, y, z]}` base placement in the URDF world frame;
+  `null` falls back to the default side-by-side layout.
 - `GET .../urdf-viz?source=X` → `{available, arms: [{prefix, frames: [{joints}, ...], fps?}]}`.
   Polled per tick (live mode) or per scrubber move (dataset mode).
 
@@ -177,6 +181,9 @@ VIZ_SPEC = {
     "urdf_file":   str,                # URDF filename within urdf/
     "alignment":   {prefix: {motor: (sign, offset_deg)}} | None,
     "ee_link":     str | None,         # URDF link name for trajectory tube
+    # optional:
+    "urdf_file_right": str,            # right-arm URDF for mirrored arms
+    "base_offsets":    {prefix: (x, y, z)},  # per-arm base offsets, URDF world frame
 }
 ```
 
@@ -187,6 +194,20 @@ trajectory tube traces arm motion rather than gripper jiggle. `None`
 `alignment` is layer 2; `None` means identity. `prefix` is `"left_"` /
 `"right_"` for a bimanual robot; a unimanual robot reuses the `"right_"`
 entry.
+
+`urdf_file_right` covers bimanual robots whose arms are mirrored hardware
+(OpenArm 2.0): the left arm loads `urdf_file`, the right arm loads
+`urdf_file_right`, and per-arm joint angles are applied to each arm's own
+URDF tree — so both files should use the same joint names, letting one
+`urdf_joints` list serve both arms. When omitted, both arms load
+`urdf_file` (the SO layout).
+
+`base_offsets` places each arm's base in the scene as physical offsets in
+the URDF world frame (the viewer maps `(x, y, z)` to `(x, z, -y)` with the
+same rotation it applies to the robot). Use it when the default
+side-by-side spacing (±0.165 m along screen X) misrepresents the physical
+mounting — e.g. OpenArm's arms mount only 0.062 m apart along the
+arm-to-arm axis, which the URDF world frame expresses as `y=±0.031`.
 
 `resolve_robot` matches a live robot by its **motor set**: the description
 whose `motors` are all present wins, and the **most specific** (largest
@@ -216,7 +237,8 @@ To onboard a robot:
 1. Create `<name>_description/` with the `urdf/` and `meshes/` files and a
    `PROVENANCE.md` recording the upstream source. Meshes are git-LFS
    tracked — a `.gitignore` negation keeps these packages tracked despite
-   the global `*.urdf` / `*.stl` ignore.
+   the global `*.urdf` / `*.stl` ignore. Mesh format may be STL or COLLADA
+   (`.dae`); the viewer's mesh loader dispatches on the file extension.
 2. Add `__init__.py` exposing `get_urdf_path()`, `get_meshes_dir()`, and a
    module-level `VIZ_SPEC` (the contract above).
 3. Choose the calibration layer. A URDF authored to match the motor

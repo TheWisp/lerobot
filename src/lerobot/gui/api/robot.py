@@ -7,7 +7,9 @@ import contextlib
 import dataclasses
 import json
 import logging
+import os
 import platform
+import shlex
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -126,8 +128,13 @@ def _literal_choices(annotation: Any) -> list[str] | None:
     return None
 
 
-def _introspect_fields(cls: type) -> list[dict]:
-    """Extract field info from a dataclass config class."""
+def _introspect_fields(cls: type, *, prefix: str = "") -> list[dict]:
+    """Extract editable leaf fields, recursively flattening nested dataclasses.
+
+    Nested field names use the same dotted path accepted by draccus, for
+    example ``left_arm_config.port``. Profile JSON remains nested; the dotted
+    name is only the schema/UI address of a leaf value.
+    """
     # Resolve string annotations (PEP 563 / __future__ annotations) so
     # ``Literal["latest", "wait_for_new"]`` is the actual ``Literal``
     # generic, not a bare string. Without this, ``_literal_choices``
@@ -153,9 +160,13 @@ def _introspect_fields(cls: type) -> list[dict]:
             default = None
 
         resolved_type = type_hints.get(f.name, f.type)
+        field_name = f"{prefix}.{f.name}" if prefix else f.name
+        if dataclasses.is_dataclass(resolved_type):
+            result.extend(_introspect_fields(resolved_type, prefix=field_name))
+            continue
         entry = {
-            "name": f.name,
-            "type_str": _stringify_type(f.type),
+            "name": field_name,
+            "type_str": _stringify_type(resolved_type),
             "required": required,
             "default": default,
         }
@@ -394,6 +405,146 @@ async def rename_teleop_profile(name: str, req: RenameRequest) -> dict:
 # ============================================================================
 
 
+def _linux_video_capture_candidates() -> list[dict[str, Any]]:
+    """Return one GUI candidate per Linux V4L2 capture device.
+
+    UVC cameras commonly expose both an image node (``index=0``) and a
+    metadata node (``index=1``). OpenCV silently returns ``isOpened=False``
+    for inaccessible devices, so its normal discovery result cannot explain
+    permission failures. Keep the candidates here so the GUI can render one
+    diagnostic card per physical camera when opening fails.
+    """
+    if platform.system() != "Linux":
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    for device in sorted(Path("/dev").glob("video*"), key=lambda path: path.name):
+        sysfs_dir = Path("/sys/class/video4linux") / device.name
+        index_path = sysfs_dir / "index"
+        try:
+            if index_path.exists() and int(index_path.read_text().strip()) != 0:
+                continue
+        except (OSError, ValueError):
+            # If sysfs is incomplete, retain the node rather than hiding a
+            # potentially usable camera from the diagnostics.
+            pass
+
+        name = f"OpenCV Camera @ {device}"
+        name_path = sysfs_dir / "name"
+        try:
+            if name_path.exists():
+                name = f"{name_path.read_text().strip()} @ {device}"
+        except OSError:
+            pass
+
+        candidates.append({"name": name, "type": "OpenCV", "id": str(device)})
+
+    return candidates
+
+
+def _camera_permission_remediation(camera_id: str) -> dict[str, str]:
+    """Return an actionable fix for the account and group owning a V4L2 node."""
+    fallback = {
+        "error_action": (
+            "Give the GUI server account read/write access to the camera, "
+            "then sign out and back in and restart LeRobot GUI."
+        )
+    }
+    try:
+        import grp
+        import pwd
+
+        username = pwd.getpwuid(os.geteuid()).pw_name
+        group = grp.getgrgid(Path(camera_id).stat().st_gid).gr_name
+    except (ImportError, KeyError, OSError):
+        return fallback
+
+    return {
+        "error_action": "Run this on the GUI server, then sign out and back in and restart LeRobot GUI:",
+        "error_command": f"sudo usermod -aG {shlex.quote(group)} {shlex.quote(username)}",
+    }
+
+
+def _camera_open_error_details(error: str, camera_id: str | None = None) -> dict[str, str]:
+    """Classify a camera-open failure into stable frontend behavior."""
+    normalized = error.casefold()
+    if "permission denied" in normalized:
+        details = {
+            "error_code": "permission_denied",
+            "error_summary": "Camera access denied",
+        }
+        if camera_id and camera_id.startswith("/dev/"):
+            details.update(_camera_permission_remediation(camera_id))
+        else:
+            details["error_action"] = "Give the GUI server account access to the camera, then retry."
+        return details
+    if any(marker in normalized for marker in ("device or resource busy", "resource busy", "ebusy")):
+        return {
+            "error_code": "busy",
+            "error_summary": "Camera busy",
+            "error_action": (
+                "Stop the active LeRobot run or close the other app using this camera, "
+                "then select Detect Cameras again."
+            ),
+        }
+    if any(marker in normalized for marker in ("disconnected", "no such device", "enodev")):
+        return {
+            "error_code": "disconnected",
+            "error_summary": "Camera disconnected",
+            "error_action": "Reconnect the camera, wait a few seconds, then select Detect Cameras again.",
+        }
+    if any(marker in normalized for marker in ("not supported", "unsupported")):
+        return {
+            "error_code": "unsupported",
+            "error_summary": "Camera unsupported",
+            "error_action": (
+                "Try a supported camera format or install the camera backend required by this device, "
+                "then select Detect Cameras again."
+            ),
+        }
+    return {
+        "error_code": "open_failed",
+        "error_summary": "Camera unavailable",
+        "error_action": (
+            "Reconnect the camera and close other apps using it, then select Detect Cameras again."
+        ),
+    }
+
+
+def _merge_opencv_discovery_errors(discovered: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge successful OpenCV probes with per-device Linux failures."""
+    candidates = _linux_video_capture_candidates()
+    if not candidates:
+        return discovered
+
+    discovered_by_id = {str(camera.get("id")): camera for camera in discovered}
+    results: list[dict[str, Any]] = []
+    candidate_ids: set[str] = set()
+
+    for candidate in candidates:
+        camera_id = str(candidate["id"])
+        candidate_ids.add(camera_id)
+        if camera_id in discovered_by_id:
+            results.append(discovered_by_id[camera_id])
+            continue
+
+        if not os.access(camera_id, os.R_OK | os.W_OK):
+            error = f"Permission denied for {camera_id}."
+            error_details = _camera_open_error_details(error, camera_id)
+        else:
+            error = (
+                f"Could not open {camera_id}. The camera may be busy, disconnected, "
+                "or unsupported by this OpenCV build."
+            )
+            error_details = _camera_open_error_details(error, camera_id)
+        results.append({**candidate, "error": error, **error_details})
+
+    # Preserve unusual successful devices that do not have a normal Linux
+    # video-index=0 sysfs entry.
+    results.extend(camera for camera in discovered if str(camera.get("id")) not in candidate_ids)
+    return results
+
+
 def _detect_and_open_cameras() -> list[dict]:
     """Detect cameras and open them for live preview. Runs in thread pool.
 
@@ -431,14 +582,22 @@ def _detect_and_open_cameras() -> list[dict]:
                 )
                 camera = RealSenseCamera(config)
                 camera.connect(warmup=True)
+                preview_info = {**cam_info, "preview_index": len(_preview_cameras)}
                 _preview_cameras.append(camera)
-                _preview_camera_info.append(cam_info)
-                all_cameras.append(cam_info)
+                _preview_camera_info.append(preview_info)
+                all_cameras.append(preview_info)
                 camera = None  # ownership transferred
                 logger.info(f"Opened preview camera: RealSense {cam_id}")
             except Exception as e:
                 logger.warning(f"Failed to open RealSense {cam_id}: {e}")
-                all_cameras.append(cam_info)
+                error = f"{type(e).__name__}: {e}"
+                all_cameras.append(
+                    {
+                        **cam_info,
+                        "error": error,
+                        **_camera_open_error_details(error, str(cam_id)),
+                    }
+                )
             finally:
                 if camera is not None:
                     with contextlib.suppress(Exception):
@@ -453,8 +612,11 @@ def _detect_and_open_cameras() -> list[dict]:
         from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
         from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 
-        opencv_cams = OpenCVCamera.find_cameras()
-        logger.info(f"Found {len(opencv_cams)} OpenCV camera(s)")
+        opencv_cams = _merge_opencv_discovery_errors(OpenCVCamera.find_cameras())
+        available_count = sum("error" not in camera for camera in opencv_cams)
+        logger.info(
+            f"Found {available_count} usable OpenCV camera(s), {len(opencv_cams) - available_count} unavailable"
+        )
 
         for cam_info in opencv_cams:
             cam_id = cam_info.get("id")
@@ -467,6 +629,10 @@ def _detect_and_open_cameras() -> list[dict]:
                     if "RealSense" in hw_name:
                         logger.debug(f"Skipping {cam_id} (RealSense V4L2 node: {hw_name})")
                         continue
+            if error := cam_info.get("error"):
+                logger.warning(f"OpenCV camera {cam_id} unavailable: {error}")
+                all_cameras.append(cam_info)
+                continue
             # Same ownership-transfer pattern as the RealSense branch above —
             # `camera` is disconnected by the finally clause unless registered.
             camera = None
@@ -477,13 +643,22 @@ def _detect_and_open_cameras() -> list[dict]:
                 )
                 camera = OpenCVCamera(config)
                 camera.connect(warmup=True)
+                preview_info = {**cam_info, "preview_index": len(_preview_cameras)}
                 _preview_cameras.append(camera)
-                _preview_camera_info.append(cam_info)
-                all_cameras.append(cam_info)
+                _preview_camera_info.append(preview_info)
+                all_cameras.append(preview_info)
                 camera = None  # ownership transferred
                 logger.info(f"Opened preview camera: OpenCV {cam_id}")
             except Exception as e:
                 logger.warning(f"Failed to open OpenCV {cam_id}: {e}")
+                error = f"{type(e).__name__}: {e}"
+                all_cameras.append(
+                    {
+                        **cam_info,
+                        "error": error,
+                        **_camera_open_error_details(error, str(cam_id)),
+                    }
+                )
             finally:
                 if camera is not None:
                     with contextlib.suppress(Exception):
@@ -605,7 +780,7 @@ async def stop_cameras() -> dict:
 
 @router.get("/ports")
 async def scan_ports() -> list[dict]:
-    """Scan for USB serial ports (ttyACM*, ttyUSB* on Linux).
+    """Scan for USB serial ports and Linux SocketCAN interfaces.
 
     Only shows USB serial adapters, not legacy serial ports (ttyS*),
     virtual terminals (tty0-63), or kernel consoles (ttyprintk).
@@ -640,6 +815,7 @@ async def scan_ports() -> list[dict]:
                     ports.append({"path": str(p), "name": p.name})
         else:
             logger.warning("pyserial not installed, cannot scan ports")
+    ports.extend(_scan_socketcan_interfaces())
     return ports
 
 
@@ -650,6 +826,39 @@ async def scan_ports() -> list[dict]:
 # click. The answer is a pure function of the profile, so it is cached. Keyed on
 # content rather than robot type so editing a profile cannot serve a stale spec.
 _MOTOR_SPEC_CACHE: dict[str, tuple[type, str, object]] = {}
+
+
+def _scan_socketcan_interfaces(sys_class_net: Path = Path("/sys/class/net")) -> list[dict]:
+    """Return CAN network interfaces using read-only Linux sysfs metadata."""
+    if platform.system() != "Linux" or not sys_class_net.is_dir():
+        return []
+
+    interfaces = []
+    try:
+        candidates = sorted(sys_class_net.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return []
+    for interface in candidates:
+        try:
+            # ARPHRD_CAN from linux/if_arp.h. Reading sysfs has no effect on
+            # interface state, bitrate, or attached hardware.
+            if (interface / "type").read_text().strip() != "280":
+                continue
+            state_path = interface / "operstate"
+            state = state_path.read_text().strip() if state_path.exists() else "unknown"
+        except OSError:
+            continue
+        interfaces.append(
+            {
+                "path": interface.name,
+                "name": f"SocketCAN {interface.name}",
+                "manufacturer": "SocketCAN",
+                "vid_pid": "",
+                "kind": "socketcan",
+                "state": state,
+            }
+        )
+    return interfaces
 
 
 def _probe_motor_spec(profile: dict) -> tuple[type, str, object]:
@@ -771,18 +980,17 @@ def _collect_all_port_assignments() -> list[dict]:
             config_cls = choices.get(profile_type)
             if not config_cls:
                 continue
-            for field in dataclasses.fields(config_cls):
-                if field.name in _SKIP_FIELDS:
-                    continue
-                if "port" in field.name and "str" in _stringify_type(field.type).lower():
-                    port_value = fields_data.get(field.name)
+            for field in _introspect_fields(config_cls):
+                field_name = field["name"]
+                if "port" in field_name and "str" in field["type_str"].lower():
+                    port_value = _get_nested_value(fields_data, field_name)
                     if port_value and isinstance(port_value, str) and port_value.strip():
                         assignments.append(
                             {
                                 "port": port_value.strip(),
                                 "profile_name": profile_name,
                                 "profile_kind": kind,
-                                "field_name": field.name,
+                                "field_name": field_name,
                             }
                         )
 
@@ -793,6 +1001,27 @@ def _collect_all_port_assignments() -> list[dict]:
 async def get_all_port_assignments() -> list[dict]:
     """Return all port assignments across all saved profiles."""
     return _collect_all_port_assignments()
+
+
+def _get_nested_value(data: dict, dotted_path: str) -> Any:
+    value: Any = data
+    for part in dotted_path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _supports_feetech_wiggle(profile_type: str | None, port: str) -> bool:
+    """Reject device families/interfaces that cannot use Feetech serial I/O."""
+    type_name = (profile_type or "").lower()
+    port_name = Path(port).name.lower()
+    return not (
+        "openarm" in type_name
+        or "damiao" in type_name
+        or port_name.startswith("can")
+        or port_name.startswith("vcan")
+    )
 
 
 class IdentifyArmRequest(BaseModel):
@@ -829,6 +1058,12 @@ async def open_in_file_manager(body: dict) -> dict:
 @router.post("/identify-arm")
 async def identify_arm(request: IdentifyArmRequest) -> dict:
     """Wiggle the robot's first motor on the given port to identify which arm it is."""
+    if not _supports_feetech_wiggle(request.profile.get("type"), request.port):
+        return {
+            "status": "error",
+            "port": request.port,
+            "message": "Feetech arm identification is unavailable for OpenArm/Damiao or SocketCAN devices",
+        }
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, _wiggle_first_motor, request.port, request.profile)
     return result

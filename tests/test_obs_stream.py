@@ -2,6 +2,7 @@
 
 import os
 from dataclasses import dataclass
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -129,6 +130,30 @@ class TestSequenceCounter:
         seq2 = reader.image_seq("cam")
         assert seq1 == seq2
         reader.close()
+
+
+class TestTornReadProtection:
+    def test_exhausted_sequence_retries_never_return_copied_bytes(self, monkeypatch):
+        import lerobot.robots.obs_stream as mod
+
+        block = object.__new__(mod._Block)
+        block._shm = SimpleNamespace(buf=bytearray(mod._HDR_SIZE + 4))
+        block._total = mod._HDR_SIZE + 4
+
+        class RacingHeader:
+            calls = 0
+
+            def unpack_from(self, _buf, _offset):
+                self.calls += 1
+                # Each header read sees a different completed generation,
+                # deterministically simulating a writer racing every copy.
+                return self.calls, self.calls, 1.0
+
+        header = RacingHeader()
+        monkeypatch.setattr(mod, "_HDR", header)
+
+        assert block.read() is None
+        assert header.calls == 6  # two sequence reads for each of three attempts
 
 
 # ============================================================================

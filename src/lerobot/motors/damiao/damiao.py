@@ -17,6 +17,8 @@
 # https://github.com/cmjang/DM_Control_Python
 
 import logging
+import math
+import struct
 import time
 from contextlib import contextmanager
 from copy import deepcopy
@@ -47,19 +49,24 @@ from .tables import (
     CAN_CMD_ENABLE,
     CAN_CMD_REFRESH,
     CAN_CMD_SET_ZERO,
+    CAN_CMD_WRITE_PARAM,
     CAN_PARAM_ID,
     DEFAULT_BAUDRATE,
     DEFAULT_TIMEOUT_MS,
     MIT_KD_RANGE,
     MIT_KP_RANGE,
     MOTOR_LIMIT_PARAMS,
+    ControlMode,
     MotorType,
+    MotorVariable,
 )
 
 logger = logging.getLogger(__name__)
 
 
 LONG_TIMEOUT_SEC = 0.1
+# Upstream LeRobot Damiao timing tier. For batch refresh this is a response
+# deadline, not a control-loop period and not a motor-motion completion wait.
 MEDIUM_TIMEOUT_SEC = 0.01
 SHORT_TIMEOUT_SEC = 0.001
 PRECISE_TIMEOUT_SEC = 0.0001
@@ -146,6 +153,10 @@ class DamiaoMotorsBus(MotorsBusBase):
             }
             for name in self.motors
         }
+        self._last_state_update_monotonic: dict[str, float | None] = dict.fromkeys(self.motors)
+        # Last time the all-healthy CAN_REFRESH debug line was emitted, keyed
+        # by (port, context) — used to rate-limit it (see _log_refresh below).
+        self._last_healthy_refresh_log: dict[tuple[str, str], float] = {}
 
         # Dynamic gains storage
         # Defaults: Kp=10.0 (Stiffness), Kd=0.5 (Damping)
@@ -237,7 +248,7 @@ class DamiaoMotorsBus(MotorsBusBase):
             if response is None:
                 missing_motors.append(motor_name)
             else:
-                self._process_response(motor_name, msg)
+                self._process_response(motor_name, response)
             time.sleep(MEDIUM_TIMEOUT_SEC)
 
         if missing_motors:
@@ -275,6 +286,56 @@ class DamiaoMotorsBus(MotorsBusBase):
         for motor in self.motors:
             self._send_simple_command(motor, CAN_CMD_ENABLE)
             time.sleep(MEDIUM_TIMEOUT_SEC)
+
+    def set_control_mode(self, motor: NameOrID, mode: ControlMode) -> None:
+        """Set a motor's volatile CTRL_MODE register without saving to flash."""
+        motor_id = self._get_motor_id(motor)
+        recv_id = self._get_motor_recv_id(motor)
+        mode = ControlMode(mode)
+        data = [
+            motor_id & 0xFF,
+            (motor_id >> 8) & 0xFF,
+            CAN_CMD_WRITE_PARAM,
+            int(MotorVariable.CTRL_MODE),
+            int(mode),
+            0,
+            0,
+            0,
+        ]
+        if self.canbus is None:
+            raise RuntimeError("CAN bus is not initialized.")
+
+        msg = can.Message(
+            arbitration_id=CAN_PARAM_ID,
+            data=data,
+            is_extended_id=False,
+            is_fd=self.use_can_fd,
+        )
+        self.canbus.send(msg)
+
+        # Consume the parameter acknowledgement so the next state operation
+        # cannot decode it as motor feedback.
+        response = self._recv_motor_response(expected_recv_id=recv_id, timeout=MEDIUM_TIMEOUT_SEC)
+        if response is None:
+            logger.warning(
+                "No CTRL_MODE acknowledgement from %s after requesting %s",
+                self._get_motor_name(motor),
+                mode.name,
+            )
+            return
+
+        payload = bytes(response.data)
+        acknowledged = (
+            len(payload) >= 8
+            and payload[2] == CAN_CMD_WRITE_PARAM
+            and payload[3] == int(MotorVariable.CTRL_MODE)
+            and int.from_bytes(payload[4:8], byteorder="little") == int(mode)
+        )
+        if not acknowledged:
+            raise RuntimeError(
+                f"Motor {self._get_motor_name(motor)} returned an invalid CTRL_MODE acknowledgement: "
+                f"{payload.hex()}"
+            )
 
     def _send_simple_command(self, motor: NameOrID, command_byte: int) -> None:
         """Helper to send simple 8-byte commands (Enable, Disable, Zero)."""
@@ -393,7 +454,10 @@ class DamiaoMotorsBus(MotorsBusBase):
         return None
 
     def _recv_all_responses(
-        self, expected_recv_ids: list[int], timeout: float = 0.002
+        self,
+        expected_recv_ids: list[int],
+        timeout: float = 0.002,
+        diagnostics: dict[str, Any] | None = None,
     ) -> dict[int, can.Message]:
         """
         Efficiently receive responses from multiple motors at once.
@@ -408,21 +472,52 @@ class DamiaoMotorsBus(MotorsBusBase):
         """
         responses: dict[int, can.Message] = {}
         expected_set = set(expected_recv_ids)
-        start_time = time.time()
+        start_time = time.perf_counter()
+        first_response_ms: float | None = None
+        last_response_ms: float | None = None
+        arrival_ms_by_id: dict[int, float] = {}
+        messages_seen = 0
+        unexpected_ids: set[int] = set()
+        poll_calls = 0
 
         if self.canbus is None:
             raise RuntimeError("CAN bus is not initialized.")
 
         try:
-            while len(responses) < len(expected_recv_ids) and (time.time() - start_time) < timeout:
+            while len(responses) < len(expected_set) and (time.perf_counter() - start_time) < timeout:
                 # 100us poll timeout
+                poll_calls += 1
                 msg = self.canbus.recv(timeout=PRECISE_TIMEOUT_SEC)
+                if msg:
+                    messages_seen += 1
                 if msg and msg.arbitration_id in expected_set:
                     responses[msg.arbitration_id] = msg
-                    if len(responses) == len(expected_recv_ids):
+                    arrival_ms = (time.perf_counter() - start_time) * 1e3
+                    arrival_ms_by_id[msg.arbitration_id] = arrival_ms
+                    if first_response_ms is None:
+                        first_response_ms = arrival_ms
+                    last_response_ms = arrival_ms
+                    if len(responses) == len(expected_set):
                         break
+                elif msg:
+                    unexpected_ids.add(msg.arbitration_id)
         except Exception as e:
-            logger.debug(f"Error receiving responses: {e}")
+            logger.debug("Error receiving CAN responses on %s: %s", self.port, e)
+
+        if diagnostics is not None:
+            diagnostics.update(
+                {
+                    "receive_ms": (time.perf_counter() - start_time) * 1e3,
+                    "first_response_ms": first_response_ms,
+                    "last_response_ms": last_response_ms,
+                    "arrival_ms_by_id": arrival_ms_by_id,
+                    "messages_seen": messages_seen,
+                    "poll_calls": poll_calls,
+                    "unexpected_ids": sorted(unexpected_ids),
+                    "received_ids": sorted(responses),
+                    "missing_ids": sorted(expected_set - responses.keys()),
+                }
+            )
 
         return responses
 
@@ -461,6 +556,91 @@ class DamiaoMotorsBus(MotorsBusBase):
         data[6] = ((kd_uint & 0xF) << 4) | ((tau_uint >> 8) & 0xF)
         data[7] = tau_uint & 0xFF
         return data
+
+    def _encode_posforce_packet(
+        self,
+        motor: NameOrID,
+        position_rad: float,
+        speed_rad_s: float,
+        current_pu: float,
+    ) -> bytes:
+        """Encode the Damiao POS_FORCE payload using physical units."""
+        values = (position_rad, speed_rad_s, current_pu)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("POS_FORCE values must be finite")
+
+        motor_name = self._get_motor_name(motor)
+        pmax, _, _ = MOTOR_LIMIT_PARAMS[self._motor_types[motor_name]]
+        if not -pmax <= position_rad <= pmax:
+            raise ValueError(f"position_rad must be within [{-pmax}, {pmax}]")
+        if not 0.0 <= speed_rad_s <= 100.0:
+            raise ValueError("speed_rad_s must be within [0, 100]")
+        if not 0.0 <= current_pu <= 1.0:
+            raise ValueError("current_pu must be within [0, 1]")
+
+        return struct.pack("<fHH", position_rad, int(speed_rad_s * 100), int(current_pu * 10000))
+
+    @check_if_not_connected
+    def posforce_control(
+        self,
+        motor: NameOrID,
+        position_rad: float,
+        speed_rad_s: float,
+        current_pu: float,
+    ) -> None:
+        """Send one POS_FORCE command without blocking the control loop.
+
+        The official OpenArm driver receives state on its independent CAN
+        receive path; the next normal state refresh updates this bus cache.
+        """
+        motor_id = self._get_motor_id(motor)
+        data = self._encode_posforce_packet(motor, position_rad, speed_rad_s, current_pu)
+        if self.canbus is None:
+            raise RuntimeError("CAN bus is not initialized.")
+
+        msg = can.Message(
+            arbitration_id=motor_id + 0x300,
+            data=data,
+            is_extended_id=False,
+            is_fd=self.use_can_fd,
+        )
+        self.canbus.send(msg)
+
+    def mit_control(
+        self,
+        motor: NameOrID,
+        kp: float,
+        kd: float,
+        position_degrees: float,
+        velocity_deg_per_sec: float = 0.0,
+        torque: float = 0.0,
+    ) -> None:
+        """
+        Send an MIT control command to a single motor (public API).
+
+        Args:
+            motor: Motor name or CAN ID
+            kp: Position gain (stiffness)
+            kd: Velocity gain (damping)
+            position_degrees: Goal position in degrees
+            velocity_deg_per_sec: Velocity feedforward in degrees/second
+            torque: Torque feedforward in N·m
+        """
+        self._mit_control(motor, kp, kd, position_degrees, velocity_deg_per_sec, torque)
+
+    def mit_control_batch(
+        self,
+        commands: dict[NameOrID, tuple[float, float, float, float, float]],
+    ) -> None:
+        """
+        Send MIT control commands to multiple motors in batch (public API).
+        Sends all commands first, then collects responses.
+
+        Args:
+            commands: Dict mapping motor name/ID to (kp, kd, position_deg, velocity_deg/s, torque)
+                     Example: {'joint_1': (10.0, 0.5, 45.0, 0.0, 0.0), ...}
+        """
+        self._mit_control_batch(commands)
 
     def _mit_control(
         self,
@@ -580,6 +760,7 @@ class DamiaoMotorsBus(MotorsBusBase):
                 "temp_mos": float(t_mos),
                 "temp_rotor": float(t_rotor),
             }
+            self._last_state_update_monotonic[motor] = time.monotonic()
         except Exception as e:
             logger.warning(f"Failed to decode response from {motor}: {e}")
 
@@ -657,6 +838,7 @@ class DamiaoMotorsBus(MotorsBusBase):
         motors: str | list[str] | None = None,
         *,
         num_retry: int = 0,
+        context: str = "sync_read_all_states",
     ) -> dict[str, MotorState]:
         """
         Read ALL motor states (position, velocity, torque) from multiple motors in ONE refresh cycle.
@@ -666,19 +848,31 @@ class DamiaoMotorsBus(MotorsBusBase):
             Example: {'joint_1': {'position': 45.2, 'velocity': 1.3, 'torque': 0.5}, ...}
         """
         target_motors = self._get_motors_list(motors)
-        self._batch_refresh(target_motors)
+        self._batch_refresh(target_motors, context=context)
 
         result = {}
         for motor in target_motors:
             result[motor] = self._last_known_states[motor].copy()
         return result
 
-    def _batch_refresh(self, motors: list[str]) -> None:
-        """Internal helper to refresh a list of motors and update cache."""
+    def get_cached_states(self) -> dict[str, MotorState]:
+        """
+        Return the most recent decoded state per motor WITHOUT touching the CAN bus.
+
+        The cache is refreshed by every motor response (MIT control, refresh, reads),
+        so right after `mit_control_batch` it reflects the feedback frames the motors
+        just sent. Useful for cheap per-cycle consumers (telemetry, feedforward).
+        """
+        return {name: state.copy() for name, state in self._last_known_states.items()}
+
+    def _batch_refresh(self, motors: list[str], *, context: str = "batch_refresh") -> None:
+        """Refresh motors, retaining the last valid state when a response is late or missing."""
 
         if self.canbus is None:
             raise RuntimeError("CAN bus is not initialized.")
 
+        refresh_start = time.perf_counter()
+        send_start = refresh_start
         # Send refresh commands
         for motor in motors:
             motor_id = self._get_motor_id(motor)
@@ -687,19 +881,85 @@ class DamiaoMotorsBus(MotorsBusBase):
                 arbitration_id=CAN_PARAM_ID, data=data, is_extended_id=False, is_fd=self.use_can_fd
             )
             self.canbus.send(msg)
+        send_ms = (time.perf_counter() - send_start) * 1e3
 
         # Collect responses
         expected_recv_ids = [self._get_motor_recv_id(m) for m in motors]
-        responses = self._recv_all_responses(expected_recv_ids, timeout=MEDIUM_TIMEOUT_SEC)
+        diagnostics: dict[str, Any] = {}
+        responses = self._recv_all_responses(
+            expected_recv_ids,
+            timeout=MEDIUM_TIMEOUT_SEC,
+            diagnostics=diagnostics,
+        )
 
         # Update cache
+        decode_start = time.perf_counter()
+        missing_motors: list[str] = []
         for motor in motors:
             recv_id = self._get_motor_recv_id(motor)
             msg = responses.get(recv_id)
             if msg:
                 self._process_response(motor, msg)
             else:
-                logger.warning(f"Packet drop: {motor} (ID: 0x{recv_id:02X}). Using last known state.")
+                missing_motors.append(motor)
+        decode_ms = (time.perf_counter() - decode_start) * 1e3
+        total_ms = (time.perf_counter() - refresh_start) * 1e3
+        now = time.monotonic()
+        stale_age_ms = {
+            # Bind the timestamp once so mypy can narrow the None guard — the
+            # double dict access defeated narrowing and failed the strict
+            # lerobot.motors mypy gate, blocking every commit on this branch.
+            motor: (
+                None
+                if (ts := self._last_state_update_monotonic[motor]) is None
+                else round((now - ts) * 1e3, 3)
+            )
+            for motor in missing_motors
+        }
+        arrival_ms_by_motor = {
+            self._recv_id_to_motor.get(recv_id, f"0x{recv_id:02X}"): round(arrival_ms, 3)
+            for recv_id, arrival_ms in diagnostics.get("arrival_ms_by_id", {}).items()
+        }
+
+        metric_args = (
+            self.port,
+            context,
+            len(motors),
+            len(responses),
+            send_ms,
+            MEDIUM_TIMEOUT_SEC * 1e3,
+            diagnostics.get("first_response_ms"),
+            diagnostics.get("last_response_ms"),
+            diagnostics.get("receive_ms", 0.0),
+            decode_ms,
+            total_ms,
+            missing_motors,
+            stale_age_ms,
+            arrival_ms_by_motor,
+            diagnostics.get("messages_seen", 0),
+            diagnostics.get("poll_calls", 0),
+            [f"0x{recv_id:02X}" for recv_id in diagnostics.get("unexpected_ids", [])],
+        )
+        metric_format = (
+            "CAN_REFRESH port=%s context=%s expected=%d received=%d send_ms=%.3f timeout_ms=%.3f "
+            "first_response_ms=%s last_response_ms=%s receive_ms=%.3f decode_ms=%.3f "
+            "total_ms=%.3f missing=%s reuse_last_state=true stale_age_ms=%s arrivals_ms=%s messages_seen=%d "
+            "poll_calls=%d unexpected_ids=%s"
+        )
+        if missing_motors:
+            logger.warning(metric_format, *metric_args)
+        else:
+            # Rate-limit the all-healthy line: it fires per refresh per
+            # context (observation + gravity_ff, per arm) — hundreds of lines
+            # per second at 30 Hz, which alone measurably starves the record
+            # loop (and produces multi-hundred-thousand-line log files).
+            # 1 Hz per (port, context) keeps the timing data available for
+            # postmortems. The warning path above stays per-occurrence.
+            key = (self.port, context)
+            now_mono = time.monotonic()
+            if now_mono - self._last_healthy_refresh_log.get(key, 0.0) >= 1.0:
+                self._last_healthy_refresh_log[key] = now_mono
+                logger.debug(metric_format, *metric_args)
 
     @check_if_not_connected
     def sync_write(self, data_name: str, values: dict[str, Value]) -> None:
