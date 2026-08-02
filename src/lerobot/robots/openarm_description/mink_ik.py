@@ -247,12 +247,8 @@ class BimanualOpenArmMinkIKTransform:
             return self._output()
 
         current = self._fk()
-        targets = {
-            side: self._target_for_side(side, values, current[side]) for side in ("left", "right")
-        }
-        state_rad = np.concatenate(
-            [np.deg2rad(self._q_last["right"]), np.deg2rad(self._q_last["left"])]
-        )
+        targets = {side: self._target_for_side(side, values, current[side]) for side in ("left", "right")}
+        state_rad = np.concatenate([np.deg2rad(self._q_last["right"]), np.deg2rad(self._q_last["left"])])
         self._kin.sync(state_rad)
         for side in ("right", "left"):
             self._kin.set_target(side, _matrix_to_pose7(targets[side]))
@@ -276,9 +272,7 @@ class BimanualOpenArmMinkIKTransform:
                 candidates[side][:7] = self._q_last[side][:7]
             candidates[side][7] = values[f"{side}_gripper_pos"]
             lower, upper = self._joint_bounds_deg[side]
-            if np.any(candidates[side][:7] < lower - 1e-6) or np.any(
-                candidates[side][:7] > upper + 1e-6
-            ):
+            if np.any(candidates[side][:7] < lower - 1e-6) or np.any(candidates[side][:7] > upper + 1e-6):
                 # Out-of-bounds solve: hold THIS arm at its last joint
                 # positions; the other arm keeps tracking.
                 candidates[side][:7] = self._q_last[side][:7]
@@ -293,9 +287,7 @@ class BimanualOpenArmMinkIKTransform:
                 # operator re-anchors (reported as "arm unresponsive until
                 # both controllers are wiggled"). Clamped progress keeps the
                 # same per-tick velocity bound but converges on the target.
-                candidates[side][:7] = self._q_last[side][:7] + joint_step * (
-                    _MAX_JOINT_STEP_DEG / step_mag
-                )
+                candidates[side][:7] = self._q_last[side][:7] + joint_step * (_MAX_JOINT_STEP_DEG / step_mag)
                 hold[side] = True
 
         self._q_last = {side: candidates[side].copy() for side in ("left", "right")}

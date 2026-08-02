@@ -178,9 +178,7 @@ def test_record_action_schema_contains_only_values_returned_by_send_action():
     assert any(name.endswith(".torque") for name in robot.observation_features)
 
     sent_action = dict.fromkeys(action_names, 0.0)
-    dataset_features = {
-        ACTION: {"dtype": "float32", "shape": (len(action_names),), "names": action_names}
-    }
+    dataset_features = {ACTION: {"dtype": "float32", "shape": (len(action_names),), "names": action_names}}
     frame = build_dataset_frame(dataset_features, sent_action, prefix=ACTION)
     assert frame[ACTION].shape == (len(action_names),)
 

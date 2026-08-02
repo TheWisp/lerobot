@@ -53,10 +53,7 @@ class BiOpenArmFollowerConfig(RobotConfig):
     ik_max_iters: int = field(
         default=10,
         metadata={
-            "description": (
-                "QP iterations per shared bimanual solve. The pinned dora "
-                "OpenArm flow uses 10."
-            ),
+            "description": ("QP iterations per shared bimanual solve. The pinned dora OpenArm flow uses 10."),
         },
     )
     ik_damping: float = field(

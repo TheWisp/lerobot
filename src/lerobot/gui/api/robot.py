@@ -827,6 +827,7 @@ async def scan_ports() -> list[dict]:
 # content rather than robot type so editing a profile cannot serve a stale spec.
 _MOTOR_SPEC_CACHE: dict[str, tuple[type, str, object]] = {}
 
+
 def _scan_socketcan_interfaces(sys_class_net: Path = Path("/sys/class/net")) -> list[dict]:
     """Return CAN network interfaces using read-only Linux sysfs metadata."""
     if platform.system() != "Linux" or not sys_class_net.is_dir():

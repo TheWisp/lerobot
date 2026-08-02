@@ -489,7 +489,6 @@ class TestCollectAllPortAssignments:
 
         assert assignments == []
 
-
     def test_skips_corrupt_json(self, tmp_path):
         robot_dir, teleop_dir = self._setup_dirs(tmp_path)
         (robot_dir / "corrupt.json").write_text("not json {{{")

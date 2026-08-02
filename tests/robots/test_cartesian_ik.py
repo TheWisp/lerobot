@@ -75,18 +75,6 @@ _WS_MIN = (-0.20, -0.35, 0.03)
 _WS_MAX = (0.25, 0.05, 0.36)
 
 
-
-    pink 4.2's ``NoSolutionFound`` takes ``(problem, results)``; older pink
-    and the no-pink sentinel in ``cartesian_ik`` take a plain message.
-    """
-    from lerobot.robots.so107_description.cartesian_ik import _NoSolutionFound
-
-    try:
-        return _NoSolutionFound(msg)
-    except TypeError:
-        return _NoSolutionFound(None, None)  # pink 4.2: (problem, results)
-
-
 class _StubKinematics:
     """Deterministic FK/IK stand-in for controller-logic tests.
 

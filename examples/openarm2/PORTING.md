@@ -13,17 +13,17 @@ integration. Base: `sync/upstream-2026-07` (untouched).
 
 ## Port map (dora → lerobot)
 
-| dora (validated) | lerobot (this branch) |
-| --- | --- |
+| dora (validated)                                                                                                                 | lerobot (this branch)                                                                                                                                              |
+| -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `gravity_ff.py`: MuJoCo `qfrc_bias` → MIT `tff` slot, gain 0.9, 1 s fade-in, 20 Hz LPF, clamp 0.5×actuatorfrcrange, non-finite→0 | `src/lerobot/robots/openarm_follower/gravity_ff.py` — same math/safeguards, wired into `OpenArmFollower.send_action`, gated by `gravity_ff_gain` (default 0 = off) |
-| (stock) MIT velocity/torque slots unreachable | New public `DamiaoMotorsBus.mit_control()` / `mit_control_batch()` (`src/lerobot/motors/damiao/damiao.py`) — `send_action` no longer calls privates |
-| Velocity FF (tracking-goal lever 1, was planned not implemented) | Implemented: finite-difference of commanded positions → MIT `q̇*` slot, clamped to joint delta limits, gated by `velocity_ff_gain` |
-| Align ramp 0.003 rad/step, **gripper (J8) excluded**; jump-guard logs naming the joint | Same in `send_action`: `align_step_limit` (None = off), gripper unclamped (1 N·m POS_FORCE finger), `align_jump_threshold` warnings, rate-limited |
-| 30 s follower telemetry (err_max, τ_ext = qtorque − tff, MOS temp) | `src/lerobot/robots/openarm_follower/telemetry.py` — fed from the bus response cache, zero extra CAN traffic |
-| `openarm_standard.yaml`: zero offsets, arms-down zero, v2 model joint limits, standard PD gains | Defaults in `OpenArmFollowerConfig` (per-side `joint_limits`, `position_kp/kd`); docstring states the zero convention |
-| dora-openarm-vr: settle window after tracking recovery; jump-guard diagnostics | `teleoperators/quest_vr`: 0.25 s post-recovery settle (clutch treated released while pose settles), per-tick target-step warnings |
-| dora-openarm-vr: yaw-only gravity-aligned anchor | **Not ported** — that fixed dora's live-head-pose anchoring; lerobot's WebXR stage frame is already fixed and gravity-aligned |
-| UDP receiver + custom dataflow | **Replaced** by the fork's existing `quest_vr` WebXR teleop (browser on the Quest → WebSocket), extended with an OpenArm IK path (below) |
+| (stock) MIT velocity/torque slots unreachable                                                                                    | New public `DamiaoMotorsBus.mit_control()` / `mit_control_batch()` (`src/lerobot/motors/damiao/damiao.py`) — `send_action` no longer calls privates                |
+| Velocity FF (tracking-goal lever 1, was planned not implemented)                                                                 | Implemented: finite-difference of commanded positions → MIT `q̇*` slot, clamped to joint delta limits, gated by `velocity_ff_gain`                                  |
+| Align ramp 0.003 rad/step, **gripper (J8) excluded**; jump-guard logs naming the joint                                           | Same in `send_action`: `align_step_limit` (None = off), gripper unclamped (1 N·m POS_FORCE finger), `align_jump_threshold` warnings, rate-limited                  |
+| 30 s follower telemetry (err_max, τ_ext = qtorque − tff, MOS temp)                                                               | `src/lerobot/robots/openarm_follower/telemetry.py` — fed from the bus response cache, zero extra CAN traffic                                                       |
+| `openarm_standard.yaml`: zero offsets, arms-down zero, v2 model joint limits, standard PD gains                                  | Defaults in `OpenArmFollowerConfig` (per-side `joint_limits`, `position_kp/kd`); docstring states the zero convention                                              |
+| dora-openarm-vr: settle window after tracking recovery; jump-guard diagnostics                                                   | `teleoperators/quest_vr`: 0.25 s post-recovery settle (clutch treated released while pose settles), per-tick target-step warnings                                  |
+| dora-openarm-vr: yaw-only gravity-aligned anchor                                                                                 | **Not ported** — that fixed dora's live-head-pose anchoring; lerobot's WebXR stage frame is already fixed and gravity-aligned                                      |
+| UDP receiver + custom dataflow                                                                                                   | **Replaced** by the fork's existing `quest_vr` WebXR teleop (browser on the Quest → WebSocket), extended with an OpenArm IK path (below)                           |
 
 ## Quest VR teleop: which solution
 

@@ -73,6 +73,7 @@ def test_record_rejects_upstream_base_dataset_config():
     with pytest.raises(TypeError, match=r"record_images.*lerobot\.scripts\.lerobot_record"):
         record(cfg)
 
+
 def _teleoperate_config() -> TeleoperateConfig:
     return TeleoperateConfig(
         robot=MockRobotConfig(),

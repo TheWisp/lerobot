@@ -137,7 +137,13 @@ def prepare_observation_for_inference(
             # is numerically irrelevant to any model input but is not
             # bitwise identical to the CPU path.
             observation[name] = (
-                torch.from_numpy(value).to(device, non_blocking=True).float().div(255).permute(2, 0, 1).contiguous().unsqueeze(0)
+                torch.from_numpy(value)
+                .to(device, non_blocking=True)
+                .float()
+                .div(255)
+                .permute(2, 0, 1)
+                .contiguous()
+                .unsqueeze(0)
             )
             continue
         observation[name] = torch.from_numpy(value)
