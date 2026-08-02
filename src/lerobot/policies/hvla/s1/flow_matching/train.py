@@ -37,6 +37,44 @@ from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
 logger = logging.getLogger(__name__)
 
 
+def checkpoint_config_dict(config: FlowMatchingS1Config) -> dict:
+    """Serialize a config into what a checkpoint's ``config.json`` must contain.
+
+    Postcondition: the result satisfies
+    :meth:`FlowMatchingS1Config.from_checkpoint_dict`, which is what makes a
+    checkpoint loadable. Lives at module level rather than inside ``train()``
+    so a test can hold the writer and the reader against each other; while it
+    was a closure, dropping a contract field here would have shipped
+    unloadable checkpoints with the whole suite still green.
+    """
+    return {
+        "type": "hvla_flow_s1",
+        "feature_contract_version": FlowMatchingS1Config.FEATURE_CONTRACT_VERSION,
+        "action_dim": config.action_dim,
+        "action_feature_names": config.action_feature_names,
+        "robot_state_feature": config.robot_state_feature,
+        "state_dim": config.state_dim,
+        "state_feature_names": config.state_feature_names,
+        "chunk_size": config.chunk_size,
+        "hidden_dim": config.hidden_dim,
+        "num_heads": config.num_heads,
+        "num_encoder_layers": config.num_encoder_layers,
+        "num_decoder_layers": config.num_decoder_layers,
+        "dim_feedforward": config.dim_feedforward,
+        "s2_latent_dim": config.s2_latent_dim,
+        "s2_proj_hidden": config.s2_proj_hidden,
+        "num_inference_steps": config.num_inference_steps,
+        "rtc_max_delay": config.rtc_max_delay,
+        "rtc_drop_prob": config.rtc_drop_prob,
+        "use_dino_backbone": config.use_dino_backbone,
+        "backbone_dim": config.backbone_dim,
+        "freeze_backbone": config.freeze_backbone,
+        "image_features": config.image_features,
+        "image_resize_shape": config.image_resize_shape,
+        "dino_model": config.dino_model,
+    }
+
+
 def configure_from_dataset_features(
     config: FlowMatchingS1Config,
     features: dict,
@@ -439,33 +477,7 @@ def train(args):
         torch.save(norm_stats, str(pretrained_dir / "norm_stats.pt"))
 
         # config.json — identifies this as an HVLA checkpoint
-        policy_config = {
-            "type": "hvla_flow_s1",
-            "feature_contract_version": FlowMatchingS1Config.FEATURE_CONTRACT_VERSION,
-            "action_dim": config.action_dim,
-            "action_feature_names": config.action_feature_names,
-            "robot_state_feature": config.robot_state_feature,
-            "state_dim": config.state_dim,
-            "state_feature_names": config.state_feature_names,
-            "chunk_size": config.chunk_size,
-            "hidden_dim": config.hidden_dim,
-            "num_heads": config.num_heads,
-            "num_encoder_layers": config.num_encoder_layers,
-            "num_decoder_layers": config.num_decoder_layers,
-            "dim_feedforward": config.dim_feedforward,
-            "s2_latent_dim": config.s2_latent_dim,
-            "s2_proj_hidden": config.s2_proj_hidden,
-            "num_inference_steps": config.num_inference_steps,
-            "rtc_max_delay": config.rtc_max_delay,
-            "rtc_drop_prob": config.rtc_drop_prob,
-            "use_dino_backbone": config.use_dino_backbone,
-            "backbone_dim": config.backbone_dim,
-            "freeze_backbone": config.freeze_backbone,
-            "image_features": config.image_features,
-            "image_resize_shape": config.image_resize_shape,
-            "dino_model": config.dino_model,
-        }
-        (pretrained_dir / "config.json").write_text(json.dumps(policy_config, indent=2))
+        (pretrained_dir / "config.json").write_text(json.dumps(checkpoint_config_dict(config), indent=2))
 
         # train_config.json — training args for reproducibility
         train_config = {

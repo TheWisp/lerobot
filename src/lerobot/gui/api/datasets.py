@@ -628,6 +628,18 @@ def _prefetch_single_episode(
                     total_encode_ms += (t3 - t2) * 1000
 
                 decoded_count += len(uncached_frames)
+            except IndexError:
+                # The episode vanished mid-prefetch — a concurrently-running
+                # re-record discards the in-progress episode's metadata and
+                # files, so get_video_file_path starts raising out-of-range
+                # for every remaining batch. Expected when browsing a dataset
+                # that is actively being recorded; abort quietly instead of
+                # logging a traceback per batch.
+                logger.info(
+                    f"Prefetch aborted for episode {episode_idx}: episode no longer exists "
+                    f"(re-recorded or deleted while prefetching)"
+                )
+                return
             except Exception:
                 logger.warning(
                     f"Prefetch failed for batch {batch_start}-{batch_end} of episode {episode_idx}",

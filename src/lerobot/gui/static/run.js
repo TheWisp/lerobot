@@ -20,6 +20,7 @@ async function runTabInit() {
         return;
     }
     runTabInitialized = true;
+    _bindRunControlHotkeys();
 
     // Ensure profiles are loaded (Robot tab may not have been visited yet)
     if (typeof robotProfiles !== 'undefined' && !robotProfiles.length) {
@@ -46,9 +47,9 @@ async function runTabInit() {
     // close racing with the `done` event, browser tab backgrounded, etc.)
     // the frontend can be left thinking a long-dead subprocess is still
     // running. A low-frequency poll closes that gap without user
-    // intervention; cost is one tiny GET every 5 s.
+    // intervention; cost is one tiny GET every second.
     if (!window._runStatusPollTimer) {
-        window._runStatusPollTimer = setInterval(pollRunStatus, 5000);
+        window._runStatusPollTimer = setInterval(pollRunStatus, 1000);
     }
 }
 
@@ -164,6 +165,9 @@ const _WORKFLOW_VALIDATORS = {
 };
 
 let _isRunning = false;
+// Kind of the active subprocess ('record', 'teleoperate', ...); null when idle.
+// Episode controls and their hotkeys are record-only.
+let _runCommand = null;
 
 function _validateLaunch() {
     if (_isRunning) {
@@ -1191,6 +1195,26 @@ function renderRunForm() {
     html += '</div>'; // end standard fields
     html += '</div>'; // end policy section
 
+    // ---- Episode control (active while a record subprocess runs) ----
+    // Sends episode-transition commands to the running lerobot-record
+    // subprocess via POST /api/run/control — mirrors the keyboard events
+    // the CLI listens for (right-arrow / left-arrow / ESC). Applies to any
+    // workflow that launches a record subprocess (teleop record, policy
+    // record, HVLA), so it lives outside the per-workflow sections.
+    // Buttons start disabled; updateRunUI enables them while a subprocess
+    // runs (the endpoint 409s otherwise).
+    html += '<div class="form-section">';
+    // Live phase readout sits right in the section title so the operator can
+    // see what a "Next episode" click will interrupt ("recording episode 3" /
+    // "resetting" / ...). Fed by pollRunStatus from /api/run/status.
+    html += '<div class="form-section-title">Episode control <span id="run-phase" class="run-phase-badge"></span></div>';
+    html += '<div class="episode-control-row">';
+    html += '<button id="run-ctrl-next" class="btn-small secondary" onclick="sendRunControl(\'exit_early\')" disabled title="End the current phase early (hotkey: N)">Next episode (N)</button>';
+    html += '<button id="run-ctrl-rerecord" class="btn-small secondary" onclick="sendRunControl(\'rerecord_episode\')" disabled title="Discard the current episode and re-record it (hotkey: R)">Re-record (R)</button>';
+    html += '</div>';
+    html += '<div class="form-hint" style="margin-top:6px;">Active while a record run is in progress. Stopping a run uses the main Stop button above.</div>';
+    html += '</div>';
+
     form.innerHTML = html;
     _toggleHvlaRecordFields();
     // Refresh debug-model state after the form is in the DOM. Without this,
@@ -1593,7 +1617,7 @@ async function launchRun() {
         }
         const data = await res.json();
         showToast('Started', `${data.command} started (PID ${data.pid})`, 'success');
-        updateRunUI(true);
+        updateRunUI(true, data.command);
         connectOutputSSE();
         if (body?.rlt_mode) {
             _startRLTPoll();
@@ -1621,12 +1645,70 @@ async function stopRun() {
             showToast('Error', err.detail || 'Failed to stop', 'error');
             return;
         }
-        showToast('Stopped', 'Process stopped', 'info');
+        const data = await res.json().catch(() => ({}));
+        // A graceful stop means the record subprocess saved the buffered
+        // episode before exiting; say so, because the operator's next question
+        // after stopping mid-reset is whether their episode survived.
+        showToast('Stopped', data.graceful ? 'Episode saved, recorder exited cleanly' : 'Process stopped', 'info');
         stopObsStreamViewer();
         updateRunUI(false);
     } catch (e) {
         showToast('Error', e.message, 'error');
     }
+}
+
+// ============================================================================
+// Episode control (episode transitions during an active record run)
+// ============================================================================
+
+// Human-readable labels for toasts, keyed by the command sent to
+// POST /api/run/control.
+const _RUN_CONTROL_LABELS = {
+    exit_early: 'Next episode',
+    rerecord_episode: 'Re-record episode',
+    stop_recording: 'Stop recording',
+};
+
+async function sendRunControl(cmd) {
+    try {
+        const res = await fetch('/api/run/control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cmd }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            showToast('Episode control', err.detail || `Command "${cmd}" failed`, 'error');
+            return;
+        }
+        showToast('Episode control', `${_RUN_CONTROL_LABELS[cmd] || cmd} sent`, 'info');
+    } catch (e) {
+        showToast('Error', e.message, 'error');
+    }
+}
+
+// Hotkeys mirror the record CLI's own keyboard controls. Bound once from
+// runTabInit; active only while the Run tab is visible and a subprocess is
+// running, and never while typing in a form field.
+let _runControlHotkeysBound = false;
+
+function _bindRunControlHotkeys() {
+    if (_runControlHotkeysBound) return;
+    _runControlHotkeysBound = true;
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        const activeTab = document.querySelector('.tab.active')?.dataset.tab;
+        if (activeTab !== 'run') return;
+        // Same gate as the buttons: during a teleop run, N would not advance
+        // an episode — it would end the whole session.
+        if (!episodeControlsAvailable(_isRunning, _runCommand)) return;
+        const target = e.target;
+        if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return;
+        const cmd = { n: 'exit_early', r: 'rerecord_episode' }[e.key.toLowerCase()];
+        if (!cmd) return;
+        e.preventDefault();
+        sendRunControl(cmd);
+    });
 }
 
 // ============================================================================
@@ -1924,7 +2006,33 @@ async function pollRunStatus() {
     try {
         const res = await fetch('/api/run/status');
         const status = await res.json();
-        updateRunUI(status.running);
+        updateRunUI(status.running, status.command);
+
+        // Live record-phase readout next to the episode-control buttons
+        // ("recording episode 3" / "resetting" / ...). Empty when idle or
+        // before the first phase transition.
+        const phaseEl = document.getElementById('run-phase');
+        const phase = status.running ? (status.phase || '') : '';
+        if (phaseEl) {
+            phaseEl.textContent = phase;
+        }
+
+        // "Next episode" means different things per phase: while recording it
+        // ENDS the episode early (and keeps it), during reset it SKIPS the
+        // remaining reset time and starts the next episode. Say which.
+        const nextBtn = document.getElementById('run-ctrl-next');
+        if (nextBtn) {
+            if (phase.startsWith('recording episode')) {
+                nextBtn.textContent = 'End episode → reset (N)';
+                nextBtn.title = 'Finish and keep the current episode now, then enter the reset phase (hotkey: N)';
+            } else if (phase === 'resetting') {
+                nextBtn.textContent = 'Start next episode (N)';
+                nextBtn.title = 'Skip the rest of the reset phase and start recording the next episode (hotkey: N)';
+            } else {
+                nextBtn.textContent = 'Next episode (N)';
+                nextBtn.title = 'End the current phase early (hotkey: N)';
+            }
+        }
 
         // If running but no SSE, reconnect
         if (status.running && !runEventSource) {
@@ -1940,13 +2048,28 @@ async function pollRunStatus() {
 // UI state management
 // ============================================================================
 
-function updateRunUI(isRunning) {
+// Episode flow control only exists in lerobot-record. Enabling the buttons
+// for any other run kind hands the operator a live "Next episode" during a
+// teleop session — where exit_early doesn't advance an episode, it ends the
+// whole run.
+function episodeControlsAvailable(isRunning, command) {
+    return !!isRunning && command === 'record';
+}
+
+function updateRunUI(isRunning, command = null) {
     _isRunning = isRunning;  // mirror for _validateLaunch
+    _runCommand = command;  // mirror for the N/R hotkey gate
     const stopBtn = document.getElementById('run-stop-btn');
     const formInputs = document.querySelectorAll('#run-form input, #run-form select');
     const workflowBtns = document.querySelectorAll('.workflow-btn');
 
     if (stopBtn) stopBtn.disabled = !isRunning;
+
+    const controlsLive = episodeControlsAvailable(isRunning, command);
+    for (const id of ['run-ctrl-next', 'run-ctrl-rerecord']) {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = !controlsLive;
+    }
 
     formInputs.forEach(el => el.disabled = isRunning);
     workflowBtns.forEach(el => el.disabled = isRunning);

@@ -477,24 +477,26 @@ def _create_or_resume_dataset(repo_id: str, fps: int, features: dict, robot_type
     )
 
 
-def _create_recording_dataset(repo_id: str, fps: int, robot, task: str):
+def _create_recording_dataset(
+    repo_id: str, fps: int, robot, task: str, action_names: list[str], state_names: list[str]
+):
     """Create a LeRobotDataset for recording inference episodes.
 
-    Features are derived from the robot's action/observation specs.
+    Precondition: ``action_names`` and ``state_names`` are the orders the frames
+    will actually be written in — the checkpoint's resolved layout, not the
+    robot's. They can differ, and the recorded metadata has to describe the
+    columns it ships: a dataset labelled in robot order but filled in checkpoint
+    order trains the next model on a permuted contract.
     """
 
     obs_ft = robot.observation_features
-    action_ft = robot.action_features
-
-    # Joint names = non-camera observation features
-    joint_names = [k for k, v in action_ft.items() if not isinstance(v, tuple)]
     cam_features = {k: v for k, v in obs_ft.items() if isinstance(v, tuple)}
 
     features = {}
     features["observation.state"] = {
         "dtype": "float32",
-        "shape": (len(joint_names),),
-        "names": list(joint_names),
+        "shape": (len(state_names),),
+        "names": list(state_names),
     }
     for cam_name, shape in cam_features.items():
         features[f"observation.images.{cam_name}"] = {
@@ -504,8 +506,8 @@ def _create_recording_dataset(repo_id: str, fps: int, robot, task: str):
         }
     features["action"] = {
         "dtype": "float32",
-        "shape": (len(joint_names),),
-        "names": list(joint_names),
+        "shape": (len(action_names),),
+        "names": list(action_names),
     }
 
     dataset = _create_or_resume_dataset(
@@ -515,20 +517,25 @@ def _create_recording_dataset(repo_id: str, fps: int, robot, task: str):
         robot_type=robot.robot_type,
     )
     logger.info(
-        "S1: Recording dataset '%s' (%d joints, %d cameras, %d existing episodes)",
+        "S1: Recording dataset '%s' (%d action, %d state, %d cameras, %d existing episodes)",
         repo_id,
-        len(joint_names),
+        len(action_names),
+        len(state_names),
         len(cam_features),
         dataset.meta.total_episodes,
     )
     return dataset
 
 
-def _add_frame_to_dataset(dataset, obs: dict, action_np: np.ndarray, joint_names: list[str], task: str):
-    """Add a single frame (obs + action) to the recording dataset."""
+def _add_frame_to_dataset(dataset, obs: dict, action_np: np.ndarray, state_names: list[str], task: str):
+    """Add a single frame (obs + action) to the recording dataset.
+
+    Precondition: ``state_names`` is the state layout the dataset was created
+    with, and ``action_np`` is already in the dataset's action order.
+    """
     frame = {"task": task}
     frame["observation.state"] = np.array(
-        [float(obs.get(j, 0)) for j in joint_names],
+        [float(obs.get(j, 0)) for j in state_names],
         dtype=np.float32,
     )
     frame["action"] = action_np.astype(np.float32)
@@ -844,12 +851,16 @@ def run_s1(
     # Episode recording
     dataset = None
     if record_dataset:
-        dataset = _create_recording_dataset(record_dataset, fps, robot, task)
+        dataset = _create_recording_dataset(
+            record_dataset, fps, robot, task, joint_names, state_feature_names
+        )
 
     # Intervention recording dataset
     int_dataset = None
     if intervention_dataset:
-        int_dataset = _create_recording_dataset(intervention_dataset, fps, robot, task)
+        int_dataset = _create_recording_dataset(
+            intervention_dataset, fps, robot, task, joint_names, state_feature_names
+        )
         logger.info("S1: Intervention dataset '%s' created", intervention_dataset)
 
     # Teleop (leader arm) for intervention / inverse follow
@@ -1251,7 +1262,7 @@ def run_s1(
             policy=policy,
             device=device,
             chunk_length=rl_chunk_length,
-            joint_names=joint_names,
+            state_feature_names=state_feature_names,
         )
     else:
         rlt_recorder = None
@@ -1322,9 +1333,21 @@ def run_s1(
         events = {"exit_early": False, "stop_recording": False}
         listener = None
 
-    # RLT: hook R key into existing keyboard listener for reward signal
-    if rlt_mode and rlt_state is not None and listener is not None:
-        _orig_on_press = listener.on_press
+    # RLT: hook R key into existing keyboard listener for reward signal.
+    # `on_press` is a pynput attribute, so this hook is inert under the terminal
+    # backend (Wayland / headless TTY) and absent entirely when local keyboard
+    # capture is disabled — which the GUI does for subprocesses it launches, so
+    # a GUI-driven RLT run currently has no transport for the reward keys at
+    # all. Degrade loudly rather than raising AttributeError mid-rollout; see
+    # the RLT reward-transport TODO in gui/TODO.md.
+    _orig_on_press = getattr(listener, "on_press", None) if listener is not None else None
+    if rlt_mode and rlt_state is not None and _orig_on_press is None:
+        logger.warning(
+            "RLT: reward hotkeys (R = success, LEFT = abort) are unavailable — the active "
+            "keyboard backend exposes no on_press hook. Episodes will still run, but terminal "
+            "reward must be signalled another way."
+        )
+    if rlt_mode and rlt_state is not None and _orig_on_press is not None:
 
         def _rlt_on_press(key, *args):
             try:
@@ -1887,11 +1910,11 @@ def run_s1(
 
                     # Record to intervention dataset
                     if int_dataset is not None:
-                        _add_frame_to_dataset(int_dataset, obs, action_np, joint_names, task)
+                        _add_frame_to_dataset(int_dataset, obs, action_np, state_feature_names, task)
 
                     # Record to main dataset too (so episode is continuous)
                     if dataset is not None:
-                        _add_frame_to_dataset(dataset, obs, action_np, joint_names, task)
+                        _add_frame_to_dataset(dataset, obs, action_np, state_feature_names, task)
 
                     # RLT: route human actions into the replay buffer via the
                     # recorder. Paper Alg 1 lines 9, 11, 12 during intervention.
@@ -2078,7 +2101,7 @@ def run_s1(
 
                     # Record frame to dataset
                     if dataset is not None:
-                        _add_frame_to_dataset(dataset, obs, action_np, joint_names, task)
+                        _add_frame_to_dataset(dataset, obs, action_np, state_feature_names, task)
 
                     # Track chunk execution index for RTC prefix extraction
                     if _supports_rtc:

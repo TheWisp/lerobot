@@ -178,12 +178,27 @@ def test_init_selects_terminal_when_pynput_cannot_capture(monkeypatch):
     _set_tty(monkeypatch, is_tty=True)
     monkeypatch.setattr(TerminalKeyListener, "start", lambda self: None)  # avoid touching termios
     listener, _ = init_keyboard_listener()
-    assert isinstance(listener, TerminalKeyListener)
+    # The keyboard backend comes back wrapped in the composite (stdin source is
+    # inactive here because stdin is a TTY).
+    assert isinstance(listener, ki._CompositeControlListener)
+    assert any(isinstance(src, TerminalKeyListener) for src in listener._listeners)
 
 
-def test_init_returns_none_without_tty(monkeypatch):
+def test_init_activates_stdin_channel_when_not_tty(monkeypatch):
+    """Piped stdin (GUI launches, CI) activates the JSON control channel."""
     monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
     _set_tty(monkeypatch, is_tty=False)
+    listener, _ = init_keyboard_listener()
+    assert isinstance(listener, ki._CompositeControlListener)
+    assert any(isinstance(src, ki.StdinControlListener) for src in listener._listeners)
+    listener.stop()
+
+
+def test_init_returns_none_when_no_source_available(monkeypatch):
+    """TTY stdin but no usable keyboard backend and capture disabled -> no listener."""
+    monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
+    monkeypatch.setenv(ki.KEYBOARD_LISTENER_ENV_VAR, "0")
+    _set_tty(monkeypatch, is_tty=True)
     listener, _ = init_keyboard_listener()
     assert listener is None
 
@@ -198,8 +213,67 @@ def test_init_terminal_key_routing(monkeypatch, key, flag):
     _set_tty(monkeypatch, is_tty=True)
     monkeypatch.setattr(TerminalKeyListener, "start", lambda self: None)
     listener, events = init_keyboard_listener()
-    listener._on_key(key)
+    terminal = next(src for src in listener._listeners if isinstance(src, TerminalKeyListener))
+    terminal._on_key(key)
     assert events[flag] is True
+
+
+# --- stdin control channel (GUI -> subprocess) -------------------------------
+def _set_stdin_content(monkeypatch, text):
+    stdin = io.StringIO(text)
+    stdin.isatty = lambda: False
+    monkeypatch.setattr(sys, "stdin", stdin)
+
+
+def _drain_stdin(listener):
+    """Wait for the composite's stdin reader to consume the scripted input (it exits at EOF)."""
+    stdin_listener = next(src for src in listener._listeners if isinstance(src, ki.StdinControlListener))
+    stdin_listener._thread.join(timeout=2.0)
+    assert not stdin_listener._thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    ("cmd", "expected_flags"),
+    [
+        ("exit_early", {"exit_early": True}),
+        ("rerecord_episode", {"rerecord_episode": True, "exit_early": True}),
+        ("stop_recording", {"stop_recording": True, "exit_early": True}),
+    ],
+)
+def test_stdin_command_routing(monkeypatch, cmd, expected_flags):
+    """JSON control lines drive the same events-dict flags as the keyboard keys."""
+    monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
+    _set_stdin_content(monkeypatch, f'{{"v": 1, "cmd": "{cmd}"}}\n')
+    listener, events = init_keyboard_listener()
+    _drain_stdin(listener)
+    for flag, value in expected_flags.items():
+        assert events[flag] is value
+    listener.stop()
+
+
+def test_stdin_malformed_lines_ignored(monkeypatch, caplog):
+    """Garbage, wrong protocol version, and unknown commands set no flags."""
+    monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
+    _set_stdin_content(
+        monkeypatch,
+        'garbage\n{"v": 2, "cmd": "exit_early"}\n{"v": 1}\n{"v": 1, "cmd": "explode"}\n',
+    )
+    listener, events = init_keyboard_listener()
+    _drain_stdin(listener)
+    assert events == {"exit_early": False, "rerecord_episode": False, "stop_recording": False}
+    listener.stop()
+
+
+def test_keyboard_listener_disabled_env(monkeypatch):
+    """LEROBOT_KEYBOARD_LISTENER=0 suppresses local capture but not the stdin channel."""
+    monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
+    monkeypatch.setenv(ki.KEYBOARD_LISTENER_ENV_VAR, "0")
+    _set_stdin_content(monkeypatch, "")
+    assert create_key_listener(lambda name: None) is None
+    listener, _ = init_keyboard_listener()
+    assert isinstance(listener, ki._CompositeControlListener)
+    assert all(isinstance(src, ki.StdinControlListener) for src in listener._listeners)
+    listener.stop()
 
 
 # --- Shared factory + pynput key resolver -----------------------------------
@@ -226,3 +300,54 @@ def test_create_key_listener_none_without_tty(monkeypatch):
     monkeypatch.setattr(ki, "pynput_can_capture", lambda: False)
     _set_tty(monkeypatch, is_tty=False)
     assert create_key_listener(lambda name: None) is None
+
+
+class TestCompositeListenerDelegation:
+    """The composite must not break call-sites that reach into the keyboard listener.
+
+    Before the stdin channel existed, ``init_keyboard_listener`` returned the
+    keyboard listener itself, and callers hook it — ``s1_process`` wraps
+    ``listener.on_press`` to add the RLT reward hotkeys (R = success,
+    LEFT = abort). Interposing a wrapper without delegation turns that into an
+    AttributeError partway through an RLT rollout.
+    """
+
+    def test_delegates_unknown_attributes_to_the_keyboard_listener(self):
+        from lerobot.utils.keyboard_input import _CompositeControlListener
+
+        class FakeKeyboardListener:
+            def __init__(self):
+                self.stopped = False
+
+            def on_press(self, key):
+                return "original-handler"
+
+            def stop(self):
+                self.stopped = True
+
+        kb = FakeKeyboardListener()
+        composite = _CompositeControlListener(kb, None)
+
+        assert composite.on_press(None) == "original-handler"
+
+    def test_stop_is_not_delegated_and_reaches_every_listener(self):
+        from lerobot.utils.keyboard_input import _CompositeControlListener
+
+        class Recorder:
+            def __init__(self):
+                self.stopped = False
+
+            def stop(self):
+                self.stopped = True
+
+        kb, stdin = Recorder(), Recorder()
+        _CompositeControlListener(kb, stdin).stop()
+        assert kb.stopped and stdin.stopped, "stop() must reach both sources, not delegate to one"
+
+    def test_missing_keyboard_backend_raises_an_actionable_attribute_error(self):
+        """With no keyboard backend the hook genuinely cannot exist — say why."""
+        from lerobot.utils.keyboard_input import _CompositeControlListener
+
+        composite = _CompositeControlListener(None, object())
+        with pytest.raises(AttributeError, match="no keyboard backend is active"):
+            _ = composite.on_press

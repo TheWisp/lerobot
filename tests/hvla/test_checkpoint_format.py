@@ -414,14 +414,25 @@ class TestGUIScanner:
         assert _scan_training_run(tmp_path) is None
 
 
+def _v7_is_migrated() -> bool:
+    """Is a *fully* migrated v7 on disk — layout and feature contract both?
+
+    The layout migration and the contract backfill are separate steps, and a
+    machine can sit between them. Asserting on a checkpoint that has had only
+    the first would report the operator's pending migration as a code failure.
+    """
+    config = Path("outputs/flow_s1_hvla_v7/checkpoints/checkpoint-50000/pretrained_model/config.json")
+    if not config.with_name("model.safetensors").exists() or not config.exists():
+        return False
+    return "action_feature_names" in json.loads(config.read_text())
+
+
 class TestMigratedCheckpointLoads:
     """Test that the actually migrated v7 checkpoint loads correctly (integration test)."""
 
     @pytest.mark.skipif(
-        not Path(
-            "outputs/flow_s1_hvla_v7/checkpoints/checkpoint-50000/pretrained_model/model.safetensors"
-        ).exists(),
-        reason="Migrated v7 checkpoint not available",
+        not _v7_is_migrated(),
+        reason="No fully migrated v7 checkpoint on disk (run hvla_migrate_checkpoints)",
     )
     def test_load_migrated_v7(self):
         """Load the migrated v7 checkpoint by directory path."""

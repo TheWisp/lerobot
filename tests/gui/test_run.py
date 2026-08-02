@@ -1283,3 +1283,144 @@ class TestLaunchLockSerializes:
             run_module._active_command = None
 
         asyncio.run(run())
+
+
+class TestControlEndpoint:
+    """Tests for POST /api/run/control — the GUI -> subprocess stdin control channel."""
+
+    def test_unknown_command_rejected(self):
+        from lerobot.gui.api.run import ControlRequest, send_control
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(send_control(ControlRequest(cmd="explode")))
+        assert exc_info.value.status_code == 400
+
+    def test_no_active_process(self):
+        from lerobot.gui.api.run import ControlRequest, send_control
+
+        with patch("lerobot.gui.api.run._active_process", None):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(send_control(ControlRequest(cmd="exit_early")))
+        assert exc_info.value.status_code == 409
+
+    def test_exited_process(self):
+        from lerobot.gui.api.run import ControlRequest, send_control
+
+        proc = AsyncMock()
+        proc.returncode = 0
+        with patch("lerobot.gui.api.run._active_process", proc):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(send_control(ControlRequest(cmd="exit_early")))
+        assert exc_info.value.status_code == 409
+
+    def test_writes_json_line_to_stdin(self):
+        from lerobot.gui.api.run import ControlRequest, send_control
+
+        written = []
+
+        class FakeStdin:
+            def write(self, data):
+                written.append(data)
+
+            async def drain(self):
+                pass
+
+        proc = AsyncMock()
+        proc.returncode = None
+        proc.stdin = FakeStdin()
+        proc.pid = 1234
+        with patch("lerobot.gui.api.run._active_process", proc):
+            result = asyncio.run(send_control(ControlRequest(cmd="rerecord_episode")))
+
+        assert result["status"] == "sent"
+        assert result["cmd"] == "rerecord_episode"
+        assert written == [b'{"v": 1, "cmd": "rerecord_episode"}\n']
+
+    def test_endpoint_and_subprocess_agree_on_the_command_vocabulary(self):
+        """The two ends of the protocol must accept exactly the same commands.
+
+        `_CONTROL_COMMANDS` here and `_STDIN_COMMAND_TO_CONTROL` in
+        keyboard_input are maintained by hand in different files. A command
+        added to only one side fails asymmetrically and quietly: the endpoint
+        returns 200 "sent" while the subprocess logs "unknown command" and does
+        nothing, so the button appears to work and the robot ignores it.
+        """
+        from lerobot.gui.api.run import _CONTROL_COMMANDS
+        from lerobot.utils.keyboard_input import _STDIN_COMMAND_TO_CONTROL
+
+        assert set(_STDIN_COMMAND_TO_CONTROL) == _CONTROL_COMMANDS, (
+            "control vocabulary drifted between the GUI endpoint and the stdin listener: "
+            f"endpoint-only={_CONTROL_COMMANDS - set(_STDIN_COMMAND_TO_CONTROL)}, "
+            f"listener-only={set(_STDIN_COMMAND_TO_CONTROL) - _CONTROL_COMMANDS}"
+        )
+
+    def test_process_swapped_mid_drain_returns_409_not_500(self):
+        """A concurrent /stop during `drain()` must not turn into a 500.
+
+        `drain()` is the one await in the handler. Re-reading the
+        `_active_process` global after it — as the code did — hits None when a
+        stop landed in between, and `None.pid` surfaces as a 500 rather than the
+        409 this actually is. Binding the process once before the await fixes it.
+        """
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.api.run import ControlRequest, send_control
+
+        class StopMidDrainStdin:
+            def write(self, data):
+                pass
+
+            async def drain(self):
+                # Simulate /stop completing while we were suspended.
+                run_mod._active_process = None
+
+        proc = AsyncMock()
+        proc.returncode = None
+        proc.stdin = StopMidDrainStdin()
+        proc.pid = 4321
+
+        original = run_mod._active_process
+        try:
+            run_mod._active_process = proc
+            result = asyncio.run(send_control(ControlRequest(cmd="exit_early")))
+        finally:
+            run_mod._active_process = original
+
+        assert result["status"] == "sent"
+        assert result["pid"] == 4321
+
+
+class TestRunPhaseTracking:
+    """The Run tab's phase readout is parsed from subprocess stdout (brittle, see TODO)."""
+
+    def setup_method(self):
+        import lerobot.gui.api.run as run_mod
+
+        run_mod._active_phase = None
+
+    def test_phase_transitions(self):
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.api.run import _append_output
+
+        _append_output("INFO 2026-07-23 12:44:53 t_record.py:1166 Recording episode 3")
+        assert run_mod._active_phase == "recording episode 3"
+        _append_output("INFO 2026-07-23 12:45:20 t_record.py:1127 Reset the environment")
+        assert run_mod._active_phase == "resetting"
+        _append_output("INFO 2026-07-23 12:45:21 t_record.py:1210 Re-record episode")
+        assert run_mod._active_phase == "re-recording"
+        _append_output("some unrelated line")
+        assert run_mod._active_phase == "re-recording"  # unchanged
+
+    def test_status_includes_phase(self):
+        from lerobot.gui.api._run_core import get_run_status
+
+        proc = AsyncMock()
+        proc.returncode = None
+        proc.pid = 4321
+        with (
+            patch("lerobot.gui.api.run._active_process", proc),
+            patch("lerobot.gui.api.run._active_command", "record"),
+            patch("lerobot.gui.api.run._active_phase", "recording episode 3"),
+        ):
+            status = get_run_status()
+        assert status["running"] is True
+        assert status["phase"] == "recording episode 3"

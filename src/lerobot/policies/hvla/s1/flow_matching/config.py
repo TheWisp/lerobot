@@ -203,7 +203,8 @@ class FlowMatchingS1Config:
         if missing:
             raise ValueError(
                 f"HVLA checkpoint feature contract is ambiguous or missing fields: {missing}. "
-                "Migrate it with verified action/state order and camera metadata."
+                "Backfill it from the run's training dataset with: python -m "
+                "lerobot.policies.hvla.scripts.hvla_migrate_checkpoints <run_dir>"
             )
 
         init_fields = {item.name for item in fields(cls) if item.init}

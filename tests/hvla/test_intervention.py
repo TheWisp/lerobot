@@ -68,7 +68,7 @@ def _make_recorder(replay, device, joint_names, normalize=False):
         policy=_MockPolicy(normalize=normalize),
         device=device,
         chunk_length=C,
-        joint_names=joint_names,
+        state_feature_names=joint_names,
     )
 
 
@@ -541,3 +541,33 @@ class TestFlushTerminal:
         # "to" side = the operator-R moment
         assert torch.allclose(replay._next_z_rl[last], torch.full((Z_DIM,), 0.9))
         assert torch.allclose(replay._next_state[last], torch.full((STATE_DIM,), 0.9))
+
+
+class TestStateLayoutIsIndependentOfActionLayout:
+    """The RL state vector follows the checkpoint's *state* contract.
+
+    The recorder used to be handed ``joint_names`` — the resolved *action*
+    order — and used it to gather ``observation.state``. Once the feature
+    contract made the two layouts independent, that was wrong by construction:
+    on a robot whose state telemetry is wider than its action space (OpenArm
+    2.0: 16 actions, 48 state values) it gathers the wrong columns, and the
+    normalization stats it divides by are sized for the state contract.
+    """
+
+    def test_state_is_gathered_in_the_declared_state_order(self, replay, device):
+        state_names = ["b.pos", "a.pos", "c.pos"]
+        rec = _make_recorder(replay, device, state_names)
+
+        state = rec._extract_state({"a.pos": 1.0, "b.pos": 2.0, "c.pos": 3.0, "unused.pos": 9.0})
+
+        assert state.tolist() == [2.0, 1.0, 3.0]
+
+    def test_state_may_be_wider_than_the_action_space(self, replay, device):
+        """The OpenArm 2.0 shape: more state values than action values."""
+        state_names = [f"s{i}.pos" for i in range(8)]
+        rec = _make_recorder(replay, device, state_names)
+
+        state = rec._extract_state({name: float(i) for i, name in enumerate(state_names)})
+
+        assert state.shape[0] == 8
+        assert state.tolist() == [float(i) for i in range(8)]

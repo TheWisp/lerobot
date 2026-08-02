@@ -8,6 +8,7 @@ import ctypes
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import time
@@ -288,6 +289,34 @@ _OUTPUT_MAX_LINES = 2000
 
 _overlay_state: dict | None = None  # {"text": "...", "color": "..."}
 
+# Current record-phase shown next to the Run tab's flow-control buttons.
+# TODO(run-state): this is parsed from subprocess stdout text, which is
+# brittle — any rewording of the log_say messages in lerobot_record breaks
+# it silently. Replace with a structured run_state.json published by the
+# subprocess (the RLT metrics.json pattern: writer in lerobot_record,
+# reader here, polled by the frontend).
+_active_phase: str | None = None
+
+# Ordered (pattern, phase-label) rules; first match wins. The {episode}
+# placeholder is filled from the capture group when present.
+_RUN_PHASE_RULES: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"Recording episode (\d+)"), "recording episode {episode}"),
+    (re.compile(r"Re-record episode"), "re-recording"),
+    (re.compile(r"Reset the environment"), "resetting"),
+    (re.compile(r"Auto-reset: moving to trajectory start"), "resetting"),
+    (re.compile(r"Stopping data recording"), "stopping"),
+]
+
+
+def _track_run_phase(line: str) -> None:
+    """Update _active_phase when a subprocess stdout line marks a phase transition."""
+    global _active_phase
+    for pattern, label in _RUN_PHASE_RULES:
+        m = pattern.search(line)
+        if m:
+            _active_phase = label.format(episode=m.group(1) if m.groups() else "")
+            return
+
 
 def _append_output(line: str) -> None:
     """Append a line to the output buffer and notify SSE waiters.
@@ -297,6 +326,7 @@ def _append_output(line: str) -> None:
     the camera-feed overlay by printing this format to stdout.
     """
     global _output_lines, _overlay_state
+    _track_run_phase(line)
     if line.startswith("##OVERLAY:"):
         parts = line.strip().strip("#").split(":")
         # OVERLAY:text or OVERLAY:text:color
@@ -423,11 +453,30 @@ async def _launch_subprocess(
     args: list[str], command: str, config: dict, extra_env: dict[str, str] | None = None
 ) -> None:
     """Launch a subprocess and start reading its output."""
-    global _active_process, _active_command, _active_config, _output_lines, _stream_tasks
+    # TODO(gui-hardware): Manage SocketCAN interface lifecycle here before
+    # launching hardware subprocesses. Kernel CAN interfaces lose their
+    # config (bitrate / FD mode / up state) on reboot or link-down, and
+    # nothing on a stock system re-arms them — today the operator must run
+    # `ip link set canX type can bitrate ... fd on up` manually after every
+    # reboot (see docs/source/damiao.mdx), and a forgotten bring-up surfaces
+    # only as a late "Network is down" ConnectionError deep inside robot
+    # connect. The GUI should instead: (1) parse the required CAN channels
+    # from the robot profile (e.g. left/right_arm_config.port for
+    # bi_openarm_follower), (2) check each interface's state via
+    # `ip -details -j link show canX`, (3) bring it up with the right
+    # bitrate/FD settings when down or misconfigured, and (4) report the
+    # action in the run terminal. Privilege design is the open question:
+    # `ip link` needs CAP_NET_ADMIN — options are a narrowly-scoped sudoers
+    # entry for the exact commands, pkexec, or a tiny privileged helper
+    # service (systemd/D-Bus); running the whole GUI as root is NOT
+    # acceptable. Until this lands, the interim fix is persistent host
+    # config via systemd-networkd (.netdev with BitRate/DataBitRate/FDMode).
+    global _active_process, _active_command, _active_config, _output_lines, _stream_tasks, _active_phase
 
     _output_lines = []
     _active_command = command
     _active_config = config
+    _active_phase = None
 
     # Release camera previews before the subprocess opens the same devices.
     # The Robot tab holds a V4L2 / librealsense handle per previewed camera for
@@ -458,6 +507,11 @@ async def _launch_subprocess(
         pass
 
     env = {**__import__("os").environ, "LEROBOT_OBS_STREAM": "1"}
+    # The GUI owns flow control for every subprocess it launches (via POST
+    # /api/run/control -> subprocess stdin), so suppress the subprocesses' local
+    # keyboard listeners: single source of truth, and avoids the X11 footgun of
+    # a global pynput listener firing on keypresses meant for other windows.
+    env["LEROBOT_KEYBOARD_LISTENER"] = "0"
     if extra_env:
         env.update(extra_env)
     cmd_str = " ".join(args)
@@ -467,6 +521,7 @@ async def _launch_subprocess(
 
     _active_process = await asyncio.create_subprocess_exec(
         *args,
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
@@ -1074,31 +1129,113 @@ async def set_rlt_config(body: dict) -> dict:
         raise HTTPException(500, str(e)) from e
 
 
+class ControlRequest(BaseModel):
+    """Flow-control command forwarded to the active subprocess's stdin.
+
+    The command vocabulary matches the stdin control protocol consumed by
+    ``lerobot.utils.keyboard_input.StdinControlListener`` — the same events the
+    record loop's right/left/esc keyboard controls set.
+    """
+
+    cmd: str
+
+
+_CONTROL_COMMANDS = {"exit_early", "rerecord_episode", "stop_recording"}
+
+
+@router.post("/control")
+async def send_control(req: ControlRequest) -> dict:
+    """Write one JSON control line to the active subprocess's stdin."""
+    if req.cmd not in _CONTROL_COMMANDS:
+        raise HTTPException(
+            400, f"Unknown control command {req.cmd!r}; expected one of {sorted(_CONTROL_COMMANDS)}"
+        )
+    # Bind the process once. `drain()` yields, and a concurrent /stop clears
+    # _active_process — re-reading the global after the await would raise
+    # AttributeError on None and surface as a 500 instead of the 409 this is.
+    proc = _active_process
+    if proc is None or proc.returncode is not None:
+        raise HTTPException(409, "No active process to control")
+    if proc.stdin is None:
+        raise HTTPException(409, "Active process has no control channel")
+
+    line = json.dumps({"v": 1, "cmd": req.cmd}) + "\n"
+    try:
+        proc.stdin.write(line.encode())
+        await proc.stdin.drain()
+    except (BrokenPipeError, ConnectionResetError) as e:
+        raise HTTPException(409, f"Control channel broken: {e}") from e
+    logger.info(f"Control channel: {req.cmd} forwarded to PID {proc.pid}")
+    return {"status": "sent", "cmd": req.cmd, "pid": proc.pid}
+
+
+# How long Stop waits for a record run to save and exit on its own before
+# escalating to SIGINT. Save runs AFTER the reset phase, so at the moment the
+# operator clicks Stop a finished episode is usually still only in memory;
+# killing before save_episode() completes silently discards it. The window
+# must cover a buffered video encode of one episode.
+STOP_GRACE_S = 30.0
+
+# True while a graceful stop is waiting on the subprocess. A second Stop click
+# during the wait escalates to SIGINT immediately instead of queueing another
+# grace period — the operator pressing Stop twice means "kill it".
+_graceful_stop_inflight = False
+
+
 @router.post("/stop")
 async def stop_process() -> dict:
-    global _active_process, _active_command, _active_config
+    global _active_process, _active_command, _active_config, _active_phase, _graceful_stop_inflight
 
-    if _active_process is None:
+    # Bind once: every await below yields, and the globals can be cleared by a
+    # concurrent caller in the meantime (same race send_control guards against).
+    proc = _active_process
+    if proc is None:
         raise HTTPException(409, "No active process to stop")
+    pid = proc.pid
 
-    pid = _active_process.pid
-    try:
-        _active_process.send_signal(signal.SIGINT)
+    # Record runs get a graceful stop first. The subprocess's stop_recording
+    # command skips the reset phase, SAVES the buffered episode and exits
+    # cleanly — whereas SIGINT during the reset phase discards an episode the
+    # operator already finished recording. Observed in the field: record one
+    # episode, press Stop during reset, dataset ends up empty.
+    graceful = False
+    if (
+        _active_command == "record"
+        and proc.stdin is not None
+        and proc.returncode is None
+        and not _graceful_stop_inflight
+    ):
+        _graceful_stop_inflight = True
         try:
-            await asyncio.wait_for(_active_process.wait(), timeout=5.0)
-        except _TIMEOUT_EXCS:
-            _active_process.kill()
-            await _active_process.wait()
-    except ProcessLookupError:
-        pass
+            proc.stdin.write((json.dumps({"v": 1, "cmd": "stop_recording"}) + "\n").encode())
+            await proc.stdin.drain()
+            _append_output(f"\n--- Stop requested: finishing save, then exiting (PID {pid}) ---\n")
+            await asyncio.wait_for(proc.wait(), timeout=STOP_GRACE_S)
+            graceful = True
+        except (*_TIMEOUT_EXCS, BrokenPipeError, ConnectionResetError, OSError) as e:
+            logger.warning(f"Graceful stop failed for PID {pid} ({e}); escalating to SIGINT")
+        finally:
+            _graceful_stop_inflight = False
+
+    if proc.returncode is None:
+        try:
+            proc.send_signal(signal.SIGINT)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except _TIMEOUT_EXCS:
+                proc.kill()
+                await proc.wait()
+        except ProcessLookupError:
+            pass
 
     _append_output(f"\n--- Process stopped (PID {pid}) ---\n")
     _active_process = None
     _active_command = None
     _active_config = None
+    _active_phase = None
     _close_obs_reader()
     # NOTE: debug model is NOT stopped here — it stays warm for reuse
-    return {"status": "stopped", "pid": pid}
+    return {"status": "stopped", "pid": pid, "graceful": graceful}
 
 
 @router.get("/status")
