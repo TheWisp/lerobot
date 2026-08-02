@@ -1209,10 +1209,10 @@ function renderRunForm() {
     // "resetting" / ...). Fed by pollRunStatus from /api/run/status.
     html += '<div class="form-section-title">Episode control <span id="run-phase" class="run-phase-badge"></span></div>';
     html += '<div class="episode-control-row">';
-    html += '<button id="run-ctrl-next" class="btn-small secondary" onclick="sendRunControl(\'exit_early\')" disabled title="End the current phase early (hotkey: N)">Next episode</button>';
-    html += '<button id="run-ctrl-rerecord" class="btn-small secondary" onclick="sendRunControl(\'rerecord_episode\')" disabled title="Discard the current episode and re-record it (hotkey: R)">Re-record</button>';
+    html += '<button id="run-ctrl-next" class="btn-small secondary" onclick="sendRunControl(\'exit_early\')" disabled title="End the current phase early (hotkey: N)">Next episode (N)</button>';
+    html += '<button id="run-ctrl-rerecord" class="btn-small secondary" onclick="sendRunControl(\'rerecord_episode\')" disabled title="Discard the current episode and re-record it (hotkey: R)">Re-record (R)</button>';
     html += '</div>';
-    html += '<div class="form-hint" style="margin-top:6px;">Active while a subprocess is running. Stopping a run uses the main Stop button above. Hotkeys: N next · R re-record</div>';
+    html += '<div class="form-hint" style="margin-top:6px;">Active while a record run is in progress. Stopping a run uses the main Stop button above.</div>';
     html += '</div>';
 
     form.innerHTML = html;
@@ -2023,13 +2023,13 @@ async function pollRunStatus() {
         const nextBtn = document.getElementById('run-ctrl-next');
         if (nextBtn) {
             if (phase.startsWith('recording episode')) {
-                nextBtn.textContent = 'End episode → reset';
+                nextBtn.textContent = 'End episode → reset (N)';
                 nextBtn.title = 'Finish and keep the current episode now, then enter the reset phase (hotkey: N)';
             } else if (phase === 'resetting') {
-                nextBtn.textContent = 'Start next episode';
+                nextBtn.textContent = 'Start next episode (N)';
                 nextBtn.title = 'Skip the rest of the reset phase and start recording the next episode (hotkey: N)';
             } else {
-                nextBtn.textContent = 'Next episode';
+                nextBtn.textContent = 'Next episode (N)';
                 nextBtn.title = 'End the current phase early (hotkey: N)';
             }
         }
