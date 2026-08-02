@@ -61,6 +61,39 @@ logger = logging.getLogger(__name__)
 DOFS = {"left": list(range(0, 7)), "right": list(range(9, 16))}
 
 
+def validate_model_layout(side: str, model_nv: int, limits: np.ndarray) -> None:
+    """Fail loudly when the loaded MJCF cannot support this side's dof layout.
+
+    ``DOFS`` pins each arm to fixed dof indices of the OpenArm 2.0 bimanual
+    model, and ``gravity_ff_xml`` lets an operator substitute a different MJCF.
+    Both failure modes below are silent by nature — the arm keeps running while
+    the feedforward is wrong or absent — so they are raised, not warned.
+
+    Raises:
+        ValueError: the model has too few dofs for this side (torque would be
+            computed from whatever joints happen to occupy those indices), or
+            it declares no actuator force range on them (every torque would
+            clip to zero and the feature would do nothing while logging that it
+            is enabled).
+    """
+    dofs = DOFS[side]
+    required = max(dofs) + 1
+    if model_nv < required:
+        raise ValueError(
+            f"gravity feedforward model has {model_nv} dofs but side {side!r} reads dofs {dofs}, "
+            f"needing at least {required}. The dof layout is pinned to the OpenArm 2.0 bimanual "
+            f"model; a model with a different joint ordering would apply each joint's gravity "
+            f"torque to the wrong joint. Check gravity_ff_xml."
+        )
+    if not np.any(limits):
+        raise ValueError(
+            f"gravity feedforward torque limits are all zero for side {side!r}: the model declares "
+            f"no actuatorfrcrange on dofs {dofs}, so every computed torque clips to zero and the "
+            f"feature would silently do nothing while logging that it is enabled. Check "
+            f"gravity_ff_xml, or set gravity_ff_gain=0 to disable it deliberately."
+        )
+
+
 def _find_distribution_model(module_file: str | Path) -> Path | None:
     """Find model data relative to the distribution that provided the module."""
     relative_model = Path("share/openarm_mujoco/v2/openarm_bimanual.xml")
@@ -121,10 +154,14 @@ class GravityFF:
         self._model = mujoco.MjModel.from_xml_path(xml or default_bimanual_xml())
         self._data = mujoco.MjData(self._model)
         self._dofs = DOFS[side]
+        # Checked before indexing: an undersized model would raise an opaque
+        # IndexError here instead of naming the real problem.
+        validate_model_layout(side, int(self._model.nv), np.ones(len(self._dofs)))
         self._qposadr = [int(self._model.jnt_qposadr[self._model.dof_jntid[d]]) for d in self._dofs]
         self._limits = torque_frac * np.array(
             [abs(float(self._model.jnt_actfrcrange[self._model.dof_jntid[d]][1])) for d in self._dofs]
         )
+        validate_model_layout(side, int(self._model.nv), self._limits)
 
         self._tau_lp: np.ndarray | None = None  # low-pass state
         self._t_enable: float | None = None  # fade-in start
@@ -150,6 +187,18 @@ class GravityFF:
         # mj_forward runs the full pipeline; qfrc_bias at zero velocity is tau_g.
         mujoco.mj_forward(self._model, d)
         return np.array([d.qfrc_bias[dof] for dof in self._dofs])
+
+    def reset(self) -> None:
+        """Drop per-session filter and fade state.
+
+        Called on disconnect so a reconnect starts from a cold low-pass filter
+        and replays the fade-in. Without it ``_t_enable`` stays set from the
+        previous session, so the first command after reconnecting would apply
+        full-gain gravity torque with no ramp.
+        """
+        self._tau_lp = None
+        self._t_enable = None
+        self._t_prev = None
 
     def torque(self, q7: ArrayLike, now: float | None = None) -> np.ndarray:
         """Feedforward torque [Nm] for the MIT torque slot: faded, filtered, clamped."""

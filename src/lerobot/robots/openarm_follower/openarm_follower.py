@@ -482,10 +482,24 @@ class OpenArmFollower(Robot):
 
     @check_if_not_connected
     def disconnect(self):
-        """Disconnect from robot."""
+        """Disconnect from robot.
+
+        Postcondition: no per-session command state survives. The alignment
+        ramp seeds its origin from the measured pose only when it has no
+        previous command; leaving the previous session's command in place would
+        make a reconnect rate-limit toward wherever the arm was commanded
+        *last time* rather than where it now physically rests -- and with
+        torque released on disconnect, gravity has since moved it.
+        """
 
         # Disconnect CAN bus
         self.bus.disconnect(self.config.disable_torque_on_disconnect)
+
+        self._last_cmd_deg = {}
+        self._last_send_time = None
+        self._last_jump_log = 0.0
+        if self._gravity_ff is not None:
+            self._gravity_ff.reset()
 
         # Disconnect cameras
         for cam in self.cameras.values():
