@@ -371,6 +371,9 @@ function renderCheckpoints(checkpoints, run) {
         html += `<td>${_formatParams(ckpt.num_parameters)}</td>`;
         html += `<td>${ckpt.has_training_state ? 'Yes' : 'No'}</td>`;
         html += `<td class="model-ckpt-actions">`;
+        if (ckpt.has_training_state && run.run_id && ckpt.step != null) {
+            html += `<button class="btn-tiny btn-accent" onclick="trainingResumeRun('${run.run_id}', ${ckpt.step})">Resume</button>`;
+        }
         html += `<button class="btn-tiny" onclick="openModelFolder('${ckpt.path.replace(/'/g, "\\'")}')">Open</button>`;
         html += `</td>`;
         html += `</tr>`;

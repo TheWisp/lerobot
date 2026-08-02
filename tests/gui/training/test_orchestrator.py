@@ -24,6 +24,7 @@ import pytest
 
 from lerobot.gui.training.hosts import HostRegistry, TrainingHost
 from lerobot.gui.training.orchestrator import (
+    CheckpointNotResumableError,
     HostBusyError,
     Orchestrator,
     StartRequest,
@@ -61,12 +62,35 @@ def _wait_until_state(orch: Orchestrator, run_id: str, want: RunState, *, timeou
     while time.monotonic() < deadline:
         snap = orch.poll(run_id)
         last = snap
-        if snap.run.state == want or snap.run.state.value in {"completed", "failed", "aborted"}:
+        if snap.run.state == want or snap.run.state.value in {"completed", "stopped", "failed"}:
             return snap
         time.sleep(0.05)
     raise AssertionError(
         f"timed out waiting for state {want.value}; last={last.run.state.value if last else None}"
     )
+
+
+def _write_resumable_checkpoint(checkpoint: Path) -> None:
+    """Create the minimum LeRobot layout accepted by resume validation."""
+    pretrained = checkpoint / "pretrained_model"
+    pretrained.mkdir(parents=True)
+    (pretrained / "model.safetensors").write_bytes(b"x")
+    (pretrained / "train_config.json").write_text("{}")
+    (checkpoint / "training_state").mkdir()
+
+
+class _FixedExitCodeClient(SubprocessClient):
+    """Subprocess transport with a deterministic completed process status."""
+
+    def __init__(self, transport: SubprocessTransport, *, exit_code: int) -> None:
+        super().__init__(transport)
+        self._fixed_exit_code = exit_code
+
+    def exit_code(self, session_id: str) -> int | None:
+        return self._fixed_exit_code
+
+    def is_alive(self, session_id: str) -> bool:
+        return False
 
 
 # ── Start ──────────────────────────────────────────────────────────────────────
@@ -137,8 +161,8 @@ def test_start_refuses_when_host_busy(orch: Orchestrator) -> None:
     # actually races against a real RUNNING worker, not the still-PENDING
     # run. The host-busy check passes either way (PENDING is non-terminal),
     # but the stop()-cleanup at the end of the test wants RUNNING so it
-    # exercises the SIGTERM path (PENDING goes straight to ABORTED, which
-    # we cover in test_stop_pending_run_skips_to_aborted).
+    # exercises the SIGTERM path (PENDING goes straight to STOPPED, which
+    # we cover in test_stop_pending_run_skips_to_stopped).
     _wait_until_state(orch, run1.run_id, RunState.RUNNING)
     try:
         req2 = StartRequest(
@@ -151,7 +175,63 @@ def test_start_refuses_when_host_busy(orch: Orchestrator) -> None:
             orch.start(req2)
     finally:
         orch.stop(run1.run_id)
-        _wait_until_state(orch, run1.run_id, RunState.ABORTED)
+        _wait_until_state(orch, run1.run_id, RunState.STOPPED)
+
+
+def test_resume_creates_new_run_with_checkpoint_lineage(
+    orch: Orchestrator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = Run(
+        run_id="source-run",
+        host_id="test-host",
+        recipe_name="hvla",
+        dataset_id="robot/data",
+        args={"__recipe__": "hvla_flow_s1", "steps": 500, "batch_size": 8},
+        state=RunState.COMPLETED,
+        created_at=time.time(),
+        finished_at=time.time(),
+    )
+    orch._runs.save(source)  # noqa: SLF001 - arrange persisted source run
+    source_paths = RunPaths.for_run(source.run_id, orch._runs.runs_dir)  # noqa: SLF001
+    checkpoint = source_paths.root / "output/checkpoints/checkpoint-200"
+    (checkpoint / "training_state").mkdir(parents=True)
+    pretrained = checkpoint / "pretrained_model"
+    pretrained.mkdir()
+    (pretrained / "train_config.json").write_text("{}")
+    # Keep this a pure orchestration test: start() persists PENDING before its
+    # background preparation callback, which we replace with a no-op.
+    monkeypatch.setattr(orch, "_prepare_and_launch", lambda *_args: None)
+
+    resumed = orch.resume(source.run_id, checkpoint_step=200, idempotency_key="resume-once")
+
+    assert resumed.run_id != source.run_id
+    assert resumed.state == RunState.PENDING
+    assert resumed.args["__resume_checkpoint__"] == str(checkpoint.resolve())
+    assert resumed.args["__resumed_from_run__"] == source.run_id
+    assert resumed.args["__resumed_from_step__"] == 200
+    assert resumed.recipe_name == "hvla (resume 200)"
+
+
+def test_resume_rejects_checkpoint_without_training_state(orch: Orchestrator) -> None:
+    source = Run(
+        run_id="source-no-state",
+        host_id="test-host",
+        recipe_name="hvla",
+        dataset_id="robot/data",
+        args={"__recipe__": "hvla_flow_s1", "steps": 500},
+        state=RunState.FAILED,
+        created_at=time.time(),
+        finished_at=time.time(),
+    )
+    orch._runs.save(source)  # noqa: SLF001
+    paths = RunPaths.for_run(source.run_id, orch._runs.runs_dir)  # noqa: SLF001
+    pretrained = paths.root / "output/checkpoints/checkpoint-200/pretrained_model"
+    pretrained.mkdir(parents=True)
+    (pretrained / "train_config.json").write_text("{}")
+
+    with pytest.raises(CheckpointNotResumableError, match="training_state"):
+        orch.resume(source.run_id, checkpoint_step=200)
 
 
 # ── End-to-end happy path ──────────────────────────────────────────────────────
@@ -199,8 +279,8 @@ def test_stop_aborts_running_run(orch: Orchestrator) -> None:
     # Give the worker a moment to actually start its loop
     time.sleep(0.3)
     orch.stop(run.run_id)
-    snap = _wait_until_state(orch, run.run_id, RunState.ABORTED)
-    assert snap.run.state == RunState.ABORTED
+    snap = _wait_until_state(orch, run.run_id, RunState.STOPPED)
+    assert snap.run.state == RunState.STOPPED
 
 
 def test_stop_unknown_run_raises(orch: Orchestrator) -> None:
@@ -252,7 +332,7 @@ def test_poll_returns_progress_during_run(orch: Orchestrator) -> None:
         assert snap.run.state == RunState.RUNNING
     finally:
         orch.stop(run.run_id)
-        _wait_until_state(orch, run.run_id, RunState.ABORTED)
+        _wait_until_state(orch, run.run_id, RunState.STOPPED)
 
 
 # ── List ───────────────────────────────────────────────────────────────────────
@@ -496,6 +576,126 @@ def test_orchestrator_crashed_on_exit_without_checkpoints(host: TrainingHost, tm
     assert "crashed" in paths.events_jsonl.read_text()
 
 
+def test_orchestrator_unknown_exit_with_partial_checkpoint_is_stopped(
+    host: TrainingHost, tmp_path: Path
+) -> None:
+    """After a GUI restart the Popen exit code is unavailable. A periodic
+    checkpoint below the configured target is recovery state, not proof that
+    training completed."""
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id="partial-exit",
+        host_id="test-host",
+        recipe_name="hvla",
+        dataset_id="lerobot/pusht",
+        args={"__recipe__": "hvla_flow_s1", "steps": 50_000},
+        state=RunState.PENDING,
+        created_at=time.time(),
+    )
+    run.session_id = "1"  # unknown to this post-restart client
+    run.advance(RunState.RUNNING)
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    checkpoint = paths.root / "output" / "checkpoints" / "checkpoint-20000"
+    _write_resumable_checkpoint(checkpoint)
+    paths.stderr_log.write_text("DataLoader worker exited unexpectedly")
+
+    snap = orch.poll(run.run_id)
+
+    assert snap.run.state == RunState.STOPPED
+    assert snap.run.error is not None
+    assert "20000/50000" in snap.run.error
+    assert "DataLoader worker exited unexpectedly" in snap.run.error
+    assert snap.resumable_checkpoint_steps == [20_000]
+    assert (
+        orch._read_terminal_event(  # noqa: SLF001 - verify persisted terminal evidence
+            SubprocessClient(host.transport), paths.events_jsonl
+        )
+        == "stopped"
+    )
+
+
+def test_list_runs_repairs_legacy_partial_completion(host: TrainingHost, tmp_path: Path) -> None:
+    """Repair records written by the old any-checkpoint completion heuristic."""
+    from lerobot.gui.training.runs import append_event
+
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id="legacy-false-complete",
+        host_id="test-host",
+        recipe_name="hvla",
+        dataset_id="lerobot/pusht",
+        args={"__recipe__": "hvla_flow_s1", "steps": 50_000},
+        state=RunState.COMPLETED,
+        created_at=time.time(),
+        finished_at=time.time(),
+    )
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    append_event(paths.events_jsonl, "completed_naturally", final_step=20_000)
+    _write_resumable_checkpoint(paths.root / "output" / "checkpoints" / "checkpoint-20000")
+    paths.stderr_log.write_text("worker terminated with traceback")
+
+    repaired = next(item for item in orch.list_runs() if item.run_id == run.run_id)
+
+    assert repaired.state == RunState.STOPPED
+    assert repaired.error is not None and "20000/50000" in repaired.error
+    assert (
+        orch._read_terminal_event(  # noqa: SLF001 - verify persisted migration result
+            SubprocessClient(host.transport), paths.events_jsonl
+        )
+        == "stopped"
+    )
+
+
+def test_list_runs_repairs_previous_failed_partial_migration(host: TrainingHost, tmp_path: Path) -> None:
+    """The first repair shipped failed before ``stopped`` existed.
+
+    Migrate only its distinctive event shape, so unrelated failed runs are
+    never relabelled merely because they happen to have a model checkpoint.
+    """
+    from lerobot.gui.training.runs import append_event
+
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id="legacy-failed-partial",
+        host_id="test-host",
+        recipe_name="hvla",
+        dataset_id="lerobot/pusht",
+        args={"__recipe__": "hvla_flow_s1", "steps": 50_000},
+        state=RunState.FAILED,
+        created_at=time.time(),
+        finished_at=time.time(),
+        error="process disappeared before training completed",
+    )
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    _write_resumable_checkpoint(paths.root / "output" / "checkpoints" / "checkpoint-20000")
+    append_event(
+        paths.events_jsonl,
+        "crashed",
+        error="corrected incomplete training: step 20000/50000",
+        final_step=20_000,
+    )
+
+    repaired = next(item for item in orch.list_runs() if item.run_id == run.run_id)
+
+    assert repaired.state == RunState.STOPPED
+    assert "resume is available" in (repaired.error or "")
+    assert (
+        orch._read_terminal_event(  # noqa: SLF001 - verify persisted migration result
+            SubprocessClient(host.transport), paths.events_jsonl
+        )
+        == "stopped"
+    )
+
+
 def test_orchestrator_crashes_on_nonzero_exit_even_with_checkpoints(
     host: TrainingHost, tmp_path: Path
 ) -> None:
@@ -509,25 +709,9 @@ def test_orchestrator_crashes_on_nonzero_exit_even_with_checkpoints(
 
     from lerobot.gui.training.runs import Run, RunPaths, new_run_id
 
-    class _ExitCodeClient(SubprocessClient):
-        """Real subprocess client EXCEPT exit_code() returns a fixed value
-        so we can simulate the docker container's non-zero exit without
-        actually launching a process. The session_id (1) intentionally
-        isn't in our Popen registry → we override at the exit_code call."""
-
-        def __init__(self, transport: SubprocessTransport, *, fake_exit_code: int) -> None:
-            super().__init__(transport)
-            self._fake_exit_code = fake_exit_code
-
-        def exit_code(self, session_id: int) -> int | None:
-            return self._fake_exit_code
-
-        def is_alive(self, session_id: int) -> bool:
-            return False  # crashed, not alive
-
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
-    client = _ExitCodeClient(SubprocessTransport(workdir=tmp_path / "workdir"), fake_exit_code=1)
+    client = _FixedExitCodeClient(SubprocessTransport(workdir=tmp_path / "workdir"), exit_code=1)
     orch = Orchestrator(
         host_registry=hr,
         run_registry=rr,
@@ -565,6 +749,40 @@ def test_orchestrator_crashes_on_nonzero_exit_even_with_checkpoints(
     assert snap.run.error is not None and "exit code 1" in snap.run.error
     assert "403 Forbidden" in snap.run.error, "stderr tail should be surfaced in run.error"
     assert "crashed" in paths.events_jsonl.read_text()
+
+
+def test_orchestrator_nonzero_exit_with_training_state_is_stopped(host: TrainingHost, tmp_path: Path) -> None:
+    """A process error is recoverable when the full LeRobot training state exists."""
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    client = _FixedExitCodeClient(SubprocessTransport(workdir=tmp_path / "workdir"), exit_code=1)
+    orch = Orchestrator(
+        host_registry=hr,
+        run_registry=rr,
+        make_client_fn=lambda _transport: client,
+    )
+    run = Run(
+        run_id="recoverable-nonzero",
+        host_id="test-host",
+        recipe_name="real",
+        dataset_id="lerobot/pusht",
+        args={"policy.type": "act", "steps": 500},
+        state=RunState.PENDING,
+        created_at=time.time(),
+    )
+    run.session_id = "1"
+    run.advance(RunState.RUNNING)
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    _write_resumable_checkpoint(paths.root / "output/checkpoints/000200")
+    paths.stderr_log.write_text("worker terminated")
+
+    snap = orch.poll(run.run_id)
+
+    assert snap.run.state == RunState.STOPPED
+    assert snap.resumable_checkpoint_steps == [200]
+    assert "resume is available" in (snap.run.error or "")
+    assert orch._read_terminal_event(client, paths.events_jsonl) == "stopped"  # noqa: SLF001
 
 
 def test_orchestrator_final_step_from_max_checkpoint_not_progress_json(
@@ -686,10 +904,10 @@ def test_list_runs_reconciles_abort_without_poll(host: TrainingHost, tmp_path: P
             break
         time.sleep(0.05)
     assert "aborted_by_user" in events_path.read_text()
-    # list_runs should now reconcile COMPLETING → ABORTED
+    # list_runs should now reconcile COMPLETING → STOPPED
     runs = orch.list_runs()
     me = next(r for r in runs if r.run_id == run.run_id)
-    assert me.state == RunState.ABORTED
+    assert me.state == RunState.STOPPED
 
 
 # ── C5: image preparation (pre-pull + events) ─────────────────────────────────
@@ -881,9 +1099,9 @@ def test_ensure_image_pull_failure_emits_pull_failed_and_raises(host, tmp_path: 
     assert "manifest unknown" in events[1]["error"]
 
 
-def test_stop_pending_run_skips_to_aborted(orch: Orchestrator) -> None:
+def test_stop_pending_run_skips_to_stopped(orch: Orchestrator) -> None:
     """A stop() before the prep thread has finished should advance the run
-    straight to ABORTED (skipping COMPLETING, since there's no worker yet
+    straight to STOPPED (skipping COMPLETING, since there's no worker yet
     to SIGTERM). The prep thread bails on the state change."""
     # We rely on the fake recipe being effectively instant; the race window
     # is small but nonzero. To make this deterministic, we'd need a barrier
@@ -899,10 +1117,10 @@ def test_stop_pending_run_skips_to_aborted(orch: Orchestrator) -> None:
     run = orch.start(req)
     # In the small chance the prep thread already advanced, we still want
     # the test to pass — the stop() path from RUNNING is well-tested
-    # elsewhere. Here we only assert that stop()+wait reaches ABORTED.
+    # elsewhere. Here we only assert that stop()+wait reaches STOPPED.
     orch.stop(run.run_id)
-    snap = _wait_until_state(orch, run.run_id, RunState.ABORTED)
-    assert snap.run.state == RunState.ABORTED
+    snap = _wait_until_state(orch, run.run_id, RunState.STOPPED)
+    assert snap.run.state == RunState.STOPPED
 
 
 # ── Delete + clear (housekeeping) ─────────────────────────────────────────────
@@ -948,7 +1166,7 @@ def test_delete_run_with_model_preserves_checkpoints(orch: Orchestrator) -> None
 
 
 def test_delete_failed_no_checkpoint_run_nukes_dir(orch: Orchestrator) -> None:
-    """A run that never wrote a model (e.g. failed pull, aborted before
+    """A run that never wrote a model (e.g. failed pull, stopped before
     first save) has nothing to preserve — the whole dir goes."""
     import time as _t
 
@@ -1037,7 +1255,7 @@ def test_delete_running_run_refuses(orch: Orchestrator) -> None:
             orch.delete_run(run.run_id)
     finally:
         orch.stop(run.run_id)
-        _wait_until_state(orch, run.run_id, RunState.ABORTED)
+        _wait_until_state(orch, run.run_id, RunState.STOPPED)
 
 
 def test_delete_unknown_raises(orch: Orchestrator) -> None:
@@ -1061,7 +1279,7 @@ def test_clear_terminal_removes_only_finished_runs(orch: Orchestrator, tmp_path:
     no_model_run_id = None
     for label, target_state, write_model in [
         ("done-with-model", RunState.COMPLETED, True),
-        ("oops-no-model", RunState.ABORTED, False),
+        ("oops-no-model", RunState.STOPPED, False),
     ]:
         r = Run(
             run_id=new_run_id(),
@@ -1117,7 +1335,7 @@ def test_clear_terminal_removes_only_finished_runs(orch: Orchestrator, tmp_path:
         assert active_paths.root.is_dir()
     finally:
         orch.stop(active.run_id)
-        _wait_until_state(orch, active.run_id, RunState.ABORTED)
+        _wait_until_state(orch, active.run_id, RunState.STOPPED)
 
 
 def test_clear_terminal_empty_is_noop(orch: Orchestrator) -> None:

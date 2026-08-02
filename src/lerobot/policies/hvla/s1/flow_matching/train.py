@@ -22,13 +22,14 @@ from __future__ import annotations
 
 import argparse
 import logging
-import time
+import math
 from pathlib import Path
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+from lerobot.common.training_log import TrainingHealthTracker
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
 from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
@@ -277,8 +278,6 @@ def train(args):
     )
 
     # Cosine decay: warmup → peak_lr → decay to lr_decay
-    import math
-
     def lr_lambda(step):
         if step < config.warmup_steps:
             return step / max(config.warmup_steps, 1)  # linear warmup
@@ -428,19 +427,28 @@ def train(args):
     policy.train()
     step = start_step
     data_iter = iter(dataloader)
-
     logger.info("Starting training from step %d to %d...", step, args.steps)
+    health = TrainingHealthTracker(
+        batch_size=args.batch_size,
+        total_steps=args.steps,
+        peak_memory_gb=(
+            (lambda: torch.cuda.max_memory_allocated(device) / (1024**3)) if device.type == "cuda" else None
+        ),
+        reset_peak_memory=(
+            (lambda: torch.cuda.reset_peak_memory_stats(device)) if device.type == "cuda" else None
+        ),
+    )
+
     while step < args.steps:
-        t0 = time.time()
+        with health.measure_data_loading():
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                data_iter = iter(dataloader)
+                batch = next(data_iter)
 
-        try:
-            batch = next(data_iter)
-        except StopIteration:
-            data_iter = iter(dataloader)
-            batch = next(data_iter)
-
-        # Move to device
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            # Move to device
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
         # Forward with bf16 autocast
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
@@ -448,27 +456,60 @@ def train(args):
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
         optimizer.step()
         scheduler.step()
 
         step += 1
-        elapsed = (time.time() - t0) * 1000
+        health.step()
+        is_log_step = step <= 5 or step % 100 == 0
 
-        if step <= 5 or step % 100 == 0:
+        if is_log_step:
             cur_lr = optimizer.param_groups[0]["lr"]
+            # These scalar reads synchronize CUDA once per log window. Measure
+            # the window after that synchronization so throughput and ETA
+            # include real GPU execution without stalling every training step.
+            loss_value = loss.item()
+            flow_loss_value = float(loss_dict["flow_loss"])
+            grad_norm_value = grad_norm.item()
+            sample = health.sample(
+                step=step,
+                values={
+                    "loss": loss_value,
+                    "flow_loss": flow_loss_value,
+                    "grdn": grad_norm_value,
+                    "lr": cur_lr,
+                },
+            )
+            if sample.omitted_fields:
+                logger.warning(
+                    "Non-finite training metrics at step %d (omitted from structured record): %s",
+                    step,
+                    ", ".join(sample.omitted_fields),
+                )
             logger.info(
-                "step %d/%d | loss: %.4f | flow_loss: %.4f | lr: %.1e | %.0fms",
+                "step %d/%d | loss: %.4f | flow_loss: %.4f | grdn: %.3f | lr: %.1e "
+                "| updt_s: %.3f | data_s: %.3f | %.0fms | %s",
                 step,
                 args.steps,
-                loss.item(),
-                loss_dict["flow_loss"],
+                loss_value,
+                flow_loss_value,
+                grad_norm_value,
                 cur_lr,
-                elapsed,
+                sample.values["updt_s"],
+                sample.values["data_s"],
+                sample.values["step_time_ms"],
+                sample.record,
             )
 
         if step % args.save_freq == 0:
-            save_checkpoint(step)
+            with health.exclude_time():
+                save_checkpoint(step)
+
+        if is_log_step:
+            # Exclude logging and checkpoint I/O from the next training
+            # window's throughput/ETA estimate.
+            health.reset()
 
     # Final save
     save_checkpoint(step)

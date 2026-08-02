@@ -11,9 +11,103 @@
 // - GET /api/training/runs/{id}                  → detail (progress, checkpoints, log)
 // - POST /api/training/runs/{id}/stop            → user-initiated stop
 // - GET /api/datasets/sources + .../datasets     → populate the dataset dropdown
+// - GET /api/training/image-status               → training-image section (default tag + freshness)
+// - POST /api/training/build-image + .../status  → local image build with polled progress
 
 const TRAINING_POLL_MS = 3000;
 let _trainingHosts = [];
+
+// The three user-facing terminal outcomes keep process details out of the
+// user's mental model. Operational states still appear while work is active.
+// A stopped run may or may not be resumable; checkpoint validation controls
+// whether the Resume action is offered.
+const TRAINING_STATE_HELP = Object.freeze({
+  pending: "Preparing the training environment. No trainer is running yet.",
+  running: "Training is currently running.",
+  completing: "A stop was requested. Waiting for the trainer to exit safely.",
+  completed: "Training ended cleanly, including a deliberate early stop.",
+  stopped: "Training ended before completion, by choice or interruption. Resume is offered when a valid checkpoint exists.",
+  failed: "Training could not complete and no safe resume checkpoint is available.",
+});
+
+function trainingStateBadge(state) {
+  const normalized = String(state || "unknown");
+  const help = TRAINING_STATE_HELP[normalized] || "Training state reported by the backend.";
+  return `<span class="training-state-badge training-state-${escapeHtml(normalized)} training-state-help-target" ` +
+    `tabindex="0" aria-label="${escapeHtml(normalized)}: ${escapeHtml(help)}" ` +
+    `data-state-help="${escapeHtml(help)}">${escapeHtml(normalized)}</span>`;
+}
+
+let _trainingStateTooltipTarget = null;
+function trainingStateTooltipElement() {
+  let tooltip = document.getElementById("training-state-tooltip");
+  if (!tooltip) {
+    tooltip = document.createElement("div");
+    tooltip.id = "training-state-tooltip";
+    tooltip.className = "training-state-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    document.body.appendChild(tooltip);
+  }
+  return tooltip;
+}
+
+function trainingShowStateTooltip(target) {
+  if (!target?.classList?.contains("training-state-help-target")) return;
+  const tooltip = trainingStateTooltipElement();
+  tooltip.textContent = target.dataset.stateHelp || "";
+  tooltip.classList.add("visible");
+  target.setAttribute("aria-describedby", tooltip.id);
+  _trainingStateTooltipTarget = target;
+
+  const rect = target.getBoundingClientRect();
+  const margin = 8;
+  const width = tooltip.offsetWidth;
+  const height = tooltip.offsetHeight;
+  const left = Math.max(margin, Math.min(window.innerWidth - width - margin, rect.left + rect.width / 2 - width / 2));
+  const below = rect.bottom + margin;
+  const top = below + height <= window.innerHeight - margin
+    ? below
+    : Math.max(margin, rect.top - height - margin);
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.round(top)}px`;
+}
+
+function trainingHideStateTooltip(target = null) {
+  if (target && target !== _trainingStateTooltipTarget) return;
+  const tooltip = document.getElementById("training-state-tooltip");
+  if (tooltip) tooltip.classList.remove("visible");
+  if (_trainingStateTooltipTarget) {
+    _trainingStateTooltipTarget.removeAttribute("aria-describedby");
+  }
+  _trainingStateTooltipTarget = null;
+}
+
+// Delegation keeps dynamically-rendered sidebar/detail badges accessible:
+// hover for a mouse, focus for keyboard users, and tap to toggle on touch.
+document.addEventListener("pointerover", (event) => {
+  const badge = event.target.closest?.(".training-state-help-target");
+  if (badge) trainingShowStateTooltip(badge);
+});
+document.addEventListener("pointerout", (event) => {
+  const badge = event.target.closest?.(".training-state-help-target");
+  if (badge && !badge.contains(event.relatedTarget)) trainingHideStateTooltip(badge);
+});
+document.addEventListener("focusin", (event) => {
+  const badge = event.target.closest?.(".training-state-help-target");
+  if (badge) trainingShowStateTooltip(badge);
+});
+document.addEventListener("focusout", (event) => {
+  const badge = event.target.closest?.(".training-state-help-target");
+  if (badge) trainingHideStateTooltip(badge);
+});
+document.addEventListener("click", (event) => {
+  const badge = event.target.closest?.(".training-state-help-target");
+  if (!badge) {
+    trainingHideStateTooltip();
+  } else {
+    trainingShowStateTooltip(badge);
+  }
+});
 
 // ── Nebius connection (server-held service-account credential) ──────────────
 // One service-account key for the whole GUI server, configured once via the
@@ -243,6 +337,71 @@ async function trainingInit() {
   await trainingLoadHosts();
   await trainingRefreshRuns();
   trainingSchedulePoll();
+  _bindTrainingCopy();
+  // Not awaited: the image section renders lazily once the start form opens.
+  trainingLoadImageStatus();
+}
+
+// Error fields re-render every TRAINING_POLL_MS (3 s), which wipes any
+// in-progress text selection mid-drag. Every error field carries an
+// explicit Copy button (see _errorHtml); clicking anywhere on the field
+// copies too, as a fallback.
+function _errorHtml(text) {
+  return `<div class="training-error"><span class="training-error-text">${escapeHtml(text)}</span><button type="button" class="training-copy-btn">Copy</button></div>`;
+}
+
+function _copyTrainingText(text, successMessage) {
+  const notify = (ok) => {
+    if (typeof showToast !== "function") return;
+    showToast(
+      ok ? "Copied" : "Copy failed",
+      ok ? successMessage : "Select the text and copy it manually",
+      ok ? "info" : "error",
+    );
+  };
+  const fallback = () => {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch (_) {
+      ok = false;
+    }
+    area.remove();
+    return ok;
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(
+      () => notify(true),
+      () => notify(fallback()),
+    );
+  } else {
+    notify(fallback());
+  }
+}
+
+function _bindTrainingCopy() {
+  document.addEventListener("click", (e) => {
+    const logBtn = e.target.closest(".training-log-copy");
+    if (logBtn) {
+      const log = logBtn.closest(".training-card")?.querySelector(".training-log");
+      const text = log?.textContent || "";
+      if (text) _copyTrainingText(text, "Training log copied to clipboard");
+      return;
+    }
+
+    const el = e.target.closest(".training-error, .training-image-banner.failed");
+    if (!el) return;
+    const textEl = el.querySelector(".training-error-text");
+    const text = (textEl ? textEl.textContent : el.textContent).trim();
+    if (!text) return;
+    _copyTrainingText(text, "Error copied to clipboard");
+  });
 }
 
 function trainingSchedulePoll() {
@@ -373,7 +532,7 @@ function trainingRenderRunsList(runs) {
     row.innerHTML = `
       <div class="training-run-row-top">
         <span class="training-run-name">${escapeHtml(r.recipe_name)}</span>
-        <span class="training-state-badge training-state-${r.state}">${r.state}</span>
+        ${trainingStateBadge(r.state)}
       </div>
       <div class="training-run-row-sub">${escapeHtml(r.dataset_id)}</div>
     `;
@@ -391,7 +550,7 @@ function trainingRenderRunsList(runs) {
   }
 }
 
-const TERMINAL_STATES = new Set(["completed", "failed", "aborted"]);
+const TERMINAL_STATES = new Set(["completed", "stopped", "failed"]);
 
 // One floating context-menu element shared across rows; created on first
 // use, hidden by default, repositioned on each show. "Delete this run" is
@@ -489,7 +648,7 @@ async function trainingClearCompleted() {
     return;
   }
   const ok = window.confirm(
-    `Drop ${terminal.length} completed/failed/aborted run(s) from training history? ` +
+    `Drop ${terminal.length} completed/stopped/failed run(s) from training history? ` +
       `Trained models (if any) stay in the Models tab — only the run records disappear.`,
   );
   if (!ok) return;
@@ -524,6 +683,7 @@ function trainingShowMain(mode) {
 }
 
 function trainingSelectRun(runId) {
+  trainingHideStateTooltip();
   _trainingSelectedRunId = runId;
   trainingShowMain("detail");
   trainingRefreshDetail(runId);
@@ -535,6 +695,7 @@ function trainingSelectRun(runId) {
 // the model view. Symmetric to trainingShowMain() hiding model containers
 // when the user enters training mode.
 function trainingLeaveView() {
+  trainingHideStateTooltip();
   const td = document.getElementById("training-detail");
   if (td) td.style.display = "none";
   _trainingMode = "empty";
@@ -578,8 +739,12 @@ async function trainingRefreshDetail(runId) {
     if (stopBtn) stopBtn.onclick = () => trainingStopRun(runId);
     const cloneBtn = document.getElementById(`training-clone-${runId}`);
     if (cloneBtn) cloneBtn.onclick = () => trainingDuplicateRun(runId);
+    const resumeBtn = document.getElementById(`training-resume-${runId}`);
+    if (resumeBtn) {
+      resumeBtn.onclick = () => trainingResumeRun(runId, Number(resumeBtn.dataset.step));
+    }
   } catch (e) {
-    el.innerHTML = `<div class="training-error">Failed to load run: ${escapeHtml(e.message)}</div>`;
+    el.innerHTML = _errorHtml(`Failed to load run: ${e.message}`);
   }
 }
 
@@ -610,14 +775,138 @@ function trainingWandbUrl(text) {
   return m ? m[0] : null;
 }
 
-// Curated default metric charts (loss, lr). These reuse the SAME canvas
+// Browser-side compatibility for an HVLA process already running with an old
+// image while the GUI backend has not been restarted. This is deliberately
+// isolated from the primary protocol: new images emit versioned
+// LEROBOT_TRAINING_JSON records and the backend supplies indexed metrics.
+function trainingLegacySamplesFromLog(text) {
+  const samples = [];
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const position = line.match(/\bstep\s+(\d+)\s*\/\s*(\d+)\b/i);
+    if (!position) continue;
+    const sample = {
+      step: Number(position[1]),
+      total_steps: Number(position[2]),
+    };
+    for (const field of line.matchAll(
+      /\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?\d[\d,]*\.?\d*(?:[eE][+-]?\d+)?)(?=\s|\||$)/g,
+    )) {
+      const value = Number(field[2].replaceAll(",", ""));
+      if (Number.isFinite(value)) sample[field[1]] = value;
+    }
+    const stepTime = line.match(/\|\s*(\d+(?:\.\d+)?)ms(?:\s*\||\s*$)/i);
+    if (stepTime) sample.step_time_ms = Number(stepTime[1]);
+    const timestamp = line.match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2}),(\d{3})/,
+    );
+    if (timestamp) {
+      sample.timestamp_ms = Date.UTC(
+        Number(timestamp[1]),
+        Number(timestamp[2]) - 1,
+        Number(timestamp[3]),
+        Number(timestamp[4]),
+        Number(timestamp[5]),
+        Number(timestamp[6]),
+        Number(timestamp[7]),
+      );
+    }
+    if (Number.isFinite(sample.loss)) samples.push(sample);
+  }
+  return samples;
+}
+
+function trainingEtaFromSamples(samples) {
+  if (!samples.length) return null;
+  const latest = samples[samples.length - 1];
+  const rates = [];
+  for (let i = Math.max(1, samples.length - 10); i < samples.length; i++) {
+    const previous = samples[i - 1];
+    const current = samples[i];
+    const steps = current.step - previous.step;
+    const elapsedMs = current.timestamp_ms - previous.timestamp_ms;
+    if (steps > 0 && elapsedMs > 0 && Number.isFinite(elapsedMs)) {
+      rates.push(elapsedMs / steps);
+    }
+  }
+  let msPerStep = null;
+  if (rates.length) {
+    rates.sort((a, b) => a - b);
+    const middle = Math.floor(rates.length / 2);
+    msPerStep =
+      rates.length % 2 ? rates[middle] : (rates[middle - 1] + rates[middle]) / 2;
+  } else if (Number.isFinite(latest.step_time_ms) && latest.step_time_ms > 0) {
+    msPerStep = latest.step_time_ms;
+  }
+  if (msPerStep == null) return null;
+  return (Math.max(0, latest.total_steps - latest.step) * msPerStep) / 1000;
+}
+
+function trainingProgressFromLog(text) {
+  const samples = trainingLegacySamplesFromLog(text);
+  if (!samples.length) return null;
+  const latest = samples[samples.length - 1];
+  return {
+    step: latest.step,
+    total_steps: latest.total_steps,
+    eta_seconds: trainingEtaFromSamples(samples),
+  };
+}
+
+function trainingMetricSeries(snap) {
+  const indexed = (snap.metrics || []).filter((m) => typeof m.step === "number");
+  const legacy = trainingLegacySamplesFromLog(snap.stderr_tail);
+  if (!indexed.length) return legacy;
+  if (!legacy.length) return indexed;
+
+  // A GUI/backend built before a trainer learned a metric may have persisted
+  // only part of each sample. Merge the raw-log fallback by step so fields
+  // such as legacy HVLA's trailing `263ms` can still populate the timing
+  // chart without replacing the backend's authoritative values.
+  const legacyByStep = new Map(legacy.map((sample) => [sample.step, sample]));
+  return indexed.map((sample) => ({
+    ...(legacyByStep.get(sample.step) || {}),
+    ...sample,
+  }));
+}
+
+// Curated default metric charts. These reuse the SAME canvas
 // primitive (`drawChart` in charts.js) as the RLT + performance panels so the
-// app's charts look and behave consistently — including hover/crosshair. The
-// canvases are drawn post-render by trainingDrawDetailCharts(). grad_norm +
-// other auto-captured keys live in the stat tiles / a future metric picker.
-const TRAINING_CHART_KEYS = [
-  { key: "loss", label: "Loss", color: "#34d399", logY: true }, // spans orders of magnitude
-  { key: "lr", label: "Learning rate", color: "#fb923c" },
+// app's charts look and behave consistently — including hover/crosshair.
+// Keep this deliberately small: these are the LeRobot signals that answer
+// "is it learning?" and "is the training loop healthy?" across our policies.
+const TRAINING_CHARTS = [
+  {
+    key: "loss",
+    label: "Loss",
+    logY: true,
+    lines: [{ key: "loss", label: "Loss", color: "#34d399" }],
+  },
+  {
+    key: "grdn",
+    label: "Gradient norm",
+    logY: true,
+    lines: [{ key: "grdn", label: "Grad norm", color: "#60a5fa" }],
+  },
+  {
+    key: "lr",
+    label: "Learning rate",
+    lines: [{ key: "lr", label: "LR", color: "#fb923c" }],
+  },
+  {
+    key: "memory",
+    label: "Peak GPU allocation (GB)",
+    lines: [{ key: "mem_gb", label: "Peak allocated", color: "#22d3ee" }],
+  },
+  {
+    key: "timing",
+    label: "Step time (ms)",
+    wide: true,
+    lines: [
+      { key: "step_time_ms", label: "Total", color: "#c084fc" },
+      { key: "updt_s", label: "Update", color: "#f472b6", scale: 1000 },
+      { key: "data_s", label: "Data", color: "#facc15", scale: 1000 },
+    ],
+  },
 ];
 
 function trainingMetricsCardHtml(series, isActive) {
@@ -626,33 +915,54 @@ function trainingMetricsCardHtml(series, isActive) {
       ? '<section class="training-card"><div class="training-empty-hint">Metrics will appear once training logs its first step…</div></section>'
       : "";
   }
-  const card = (c) =>
-    `<div class="training-chart">
-       <div class="training-chart-title">${c.label}</div>
-       <canvas id="training-chart-${c.key}" class="training-chart-canvas"></canvas>
+  const card = (chart) => {
+    const hasData = chart.lines.some((line) =>
+      series.some((sample) => Number.isFinite(Number(sample[line.key]))),
+    );
+    return `<div class="training-chart${chart.wide ? " training-chart-wide" : ""}">
+       <div class="training-chart-title">${chart.label}</div>
+       ${
+         hasData
+           ? `<canvas id="training-chart-${chart.key}" class="training-chart-canvas"></canvas>`
+           : '<div class="training-chart-empty">Not logged by this run</div>'
+       }
      </div>`;
+  };
   return `
     <section class="training-card">
       <h3 class="training-card-heading">Metrics</h3>
-      <div class="training-charts">${TRAINING_CHART_KEYS.map(card).join("")}</div>
+      <div class="training-charts">${TRAINING_CHARTS.map(card).join("")}</div>
     </section>`;
 }
 
 // Draw the metric canvases after the detail HTML is in the DOM (canvas needs
 // layout for its getBoundingClientRect). Uses the shared drawChart primitive
-// (charts.js); the 'training' sync group gives loss + lr a shared crosshair.
+// (charts.js); the 'training' sync group gives all visible charts a shared
+// crosshair.
 function trainingDrawDetailCharts(snap) {
   if (typeof drawChart !== "function") return; // provided by charts.js
-  const series = (snap.metrics || []).filter((m) => typeof m.step === "number");
+  clearChartGroup("training");
+  const series = trainingMetricSeries(snap);
   const latestStep = series.length ? series[series.length - 1].step : 0;
-  for (const c of TRAINING_CHART_KEYS) {
-    const data = series.map((m) => m[c.key]).filter((v) => typeof v === "number" && isFinite(v));
-    if (data.length) {
-      drawChart(`training-chart-${c.key}`, {
-        series: [{ data, color: c.color, label: c.label }],
+  for (const chart of TRAINING_CHARTS) {
+    const lines = chart.lines
+      .map((line) => ({
+        data: series
+          .map((sample) => {
+            const value = Number(sample[line.key]) * (line.scale || 1);
+            return Number.isFinite(value) ? value : null;
+          }),
+        color: line.color,
+        label: line.label,
+      }))
+      .filter((line) => line.data.some((value) => value != null));
+    if (lines.length) {
+      drawChart(`training-chart-${chart.key}`, {
+        series: lines,
         syncGroup: "training",
         latestStep,
-        logY: !!c.logY,
+        xValues: series.map((sample) => sample.step),
+        logY: !!chart.logY,
       });
     }
   }
@@ -663,7 +973,7 @@ function trainingRenderDetailHtml(snap) {
   const progress = snap.progress || {};
   const checkpoints = snap.checkpoints || [];
   const events = snap.events || [];
-  const isActive = !["completed", "failed", "aborted"].includes(r.state);
+  const isActive = !TERMINAL_STATES.has(r.state);
 
   // Position comes from progress.json (parsed from the tqdm bar by the
   // orchestrator). The training-signal series (loss/lr/grdn) comes from
@@ -674,11 +984,26 @@ function trainingRenderDetailHtml(snap) {
   //
   // Checkpoint step uses max-by-step, not last entry: the scanner sorts dirs
   // alphabetically, so HVLA's ``checkpoint-10`` can land before ``checkpoint-5``.
-  const metricsSeries = (snap.metrics || []).filter((m) => typeof m.step === "number");
-  const latest = metricsSeries.length ? metricsSeries[metricsSeries.length - 1] : {};
+  const rawMetrics = snap.metrics || [];
+  const metricsSeries = trainingMetricSeries(snap);
+  // Older GUI backends parsed HVLA loss/lr but omitted its space-separated
+  // step field. Keep the latest tiles live while the log fallback supplies
+  // position; structured records make all future series fully step-indexed.
+  const latest = metricsSeries.length
+    ? metricsSeries[metricsSeries.length - 1]
+    : rawMetrics.length
+      ? rawMetrics[rawMetrics.length - 1]
+      : {};
+  const logProgress = trainingProgressFromLog(snap.stderr_tail);
   const lastCkptStep = checkpoints.length ? Math.max(...checkpoints.map((c) => c.step)) : 0;
-  const step = progress.step ?? latest.step ?? lastCkptStep;
-  const total = progress.total_steps ?? progress.num_steps ?? r.args?.num_steps ?? r.args?.steps ?? 0;
+  const step = progress.step ?? latest.step ?? logProgress?.step ?? lastCkptStep;
+  const total =
+    progress.total_steps ??
+    progress.num_steps ??
+    logProgress?.total_steps ??
+    r.args?.num_steps ??
+    r.args?.steps ??
+    0;
   const pct = total > 0 ? Math.min(100, Math.round((step / total) * 100)) : 0;
   // loss/lr/grad: prefer the parsed metric series; fall back to the fake
   // runner's progress.loss so legacy/test runs still show a value.
@@ -686,7 +1011,11 @@ function trainingRenderDetailHtml(snap) {
   const loss = lossVal != null ? trainingFmtMetric(lossVal) : "—";
   const lr = latest.lr != null ? trainingFmtMetric(latest.lr) : "—";
   const grdn = latest.grdn != null ? trainingFmtMetric(latest.grdn) : "—";
-  const eta = progress.eta_seconds != null ? trainingFmtDuration(progress.eta_seconds) : "—";
+  const samplesPerS = latest.samples_per_s ?? latest["smp/s"];
+  const speed = samplesPerS != null ? `${trainingFmtMetric(samplesPerS)} samples/s` : "—";
+  const memory = latest.mem_gb != null ? `${trainingFmtMetric(latest.mem_gb)} GB` : "—";
+  const etaSeconds = progress.eta_seconds ?? logProgress?.eta_seconds;
+  const eta = etaSeconds != null ? trainingFmtDuration(etaSeconds) : "—";
   // Running but no step parsed yet → tqdm hasn't printed its first bar.
   const warming = isActive && step === 0;
   const wandbUrl = trainingWandbUrl(snap.stderr_tail);
@@ -702,6 +1031,14 @@ function trainingRenderDetailHtml(snap) {
   // runs (peek at the config), terminal runs (clone-and-adjust), and
   // failed runs (fix-and-retry).
   const cloneBtn = `<button class="btn-small secondary" id="training-clone-${r.run_id}" title="Open the start form pre-filled with this run's settings">Run with same config</button>`;
+  const resumableSteps = snap.resumable_checkpoint_steps || [];
+  const resumeStep = resumableSteps.length
+    ? Math.max(...resumableSteps.map((checkpointStep) => Number(checkpointStep) || 0))
+    : 0;
+  const resumeBtn =
+    !isActive && resumeStep > 0
+      ? `<button class="btn-small primary" id="training-resume-${r.run_id}" data-step="${resumeStep}" title="Create a new run from checkpoint step ${resumeStep}">Resume from ${resumeStep}</button>`
+      : "";
 
   // Image-prep status banner: when state=PENDING (background prep thread is
   // running), surface the most recent image-* event so the user sees what's
@@ -724,7 +1061,8 @@ function trainingRenderDetailHtml(snap) {
           </div>
         </div>
         <div class="training-detail-actions">
-          <span class="training-state-badge training-state-${r.state}">${r.state}</span>
+          ${trainingStateBadge(r.state)}
+          ${resumeBtn}
           ${cloneBtn}
           ${stopBtn}
         </div>
@@ -738,9 +1076,10 @@ function trainingRenderDetailHtml(snap) {
           <div class="training-stat"><div class="training-stat-label">Loss</div><div class="training-stat-value">${loss}</div></div>
           <div class="training-stat"><div class="training-stat-label">LR</div><div class="training-stat-value">${lr}</div></div>
           <div class="training-stat"><div class="training-stat-label">Grad norm</div><div class="training-stat-value">${grdn}</div></div>
+          <div class="training-stat"><div class="training-stat-label">Throughput</div><div class="training-stat-value training-stat-value-compact">${speed}</div></div>
+          <div class="training-stat"><div class="training-stat-label">Peak GPU alloc.</div><div class="training-stat-value">${memory}</div></div>
           <div class="training-stat"><div class="training-stat-label">ETA</div><div class="training-stat-value">${eta}</div></div>
           <div class="training-stat"><div class="training-stat-label">Elapsed</div><div class="training-stat-value">${trainingFmtDuration(elapsedSec)}</div></div>
-          <div class="training-stat"><div class="training-stat-label">Checkpoints</div><div class="training-stat-value">${checkpoints.length}</div></div>
         </div>
         <div class="training-progress-bar">
           <div class="training-progress-fill" style="width: ${pct}%"></div>
@@ -773,13 +1112,16 @@ function trainingRenderDetailHtml(snap) {
       </section>
 
       <section class="training-card">
-        <h3 class="training-card-heading">Log tail</h3>
+        <div class="training-card-heading-row">
+          <h3 class="training-card-heading">Training log <span class="training-muted">(last 16 KiB)</span></h3>
+          <button type="button" class="btn-small secondary training-log-copy">Copy log</button>
+        </div>
         <pre class="training-log">${escapeHtml(snap.stderr_tail || "(no output yet)")}</pre>
       </section>
 
       ${trainingConfigCardHtml(r)}
 
-      ${r.error ? `<div class="training-error">Error: ${escapeHtml(r.error)}</div>` : ""}
+      ${r.error ? _errorHtml(`Error: ${r.error}`) : ""}
     </div>
   `;
 }
@@ -803,6 +1145,8 @@ function trainingConfigCardHtml(r) {
   // image was used.
   const recipeMarker = args["__recipe__"] || "lerobot-train";
   const imageMarker = args["__image__"] || "(default)";
+  const resumedFromRun = args["__resumed_from_run__"];
+  const resumedFromStep = args["__resumed_from_step__"];
   return `
     <section class="training-card">
       <details class="training-section" open>
@@ -810,12 +1154,217 @@ function trainingConfigCardHtml(r) {
         <table class="training-args-table">
           <tr><th>Recipe</th><td class="training-mono">${escapeHtml(recipeMarker)}</td></tr>
           <tr><th>Image</th><td class="training-mono">${escapeHtml(imageMarker)}</td></tr>
+          ${
+            resumedFromRun
+              ? `<tr><th>Resumed from</th><td class="training-mono">${escapeHtml(resumedFromRun)} · step ${escapeHtml(String(resumedFromStep))}</td></tr>`
+              : ""
+          }
           ${rows.join("")}
         </table>
         <div class="training-field-hint">Click <strong>Run with same config</strong> above to open the start form pre-filled with these values.</div>
       </details>
     </section>
   `;
+}
+
+// ── Training image (CI default vs local build) ──────────────────────────────
+//
+// Backs the "Training image" section of the start form. Data comes from
+// GET /api/training/image-status: the effective CI-default tag, the local
+// dev image (built from this checkout), and git provenance used to show how
+// stale the CI image is relative to the checked-out branch. When the GUI is
+// not served from a git checkout (git === null) the freshness line is hidden
+// entirely — there is no local history to compare against.
+//
+// Choosing anything but the CI default sends args["__image__"] with the run
+// request (see trainingSubmitStart); the backend honors it as a per-run
+// image override.
+
+let _trainingImageStatus = null;     // last GET /api/training/image-status, null until loaded
+let _trainingImageChoice = "";       // "", "local" or "custom" — survives form re-renders
+let _trainingImageCustomTag = "";    // free-text custom tag — survives section re-renders
+let _trainingBuildPollTimer = null;  // active build-image/status interval
+let _trainingBuildRunning = false;
+let _trainingBuildNote = null;       // {text, color} shown next to the Build button
+let _trainingBuildTail = [];         // last docker build output lines (kept across re-renders)
+
+async function trainingLoadImageStatus() {
+  try {
+    const resp = await fetch("/api/training/image-status");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    _trainingImageStatus = await resp.json();
+  } catch (e) {
+    console.error("training: failed to load image status", e);
+  }
+  trainingRenderImageSection();
+}
+
+// ISO timestamp → "YYYY-MM-DD" (docker Created + git commit dates are RFC3339).
+function _trainingFmtDate(iso) {
+  return iso ? String(iso).slice(0, 10) : "";
+}
+
+function trainingRenderImageSection() {
+  const el = document.getElementById("training-image-section");
+  if (!el) return; // start form not open
+  // Preserve the free-text tag across re-renders (build polls re-render).
+  const prevTag = el.querySelector("input[name=image_custom_tag]");
+  if (prevTag) _trainingImageCustomTag = prevTag.value;
+  const st = _trainingImageStatus;
+  if (!st) {
+    el.innerHTML =
+      '<div class="training-empty-hint">Image status unavailable — the run will use the backend default.</div>';
+    return;
+  }
+  const git = st.git || null;
+  const local = st.local_image || {};
+
+  // Freshness line: only when served from a git checkout.
+  let freshness = "";
+  if (git) {
+    const from =
+      git.image_branch && git.image_commit
+        ? `built from <span class="training-mono">${escapeHtml(git.image_branch)}@${escapeHtml(git.image_commit)}</span>`
+        : "";
+    let staleness;
+    const builtDate = _trainingFmtDate(st.image_created);
+    const builtSuffix = builtDate ? ` · built ${escapeHtml(builtDate)}` : "";
+    if (git.image_commit && git.commits_behind != null) {
+      staleness =
+        git.commits_behind === 0
+          ? `<span style="color:#98c379;">up to date with ${escapeHtml(git.branch)}</span>`
+          : `<span style="color:#e5c07b;">${git.commits_behind} commit${git.commits_behind === 1 ? "" : "s"} behind ${escapeHtml(git.branch)}${builtSuffix}</span>`;
+    } else if (git.image_commit) {
+      const d = _trainingFmtDate(git.image_commit_date) || builtDate;
+      staleness = `<span style="color:#e5c07b;">provenance not in local history${d ? ` (built ${escapeHtml(d)})` : ""}</span>`;
+    } else {
+      staleness = '<span style="color:#888;">tag carries no commit provenance</span>';
+    }
+    freshness = `<div class="training-field-hint">${from}${from ? " · " : ""}${staleness}</div>`;
+  }
+
+  const localTag = local.tag || "";
+  const localInfo = local.created
+    ? `<span style="color:#98c379;">exists — built ${escapeHtml(_trainingFmtDate(local.created))}</span>`
+    : '<span style="color:#e5c07b;">not built yet</span>';
+  const note = _trainingBuildNote
+    ? `<span id="training-image-build-status" class="training-field-hint" style="color:${_trainingBuildNote.color};">${escapeHtml(_trainingBuildNote.text)}</span>`
+    : '<span id="training-image-build-status" class="training-field-hint"></span>';
+  const logShown = _trainingBuildTail.length > 0 || _trainingBuildRunning;
+
+  el.innerHTML = `
+    <label class="training-field">
+      <span class="training-field-label">Default image</span>
+      <span class="training-mono" style="grid-column: 2; word-break: break-all;">${escapeHtml(st.image)}</span>
+      ${freshness}
+    </label>
+    <label class="training-field">
+      <span class="training-field-label">Use image</span>
+      <select name="image_choice" onchange="trainingImageChoiceChanged()">
+        <option value="">CI default</option>
+        <option value="local"${_trainingImageChoice === "local" ? " selected" : ""}>Local image (rebuild after code changes)</option>
+        <option value="custom"${_trainingImageChoice === "custom" ? " selected" : ""}>Custom tag…</option>
+      </select>
+      <span class="training-field-hint">Which Docker image the run trains in. Selecting the local image reuses its existing tag; click <strong>Build now</strong> after source changes to bake the current checkout into it.</span>
+    </label>
+    <div id="training-image-custom" style="display:none;">
+      <label class="training-field">
+        <span class="training-field-label">Custom tag</span>
+        <input type="text" name="image_custom_tag" placeholder="ghcr.io/org/image:tag" value="${escapeHtml(_trainingImageCustomTag)}" />
+      </label>
+    </div>
+    <div id="training-image-local" style="display:none;">
+      <div class="training-field-hint"><span class="training-mono">${escapeHtml(localTag)}</span> — ${localInfo}</div>
+      <div class="training-image-actions">
+        <button type="button" id="training-image-build-btn" class="btn-small secondary" onclick="trainingBuildImage()" ${_trainingBuildRunning ? "disabled" : ""}>Build now</button>
+        ${note}
+      </div>
+      <pre id="training-image-build-log" class="training-image-build-log" style="display:${logShown ? "block" : "none"};">${escapeHtml(_trainingBuildTail.join("\n"))}</pre>
+    </div>
+  `;
+  trainingImageChoiceChanged(); // sync custom/local sub-block visibility
+}
+
+function trainingImageChoiceChanged() {
+  const sel = document.querySelector("#training-start-form select[name=image_choice]");
+  const v = sel ? sel.value : "";
+  _trainingImageChoice = v;
+  const custom = document.getElementById("training-image-custom");
+  if (custom) custom.style.display = v === "custom" ? "block" : "none";
+  const local = document.getElementById("training-image-local");
+  if (local) local.style.display = v === "local" ? "block" : "none";
+}
+
+// POST /api/training/build-image, then poll build-image/status every
+// TRAINING_POLL_MS while the build runs. The button stays disabled for the
+// whole build; the tail of the docker output streams into the log box.
+async function trainingBuildImage() {
+  const btn = document.getElementById("training-image-build-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const resp = await fetch("/api/training/build-image", { method: "POST" });
+    if (!resp.ok) {
+      // 409: already building / no docker / not a checkout — surface the detail.
+      const detail = await resp.json().catch(() => ({}));
+      _trainingBuildNote = {
+        text: detail.detail || `Build failed to start (HTTP ${resp.status}).`,
+        color: "#e06c75",
+      };
+      trainingRenderImageSection();
+      return;
+    }
+    _trainingBuildRunning = true;
+    _trainingBuildNote = { text: "Building… (first build can take tens of minutes)", color: "#e5c07b" };
+    _trainingBuildTail = [];
+    if (_trainingBuildPollTimer) clearInterval(_trainingBuildPollTimer);
+    _trainingBuildPollTimer = setInterval(trainingCheckBuildStatus, TRAINING_POLL_MS);
+    trainingRenderImageSection();
+    trainingCheckBuildStatus(); // first tick immediately
+  } catch (e) {
+    _trainingBuildNote = { text: `Build failed to start: ${e.message || e}`, color: "#e06c75" };
+    trainingRenderImageSection();
+  }
+}
+
+async function trainingCheckBuildStatus() {
+  let st;
+  try {
+    const resp = await fetch("/api/training/build-image/status");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    st = await resp.json();
+  } catch (e) {
+    console.error("training: failed to poll build status", e);
+    return; // transient — keep polling
+  }
+  if (Array.isArray(st.lines) && st.lines.length) {
+    _trainingBuildTail = st.lines.slice(-8);
+    const logEl = document.getElementById("training-image-build-log");
+    if (logEl) {
+      logEl.style.display = "block";
+      logEl.textContent = _trainingBuildTail.join("\n");
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
+  if (st.running) return;
+
+  if (_trainingBuildPollTimer) {
+    clearInterval(_trainingBuildPollTimer);
+    _trainingBuildPollTimer = null;
+  }
+  _trainingBuildRunning = false;
+  const failed = !!st.error || st.exit_code !== 0;
+  _trainingBuildNote = failed
+    ? {
+        text: `Build failed${st.exit_code != null ? ` (exit ${st.exit_code})` : ""}${st.error ? `: ${st.error}` : ""}`,
+        color: "#e06c75",
+      }
+    : { text: "✓ Build complete.", color: "#98c379" };
+  if (!failed) {
+    // Refresh local_image.created (and the freshness line); re-renders the section.
+    await trainingLoadImageStatus();
+  } else {
+    trainingRenderImageSection();
+  }
 }
 
 // ── Start form ────────────────────────────────────────────────────────────────
@@ -859,6 +1408,36 @@ async function trainingDuplicateRun(runId) {
   });
 }
 
+async function trainingResumeRun(runId, checkpointStep) {
+  if (
+    !confirm(
+      `Resume from checkpoint step ${checkpointStep}? ` +
+        "This creates a new run and keeps the source checkpoint unchanged.",
+    )
+  ) {
+    return;
+  }
+  const idempotencyKey = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    const resp = await fetch(`/api/training/runs/${runId}/resume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        checkpoint_step: checkpointStep,
+        idempotency_key: idempotencyKey,
+      }),
+    });
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }));
+      throw new Error(detail.detail || `HTTP ${resp.status}`);
+    }
+    const resumed = await resp.json();
+    trainingSelectRun(resumed.run_id);
+  } catch (e) {
+    alert(`Failed to resume training: ${e.message}`);
+  }
+}
+
 // ── Image-prep status banner ──────────────────────────────────────────────────
 //
 // Reads the events.jsonl-derived `events` list off the snapshot and renders
@@ -895,7 +1474,7 @@ function trainingImageStatusHtml(run, events) {
       return `<div class="training-image-banner ok">Image: pulled in ${dur}${size} · <span class="training-mono">${escapeHtml(last.image)}</span></div>`;
     }
     case "image_pull_failed":
-      return `<div class="training-image-banner failed">Image pull failed: <span class="training-mono">${escapeHtml(last.error || "(no error tail)")}</span></div>`;
+      return `<div class="training-image-banner failed"><span class="training-error-text">Image pull failed: <span class="training-mono">${escapeHtml(last.error || "(no error tail)")}</span></span><button type="button" class="training-copy-btn">Copy</button></div>`;
     default:
       return "";
   }
@@ -926,7 +1505,7 @@ function formatBytes(n) {
 //
 // One adapter helper: each catalog entry is
 // ``{type_name, label, recipe, arg_key_prefix, fields: [{name, label,
-// type, default, choices?, description?}]}``. The frontend prepends
+// type, default, choices?, description?, advanced?}]}``. The frontend prepends
 // ``arg_key_prefix`` (``"policy."`` for draccus recipes, ``""`` for HVLA)
 // to each field's ``name`` when building the args dict that POST
 // /api/training/runs receives.
@@ -1024,6 +1603,11 @@ function trainingRenderStartForm(prefill) {
           </div>
         </details>
 
+        <details class="training-section" open>
+          <summary class="training-section-summary">Training image</summary>
+          <div id="training-image-section"><div class="training-empty-hint">Loading image status…</div></div>
+        </details>
+
         <div class="training-form-actions">
           <button type="submit" class="btn-small">Start training</button>
           <button type="button" class="btn-small secondary" onclick="trainingCancelForm()">Cancel</button>
@@ -1037,6 +1621,13 @@ function trainingRenderStartForm(prefill) {
   const initialPolicy =
     trainingPolicyFromArgs(prefill?.args) || _trainingPolicyCatalog[0]?.type_name || "";
   trainingRenderPolicyFields(initialPolicy);
+  // Image section: render from cache when we have it, otherwise fetch (the
+  // fetch re-renders the section when it lands).
+  if (_trainingImageStatus === null) {
+    trainingLoadImageStatus();
+  } else {
+    trainingRenderImageSection();
+  }
   if (prefill) trainingApplyPrefill(prefill, initialPolicy);
 }
 
@@ -1103,6 +1694,24 @@ function trainingApplyPrefill(prefill, policyType) {
       input.value = String(args[f.key]);
     }
   }
+
+  // Training-image choice: restore the selector from the run's __image__.
+  // A match against the local dev tag selects "Local build"; anything else
+  // is shown as a custom tag.
+  const img = args["__image__"];
+  if (typeof img === "string" && img) {
+    const choiceSel = form.querySelector("select[name=image_choice]");
+    if (choiceSel) {
+      const localTag = _trainingImageStatus?.local_image?.tag;
+      choiceSel.value = localTag && img === localTag ? "local" : "custom";
+      trainingImageChoiceChanged();
+      if (choiceSel.value === "custom") {
+        _trainingImageCustomTag = img;
+        const tagInput = form.querySelector("input[name=image_custom_tag]");
+        if (tagInput) tagInput.value = img;
+      }
+    }
+  }
 }
 
 // Minimal CSS.escape() shim — names contain dots (e.g. `policy.chunk_size`)
@@ -1127,7 +1736,20 @@ function trainingRenderPolicyFields(policyType) {
     ...f,
     key: trainingFormKey(policy, f),
   }));
-  container.innerHTML = `<div class="training-field-row">${fields.map(fieldHtml).join("")}</div>`;
+  const primaryFields = fields.filter((f) => !f.advanced);
+  const advancedFields = fields.filter((f) => f.advanced);
+  const primaryHtml = primaryFields.length
+    ? `<div class="training-field-row">${primaryFields.map(fieldHtml).join("")}</div>`
+    : "";
+  const advancedHtml = advancedFields.length
+    ? `
+      <details class="training-policy-advanced">
+        <summary>Advanced policy and performance settings</summary>
+        <div class="training-field-row">${advancedFields.map(fieldHtml).join("")}</div>
+      </details>
+    `
+    : "";
+  container.innerHTML = primaryHtml + advancedHtml;
 }
 
 function fieldHtml(f) {
@@ -1215,6 +1837,17 @@ async function trainingSubmitStart(ev) {
     if (v !== undefined) args[f.key] = v;
   }
 
+  // Training image override: only sent when the user picked something other
+  // than the CI default. The backend honors args["__image__"] as a per-run
+  // image override; the CI-default path leaves the key out entirely.
+  const imageChoice = fd.get("image_choice");
+  if (imageChoice === "local" && _trainingImageStatus?.local_image?.tag) {
+    args.__image__ = _trainingImageStatus.local_image.tag;
+  } else if (imageChoice === "custom") {
+    const customTag = (fd.get("image_custom_tag") || "").trim();
+    if (customTag) args.__image__ = customTag;
+  }
+
   // Auto-generate a label if user didn't provide one
   let recipeName = (fd.get("recipe_name") || "").trim();
   if (!recipeName) {
@@ -1258,8 +1891,8 @@ async function trainingSubmitStart(ev) {
     // Switch to detail view of the new run
     trainingSelectRun(run.run_id);
   } catch (e) {
-    errEl.style.display = "block";
-    errEl.textContent = e.message || String(e);
+    errEl.style.display = "flex";
+    errEl.innerHTML = `<span class="training-error-text">${escapeHtml(e.message || String(e))}</span><button type="button" class="training-copy-btn">Copy</button>`;
   } finally {
     if (submitBtn) submitBtn.disabled = false;
   }
@@ -1328,5 +1961,8 @@ window.trainingSaveNebiusConnection = trainingSaveNebiusConnection;
 window.trainingClearNebiusConnection = trainingClearNebiusConnection;
 window.trainingRenderPolicyFields = trainingRenderPolicyFields;
 window.trainingDuplicateRun = trainingDuplicateRun;
+window.trainingResumeRun = trainingResumeRun;
 window.trainingDeleteRun = trainingDeleteRun;
 window.trainingClearCompleted = trainingClearCompleted;
+window.trainingImageChoiceChanged = trainingImageChoiceChanged;
+window.trainingBuildImage = trainingBuildImage;

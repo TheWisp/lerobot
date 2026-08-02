@@ -65,6 +65,16 @@ def test_run_from_json_coerces_legacy_int_session_id() -> None:
     assert re.session_id == "1230680"
 
 
+def test_run_from_json_migrates_legacy_aborted_state() -> None:
+    r = _make_run()
+    d = json.loads(r.to_json())
+    d["state"] = "aborted"
+
+    restored = Run.from_json(json.dumps(d))
+
+    assert restored.state == RunState.STOPPED
+
+
 def test_run_advance_pending_to_running_sets_started_at() -> None:
     r = _make_run()
     assert r.started_at is None
@@ -98,7 +108,7 @@ def test_run_advance_pending_to_failed_allowed() -> None:
 
 
 def test_terminal_states_set() -> None:
-    assert {RunState.COMPLETED, RunState.FAILED, RunState.ABORTED} == TERMINAL_STATES
+    assert {RunState.COMPLETED, RunState.STOPPED, RunState.FAILED} == TERMINAL_STATES
 
 
 # ── RunPaths ───────────────────────────────────────────────────────────────────

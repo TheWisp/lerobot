@@ -253,23 +253,28 @@ The start form — same shape for every host mode, dropdowns swap by host:
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Run state machine — the same six states regardless of host mode:
+Run state machine — the same six states regardless of host mode. The three
+terminal outcomes are intentionally simple: `COMPLETED` for a clean exit
+(including deliberate early stopping), `STOPPED` for a user stop or an
+unexpected interruption with safe recovery state, and `FAILED` when the run
+cannot be resumed safely.
 
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING: POST /runs
     PENDING --> RUNNING: prep done + worker spawned
     PENDING --> FAILED: image_pull_failed / prep error
-    PENDING --> ABORTED: user clicked Stop before launch
+    PENDING --> STOPPED: user clicked Stop before launch
     RUNNING --> COMPLETING: user clicked Stop (SIGTERM)
     RUNNING --> COMPLETED: worker wrote completed_naturally
-    RUNNING --> FAILED: worker crashed / lost contact
-    COMPLETING --> ABORTED: worker wrote aborted_by_user
+    RUNNING --> STOPPED: interrupted + resumable checkpoint
+    RUNNING --> FAILED: unrecoverable error
+    COMPLETING --> STOPPED: worker wrote aborted_by_user
     COMPLETING --> COMPLETED: finished cleanly before SIGTERM took
-    COMPLETING --> FAILED: worker crashed before responding
+    COMPLETING --> FAILED: unrecoverable error before responding
     COMPLETED --> [*]
+    STOPPED --> [*]
     FAILED --> [*]
-    ABORTED --> [*]
 ```
 
 Transitions are gated server-side (you cannot go `RUNNING → PENDING`), so a stale duplicate request cannot re-run a finished run. The orchestrator's image-prep daemon thread (see Threading) drives `PENDING → RUNNING`; everything else is event-driven from the worker.
@@ -397,6 +402,43 @@ Training launches detached on the host: `tmux` for SSH transport, managed subpro
 
 **Metrics: auto-capture, curated display.** The parser pulls _every_ `key:value` numeric field from lerobot's log line into a generic bag (so new / policy-specific metrics are captured with zero code change); `step` routes to progress. The dashboard charts a curated default set (loss, lr, grad_norm) with correct scaling (lr log-scale), and exposes the rest behind a metric picker.
 
+### Integrating a trainer with training health
+
+There are three ingestion grades, and **most models need grade 1 — which is no
+integration at all**:
+
+1. **Any policy trained through `lerobot-train`** (act, diffusion, smolvla,
+   pi0, every draccus-registered policy, present and future): covered out of
+   the box. The parser reads the trainer's _existing_ output — the tqdm bar
+   for position, the standard `step:N loss:X grdn:Y lr:Z …` line for signal —
+   and auto-captures every numeric `key:value`, so a policy that logs a new
+   metric charts it with zero code change on either side. The training image
+   stays vanilla.
+
+2. **A trainer with its own logging** (HVLA S1's argparse trainer is the one
+   current example): emit one `LEROBOT_TRAINING_JSON:{…}` line per log step
+   via `lerobot.common.training_log.format_training_log_record` — a single
+   call appended to the trainer's existing log statement. The record is
+   versioned, so this survives any rewording of the human-readable text
+   around it. This is the _only_ intrusive grade, and the intrusion is one
+   line.
+
+3. **A trainer you cannot modify at all**: the parser's regex fallback can be
+   extended (see `_LEGACY_HVLA_*` in `log_parse.py` for the shape). This is
+   deliberately the last resort — regexes over prose logs are brittle against
+   rewording, which is exactly what grade 2 exists to avoid. Fallbacks live
+   in `log_parse.py` only, marked legacy, with a test pinning each shape.
+
+Decision rule: if the trainer can adopt `lerobot-train`, do that; if it can't
+but you own its code, grade 2; only if you own nothing, grade 3.
+
+**Known limitation:** a trainer that is none of the above — not
+`lerobot-train`, no JSON records, no fallback regex — runs fine but appears
+metrics-blind in the dashboard (progress-only if it prints a tqdm bar,
+otherwise state transitions only). No such trainer exists in-tree today; the
+gap becomes real the day a third-party trainer is wired into a recipe, and
+the fix at that point is grade 2 or 3 above.
+
 The run detail view is the user's window into all of it:
 
 ```
@@ -428,7 +470,7 @@ Liveness comes from two independent signals: a process probe (`pgrep` over SSH; 
 
 Why not Wandb-style HTTP heartbeats from the training script? Those require the pod to reach the GUI server — often blocked by NAT/firewall. Our setup is the inverse (GUI server reaches the pod), so we use the channel we already have.
 
-**Completion signal.** The worker writes a final `events.jsonl` line before exiting — `completed_naturally{exit_code,final_step}`, `aborted_by_user{final_step}`, or `crashed{exit_code,error}`. The GUI reads this — not "process is gone" — as canonical, so the UI labels outcomes correctly and Ephemeral destroy proceeds with the right framing.
+**Completion signal.** The worker writes a final `events.jsonl` line before exiting — `completed_naturally{exit_code,final_step}` or `aborted_by_user{final_step}`. When a process disappears without one, the orchestrator records either `stopped{final_step,error}` after validating resumable state, or `crashed{exit_code,error}` when safe continuation is unavailable. The event log is canonical; checkpoint presence controls recovery actions independently. This keeps a usable inference model from being mistaken for resumable optimizer/scheduler state.
 
 **Connection resilience.** The poll scheduler uses exponential backoff (5/10/20/40/60 s, ~5 min before give-up). Transient errors retry; permanent errors (auth, bad host key) give up immediately. Transitions surface as events and a connection-quality indicator.
 

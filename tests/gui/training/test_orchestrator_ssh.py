@@ -63,7 +63,7 @@ def _wait_until_state(orch: Orchestrator, run_id: str, want: RunState, *, timeou
     while time.monotonic() < deadline:
         snap = orch.poll(run_id)
         last = snap
-        if snap.run.state == want or snap.run.state.value in {"completed", "failed", "aborted"}:
+        if snap.run.state == want or snap.run.state.value in {"completed", "stopped", "failed"}:
             return snap
         time.sleep(0.1)
     raise AssertionError(

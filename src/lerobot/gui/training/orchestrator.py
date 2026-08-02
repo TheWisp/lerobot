@@ -145,6 +145,9 @@ class RunSnapshot:
     stderr_tail: str  # last N bytes of stderr.log (configurable on poll)
     events: list[dict[str, Any]]  # all events.jsonl entries (oldest first)
     metrics: list[dict[str, float]]  # training-signal series (metrics.jsonl), one row per logged step
+    # Checkpoints that contain optimizer/scheduler state plus train config.
+    # This is deliberately separate from model checkpoints usable for inference.
+    resumable_checkpoint_steps: list[int] = field(default_factory=list)
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -178,6 +181,14 @@ class RunNotTerminalError(RuntimeError):
         and delete"; surfacing this as an error makes the two-step
         explicit (stop, then delete).
     """
+
+
+class CheckpointNotResumableError(RuntimeError):
+    """A resume request did not identify a complete local training state."""
+
+
+class ResumeNotSupportedError(RuntimeError):
+    """The selected host cannot safely resume with the current transport."""
 
 
 class Orchestrator:
@@ -290,6 +301,80 @@ class Orchestrator:
         t.start()
         return run
 
+    def resume(
+        self,
+        run_id: str,
+        *,
+        checkpoint_step: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> Run:
+        """Start a new local run from a terminal run's complete checkpoint.
+
+        The source checkpoint is mounted read-only into the new container.
+        Outputs go to the new run directory, preserving the terminal
+        source run and making lineage explicit in hidden run metadata.
+        """
+        source = self._runs.load(run_id)
+        if source is None:
+            raise UnknownRunError(f"unknown run id: {run_id!r}")
+        if source.state not in TERMINAL_STATES:
+            raise RunNotTerminalError(
+                f"run {run_id!r} is still {source.state.value!r}; stop it before resuming"
+            )
+
+        host = self._hosts.get(source.host_id)
+        if host is None:
+            raise UnknownHostError(f"unknown host id: {source.host_id!r}")
+        if not isinstance(host.transport, SubprocessTransport):
+            raise ResumeNotSupportedError(
+                "resume currently requires a checkpoint on this workstation; "
+                "remote training_state transfer is not implemented"
+            )
+
+        source_paths = RunPaths.for_run(source.run_id, self._runs.runs_dir)
+        client = self._client_for_host(host, source_paths, source)
+        checkpoints = list(self._iter_checkpoint_dirs(client, source, source_paths))
+        if checkpoint_step is not None:
+            checkpoints = [(path, step) for path, step in checkpoints if step == checkpoint_step]
+        if not checkpoints:
+            requested = f" at step {checkpoint_step}" if checkpoint_step is not None else ""
+            raise CheckpointNotResumableError(f"run {run_id!r} has no checkpoint{requested}")
+
+        checkpoint, step = max(checkpoints, key=lambda item: item[1])
+        training_state = checkpoint / "training_state"
+        train_config = checkpoint / "pretrained_model" / "train_config.json"
+        if not training_state.is_dir() or not train_config.is_file():
+            raise CheckpointNotResumableError(
+                f"checkpoint step {step} is missing training_state or train_config.json"
+            )
+
+        resolved_checkpoint = checkpoint.resolve()
+        try:
+            resolved_checkpoint.relative_to(source_paths.root.resolve())
+        except ValueError as exc:
+            raise CheckpointNotResumableError(
+                f"checkpoint step {step} resolves outside its source run"
+            ) from exc
+
+        args = dict(source.args)
+        # A resumed standard LeRobot run may itself carry these public flags.
+        # The recipe emits the canonical values from the hidden, validated
+        # checkpoint marker below.
+        args.pop("resume", None)
+        args.pop("config_path", None)
+        args["__resume_checkpoint__"] = str(resolved_checkpoint)
+        args["__resumed_from_run__"] = source.run_id
+        args["__resumed_from_step__"] = step
+        return self.start(
+            StartRequest(
+                host_id=source.host_id,
+                recipe_name=f"{source.recipe_name} (resume {step})",
+                dataset_id=source.dataset_id,
+                args=args,
+                idempotency_key=idempotency_key,
+            )
+        )
+
     def poll(
         self,
         run_id: str,
@@ -313,6 +398,10 @@ class Orchestrator:
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
         host = self._hosts.get(run.host_id)
         client = self._client_for_host(host, paths, run)
+        if run.state in (RunState.COMPLETED, RunState.FAILED) and self._repair_legacy_terminal_state(
+            run, paths, client
+        ):
+            self._runs.save(run)
 
         # Reconcile state with the worker, if it's still in a live state.
         # We only do the liveness probe when the host is known; otherwise
@@ -330,6 +419,11 @@ class Orchestrator:
         progress = self._read_progress(client, paths.progress_json)
         checkpoints = self._read_manifest(client, paths.checkpoints_jsonl)
         metrics = self._read_metrics(paths.metrics_jsonl)
+        resumable_checkpoint_steps = [
+            step
+            for checkpoint, step in self._iter_checkpoint_dirs(client, run, paths)
+            if self._checkpoint_is_resumable(client, checkpoint)
+        ]
 
         # Completed-but-artifacts-elsewhere: a run that finished while the
         # GUI was down (or before the fetch feature existed) has a manifest
@@ -359,13 +453,14 @@ class Orchestrator:
             stderr_tail=stderr_tail,
             events=events,
             metrics=metrics,
+            resumable_checkpoint_steps=resumable_checkpoint_steps,
         )
 
     def stop(self, run_id: str) -> Run:
         """User-initiated stop — SIGTERM the worker, mark COMPLETING.
 
         The worker writes its final ``aborted_by_user`` event then exits;
-        next ``poll()`` reconciles to ABORTED. Idempotent on terminal runs.
+        next ``poll()`` reconciles to STOPPED. Idempotent on terminal runs.
 
         Any ephemeral teardown driven by this stop authenticates with the
         server-held Nebius service-account key.
@@ -382,11 +477,11 @@ class Orchestrator:
         client = self._client_for_host(host, paths, run)
         if run.state == RunState.PENDING:
             # Prep thread is still running (image pull or pre-launch). No
-            # worker to SIGTERM. Skip COMPLETING straight to ABORTED — the
+            # worker to SIGTERM. Skip COMPLETING straight to STOPPED — the
             # prep thread will reload run state before launching and bail
             # if it sees a terminal state. (If it raced past that check
             # already, the spawned worker is --rm so it cleans up on exit.)
-            run.advance(RunState.ABORTED)
+            run.advance(RunState.STOPPED)
             self._runs.save(run)
             self._emit_event(client, paths.events_jsonl, "aborted_by_user", final_step=0)
             # If the prep thread already spawned the VM, tear it down. (A
@@ -394,8 +489,8 @@ class Orchestrator:
             self._maybe_teardown_ephemeral(run, paths)
             return run
         if host is None:
-            # Host went away (deleted profile) — best-effort mark aborted.
-            run.advance(RunState.ABORTED)
+            # Host went away (deleted profile) — best-effort mark stopped.
+            run.advance(RunState.STOPPED)
             self._runs.save(run)
             self._maybe_teardown_ephemeral(run, paths)
             return run
@@ -417,9 +512,14 @@ class Orchestrator:
         """
         runs = self._runs.list_all()
         for run in runs:
+            paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
+            if run.state in (RunState.COMPLETED, RunState.FAILED):
+                host = self._hosts.get(run.host_id)
+                client = self._client_for_host(host, paths, run)
+                if self._repair_legacy_terminal_state(run, paths, client):
+                    self._runs.save(run)
             if run.state in TERMINAL_STATES:
                 continue
-            paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
             if self._reconcile_from_events_only(run, paths):
                 self._runs.save(run)
         return runs
@@ -435,7 +535,7 @@ class Orchestrator:
         checkpoint continues to surface in the Models tab; disk cleanup
         of the model itself is a separate Models-tab action.
 
-        If the run produced no checkpoints (failed pull, aborted before
+        If the run produced no checkpoints (failed pull, stopped before
         first save), the whole dir is removed — nothing to preserve.
 
         Returns ``{"run_id": str, "metadata_bytes_freed": int,
@@ -589,7 +689,7 @@ class Orchestrator:
     def _emit_event(client: TransportClient, events_path: Path, type_: str, **fields: Any) -> None:
         """Append a JSON event line to the host's events.jsonl via the
         transport. Used by the orchestrator for its own event emits
-        (``started`` / ``image_*`` / ``aborted_by_user`` / ``crashed`` /
+        (``started`` / ``image_*`` / ``aborted_by_user`` / ``stopped`` / ``crashed`` /
         ``completed_naturally``). The worker still uses the direct-file
         :func:`runs.append_event` because it runs inside the container
         with local filesystem access.
@@ -703,7 +803,7 @@ class Orchestrator:
             self._maybe_teardown_ephemeral(run, paths)
             return
         # Race check: did the user stop us between image-prep and launch?
-        # (stop() on PENDING transitions directly to ABORTED.)
+        # (stop() on PENDING transitions directly to STOPPED.)
         run = self._runs.load(run_id)
         if run is None or run.state != RunState.PENDING:
             logger.info(
@@ -885,8 +985,8 @@ class Orchestrator:
         terminal_event = self._read_terminal_event(client, paths.events_jsonl)
         if terminal_event == "completed_naturally" and run.state != RunState.COMPLETED:
             run.advance(RunState.COMPLETED)
-        elif terminal_event == "aborted_by_user" and run.state != RunState.ABORTED:
-            run.advance(RunState.ABORTED)
+        elif terminal_event in {"aborted_by_user", "stopped"} and run.state != RunState.STOPPED:
+            run.advance(RunState.STOPPED)
         elif terminal_event == "crashed" and run.state != RunState.FAILED:
             run.advance(RunState.FAILED)
         elif (
@@ -932,9 +1032,9 @@ class Orchestrator:
             # GUI-restarted-after-completion case where the terminal event
             # exists but artifacts were never localized.
             self._fetch_run_artifacts(client, run, paths)
-        elif terminal_event == "aborted_by_user":
-            if run.state != RunState.ABORTED:
-                run.advance(RunState.ABORTED)
+        elif terminal_event in {"aborted_by_user", "stopped"}:
+            if run.state != RunState.STOPPED:
+                run.advance(RunState.STOPPED)
                 self._runs.save(run)
         elif terminal_event == "crashed":
             if run.state != RunState.FAILED:
@@ -947,32 +1047,41 @@ class Orchestrator:
             self._write_terminal_event_from_exit(client, run, paths)
 
     def _write_terminal_event_from_exit(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
-        """Process exited without writing a terminal event. Decide whether
-        to call it ``completed_naturally`` or ``crashed`` based on exit
-        code first (authoritative when available), then artifacts.
+        """Process exited without writing a terminal event. Classify it as
+        completed, stopped, or failed from exit status and recovery state.
 
         Order of evidence:
           1. Stop intent (``state==COMPLETING``) → ``aborted_by_user``.
           2. Exit code from the transport, if known (i.e. the worker is
-             still our subprocess and we have the Popen). Non-zero =>
-             ``crashed`` with stderr tail as error; zero => ``completed``.
-          3. Fallback (post-GUI-restart, no Popen): checkpoint heuristic.
+             still our subprocess and we have the Popen). Zero means
+             ``completed`` (including deliberate early stopping). A
+             non-zero exit is ``stopped`` only when a validated checkpoint
+             can resume it; otherwise it is ``failed``.
+          3. Fallback (post-GUI-restart, no Popen): configured target plus
+             validated checkpoint state. A model file alone is not enough
+             to promise resume.
 
         ``final_step`` is derived from the latest checkpoint (max step
         across discovered dirs) when present; otherwise progress.json.
         The previous code trusted progress.json alone, which the real
         lerobot-train never writes, so completed runs reported step 0.
 
-        Aborted runs (state==COMPLETING after a Stop) → ``aborted_by_user``.
+        Intentional stops (state==COMPLETING after Stop) retain the
+        ``aborted_by_user`` event for event-log compatibility, but expose
+        the user-facing ``stopped`` state.
         """
         if run.state == RunState.COMPLETING:
             self._emit_event(client, paths.events_jsonl, "aborted_by_user")
-            run.advance(RunState.ABORTED)
+            run.advance(RunState.STOPPED)
             self._runs.save(run)
             return
 
-        ckpt_steps = [step for _, step in self._iter_checkpoint_dirs(client, run, paths)]
+        checkpoints = list(self._iter_checkpoint_dirs(client, run, paths))
+        ckpt_steps = [step for _, step in checkpoints]
         ckpt_count = len(ckpt_steps)
+        resumable_steps = [
+            step for checkpoint, step in checkpoints if self._checkpoint_is_resumable(client, checkpoint)
+        ]
         progress = self._read_progress(client, paths.progress_json) or {}
         progress_step = progress.get("step", 0) if isinstance(progress, dict) else 0
         # Latest checkpoint step beats progress.json: lerobot-train doesn't
@@ -990,30 +1099,124 @@ class Orchestrator:
         if run.session_id is not None:
             code = client.exit_code(run.session_id)
 
-        if code is not None and code != 0:
-            stderr_tail = self._read_stderr_tail(client, paths.stderr_log, 4096)
-            run.error = f"exit code {code}\n{stderr_tail}".strip()
+        expected_steps = _expected_total_steps(run)
+        before_target = expected_steps is not None and final_step < expected_steps
+        stderr_tail = self._read_stderr_tail(client, paths.stderr_log, 4096)
+
+        if code == 0:
+            # A clean process exit is completion even below the configured
+            # maximum: early stopping is a valid training strategy.
+            self._emit_event(client, paths.events_jsonl, "completed_naturally", final_step=final_step)
+            run.advance(RunState.COMPLETED)
+            self._fetch_run_artifacts(client, run, paths)
+        elif resumable_steps and (code is not None or before_target):
+            reason = (
+                f"exit code {code}" if code is not None else "process disappeared before training completed"
+            )
+            target = f"/{expected_steps}" if expected_steps is not None else ""
+            run.error = (
+                f"{reason} (last checkpoint step {max(resumable_steps)}{target}); "
+                f"resume is available\n{stderr_tail}"
+            ).strip()
             self._emit_event(
                 client,
                 paths.events_jsonl,
-                "crashed",
-                error=f"exit code {code}",
-                final_step=final_step,
+                "stopped",
+                error=f"{reason}: checkpoint step {max(resumable_steps)}{target}",
+                final_step=max(resumable_steps),
             )
-            run.advance(RunState.FAILED)
-            self._runs.save(run)
-            return
-
-        if code == 0 or ckpt_count > 0:
-            # Clean exit, or unknown-exit-code-but-has-checkpoints fallback.
+            run.advance(RunState.STOPPED)
+        elif code is None and ckpt_count > 0 and not before_target:
+            # After a GUI restart there may be no exit code. Reaching the
+            # configured target (or a legacy run with no recorded target)
+            # is the strongest completion evidence available.
             self._emit_event(client, paths.events_jsonl, "completed_naturally", final_step=final_step)
             run.advance(RunState.COMPLETED)
             self._fetch_run_artifacts(client, run, paths)
         else:
-            run.error = "process exited without writing a checkpoint"
+            reason = f"exit code {code}" if code is not None else "process exited"
+            checkpoint_note = (
+                " without a resumable checkpoint" if ckpt_count else " without writing a checkpoint"
+            )
+            run.error = f"{reason}{checkpoint_note}\n{stderr_tail}".strip()
             self._emit_event(client, paths.events_jsonl, "crashed", error=run.error, final_step=final_step)
             run.advance(RunState.FAILED)
         self._runs.save(run)
+
+    def _repair_legacy_terminal_state(
+        self,
+        run: Run,
+        paths: RunPaths,
+        client: TransportClient,
+    ) -> bool:
+        """Migrate old interrupted runs to ``stopped`` when resume is safe.
+
+        Two old representations are repaired:
+
+        * ``completed`` from the former "any checkpoint = success" fallback;
+        * ``failed`` records previously produced by that repair.
+
+        This is deliberately narrow: an arbitrary failed run with a
+        checkpoint is not relabelled. It must carry the known legacy
+        incomplete-training event and a checkpoint that contains both
+        ``training_state`` and ``pretrained_model/train_config.json``.
+        """
+        expected_steps = _expected_total_steps(run)
+        if expected_steps is None:
+            return False
+        terminal = next(
+            (
+                event
+                for event in reversed(self._read_events(client, paths.events_jsonl))
+                if event.get("type") in {"completed_naturally", "aborted_by_user", "stopped", "crashed"}
+            ),
+            None,
+        )
+        if terminal is None:
+            return False
+        terminal_type = terminal.get("type")
+        legacy_false_completion = (
+            run.state == RunState.COMPLETED
+            and terminal_type == "completed_naturally"
+            and terminal.get("exit_code") != 0
+        )
+        terminal_error = str(terminal.get("error", ""))
+        legacy_failed_repair = (
+            run.state == RunState.FAILED
+            and terminal_type == "crashed"
+            and terminal_error.startswith("corrected incomplete training:")
+        )
+        if not (legacy_false_completion or legacy_failed_repair):
+            return False
+        final_step = terminal.get("final_step")
+        if not isinstance(final_step, (int, float)) or final_step >= expected_steps:
+            return False
+        resumable_steps = [
+            step
+            for checkpoint, step in self._iter_checkpoint_dirs(client, run, paths)
+            if step <= int(final_step) and self._checkpoint_is_resumable(client, checkpoint)
+        ]
+        if not resumable_steps:
+            return False
+        resumable_step = max(resumable_steps)
+
+        # This is a narrowly-scoped persisted-state repair, not a normal
+        # state-machine transition: terminal states intentionally have no
+        # outgoing transitions.
+        run.state = RunState.STOPPED
+        stderr_tail = self._read_stderr_tail(client, paths.stderr_log, 4096)
+        run.error = (
+            f"process disappeared before training completed "
+            f"(last checkpoint step {resumable_step}/{expected_steps}); resume is available\n{stderr_tail}"
+        ).strip()
+        self._emit_event(
+            client,
+            paths.events_jsonl,
+            "stopped",
+            error=f"corrected incomplete training: step {resumable_step}/{expected_steps}",
+            final_step=resumable_step,
+        )
+        return True
 
     def _fetch_run_artifacts(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
         """Localize the run's checkpoint files onto the GUI server.
@@ -1176,6 +1379,22 @@ class Orchestrator:
         yield from pairs
 
     @staticmethod
+    def _checkpoint_is_resumable(client: TransportClient, checkpoint: Path) -> bool:
+        """Return whether ``checkpoint`` carries LeRobot resume state.
+
+        A model artifact alone can be used for inference but cannot safely
+        continue optimizer/scheduler state. Keep that distinction explicit
+        when deciding whether an interruption is recoverable. Directory
+        inspection goes through the transport so local and SSH-hosted runs
+        use the same validation.
+        """
+        children = {child.name: child for child in client.list_dir(checkpoint)}
+        if "training_state" not in children or "pretrained_model" not in children:
+            return False
+        pretrained_children = {child.name for child in client.list_dir(children["pretrained_model"])}
+        return "train_config.json" in pretrained_children
+
+    @staticmethod
     def _read_progress(client: TransportClient, progress_path: Path) -> dict[str, Any] | None:
         text = client.read_text(progress_path)
         if text is None:
@@ -1334,12 +1553,14 @@ class Orchestrator:
     @staticmethod
     def _read_terminal_event(client: TransportClient, events_path: Path) -> str | None:
         """Scan events.jsonl for a terminal event type. Returns the type name
-        or None. Terminal events: completed_naturally / aborted_by_user / crashed.
+        or None. Terminal events: completed_naturally / aborted_by_user /
+        stopped / crashed.
         """
         text = client.read_text(events_path)
         if text is None:
             return None
-        terminal = {"completed_naturally", "aborted_by_user", "crashed"}
+        terminal = {"completed_naturally", "aborted_by_user", "stopped", "crashed"}
+        latest: str | None = None
         for line in text.splitlines():
             line = line.strip()
             if not line:
@@ -1349,11 +1570,22 @@ class Orchestrator:
             except json.JSONDecodeError:
                 continue
             if evt.get("type") in terminal:
-                return evt["type"]
-        return None
+                latest = evt["type"]
+        return latest
 
 
 # ── Module helpers ────────────────────────────────────────────────────────────
+
+
+def _expected_total_steps(run: Run) -> int | None:
+    value = run.args.get("steps", run.args.get("num_steps"))
+    if isinstance(value, bool):
+        return None
+    try:
+        steps = int(value)
+    except (TypeError, ValueError):
+        return None
+    return steps if steps > 0 else None
 
 
 def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
@@ -1386,7 +1618,7 @@ def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
     ]
     # Has-model probe — look for ANY .safetensors anywhere under
     # output/checkpoints/. If none, this is a no-model run (failed early
-    # or aborted before the first save) and the whole dir is dead weight.
+    # or stopped before the first save) and the whole dir is dead weight.
     ckpt_dir = (
         paths.checkpoints_dir
         if not (paths.root / "output").exists()

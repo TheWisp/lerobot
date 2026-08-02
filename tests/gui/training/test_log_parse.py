@@ -13,6 +13,7 @@ import math
 
 import pytest
 
+from lerobot.common.training_log import TrainingHealthTracker, format_training_log_record
 from lerobot.gui.training.log_parse import (
     ProgressSample,
     parse_metric_sample,
@@ -41,6 +42,27 @@ def test_progress_eta_unknown_is_none():
     assert s.step == 0
     assert s.total_steps == 10000
     assert s.eta_seconds is None
+
+
+def test_progress_structured_record():
+    record = format_training_log_record(
+        step=600,
+        total_steps=50_000,
+        eta_seconds=11_954.8,
+        loss=0.5179,
+    )
+    line = f"2026-07-24 06:34:18,471 [INFO] readable text | {record}"
+
+    assert parse_progress(line) == ProgressSample(step=600, total_steps=50_000, eta_seconds=11_954.8)
+
+
+def test_progress_legacy_hvla_step_record():
+    line = (
+        "2026-07-24 06:34:18,471 [INFO] "
+        "step 600/50000 | loss: 0.5179 | flow_loss: 0.5179 | lr: 1.5e-05 | 242ms"
+    )
+
+    assert parse_progress(line) == ProgressSample(step=600, total_steps=50_000, eta_seconds=11_954.8)
 
 
 @pytest.mark.parametrize(
@@ -95,6 +117,116 @@ def test_metric_sample_real_lerobot_line():
     assert bag["loss"] == pytest.approx(0.034)
     assert bag["grdn"] == pytest.approx(1.234)
     assert bag["lr"] == pytest.approx(1e-5)
+
+
+def test_metric_sample_captures_lerobot_throughput_name():
+    bag = parse_metric_sample("step:100 loss:0.2 updt_s:0.12 data_s:0.01 smp/s:61")
+
+    assert bag["smp/s"] == pytest.approx(61)
+
+
+def test_metric_sample_structured_record():
+    record = format_training_log_record(
+        step=600,
+        total_steps=50_000,
+        loss=0.5179,
+        flow_loss=0.5179,
+        grdn=1.234,
+        lr=1.5e-05,
+        updt_s=0.2,
+        data_s=0.042,
+        samples_per_s=66.1,
+        mem_gb=7.8,
+        step_time_ms=242.0,
+    )
+    bag = parse_metric_sample(f"2026-07-24 06:34:18,471 [INFO] readable text | {record}")
+
+    assert bag == {
+        "step": 600.0,
+        "total_steps": 50_000.0,
+        "loss": pytest.approx(0.5179),
+        "flow_loss": pytest.approx(0.5179),
+        "grdn": pytest.approx(1.234),
+        "lr": pytest.approx(1.5e-05),
+        "updt_s": pytest.approx(0.2),
+        "data_s": pytest.approx(0.042),
+        "samples_per_s": pytest.approx(66.1),
+        "mem_gb": pytest.approx(7.8),
+        "step_time_ms": 242.0,
+    }
+
+
+def test_custom_trainer_health_record_round_trips_through_parser():
+    timestamps = iter((10.0, 12.0))
+    tracker = TrainingHealthTracker(
+        batch_size=8,
+        total_steps=100,
+        clock=lambda: next(timestamps),
+        peak_memory_gb=lambda: 4.5,
+    )
+    tracker.step()
+
+    sample = tracker.sample(step=1, values={"loss": 0.25, "grdn": 1.5, "lr": 1e-5})
+    bag = parse_metric_sample(sample.record)
+
+    assert bag is not None
+    assert bag["step"] == 1
+    assert bag["total_steps"] == 100
+    assert bag["loss"] == pytest.approx(0.25)
+    assert bag["grdn"] == pytest.approx(1.5)
+    assert bag["samples_per_s"] == pytest.approx(4.0)
+    assert bag["mem_gb"] == pytest.approx(4.5)
+
+
+def test_metric_sample_legacy_hvla_step_record():
+    line = (
+        "2026-07-24 06:34:18,471 [INFO] "
+        "step 600/50000 | loss: 0.5179 | flow_loss: 0.5179 | lr: 1.5e-05 | 242ms"
+    )
+    bag = parse_metric_sample(line)
+
+    assert bag == {
+        "step": 600.0,
+        "loss": pytest.approx(0.5179),
+        "flow_loss": pytest.approx(0.5179),
+        "lr": pytest.approx(1.5e-05),
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"version":2,"step":1,"total_steps":10,"loss":0.5}',
+        '{"version":true,"step":1,"total_steps":10,"loss":0.5}',
+        '{"version":1,"step":-1,"total_steps":10,"loss":0.5}',
+        '{"version":1,"step":1.5,"total_steps":10,"loss":0.5}',
+        '{"version":1,"step":1,"total_steps":0,"loss":0.5}',
+        '{"version":1,"step":1,"total_steps":10,"eta_seconds":-1,"loss":0.5}',
+        '{"version":1,"total_steps":10,"loss":0.5}',
+        '{"version":1,"step":1,"loss":0.5}',
+        '{"version":1,"step":1,"total_steps":10,"loss":0.5} trailing',
+        "not-json",
+    ],
+)
+def test_structured_record_rejects_unknown_or_invalid_payload(payload):
+    line = f"2026-07-24 06:34:18,471 [INFO] step 7/10 | loss: 0.5 | LEROBOT_TRAINING_JSON:{payload}"
+    assert parse_progress(line) is None
+    assert parse_metric_sample(line) is None
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error"),
+    [
+        ({"step": -1, "total_steps": 10}, ValueError),
+        ({"step": 1.5, "total_steps": 10}, ValueError),
+        ({"step": 1, "total_steps": 0}, ValueError),
+        ({"step": 1, "total_steps": 10, "loss": float("inf")}, ValueError),
+        ({"step": 1, "total_steps": 10, "loss": "bad"}, TypeError),
+    ],
+)
+def test_structured_record_writer_rejects_invalid_values(kwargs, error):
+    with pytest.raises(error):
+        format_training_log_record(**kwargs)
 
 
 def test_metric_sample_billion_suffix_not_dropped():
@@ -253,6 +385,48 @@ def test_ingest_writes_progress_and_metrics(tmp_path):
     assert [s["step"] for s in series] == [100, 250]
     assert series[-1]["loss"] == pytest.approx(0.3)
     assert series[-1]["grdn"] == pytest.approx(1.5)
+
+
+@pytest.mark.parametrize("structured", [True, False], ids=["structured", "legacy"])
+def test_ingest_hvla_progress_and_metrics(tmp_path, structured):
+    from lerobot.gui.training.hosts import HostRegistry
+    from lerobot.gui.training.orchestrator import Orchestrator
+    from lerobot.gui.training.runs import RunPaths, RunRegistry
+    from lerobot.gui.training.transport import SubprocessClient, SubprocessTransport
+
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(HostRegistry(hosts=[]), rr)
+    paths = RunPaths.for_run("hvla", rr.runs_dir)
+    paths.ensure_exists()
+
+    def line(step, loss):
+        readable = (
+            f"2026-07-24 06:34:18,471 [INFO] step {step}/50000 | "
+            f"loss: {loss:.4f} | flow_loss: {loss:.4f} | lr: 1.5e-05 | 242ms"
+        )
+        if not structured:
+            return readable
+        record = format_training_log_record(
+            step=step,
+            total_steps=50_000,
+            loss=loss,
+            flow_loss=loss,
+            lr=1.5e-05,
+            step_time_ms=242.0,
+        )
+        return f"{readable} | {record}"
+
+    paths.stderr_log.write_text(line(500, 0.4977) + "\n" + line(600, 0.5179) + "\n")
+    client = SubprocessClient(SubprocessTransport(workdir=paths.root))
+
+    orch._ingest_training_log(client, paths)
+
+    progress = orch._read_progress(client, paths.progress_json)
+    assert progress["step"] == 600
+    assert progress["total_steps"] == 50_000
+    series = orch._read_metrics(paths.metrics_jsonl)
+    assert [sample["step"] for sample in series] == [500, 600]
+    assert series[-1]["loss"] == pytest.approx(0.5179)
 
 
 def test_ingest_glued_real_lerobot_lines(tmp_path):

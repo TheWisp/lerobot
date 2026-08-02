@@ -18,6 +18,8 @@
 //   // synced crosshair across several charts: give them the same group
 //   drawChart('a', { series, syncGroup: 'rlt', latestStep: 1200, timestamps });
 //   drawChart('b', { series, syncGroup: 'rlt', latestStep: 1200, timestamps });
+//   // Sparse samples: xValues prevents "N samples == N consecutive steps".
+//   drawChart('loss', { series, syncGroup: 'training', xValues: [1, 100, 200] });
 //
 // Options:
 //   series:     [{ data:[Number], color, label?, percentage?, hideLine?,
@@ -28,11 +30,15 @@
 //   percentage: format values/labels as N% (per-chart default; series can override).
 //   timestamps: [unixSeconds] aligned to the longest series, for the hover label.
 //   latestStep: global step of the newest point, for the hover "step N" label.
+//   xValues:    numeric X coordinates aligned to every series data array.
+//               Use for sparse samples such as metrics logged every 100 steps.
 
-const _chartGroups = {}; // group name -> { hoverIndex, latestStep, charts: {canvasId: spec} }
+const _chartGroups = {}; // group name -> { hoverIndex, latestStep, xValues, charts: {canvasId: spec} }
 
 function _chartGroup(name) {
-  if (!_chartGroups[name]) _chartGroups[name] = { hoverIndex: -1, latestStep: 0, charts: {} };
+  if (!_chartGroups[name]) {
+    _chartGroups[name] = { hoverIndex: -1, latestStep: 0, xValues: [], charts: {} };
+  }
   return _chartGroups[name];
 }
 
@@ -58,9 +64,14 @@ function _chartFmtValue(v) {
   return a < 1 ? v.toFixed(4) : v.toFixed(3);
 }
 
+function _chartIsFiniteValue(value) {
+  return value != null && Number.isFinite(Number(value));
+}
+
 // Longest series across all charts in a group → shared X axis. Charts are
 // right-aligned: a short series occupies the right portion of the canvas.
 function _chartGroupN(group) {
+  if (group.xValues && group.xValues.length) return group.xValues.length;
   let maxN = 1;
   for (const spec of Object.values(group.charts)) {
     for (const s of spec.series) {
@@ -71,17 +82,55 @@ function _chartGroupN(group) {
   return maxN;
 }
 
+function _chartStepAtIndex(group, index) {
+  if (group?.xValues?.length && index >= 0 && index < group.xValues.length) {
+    return group.xValues[index];
+  }
+  return (group?.latestStep || 0) - (_chartGroupN(group) - 1 - index);
+}
+
+function _chartHoverIndex(group, fraction) {
+  const N = _chartGroupN(group);
+  if (!group.xValues || group.xValues.length !== N) {
+    return Math.min(N - 1, Math.max(0, Math.round(fraction * (N - 1))));
+  }
+  const first = group.xValues[0];
+  const last = group.xValues[N - 1];
+  const target = first + Math.min(1, Math.max(0, fraction)) * (last - first);
+  let nearest = 0;
+  let nearestDistance = Math.abs(group.xValues[0] - target);
+  for (let i = 1; i < N; i++) {
+    const distance = Math.abs(group.xValues[i] - target);
+    if (distance < nearestDistance) {
+      nearest = i;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
 // Public entry point. Registers/updates the chart in its group and (re)draws
 // every chart in that group so a shared crosshair stays in sync.
 function drawChart(canvasId, opts) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
-  const series = (opts.series || []).filter((s) => s.data && s.data.length > 0);
+  const series = (opts.series || []).filter(
+    (s) => s.data && s.data.some(_chartIsFiniteValue),
+  );
   if (series.length === 0) return;
 
   const groupName = opts.syncGroup || canvasId;
   const group = _chartGroup(groupName);
   if (opts.latestStep != null) group.latestStep = opts.latestStep;
+  if (
+    opts.xValues?.length &&
+    opts.xValues.every((value, index) => {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) && (index === 0 || numeric >= Number(opts.xValues[index - 1]));
+    })
+  ) {
+    group.xValues = opts.xValues.map(Number);
+  }
 
   // Size the backing store for crisp lines on HiDPI.
   const dpr = window.devicePixelRatio || 1;
@@ -96,7 +145,9 @@ function drawChart(canvasId, opts) {
   const logY = !!opts.logY;
   const proj = (v) => (logY ? Math.log10(Math.max(v, 1e-9)) : v);
   let allVals = [];
-  for (const s of series) allVals = allVals.concat(s.data);
+  for (const s of series) {
+    allVals = allVals.concat(s.data.filter(_chartIsFiniteValue).map(Number));
+  }
   const min = opts.fixedMin !== undefined ? opts.fixedMin : Math.min(...allVals.map(proj));
   const max = opts.fixedMax !== undefined ? opts.fixedMax : Math.max(...allVals.map(proj));
 
@@ -121,8 +172,7 @@ function drawChart(canvasId, opts) {
       const spec = group.charts[canvasId];
       if (!spec) return;
       const x = e.clientX - canvas.getBoundingClientRect().left;
-      const N = _chartGroupN(group);
-      group.hoverIndex = Math.min(N - 1, Math.max(0, Math.round((x / spec.W) * (N - 1))));
+      group.hoverIndex = _chartHoverIndex(group, x / spec.W);
       _redrawGroup(group);
     });
     canvas.addEventListener("mouseleave", () => {
@@ -172,7 +222,14 @@ function _renderChart(spec) {
 
   const projY = (v) => (spec.logY ? Math.log10(Math.max(v, 1e-9)) : v);
   const toY = (v) => pad + (H - 2 * pad) * (1 - (projY(v) - min) / range);
-  const toXGlobal = (i) => (i / Math.max(N - 1, 1)) * W;
+  const toXGlobal = (i) => {
+    if (group?.xValues?.length === N) {
+      const first = group.xValues[0];
+      const xRange = group.xValues[N - 1] - first;
+      return xRange > 0 ? ((group.xValues[i] - first) / xRange) * W : 0;
+    }
+    return (i / Math.max(N - 1, 1)) * W;
+  };
   const globalIdx = (s, localIdx) => N - s.data.length + localIdx;
 
   // Optional min/max band fill (a pair of series tagged bandPair).
@@ -193,11 +250,17 @@ function _renderChart(spec) {
     ctx.strokeStyle = s.color;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
+    let drawing = false;
     for (let i = 0; i < s.data.length; i++) {
+      if (!_chartIsFiniteValue(s.data[i])) {
+        drawing = false;
+        continue;
+      }
       const x = toXGlobal(globalIdx(s, i));
       const y = toY(s.data[i]);
-      if (i === 0) ctx.moveTo(x, y);
+      if (!drawing) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
+      drawing = true;
     }
     ctx.stroke();
   }
@@ -230,9 +293,14 @@ function _renderChart(spec) {
         continue;
       }
     } else {
-      localIdx = s.data.length - 1;
+      localIdx = s.data.findLastIndex(_chartIsFiniteValue);
     }
     const v = s.data[localIdx];
+    if (!_chartIsFiniteValue(v)) {
+      ctx.fillStyle = s.color;
+      ctx.fillText("—", W - 4, 12 + i * 12);
+      continue;
+    }
     const pct = s.percentage != null ? s.percentage : spec.percentage;
     ctx.fillStyle = s.color;
     ctx.fillText(pct ? (v * 100).toFixed(0) + "%" : _chartFmtValue(v), W - 4, 12 + i * 12);
@@ -242,8 +310,7 @@ function _renderChart(spec) {
   ctx.fillStyle = "#444";
   ctx.textAlign = "left";
   if (hoverIndex >= 0) {
-    const latestStep = group ? group.latestStep : 0;
-    const globalStep = latestStep - (N - 1 - hoverIndex);
+    const globalStep = _chartStepAtIndex(group, hoverIndex);
     const ts = spec.timestamps;
     const tsLocalIdx = hoverIndex - (N - ts.length);
     const t = tsLocalIdx >= 0 && tsLocalIdx < ts.length ? ts[tsLocalIdx] : null;

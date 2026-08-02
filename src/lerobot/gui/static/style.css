@@ -1324,12 +1324,40 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
+.training-state-badge:focus-visible {
+    outline: 2px solid #80ccff;
+    outline-offset: 2px;
+}
 .training-state-pending    { background: #4a4a4a; color: #ccc; }
 .training-state-running    { background: #2a4a5a; color: #80ccff; }
 .training-state-completing { background: #5a4a2a; color: #f0c040; }
 .training-state-completed  { background: #2a5a2a; color: #80f080; }
+.training-state-stopped    { background: #5a4a2a; color: #f0c040; }
 .training-state-failed     { background: #5a2a2a; color: #f08080; }
-.training-state-aborted    { background: #4a4a4a; color: #aaa; }
+.training-state-tooltip {
+    position: fixed;
+    z-index: 10050;
+    width: max-content;
+    max-width: min(300px, calc(100vw - 16px));
+    padding: 8px 10px;
+    border: 1px solid #3b4b70;
+    border-radius: 6px;
+    background: #11182b;
+    color: #d8deee;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    font-size: 12px;
+    line-height: 1.4;
+    text-transform: none;
+    letter-spacing: normal;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 100ms ease;
+}
+.training-state-tooltip.visible {
+    opacity: 1;
+    visibility: visible;
+}
 .training-run-row:hover { background: #1a2640; }
 
 /* ── Training panel — sidebar row + detail pane ───────────────────────────── */
@@ -1543,6 +1571,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     letter-spacing: 0.5px;
     font-weight: 600;
 }
+.training-card-heading-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+.training-card-heading-row .training-card-heading {
+    margin-bottom: 0;
+}
 
 /* Stats row inside a card */
 .training-stats-row {
@@ -1562,6 +1600,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     font-weight: 600;
     color: #e8e8e8;
     margin-top: 2px;
+}
+.training-stat-value-compact {
+    font-size: 15px;
+    line-height: 22px;
+    white-space: nowrap;
 }
 .training-progress-bar {
     position: relative;
@@ -1587,17 +1630,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
-/* Metric charts (hand-rolled inline SVG; no charting dependency) */
+/* Metric charts (shared canvas renderer; no charting dependency) */
 .training-charts {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
 }
 .training-chart {
     background: var(--bg-primary, #252526);
     border: 1px solid #1a3a6a;
     border-radius: 6px;
     padding: 8px 10px;
+}
+.training-chart-wide {
+    grid-column: 1 / -1;
 }
 .training-chart-title {
     font-size: 11px;
@@ -1616,12 +1662,31 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     height: 96px;
     display: block;
 }
+.training-chart-empty {
+    height: 96px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #666;
+    font-size: 12px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.08);
+}
 .training-chart-axis {
     display: flex;
     justify-content: space-between;
     font-size: 10px;
     color: #666;
     margin-top: 2px;
+}
+
+@media (max-width: 760px) {
+    .training-charts {
+        grid-template-columns: 1fr;
+    }
+    .training-chart-wide {
+        grid-column: auto;
+    }
 }
 
 /* Checkpoints list */
@@ -1660,13 +1725,34 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .training-muted { color: #888; }
 
 .training-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
     background: #3a1a1a;
     color: #f08080;
     padding: 10px 12px;
     border-radius: 4px;
     margin-top: 12px;
     font-size: 12px;
+    cursor: copy; /* click anywhere copies the message (training.js _bindErrorCopy) */
 }
+.training-error-text {
+    flex: 1;
+    user-select: text;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.training-copy-btn {
+    flex-shrink: 0;
+    padding: 2px 10px;
+    font-size: 11px;
+    background: #5a2a2a;
+    color: #f08080;
+    border: 1px solid #7a3a3a;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.training-copy-btn:hover { background: #7a3a3a; color: #fff; }
 
 /* Form */
 .training-form {
@@ -1730,6 +1816,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     flex-direction: column;
     gap: 10px;
 }
+.training-policy-advanced {
+    margin-top: 8px;
+    border: 1px solid #1a3a6a;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.015);
+}
+.training-policy-advanced > summary {
+    padding: 9px 11px;
+    color: #888;
+    font-size: 12px;
+    cursor: pointer;
+}
+.training-policy-advanced[open] > summary {
+    border-bottom: 1px solid #1a3a6a;
+}
+.training-policy-advanced > .training-field-row {
+    padding: 11px;
+}
 .training-form-actions {
     display: flex;
     gap: 8px;
@@ -1782,4 +1886,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     margin: 0;
     justify-self: start;
     accent-color: #4fc3f7;
+}
+
+/* Training image section (start form): local-build actions + build log tail. */
+.training-image-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+.training-image-build-log {
+    background: #0d2137;
+    border: 1px solid #1a3a6a;
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 11px;
+    max-height: 140px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 8px 0 0;
 }

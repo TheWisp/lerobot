@@ -22,11 +22,13 @@ with the right runs_dir. See :func:`init_state` and :func:`get_state`.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import importlib
 import pkgutil
 import typing
+from collections import deque
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -37,8 +39,10 @@ from pydantic import BaseModel, Field
 from lerobot.gui.training.hosts import WORKSTATION_HOST_ID, HostRegistry, profile_to_training_host
 from lerobot.gui.training.jobs import HOSTS_DIR, HostProfile
 from lerobot.gui.training.orchestrator import (
+    CheckpointNotResumableError,
     HostBusyError,
     Orchestrator,
+    ResumeNotSupportedError,
     RunNotTerminalError,
     RunSnapshot,
     StartRequest,
@@ -160,6 +164,11 @@ class StartRunBody(BaseModel):
     idempotency_key: str | None = None
 
 
+class ResumeRunBody(BaseModel):
+    checkpoint_step: int | None = Field(default=None, gt=0)
+    idempotency_key: str | None = None
+
+
 class RunDTO(BaseModel):
     run_id: str
     host_id: str
@@ -193,6 +202,9 @@ class RunSnapshotDTO(BaseModel):
     # logged step, each an auto-captured {key: value} bag (loss/lr/grdn/…).
     # The dashboard charts these; distinct from `progress` (position).
     metrics: list[dict[str, float]] = []
+    # Model checkpoints and resumable training checkpoints are distinct:
+    # only these steps have validated optimizer/scheduler state + train config.
+    resumable_checkpoint_steps: list[int] = Field(default_factory=list)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -216,6 +228,7 @@ def _snapshot_to_dto(snap: RunSnapshot) -> RunSnapshotDTO:
         stderr_tail=snap.stderr_tail,
         events=list(snap.events),
         metrics=list(snap.metrics),
+        resumable_checkpoint_steps=list(snap.resumable_checkpoint_steps),
     )
 
 
@@ -404,6 +417,18 @@ def start_run(body: StartRunBody) -> RunDTO:
     service-account connection (see the ``/nebius/connection`` endpoints);
     no per-request credential is passed.
     """
+    internal_resume_keys = {
+        "__resume_checkpoint__",
+        "__resumed_from_run__",
+        "__resumed_from_step__",
+    }
+    forbidden = sorted(internal_resume_keys.intersection(body.args))
+    if forbidden:
+        raise HTTPException(
+            status_code=422,
+            detail=f"reserved internal training arguments: {', '.join(forbidden)}",
+        )
+
     orch, _ = get_state()
     try:
         run = orch.start(
@@ -435,6 +460,27 @@ def get_run(run_id: str) -> RunSnapshotDTO:
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return _snapshot_to_dto(snap)
+
+
+@router.post("/runs/{run_id}/resume", response_model=RunDTO, status_code=201)
+def resume_run(run_id: str, body: ResumeRunBody) -> RunDTO:
+    """Start a new tracked run from a complete local checkpoint."""
+    orch, _ = get_state()
+    try:
+        run = orch.resume(
+            run_id,
+            checkpoint_step=body.checkpoint_step,
+            idempotency_key=body.idempotency_key,
+        )
+    except UnknownRunError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except HostBusyError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except RunNotTerminalError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except (CheckpointNotResumableError, ResumeNotSupportedError, UnknownHostError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _run_to_dto(run)
 
 
 @router.post("/runs/{run_id}/stop", response_model=RunDTO)
@@ -469,7 +515,7 @@ def delete_run(run_id: str) -> DeleteRunResponse:
     Metadata-only delete: removes the run row from the Training list but
     keeps ``output/checkpoints/`` so the trained model continues to show
     up in the Models tab. If the run produced no model (failed pull,
-    aborted before first save), the whole dir is removed.
+    stopped before first save), the whole dir is removed.
 
     Returns 409 if the run is still active (caller must Stop first).
     Returns 404 if the run id is unknown.
@@ -854,11 +900,73 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
         "recipe": HVLA_FLOW_S1_RECIPE,
         "arg_key_prefix": "",  # HVLA's keys are bare snake_case
         "fields": [
-            {"name": "chunk_size", "label": "Chunk size", "type": "int", "default": 50},
-            {"name": "num_inference_steps", "label": "Inference steps", "type": "int", "default": 15},
-            {"name": "hidden_dim", "label": "Hidden dim", "type": "int", "default": 768},
-            {"name": "num_decoder_layers", "label": "Decoder layers", "type": "int", "default": 6},
-            {"name": "num_workers", "label": "Data workers", "type": "int", "default": 4},
+            {
+                "name": "chunk_size",
+                "label": "Action horizon (frames)",
+                "type": "int",
+                "default": 50,
+                "advanced": True,
+                "description": "Number of future actions per chunk; 50 frames is about 1.67 s at 30 FPS.",
+            },
+            {
+                "name": "num_inference_steps",
+                "label": "Denoise steps",
+                "type": "int",
+                "default": 15,
+                "advanced": True,
+                "description": "Flow-matching solver steps saved in the checkpoint; higher costs more latency.",
+            },
+            {
+                "name": "rtc_max_delay",
+                "label": "RTC max delay (frames)",
+                "type": "int",
+                "default": 6,
+                "advanced": True,
+                "description": "Largest simulated inference delay used by training-time RTC.",
+            },
+            {
+                "name": "rtc_drop_prob",
+                "label": "RTC drop probability",
+                "type": "float",
+                "default": 0.2,
+                "advanced": True,
+                "description": "Probability of training without a conditioned action prefix.",
+            },
+            {
+                "name": "resize_images",
+                "label": "Image input resolution",
+                "type": "string",
+                "default": "224x224",
+                "advanced": True,
+                "description": (
+                    "Resolution seen by the DINOv2-S/14 encoder as HxW. "
+                    "224x224 is the current recommended balance of detail and compute."
+                ),
+            },
+            {
+                "name": "hidden_dim",
+                "label": "Transformer width",
+                "type": "int",
+                "default": 768,
+                "advanced": True,
+                "description": "Model capacity; keep the tested default unless running a controlled experiment.",
+            },
+            {
+                "name": "num_decoder_layers",
+                "label": "Decoder layers",
+                "type": "int",
+                "default": 6,
+                "advanced": True,
+                "description": "Model capacity; keep the tested default unless running a controlled experiment.",
+            },
+            {
+                "name": "num_workers",
+                "label": "Data workers",
+                "type": "int",
+                "default": 4,
+                "advanced": True,
+                "description": "Parallel data loading; affects input throughput, not the learned model.",
+            },
         ],
         # Make explicit which form keys map to the trainer's CLI; the
         # frontend doesn't need to know but it's useful in tests + docs.
@@ -911,3 +1019,206 @@ def list_policies() -> list[dict]:
         external = {k: v for k, v in entry.items() if not k.startswith("_")}
         schemas.append(external)
     return schemas
+
+
+# ============================================================================
+# Training image: status (provenance + freshness) and local build
+# ============================================================================
+
+# The training worker runs code baked into a docker image, NOT the checkout
+# the GUI serves (see docker/Dockerfile.training: COPY src/ + uv sync). The
+# image the run will use is a hand-bumped constant (recipes.DEFAULT_IMAGE),
+# so it silently drifts behind the checkout. These endpoints make the image
+# and its staleness visible, and let local dev build/select an image from
+# the current checkout instead.
+
+LOCAL_DEV_IMAGE_TAG = "lerobot-training:dev-local"
+
+
+def _git(args: list[str], cwd: Path) -> str | None:
+    """Run a git command, returning stdout.strip() or None on any failure."""
+    import subprocess
+
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _repo_root() -> Path | None:
+    """Repo root when the GUI serves from a git checkout, else None.
+
+    Freshness comparison is only meaningful on the dev machine; a pip-installed
+    GUI (no .git) must not show "N commits behind" — there is no local history
+    to be behind relative to.
+    """
+    import lerobot
+
+    root = Path(lerobot.__file__).resolve().parent.parent.parent
+    return root if (root / ".git").exists() else None
+
+
+def _local_image_created(tag: str) -> str | None:
+    """ISO creation date of a locally-present docker image, None when absent/unavailable."""
+    return _docker_image_inspect(tag).get("created")
+
+
+def _docker_image_inspect(tag: str) -> dict:
+    """{'created': ISO date, 'revision': full git sha from OCI label} for a
+    locally-present image; empty dict when absent or docker unavailable."""
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            [
+                "docker",
+                "image",
+                "inspect",
+                tag,
+                "--format",
+                '{{.Created}} {{index .Config.Labels "org.opencontainers.image.revision"}}',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if r.returncode != 0:
+            return {}
+        parts = r.stdout.strip().split()
+        return {"created": parts[0] if parts else None, "revision": parts[1] if len(parts) > 1 else None}
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+
+
+def get_image_status() -> dict[str, Any]:
+    """Effective training image + provenance + freshness vs the local checkout.
+
+    ``git`` is None when the GUI is not served from a git checkout (e.g. a
+    pip install on a robot host) — the frontend hides the freshness section
+    in that case, per design: without local history there is nothing sensible
+    to compare against.
+    """
+    from lerobot.gui.training.recipes import DEFAULT_IMAGE
+
+    status: dict[str, Any] = {
+        "image": DEFAULT_IMAGE,
+        "local_image": {"tag": LOCAL_DEV_IMAGE_TAG, "created": _local_image_created(LOCAL_DEV_IMAGE_TAG)},
+        "git": None,
+    }
+
+    root = _repo_root()
+    if root is None:
+        return status
+
+    git_info: dict[str, Any] = {
+        "branch": _git(["rev-parse", "--abbrev-ref", "HEAD"], root),
+        "head": _git(["rev-parse", "--short=8", "HEAD"], root),
+        "head_date": _git(["show", "-s", "--format=%cI", "HEAD"], root),
+    }
+
+    # CI tags are "<branch-slug>-<short-sha>" (docker/metadata-action in
+    # docker_publish_fork_training.yml). Parse and compare against local
+    # history when the commit is known here. If the short sha is not in local
+    # history, the OCI revision label on a locally-pulled image gives the
+    # FULL sha — GitHub accepts fetching dangling commits by full sha, which
+    # brings the commit into local history and enables the count. The fetch
+    # is attempted at most once per sha (it persists in .git afterwards).
+    import re
+
+    image_meta = _docker_image_inspect(DEFAULT_IMAGE)
+    status["image_created"] = image_meta.get("created")
+    status["image_revision"] = image_meta.get("revision")
+
+    tag = DEFAULT_IMAGE.rsplit(":", 1)[-1]
+    m = re.match(r"^(?P<branch>.+)-(?P<sha>[0-9a-f]{7,8})$", tag)
+    if m:
+        git_info["image_branch"] = m.group("branch")
+        git_info["image_commit"] = m.group("sha")
+        sha = m.group("sha")
+        known = _git(["cat-file", "-t", sha], root) == "commit"
+        if not known and image_meta.get("revision"):
+            _git(["fetch", "origin", image_meta["revision"]], root)
+            sha = image_meta["revision"]
+            known = _git(["cat-file", "-t", sha], root) == "commit"
+        if known:
+            git_info["image_commit"] = sha
+            git_info["image_commit_date"] = _git(["show", "-s", "--format=%cI", sha], root)
+            behind = _git(["rev-list", "--count", f"{sha}..HEAD"], root)
+            git_info["commits_behind"] = int(behind) if behind and behind.isdigit() else None
+        else:
+            git_info["commits_behind"] = None  # provenance not in local history
+    status["git"] = git_info
+    return status
+
+
+@router.get("/image-status")
+async def image_status() -> dict:
+    return get_image_status()
+
+
+# ── Local image build (background task + polled progress) ─────────────────
+
+_build_task: asyncio.Task | None = None
+_build_lines: deque = deque(maxlen=300)
+_build_exit: int | None = None
+
+
+async def _run_image_build(repo_root: Path) -> None:
+    global _build_exit
+    _build_exit = None
+    proc = await asyncio.create_subprocess_exec(
+        "docker",
+        "build",
+        "-f",
+        "docker/Dockerfile.training",
+        "-t",
+        LOCAL_DEV_IMAGE_TAG,
+        ".",
+        cwd=str(repo_root),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    assert proc.stdout is not None
+    async for raw in proc.stdout:
+        _build_lines.append(raw.decode("utf-8", errors="replace").rstrip())
+    _build_exit = await proc.wait()
+
+
+@router.post("/build-image")
+async def build_image() -> dict:
+    """Build the training image from the current checkout (local dev path).
+
+    Long-running (tens of minutes on first build); progress is polled via
+    GET /build-image/status. Requires a git checkout to build from and a
+    working docker daemon.
+    """
+    global _build_task, _build_exit
+    from lerobot.gui.training.recipes import docker_available
+
+    if _build_task is not None and not _build_task.done():
+        raise HTTPException(409, "An image build is already running")
+    if not docker_available():
+        raise HTTPException(409, "docker is not installed on this host")
+    root = _repo_root()
+    if root is None:
+        raise HTTPException(409, "GUI is not served from a git checkout — nothing to build from")
+
+    _build_lines.clear()
+    _build_exit = None
+    _build_task = asyncio.create_task(_run_image_build(root))
+    return {"status": "started", "tag": LOCAL_DEV_IMAGE_TAG}
+
+
+@router.get("/build-image/status")
+async def build_image_status() -> dict:
+    running = _build_task is not None and not _build_task.done()
+    error = None
+    if _build_task is not None and _build_task.done() and _build_task.exception() is not None:
+        error = str(_build_task.exception())
+    return {
+        "running": running,
+        "exit_code": _build_exit,
+        "error": error,
+        "lines": list(_build_lines)[-50:],
+    }

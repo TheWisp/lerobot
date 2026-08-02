@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 from lerobot.gui.api import training as training_api
 from lerobot.gui.training.hosts import HostRegistry, TrainingHost
 from lerobot.gui.training.orchestrator import Orchestrator
-from lerobot.gui.training.runs import RunRegistry
+from lerobot.gui.training.runs import Run, RunPaths, RunRegistry, RunState
 from lerobot.gui.training.transport import SubprocessTransport
 
 
@@ -75,7 +75,7 @@ def _wait_until_state(client: TestClient, run_id: str, want: str, timeout: float
         if body["run"]["state"] == want or body["run"]["state"] in {
             "completed",
             "failed",
-            "aborted",
+            "stopped",
         }:
             return body
         time.sleep(0.05)
@@ -138,6 +138,16 @@ def test_start_run_validation_400(client: TestClient) -> None:
     assert resp.status_code == 422  # FastAPI validation error for min_length=1
 
 
+def test_start_run_rejects_internal_resume_path(client: TestClient) -> None:
+    payload = _start_run_payload()
+    payload["args"]["__resume_checkpoint__"] = "/etc"
+
+    response = client.post("/api/training/runs", json=payload)
+
+    assert response.status_code == 422
+    assert "reserved internal training arguments" in response.json()["detail"]
+
+
 def test_start_run_host_busy_409(client: TestClient) -> None:
     """Two start requests targeting the same host while the first is running →
     second gets 409."""
@@ -152,7 +162,7 @@ def test_start_run_host_busy_409(client: TestClient) -> None:
         assert "busy" in r2.json()["detail"].lower()
     finally:
         client.post(f"/api/training/runs/{r1.json()['run_id']}/stop")
-        _wait_until_state(client, r1.json()["run_id"], "aborted")
+        _wait_until_state(client, r1.json()["run_id"], "stopped")
 
 
 def test_start_run_idempotency_returns_same_id(client: TestClient) -> None:
@@ -199,6 +209,54 @@ def test_get_run_snapshot_with_checkpoints(client: TestClient) -> None:
     assert all(c["sha256"] for c in body["checkpoints"])
 
 
+# ── /runs/{id}/resume ─────────────────────────────────────────────────────────
+
+
+def test_resume_run_201(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    orch, _ = training_api.get_state()
+    source = Run(
+        run_id="resume-source",
+        host_id="test-host",
+        recipe_name="hvla",
+        dataset_id="robot/data",
+        args={"__recipe__": "hvla_flow_s1", "steps": 500},
+        state=RunState.FAILED,
+        created_at=time.time(),
+        finished_at=time.time(),
+    )
+    orch._runs.save(source)  # noqa: SLF001 - arrange API fixture state
+    paths = RunPaths.for_run(source.run_id, orch._runs.runs_dir)  # noqa: SLF001
+    checkpoint = paths.root / "output/checkpoints/checkpoint-200"
+    (checkpoint / "training_state").mkdir(parents=True)
+    pretrained = checkpoint / "pretrained_model"
+    pretrained.mkdir()
+    (pretrained / "train_config.json").write_text("{}")
+    monkeypatch.setattr(orch, "_prepare_and_launch", lambda *_args: None)
+
+    response = client.post(
+        f"/api/training/runs/{source.run_id}/resume",
+        json={"checkpoint_step": 200, "idempotency_key": "resume-api"},
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["state"] == "pending"
+    assert body["run_id"] != source.run_id
+    assert body["recipe_name"] == "hvla (resume 200)"
+
+
+def test_resume_run_missing_404(client: TestClient) -> None:
+    response = client.post(
+        "/api/training/runs/missing/resume",
+        json={"checkpoint_step": 200},
+    )
+
+    assert response.status_code == 404
+
+
 # ── /runs/{id}/stop ───────────────────────────────────────────────────────────
 
 
@@ -217,8 +275,8 @@ def test_stop_run_aborts(client: TestClient) -> None:
     time.sleep(0.3)
     resp = client.post(f"/api/training/runs/{r['run_id']}/stop")
     assert resp.status_code == 200
-    body = _wait_until_state(client, r["run_id"], "aborted")
-    assert body["run"]["state"] == "aborted"
+    body = _wait_until_state(client, r["run_id"], "stopped")
+    assert body["run"]["state"] == "stopped"
 
 
 def test_stop_run_idempotent_on_completed(client: TestClient) -> None:
@@ -310,7 +368,7 @@ def test_delete_active_run_409(client: TestClient) -> None:
     assert "stop it first" in resp.json()["detail"]
     # Cleanup
     client.post(f"/api/training/runs/{r['run_id']}/stop")
-    _wait_until_state(client, r["run_id"], "aborted")
+    _wait_until_state(client, r["run_id"], "stopped")
 
 
 def test_clear_terminal_endpoint(client: TestClient) -> None:
@@ -370,14 +428,31 @@ def test_list_policies_act_entry_has_renderable_fields(client: TestClient) -> No
 
 
 def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None:
-    """HVLA's manual entry should declare its recipe marker + bare
-    (no-prefix) arg keys."""
+    """The manual S1-without-S2 entry exposes its complete training contract."""
     catalog = client.get("/api/training/policies").json()
     hvla = next(p for p in catalog if p["type_name"] == "hvla_flow_s1")
     assert hvla["recipe"] == "hvla_flow_s1"
     assert hvla["arg_key_prefix"] == ""
-    field_names = {f["name"] for f in hvla["fields"]}
-    assert {"chunk_size", "num_inference_steps", "hidden_dim"} <= field_names
+    fields = {f["name"]: f for f in hvla["fields"]}
+    expected = {
+        "chunk_size",
+        "num_inference_steps",
+        "rtc_max_delay",
+        "rtc_drop_prob",
+        "resize_images",
+        "hidden_dim",
+        "num_decoder_layers",
+        "num_workers",
+    }
+    assert expected <= fields.keys()
+    assert fields["num_inference_steps"]["label"] == "Denoise steps"
+    assert fields["num_inference_steps"]["default"] == 15
+    assert fields["rtc_max_delay"]["default"] == 6
+    assert fields["rtc_drop_prob"]["default"] == 0.2
+    assert fields["resize_images"]["default"] == "224x224"
+    assert fields["resize_images"]["label"] == "Image input resolution"
+    assert all(field["advanced"] is True for field in fields.values())
+    assert "max_delay" not in fields  # S2 latent delay is irrelevant to this no-S2 recipe.
 
 
 def test_list_policies_skips_complex_fields(client: TestClient) -> None:
