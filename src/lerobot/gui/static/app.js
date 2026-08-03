@@ -1206,6 +1206,10 @@ function switchTab(tabName) {
     if (tabName === 'model' && typeof modelTabInit === 'function') {
         modelTabInit();
     }
+    // Notify preprocess tab
+    if (tabName === 'preprocess' && typeof preprocessTabInit === 'function') {
+        preprocessTabInit();
+    }
     // Leaving the robot tab must RELEASE the cameras, not just stop drawing them.
     // stopCameraPreview() only clears the polling interval and hides the Stop
     // Preview button; the backend keeps a V4L2 / librealsense handle per camera,
