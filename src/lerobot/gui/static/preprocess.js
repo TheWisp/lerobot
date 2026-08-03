@@ -108,6 +108,12 @@ async function _prepPoll() {
                 if (typeof window.refreshExpandedSources === 'function') {
                     window.refreshExpandedSources();
                 }
+                // The training panel caches its dataset list page-locally;
+                // refresh it too or the new derivative only shows up after a
+                // full page reload.
+                if (typeof window.trainingLoadDatasets === 'function') {
+                    window.trainingLoadDatasets();
+                }
                 return;
             }
             if (job.status === 'failed') {

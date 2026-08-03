@@ -79,6 +79,9 @@ def _create_source(root: Path, episodes: int = 2, frames_per_episode: int = 3) -
         for _ in range(frames_per_episode):
             dataset.add_frame(_make_frame())
         dataset.save_episode()
+    # finalize() flushes buffered episode metadata and info.json totals;
+    # without it the source loads back with 0 episodes.
+    dataset.finalize()
 
 
 def _run_prepare(prep, src_root: Path, out_root: Path):
@@ -172,6 +175,15 @@ class TestRefusals:
         _create_source(src_root)
         with pytest.raises(ValueError, match="differ"):
             _run_prepare(prep, src_root, src_root)
+
+    def test_refuses_output_inside_source(self, prep, tmp_path):
+        src_root = tmp_path / "src"
+        _create_source(src_root)
+        with pytest.raises(ValueError, match="inside the source"):
+            _run_prepare(prep, src_root, src_root / "prepared")
+        # No output or staging directory was created inside the source.
+        assert not (src_root / "prepared").exists()
+        assert not list(src_root.glob(".*staging*"))
 
     def test_refuses_missing_videos(self, prep, tmp_path):
         src_root = tmp_path / "src"
