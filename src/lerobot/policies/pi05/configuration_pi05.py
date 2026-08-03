@@ -85,6 +85,12 @@ class PI05Config(PreTrainedConfig):
 
     # Finetuning settings
     freeze_vision_encoder: bool = False  # Freeze only the vision encoder
+    # Freeze PaliGemma's language tower while the vision tower, the multimodal
+    # projector and the action expert keep training. Distinct from
+    # train_expert_only, which freezes the vision tower too: the cameras are
+    # exactly what needs to adapt to a new robot, the language grounding is not.
+    # Roughly halves optimizer state, which is what makes pi05 fit a single GPU.
+    freeze_language_tower: bool = False
     train_expert_only: bool = False  # Freeze entire VLM, train only action expert and projections
 
     # Optimizer settings: see openpi `AdamW`
