@@ -6,11 +6,26 @@
 
 (function () {
     let MODELS = [];
+    let SEGMENTERS = [];    // model keys valid for data editing (text-prompted segmenters)
+    let RESOLUTIONS = [];   // SAM resolution presets [{value,label}] — a load-time knob (change = respawn)
+    let TREATMENTS = [];  // per-region treatments (from /api/process/treatments); Tint/Random/Blur/None
     const panels = [];
     let livePanel = null;
 
     const PALETTE = [[239, 68, 68], [34, 197, 94], [59, 130, 246], [234, 179, 8], [168, 85, 247], [20, 184, 166]];
     const MAX_OBJECTS = 6;
+
+    // Per-tab identity for the data overlay's single-owner lease (the model + obs
+    // stream are shared, so one tab drives at a time). sessionStorage keeps ownership
+    // across a reload; a new tab gets a new token. Sent as X-Overlay-Session.
+    const OVL_SESSION = (() => {
+        try {
+            let s = sessionStorage.getItem('ovlSession');
+            if (!s) { s = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'ovl-' + Math.random().toString(36).slice(2); sessionStorage.setItem('ovlSession', s); }
+            return s;
+        } catch (e) { return 'ovl-' + Math.random().toString(36).slice(2); }
+    })();
+    const ovlHeaders = (extra) => Object.assign({ 'X-Overlay-Session': OVL_SESSION }, extra || {});
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const safeCam = (cam) => cam.replace(/\./g, '-');
 
@@ -97,8 +112,11 @@
             { el: document.getElementById('overlays-panel-run'), mode: 'live' },
         ].filter((r) => r.el);
         if (!roots.length) return;
+        // The data-editing effects live in the overlay panel now (they drive the live
+        // preview); fetch them once so the picker is ready when a model is chosen.
+        fetch('/api/process/treatments').then((r) => r.json()).then((d) => { TREATMENTS = d.treatments || []; }).catch(() => {});
         fetch('/api/overlays/models').then((r) => r.json())
-            .then((d) => { MODELS = d.models || []; build(roots); })
+            .then((d) => { MODELS = d.models || []; SEGMENTERS = d.segmenters || []; RESOLUTIONS = d.resolutions || []; build(roots); })
             .catch(() => build(roots));
     }
 
@@ -108,6 +126,18 @@
             panels.push(p);
             if (r.mode === 'live') livePanel = p;
         }
+        // The data-editing menu lives alongside the data overlay (shares its
+        // objects). Init it once; reflect the active-job count on the button.
+        if (window.ProcessData) window.ProcessData.init({ onCountChange: updateProcessButtons });
+    }
+
+    // Show the running-job count on every "Process dataset…" button so a user
+    // who closed the menu still sees work is in flight.
+    function updateProcessButtons(count) {
+        document.querySelectorAll('.overlays-process').forEach((b) => {
+            b.textContent = count > 0 ? `⚙ Process dataset… (${count} running)` : '⚙ Process dataset…';
+            b.classList.toggle('busy', count > 0);
+        });
     }
 
     function Panel(root, mode) {
@@ -119,11 +149,22 @@
         };
         let current = '';
         // Monitored objects: open-vocab name + colour + sign (+ include / − exclude).
-        let objects = [{ name: '', color: PALETTE[0], sign: '+' }];
-        let background = null;            // null = transparent; else [r,g,b]
+        // Data mode: each object is a region with its own treatment; the background is a
+        // region too (see backgroundTreatment). Objects default to None (kept as-is);
+        // background defaults to Random → the GreenAug recipe is zero-click.
+        let objects = [{ name: '', sign: '+', treatment: { key: 'none', params: {} } }];
+        let backgroundTreatment = { key: 'random', params: {} };
+        let multiInstance = true;               // data mode: segment ALL instances of each object (both arms) vs largest
+        // SAM inference resolution (a LOAD-TIME knob: changing it respawns the worker; the
+        // batch job inherits it so preview == commit). Default to the backend's default preset.
+        let resolution = (RESOLUTIONS.find((r) => /default/i.test(r.label || '')) || RESOLUTIONS[0] || { value: null }).value;
+        let background = null;            // run mode only: contour-view fill; null = transparent, else [r,g,b]
         let nameTimer = null;
         let status = { state: 'idle' };
         let pollTimer = null;
+        let overlayES = null;            // data: SSE stream that pushes overlay-ready → instant re-pull (vs the 500ms poll)
+        const pullGate = window.OverlayPullGate ? window.OverlayPullGate.create() : null;  // seq-gated overlay pulls (see overlay_pull_gate.js)
+        let wasBusy = false;             // data: another tab owns the overlay (lease); auto-resume when freed
         let started = false;             // live: standalone launched
         let dataVersion = 0;             // data: cache-buster, bumped on config change so scrubbing re-pulls
         let frameTick = 0;               // data: increments each overlay re-pull so the lagging worker result refreshes
@@ -138,6 +179,9 @@
         let lastDiag = '';               // last frontend-state signature reported to the server log (dedup)
 
         for (const m of MODELS) {
+            // Data mode edits pixels via a segmenter; overlay-only steps (policy saliency
+            // reads the RUNNING policy) can't produce anything there — don't offer them.
+            if (mode === 'data' && SEGMENTERS.length && !SEGMENTERS.includes(m.key)) continue;
             const o = document.createElement('option');
             o.value = m.key; o.textContent = m.label;
             els.picker.appendChild(o);
@@ -160,16 +204,16 @@
         // step like policy_attention is "ready" without one — don't gate its launch on the object field.
         const requiresObjects = () => (modelSpec(current)?.controls || []).some((c) => c.type === 'objects');
         const objectsReady = () => !requiresObjects() || namedObjects().length > 0;
-        // What goes to the backend: named objects (with colour/sign), or the implicit
-        // "object" default coloured from row 0 so the palette still drives it.
+        // What goes to the backend: named objects with their per-region treatment + sign.
         function payloadObjects() {
+            const tr = (o) => o.treatment || { key: 'none', params: {} };
             const named = objects.filter((o) => (o.name || '').trim())
-                .map((o) => ({ name: o.name.trim(), color: o.color, sign: o.sign || '+' }));
+                .map((o) => ({ name: o.name.trim(), sign: o.sign || '+', treatment: tr(o) }));
             if (named.length) return named;
             const o = objects[0] || {};
-            return [{ name: 'object', color: o.color || PALETTE[0], sign: o.sign || '+' }];
+            return [{ name: 'object', sign: o.sign || '+', treatment: tr(o) }];
         }
-        const bgPayload = () => ({ color: background });
+        const bgPayload = () => ({ color: background });  // run mode only: contour-view fill
         const camsArg = () => (selectedCameras && selectedCameras.size ? [...selectedCameras] : null);
 
         function onPick(key) {
@@ -180,7 +224,7 @@
             ctl.style = ctl.smooth = ctl.method = null;
             if (!key) {
                 stopPoll();
-                if (mode === 'data') fetch('/api/overlays/data/cancel', { method: 'POST' }).catch(() => {});
+                if (mode === 'data') fetch('/api/overlays/data/cancel', { method: 'POST', headers: ovlHeaders() }).catch(() => {});
                 clearOverlays();
                 setBadge('off', 'off');
             }
@@ -199,14 +243,35 @@
             const controls = modelSpec(current)?.controls || [];
             const ctrl = controls[0] || {};
             if (ctrl.type === 'objects' || ctrl.type === 'text') {
+                const hint = mode === 'data'
+                    ? 'Each object is a region with a treatment; the <b>Background</b> row is a region too. Tile shows the live WYSIWYG result — the glow + label is a detection aid, not part of the output.'
+                    : 'Open-vocab names, each in its own colour. <b>+</b> include / <b>−</b> exclude. Name edits apply ~1s after you stop typing; colour/sign are instant.';
                 els.modelBody.innerHTML = `
                     <label class="overlays-label">${esc(ctrl.label || 'Objects')}</label>
-                    <div class="overlays-hint">Open-vocab names, each in its own colour. <b>+</b> include / <b>−</b> exclude. Name edits apply ~1s after you stop typing; colour/sign are instant.</div>
+                    <div class="overlays-hint">${hint}</div>
                     <div class="overlays-objrows"></div>
                     <button class="overlays-add-obj">+ Add object</button>
+                    ${mode === 'data' ? `<label class="overlays-check" title="On: keep every instance of each object (e.g. both robot arms). Off: keep only the single largest.">
+                        <input type="checkbox" class="overlays-multi"${multiInstance ? ' checked' : ''}> Segment all instances (e.g. both arms)</label>` : ''}
+                    ${RESOLUTIONS.length ? `<label class="overlays-label" title="SAM inference resolution — lower is faster; Balanced measured equal-or-better masks than Full at ~1.8× the speed. Changing it reloads the model.">Quality</label>
+                    <select class="overlays-select overlays-res">${RESOLUTIONS.map((r) => `<option value="${r.value}"${r.value === resolution ? ' selected' : ''}>${esc(r.label)}</option>`).join('')}</select>` : ''}
                     <label class="overlays-label">cameras</label>
-                    <div class="overlays-cameras"></div>`;
+                    <div class="overlays-cameras"></div>
+                    ${mode === 'data' ? '<button class="overlays-process" title="Apply these per-region treatments to every episode as a new dataset">⚙ Process dataset…</button>' : ''}`;
                 els.modelBody.querySelector('.overlays-add-obj').addEventListener('click', addObject);
+                const procBtn = els.modelBody.querySelector('.overlays-process');
+                if (procBtn) procBtn.addEventListener('click', openProcess);
+                const multiCb = els.modelBody.querySelector('.overlays-multi');
+                if (multiCb) multiCb.addEventListener('change', () => { multiInstance = multiCb.checked; applyInstant(); });
+                const resSel = els.modelBody.querySelector('.overlays-res');
+                if (resSel) resSel.addEventListener('change', () => {
+                    resolution = Number(resSel.value) || null;
+                    // Resolution is baked into the model at load — a running live worker must
+                    // RESTART (a control push can't apply it); the data path's re-configure
+                    // respawns server-side when the resolution differs.
+                    if (mode === 'live' && started) { fetch('/api/overlays/live/stop', { method: 'POST' }).catch(() => {}); started = false; }
+                    applyInstant();
+                });
                 renderObjects();
             } else {
                 // simple controls (select, slider, ...) rendered in order, then the camera picker
@@ -251,45 +316,186 @@
         const swatch = (rgb, sel) => `<span class="overlays-swatch${sel ? ' sel' : ''}" data-rgb="${rgb.join(',')}" style="background:rgb(${rgb[0]},${rgb[1]},${rgb[2]})"></span>`;
         const paletteHTML = (s) => PALETTE.map((c) => swatch(c, s && c[0] === s[0] && c[1] === s[1] && c[2] === s[2])).join('');
 
+        // ---- per-region treatment widget (data mode): [ Tint | Random | Blur | None ] ----
+        const TINT_PRESETS = [[239, 68, 68], [34, 197, 94], [59, 130, 246], [234, 179, 8], [168, 85, 247], [20, 184, 166], [255, 255, 255], [15, 23, 42]];
+        const rgbCss = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
+        const toHex = (c) => '#' + c.map((x) => Math.max(0, Math.min(255, x | 0)).toString(16).padStart(2, '0')).join('');
+        const fromHex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+        const regionTreatment = (r) => (r === 'bg' ? backgroundTreatment : (objects[r] || {}).treatment) || { key: 'none', params: {} };
+
+        // Compact ICON set (best-practice glyphs): ∅ none · colour square = tint (click to
+        // pick) · dice = random · fading circle = blur. The SELECTED button gets a filled
+        // accent so the active treatment is unambiguous regardless of the icons.
+        const TREAT_SVG = {
+            none: '<svg viewBox="0 0 16 16" class="ti"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><line x1="4.2" y1="11.8" x2="11.8" y2="4.2" stroke="currentColor" stroke-width="1.4"/></svg>',
+            random: '<svg viewBox="0 0 16 16" class="ti"><rect x="2.3" y="2.3" width="11.4" height="11.4" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/><g fill="currentColor"><circle cx="5.6" cy="5.6" r="1.05"/><circle cx="10.4" cy="5.6" r="1.05"/><circle cx="8" cy="8" r="1.05"/><circle cx="5.6" cy="10.4" r="1.05"/><circle cx="10.4" cy="10.4" r="1.05"/></g></svg>',
+            blur: '<svg viewBox="0 0 16 16" class="ti"><path d="M8 1.6 C 8 1.6 3.4 7.6 3.4 10 a 4.6 4.6 0 1 0 9.2 0 C 12.6 7.6 8 1.6 8 1.6 Z" fill="currentColor"/></svg>',
+        };
+        const treatIcon = (key, tr) => key === 'tint'
+            ? `<span class="overlays-tint-chip" style="background:${rgbCss((tr && tr.params && tr.params.color) || TINT_PRESETS[2])}"></span>`
+            : (TREAT_SVG[key] || esc((key || '?')[0]));
+        // `selAttr` identifies the region for delegated handlers (data-obj="i" / data-bg="1").
+        function treatWidget(tr, selAttr) {
+            const cur = (tr && tr.key) || 'none';
+            const btns = TREATMENTS.map((t) => `<button class="overlays-treat-btn${t.key === cur ? ' sel' : ''}" data-key="${t.key}" title="${esc(t.label)}" aria-label="${esc(t.label)}">${treatIcon(t.key, tr)}</button>`).join('');
+            return `<span class="overlays-treat" ${selAttr}>${btns}</span>`;
+        }
+        function setTreatment(region, key) {
+            const t = regionTreatment(region);
+            const params = Object.assign({}, t.params);
+            if (key === 'tint' && !params.color) params.color = TINT_PRESETS[2];
+            const nt = { key, params: (key === 'tint' || key === 'blur') ? params : {} };
+            if (region === 'bg') backgroundTreatment = nt; else objects[region].treatment = nt;
+            renderObjects(); applyInstant();
+        }
+        // Update a tint region's colour IN PLACE — no re-render (re-rendering would destroy
+        // the open native colour picker mid-interaction, which dropped custom colours). Just
+        // repaint the bar + push to the worker.
+        // Update a tint region's colour IN PLACE (no re-render — that would destroy the open
+        // native picker). Repaint the icon's colour chip immediately; DEBOUNCE the worker push,
+        // because the native picker fires 'input' continuously and each push re-segments (laggy).
+        let tintPushTimer = null;
+        function setTintColor(region, rgb, immediate) {
+            const t = regionTreatment(region);
+            t.params = Object.assign({}, t.params, { color: rgb });
+            if (region === 'bg') backgroundTreatment = t; else objects[region].treatment = t;
+            const sel = region === 'bg' ? '[data-bg="1"]' : `[data-obj="${region}"]`;
+            const chip = els.modelBody.querySelector(`.overlays-treat${sel} .overlays-treat-btn[data-key="tint"] .overlays-tint-chip`);
+            if (chip) chip.style.background = rgbCss(rgb);
+            clearTimeout(tintPushTimer);
+            if (immediate) applyInstant();
+            else tintPushTimer = setTimeout(() => applyInstant(), 250);
+        }
+
+        // Shared Tint colour popover — created once at body level so panel re-renders don't
+        // kill it. Presets + a custom picker; click-outside closes.
+        let tintPop = null;
+        function closeTintPop() { if (tintPop) tintPop.style.display = 'none'; }
+        function tintPopEl() {
+            if (tintPop) return tintPop;
+            tintPop = document.createElement('div');
+            tintPop.className = 'overlays-tint-pop';
+            tintPop.style.display = 'none';
+            document.body.appendChild(tintPop);
+            document.addEventListener('click', (e) => {
+                if (tintPop.style.display === 'none') return;
+                const onTint = e.target.closest && e.target.closest('.overlays-treat-btn[data-key="tint"]');
+                if (!tintPop.contains(e.target) && !onTint) closeTintPop();
+            });
+            return tintPop;
+        }
+        const paintPopSel = (el, rgb) => el.querySelectorAll('.overlays-tint-sw').forEach((sw) => sw.classList.toggle('sel', sw.dataset.rgb === rgb.join(',')));
+        function openTintPop(region, anchor) {
+            const el = tintPopEl();
+            const cur = (regionTreatment(region).params || {}).color || TINT_PRESETS[2];
+            el.innerHTML = `<div class="overlays-tint-sws">${TINT_PRESETS.map((c) => `<span class="overlays-tint-sw${c.join(',') === cur.join(',') ? ' sel' : ''}" data-rgb="${c.join(',')}" style="background:${rgbCss(c)}"></span>`).join('')}</div>`
+                + `<label class="overlays-tint-custom-row">Custom <input type="color" class="overlays-tint-custom" value="${toHex(cur)}"></label>`;
+            el.querySelectorAll('.overlays-tint-sw').forEach((sw) => sw.addEventListener('click', () => { const rgb = sw.dataset.rgb.split(',').map(Number); setTintColor(region, rgb, true); paintPopSel(el, rgb); el.querySelector('.overlays-tint-custom').value = toHex(rgb); }));
+            const ci = el.querySelector('.overlays-tint-custom');
+            ci.addEventListener('input', (e) => { const rgb = fromHex(e.target.value); setTintColor(region, rgb); paintPopSel(el, rgb); });  // debounced push while dragging
+            ci.addEventListener('change', (e) => setTintColor(region, fromHex(e.target.value), true));  // final push on close
+            el.style.display = 'block';
+            const r = anchor.getBoundingClientRect();
+            el.style.left = Math.max(6, Math.min(r.left, window.innerWidth - el.offsetWidth - 8)) + 'px';
+            el.style.top = (r.bottom + 4) + 'px';
+        }
+        function wireTreatments(box) {
+            const regionOf = (el) => { const s = el.closest('.overlays-treat'); return s.dataset.bg ? 'bg' : +s.dataset.obj; };
+            box.querySelectorAll('.overlays-treat-btn').forEach((b) => b.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const region = regionOf(b);
+                if (b.dataset.key === 'tint') {
+                    setTreatment(region, 'tint');  // re-renders; anchor the popover to the fresh button
+                    const sel = region === 'bg' ? '[data-bg="1"]' : `[data-obj="${region}"]`;
+                    const fresh = els.modelBody.querySelector(`.overlays-treat${sel} .overlays-treat-btn[data-key="tint"]`);
+                    if (fresh) openTintPop(region, fresh);
+                } else { closeTintPop(); setTreatment(region, b.dataset.key); }
+            }));
+        }
+
         function renderObjects() {
             const box = els.modelBody.querySelector('.overlays-objrows');
             if (!box) return;
             const anyNamed = objects.some((o) => (o.name || '').trim());
-            const rows = objects.map((o, i) => {
-                const neg = o.sign === '-';
-                const ph = (i === 0 && !anyNamed) ? 'object' : 'object name (e.g. robot arm)';
-                const trail = objects.length > 1
-                    ? `<button class="overlays-obj-btn rm" data-i="${i}" title="remove">✕</button>`
-                    : '<span class="overlays-obj-slot"></span>';
-                // A − concept is subtracted, never drawn, so its colour is unused — grey the
-                // palette out (kept in place so flipping +/− doesn't shift the row).
-                return `<div class="overlays-objrow">
-                    <button class="overlays-obj-btn sign${neg ? ' neg' : ''}" data-i="${i}" title="${neg ? 'excluded — click to include' : 'included — click to exclude'}">${neg ? '−' : '+'}</button>
-                    <input class="overlays-obj-name" type="text" data-i="${i}" placeholder="${ph}" value="${esc(o.name)}">
-                    <span class="overlays-palette${neg ? ' disabled' : ''}" data-i="${i}" title="${neg ? 'a − concept is subtracted, not drawn — colour unused' : ''}">${paletteHTML(o.color)}</span>${trail}</div>`;
-            }).join('');
-            const bgrow = `<div class="overlays-objrow">
-                <span class="overlays-obj-slot"></span>
-                <span class="overlays-bg-label">Background</span>
-                <span class="overlays-palette" data-bg="1">${paletteHTML(background)}</span>
-                <button class="overlays-obj-btn bg-clear${!background ? ' on' : ''}" title="transparent (don't paint)">∅</button></div>`;
-            box.innerHTML = rows + bgrow;
+            const signBtn = (o, i) => `<button class="overlays-obj-btn sign${o.sign === '-' ? ' neg' : ''}" data-i="${i}" title="${o.sign === '-' ? 'excluded — click to include' : 'included — click to exclude'}">${o.sign === '-' ? '−' : '+'}</button>`;
+            const nameInput = (o, i) => `<input class="overlays-obj-name" type="text" data-i="${i}" placeholder="${(i === 0 && !anyNamed) ? 'object' : 'object name (e.g. robot arm)'}" value="${esc(o.name)}">`;
+            const trail = (i) => objects.length > 1 ? `<button class="overlays-obj-btn rm" data-i="${i}" title="remove">✕</button>` : '<span class="overlays-obj-slot"></span>';
+
+            if (mode === 'data') {
+                // One line per region: [+/− polarity] [name] [treatment icons] [× remove].
+                // The polarity pill is a first-class per-concept filter: green + = add to the
+                // foreground, red − = SUPPRESS (subtract from it — e.g. arm − gripper). The
+                // Background row uses slot placeholders so its columns line up.
+                const pol = (o, i) => `<button class="overlays-pol ${o.sign === '-' ? 'neg' : 'pos'}" data-i="${i}" title="${o.sign === '-' ? '− suppress: subtracted from the foreground — click to add' : '+ foreground: added — click to suppress'}">${o.sign === '-' ? '−' : '+'}</button>`;
+                const rmBtn = (i) => objects.length > 1 ? `<span class="overlays-obj-rm" data-i="${i}" title="remove">&times;</span>` : '<span class="overlays-obj-slot"></span>';
+                const rows = objects.map((o, i) => {
+                    const excl = o.sign === '-';
+                    const mid = excl
+                        ? '<span class="overlays-treat-na" title="a − concept is subtracted from the foreground, not treated">subtracted</span>'
+                        : treatWidget(o.treatment, `data-obj="${i}"`);
+                    return `<div class="overlays-objrow data${excl ? ' excl' : ''}">${pol(o, i)}${nameInput(o, i)}${mid}${rmBtn(i)}</div>`;
+                }).join('');
+                const bgrow = `<div class="overlays-objrow data bg"><span class="overlays-obj-slot"></span><span class="overlays-bg-label">Background</span>${treatWidget(backgroundTreatment, 'data-bg="1"')}<span class="overlays-obj-slot"></span></div>`;
+                box.innerHTML = rows + bgrow;
+                wireTreatments(box);
+                box.querySelectorAll('.overlays-pol').forEach((b) => b.addEventListener('click', () => { objects[+b.dataset.i].sign = objects[+b.dataset.i].sign === '-' ? '+' : '-'; renderObjects(); applyInstant(); }));
+                box.querySelectorAll('.overlays-obj-rm').forEach((b) => b.addEventListener('click', () => { if (objects.length > 1) { objects.splice(+b.dataset.i, 1); renderObjects(); applyInstant(); } }));
+            } else {
+                // Run tab: the debug-contour view keeps per-object colours + a Background fill.
+                const rows = objects.map((o, i) => {
+                    const neg = o.sign === '-';
+                    return `<div class="overlays-objrow">${signBtn(o, i)}${nameInput(o, i)}<span class="overlays-palette${neg ? ' disabled' : ''}" data-i="${i}" title="${neg ? 'a − concept is subtracted, not drawn — colour unused' : ''}">${paletteHTML(o.color)}</span>${trail(i)}</div>`;
+                }).join('');
+                const bgrow = `<div class="overlays-objrow"><span class="overlays-obj-slot"></span><span class="overlays-bg-label">Background</span><span class="overlays-palette" data-bg="1">${paletteHTML(background)}</span><button class="overlays-obj-btn bg-clear${!background ? ' on' : ''}" title="transparent (don't paint)">∅</button></div>`;
+                box.innerHTML = rows + bgrow;
+                box.querySelectorAll('.overlays-palette[data-i] .overlays-swatch').forEach((sw) => sw.addEventListener('click', () => { objects[+sw.parentElement.dataset.i].color = sw.dataset.rgb.split(',').map(Number); renderObjects(); applyInstant(); }));
+                box.querySelectorAll('.overlays-palette[data-bg] .overlays-swatch').forEach((sw) => sw.addEventListener('click', () => { background = sw.dataset.rgb.split(',').map(Number); renderObjects(); applyInstant(); }));
+                const bgClear = box.querySelector('.overlays-obj-btn.bg-clear');
+                if (bgClear) bgClear.addEventListener('click', () => { background = null; renderObjects(); applyInstant(); });
+            }
 
             box.querySelectorAll('.overlays-obj-btn.sign').forEach((b) => b.addEventListener('click', () => { objects[+b.dataset.i].sign = objects[+b.dataset.i].sign === '-' ? '+' : '-'; renderObjects(); applyInstant(); }));
             box.querySelectorAll('.overlays-obj-btn.rm').forEach((b) => b.addEventListener('click', () => { if (objects.length > 1) { objects.splice(+b.dataset.i, 1); renderObjects(); applyInstant(); } }));
             box.querySelectorAll('.overlays-obj-name').forEach((inp) => inp.addEventListener('input', () => { objects[+inp.dataset.i].name = inp.value; renderAction(); scheduleApply(); }));
-            box.querySelectorAll('.overlays-palette[data-i] .overlays-swatch').forEach((sw) => sw.addEventListener('click', () => { objects[+sw.parentElement.dataset.i].color = sw.dataset.rgb.split(',').map(Number); renderObjects(); applyInstant(); }));
-            box.querySelectorAll('.overlays-palette[data-bg] .overlays-swatch').forEach((sw) => sw.addEventListener('click', () => { background = sw.dataset.rgb.split(',').map(Number); renderObjects(); applyInstant(); }));
-            box.querySelector('.overlays-obj-btn.bg-clear').addEventListener('click', () => { background = null; renderObjects(); applyInstant(); });
 
             const add = els.modelBody.querySelector('.overlays-add-obj');
             if (add) { add.disabled = objects.length >= MAX_OBJECTS; add.textContent = `+ Add object (${objects.length}/${MAX_OBJECTS})`; }
+
+            // Gate "Process dataset…": needs a named object AND at least one real treatment.
+            const procBtn = els.modelBody.querySelector('.overlays-process');
+            if (procBtn) {
+                const ok = namedObjects().length > 0 && hasTreatment();
+                procBtn.disabled = !ok;
+                procBtn.title = ok ? 'Apply these per-region treatments to every episode as a new dataset'
+                    : 'Name an object and set at least one treatment (an object or the Background) first';
+            }
         }
 
         function addObject() {
             if (objects.length >= MAX_OBJECTS) return;
-            objects.push({ name: '', color: PALETTE[objects.length % PALETTE.length], sign: '+' });
+            objects.push({ name: '', sign: '+', treatment: { key: 'none', params: {} } });
             renderObjects();  // no apply — the new row has no name yet
+        }
+
+        // Whether any region carries a real (non-None) treatment — the commit needs one.
+        const hasTreatment = () => (backgroundTreatment.key && backgroundTreatment.key !== 'none')
+            || objects.some((o) => (o.name || '').trim() && o.sign !== '-' && o.treatment && o.treatment.key && o.treatment.key !== 'none');
+
+        // Open the data-editing menu with the panel's current per-region treatments +
+        // selected cameras. Segmentation is the same SAM3 the tile previews, so what you
+        // see (minus the detection chrome) is exactly what gets committed.
+        function openProcess() {
+            if (!window.ProcessData || !window.currentDataset || !hasTreatment()) return;
+            window.ProcessData.open({
+                datasetId: window.currentDataset,
+                objects: payloadObjects(),
+                backgroundTreatment: backgroundTreatment,
+                cameras: camsArg(),
+                multiInstance: multiInstance,
+                model: current,          // the batch job runs the SAME segmenter + resolution
+                resolution,              // as this live preview (preview == commit)
+                computeMs: (status && status.compute_ms) || null,  // measured ms/frame/cam from THIS preview (null = unmeasured)
+            });
         }
 
         // Name edits restart tracking, so debounce; colour/sign/remove are display-only → instant.
@@ -357,12 +563,12 @@
             if (!current) { els.action.innerHTML = ''; return; }
             const hasObj = namedObjects().length > 0;
             if (mode === 'data') {
-                let txt;
+                let txt = '';
                 if (!hasObj) txt = 'name an object';
                 else if (status.state === 'loading') txt = 'loading…';
                 else if (status.state === 'error') txt = 'error — see log';
-                else txt = 'following scrub';
-                els.action.innerHTML = `<div class="overlays-status">${esc(txt)}</div>`;
+                // else: the tile IS the feedback — no redundant status line.
+                els.action.innerHTML = txt ? `<div class="overlays-status">${esc(txt)}</div>` : '';
             } else {
                 let txt;
                 if (!hasObj) txt = 'name an object to start';
@@ -380,7 +586,7 @@
         function syncData() {
             if (mode !== 'data') return;
             if (!current || !objectsReady() || !window.currentDataset) {
-                fetch('/api/overlays/data/cancel', { method: 'POST' }).catch(() => {});
+                fetch('/api/overlays/data/cancel', { method: 'POST', headers: ovlHeaders() }).catch(() => {});
                 dataVersion++;
                 stopPoll();
                 clearOverlays();
@@ -388,12 +594,23 @@
                 return;
             }
             dataVersion++;  // bust the per-frame img cache so changed objects/colours re-pull
+            if (pullGate) pullGate.reset();
+            if (pullLoader) pullLoader.reset();
             fetch('/api/overlays/data/configure', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background: bgPayload(), cameras: selectedCameras ? [...selectedCameras] : [] }),
-            }).then((r) => {
-                // A run owns the obs stream (one writer at a time) — surface it, don't silently fail.
-                if (r.status === 409) { setBadge('run active', 'error'); stopPoll(); clearOverlays(); return; }
+                method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background_treatment: backgroundTreatment, multi_instance: multiInstance, resolution, cameras: selectedCameras ? [...selectedCameras] : [] }),
+            }).then(async (r) => {
+                if (r.status === 409) {
+                    // The overlay mutex is held by another client (another data tab/machine,
+                    // or the run overlay). Show it and keep polling so we auto-resume when freed.
+                    const d = await r.json().catch(() => ({}));
+                    const holder = d && d.detail && d.detail.holder;
+                    wasBusy = true;
+                    setBadge('busy: ' + (holder || 'another client'), 'idle');
+                    clearOverlays();
+                    startPoll();
+                    return;
+                }
                 startPoll(); onFrame();
             }).catch(() => {});
         }
@@ -411,8 +628,19 @@
                 started = true;
                 fetch('/api/overlays/live/start', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: current, objects: payloadObjects(), background: bgPayload(), cameras: camsArg(), style: ctl.style, smooth: ctl.smooth, method: ctl.method }),
-                }).then(() => startPoll()).catch(() => {});
+                    body: JSON.stringify({ model: current, objects: payloadObjects(), background: bgPayload(), cameras: camsArg(), style: ctl.style, smooth: ctl.smooth, method: ctl.method, resolution }),
+                }).then(async (r) => {
+                    if (r.status === 409) {
+                        // The aux-GPU slot is held by another activity (a data client, or a
+                        // batch job) — can't start the run overlay. Show it and keep polling.
+                        const d = await r.json().catch(() => ({}));
+                        started = false; wasBusy = true;
+                        setBadge('busy: ' + ((d.detail && d.detail.holder) || 'another client'), 'idle');
+                        startPoll();
+                        return;
+                    }
+                    startPoll();
+                }).catch(() => {});
                 setBadge('starting…', 'loading');
             } else {
                 fetch('/api/overlays/live/control', {
@@ -425,18 +653,93 @@
         // Draw iff the backend machine says ACTIVE — single source of truth. `started` (below) is
         // only the frontend's launch *request*, not a second copy of "is it running". The decision
         // lives in OverlayGate.shouldDraw (overlay_gate.js) so it is unit-tested in isolation.
-        function isLiveOn() { return OverlayGate.shouldDraw(mode, current, objectsReady(), status.state); }
+        function isLiveOn() { return !status.busy && OverlayGate.shouldDraw(mode, current, objectsReady(), status.state); }
 
         // ---- status polling + badge ----
-        function startPoll() { stopPoll(); pollTimer = setInterval(refreshStatus, 500); refreshStatus(); }
-        function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } lastDiag = ''; }
+        function startPoll() { stopPoll(); pollTimer = setInterval(refreshStatus, 500); refreshStatus(); if (mode === 'data') startOverlayStream(); }
+        function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } stopOverlayStream(); lastDiag = ''; }
+
+        // Event-driven overlay delivery: the server SSE-pushes {cam, seq} the instant the
+        // worker writes a new overlay, so we re-pull that camera immediately instead of on
+        // the ~2 Hz status poll (the dominant felt lag). The 500 ms poll stays as a fallback.
+        function startOverlayStream() {
+            if (overlayES || mode !== 'data') return;
+            try {
+                overlayES = new EventSource('/api/overlays/data/events');
+                overlayES.onmessage = (e) => {
+                    let d; try { d = JSON.parse(e.data); } catch (_) { return; }
+                    diag.lastSseAt = performance.now();
+                    // Pull only when this camera's overlay SEQ actually advanced — the
+                    // worker produces ~8 overlays/s; anything more is wasted PNG decodes.
+                    if (d && d.cam && (!pullGate || pullGate.onSse(d.cam, d.seq))) pullOverlayCam(d.cam, d.seq);
+                };
+                // onerror: the browser auto-reconnects; nothing to do.
+            } catch (_) { overlayES = null; }
+        }
+        function stopOverlayStream() { if (overlayES) { try { overlayES.close(); } catch (_) { /* */ } overlayES = null; } }
+        // At most one in-flight overlay load per camera, latest-wins (createLoader in
+        // overlay_pull_gate.js): reassigning src mid-download ABORTS the fetch, so
+        // unthrottled reassignment under remote-browser bandwidth means no load ever
+        // completes and the tile freezes while the worker badge stays healthy.
+        const pullLoader = window.OverlayPullGate && window.OverlayPullGate.createLoader
+            ? window.OverlayPullGate.createLoader() : null;
+        function assignOverlaySrc(cam, img, url) {
+            img.onload = () => {
+                img.style.display = 'block';
+                diag.lastLoadDoneAt = performance.now();
+                const next = pullLoader && pullLoader.done(cam);
+                if (next) assignOverlaySrc(cam, img, next);
+            };
+            img.onerror = () => {
+                const next = pullLoader && pullLoader.done(cam);
+                if (next) assignOverlaySrc(cam, img, next);
+            };
+            img.src = url;
+        }
+        function pullOverlayCam(cam, seq) {
+            if (!current || !objectsReady() || !window.currentDataset || window.currentEpisode === null || status.busy) return;
+            if (!(selectedCameras && selectedCameras.has(cam))) return;
+            const img = document.getElementById(`overlay-${safeCam(cam)}`);
+            if (!img) return;
+            // Cache-key by overlay seq when known (one fetch per produced overlay);
+            // frameTick only paces the SSE-down fallback pulls.
+            diag.lastPullAt = performance.now();
+            const tick = (seq === undefined || seq === null) ? `t${frameTick++}` : `s${seq}`;
+            const url = `/api/overlays/data/${encodeURIComponent(window.currentDataset)}/frame/${window.currentEpisode}/${window.currentFrame}?camera=${encodeURIComponent(cam)}&v=${dataVersion}-${tick}`;
+            if (!pullLoader) {
+                img.onload = () => { img.style.display = 'block'; };
+                img.src = url;
+                return;
+            }
+            const now = pullLoader.request(cam, url);
+            if (now) assignOverlaySrc(cam, img, now);
+        }
 
         function refreshStatus() {
             const url = mode === 'live'
                 ? '/api/overlays/live/status?model=' + encodeURIComponent(current || '')  // per-model state
                 : '/api/overlays/data/status';
-            fetch(url).then((r) => r.json()).then((s) => {
+            fetch(url, { headers: ovlHeaders() }).then((r) => r.json()).then((s) => {
                 status = s;
+                // Overlay mutex: if another client holds the shared worker (another data
+                // tab/machine, or the run overlay), don't draw/publish — keep polling so
+                // we auto-resume the instant it frees. Same for both panels.
+                if (s.busy) {
+                    wasBusy = true;
+                    setBadge('busy: ' + (s.holder || 'another client'), 'idle');
+                    renderAction();
+                    clearOverlays();
+                    if (!pollTimer) startPoll();
+                    return;
+                }
+                if (wasBusy && !s.busy) {
+                    wasBusy = false;  // freed — retry to take the mutex
+                    sync();
+                    return;
+                }
+                // (The backend re-pushes the data config on every poll while the worker
+                // is up, so an effect chosen during its load window is delivered reliably
+                // once the shm buffer exists — no frontend reconcile needed here.)
                 // `started` is ONLY the launch request — it picks /live/start vs /live/control, nothing
                 // more. The draw gate (isLiveOn) reads the backend machine's ACTIVE state directly, so the
                 // worker's own INACTIVE→LOADING→ACTIVE warm-up needs no syncing here (the old reconcile
@@ -529,18 +832,48 @@
             els.badge.innerHTML = parts.map((p) => `<span title="${esc(p.title)}">${esc(p.t)}</span>`).join(' · ');
         }
 
+        // ---- data: playback-stall diagnostics ----
+        // The worker badge can read a healthy fps while the page itself is stuck (the
+        // worker re-sweeps whatever was last published), so a frozen view needs
+        // CLIENT-side facts. Track frame advance here; on a stall during playback,
+        // console.warn a snapshot (throttled) and keep the latest one readable at
+        // window.__ovlDiag for remote inspection.
+        const diag = { frame: null, changedAt: 0, sse: null, lastSseAt: 0, lastPullAt: 0, lastLoadDoneAt: 0, warnedAt: 0 };
+        function diagSnapshot() {
+            return {
+                frame: window.currentFrame, episode: window.currentEpisode, playing: !!window.isPlaying,
+                msSinceFrameChange: Math.round(performance.now() - diag.changedAt),
+                sseState: overlayES ? overlayES.readyState : null,
+                msSinceSse: diag.lastSseAt ? Math.round(performance.now() - diag.lastSseAt) : null,
+                msSincePull: diag.lastPullAt ? Math.round(performance.now() - diag.lastPullAt) : null,
+                msSinceLoadDone: diag.lastLoadDoneAt ? Math.round(performance.now() - diag.lastLoadDoneAt) : null,
+                workerState: status.state, workerFps: status.fps || null, busy: !!status.busy,
+            };
+        }
+        function diagTick(showable) {
+            const now = performance.now();
+            if (window.currentFrame !== diag.frame) { diag.frame = window.currentFrame; diag.changedAt = now; return; }
+            const stalled = showable && window.isPlaying && diag.changedAt && now - diag.changedAt > 2000;
+            if (stalled && now - diag.warnedAt > 5000) {
+                diag.warnedAt = now;
+                window.__ovlDiag = diagSnapshot();
+                console.warn('[overlays] playback stalled while playing:', JSON.stringify(window.__ovlDiag));
+            }
+        }
+
         // ---- data: per-frame overlay renderer (hooked from app.js loadAllFrames) ----
         function onFrame() {
             if (mode !== 'data') return;
             const ds = window.datasets && window.datasets[window.currentDataset];
             if (!ds) return;
             const showable = current && objectsReady() && window.currentDataset && window.currentEpisode !== null;
+            diagTick(showable);
             if (showable) {
                 // Feed the worker the current frame: the backend decodes it + publishes it to the obs
                 // stream (no-op if the frame is unchanged). Called on frame change AND the status poll,
                 // so a re-visited frame re-publishes and the overlay is never stale.
                 fetch('/api/overlays/data/publish', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ dataset_id: window.currentDataset, episode: window.currentEpisode, frame: window.currentFrame }),
                 }).catch(() => {});
             }
@@ -548,16 +881,18 @@
                 const img = document.getElementById(`overlay-${safeCam(cam)}`);
                 if (!img) continue;
                 if (!showable || !(selectedCameras && selectedCameras.has(cam))) { img.style.display = 'none'; img.src = ''; continue; }
-                img.onload = () => { img.style.display = 'block'; };
-                img.onerror = () => { img.style.display = 'none'; };
-                // Re-pull each tick so the worker's result (which lags playback, like the live feed)
-                // refreshes; the backend PNG-caches by overlay seq so an unchanged result is cheap.
-                img.src = `/api/overlays/data/${encodeURIComponent(window.currentDataset)}/frame/${window.currentEpisode}/${window.currentFrame}?camera=${encodeURIComponent(cam)}&v=${dataVersion}-${frameTick++}`;
+                // onload/onerror belong to assignOverlaySrc (the completion-gated loader);
+                // overriding them here would orphan its in-flight bookkeeping.
+                // Freshness is SSE-driven (pull per NEW overlay seq — see overlay_pull_gate.js);
+                // this per-tick path only pulls as a rate-limited fallback while SSE is down.
+                // Unconditional per-tick re-pulls cost ~4 fps of worker throughput (measured).
+                if (!pullGate || pullGate.onTick(cam, !!(overlayES && overlayES.readyState === 1))) pullOverlayCam(cam);
             }
         }
 
         function clearOverlays() {
             if (mode === 'data') document.querySelectorAll('#camera-grid .overlay-layer').forEach((i) => { i.style.display = 'none'; i.src = ''; });
+            if (pullLoader) pullLoader.reset();
         }
 
         function openLog() {
