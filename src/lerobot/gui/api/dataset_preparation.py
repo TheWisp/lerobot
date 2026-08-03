@@ -117,7 +117,7 @@ def start_hvla_preparation(body: PrepareHvlaRequest) -> dict:
             output_root=output_root,
         )
         _jobs[job.job_id] = job
-    _executor.submit(_run_job, job, body.source_root)
+    _executor.submit(_run_job, job, body.source_root or None)
     return {"job_id": job.job_id, "status": job.status}
 
 
