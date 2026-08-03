@@ -9,9 +9,12 @@
 
 Every RGB video is decoded, resized to 224x224 with the exact torchvision
 call HVLA training uses (bilinear, antialias=True), and re-encoded as
-lossless H.264. The result is a plain standard LeRobot Dataset: existing
-TRAIN loads it unchanged, and its ``--resize-images 224x224`` resize becomes
-a same-size no-op (torchvision returns the input early when sizes match).
+CRF-0 H.264 (yuv444p). CRF 0 is lossless in the encoded YUV domain; the
+RGB -> YUV -> RGB round-trip may still round some values, so the derivative
+is near-lossless rather than bit-exact. The result is a plain standard
+LeRobot Dataset: existing TRAIN loads it unchanged, and its
+``--resize-images 224x224`` resize becomes a same-size no-op (torchvision
+returns the input early when sizes match).
 
 This module is a single public function on purpose: no profile registry, no
 plugin system, no job framework. CLI and GUI both call
@@ -43,10 +46,11 @@ logger = logging.getLogger(__name__)
 
 HVLA_IMAGE_SIZE = (224, 224)
 
-# Lossless H.264 (crf=0) in 4:4:4 chroma keeps the re-encode step from adding
-# any error beyond uint8 quantization; at 224x224 the files stay small.
-# g=2 keeps timestamp-based seeking cheap and accurate. H.264 is also much
-# cheaper to decode than the AV1 sources this was built for.
+# CRF-0 H.264 in 4:4:4 chroma: lossless in the encoded YUV domain, so the
+# re-encode step adds nothing beyond uint8 quantization and YUV rounding;
+# at 224x224 the files stay small. g=2 keeps timestamp-based seeking cheap
+# and accurate. H.264 is also much cheaper to decode than the AV1 sources
+# this was built for.
 HVLA_VIDEO_ENCODER = RGBEncoderConfig(
     vcodec="h264",
     pix_fmt="yuv444p",
@@ -191,7 +195,7 @@ def prepare_hvla_dataset(
     output_root: Path | str,
     progress: ProgressCallback | None = None,
 ) -> Path:
-    """Create a 224x224 lossless-H.264 derivative dataset for HVLA training.
+    """Create a 224x224 CRF-0 H.264 derivative dataset for HVLA training.
 
     Returns the completed output root. Refuses to overwrite the source or an
     existing output. On any failure the staging directory it created is
@@ -199,8 +203,14 @@ def prepare_hvla_dataset(
     """
     src_root = Path(source_root) if source_root is not None else HF_LEROBOT_HOME / source_repo_id
     out_root = Path(output_root)
-    if src_root.resolve() == out_root.resolve():
+    src_resolved = src_root.resolve()
+    out_resolved = out_root.resolve()
+    if src_resolved == out_resolved:
         raise ValueError("output_root must differ from the source root.")
+    if out_resolved.is_relative_to(src_resolved):
+        # Staging is created next to the output; an output inside the source
+        # would make the copy step recursively copy the staging directory.
+        raise ValueError("output_root must not be inside the source dataset root.")
     if out_root.exists():
         raise FileExistsError(f"Output already exists, refusing to overwrite: {out_root}")
 
