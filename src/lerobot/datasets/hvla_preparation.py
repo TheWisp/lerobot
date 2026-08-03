@@ -201,7 +201,7 @@ def prepare_hvla_dataset(
     existing output. On any failure the staging directory it created is
     removed and the source dataset is left untouched.
     """
-    src_root = Path(source_root) if source_root is not None else HF_LEROBOT_HOME / source_repo_id
+    src_root = Path(source_root) if source_root not in (None, "") else HF_LEROBOT_HOME / source_repo_id
     out_root = Path(output_root)
     src_resolved = src_root.resolve()
     out_resolved = out_root.resolve()
