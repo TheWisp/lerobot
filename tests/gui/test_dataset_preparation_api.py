@@ -164,6 +164,8 @@ class TestApiToCoreBoundary:
                     }
                 )
             dataset.save_episode()
+        # finalize() flushes buffered episode metadata and info.json totals.
+        dataset.finalize()
 
         out_root = tmp_path / "out"
         res = client.post(
