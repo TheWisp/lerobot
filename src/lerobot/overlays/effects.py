@@ -42,14 +42,18 @@ def _solid(h: int, w: int, color) -> np.ndarray:
 
 
 def _noise_texture(h: int, w: int, rng: np.random.Generator) -> np.ndarray:
-    """A blobby low-frequency colour texture (random patches upsampled), not
-    per-pixel static — closer to the random-texture backgrounds GreenAug found
-    most effective, and far less jarring than white noise."""
-    import cv2
+    """Per-pixel colour static ("TV noise"), one pattern drawn per application.
 
-    blocks = int(rng.integers(6, 16))
-    small = rng.integers(0, 256, size=(blocks, blocks, 3), dtype=np.uint8)
-    return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+    GreenAug's texture ablation (arXiv:2407.07868, Table 4) found background-texture
+    ENTROPY correlates with scene generalisation: real high-entropy textures (6.81
+    bits) reached 87% success vs Perlin noise (4.45 bits) at 66% and solid colours
+    at 65% — "greater texture randomness leads to better performance". Per-pixel
+    static is the maximum-entropy extreme of that trend (the earlier low-frequency
+    block texture sat near the weak Perlin end). Known trade-off: video codecs
+    low-pass or rate-inflate pure noise, so committed datasets store a softened
+    version of it; a bank of random REAL texture images (GreenAug's best performer)
+    is the follow-up that avoids both issues."""
+    return rng.integers(0, 256, size=(h, w, 3), dtype=np.uint8)
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +84,7 @@ TREATMENTS: list[TreatmentSpec] = [
         label="Tint",
         controls=[{"type": "color", "key": "color", "label": "Colour", "default": [79, 195, 247]}],
     ),
-    TreatmentSpec(key="random", label="Random", randomized=True),  # random solid colour, per episode
+    TreatmentSpec(key="random", label="Random", randomized=True),  # per-pixel static, one draw per episode
     TreatmentSpec(
         key="blur",
         label="Blur",
@@ -97,9 +101,8 @@ def sample_treatment(key: str, params: dict, h: int, w: int, rng: np.random.Gene
     """Draw a treatment's per-application randomness (or ``{}`` if deterministic),
     at whatever cadence the caller chooses (once per episode for coherence)."""
     if key == "random":
-        # A random blobby COLOUR TEXTURE per episode — GreenAug's effective randomized
-        # background (a flat random colour barely shifts the distribution). Random real
-        # photos from an image bank are the higher-impact follow-up.
+        # One per-pixel static pattern per episode (see _noise_texture for the
+        # entropy rationale + the real-texture-bank follow-up).
         return {"bg": _noise_texture(h, w, rng)}
     return {}
 

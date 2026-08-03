@@ -719,6 +719,11 @@ Explicitly out of scope (ruled out in the design discussion before merge of PR #
       2 cams x ~10/s saturates a Wi-Fi link. The completion-gated loader keeps remote
       tiles updating under that pressure, but a 5-10x smaller encoding would restore
       near-full overlay refresh remotely. Keep PNG for contour/chrome overlays (alpha).
+- [ ] Random-texture bank: GreenAug's best background randomization is random REAL
+      texture images (87% success vs 66% Perlin / 65% solid; arXiv:2407.07868 Table 4)
+      — a local bank of high-entropy texture photos sampled per episode, offered next
+      to the per-pixel static default (which follows the paper's entropy trend but is
+      untested there and gets low-passed by video codecs on commit).
 - [ ] Overlap resolution upgrade: per-pixel mask-logit argmax when object masks
       dispute a pixel, replacing the smallest-mask-wins containment heuristic
       (effects.build_and_sample_regions). Needs per-concept logits plumbed through the
