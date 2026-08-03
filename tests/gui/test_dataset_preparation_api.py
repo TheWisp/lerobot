@@ -66,6 +66,10 @@ def _wait_for_terminal(client: TestClient, job_id: str, timeout_s: float = 30.0)
 
 
 def _patch_core(monkeypatch, fn):
+    # Patching imports hvla_preparation, which builds its encoder config at
+    # import time and validates H.264 against the local FFmpeg build.
+    if get_codec("h264") is None:
+        pytest.skip("'h264' not in local FFmpeg build")
     monkeypatch.setattr("lerobot.datasets.hvla_preparation.prepare_hvla_dataset", fn)
 
 
