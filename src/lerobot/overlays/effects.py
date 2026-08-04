@@ -116,7 +116,9 @@ def _treat(rgb: np.ndarray, key: str, params: dict, sampled: dict) -> np.ndarray
     if key == "tint":
         color = np.asarray(params.get("color", _TINT_DEFAULT), dtype=np.float32)
         s = float(params.get("strength", 0.55))  # blend toward colour, keeps shading
-        return np.clip(rgb.astype(np.float32) * (1.0 - s) + color * s, 0, 255).astype(np.uint8)
+        # Round, not truncate (see composite_regions): a fractional blend strength
+        # makes ~45% of values land just under an integer, biasing the tint down.
+        return np.rint(np.clip(rgb.astype(np.float32) * (1.0 - s) + color * s, 0, 255)).astype(np.uint8)
     if key == "random":
         bg = sampled.get("bg")
         return bg if (bg is not None and bg.shape[:2] == (h, w)) else _solid(h, w, [0, 0, 0])

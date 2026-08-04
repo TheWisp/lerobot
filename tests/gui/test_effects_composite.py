@@ -181,3 +181,15 @@ def test_kept_region_survives_bit_exact_under_feathering():
     )
     out = composite_regions(frame, regions, sampled)
     assert out[24, 16].tolist() == [220, 30, 30], "kept region must not be darkened by the cast"
+
+
+def test_tint_rounds_instead_of_truncating():
+    """Same class as the composite cast: a fractional blend strength lands ~45% of
+    values just under an integer, and truncating biased every tinted pixel down by
+    up to a level (mean -0.45). Tint output goes into committed datasets."""
+    from lerobot.overlays.effects import _treat
+
+    rgb = np.full((1, 1, 3), 100, dtype=np.uint8)
+    out = _treat(rgb, "tint", {"color": [202, 202, 202], "strength": 0.35}, {})
+    # 100*0.65 + 202*0.35 = 135.7 -> 136, not 135.
+    assert out[0, 0].tolist() == [136, 136, 136]
