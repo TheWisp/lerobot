@@ -1939,3 +1939,124 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     word-break: break-all;
     margin: 8px 0 0;
 }
+
+/* ── Data editing: "Process dataset…" button + modal (process.js) ─────────── */
+.overlays-process { width: 100%; box-sizing: border-box; margin-top: 12px; padding: 8px;
+    background: #15324a; color: #4fc3f7; border: 1px solid #0f3460; border-radius: 4px;
+    font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.overlays-process:hover { background: #1b3f5e; }
+.overlays-process.busy { background: #14401f; color: #39d353; border-color: #14401f; }
+
+.proc-modal { display: none; position: fixed; inset: 0; background: #000a; z-index: 1000;
+    align-items: center; justify-content: center; }
+.proc-box { width: 460px; max-width: 92vw; max-height: 88vh; overflow-y: auto; background: #16213e;
+    border: 1px solid #0f3460; border-radius: 8px; color: #ddd; box-shadow: 0 12px 48px #000a; }
+.proc-head { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid #0f3460; }
+.proc-title { font-size: 14px; font-weight: 600; color: #4fc3f7; }
+.proc-close { margin-left: auto; background: none; border: none; color: #889; font-size: 20px; line-height: 1; cursor: pointer; }
+.proc-close:hover { color: #f85149; }
+.proc-body { padding: 14px 16px; font-size: 12px; }
+.proc-protected { background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px; padding: 8px 10px;
+    color: #bcd; font-size: 11.5px; line-height: 1.4; margin-bottom: 10px; }
+.proc-label { display: block; color: #888; font-size: 11px; margin: 8px 0 4px; }
+.proc-effect, .proc-name, .proc-variants, .proc-ctl[type=range], .proc-ctl[type=color] {
+    box-sizing: border-box; background: #0f1c2e; border: 1px solid #0f3460; color: #ddd;
+    font-size: 12px; padding: 6px 8px; border-radius: 4px; }
+.proc-effect, .proc-name { width: 100%; }
+.proc-ctl[type=range] { width: 100%; accent-color: #4fc3f7; padding: 0; }
+.proc-ctl[type=color] { width: 48px; height: 28px; padding: 2px; }
+.proc-row { display: flex; gap: 10px; margin-top: 4px; }
+.proc-row .proc-grow { flex: 1; }
+.proc-variants { width: 70px; }
+.proc-est { margin-top: 10px; color: #8aa; font-size: 11px; }
+.proc-est b { color: #bcd; font-weight: 600; }
+.proc-error { color: #f85149; font-size: 11.5px; margin: 6px 0 0; min-height: 14px; }
+.proc-actions-row { display: flex; gap: 8px; margin-top: 8px; }
+.proc-preview, .proc-start { flex: 1; padding: 9px; border: none; border-radius: 4px;
+    font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.proc-preview { background: #15324a; color: #4fc3f7; border: 1px solid #1e4a6b; }
+.proc-preview:hover { background: #1b3f5e; }
+.proc-start { background: #4fc3f7; color: #06223a; }
+.proc-start:hover { background: #6fd0ff; }
+.proc-preview:disabled, .proc-start:disabled { background: #2a3550; color: #667; cursor: not-allowed; border-color: #2a3550; }
+.proc-job-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; color: #c9a94a;
+    background: #33301a; padding: 1px 5px; border-radius: 3px; margin-right: 4px; vertical-align: middle; }
+.proc-jobs-wrap { padding: 4px 16px 16px; border-top: 1px solid #0f3460; }
+.proc-jobs { display: flex; flex-direction: column; gap: 8px; }
+.proc-hint { color: #777; font-size: 11px; }
+.proc-job { background: #0f1c2e; border: 1px solid #0f3460; border-radius: 6px; padding: 8px 10px; }
+.proc-job-top { display: flex; align-items: center; gap: 8px; }
+.proc-job-name { font-size: 12px; color: #cce; font-weight: 600; word-break: break-all; }
+.proc-job-status { margin-left: auto; font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 9px; text-transform: uppercase; }
+.proc-job-status.run { background: #15324a; color: #4fc3f7; }
+.proc-job-status.ok { background: #14401f; color: #39d353; }
+.proc-job-status.err { background: #4a1a1a; color: #f85149; }
+.proc-bar { height: 6px; background: #0a1422; border-radius: 3px; margin: 6px 0; overflow: hidden; }
+.proc-bar-fill { height: 100%; background: #4fc3f7; transition: width 0.3s; }
+.proc-bar-fill.ok { background: #39d353; }
+.proc-bar-fill.err { background: #f85149; }
+.proc-job-detail { color: #889; font-size: 11px; }
+.proc-job-actions { display: flex; gap: 6px; margin-top: 7px; }
+.proc-job-btn { background: #15324a; color: #9cf; border: 1px solid #0f3460; border-radius: 4px;
+    padding: 4px 10px; font-size: 11px; cursor: pointer; }
+.proc-job-btn:hover { background: #1b3f5e; }
+.proc-job-btn.primary { background: #14401f; color: #39d353; border-color: #14401f; }
+
+/* Data overlay: effect selector (data mode) — the live WYSIWYG augmentation. */
+.overlays-effect { width: 100%; box-sizing: border-box; background: #0f1c2e; border: 1px solid #0f3460;
+    color: #ddd; font-size: 12px; padding: 6px 8px; border-radius: 4px; margin-bottom: 4px; }
+.overlays-effect-controls { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px; }
+.overlays-effect-ctl[type=range] { width: 100%; accent-color: #4fc3f7; }
+.overlays-effect-ctl[type=color] { width: 46px; height: 26px; padding: 2px; background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px; }
+/* Process menu: effect echoed read-only (chosen in the overlay). */
+.proc-effect-summary { background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px;
+    padding: 7px 10px; margin: 8px 0 2px; font-size: 12px; color: #cce; }
+.proc-effect-hint { color: #778; font-size: 11px; }
+.proc-effect-none { color: #c9a94a; font-size: 11.5px; }
+
+/* Data overlay: per-region treatment widget — ONE line per region, as a GRID so the
+   object rows and the Background row share columns exactly: [±|·][name][icons][×|·].
+   Uses the panel's existing tokens (#0f1c2e bg / #0f3460 border / 4px) so it reads as
+   part of the panel, not a bolted-on component. */
+.overlays-objrow.data { display: grid; grid-template-columns: 24px 1fr auto 24px; align-items: center; gap: 6px; margin-bottom: 4px; }
+.overlays-objrow.data.bg { border-top: 1px dashed #0f3460; padding-top: 6px; margin-top: 2px; }
+.overlays-objrow.data .overlays-obj-name { width: 100%; min-width: 0; }
+.overlays-bg-label { color: #ccc; font-size: 12px; }
+/* Compact icon segmented control (baseline button tokens; selected = the panel's cyan). */
+.overlays-treat { display: inline-flex; border: 1px solid #0f3460; border-radius: 4px; overflow: hidden; flex: none; }
+.overlays-treat-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px;
+    background: #0f1c2e; color: #ccc; border: none; border-right: 1px solid #0f3460; cursor: pointer; padding: 0; }
+.overlays-treat-btn:last-child { border-right: none; }
+.overlays-treat-btn:hover { background: #15324a; }
+.overlays-treat-btn.sel { background: #15324a; }
+.overlays-treat-btn .ti { width: 15px; height: 15px; display: block; }
+.overlays-treat-btn.sel .ti { color: #4fc3f7; }
+.overlays-tint-chip { width: 14px; height: 14px; border-radius: 3px; display: block; border: 1px solid #0007; }
+.overlays-treat-btn.sel .overlays-tint-chip { box-shadow: 0 0 0 1.5px #4fc3f7; }
+.overlays-treat-na { color: #777; font-size: 11px; font-style: italic; margin-left: auto; }
+/* Polarity pill: light — the panel's flat button + colored text/border (green + = add,
+   red − = suppress), matching the baseline sign button rather than a saturated block. */
+.overlays-pol { width: 24px; height: 22px; flex: none; background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px;
+    cursor: pointer; font-size: 14px; font-weight: 700; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.overlays-pol.pos { color: #34d399; border-color: #1e5233; }
+.overlays-pol.neg { color: #f87171; border-color: #5a2020; }
+.overlays-pol:hover { background: #15324a; }
+/* Remove ×: the same subtle red delete used across the GUI (source/camera rows). */
+.overlays-obj-rm { color: #e74c3c; cursor: pointer; font-size: 16px; line-height: 1; text-align: center; opacity: 0.55; }
+.overlays-obj-rm:hover { opacity: 1; }
+/* Tint colour popover (body-level; opened by clicking the Tint colour square). */
+.overlays-tint-pop { position: fixed; z-index: 1200; background: #16213e; border: 1px solid #0f3460;
+    border-radius: 4px; padding: 8px; box-shadow: 0 8px 28px #000a; }
+.overlays-tint-sws { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.overlays-tint-sw { width: 20px; height: 20px; border-radius: 3px; cursor: pointer; border: 1px solid #0006; }
+.overlays-tint-sw.sel { outline: 2px solid #4fc3f7; outline-offset: 1px; }
+.overlays-tint-custom-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: #888; font-size: 11px; }
+.overlays-tint-custom { width: 28px; height: 22px; padding: 0; border: 1px solid #0f3460; border-radius: 4px; background: #0f1c2e; cursor: pointer; }
+
+/* Data overlay: "segment all instances" checkbox (both arms vs largest). */
+.overlays-check { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; color: #cce; font-size: 12px; cursor: pointer; }
+.overlays-check input { accent-color: #4fc3f7; }
+
+/* Processing tray: offset left of Transfers so both popovers can be open. */
+#proc-popover { right: 376px; width: 360px; }
+#proc-jobs-list { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
