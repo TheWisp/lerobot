@@ -714,6 +714,22 @@ Explicitly out of scope (ruled out in the design discussion before merge of PR #
 
 ## Overlays / Data Editing
 
+- [ ] Hoist segmentation out of the `variants` loop. Measured (pick_ball ep0, 241
+      frames, 2 cams, sam3_track@672): segmentation is **77% of a job's wall time**
+      (15.9 s of 20.7 s), and `variants` is the OUTERMOST loop — so N randomized
+      copies re-segment every frame N times for identical masks (masks depend on the
+      frames and the object list, not on the random draws). Cache the episode's masks
+      (bit-packed or RLE to bound RAM) and composite N times: extra variants become
+      nearly free instead of costing N x the GPU work.
+- [ ] Overlap the CPU and GPU stages of a processing job. The loop is strictly serial
+      per frame — decode (CPU) -> segment (GPU) -> composite (CPU) -> buffer, then
+      encode per episode (CPU) — so the GPU idles through ~22% of wall time
+      (composite 13%, decode 5%, encode 4%) and measured utilization is mean 65%,
+      max 79% (never higher, even mid-segmentation; note nvidia-smi "utilization"
+      only means a kernel was running, so true compute efficiency is lower).
+      Prefetch decode in a thread and composite frame N-1 while the GPU segments
+      frame N: ~1.25x, no quality risk. Beyond that: torch.compile on the detector
+      (1.34x measured, unwired), or batching, which trades tracking quality.
 - [ ] Encode WYSIWYG composite overlays as JPEG/WebP instead of PNG. Composites are
       full-frame photo-like images, so PNG is the pathological codec (~300-800 KB each);
       2 cams x ~10/s saturates a Wi-Fi link. The completion-gated loader keeps remote
