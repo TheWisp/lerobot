@@ -1931,3 +1931,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     word-break: break-all;
     margin: 8px 0 0;
 }
+
+/* --- Preprocess tab --- */
+.prep-profile-title { font-size: 13px; font-weight: 600; color: #4fc3f7; margin-bottom: 6px; }
+.prep-profile-desc { font-size: 11px; color: #888; line-height: 1.5; margin-bottom: 14px; }
+.prep-label { display: block; font-size: 11px; color: #999; margin: 10px 0 4px; }
+.prep-input {
+    width: 100%; padding: 6px 8px; box-sizing: border-box;
+    background: #2d2d30; color: #ccc; border: 1px solid #0e639c;
+    border-radius: 4px; font-size: 12px; outline: none;
+}
+.prep-start { width: 100%; margin-top: 14px; }
+.prep-start:disabled { opacity: 0.5; cursor: default; }
+.prep-status-card { margin: 24px; padding: 16px; background: #16213e; border: 1px solid #0f3460; border-radius: 8px; max-width: 640px; }
+#prep-status-line { font-size: 13px; color: #ccc; margin-bottom: 10px; }
+.prep-progress { height: 8px; background: #0f3460; border-radius: 4px; overflow: hidden; }
+#prep-progress-bar { height: 100%; width: 0; background: #4fc3f7; transition: width 0.3s; }
+.prep-current-file { font-size: 11px; color: #888; margin-top: 8px; font-family: monospace; word-break: break-all; }
+.prep-output-path { font-size: 11px; color: #666; margin-top: 6px; font-family: monospace; word-break: break-all; }

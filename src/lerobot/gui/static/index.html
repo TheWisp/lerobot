@@ -13,6 +13,7 @@
         <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
+        <button class="tab" data-tab="preprocess" onclick="switchTab('preprocess')">Preprocess</button>
         <span id="hf-auth-indicator" style="margin-left:auto; font-size:11px; color:var(--text-secondary, #666); padding-right:12px; cursor:default;" title="HuggingFace Hub login status"></span>
         <!-- Transfers indicator: always visible so the user can find their
              Hub transfers without remembering a hidden trigger. Click toggles
@@ -404,6 +405,41 @@
         </div>
     </div>
 
+    <div class="tab-content" id="tab-preprocess">
+        <div class="layout">
+            <div class="sidebar" id="preprocess-sidebar">
+                <div class="sidebar-header">
+                    <h1>Preprocess</h1>
+                </div>
+                <div class="sidebar-section" style="padding:12px;">
+                    <div class="prep-profile-title">HVLA 224&times;224 H.264</div>
+                    <div class="prep-profile-desc">
+                        Re-encode every RGB video to 224&times;224 CRF-0 H.264.
+                        The output is a plain new dataset; training is unchanged —
+                        its 224&times;224 resize simply becomes a no-op.
+                    </div>
+                    <label class="prep-label" for="prep-source-select">Source dataset</label>
+                    <select id="prep-source-select" class="prep-input" onchange="prepSourceChanged()"></select>
+                    <label class="prep-label" for="prep-output-repo">Output repo id</label>
+                    <input id="prep-output-repo" class="prep-input" type="text" spellcheck="false" autocomplete="off">
+                    <button id="prep-start-btn" class="btn-launch prep-start" onclick="startPreprocess()">Prepare for HVLA</button>
+                </div>
+            </div>
+            <div class="sidebar-resize-handle"></div>
+            <div class="main" id="preprocess-main">
+                <div class="empty-state" id="prep-empty">Select a source dataset to prepare an HVLA derivative.</div>
+                <div id="prep-status-panel" style="display:none;">
+                    <div class="prep-status-card">
+                        <div id="prep-status-line">Idle</div>
+                        <div class="prep-progress"><div id="prep-progress-bar"></div></div>
+                        <div id="prep-current-file" class="prep-current-file"></div>
+                        <div id="prep-output-path" class="prep-output-path"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Episode context menu -->
     <div class="context-menu" id="context-menu">
         <div class="context-menu-item" onclick="contextAction('view')">View Episode</div>
@@ -654,7 +690,7 @@ nebius iam auth-public-key generate \
         </form>
     </dialog>
 
-    <script src="/static/app.js?v=38"></script>
+    <script src="/static/app.js?v=39"></script>
     <script src="/static/feature_editing.js?v=25"></script>
     <script src="/static/add_feature_dialog.js?v=2"></script>
     <script src="/static/charts.js?v=3"></script>
@@ -665,6 +701,7 @@ nebius iam auth-public-key generate \
     <script src="/static/overlays.js?v=37"></script>
     <script src="/static/model.js?v=6"></script>
     <script src="/static/training.js?v=32"></script>
+    <script src="/static/preprocess.js?v=1"></script>
     <script src="/static/add_host_dialog.js?v=4"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
