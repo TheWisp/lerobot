@@ -156,6 +156,9 @@ class TestCodecOptions:
         opts = cfg.get_codec_options()
         assert opts["rc"] == 0
         assert opts["qp"] == 25
+        # The default GOP is two frames. NVENC otherwise enables more B frames
+        # than that GOP can contain and avcodec_open2 fails with EINVAL.
+        assert opts["bf"] == 0
         assert "crf" not in opts
         assert opts["g"] == 2
 

@@ -217,6 +217,8 @@ class RecordRequest(BaseModel):
     reset_time_s: float = 60
     num_episodes: int = 50
     video: bool = True
+    # The frontend exposes this as an operator setting. Keep the API fallback
+    # conservative for older clients that do not send the field.
     vcodec: str = "libsvtav1"
     play_sounds: bool = True
     resume: bool = False
