@@ -151,3 +151,33 @@ def test_overlapping_masks_contested_pixels_go_to_the_smaller_object():
         center = out[15, 15]
         assert center[2] > 200 and center[0] < 60, f"ball centre got the wrong tint: {center}"
     np.testing.assert_array_equal(outs[0], outs[1])  # order-independent
+
+
+def test_kept_region_survives_bit_exact_under_feathering():
+    """A region with treatment "none" must come back byte-identical.
+
+    The bug: at a large object's centre the feathered alpha is 0.9999998 (float32
+    epsilon, 1.0 for every practical purpose), so the blend lands at 219.99996 —
+    and the final `astype(uint8)` TRUNCATED it to 219. Every treated pixel in every
+    written dataset was biased down by up to one level, and "keep this region"
+    quietly wasn't exact. Found by an end-to-end synthetic job run.
+    """
+    from lerobot.overlays.effects import build_and_sample_regions
+
+    h, w = 48, 64
+    mask = np.zeros((h, w), dtype=bool)
+    mask[12:36, 4:28] = True  # 24x24 — comfortably larger than the 5 px feather
+    frame = np.full((h, w, 3), 100, dtype=np.uint8)
+    frame[mask] = (220, 30, 30)
+
+    regions, sampled = build_and_sample_regions(
+        {"obj": mask},
+        {"obj": {"key": "none"}},
+        {"key": "tint", "params": {"color": [0, 0, 0], "strength": 1.0}},  # black background
+        h,
+        w,
+        np.random.default_rng(0),
+        {},
+    )
+    out = composite_regions(frame, regions, sampled)
+    assert out[24, 16].tolist() == [220, 30, 30], "kept region must not be darkened by the cast"

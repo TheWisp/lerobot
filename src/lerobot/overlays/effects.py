@@ -162,6 +162,12 @@ def composite_regions(
         np.subtract(treated.astype(np.float32), out, out=tmp)
         tmp *= a
         out += tmp
+    # ROUND, don't truncate: astype() truncates, so a pixel the blend leaves at
+    # 219.99996 (float32 epsilon on an alpha that is 1.0 for all practical purposes)
+    # would be written as 219. That biases every treated pixel downward by up to one
+    # level, and makes "treatment: none" regions not quite pixel-exact. Adding 0.5
+    # before the cast rounds half-up in one in-place pass.
+    np.add(out, 0.5, out=out)
     np.clip(out, 0, 255, out=out)
     return out.astype(np.uint8)
 
