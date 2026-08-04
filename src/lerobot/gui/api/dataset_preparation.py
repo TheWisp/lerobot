@@ -40,7 +40,7 @@ class PrepareHvlaRequest(BaseModel):
 @dataclass
 class PreparationJob:
     job_id: str
-    status: Literal["pending", "running", "complete", "failed"]
+    status: Literal["pending", "running", "complete", "failed", "cancelled"]
     done: int
     total: int
     current_file: str
@@ -48,9 +48,14 @@ class PreparationJob:
     output_repo_id: str
     output_root: str
     error: str | None = None
+    cancel_requested: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+class PreparationCancelledError(Exception):
+    """Raised inside the progress callback when the user cancels the job."""
 
 
 _jobs: dict[str, PreparationJob] = {}
@@ -72,6 +77,10 @@ def _run_job(job: PreparationJob, source_root: str | None) -> None:
     job.status = "running"
 
     def on_progress(done: int, total: int, current: str) -> None:
+        # Cancellation granularity: between video files. Raising here unwinds
+        # prepare_hvla_dataset, which removes its own staging directory.
+        if job.cancel_requested:
+            raise PreparationCancelledError
         job.done = done
         job.total = total
         job.current_file = current
@@ -84,6 +93,8 @@ def _run_job(job: PreparationJob, source_root: str | None) -> None:
             output_root=job.output_root,
             progress=on_progress,
         )
+    except PreparationCancelledError:
+        job.status = "cancelled"
     except Exception as exc:
         job.status = "failed"
         job.error = str(exc)
@@ -127,3 +138,14 @@ def get_preparation_job(job_id: str) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     return job.to_dict()
+
+
+@router.post("/jobs/{job_id}/cancel")
+def cancel_preparation_job(job_id: str) -> dict:
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    if job.status not in ("pending", "running"):
+        raise HTTPException(status_code=409, detail=f"Job already {job.status}")
+    job.cancel_requested = True
+    return {"job_id": job.job_id, "status": job.status}

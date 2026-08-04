@@ -99,8 +99,19 @@ async function startPreprocess() {
     document.getElementById('prep-empty').style.display = 'none';
     document.getElementById('prep-status-panel').style.display = 'block';
     document.getElementById('prep-start-btn').disabled = true;
+    document.getElementById('prep-stop-btn').style.display = 'inline-block';
     _prepRender({ status: 'pending', done: 0, total: 0, current_file: '' });
     _prepPoll();
+}
+
+async function stopPreprocess() {
+    if (!_prepJobId) return;
+    try {
+        await fetch(`/api/dataset-preparation/jobs/${_prepJobId}/cancel`, { method: 'POST' });
+        document.getElementById('prep-status-line').textContent = 'cancelling…';
+    } catch (e) {
+        showToast('Preprocess', 'Failed to cancel', 'error');
+    }
 }
 
 async function _prepPoll() {
@@ -129,6 +140,11 @@ async function _prepPoll() {
                 _prepFinish();
                 return;
             }
+            if (job.status === 'cancelled') {
+                showToast('Preprocess', 'Cancelled; staging cleaned up.', 'info');
+                _prepFinish();
+                return;
+            }
         }
     } catch (e) {
         // Network blip — keep polling.
@@ -141,6 +157,7 @@ function _prepFinish() {
     if (_prepPollTimer) clearTimeout(_prepPollTimer);
     _prepPollTimer = null;
     _prepUpdateStartButton();
+    document.getElementById('prep-stop-btn').style.display = 'none';
 }
 
 function _prepRender(job) {
