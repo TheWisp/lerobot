@@ -246,6 +246,10 @@ class VideoEncoderConfig:
             set_if("rc", 0)
             set_if("qp", self.crf)
             set_if("preset", self.preset)
+            # The recording default is a two-frame GOP. NVENC's default B-frame
+            # count can be too large for that GOP, causing avcodec_open2 to fail
+            # with EINVAL before the first frame is encoded.
+            set_if("bf", 0)
         elif self.vcodec == "h264_vaapi":
             set_if("qp", self.crf)
         elif self.vcodec == "h264_qsv":

@@ -329,7 +329,7 @@ class TestRecordEndpoint:
                 reset_time_s=30,
                 num_episodes=10,
                 video=True,
-                vcodec="libsvtav1",
+                vcodec="auto",
                 play_sounds=False,
                 resume=False,
             )
@@ -356,7 +356,7 @@ class TestRecordEndpoint:
         # string here only proves the GUI emits what the GUI emits — it stayed
         # green while the flag was one the CLI rejected. test_cli_contract.py is
         # what actually holds this end of the boundary honest.
-        assert "--dataset.rgb_encoder.vcodec=libsvtav1" in captured_args
+        assert "--dataset.rgb_encoder.vcodec=auto" in captured_args
         assert "--play_sounds=false" in captured_args
         # resume=False should not add --resume
         assert "--resume=true" not in captured_args

@@ -101,3 +101,68 @@ def test_none_selection_also_survives(page):
     assert page.input_value("#run-teleop-record-dataset") == ""
     page.evaluate("refreshRunDatasetSelects()")
     assert page.input_value("#run-teleop-record-dataset") == ""
+
+
+def test_video_encoder_is_user_selectable_and_persistent(page):
+    """The codec is an operator setting, shared by both recording workflows."""
+    teleop = page.locator("#run-teleop-video-codec")
+    policy = page.locator("#run-policy-video-codec")
+
+    assert teleop.input_value() == "libsvtav1"
+    assert {option.get_attribute("value") for option in teleop.locator("option").all()} >= {
+        "libsvtav1",
+        "auto",
+        "h264_nvenc",
+        "hevc_nvenc",
+    }
+
+    teleop.select_option("h264_nvenc")
+    assert policy.input_value() == "h264_nvenc"
+    assert page.evaluate("localStorage.getItem('lerobot.record.videoCodec')") == "h264_nvenc"
+
+    page.reload()
+    page.wait_for_function("typeof switchTab === 'function'", timeout=10_000)
+    page.evaluate("switchTab('run')")
+    page.wait_for_selector("#run-teleop-video-codec", timeout=10_000)
+    assert page.input_value("#run-teleop-video-codec") == "h264_nvenc"
+
+
+def test_selected_video_encoder_reaches_record_request(page):
+    """Drive the real form and inspect the HTTP payload sent across the boundary."""
+    captured = {}
+
+    page.route(
+        "**/api/robot/profiles/fake-robot",
+        lambda route: route.fulfill(json={"type": "virtual_robot", "cameras": {}}),
+    )
+    page.route(
+        "**/api/robot/teleop-profiles/fake-teleop",
+        lambda route: route.fulfill(json={"type": "virtual_teleop"}),
+    )
+
+    def capture_record(route):
+        captured.update(route.request.post_data_json)
+        route.fulfill(json={"pid": 4242})
+
+    page.route("**/api/run/record", capture_record)
+    page.evaluate(
+        """
+        for (const [id, value] of [
+            ['run-teleop-robot', 'fake-robot'],
+            ['run-teleop-teleop', 'fake-teleop'],
+            ['run-teleop-task-select', 'test-task'],
+        ]) {
+            const select = document.getElementById(id);
+            select.add(new Option(value, value));
+            select.value = value;
+        }
+        """
+    )
+    page.select_option("#run-teleop-record-dataset", value="__new__")
+    page.fill("#run-teleop-new-dataset-name", "test/gui-codec")
+    page.select_option("#run-teleop-video-codec", value="h264_nvenc")
+
+    page.evaluate("launchRun()")
+
+    assert captured["repo_id"] == "test/gui-codec"
+    assert captured["vcodec"] == "h264_nvenc"

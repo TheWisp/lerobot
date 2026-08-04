@@ -853,7 +853,10 @@ class DatasetWriter:
             return
         for video_key in rgb_video_keys:
             self.video_encoders[video_key] = OurStreamingVideoEncoder(
-                fps=self._meta.fps, vcodec=self._rgb_encoder.vcodec
+                fps=self._meta.fps,
+                vcodec=self._rgb_encoder.vcodec,
+                pix_fmt=self._rgb_encoder.pix_fmt,
+                codec_options=self._rgb_encoder.get_codec_options(self._encoder_threads, as_strings=True),
             )
         self._start_video_encoders()
 

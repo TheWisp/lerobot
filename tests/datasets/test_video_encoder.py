@@ -17,12 +17,72 @@ refactor — they would NOT be caught by the existing math-only test:
    same encoder instance.
 """
 
+import threading
 import time
 from pathlib import Path
 
 import numpy as np
 
 from lerobot.datasets.video_encoder import StreamingVideoEncoder
+
+
+def test_first_frame_encoder_initialization_is_serialized(monkeypatch, tmp_path):
+    """Multiple cameras must not open their codecs concurrently.
+
+    Real three-camera capture showed concurrent first-frame initialization can
+    stall the OpenCV reader threads for more than the 500 ms freshness limit.
+    Later frames remain parallel; only the first encode call is constrained.
+    """
+    state_lock = threading.Lock()
+    all_initialized = threading.Event()
+    active = 0
+    max_active = 0
+    initialized = 0
+
+    class FakeStream:
+        pix_fmt = None
+        width = None
+        height = None
+
+        def encode(self, frame=None):
+            nonlocal active, initialized, max_active
+            if frame is None:
+                return []
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.1)
+            with state_lock:
+                active -= 1
+                initialized += 1
+                if initialized == 3:
+                    all_initialized.set()
+            return []
+
+    class FakeContainer:
+        def add_stream(self, *_args, **_kwargs):
+            return FakeStream()
+
+        def mux(self, _packet):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("lerobot.datasets.video_encoder.av.open", lambda *_args, **_kwargs: FakeContainer())
+
+    encoders = [StreamingVideoEncoder(fps=30) for _ in range(3)]
+    for index, encoder in enumerate(encoders):
+        encoder.start_episode(tmp_path / f"camera-{index}.mp4")
+    frame = np.zeros((64, 96, 3), dtype=np.uint8)
+    for encoder in encoders:
+        encoder.push_frame(frame)
+
+    assert all_initialized.wait(timeout=2), "encoder threads did not process their first frame"
+    for encoder in encoders:
+        encoder.finish()
+
+    assert max_active == 1
 
 
 def _make_frames(n: int, h: int = 240, w: int = 320, seed: int = 0) -> list[np.ndarray]:
