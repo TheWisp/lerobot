@@ -1,0 +1,117 @@
+{
+    "codebase_version": "v3.0",
+    "fps": 10,
+    "features": {
+        "observation.image": {
+            "dtype": "image",
+            "shape": [
+                96,
+                96,
+                3
+            ],
+            "names": [
+                "height",
+                "width",
+                "channel"
+            ],
+            "fps": 10.0
+        },
+        "observation.state": {
+            "dtype": "float32",
+            "shape": [
+                2
+            ],
+            "names": {
+                "motors": [
+                    "motor_0",
+                    "motor_1"
+                ]
+            },
+            "fps": 10.0
+        },
+        "action": {
+            "dtype": "float32",
+            "shape": [
+                2
+            ],
+            "names": {
+                "motors": [
+                    "motor_0",
+                    "motor_1"
+                ]
+            },
+            "fps": 10.0
+        },
+        "next.reward": {
+            "dtype": "float32",
+            "shape": [
+                1
+            ],
+            "names": null,
+            "fps": 10.0
+        },
+        "next.done": {
+            "dtype": "bool",
+            "shape": [
+                1
+            ],
+            "names": null,
+            "fps": 10.0
+        },
+        "next.success": {
+            "dtype": "bool",
+            "shape": [
+                1
+            ],
+            "names": null,
+            "fps": 10.0
+        },
+        "timestamp": {
+            "dtype": "float32",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "frame_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "episode_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "task_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        }
+    },
+    "total_episodes": 3,
+    "total_frames": 420,
+    "total_tasks": 1,
+    "chunks_size": 1000,
+    "data_files_size_in_mb": 100,
+    "video_files_size_in_mb": 200,
+    "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
+    "video_path": null,
+    "robot_type": null,
+    "splits": {
+        "train": "0:3"
+    }
+}
