@@ -985,6 +985,7 @@ def test_extract_image_from_docker_argv_typical_recipe() -> None:
         "docker",
         "run",
         "--rm",
+        "--init",
         "--gpus",
         "all",
         "--user",

@@ -134,6 +134,10 @@ def test_docker_recipe_command_shape(tmp_path: Path) -> None:
     cmd = _docker_cmd(run, paths)
     # docker run prefix
     assert cmd[0:2] == ["docker", "run"]
+    # Docker's built-in tini must be PID 1 so SIGTERM sent to the attached
+    # `docker run` process reaches the training child and its DataLoader
+    # workers are reaped. Without this, GUI Stop remains at COMPLETING.
+    assert cmd.count("--init") == 1
     # GPU passthrough
     assert "--gpus" in cmd and "all" in cmd
     # User UID/GID: host-identity TOKENS at compose time — resolved by the
@@ -386,6 +390,7 @@ def test_hvla_recipe_entrypoint_and_dashed_cli(tmp_path: Path) -> None:
         }
     )
     cmd = _docker_cmd(run, paths)
+    assert cmd.count("--init") == 1
     # Entrypoint module
     assert "python" in cmd
     assert "lerobot.policies.hvla.s1.flow_matching.train" in cmd

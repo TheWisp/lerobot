@@ -296,6 +296,11 @@ def _docker_argv_base(
         "docker",
         "run",
         "--rm",
+        # Docker's built-in tini becomes PID 1, forwards SIGTERM to the
+        # training process, and reaps DataLoader workers. Without this the
+        # GUI's Stop signal can leave Python running as container PID 1 and
+        # the run stuck indefinitely in COMPLETING.
+        "--init",
         "--gpus",
         "all",
         # Docker defaults /dev/shm to 64 MiB, which the PyTorch DataLoader
