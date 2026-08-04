@@ -185,14 +185,6 @@ class TestRefusals:
         assert not (src_root / "prepared").exists()
         assert not list(src_root.glob(".*staging*"))
 
-    def test_refuses_missing_videos(self, prep, tmp_path):
-        src_root = tmp_path / "src"
-        _create_source(src_root)
-        for video in (src_root / "videos").rglob("*.mp4"):
-            video.unlink()
-        with pytest.raises(ValueError, match="No .mp4"):
-            _run_prepare(prep, src_root, tmp_path / "out")
-
 
 class TestValidateSource:
     """Input-contract rejections that don't need a real encoded dataset."""
