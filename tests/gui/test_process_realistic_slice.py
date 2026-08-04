@@ -16,13 +16,18 @@
 ``test_process_job_e2e`` proves the plumbing with a fake segmenter, but it cannot
 prove the *model* finds anything: its imagery (a solid square on flat grey) is not
 something an open-vocabulary segmenter would ever key on. This test closes that gap
-without needing a large dataset — it slices a handful of frames out of a PUBLIC
-LeRobot dataset (real rendered robot footage), rewrites them as a tiny video-backed
-dataset, and runs the shipped job over it with the real ``sam3_track`` adapter.
+without needing a large dataset — and without a network fetch, an HF-cache
+dependency, or rebuilding a fixture on every run.
 
-Small enough to stay quick, real enough that segmentation is meaningful. It also
-prints the measured throughput and peak VRAM, so a regression in either shows up
-here rather than on a six-hour production run.
+The source is a **committed** artifact: ``tests/artifacts/datasets/lerobot/
+data_editing_slice``, a 2 x 12-frame video-backed slice of the public
+``lerobot/aloha_sim_transfer_cube_human`` (196 KB; see its README for provenance).
+Because the pixels are fixed, the measured preserved-fraction is a stable baseline
+instead of something that drifts with a re-encode.
+
+The only irreducible prerequisites are the ones that cannot be committed: a CUDA
+device and the gated ``facebook/sam3`` weights. Both are declared by the
+``requires_sam3_gpu`` marker and auto-skip.
 """
 
 from __future__ import annotations
@@ -34,54 +39,44 @@ import numpy as np
 import pytest
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.utils.constants import HF_LEROBOT_HOME
 
 pytestmark = pytest.mark.requires_sam3_gpu
 
-PUBLIC_REPO = "lerobot/aloha_sim_transfer_cube_human"  # public, real rendered footage
+ARTIFACT_REPO = "lerobot/data_editing_slice"
+ARTIFACT_ROOT = Path(__file__).resolve().parents[1] / "artifacts" / "datasets" / ARTIFACT_REPO
 CAM = "observation.images.top"
 SLICE_EPISODES, SLICE_FRAMES = 2, 12
 PROMPT = "robot arm"
 
 
 @pytest.fixture(scope="module")
-def realistic_slice(tmp_path_factory):
-    """A tiny video-backed dataset carved out of a public one — photorealistic
-    content, trivial size. Skips (never downloads) when the source isn't cached."""
+def realistic_slice():
+    """The committed fixture — no fetch, no rebuild. Skips only when git-lfs has
+    not pulled the artifact."""
+    if not (ARTIFACT_ROOT / "meta" / "info.json").exists():
+        pytest.skip(f"{ARTIFACT_REPO} artifact missing — run `git lfs pull`")
+    ds = LeRobotDataset(repo_id=ARTIFACT_REPO, root=ARTIFACT_ROOT)
+    assert ds.meta.total_frames == SLICE_EPISODES * SLICE_FRAMES, "fixture changed shape"
+    assert CAM in ds.meta.camera_keys
+    return ds
+
+
+@pytest.fixture(scope="module")
+def sam3_adapter():
+    """The real segmenter. Skips (never fails) when CUDA or the gated weights are
+    absent — those are the only parts that cannot be committed alongside the test."""
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("needs CUDA")
-    root = HF_LEROBOT_HOME / PUBLIC_REPO
-    if not (root / "meta" / "info.json").exists():
-        pytest.skip(f"{PUBLIC_REPO} not in the local HF cache; fetch it to run this test")
+    from lerobot.overlays.adapters import build_adapter
 
-    src = LeRobotDataset(repo_id=PUBLIC_REPO, root=root)
-    assert CAM in src.meta.camera_keys, f"{PUBLIC_REPO} lost {CAM}"
-    out_root = Path(tmp_path_factory.mktemp("slice")) / "src"
-    h, w = src.meta.features[CAM]["shape"][:2]
-    dst = LeRobotDataset.create(
-        repo_id="test/realistic_slice",
-        fps=src.meta.fps,
-        features={
-            "action": {"dtype": "float32", "shape": (len(src[0]["action"]),), "names": None},
-            CAM: {"dtype": "video", "shape": (h, w, 3), "names": None},
-        },
-        root=out_root,
-        use_videos=True,
-    )
-    for ep in range(SLICE_EPISODES):
-        start = int(src.meta.episodes["dataset_from_index"][ep])
-        for f in range(SLICE_FRAMES):
-            item = src[start + f]
-            frame = item[CAM]
-            rgb = (frame.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-            dst.add_frame({"action": item["action"].numpy(), CAM: rgb, "task": "transfer cube"})
-        dst.save_episode()
-    dst.finalize()
-    return LeRobotDataset(repo_id="test/realistic_slice", root=out_root)
+    try:
+        return build_adapter("sam3_track", device="cuda", resolution=672)
+    except Exception as e:  # gated weights absent, or transformers too old
+        pytest.skip(f"real SAM3 unavailable: {e}")
 
 
-def test_real_sam3_edits_a_photorealistic_slice(tmp_path, realistic_slice):
+def test_real_sam3_edits_a_photorealistic_slice(tmp_path, realistic_slice, sam3_adapter):
     import torch
 
     from lerobot.datasets.dataset_postprocess import process_dataset
@@ -91,8 +86,7 @@ def test_real_sam3_edits_a_photorealistic_slice(tmp_path, realistic_slice):
     result = process_dataset(
         realistic_slice,
         out_repo_id="test/realistic_slice_edited",
-        model="sam3_track",
-        resolution=672,
+        adapter=sam3_adapter,
         objects=[{"name": PROMPT, "sign": "+", "treatment": {"key": "none"}}],
         background_treatment={"key": "random", "params": {}},
         cameras=[CAM],
@@ -103,8 +97,9 @@ def test_real_sam3_edits_a_photorealistic_slice(tmp_path, realistic_slice):
     n = SLICE_EPISODES * SLICE_FRAMES
     peak_gb = torch.cuda.max_memory_allocated() / 1e9
     print(
-        f"\nreal SAM3 on {n} photorealistic frames: {wall:.1f}s total "
-        f"({wall / n * 1000:.0f} ms/frame incl. model load), peak VRAM {peak_gb:.2f} GB"
+        f"\nreal SAM3 on {n} photorealistic frames: {wall:.1f}s "
+        f"({wall / n * 1000:.0f} ms/frame, model load excluded — it happens in the fixture), "
+        f"peak VRAM {peak_gb:.2f} GB"
     )
 
     assert not result.cancelled
