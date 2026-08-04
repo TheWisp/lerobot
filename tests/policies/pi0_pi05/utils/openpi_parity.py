@@ -229,6 +229,7 @@ def assert_processor_inputs_match_lerobot(
 
 
 def load_openpi_reference_state_dict(repo_id: str) -> dict[str, torch.Tensor]:
+    # external-ok: fetches the published reference weights this parity test compares against
     cache_dir = Path(snapshot_download(repo_id=repo_id, repo_type="model"))
     return safetensors.torch.load_file(cache_dir / "model.safetensors")
 
