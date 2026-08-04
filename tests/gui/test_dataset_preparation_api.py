@@ -154,9 +154,7 @@ class TestApiToCoreBoundary:
             fps=FPS,
             features=FEATURES,
             root=src_root,
-            rgb_encoder=RGBEncoderConfig(
-                vcodec="h264", pix_fmt="yuv420p", crf=18, g=2, preset="ultrafast"
-            ),
+            rgb_encoder=RGBEncoderConfig(vcodec="h264", pix_fmt="yuv420p", crf=18, g=2, preset="ultrafast"),
         )
         for _ in range(2):
             for _ in range(3):
