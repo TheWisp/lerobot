@@ -136,6 +136,7 @@ async def test_record_argv_parses():
         ),
     )
     assert _program_of(argv) == "lerobot-record"
+    assert "--dataset.rgb_encoder.vcodec=libsvtav1" in argv
     cfg = _parse(RecordConfig, argv)
     # The codec must actually reach the encoder, not just parse into some field.
     assert cfg.dataset.rgb_encoder.vcodec == "libsvtav1"

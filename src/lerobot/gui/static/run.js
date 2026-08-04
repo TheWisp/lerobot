@@ -1055,6 +1055,51 @@ function refreshRunDatasetSelects() {
 // label's `display:none` toggle naturally hides the marker too.
 const _REQ = ' <span class="required-marker">*</span>';
 
+const _VIDEO_CODEC_PREF_KEY = 'lerobot.record.videoCodec';
+const _VIDEO_CODECS = [
+    ['libsvtav1', 'Software AV1 — stable'],
+    ['auto', 'Auto — prefer available hardware'],
+    ['h264_nvenc', 'NVIDIA H.264 (NVENC)'],
+    ['hevc_nvenc', 'NVIDIA HEVC (NVENC)'],
+    ['h264', 'Software H.264'],
+    ['hevc', 'Software HEVC'],
+    ['libaom-av1', 'Software AV1 (libaom)'],
+    ['h264_vaapi', 'Linux VAAPI H.264'],
+    ['h264_qsv', 'Intel Quick Sync H.264'],
+    ['h264_videotoolbox', 'macOS H.264 VideoToolbox'],
+    ['hevc_videotoolbox', 'macOS HEVC VideoToolbox'],
+];
+
+function _savedVideoCodec() {
+    let saved = null;
+    try {
+        saved = localStorage.getItem(_VIDEO_CODEC_PREF_KEY);
+    } catch (_) {
+        // Storage can be disabled by browser policy; the safe default still works.
+    }
+    return _VIDEO_CODECS.some(([value]) => value === saved) ? saved : 'libsvtav1';
+}
+
+function _videoCodecOptions() {
+    const selected = _savedVideoCodec();
+    return _VIDEO_CODECS.map(([value, label]) =>
+        `<option value="${value}"${value === selected ? ' selected' : ''}>${label}</option>`
+    ).join('');
+}
+
+function _onVideoCodecChange(value) {
+    if (!_VIDEO_CODECS.some(([codec]) => codec === value)) return;
+    try {
+        localStorage.setItem(_VIDEO_CODEC_PREF_KEY, value);
+    } catch (_) {
+        // The current form selection remains effective even without persistence.
+    }
+    for (const id of ['run-teleop-video-codec', 'run-policy-video-codec']) {
+        const select = document.getElementById(id);
+        if (select && select.value !== value) select.value = value;
+    }
+}
+
 function renderRunForm() {
     if (_runFormRendered) return; // Only build once
     _runFormRendered = true;
@@ -1100,6 +1145,9 @@ function renderRunForm() {
     html += `<input type="number" id="run-teleop-episode-time" value="60" min="1">`;
     html += `<label>Reset Duration</label>`;
     html += `<input type="number" id="run-teleop-reset-time" value="60" min="0">`;
+    html += `<label>Video encoder</label>`;
+    html += `<div><select id="run-teleop-video-codec" onchange="_onVideoCodecChange(this.value)">${_videoCodecOptions()}</select>`;
+    html += `<div class="form-hint">Use the same codec when resuming an existing dataset.</div></div>`;
     html += '</div>';
     html += '</div>';
     // Debug model (optional — runs alongside teleop for live inspection of
@@ -1267,6 +1315,9 @@ function renderRunForm() {
     html += `<input type="number" id="run-policy-episode-time" value="60" min="1">`;
     html += `<label>Reset Duration</label>`;
     html += `<input type="number" id="run-policy-reset-time" value="60" min="0">`;
+    html += `<label>Video encoder</label>`;
+    html += `<div><select id="run-policy-video-codec" onchange="_onVideoCodecChange(this.value)">${_videoCodecOptions()}</select>`;
+    html += `<div class="form-hint">Use the same codec when resuming an existing dataset.</div></div>`;
     html += '</div>';
     html += '</div>';
     // Intervention dataset (for leader inverse following — human correction fragments)
@@ -1474,6 +1525,7 @@ async function launchRun() {
                 episode_time_s: parseFloat(document.getElementById('run-teleop-episode-time')?.value) || 60,
                 reset_time_s: parseFloat(document.getElementById('run-teleop-reset-time')?.value) || 60,
                 num_episodes: parseInt(document.getElementById('run-teleop-num-episodes')?.value) || 50,
+                vcodec: document.getElementById('run-teleop-video-codec')?.value || 'libsvtav1',
                 resume: resume,
                 debug_model: _getDebugModelConfig(),
             };
@@ -1686,6 +1738,7 @@ async function launchRun() {
                 episode_time_s: parseFloat(document.getElementById('run-policy-episode-time')?.value) || 60,
                 reset_time_s: parseFloat(document.getElementById('run-policy-reset-time')?.value) || 60,
                 num_episodes: parseInt(document.getElementById('run-policy-episodes')?.value) || 10,
+                vcodec: document.getElementById('run-policy-video-codec')?.value || 'libsvtav1',
                 resume: resume,
                 intervention_repo_id: interventionRepoId,
             };
