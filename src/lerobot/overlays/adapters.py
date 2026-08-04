@@ -154,12 +154,20 @@ class ConceptMaskAdapter(DebugVisionAdapter):
         self._seed_multi = False
         # Batch the per-frame vision encode across cameras (segment_many). Default on;
         # runtime-togglable via set_control({"batch_cameras": ...}) — an EXPERIMENTAL
-        # perf option: batched cuDNN kernels differ numerically from batch-1, so
-        # borderline tracker scores can take a different (equally valid) trajectory.
-        # The same flag drives preview AND commit, so preview == commit per setting.
-        # Default OFF: the batched vision encode is numerically different enough to
-        # collapse tracking holds on some scenes (measured: front-cam dowel 4/199
-        # batched vs 24/199 serial, ring 4/199 vs 89/199, merged_raw ep157). Opt-in.
+        # perf option (~1.3x at 2 cams) that is OFF because it measurably degrades
+        # tracking: on merged_raw ep157 an object held 199/199 frames serial fell to
+        # 176/199 batched, another 89/199 -> 4/199.
+        #
+        # The CAUSE IS NOT KERNEL NUMERICS, contrary to an earlier note here. Measured
+        # directly: trk.get_image_features is bit-identical batched vs serial (max
+        # |diff| exactly 0.0, both for two different cameras stacked and for the same
+        # frame duplicated). So the encoder is exact and the regression comes from
+        # somewhere else in this batching path — most likely the feature-cache seeding
+        # (which frame index each session's pre-seeded features are filed under). Worth
+        # root-causing rather than accepting: if it is an indexing bug, batching becomes
+        # a clean ~1.3x, and it is the one lever that attacks the real bottleneck
+        # (~1,233 kernel launches + 4 hard syncs per frame — this workload is
+        # launch-bound, not compute-bound).
         self._batch_cams = False
         self._cam: str | None = None
 

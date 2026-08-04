@@ -261,7 +261,8 @@
                         <button class="overlays-seg-btn${multiInstance ? ' sel' : ''}" data-multi="1">All</button>
                         <button class="overlays-seg-btn${multiInstance ? '' : ' sel'}" data-multi="0">Largest</button>
                     </span>
-                    ${mode === 'data' ? `<label class="overlays-check" title="One batched vision encode for all active cameras (~1.3× at 2 cams). WARNING — measurably hurts tracking on some scenes: an object held 199/199 frames serial vs 176/199 batched, another 89/199 vs 4/199. Off by default; only enable if you verify holds on YOUR data. The processing job uses the same setting, so preview = commit either way.">
+                    ${mode === 'data' ? `<label class="overlays-check" title="One batched vision encode for all active cameras (~1.3× at 2 cams). WARNING — measurably hurts tracking on some scenes (an object held 199/199 frames serial vs 176/199 batched, another 89/199 vs 4/199). The cause is NOT kernel numerics: the batched vision encode is bit-identical to the serial one, so this is an unexplained defect in the batching path, not an inherent trade. Off by default; only enable if you verify holds on YOUR data. The processing job uses the same setting, so preview = commit either way.">
+
                         <input type="checkbox" class="overlays-batch"${batchCameras ? ' checked' : ''}> Batch cameras (faster; can degrade tracking)</label>` : ''}
                     ${RESOLUTIONS.length ? `<label class="overlays-label" title="SAM inference resolution — lower is faster; Balanced measured equal-or-better masks than Full at ~1.8× the speed. Changing it reloads the model.">Quality</label>
                     <select class="overlays-select overlays-res">${RESOLUTIONS.map((r) => `<option value="${r.value}"${r.value === resolution ? ' selected' : ''}>${esc(r.label)}</option>`).join('')}</select>` : ''}
