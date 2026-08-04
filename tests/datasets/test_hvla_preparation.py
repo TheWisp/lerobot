@@ -264,16 +264,24 @@ class TestCli:
         ]["shape"] == [224, 224, 3]
 
     def test_cli_failure_returns_nonzero(self, prep, tmp_path, monkeypatch):
+        """CLI maps a core failure to exit code 1 without creating output.
+
+        The core function is stubbed out: this test only covers the
+        argument->core->exit-code mapping, not real failure modes, and must
+        not depend on Hub behaviour for missing repos.
+        """
         from lerobot.scripts.lerobot_prepare_hvla_dataset import main
 
+        def failing_prepare(**kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(prep, "prepare_hvla_dataset", failing_prepare)
         monkeypatch.setattr(
             "sys.argv",
             [
                 "lerobot-prepare-hvla-dataset",
                 "--source-repo-id",
-                "test/missing",
-                "--source-root",
-                str(tmp_path / "missing"),
+                "test/src",
                 "--output-repo-id",
                 "test/out",
                 "--output-root",
