@@ -14,6 +14,40 @@
 - [High] **Language annotations (v3.1) — GUI parity**: [docs/stories/language_annotations.md](docs/stories/language_annotations.md)
 - [ ] Undo/redo — explicitly punted from Feature Editing V1 (per-chip removal in edits-bar covers most "oops" cases). Real undo across Saves needs pre-edit value capture or a Git-like history.
 
+### Data Editing / Augmentation (segment + effect → new dataset)
+
+Shipped (prototype): a "Process dataset…" button in the data-tab overlay panel
+opens a menu that reuses the SAM3-segmented objects as the protected foreground,
+applies a background/global effect to every frame, and writes an augmented copy
+as a new LeRobotDataset via an async worker job (modelled on the Hub-transfer
+tray). See [docs/data_editing.md](docs/data_editing.md). Effects:
+background random-colour / random-texture / solid / blur (foreground feathered) +
+global brightness-contrast. Randomized effects sample per-episode only.
+
+Staging (done): tune criteria live in the overlay → **Preview this episode**
+(ephemeral single-episode run, auto-opened) → **Process all episodes**. The menu
+shows measured wall-clock estimates for both (segmentation dominates at ~90
+ms/frame/cam; full dataset = tens of min, one episode = seconds).
+
+Follow-ups:
+
+- [ ] **Background Replace from a texture/photo library** — the highest-impact
+      effect per GreenAug/RoboEngine (random _texture_ backgrounds beat solid colour
+      and beat generative). Needs a source-folder picker + per-episode image choice.
+- [ ] **Live effect preview on the scrubbed frame** — the overlay already draws
+      masks per-frame; render the chosen _effect_ (not just contours) as the overlay
+      so the composited look updates as you scrub, before even the episode preview.
+      Near-free (reuses the warm overlay worker's masks + ~9 ms effect apply).
+- [ ] **Warm-model reuse across preview → commit** — today each run reloads SAM3
+      (~6 s) and preview tears down the live overlay. A persistent worker with a
+      command channel (like the overlay worker) would let preview and commit share a
+      loaded model and skip the reload.
+- [ ] **Hue / colour-shift effect** — modest ±deg range (keep segmented target
+      objects recognizable); deferred to keep the v1 menu small.
+- [ ] **Multi-instance foreground** — SAM3 locks one instance per concept, so a
+      two-arm scene only protects one arm unless the user adds a second object row.
+      Consider auto-expanding "robot arm" to all detected instances.
+
 ### Feature Editing (per-frame view + edit)
 
 See [docs/feature_editing.md](docs/feature_editing.md) for the full design.
@@ -678,6 +712,74 @@ Explicitly out of scope (ruled out in the design discussion before merge of PR #
 - [High] **Duplicate detection within dataset**: detect near-duplicate episodes during dataset opening and before merging. Prevents wasted training compute on redundant data. Could use joint state trajectory similarity or image embedding distance.
 - ~~**Subtask labeling in GUI**~~ — delivered by Feature Editing V1 ([docs/feature_editing.md](docs/feature_editing.md)): drag-select a frame range on the subtask row → type the label in the Inspector → Apply.
 - ~~**Subtask format**~~ — superseded by upstream's v3.1 language columns; see [docs/stories/language_annotations.md](docs/stories/language_annotations.md).
+
+## Overlays / Data Editing
+
+- [ ] **Root-cause the camera-batching regression** (highest-value perf item). Batching
+      is the only lever that reduces kernel launches per frame, and it measured ~1.3x —
+      but it degraded tracking (an object held 199/199 frames serial fell to 176/199
+      batched; another 89/199 -> 4/199 on merged_raw ep157). The long-assumed cause was
+      "batched kernels diverge numerically"; that is now DISPROVEN — `trk.get_image_features`
+      is bit-identical batched vs serial (max |diff| exactly 0.0, for two cameras stacked
+      and for a duplicated frame). Prime suspect is the prime-cache seeding: which frame
+      index each session's pre-computed features get filed under. If that is an indexing
+      bug, batching becomes a clean ~1.3x with no quality cost.
+- [ ] **Try CUDA graphs** — `torch.compile(mode="reduce-overhead")` on the vision encoders.
+      Profiling says the workload is LAUNCH-BOUND, not compute-bound: ~1,233 kernel
+      launches and 4 blocking `cudaStreamSynchronize` (8.17 ms) per frame, ~15-20 ms of
+      actual kernel time inside a 26.5 ms call. Graph capture replays that launch sequence
+      as one submission, which is the textbook fix. NOTE: default-mode torch.compile was
+      already tested and rejected (1.12x for a 24 s compile) — it does not capture graphs,
+      so that result says nothing about this one. Capture may fail: graphs need static
+      shapes and no syncs inside the captured region, and this model has four.
+- [ ] Remove the 4 per-frame syncs if possible — deferring mask->CPU by one frame would
+      stop draining the pipeline every frame. Cheaper than graph capture, same target.
+
+- [ ] (LOW PRIORITY — only pays off at `variants` > 1, and the practical workflow is
+      `variants=1`: extra variants cost disk for near-duplicate data, and randomizing
+      across a decently sized dataset at episode level gives the same diversity.)
+      Hoist segmentation out of the `variants` loop. Measured (pick_ball ep0, 241
+      frames, 2 cams, sam3_track@672): segmentation is **77% of a job's wall time**
+      (15.9 s of 20.7 s), and `variants` is the OUTERMOST loop — so N randomized
+      copies re-segment every frame N times for identical masks (masks depend on the
+      frames and the object list, not on the random draws). Cache the episode's masks
+      (bit-packed or RLE to bound RAM) and composite N times: extra variants become
+      nearly free instead of costing N x the GPU work.
+- [ ] Overlap the CPU and GPU stages of a processing job. The loop is strictly serial
+      per frame — decode (CPU) -> segment (GPU) -> composite (CPU) -> buffer, then
+      encode per episode (CPU) — so the GPU idles through ~22% of wall time
+      (composite 13%, decode 5%, encode 4%) and measured utilization is mean 65%,
+      max 79% (never higher, even mid-segmentation; note nvidia-smi "utilization"
+      only means a kernel was running, so true compute efficiency is lower).
+      Prefetch decode in a thread and composite frame N-1 while the GPU segments
+      frame N: ~1.25x, no quality risk.
+- [x] ~~torch.compile the detector~~ — MEASURED AND REJECTED (2026-08-04). The old
+      "1.34x" was a micro-benchmark of the detector forward alone; it does not
+      translate, because `sam3_track` throttles detection and the per-frame cost is
+      the TRACKER. Compiling both 454M-param vision encoders end to end: **1.12x**
+      steady state (33.4 -> 29.7 ms/frame), **24.4 s** one-time compile, so
+      **break-even at ~6,600 frames** (~26 episodes). On a 274k-frame job that is a
+      ~4% saving; on anything smaller it is a net loss, and it would add 24 s before
+      the live preview's first mask. It also perturbs numerics (mean IoU 0.9998 vs
+      uncompiled, only 19/80 masks identical) — the same class of drift that made
+      camera batching collapse holds on a real dataset. Not worth 4%.
+- [ ] Encode WYSIWYG composite overlays as JPEG/WebP instead of PNG. Composites are
+      full-frame photo-like images, so PNG is the pathological codec (~300-800 KB each);
+      2 cams x ~10/s saturates a Wi-Fi link. The completion-gated loader keeps remote
+      tiles updating under that pressure, but a 5-10x smaller encoding would restore
+      near-full overlay refresh remotely. Keep PNG for contour/chrome overlays (alpha).
+- [ ] Random-texture bank: GreenAug's best background randomization is random REAL
+      texture images (87% success vs 66% Perlin / 65% solid; arXiv:2407.07868 Table 4)
+      — a local bank of high-entropy texture photos sampled per episode, offered next
+      to the per-pixel static default (which follows the paper's entropy trend but is
+      untested there and gets low-passed by video codecs on commit).
+- [ ] Overlap resolution upgrade: per-pixel mask-logit argmax when object masks
+      dispute a pixel, replacing the smallest-mask-wins containment heuristic
+      (effects.build_and_sample_regions). Needs per-concept logits plumbed through the
+      adapter contract. Prior art: confidence-sorted greedy merging (Kirillov et al.
+      arXiv:1801.00868), logit argmax (EfficientPS arXiv:2004.02307), learned occlusion
+      order (Lazarow et al. CVPR 2020). Only worth it if tint seams at true occlusion
+      boundaries (e.g. fingers wrapping a held object) become visible in practice.
 
 ## HVLA / Policy Evaluation
 

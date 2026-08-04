@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=65">
+    <link rel="stylesheet" href="/static/style.css?v=66">
 </head>
 <body>
     <div class="tab-bar">
@@ -19,6 +19,14 @@
              Hub transfers without remembering a hidden trigger. Click toggles
              the popover below; the popover lists one card per active or
              recently-completed Hub transfer (empty when idle). -->
+        <!-- Dataset-processing indicator: mirrors Transfers, always visible. In-flight
+             augmentation jobs run in a detached worker, so their progress lives here
+             rather than only in the dismissable Process window. -->
+        <button id="proc-indicator" class="transfers-indicator" type="button"
+                onclick="ProcessData.togglePopover()"
+                title="Dataset processing jobs (augmentation)">
+            <span id="proc-indicator-label">Processing</span>
+        </button>
         <button id="transfers-indicator" class="transfers-indicator" type="button"
                 onclick="toggleTransfersPopover()"
                 title="Hub uploads / downloads">
@@ -42,6 +50,15 @@
                     title="Dismiss all finished transfers">Clear finished</button>
         </div>
         <div id="transfers-list" class="transfers-list"></div>
+    </div>
+
+    <!-- Processing popover: mirrors the Transfers popover; lists augmentation jobs
+         (preview + full runs) with live progress + Cancel / Open / Dismiss. -->
+    <div id="proc-popover" class="transfers-popover" hidden>
+        <div class="transfers-popover-header">
+            <span>Dataset processing</span>
+        </div>
+        <div id="proc-jobs-list" class="proc-jobs"></div>
     </div>
 
     <!-- Data tab (existing) -->
@@ -662,8 +679,10 @@ nebius iam auth-public-key generate \
     <script src="/static/robot.js?v=24"></script>
     <script src="/static/run.js?v=50"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
+    <script src="/static/overlay_pull_gate.js?v=2"></script>
     <script src="/static/camera_release.js?v=1"></script>
-    <script src="/static/overlays.js?v=37"></script>
+    <script src="/static/process.js?v=13"></script>
+    <script src="/static/overlays.js?v=54"></script>
     <script src="/static/model.js?v=6"></script>
     <script src="/static/training.js?v=31"></script>
     <script src="/static/add_host_dialog.js?v=4"></script>
