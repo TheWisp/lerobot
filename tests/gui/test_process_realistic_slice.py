@@ -51,11 +51,23 @@ PROMPT = "robot arm"
 
 @pytest.fixture(scope="module")
 def realistic_slice():
-    """The committed fixture — no fetch, no rebuild. Skips only when git-lfs has
-    not pulled the artifact."""
+    """The committed fixture — no fetch, no rebuild.
+
+    Order matters: check CUDA BEFORE constructing the dataset. LeRobotDataset falls
+    back to a Hub download whenever the local read fails, so on a CPU-only runner an
+    early load turned into a 401 against a repo_id that exists only on disk. And the
+    load runs under HF_HUB_OFFLINE so a broken artifact can never become a silent
+    network fetch — this fixture is local by construction, and should fail loudly if
+    it isn't.
+    """
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("needs CUDA")
     if not (ARTIFACT_ROOT / "meta" / "info.json").exists():
         pytest.skip(f"{ARTIFACT_REPO} artifact missing — run `git lfs pull`")
-    ds = LeRobotDataset(repo_id=ARTIFACT_REPO, root=ARTIFACT_ROOT)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("HF_HUB_OFFLINE", "1")
+        ds = LeRobotDataset(repo_id=ARTIFACT_REPO, root=ARTIFACT_ROOT)
     assert ds.meta.total_frames == SLICE_EPISODES * SLICE_FRAMES, "fixture changed shape"
     assert CAM in ds.meta.camera_keys
     return ds
@@ -65,9 +77,6 @@ def realistic_slice():
 def sam3_adapter():
     """The real segmenter. Skips (never fails) when CUDA or the gated weights are
     absent — those are the only parts that cannot be committed alongside the test."""
-    torch = pytest.importorskip("torch")
-    if not torch.cuda.is_available():
-        pytest.skip("needs CUDA")
     from lerobot.overlays.adapters import build_adapter
 
     try:
