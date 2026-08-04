@@ -72,7 +72,9 @@ def test_local_image_build_reuses_cache_by_default():
 def test_training_dockerfile_installs_dependencies_before_source():
     """Code-only edits must not invalidate the heavyweight dependency layer."""
     dockerfile = (_REPO_ROOT / "docker" / "Dockerfile.training").read_text(encoding="utf-8")
-    dependency_sync = dockerfile.index("RUN uv sync --locked --extra training-image --no-cache --no-install-project")
+    dependency_sync = dockerfile.index(
+        "RUN uv sync --locked --extra training-image --no-cache --no-install-project"
+    )
     source_copy = dockerfile.index("COPY --chown=user_lerobot:user_lerobot src/ src/")
     project_sync = dockerfile.index(
         "RUN uv sync --locked --extra training-image --no-cache", dependency_sync + 1
@@ -103,9 +105,7 @@ def test_build_image_endpoint_forwards_full_rebuild_choice(monkeypatch, tmp_path
     training_mod._build_task = None
 
     async def exercise_endpoint():
-        response = await training_mod.build_image(
-            training_mod.BuildImageRequest(force_full_rebuild=True)
-        )
+        response = await training_mod.build_image(training_mod.BuildImageRequest(force_full_rebuild=True))
         await training_mod._build_task
         return response
 

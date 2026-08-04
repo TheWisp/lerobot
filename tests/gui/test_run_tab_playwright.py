@@ -105,6 +105,7 @@ def test_none_selection_also_survives(page):
 
 def test_video_encoder_is_user_selectable_and_persistent(page):
     """The codec is an operator setting, shared by both recording workflows."""
+    page.select_option("#run-teleop-record-dataset", value="__new__")
     teleop = page.locator("#run-teleop-video-codec")
     policy = page.locator("#run-policy-video-codec")
 
@@ -123,7 +124,8 @@ def test_video_encoder_is_user_selectable_and_persistent(page):
     page.reload()
     page.wait_for_function("typeof switchTab === 'function'", timeout=10_000)
     page.evaluate("switchTab('run')")
-    page.wait_for_selector("#run-teleop-video-codec", timeout=10_000)
+    page.select_option("#run-teleop-record-dataset", value="__new__")
+    page.wait_for_selector("#run-teleop-video-codec", state="visible", timeout=10_000)
     assert page.input_value("#run-teleop-video-codec") == "h264_nvenc"
 
 
@@ -150,7 +152,6 @@ def test_selected_video_encoder_reaches_record_request(page):
         for (const [id, value] of [
             ['run-teleop-robot', 'fake-robot'],
             ['run-teleop-teleop', 'fake-teleop'],
-            ['run-teleop-task-select', 'test-task'],
         ]) {
             const select = document.getElementById(id);
             select.add(new Option(value, value));
@@ -159,6 +160,13 @@ def test_selected_video_encoder_reaches_record_request(page):
         """
     )
     page.select_option("#run-teleop-record-dataset", value="__new__")
+    page.evaluate(
+        """
+        const select = document.getElementById('run-teleop-task-select');
+        select.add(new Option('test-task', 'test-task'));
+        select.value = 'test-task';
+        """
+    )
     page.fill("#run-teleop-new-dataset-name", "test/gui-codec")
     page.select_option("#run-teleop-video-codec", value="h264_nvenc")
 
