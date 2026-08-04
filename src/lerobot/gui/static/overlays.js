@@ -461,14 +461,22 @@
             const add = els.modelBody.querySelector('.overlays-add-obj');
             if (add) { add.disabled = objects.length >= MAX_OBJECTS; add.textContent = `+ Add object (${objects.length}/${MAX_OBJECTS})`; }
 
-            // Gate "Process dataset…": needs a named object AND at least one real treatment.
-            const procBtn = els.modelBody.querySelector('.overlays-process');
-            if (procBtn) {
-                const ok = namedObjects().length > 0 && hasTreatment();
-                procBtn.disabled = !ok;
-                procBtn.title = ok ? 'Apply these per-region treatments to every episode as a new dataset'
-                    : 'Name an object and set at least one treatment (an object or the Background) first';
-            }
+            renderProcessGate();
+        }
+
+        // Gate "Process dataset…": needs a named object AND at least one real treatment.
+        // Called from renderObjects() (rows/treatments changed) AND renderAction()
+        // (name edits, which do NOT re-render the rows). Living only in renderObjects
+        // was a bug: typing a valid object name left the button greyed out — with a
+        // tooltip telling you to do the thing you had just done — until you happened to
+        // click a treatment button and trigger a row re-render.
+        function renderProcessGate() {
+            const procBtn = els.modelBody && els.modelBody.querySelector('.overlays-process');
+            if (!procBtn) return;
+            const ok = namedObjects().length > 0 && hasTreatment();
+            procBtn.disabled = !ok;
+            procBtn.title = ok ? 'Apply these per-region treatments to every episode as a new dataset'
+                : 'Name an object and set at least one treatment (an object or the Background) first';
         }
 
         function addObject() {
@@ -560,6 +568,7 @@
 
         // ---- action + status (mode-driven) ----
         function renderAction() {
+            renderProcessGate();  // name edits land here, not in renderObjects()
             if (!current) { els.action.innerHTML = ''; return; }
             const hasObj = namedObjects().length > 0;
             if (mode === 'data') {
