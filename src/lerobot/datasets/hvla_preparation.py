@@ -33,7 +33,7 @@ from pathlib import Path
 import av
 import numpy as np
 import torch
-import torchvision.transforms.functional as TF
+from torchvision.transforms import functional as tv_functional
 
 from lerobot.configs.video import RGBEncoderConfig
 from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
@@ -68,10 +68,10 @@ _VIDEO_DIR = "videos"
 def _resize_frame_to_uint8(frame_rgb: np.ndarray) -> np.ndarray:
     """HWC uint8 -> resized HWC uint8, using HVLA TRAIN's exact resize call."""
     img = torch.from_numpy(frame_rgb).permute(2, 0, 1).float().div_(255.0)
-    img = TF.resize(
+    img = tv_functional.resize(
         img,
         list(HVLA_IMAGE_SIZE),
-        interpolation=TF.InterpolationMode.BILINEAR,
+        interpolation=tv_functional.InterpolationMode.BILINEAR,
         antialias=True,
     )
     return (img.clamp(0, 1) * 255).round().to(torch.uint8).permute(1, 2, 0).numpy()
@@ -158,9 +158,7 @@ def _validate_output(
     dataset = LeRobotDataset(output_repo_id, root=staging_root)
     meta = dataset.meta
     if meta.total_episodes != source.meta.total_episodes:
-        raise RuntimeError(
-            f"Episode count mismatch: {meta.total_episodes} != {source.meta.total_episodes}"
-        )
+        raise RuntimeError(f"Episode count mismatch: {meta.total_episodes} != {source.meta.total_episodes}")
     if meta.total_frames != source.meta.total_frames:
         raise RuntimeError(f"Frame count mismatch: {meta.total_frames} != {source.meta.total_frames}")
     if sorted(meta.video_keys) != sorted(source.meta.video_keys):
