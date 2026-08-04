@@ -532,7 +532,7 @@ def main() -> None:
             if frames_by_cam and isinstance(adapter, ConceptMaskAdapter):
                 # WYSIWYG data mode: ONE segmentation pass for the whole sweep — the
                 # adapter shares the vision encode across cameras when batching is on
-                # — then the
+                # (segment_many honors the batch_cameras control flag) — then the
                 # per-region composite per camera. The composite is the COMMITTED
                 # result; the detection chrome is drawn on top for the LIVE tile only.
                 try:

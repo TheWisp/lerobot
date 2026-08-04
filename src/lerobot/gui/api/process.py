@@ -31,7 +31,6 @@ import re
 import shutil
 import signal
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -96,6 +95,9 @@ class StartRequest(BaseModel):
     # SAM inference resolution preset (ConceptMaskAdapter.RESOLUTIONS); None = adapter
     # default. Must match the live preview's — preview == commit includes resolution.
     resolution: int | None = None
+    # Batch the vision encode across cameras (experimental; default on) — carried into
+    # the job so preview == commit per setting.
+    batch_cameras: bool = False
     out_name: str | None = None  # dataset name part; combined with the source owner
     preview: bool = False  # quick single-episode run to an ephemeral dir, auto-opened
     episodes: list[int] | None = None  # subset to process (preview passes [current])
@@ -135,12 +137,16 @@ async def start(req: StartRequest, x_overlay_session: str | None = Header(defaul
         raise HTTPException(
             status_code=400, detail="Set at least one treatment (an object or the background)"
         )
-    from lerobot.overlays.adapters import SEGMENTER_KEYS, ConceptMaskAdapter
+    from lerobot.overlays.adapters import SEGMENTER_KEYS, ConceptMaskAdapter, python_for_model
 
     if req.model not in SEGMENTER_KEYS:
         raise HTTPException(
             status_code=400, detail=f"Unknown segmentation model: {req.model}; have {list(SEGMENTER_KEYS)}"
         )
+    try:
+        python_for_model(req.model)  # sidecar models: fail here with the recipe, not at spawn
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     if req.resolution is not None and req.resolution not in ConceptMaskAdapter.RESOLUTIONS:
         raise HTTPException(
             status_code=400,
@@ -250,6 +256,7 @@ def _spawn_worker(*, job, req: StartRequest, src, out_repo_id: str, out_root: Pa
         out_root=str(out_root),
         model=req.model,
         resolution=req.resolution,
+        batch_cameras=req.batch_cameras,
         objects=req.objects,
         background_treatment=req.background_treatment or {"key": "random", "params": {}},
         apply_mode=req.apply_mode,
@@ -265,10 +272,12 @@ def _spawn_worker(*, job, req: StartRequest, src, out_repo_id: str, out_root: Pa
 
     atomic_write_json(paths.progress, {"job_id": job.job_id, "status": "pending", "stage": "starting"})
 
+    from lerobot.overlays.adapters import python_for_model
+
     env = os.environ.copy()
     env["LEROBOT_PROCESS_WORKER_CONFIG"] = cfg.to_json()
     proc = subprocess.Popen(  # noqa: S603 — args are well-controlled
-        [sys.executable, "-m", "lerobot.gui.process_worker"],
+        [python_for_model(req.model), "-m", "lerobot.gui.process_worker"],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

@@ -35,6 +35,17 @@ def test_sam3_step_external_label_is_sam3():
     assert step["label"] == "SAM3"
 
 
+def test_video_step_is_the_bounded_streaming_adapter():
+    # "sam3_video" was once banned: it implied naive Sam3VideoModel use, whose session
+    # retains every streamed frame + per-frame outputs forever (OOM on long streams).
+    # It is now a real step — but only because the adapter bounds memory the same way
+    # the two-tier does: per-frame eviction + a rolling session rebuild.
+    assert any(s["key"] == "sam3_video" for s in overlays._STEPS)
+    from lerobot.overlays.adapters import Sam3VideoUnifiedAdapter
+
+    assert Sam3VideoUnifiedAdapter.FLUSH_EVERY > 0
+
+
 @pytest.mark.parametrize(
     "filt,cams,expected",
     [
@@ -773,6 +784,26 @@ def test_observe_logs_desync_instead_of_dropping_it(overlay_client, monkeypatch,
         overlays._observe()
     assert overlays._machine("sam3_track").state is State.INACTIVE
     assert any("desync" in r.message for r in caplog.records)
+
+
+def test_spawn_missing_sidecar_is_400_and_error_state(overlay_client, monkeypatch):
+    """sam3_1 without its sidecar venv must fail the spawn with the setup recipe (400)
+    and land the machine in `error` — the previous code fired a nonexistent
+    Event.ERROR, which raised AttributeError (a 500 with no recipe) instead."""
+    import asyncio as _asyncio
+
+    from fastapi import HTTPException
+
+    from lerobot.overlays.overlay_state import State
+
+    monkeypatch.setenv("LEROBOT_SAM31_PYTHON", "/nonexistent/python")
+    overlays._machines.clear()
+    overlays._live_proc = None
+    overlays._live_model = None
+    with pytest.raises(HTTPException) as ei:
+        _asyncio.run(overlays._spawn_worker("sam3_1"))
+    assert ei.value.status_code == 400 and "sidecar" in ei.value.detail
+    assert overlays._machine("sam3_1").state is State.ERROR
 
 
 def test_spawn_exec_failure_is_500_and_error_state(overlay_client, monkeypatch):

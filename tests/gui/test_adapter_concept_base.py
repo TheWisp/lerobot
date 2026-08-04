@@ -59,8 +59,8 @@ def _mask(h, w, ys, xs):
 
 
 def test_registry_segmenters_and_presets():
-    # The SAM3 adapter is a segmenter; the overlay-only saliency step is not.
-    assert set(SEGMENTER_KEYS) == {"sam3_track"}
+    # All SAM adapters are segmenters; the overlay-only saliency step is not.
+    assert set(SEGMENTER_KEYS) == {"sam3_track", "sam3_video", "sam3_1"}
     assert not issubclass(PolicySaliencyAdapter, ConceptMaskAdapter)
     for k in SEGMENTER_KEYS:
         assert issubclass(ADAPTERS[k], ConceptMaskAdapter)
@@ -143,13 +143,69 @@ def test_segment_unions_instances_and_carves_negatives():
     assert (out["arm"] == expected).all()
 
 
-def test_segment_many_is_the_serial_per_camera_loop():
-    # Base contract: segment_many == per-camera segment, order-preserved, exactly one
-    # entry per input camera.
+def test_segment_many_serial_fallback_and_flag():
+    # Base contract: segment_many == per-camera segment (order-preserved), _prime_batch
+    # is only invoked when batching is on AND >1 camera. The flag is a runtime
+    # set_control toggle that must NOT restart tracking.
     ad = _FakeSegmenter()
     ad.set_control({"objects": [{"name": "ring", "sign": "+"}]})
     m = _mask(6, 8, slice(0, 3), slice(0, 3))
     ad.masks_by_concept = {"ring": [m]}
+    primed = []
+    ad._prime_batch = lambda frames: primed.append(sorted(frames))
+
     frames = {"a": np.zeros((6, 8, 3), np.uint8), "b": np.zeros((6, 8, 3), np.uint8)}
     out = ad.segment_many(frames)
-    assert list(out) == ["a", "b"] and (out["a"]["ring"] == m).all()
+    assert set(out) == {"a", "b"} and (out["a"]["ring"] == m).all()
+    # Batching defaults OFF (measured tracking-quality regression when batched:
+    # holds collapsed on a real dataset) — never primed unless explicitly enabled.
+    assert primed == []
+
+    restarts = ad.restarts
+    ad.set_control({"batch_cameras": True})
+    assert ad.restarts == restarts  # runtime toggle, no tracking restart
+    ad.segment_many(frames)
+    assert primed == [["a", "b"]]  # opt-in + 2 cams -> primed
+
+    ad.set_control({"batch_cameras": False})
+    ad.segment_many(frames)
+    assert primed == [["a", "b"]]  # off again -> not primed
+
+    ad.set_control({"batch_cameras": True})
+    ad.segment_many({"a": frames["a"]})
+    assert primed == [["a", "b"]]  # single camera -> nothing to share
+
+
+def test_sam31_registered_and_listed_in_gui_steps():
+    # The SAM 3.1 sidecar adapter is a full citizen: in the registry AND offered by
+    # both tabs' model pickers (the worker is tab-agnostic).
+    from lerobot.gui.api.overlays import _STEPS
+
+    assert "sam3_1" in SEGMENTER_KEYS
+    assert any(s["key"] == "sam3_1" for s in _STEPS)
+
+
+def test_python_for_model_selects_sidecar_only_for_sam31(monkeypatch):
+    # Non-sidecar models run in the server's interpreter; sam3_1 uses the sidecar
+    # (env-overridable) and fails with the setup recipe when it's missing.
+    import sys
+
+    from lerobot.overlays.adapters import python_for_model
+
+    assert python_for_model("sam3_track") == sys.executable
+    monkeypatch.setenv("LEROBOT_SAM31_PYTHON", sys.executable)  # any existing file
+    assert python_for_model("sam3_1") == sys.executable
+    monkeypatch.setenv("LEROBOT_SAM31_PYTHON", "/nonexistent/python")
+    with pytest.raises(RuntimeError, match="sidecar"):
+        python_for_model("sam3_1")
+
+
+def test_sam31_missing_sidecar_gives_actionable_error():
+    # In the main env (no Meta sam3 repo) the adapter must fail with the sidecar
+    # hint, not a bare ImportError.
+    import importlib.util
+
+    if importlib.util.find_spec("sam3") is not None:
+        pytest.skip("sam3 present in this env")
+    with pytest.raises(RuntimeError, match="sidecar"):
+        build_adapter("sam3_1", device="cpu")

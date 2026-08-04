@@ -165,6 +165,21 @@ def _process_one_episode(
         adapter.set_camera(cam)
         adapter.reset()
     ep_cache: dict[str, dict] = {}  # per-camera region cache for per_episode mode
+    # Batch-mode adapters (SAM 3.1) segment a whole episode in one native propagation
+    # pass — far faster than per-frame calls, and with reference tracking quality.
+    # Decode this episode's edited cameras up front and hand them over; the per-frame
+    # loop below then consumes the cached masks in order. Costs one extra decode pass
+    # plus the episode's edited frames in RAM, which is why it is scoped per episode.
+    prefetched: dict[str, list[np.ndarray]] | None = None
+    if hasattr(adapter, "process_episode") and edit_cams:
+        prefetched = {k: [] for k in feature_keys if k in edit_cams}
+        for f in range(length):
+            if cancelled_flag():
+                return 0
+            item = src[start + f]
+            for k in prefetched:
+                prefetched[k].append(_to_rgb_uint8(item[k]))
+        adapter.process_episode(prefetched)
     emitted = 0
     for f in range(length):
         if cancelled_flag():
@@ -172,7 +187,10 @@ def _process_one_episode(
         item = src[start + f]
         # One segmentation pass for the timestep across all edited cameras — the same
         # segment_many the live preview runs, so preview == commit.
-        rgb_by_cam = {k: _to_rgb_uint8(item[k]) for k in feature_keys if k in edit_cams}
+        if prefetched is not None:
+            rgb_by_cam = {k: prefetched[k][f] for k in prefetched}
+        else:
+            rgb_by_cam = {k: _to_rgb_uint8(item[k]) for k in feature_keys if k in edit_cams}
         if hasattr(adapter, "segment_many"):
             masks_by_cam = adapter.segment_many(rgb_by_cam)
         else:  # minimal duck-typed adapters (tests) only implement segment()
@@ -222,6 +240,7 @@ def process_dataset(
     device: str = "cuda",
     model: str = "sam3_track",
     resolution: int | None = None,
+    batch_cameras: bool = False,
     seed: int = 0,
     parallel_episodes: int = 2,
     adapter: Any = None,
@@ -302,7 +321,9 @@ def process_dataset(
 
         # resolution matches the live preview's (preview == commit includes resolution).
         adapter = build_adapter(model, device=device, resolution=resolution)
-    adapter.set_control({"objects": objects, "multi_instance": multi_instance})
+    adapter.set_control(
+        {"objects": objects, "multi_instance": multi_instance, "batch_cameras": batch_cameras}
+    )
 
     out = LeRobotDataset.create(
         repo_id=out_repo_id,

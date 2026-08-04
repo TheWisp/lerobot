@@ -30,7 +30,6 @@ import io
 import json
 import logging
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -77,6 +76,39 @@ _STEPS: list[dict] = [
                 "label": "Objects",
                 "placeholder": "green ring",
                 "hint": "Each object is detected once then locked + tracked in its own color.",
+            }
+        ],
+    },
+    {
+        "key": "sam3_video",
+        "label": "SAM3 video (unified)",
+        "result_kind": "spatial",
+        "load_cost": "slow",  # same gated weights, unified det+track+assoc pipeline
+        "controls": [
+            {
+                "type": "objects",
+                "key": "prompt",
+                "label": "Objects",
+                "placeholder": "green ring",
+                "hint": "Detected + associated on every frame — recovers occluded objects, and an "
+                "object out of view is genuinely absent (no stale mask).",
+            }
+        ],
+    },
+    {
+        "key": "sam3_1",
+        "label": "SAM 3.1 (sidecar)",
+        "result_kind": "spatial",
+        "load_cost": "slow",  # sidecar env + multiplex weights; ~half a minute to first mask
+        "controls": [
+            {
+                "type": "objects",
+                "key": "prompt",
+                "label": "Objects",
+                "placeholder": "green ring",
+                "hint": "Meta's multiplex tracker (always native 1008 px; the resolution preset is "
+                "ignored). Best tracking quality. Batch processing runs at full speed; the live "
+                "preview is slow (~1 fps) — a known limitation until the upstream port lands.",
             }
         ],
     },
@@ -196,6 +228,7 @@ class ConfigureRequest(BaseModel):
     resolution: int | None = None
     # Batch the vision encode across cameras (experimental; default on). Runtime
     # toggle — rides the control push, no respawn.
+    batch_cameras: bool = False
 
 
 def _frame_rgb(item: dict, cam: str) -> np.ndarray:
@@ -304,6 +337,7 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
         "objects": req.objects or [],
         "background_treatment": req.background_treatment or {"key": "random", "params": {}},
         "multi_instance": req.multi_instance,
+        "batch_cameras": req.batch_cameras,
     }
     prev_dataset = _data_pub_dataset  # capture before start_data_publisher updates it
     # start_data_publisher enforces the obs-stream physical constraint (teleop is the sole writer
@@ -834,7 +868,14 @@ async def _spawn_worker(
     if n:
         logger.info("swept %d stale overlay shm segment(s) before spawn", n)
     m.fire(Event.START)  # -> loading
-    args = [sys.executable, "-u", "-m", "lerobot.overlays.standalone", f"--model={model}"]
+    from lerobot.overlays.adapters import python_for_model
+
+    try:
+        py = python_for_model(model)  # sam3_1 runs in its sidecar venv
+    except RuntimeError as e:
+        m.fire(Event.CRASH)  # loading -> error; the badge shows the failure, START can retry
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    args = [py, "-u", "-m", "lerobot.overlays.standalone", f"--model={model}"]
     if objects:
         args.append(f"--objects={json.dumps(objects)}")
     # Seed the background treatment at spawn (like objects) — a control-channel push

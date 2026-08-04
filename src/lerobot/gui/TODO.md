@@ -780,6 +780,9 @@ Explicitly out of scope (ruled out in the design discussion before merge of PR #
       arXiv:1801.00868), logit argmax (EfficientPS arXiv:2004.02307), learned occlusion
       order (Lazarow et al. CVPR 2020). Only worth it if tint seams at true occlusion
       boundaries (e.g. fingers wrapping a held object) become visible in practice.
+- [ ] SAM 3.1 live preview: replace the incremental per-frame shim (~700 ms/frame,
+      degraded holds) when huggingface/transformers#46128 lands — then sam3_1 becomes a
+      checkpoint swap on the streaming sam3_video adapter and the sidecar venv retires.
 
 ## HVLA / Policy Evaluation
 

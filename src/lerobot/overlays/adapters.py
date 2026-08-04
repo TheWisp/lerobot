@@ -152,6 +152,15 @@ class ConceptMaskAdapter(DebugVisionAdapter):
         # both arms); the debug overlay keeps the single-largest lock. Set via
         # set_control({"multi_instance": ...}); default False = the debug lock.
         self._seed_multi = False
+        # Batch the per-frame vision encode across cameras (segment_many). Default on;
+        # runtime-togglable via set_control({"batch_cameras": ...}) — an EXPERIMENTAL
+        # perf option: batched cuDNN kernels differ numerically from batch-1, so
+        # borderline tracker scores can take a different (equally valid) trajectory.
+        # The same flag drives preview AND commit, so preview == commit per setting.
+        # Default OFF: the batched vision encode is numerically different enough to
+        # collapse tracking holds on some scenes (measured: front-cam dowel 4/199
+        # batched vs 24/199 serial, ring 4/199 vs 89/199, merged_raw ep157). Opt-in.
+        self._batch_cams = False
         self._cam: str | None = None
 
     def _parse_concepts(self) -> list[str]:
@@ -190,18 +199,29 @@ class ConceptMaskAdapter(DebugVisionAdapter):
             if mv != self._seed_multi:
                 self._seed_multi = mv
                 self._restart_tracking()
+        if "batch_cameras" in control:
+            self._batch_cams = bool(control["batch_cameras"])  # runtime toggle, no restart needed
 
     def segment_many(self, frames_by_cam: dict[str, np.ndarray]) -> dict[str, dict[str, np.ndarray]]:
         """:meth:`segment` for several cameras' frames of the SAME timestep.
 
-        Serial per-camera loop. Pre: each frame is HxWx3 uint8. Post:
-        ``{cam: {concept: mask}}``, exactly one entry per input camera.
+        Base implementation is the serial loop (always correct); adapters that can
+        share work across cameras (one batched vision encode) override
+        :meth:`_prime_batch` — the serial per-camera calls then reuse the primed
+        state. Honors the ``batch_cameras`` control flag. Pre: each frame is HxWx3
+        uint8. Post: ``{cam: {concept: mask}}``, exactly one entry per input camera.
         """
+        if self._batch_cams and len(frames_by_cam) > 1:
+            self._prime_batch(frames_by_cam)
         out: dict[str, dict[str, np.ndarray]] = {}
         for cam, frame in frames_by_cam.items():
             self.set_camera(cam)
             out[cam] = self.segment(frame)
         return out
+
+    def _prime_batch(self, frames_by_cam: dict[str, np.ndarray]) -> None:
+        """Optional hook: do the cross-camera shared work (e.g. one batched encode)
+        before the per-camera :meth:`segment` calls. Base: nothing to share."""
 
     def _infer_masks(self, frame_rgb: np.ndarray) -> tuple[dict[str, list[np.ndarray]], int, int]:
         """Run the model for one frame -> ``(masks_by_concept, h, w)``. Mutates the
@@ -338,6 +358,8 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         # Per-concept detector text features (deterministic per string -> lifetime cache);
         # lets _detect_many skip the text encoder entirely on seed/recover.
         self._text_cache: dict[str, tuple] = {}
+        # Per-sweep preprocessed frames from _prime_batch (consumed by _infer_masks).
+        self._pv_cache: dict[str | None, object] = {}
 
     def reset(self) -> None:
         # Discontinuity: drop this camera's session so the next infer() re-seeds from
@@ -422,6 +444,37 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             images=self._Image.fromarray(frame_rgb), size=self._proc_size, return_tensors="pt"
         )
         return inp["pixel_values"][0].to(self.device, self._torch.float16)
+
+    def _prime_batch(self, frames_by_cam: dict[str, np.ndarray]) -> None:
+        """One batched tracker vision encode for all cameras with a LIVE session,
+        pre-seeded into each session's feature cache — the tracker's frame path
+        checks the cache before encoding, so the per-camera steps skip their own
+        encode (measured 1.31x per 2-cam sweep). Cameras without a session (about
+        to seed/re-seed at frame 0) are left out — their encode happens in _seed.
+        The preprocessed tensors are also cached for :meth:`_infer_masks` via
+        ``_pv_cache`` so the frame isn't preprocessed twice."""
+        torch = self._torch
+        ready = []
+        for cam, frame in frames_by_cam.items():
+            track = self._tracks.get(cam)
+            if (
+                track is not None
+                and track.get("session") is not None
+                and track.get("shape") == frame.shape[:2]
+            ):
+                ready.append(cam)
+        self._pv_cache = {cam: self._pv(frames_by_cam[cam]) for cam in frames_by_cam}
+        if len(ready) < 2:
+            return  # nothing to share
+        with torch.inference_mode():
+            stack = torch.stack([self._pv_cache[cam] for cam in ready])
+            out = self.trk.get_image_features(stack, return_dict=True)
+        for k, cam in enumerate(ready):
+            sess = self._tracks[cam]["session"]
+            fidx = len(sess.processed_frames or {})  # the index forward() will assign this frame
+            feats = out.fpn_hidden_states[k : k + 1]  # keep batch dim = 1 (the cached shape)
+            pes = [pe[k : k + 1] for pe in out.fpn_position_encoding]
+            sess.cache.cache_vision_features(fidx, {"vision_feats": feats, "vision_pos_embeds": pes})
 
     def _seed(self, track: dict, seeds: dict[str, np.ndarray], pv, h: int, w: int) -> None:
         """REBUILD: drop the old session, init a fresh one, seed obj-per-concept from
@@ -546,7 +599,9 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                 "shape": (h, w),
             }
             self._tracks[cam] = track
-        pv = self._pv(frame_rgb)
+        pv = self._pv_cache.pop(cam, None)  # primed by _prime_batch (batched sweeps)
+        if pv is None:
+            pv = self._pv(frame_rgb)
 
         if track["session"] is None:
             # No track yet — Tier 1 detects each object to seed Tier 2. Throttled like
@@ -621,6 +676,449 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                         self._seed(track, seeds, pv, h, w)
 
         return self._live_masks(track), h, w
+
+
+class Sam3VideoUnifiedAdapter(ConceptMaskAdapter):
+    """SAM3 unified video pipeline (``Sam3VideoModel``): detection + tracking +
+    ASSOCIATION in one model, per frame.
+
+    Unlike :class:`Sam3TrackByDetectionAdapter` (seed once, propagate, hand-rolled
+    re-seed on loss), this runs Meta's own detect-every-frame pipeline with built-in
+    masklet association and keep-alive — so hard/occluded objects recover without our
+    re-seed churn, and an object that leaves the frame is genuinely ABSENT (the
+    two-tier tracker keeps propagating a stale mask). Measured on a real episode: the
+    "wooden dowel" our two-tier lost on 56% of frames is held on EVERY frame it is
+    visible, at ~49 ms/frame (672 px, 5090). Costs the detector every frame — the
+    two-tier's steady-state (tracker-only) is cheaper when nothing is ever lost.
+
+    Same weights + gating as the two-tier (``facebook/sam3``). The SAM 3.1 multiplex
+    checkpoint is this architecture's successor but is not yet loadable in
+    transformers (new tracker modules, no conversion) — when it is, it plugs in here
+    as a checkpoint swap.
+
+    Streaming session per camera; a session accumulates temporal memory, so
+    :meth:`reset` (scrub jump / episode switch) drops the current camera's session.
+
+    Memory bound (the reason a naive ``Sam3VideoModel`` step was banned before): the
+    transformers session RETAINS every streamed frame (``processed_frames``) and every
+    frame's tracker outputs, forever. Bounded here the same way the two-tier is: the
+    raw frame is evicted right after its forward (nothing ever re-reads it), and the
+    session is REBUILT every ``FLUSH_EVERY`` frames to drop the residual per-frame
+    output growth — the pipeline re-detects + re-associates in a single frame, so a
+    flush is near-seamless (unlike the two-tier, whose flush re-seeds from masks).
+    """
+
+    key = "sam3_video"
+    label = "SAM3 video (unified)"
+    controls = [
+        {
+            "type": "text",
+            "key": "prompt",
+            "label": "Objects",
+            "placeholder": "robot arm . cylinder . green ring",
+            "hint": "Period-separated objects; each is detected + associated on every frame "
+            "(built-in recovery, true absence when out of view). Changing this restarts tracking.",
+        }
+    ]
+    SAM3_ID = "facebook/sam3"
+    FLUSH_EVERY = 120  # rebuild each session every N frames -> flat GPU memory on long streams
+    # The pipeline's default masklet cap is 10000 (sized for 100+ object benchmarks), so a
+    # scene cut can churn hundreds of masklets into VRAM between flushes (measured: OOM at
+    # ~250 masklets from an N^2 mask-IoU). We track <= MAX_OBJECTS concepts — cap masklets.
+    # The cap must come WITH empty-masklet decay (set at load): by default an empty (junk /
+    # out-of-view) masklet's keep-alive never decreases, so junk saturates a small cap and
+    # then REAL detections get rejected — measured as holds collapsing under cap 24.
+    MAX_MASKLETS = 48
+    EMPTY_MASKLET_DECAY = True  # reap masklets whose mask stays empty (junk); see note above
+
+    def __init__(self, device: str = "cuda", resolution: int | None = None):
+        super().__init__(device, resolution)
+        try:
+            import torch
+            from PIL import Image
+            from transformers import Sam3VideoConfig, Sam3VideoModel, Sam3VideoProcessor
+        except ImportError as e:
+            raise RuntimeError(_IMPORT_HINT) from e
+        self._torch = torch
+        self._Image = Image
+        logger.info("loading %s (unified video pipeline) at %d px ...", self.SAM3_ID, self.resolution)
+        try:
+            # Same load-time resolution contract as the two-tier adapter, applied to BOTH
+            # sub-configs: the detector's global-attn RoPE and the tracker's prompt-encoder
+            # grid + memory-attention RoPE are all built from config at load.
+            cfg = Sam3VideoConfig.from_pretrained(self.SAM3_ID)
+            cfg.detector_config.vision_config.image_size = self.resolution
+            cfg.tracker_config.image_size = self.resolution
+            cfg.tracker_config.memory_attention_rope_feat_sizes = [self.resolution // 14] * 2
+            cfg.image_size = self.resolution
+            cfg.max_num_objects = self.MAX_MASKLETS
+            cfg.decrease_trk_keep_alive_for_empty_masklets = self.EMPTY_MASKLET_DECAY
+            self.proc = Sam3VideoProcessor.from_pretrained(self.SAM3_ID)
+            self.model = (
+                Sam3VideoModel.from_pretrained(self.SAM3_ID, config=cfg, dtype=torch.float16)
+                .to(device)
+                .eval()
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"SAM3 weights are gated — accept the Meta SAM License at "
+                f"https://huggingface.co/{self.SAM3_ID} and run `hf auth login`, then reload. ({type(e).__name__})"
+            ) from e
+        self._sessions: dict[str | None, dict] = {}  # per-camera {"sess", "shape"}
+
+    def reset(self) -> None:
+        # Discontinuity (scrub jump / episode switch / wrap): the session's temporal
+        # memory assumes contiguous frames — drop it so the next frame starts fresh.
+        self._sessions.pop(self._cam, None)
+
+    def _restart_tracking(self) -> None:
+        self._sessions = {}  # prompts live in the session -> rebuild with the new concept set
+
+    def _session_for(self, h: int, w: int) -> dict:
+        entry = self._sessions.get(self._cam)
+        if entry is None or entry["shape"] != (h, w):
+            sess = self.proc.init_video_session(inference_device=self.device, dtype=self._torch.float16)
+            self.proc.add_text_prompt(sess, list(self._concepts))
+            entry = {"sess": sess, "shape": (h, w), "frames": 0}
+            self._sessions[self._cam] = entry
+            logger.info("session[%s]: new, prompts=%s", self._cam or "?", self._concepts)
+        return entry
+
+    def _infer_masks(self, frame_rgb: np.ndarray) -> tuple[dict[str, list[np.ndarray]], int, int]:
+        torch = self._torch
+        h, w = frame_rgb.shape[:2]
+        self._concepts = self._parse_concepts()
+        entry = self._session_for(h, w)
+        pv = self.proc(images=self._Image.fromarray(frame_rgb), size=self._proc_size, return_tensors="pt")[
+            "pixel_values"
+        ][0].to(self.device, torch.float16)
+        with torch.inference_mode():
+            out = self.model(inference_session=entry["sess"], frame=pv)
+        res = self.proc.postprocess_outputs(entry["sess"], out, original_sizes=[[h, w]])
+        # Bound session memory by REBUILD only — do NOT evict streamed frames from the
+        # session: the tracker sizes its memory attention from len(processed_frames)
+        # (num_frames -> max_object_pointers_to_use), so eviction silently lobotomises
+        # it — measured as per-frame masklet churn + lost holds. A session therefore
+        # grows (raw frames + per-frame outputs + masklet memory) until the rolling
+        # flush drops it whole; the pipeline re-detects + re-associates in one frame.
+        entry["frames"] += 1
+        if entry["frames"] >= self.FLUSH_EVERY:
+            self._sessions.pop(self._cam, None)
+        oids = list(res.get("object_ids", []))
+        masks = res.get("masks")
+        p2o = res.get("prompt_to_obj_ids", {})
+        masks_by_concept: dict[str, list[np.ndarray]] = {}
+        for c in self._concepts:
+            got: list[np.ndarray] = []
+            for oid in p2o.get(c, []):
+                oid = int(oid)
+                if oid in oids:
+                    m = masks[oids.index(oid)]
+                    m = (m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m)).squeeze().astype(bool)
+                    assert m.shape == (h, w), f"postprocessed mask {m.shape} != frame {(h, w)}"
+                    if m.any():
+                        got.append(m)
+            if got and not self._seed_multi:
+                got = [max(got, key=lambda a: int(a.sum()))]  # debug-lock semantics: largest only
+            masks_by_concept[c] = got
+        return masks_by_concept, h, w
+
+
+class Sam31MultiplexAdapter(ConceptMaskAdapter):
+    """SAM 3.1 (Object Multiplex) via Meta's ``sam3`` repo — the SIDECAR model.
+
+    The multiplex tracker is not loadable in ``transformers`` (new architecture,
+    no conversion), so this adapter drives Meta's own implementation. The worker
+    process must therefore run in the sidecar env (``LEROBOT_SAM31_PYTHON``,
+    default ``~/.cache/sam31/venv``) — a venv overlaid on the main env's
+    site-packages with ``facebookresearch/sam3`` installed; the server picks that
+    interpreter when spawning this model's worker.
+
+    Incremental sessions over their offline API: Meta's OSS release only loads
+    whole video files, but the model layer is per-frame — a session is
+    bootstrapped from a 1-frame dummy image, its ``images`` swapped for a growing
+    feeder list (their own AsyncImageFrameLoader proves loader objects are
+    supported), every per-frame state list grown in lockstep, and each new frame
+    consumed via a single-frame ``propagate_in_video`` call — reusing their
+    pipeline, heuristics and output formatting verbatim.
+
+    One session per (camera, concept): the OSS session stores a SINGLE
+    ``text_prompt``. Cost therefore scales with cameras x concepts at the model's
+    native 1008 px (measured ~13 fps for one stream on the 5090) — a QUALITY
+    option (post-detection holds measured perfect on objects the two-tier loses);
+    cross-session backbone sharing is the known perf follow-up. Memory is bounded
+    the same way as the other stateful adapters: rolling session rebuild.
+    """
+
+    key = "sam3_1"
+    label = "SAM 3.1 (multiplex, sidecar)"
+    controls = [
+        {
+            "type": "text",
+            "key": "prompt",
+            "label": "Objects",
+            "placeholder": "robot arm . cylinder . green ring",
+            "hint": "Meta's SAM 3.1 multiplex tracker (native 1008 px). One session per object "
+            "per camera — highest quality, cost scales with objects x cameras.",
+        }
+    ]
+    FLUSH_EVERY = 120  # rebuild each (cam, concept) session -> bounded feeder + state growth
+    PROB_THRESH = 0.35  # their default 0.5 detected our thin dowel ~80 frames late
+    EPISODE_CHUNK = 450  # batch-session frame cap (full-video sessions of this size fit the 5090)
+
+    def __init__(self, device: str = "cuda", resolution: int | None = None):
+        # resolution is accepted for interface parity but IGNORED: Meta's builder
+        # hardcodes 1008 (positional encodings precompute at that size).
+        super().__init__(device, resolution)
+        try:
+            import torch
+            from sam3.model_builder import build_sam3_multiplex_video_predictor
+        except ImportError as e:
+            raise RuntimeError(
+                "SAM 3.1 needs the sidecar env (Meta's sam3 repo). Expected interpreter: "
+                "$LEROBOT_SAM31_PYTHON (default ~/.cache/sam31/venv/bin/python) with "
+                "`pip install -e ~/.cache/sam31/sam3`. See memory: reference_sam31_sidecar."
+            ) from e
+        self._torch = torch
+        self._cv2 = _import_cv2()
+        logger.info("loading SAM 3.1 multiplex (Meta repo, SDPA) ...")
+        # use_fa3=False: the fp8 FlashAttention-3 path needs flash-attn-3 (Hopper-first).
+        predictor = build_sam3_multiplex_video_predictor(use_fa3=False)
+        self.model = predictor.model
+        self._img_size = int(getattr(self.model, "image_size", 1008))
+        mean = getattr(self.model, "image_mean", (0.5, 0.5, 0.5))
+        std = getattr(self.model, "image_std", (0.5, 0.5, 0.5))
+        self._mean = np.asarray(mean, dtype=np.float32).reshape(3, 1, 1)
+        self._std = np.asarray(std, dtype=np.float32).reshape(3, 1, 1)
+        self._sessions: dict[tuple[str | None, str], dict] = {}  # (cam, concept) -> entry
+        self._batch: dict[str | None, dict] = {}  # cam -> {"masks": [...], "cursor": int}
+
+    def reset(self) -> None:
+        for key in [k for k in self._sessions if k[0] == self._cam]:
+            self._sessions.pop(key, None)
+        self._batch.pop(self._cam, None)
+
+    def _restart_tracking(self) -> None:
+        self._sessions = {}
+        self._batch = {}
+
+    def _preprocess(self, frame_rgb: np.ndarray):
+        torch = self._torch
+        img = self._cv2.resize(
+            frame_rgb, (self._img_size, self._img_size), interpolation=self._cv2.INTER_LINEAR
+        )
+        arr = img.astype(np.float32).transpose(2, 0, 1) / 255.0
+        arr = (arr - self._mean) / self._std
+        return torch.from_numpy(arr)
+
+    def _bootstrap(self, h: int, w: int) -> dict:
+        """A fresh incremental session: init from a 1-frame dummy, swap in a growing
+        feeder, and remember which per-frame state lists must grow with it."""
+        import tempfile
+
+        from PIL import Image as PILImage
+
+        if not hasattr(self, "_dummy_path"):
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+                self._dummy_path = f.name
+            PILImage.fromarray(np.zeros((32, 32, 3), dtype=np.uint8)).save(self._dummy_path)
+        import copy
+
+        state = self.model.init_state(resource_path=self._dummy_path)
+        # Per-frame bookkeeping lists were sized for the 1-frame dummy; reset them to
+        # empty and record (container, key, per-frame default) so append() can grow
+        # them. The per-frame lists live at the top level AND inside
+        # tracker_metadata / rank0_metadata — scan one nested level.
+        grow: list[tuple[dict, str, object]] = []
+        containers = [state]
+        tm = state.get("tracker_metadata")
+        if isinstance(tm, dict):
+            containers.append(tm)
+            r0 = tm.get("rank0_metadata")
+            if isinstance(r0, dict):
+                containers.append(r0)
+        for cont in containers:
+            for k, v in list(cont.items()):
+                if isinstance(v, list) and len(v) == 1:
+                    grow.append((cont, k, v[0]))
+                    cont[k] = []
+        feeder: list = []
+        state["images"] = feeder
+        state["num_frames"] = 0
+        state["orig_height"], state["orig_width"] = h, w
+        # input_batch was also sized for the dummy: swap its image container for the
+        # same growing feeder (their NestedTensor indexes whatever backs .tensors) and
+        # keep frame 0's FindStage as a template to clone per appended frame.
+        ib = state["input_batch"]
+        template = copy.deepcopy(ib.find_inputs[0])
+        ib.img_batch = type(ib.img_batch)(tensors=feeder, mask=None)
+        ib.find_inputs = []
+        ib.find_targets = []
+        ib.find_metadatas = []
+        return {
+            "state": state,
+            "feeder": feeder,
+            "grow": grow,
+            "template": template,
+            "frames": 0,
+            "prompted": False,
+            "shape": (h, w),
+        }
+
+    def _append(self, entry: dict, pv) -> int:
+        import copy
+
+        torch = self._torch
+        st = entry["state"]
+        idx = len(entry["feeder"])
+        entry["feeder"].append(pv.to(st.get("device", self.device), torch.float16))
+        st["num_frames"] = len(entry["feeder"])
+        for cont, k, default in entry["grow"]:
+            cont[k].append(copy.deepcopy(default))
+        # SAM2 sub-states snapshot num_frames at creation; keep them in step (their
+        # own per-frame outputs are dict-keyed, so only the scalar needs syncing).
+        for sub in st.get("sam2_inference_states") or []:
+            if isinstance(sub, dict) and "num_frames" in sub:
+                sub["num_frames"] = st["num_frames"]
+        ib = st["input_batch"]
+        stage = copy.deepcopy(entry["template"] if not ib.find_inputs else ib.find_inputs[-1])
+        # Point the cloned stage at THIS frame (img_ids may be tensor or list post-convert).
+        if hasattr(stage.img_ids, "fill_"):
+            stage.img_ids.fill_(idx)
+        else:
+            stage.img_ids = [idx]
+        stage.img_ids_np = np.array([idx])
+        ib.find_inputs.append(stage)
+        ib.find_targets.append(None)
+        ib.find_metadatas.append(None)
+        return idx
+
+    def _step(self, entry: dict, concept: str, idx: int):
+        """Run this frame through the session; returns the formatted outputs dict."""
+        torch = self._torch
+        st = entry["state"]
+        with torch.inference_mode():
+            if not entry["prompted"]:
+                out = self.model.add_prompt(st, idx, text_str=concept, output_prob_thresh=self.PROB_THRESH)
+                entry["prompted"] = True
+            else:
+                # Their action-history parser assumes the offline flow (one prompt,
+                # one full propagation) and downgrades later calls to "fetch cached
+                # results" — which don't exist for a frame we just appended. Keep only
+                # the prompt record so every incremental call parses as a fresh full
+                # propagation of its one-frame window.
+                hist = st.get("action_history")
+                if isinstance(hist, list) and len(hist) > 1:
+                    del hist[1:]
+                out = None
+                for _fidx, o in self.model.propagate_in_video(
+                    inference_state=st,
+                    start_frame_idx=idx,
+                    max_frame_num_to_track=1,
+                    reverse=False,
+                    output_prob_thresh=self.PROB_THRESH,
+                ):
+                    out = o
+        if isinstance(out, tuple):  # some paths return (frame_idx, outputs)
+            out = out[-1]
+        return out or {}
+
+    def _parse_out(self, out, h: int, w: int) -> list[np.ndarray]:
+        """Instance masks from one frame's formatted outputs (largest-only unless multi)."""
+        m = out.get("out_binary_masks") if isinstance(out, dict) else None
+        got: list[np.ndarray] = []
+        if m is not None:
+            arr = m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m)
+            for inst in arr:
+                inst = inst.astype(bool)
+                assert inst.shape == (h, w), f"sam3.1 mask {inst.shape} != frame {(h, w)}"
+                if inst.any():
+                    got.append(inst)
+        if got and not self._seed_multi:
+            got = [max(got, key=lambda a: int(a.sum()))]
+        return got
+
+    def process_episode(self, frames_by_cam: dict[str, list[np.ndarray]]) -> None:
+        """Offline batch mode: run Meta's native one-shot propagation per (camera,
+        concept) over the whole episode and cache per-frame masks; the next
+        ``len(frames)`` ``segment()``/``segment_many()`` calls per camera consume the
+        cache in order. This is the fast path — one amortized propagation instead of
+        per-frame calls — and matches their offline flow exactly, so tracking quality
+        equals the reference implementation.
+
+        Preconditions: control (objects) already set; frames are RGB uint8 HxWx3, all
+        the same shape per camera. Episodes longer than ``EPISODE_CHUNK`` run in
+        chunks with a fresh session each (a tracking reseed at each seam)."""
+        torch = self._torch
+        self._concepts = self._parse_concepts()
+        self._batch = {}
+        for cam, frames in frames_by_cam.items():
+            n = len(frames)
+            per_frame: list[dict[str, list[np.ndarray]]] = [{} for _ in range(n)]
+            if n:
+                h, w = frames[0].shape[:2]
+                for concept in self._concepts:
+                    for c0 in range(0, n, self.EPISODE_CHUNK):
+                        chunk = frames[c0 : c0 + self.EPISODE_CHUNK]
+                        try:
+                            with torch.inference_mode():
+                                entry = self._bootstrap(h, w)
+                                for rgb in chunk:
+                                    self._append(entry, self._preprocess(np.ascontiguousarray(rgb)))
+                                st = entry["state"]
+                                self.model.add_prompt(
+                                    st, 0, text_str=concept, output_prob_thresh=self.PROB_THRESH
+                                )
+                                for fidx, out in self.model.propagate_in_video(
+                                    inference_state=st,
+                                    start_frame_idx=0,
+                                    max_frame_num_to_track=None,
+                                    reverse=False,
+                                    output_prob_thresh=self.PROB_THRESH,
+                                ):
+                                    per_frame[c0 + fidx][concept] = self._parse_out(out, h, w)
+                        except RuntimeError as e:
+                            # Their propagate crashes on zero-object edge states (B=0
+                            # expand); this chunk yields no masks for the concept.
+                            logger.warning("sam3.1 batch chunk failed for %r: %s", concept, e)
+                        logger.info(
+                            "sam3.1 batch: cam=%s concept=%r frames %d-%d done",
+                            cam,
+                            concept,
+                            c0,
+                            c0 + len(chunk) - 1,
+                        )
+            self._batch[cam] = {"masks": per_frame, "cursor": 0}
+
+    def _infer_masks(self, frame_rgb: np.ndarray) -> tuple[dict[str, list[np.ndarray]], int, int]:
+        h, w = frame_rgb.shape[:2]
+        self._concepts = self._parse_concepts()
+        batch = self._batch.get(self._cam)
+        if batch is not None and batch["cursor"] < len(batch["masks"]):
+            cached = batch["masks"][batch["cursor"]]
+            batch["cursor"] += 1
+            return {c: cached.get(c, []) for c in self._concepts}, h, w
+        pv = self._preprocess(np.ascontiguousarray(frame_rgb))
+        masks_by_concept: dict[str, list[np.ndarray]] = {}
+        for concept in self._concepts:
+            key = (self._cam, concept)
+            entry = self._sessions.get(key)
+            if entry is None or entry["shape"] != (h, w) or entry["frames"] >= self.FLUSH_EVERY:
+                entry = self._bootstrap(h, w)
+                self._sessions[key] = entry
+            idx = self._append(entry, pv)
+            entry["frames"] += 1
+            try:
+                out = self._step(entry, concept, idx)
+            except RuntimeError as e:
+                # Their propagate crashes on zero-object edge states (B=0 expand);
+                # rebuild next frame rather than failing the sweep.
+                logger.warning("sam3.1 step failed (%s); session rebuilds next frame", e)
+                self._sessions.pop(key, None)
+                masks_by_concept[concept] = []
+                continue
+            masks_by_concept[concept] = self._parse_out(out, h, w)
+        return masks_by_concept, h, w
 
 
 def _import_cv2():
@@ -808,6 +1306,8 @@ class PolicySaliencyAdapter(DebugVisionAdapter):
 
 ADAPTERS: dict[str, type[DebugVisionAdapter]] = {
     Sam3TrackByDetectionAdapter.key: Sam3TrackByDetectionAdapter,
+    Sam3VideoUnifiedAdapter.key: Sam3VideoUnifiedAdapter,
+    Sam31MultiplexAdapter.key: Sam31MultiplexAdapter,
     PolicySaliencyAdapter.key: PolicySaliencyAdapter,
 }
 
@@ -816,6 +1316,31 @@ ADAPTERS: dict[str, type[DebugVisionAdapter]] = {
 SEGMENTER_KEYS: tuple[str, ...] = tuple(
     k for k, cls in ADAPTERS.items() if issubclass(cls, ConceptMaskAdapter)
 )
+
+
+def python_for_model(key: str) -> str:
+    """Interpreter for the subprocess that will load ``key``. SAM 3.1 lives only in
+    Meta's repo, installed in a sidecar venv overlaid on the main env
+    (``LEROBOT_SAM31_PYTHON``, default ``~/.cache/sam31/venv/bin/python``); every
+    other model runs in the server's own interpreter.
+
+    Raises RuntimeError (with the setup recipe) if the sidecar is required but
+    missing, so callers can surface an actionable error before spawning."""
+    import os
+    import sys
+
+    if key != Sam31MultiplexAdapter.key:
+        return sys.executable
+    py = os.environ.get("LEROBOT_SAM31_PYTHON") or os.path.expanduser("~/.cache/sam31/venv/bin/python")
+    if not os.path.exists(py):
+        raise RuntimeError(
+            f"SAM 3.1 needs its sidecar env; interpreter not found at {py}. Create it with: "
+            "python -m venv --system-site-packages ~/.cache/sam31/venv && "
+            "git clone https://github.com/facebookresearch/sam3 ~/.cache/sam31/sam3 && "
+            "~/.cache/sam31/venv/bin/pip install -e ~/.cache/sam31/sam3 pycocotools "
+            "(or set LEROBOT_SAM31_PYTHON)."
+        )
+    return py
 
 
 def build_adapter(key: str, device: str = "cuda", resolution: int | None = None) -> DebugVisionAdapter:

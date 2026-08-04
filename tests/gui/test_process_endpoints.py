@@ -74,7 +74,7 @@ def test_job_config_roundtrips_model_and_resolution():
         source_root="/src",
         out_repo_id="me/demo_aug",
         out_root="/out",
-        model="sam3_track",
+        model="sam3_video",
         resolution=672,
         objects=[{"name": "ring", "sign": "+", "treatment": {"key": "none"}}],
         background_treatment={"key": "random", "params": {}},
@@ -87,14 +87,16 @@ def test_job_config_roundtrips_model_and_resolution():
         jobs_dir="/jobs",
     )
     back = process_jobs.ProcessJobConfig.from_json(cfg.to_json())
-    assert back.model == "sam3_track" and back.resolution == 672
+    assert back.model == "sam3_video" and back.resolution == 672
+    assert back.batch_cameras is False  # default (off: measured holds regression) rides the round-trip
     # Back-compat: a config written before the knob existed loads with resolution=None.
     import json as _json
 
     d = _json.loads(cfg.to_json())
     del d["resolution"]
+    del d["batch_cameras"]
     old = process_jobs.ProcessJobConfig.from_json(_json.dumps(d))
-    assert old.resolution is None
+    assert old.resolution is None and old.batch_cameras is False
 
 
 @pytest.fixture

@@ -162,3 +162,31 @@ def test_process_dataset_rejects_unknown_treatment(src_dataset, tmp_path):
             out_root=tmp_path / "out",
             adapter=_FakeAdapter(),
         )
+
+
+class _FakeBatchAdapter(_FakeAdapter):
+    """Batch-capable stand-in (the SAM 3.1 shape): declares process_episode and
+    records what the pipeline hands it; segment() still serves the per-frame loop."""
+
+    def __init__(self):
+        self.episodes_seen: list[dict[str, int]] = []
+
+    def process_episode(self, frames_by_cam):
+        assert all(len(v) > 0 for v in frames_by_cam.values())
+        self.episodes_seen.append({k: len(v) for k, v in frames_by_cam.items()})
+
+
+def test_process_dataset_batch_adapter_gets_whole_episodes(src_dataset, tmp_path):
+    # A batch adapter is primed once per episode with EVERY edited camera's frames
+    # (the fast native path), and the output is unchanged vs the per-frame contract.
+    ad = _FakeBatchAdapter()
+    out = pp.process_dataset(
+        src_dataset,
+        out_repo_id="me/out_batch",
+        objects=[{"name": "obj", "sign": "+", "treatment": {"key": "none"}}],
+        background_treatment={"key": "tint", "params": {"color": [255, 0, 0], "strength": 1.0}},
+        out_root=tmp_path / "out_batch",
+        adapter=ad,
+    )
+    assert out.episodes_written == 2 and out.frames_written == 8 and not out.cancelled
+    assert ad.episodes_seen == [{"observation.images.cam": 4}] * 2

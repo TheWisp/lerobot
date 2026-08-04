@@ -100,6 +100,7 @@ def _run(cfg: ProcessJobConfig, state: _WorkerState) -> None:
         out_root=cfg.out_root,
         model=cfg.model,
         resolution=cfg.resolution,
+        batch_cameras=cfg.batch_cameras,
         progress=on_progress,
         should_cancel=lambda: state.cancel_requested,
     )

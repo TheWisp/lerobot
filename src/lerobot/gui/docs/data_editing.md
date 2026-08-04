@@ -99,16 +99,38 @@ Two selectors in the overlay panel choose **how** segmentation runs; the batch j
 inherits both from the live preview that tuned it, so the committed masks are the
 previewed masks.
 
-**Model** — the SAM3 segmenter over the gated `facebook/sam3` weights:
+**Model** — two SAM3 segmenters over the same gated `facebook/sam3` weights,
+plus the SAM 3.1 sidecar:
 
-| Key          | Pipeline                                                                          | Character (measured, one episode, 672 px, 5090)                                                                                                                                                   |
-| ------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sam3_track` | two-tier: detect once → geometric tracker propagates; hand-rolled re-seed on loss | ~39 ms/frame steady (p95 spikes on re-seed churn). Easy objects perfect; a hard object (thin "wooden dowel") was **lost on ~37% of in-view frames**, and an out-of-view object keeps a stale mask |
+| Key          | Pipeline                                                                                  | Character (measured, one episode, 672 px, 5090)                                                                                                                                                                         |
+| ------------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sam3_track` | two-tier: detect once → geometric tracker propagates; hand-rolled re-seed on loss         | ~39 ms/frame steady (p95 spikes on re-seed churn). Easy objects perfect; a hard object (thin "wooden dowel") was **lost on ~37% of in-view frames**, and an out-of-view object keeps a stale mask                       |
+| `sam3_video` | unified `Sam3VideoModel`: detection + tracking + **association every frame** (Meta's own) | ~52 ms/frame **flat**. The same dowel held on **every in-view frame**; an object out of view is genuinely **absent** (correct rejection). Costs the detector every frame                                                |
+| `sam3_1`     | Meta's SAM 3.1 multiplex tracker, driven natively via a **sidecar env**                   | Batch jobs: ~84 ms/concept-frame (native 1008 px only; the resolution preset is ignored), reference tracking quality — the dowel held on **every** frame after first detection. Live preview: ~700 ms/frame (see below) |
 
-Alternative segmenters with better tracking holds (Meta's unified
-`Sam3VideoModel` running detection + association every frame, and the SAM 3.1
-multiplex tracker via a sidecar env) are a follow-up PR — they need more
-soak time before shipping as defaults.
+Default remains `sam3_track` (cheapest steady-state); pick `sam3_video` when an
+object drops or ghosts. A `sam3_video` session retains per-frame state by design
+upstream (no pruning in streaming mode), so the adapter bounds memory the same way
+the two-tier does — a rolling session rebuild (`FLUSH_EVERY`) plus a masklet cap
+with empty-masklet decay; measured flat ~2 GB over 600 frames. Do **not** evict
+streamed frames from the session: the tracker sizes its memory attention from the
+frame count, and eviction measurably lobotomises it (masklet churn + lost holds).
+
+**SAM 3.1 sidecar** — the multiplex tracker is **not loadable in transformers**
+(new tracker modules, no checkpoint conversion; the upstream port is
+[huggingface/transformers#46128](https://github.com/huggingface/transformers/pull/46128)),
+so `sam3_1` runs Meta's own `facebookresearch/sam3` code in a separate venv:
+`LEROBOT_SAM31_PYTHON` (default `~/.cache/sam31/venv/bin/python`), created with
+`--system-site-packages` over the main env plus `pip install -e <sam3 clone>
+pycocotools`. The server spawns overlay workers and batch jobs for this model
+with that interpreter (`python_for_model`); starting it without the sidecar
+fails with the setup recipe. Meta's session API is offline (whole-video files),
+so batch jobs and episode previews prime the adapter with the full episode and
+run ONE native propagation per (camera, concept) — full speed, reference
+quality. The live preview has no such batch and falls back to an incremental
+per-frame shim over the same session (~700 ms/frame, and holds degrade on hard
+objects) — acceptable for spot checks, superseded by the transformers port when
+it lands (then `sam3_1` becomes a checkpoint swap on `sam3_video`).
 
 **Quality** — the SAM inference resolution, a **load-time** knob (the
 global-attention RoPE tables are built from the model config, so changing it
