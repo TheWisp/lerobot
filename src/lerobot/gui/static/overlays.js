@@ -244,7 +244,7 @@
             if (ctrl.type === 'objects' || ctrl.type === 'text') {
                 const hint = mode === 'data'
                     ? 'Each object is a region with a treatment; the <b>Background</b> row is a region too. Tile shows the live WYSIWYG result — the glow + label is a detection aid, not part of the output.'
-                    : 'Open-vocab names, each in its own colour. <b>+</b> include / <b>−</b> exclude. Name edits apply ~1s after you stop typing; colour/sign are instant.';
+                    : 'Open-vocab names, outlined + labelled on the tile in each object\'s own colour. <b>+</b> include / <b>−</b> exclude. Treatments default to None here — the run tab shows real pixels; set one only to visualise. Name edits apply ~1s after you stop typing.';
                 els.modelBody.innerHTML = `
                     <label class="overlays-label">${esc(ctrl.label || 'Objects')}</label>
                     <div class="overlays-hint">${hint}</div>
@@ -487,7 +487,7 @@
             });
         }
 
-        // Name edits restart tracking, so debounce; colour/sign/remove are display-only → instant.
+        // Name edits restart tracking, so debounce; sign/treatment/remove are display-only → instant.
         function scheduleApply() { clearTimeout(nameTimer); nameTimer = setTimeout(() => { sync(); renderAction(); }, 1000); }
         function applyInstant() { clearTimeout(nameTimer); sync(); renderAction(); }
 
