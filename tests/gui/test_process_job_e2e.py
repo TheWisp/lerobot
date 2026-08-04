@@ -217,3 +217,58 @@ def test_variants_write_independent_copies(tmp_path, monkeypatch, synthetic_sour
         img = _to_u8(out[base][EDITED_CAM])
         cy, cx = _obj_center(0)
         np.testing.assert_allclose(img[cy, cx].astype(np.int16), np.asarray(OBJ_COLOR, np.int16), atol=tol)
+
+
+def test_parallel_episodes_produce_identical_output(tmp_path, monkeypatch, synthetic_source):
+    """Running episodes concurrently must change only the ORDER OF EXECUTION.
+
+    Episodes are the one safe unit of parallelism here (frames depend on the previous
+    frame's tracker state; episodes reseed). Each worker gets its own adapter and still
+    runs batch-1 inference, so the masks cannot drift the way tensor-level batching did
+    — and per-job RNG makes the random draws depend on WHICH episode is being written
+    rather than on who got there first. The proof is the strongest available: the two
+    output datasets must be pixel-identical, not merely similar.
+    """
+    from lerobot.datasets import dataset_postprocess as pp
+    from lerobot.datasets.dataset_postprocess import process_dataset
+    from lerobot.overlays import adapters as adapters_mod
+
+    source, _tol = synthetic_source
+    # The frame-count guard is a PERFORMANCE heuristic (an extra worker must repay its
+    # model load); the identity property has to hold regardless, so switch it off here.
+    monkeypatch.setattr(pp, "_PARALLEL_MIN_FRAMES", 0)
+    built: list[int] = []
+
+    def fake_build(*_a, **_k):
+        built.append(1)
+        return _ColorSegmenter()
+
+    monkeypatch.setattr(adapters_mod, "build_adapter", fake_build)
+
+    outs = {}
+    for workers in (1, 2):
+        built.clear()
+        root = tmp_path / f"out_w{workers}"
+        res = process_dataset(
+            source,
+            out_repo_id=f"claude/parallel_{workers}",
+            objects=[{"name": "block", "sign": "+", "treatment": {"key": "none"}}],
+            background_treatment={"key": "random", "params": {}},
+            cameras=[EDITED_CAM],
+            out_root=root,
+            parallel_episodes=workers,
+        )
+        assert not res.cancelled and res.episodes_written == N_EPISODES
+        # One adapter per worker — proves the parallel path actually engaged.
+        assert len(built) == workers, f"expected {workers} adapter(s), built {len(built)}"
+        outs[workers] = LeRobotDataset(repo_id=f"claude/parallel_{workers}", root=root)
+
+    serial, parallel = outs[1], outs[2]
+    assert serial.meta.total_frames == parallel.meta.total_frames == N_EPISODES * FRAMES_PER_EP
+    for i in range(len(serial)):
+        np.testing.assert_array_equal(
+            _to_u8(serial[i][EDITED_CAM]),
+            _to_u8(parallel[i][EDITED_CAM]),
+            err_msg=f"frame {i} differs between serial and parallel runs",
+        )
+        np.testing.assert_allclose(serial[i]["action"].numpy(), parallel[i]["action"].numpy())

@@ -58,6 +58,21 @@ logger = logging.getLogger(__name__)
 # sensor noise is the one effect where per-frame is physically correct.
 ApplyMode = Literal["per_episode", "per_frame", "static"]
 
+# Frames a worker may run ahead of the writer, per in-flight episode. Bounds the
+# memory cost of parallelism to a few frames rather than a whole episode.
+_PARALLEL_QUEUE_FRAMES = 24
+# Episode-level parallelism, proven correct (byte-identical output) and ON for long
+# jobs. Measured on real footage with real SAM3, 1720 frames, model load discounted
+# (negligible on an hours-long dataset): 70.0 s -> 63.0 s, i.e. 1.11x.
+#
+# It does NOT come from filling an idle GPU: mean utilization is 54% with one worker
+# and 55% with two. Whatever leaves the card idle 46% of the time is not something a
+# second CUDA stream can fill, so adding workers is not the lever for utilization.
+#
+# Each worker costs a model load (~6 s) and its own ~3 GB VRAM copy, so a short job
+# would lose more than it gains: below this many frames the job stays serial.
+_PARALLEL_MIN_FRAMES = 2000
+
 
 # The treatment registry + per-region composite live in the shared, dependency-free
 # lerobot.overlays.effects module, so the live overlay worker renders exactly what
@@ -112,6 +127,86 @@ class ProcessResult:
     cancelled: bool = False
 
 
+def _job_rng(seed: int, variant: int, ep: int):
+    """A generator derived from (seed, variant, episode) rather than drawn from one
+    shared stream. Draws then depend only on WHICH episode this is, never on the order
+    episodes happen to run in — which is what lets a parallel run produce byte-identical
+    output to a serial one."""
+    return np.random.default_rng([seed, variant, ep])
+
+
+def _process_one_episode(
+    *,
+    src,
+    adapter,
+    ep: int,
+    start: int,
+    length: int,
+    cam_keys,
+    feature_keys,
+    edit_cams,
+    obj_treatment_by_name,
+    background_treatment,
+    apply_mode: str,
+    static_cache: dict,
+    rng,
+    emit,
+    cancelled_flag,
+) -> int:
+    """Segment + composite one episode, calling ``emit(frame)`` per frame IN ORDER.
+
+    Pre: ``adapter`` is exclusively this call's — tracking state is per-episode, so a
+    shared adapter cannot serve two episodes concurrently. Post: returns the number of
+    frames emitted, short of ``length`` only when cancelled.
+    """
+    # New tracker session per (camera, episode): each episode is an independent video
+    # stream, so reseed rather than propagate.
+    for cam in cam_keys:
+        adapter.set_camera(cam)
+        adapter.reset()
+    ep_cache: dict[str, dict] = {}  # per-camera region cache for per_episode mode
+    emitted = 0
+    for f in range(length):
+        if cancelled_flag():
+            break
+        item = src[start + f]
+        # One segmentation pass for the timestep across all edited cameras — the same
+        # segment_many the live preview runs, so preview == commit.
+        rgb_by_cam = {k: _to_rgb_uint8(item[k]) for k in feature_keys if k in edit_cams}
+        if hasattr(adapter, "segment_many"):
+            masks_by_cam = adapter.segment_many(rgb_by_cam)
+        else:  # minimal duck-typed adapters (tests) only implement segment()
+            masks_by_cam = {}
+            for k, rgb in rgb_by_cam.items():
+                adapter.set_camera(k)
+                masks_by_cam[k] = adapter.segment(rgb)
+        frame: dict[str, Any] = {}
+        for k in feature_keys:
+            if k in edit_cams:
+                rgb = rgb_by_cam[k]
+                h, w = rgb.shape[:2]
+                masks_by_name = masks_by_cam[k]
+                # Reuse randomized draws at the ApplyMode cadence (per (cam, region)).
+                if apply_mode == "per_frame":
+                    cache: dict = {}
+                elif apply_mode == "static":
+                    cache = static_cache.setdefault(k, {})
+                else:  # per_episode
+                    cache = ep_cache.setdefault(k, {})
+                regions, sampled = build_and_sample_regions(
+                    masks_by_name, obj_treatment_by_name, background_treatment, h, w, rng, cache
+                )
+                frame[k] = composite_regions(rgb, regions, sampled)
+            elif k in src.meta.camera_keys:
+                frame[k] = _to_rgb_uint8(item[k])  # a camera the user excluded
+            else:
+                frame[k] = item[k]
+        frame["task"] = item["task"]
+        emit(frame)
+        emitted += 1
+    return emitted
+
+
 def process_dataset(
     src: LeRobotDataset,
     *,
@@ -128,6 +223,7 @@ def process_dataset(
     model: str = "sam3_track",
     resolution: int | None = None,
     seed: int = 0,
+    parallel_episodes: int = 2,
     adapter: Any = None,
     progress: Callable[[dict], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
@@ -200,6 +296,7 @@ def process_dataset(
     episodes_total = variants * len(episodes)
     _emit("loading model", 0, frames_total, 0, episodes_total, None)
 
+    injected_adapter = adapter is not None
     if adapter is None:
         from lerobot.overlays.adapters import build_adapter
 
@@ -216,7 +313,6 @@ def process_dataset(
         use_videos=len(src.meta.video_keys) > 0,
     )
 
-    rng = np.random.default_rng(seed)
     # Randomized-treatment draws, memoized per (camera → per-region) at the ApplyMode
     # cadence: `static_cache` persists across episodes; a fresh `ep_cache` per episode
     # gives the default per-episode coherence; per_frame passes a throwaway cache.
@@ -225,69 +321,158 @@ def process_dataset(
     episodes_done = 0
     cancelled = False
 
-    try:
-        for _variant in range(variants):
-            if cancelled:
-                break
-            for ep in episodes:
-                if cancelled_flag():
-                    cancelled = True
-                    break
-                start = int(src.meta.episodes["dataset_from_index"][ep])
-                length = ep_lengths[ep]
-                # New tracker session per (camera, episode): each episode is an
-                # independent video stream, so reseed rather than propagate.
-                for cam in cam_keys:
-                    adapter.set_camera(cam)
-                    adapter.reset()
-                ep_cache: dict[str, dict] = {}  # per-camera region cache for per_episode mode
+    # Episodes are independent (each reseeds its tracker), so they can run
+    # concurrently — the ONE unit of parallelism this pipeline allows, since frames
+    # within an episode depend on the previous frame's tracker state. Each worker owns
+    # its own adapter (tracking state is not shareable) and still runs batch-1
+    # inference, so the masks are bit-identical to a serial run; only the ORDER of
+    # execution changes, and per-job RNG makes even the random draws order-independent.
+    jobs = [(v, ep) for v in range(variants) for ep in episodes]
+    n_workers = max(1, min(int(parallel_episodes), len(jobs)))
+    if frames_total < _PARALLEL_MIN_FRAMES:
+        n_workers = 1  # too short to repay the extra model load
+    if injected_adapter:
+        n_workers = 1  # a caller-supplied adapter cannot be cloned per worker
+    if apply_mode == "static":
+        n_workers = 1  # one draw shared by the whole run: order would decide who draws
 
-                for f in range(length):
-                    if cancelled_flag():
-                        cancelled = True
+    def _run_serial() -> tuple[int, int, bool]:
+        fd = ed = 0
+        for v, ep in jobs:
+            if cancelled_flag():
+                return fd, ed, True
+            n = _process_one_episode(
+                src=src,
+                adapter=adapter,
+                ep=ep,
+                start=int(src.meta.episodes["dataset_from_index"][ep]),
+                length=ep_lengths[ep],
+                cam_keys=cam_keys,
+                feature_keys=feature_keys,
+                edit_cams=edit_cams,
+                obj_treatment_by_name=obj_treatment_by_name,
+                background_treatment=background_treatment,
+                apply_mode=apply_mode,
+                static_cache=static_cache,
+                rng=_job_rng(seed, v, ep),
+                emit=out.add_frame,
+                cancelled_flag=cancelled_flag,
+            )
+            fd += n
+            if n < ep_lengths[ep]:
+                return fd, ed, True
+            out.save_episode()
+            ed += 1
+            _emit("processing", fd, frames_total, ed, episodes_total, ep)
+        return fd, ed, False
+
+    def _run_parallel(workers: int) -> tuple[int, int, bool]:
+        import queue as _queue
+        import threading
+
+        from lerobot.overlays.adapters import build_adapter
+
+        sentinel = object()
+        queues = [_queue.Queue(maxsize=_PARALLEL_QUEUE_FRAMES) for _ in jobs]
+        cursor, lock = [0], threading.Lock()
+        abort, errors = threading.Event(), []
+
+        def take() -> int | None:
+            with lock:
+                if cursor[0] >= len(jobs):
+                    return None
+                cursor[0] += 1
+                return cursor[0] - 1
+
+        def put(q, item) -> None:
+            while not abort.is_set():  # bounded queue: block, but stay abortable
+                try:
+                    q.put(item, timeout=0.2)
+                    return
+                except _queue.Full:
+                    continue
+
+        def work(ad) -> None:
+            try:
+                while not abort.is_set():
+                    idx = take()
+                    if idx is None:
+                        return
+                    v, ep = jobs[idx]
+                    _process_one_episode(
+                        src=src,
+                        adapter=ad,
+                        ep=ep,
+                        start=int(src.meta.episodes["dataset_from_index"][ep]),
+                        length=ep_lengths[ep],
+                        cam_keys=cam_keys,
+                        feature_keys=feature_keys,
+                        edit_cams=edit_cams,
+                        obj_treatment_by_name=obj_treatment_by_name,
+                        background_treatment=background_treatment,
+                        apply_mode=apply_mode,
+                        static_cache=static_cache,
+                        rng=_job_rng(seed, v, ep),
+                        emit=lambda frame, q=queues[idx]: put(q, frame),
+                        cancelled_flag=lambda: abort.is_set() or cancelled_flag(),
+                    )
+                    put(queues[idx], sentinel)
+            except BaseException as exc:  # a dead worker must not hang the writer
+                errors.append(exc)
+                abort.set()
+
+        adapters = [adapter] + [
+            build_adapter(model, device=device, resolution=resolution) for _ in range(workers - 1)
+        ]
+        for ad in adapters[1:]:
+            ad.set_control({"objects": objects, "multi_instance": multi_instance})
+        threads = [
+            threading.Thread(target=work, args=(ad,), name=f"process-ep-{i}", daemon=True)
+            for i, ad in enumerate(adapters)
+        ]
+        fd = ed = 0
+        stopped = False
+        for t in threads:
+            t.start()
+        try:
+            # The writer consumes jobs IN ORDER, so the output dataset is byte-identical
+            # to a serial run no matter which worker finished first.
+            for idx, (_v, ep) in enumerate(jobs):
+                got = 0
+                while True:
+                    try:
+                        item = queues[idx].get(timeout=0.2)
+                    except _queue.Empty:
+                        if abort.is_set():
+                            break
+                        continue
+                    if item is sentinel:
                         break
-                    item = src[start + f]
-                    # One segmentation pass for the timestep across all edited cameras —
-                    # the same segment_many the live preview runs, so the batching flag
-                    # (and its numeric trajectory) is shared: preview == commit.
-                    rgb_by_cam = {k: _to_rgb_uint8(item[k]) for k in feature_keys if k in edit_cams}
-                    if hasattr(adapter, "segment_many"):
-                        masks_by_cam = adapter.segment_many(rgb_by_cam)
-                    else:  # minimal duck-typed adapters (tests) only implement segment()
-                        masks_by_cam = {}
-                        for k, rgb in rgb_by_cam.items():
-                            adapter.set_camera(k)
-                            masks_by_cam[k] = adapter.segment(rgb)
-                    frame: dict[str, Any] = {}
-                    for k in feature_keys:
-                        if k in edit_cams:
-                            rgb = rgb_by_cam[k]
-                            h, w = rgb.shape[:2]
-                            masks_by_name = masks_by_cam[k]
-                            # Reuse randomized draws at the ApplyMode cadence (per (cam, region)).
-                            if apply_mode == "per_frame":
-                                cache: dict = {}
-                            elif apply_mode == "static":
-                                cache = static_cache.setdefault(k, {})
-                            else:  # per_episode
-                                cache = ep_cache.setdefault(k, {})
-                            regions, sampled = build_and_sample_regions(
-                                masks_by_name, obj_treatment_by_name, background_treatment, h, w, rng, cache
-                            )
-                            frame[k] = composite_regions(rgb, regions, sampled)
-                        elif k in src.meta.camera_keys:
-                            # A camera the user excluded — copy through untouched.
-                            frame[k] = _to_rgb_uint8(item[k])
-                        else:
-                            frame[k] = item[k]
-                    frame["task"] = item["task"]
-                    out.add_frame(frame)
-                    frames_done += 1
-                    if frames_done % 10 == 0 or f == length - 1:
-                        _emit("processing", frames_done, frames_total, episodes_done, episodes_total, ep)
+                    out.add_frame(item)
+                    got += 1
+                    fd += 1
+                    if fd % 10 == 0:
+                        _emit("processing", fd, frames_total, ed, episodes_total, ep)
+                if got < ep_lengths[ep] or cancelled_flag() or errors:
+                    stopped = True
+                    break
                 out.save_episode()
-                episodes_done += 1
-                _emit("processing", frames_done, frames_total, episodes_done, episodes_total, ep)
+                ed += 1
+                _emit("processing", fd, frames_total, ed, episodes_total, ep)
+        finally:
+            abort.set()
+            for t in threads:
+                t.join(timeout=15)
+        if errors:
+            raise errors[0]
+        return fd, ed, stopped
+
+    try:
+        if n_workers > 1:
+            logger.info("post-process: %d episodes in parallel", n_workers)
+            frames_done, episodes_done, cancelled = _run_parallel(n_workers)
+        else:
+            frames_done, episodes_done, cancelled = _run_serial()
         _emit("finalizing", frames_done, frames_total, episodes_done, episodes_total, None)
     finally:
         if out.has_pending_frames():
