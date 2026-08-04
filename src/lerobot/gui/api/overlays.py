@@ -736,8 +736,8 @@ async def _stop_live() -> None:
 
 class LiveStartRequest(BaseModel):
     model: str
-    objects: list[dict] | None = None
-    background: dict | None = None
+    objects: list[dict] | None = None  # [{name, sign, treatment:{key,params}}] — same shape as the data tab
+    background_treatment: dict | None = None  # {key, params}; None = background kept as-is
     cameras: list[str] | None = None
     style: str | None = None  # policy_saliency render style (see PolicySaliencyAdapter.STYLES)
     smooth: float | None = None  # policy_saliency smoothing sigma (0 = raw 64x64)
@@ -761,7 +761,6 @@ async def _spawn_worker(
     model: str,
     *,
     objects=None,
-    background=None,
     cameras=None,
     background_treatment=None,
     style=None,
@@ -788,7 +787,6 @@ async def _spawn_worker(
                 {
                     "config": {
                         "objects": objects or [],
-                        "background": background,
                         "background_treatment": background_treatment,  # data tab: WYSIWYG composite mode
                         "style": style,
                         "smooth": smooth,
@@ -815,8 +813,6 @@ async def _spawn_worker(
     args = [sys.executable, "-u", "-m", "lerobot.overlays.standalone", f"--model={model}"]
     if objects:
         args.append(f"--objects={json.dumps(objects)}")
-    if background is not None:
-        args.append(f"--background={json.dumps(background)}")
     # Seed the background treatment at spawn (like objects) — a control-channel push
     # is a no-op until the worker's buffer exists, so the FIRST inference would
     # otherwise miss it. Its presence switches the worker to WYSIWYG composite mode.
@@ -873,7 +869,7 @@ async def live_start(req: LiveStartRequest) -> dict:
         await _spawn_worker(
             req.model,
             objects=req.objects,
-            background=req.background,
+            background_treatment=req.background_treatment,
             cameras=req.cameras,
             style=req.style,
             smooth=req.smooth,

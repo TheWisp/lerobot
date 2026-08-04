@@ -233,67 +233,22 @@ def _box(h, w, y0, y1, x0, x1):
     return m
 
 
-def test_composite_positive_fills_and_negative_carves():
-    """The heart of +/-: a positive is filled in its colour; a negative is carved OUT of
-    overlapping positives and never drawn itself (what 'cube - reflections' relies on)."""
-    h, w = 12, 12
-    pos, neg = _box(h, w, 2, 10, 2, 10), _box(h, w, 4, 8, 4, 8)  # neg sits inside pos
-    rgba = adapters._composite_concepts(
-        h, w, {"a": [pos]}, ["a"], {"a": (10, 20, 30)}, {"a": "+"}, None, _FakeCV2()
-    )
-    assert tuple(rgba[3, 3, :3]) == (10, 20, 30) and rgba[3, 3, 3] > 0  # positive filled in its colour
-    assert rgba[0, 0, 3] == 0  # outside is transparent
-
-    carved = adapters._composite_concepts(
-        h,
-        w,
-        {"a": [pos], "b": [neg]},
-        ["a", "b"],
-        {"a": (10, 20, 30), "b": (90, 90, 90)},
-        {"a": "+", "b": "-"},
-        None,
-        _FakeCV2(),
-    )
-    assert carved[6, 6, 3] == 0, "the negative region must be carved out of the positive"
-    assert carved[3, 3, 3] > 0, "the rest of the positive must remain"
-    assert not (carved[..., :3] == (90, 90, 90)).any(), "the negative concept itself is never drawn"
-
-
-def test_composite_background_fills_the_inverse():
-    h, w = 8, 8
-    pos = _box(h, w, 2, 6, 2, 6)
-    rgba = adapters._composite_concepts(
-        h, w, {"a": [pos]}, ["a"], {"a": (1, 2, 3)}, {"a": "+"}, (200, 100, 50), _FakeCV2()
-    )
-    assert tuple(rgba[0, 0, :3]) == (200, 100, 50) and rgba[0, 0, 3] > 0, (
-        "background fills the inverse region"
-    )
-    assert rgba[3, 3, 3] > 0, "the detection itself is still drawn on top"
-
-
-def test_parse_objects_names_colours_signs():
-    names, colors, signs = adapters._parse_objects(
-        {"objects": [{"name": "ring", "color": [1, 2, 3], "sign": "-"}, {"name": "arm"}]}, 6
-    )
+def test_parse_objects_names_signs():
+    # Colors are no longer part of the control contract: object identity in the
+    # chrome is auto-assigned, never user-chosen (unified rows retired the palette).
+    names, signs = adapters._parse_objects({"objects": [{"name": "ring", "sign": "-"}, {"name": "arm"}]}, 6)
     assert names == ["ring", "arm"]
-    assert colors == {"ring": (1, 2, 3)}  # arm omitted -> palette fallback downstream
     assert signs == {"ring": "-", "arm": "+"}
-    assert adapters._parse_objects({"objects": []}, 6) == (None, None, None)  # nothing usable -> keep state
-    assert adapters._parse_objects({}, 6) == (None, None, None)
-    capped, _, _ = adapters._parse_objects({"objects": [{"name": f"o{i}"} for i in range(9)]}, 3)
+    assert adapters._parse_objects({"objects": []}, 6) == (None, None)  # nothing usable -> keep state
+    assert adapters._parse_objects({}, 6) == (None, None)
+    capped, _ = adapters._parse_objects({"objects": [{"name": f"o{i}"} for i in range(9)]}, 3)
     assert len(capped) == 3  # capped at max_objects
 
 
-def test_parse_background_color_transparent_unset():
-    assert adapters._parse_background({"background": {"color": [4, 5, 6]}}) == (4, 5, 6)
-    assert adapters._parse_background({"background": {"color": None}}) is None  # transparent
-    assert adapters._parse_background({}) is adapters._BG_UNSET  # absent -> keep current
-
-
-def test_concept_color_user_then_palette():
-    assert adapters._concept_color("x", ["x"], {"x": (7, 8, 9)}) == (7, 8, 9)  # user choice wins
-    assert adapters._concept_color("x", ["x"], {}) == adapters._CONCEPT_PALETTE[0]  # else palette by position
-    assert adapters._concept_color("y", ["x", "y"], {}) == adapters._CONCEPT_PALETTE[1]
+def test_concept_color_is_stable_by_position():
+    assert adapters._concept_color("x", ["x"]) == adapters._CONCEPT_PALETTE[0]
+    assert adapters._concept_color("y", ["x", "y"]) == adapters._CONCEPT_PALETTE[1]
+    assert adapters._concept_color("stranger", ["x"]) == adapters._color_for("stranger")
 
 
 # --- arbitrary observation-stream camera keys --------------------------------

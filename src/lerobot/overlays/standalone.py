@@ -24,7 +24,7 @@ import time
 
 import numpy as np
 
-from lerobot.overlays.adapters import ADAPTERS, build_adapter
+from lerobot.overlays.adapters import ADAPTERS, ConceptMaskAdapter, _concept_color, build_adapter
 from lerobot.overlays.overlay_ipc import OverlayStatus, SharedOverlayBuffer
 from lerobot.robots.obs_stream import _SHM_DIR, SHM_PREFIX, ObservationStreamReader
 
@@ -225,9 +225,11 @@ def _draw_labels(rgb: np.ndarray, labels: list, accent) -> np.ndarray:
     return np.asarray(pil)
 
 
-def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict, accent=_CHROME_ACCENT) -> np.ndarray:
-    """Return a COPY of ``rgb`` with a soft accent glow + a tiny label on each detected
-    object. Display-only chrome — NEVER committed. RGB in, RGB out."""
+def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict) -> np.ndarray:
+    """Return a COPY of ``rgb`` with a soft glow outline + a tiny label on each detected
+    object, in that concept's STABLE auto-assigned color (never user-chosen — the color
+    carries identity only, so it cannot be mistaken for a committed treatment).
+    Display-only chrome — NEVER committed. RGB in, RGB out."""
     import cv2
 
     out = rgb.copy()
@@ -235,7 +237,8 @@ def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict, accent=_CHROME_
     h = rgb.shape[0]
     outline_w = max(1, h // 360)  # scale line weight with resolution so it's visible
     glow_w = max(4, h // 110)
-    labels: list[tuple[str, tuple[int, int]]] = []
+    concepts = list(masks_by_name)
+    per_obj: list[tuple[str, tuple, list]] = []  # (name, color, contours)
     for name, mask in masks_by_name.items():
         m = mask.astype(np.uint8) if mask is not None else None
         if m is None or not m.any():
@@ -243,19 +246,17 @@ def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict, accent=_CHROME_
         contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
-        cv2.drawContours(glow, contours, -1, accent, thickness=glow_w)
-        x, y, _bw, _bh = cv2.boundingRect(max(contours, key=cv2.contourArea))
-        labels.append((name, (x, y)))  # anchor at the object's top-left
-    if glow.any():
+        per_obj.append((name, _concept_color(name, concepts), contours))
+        cv2.drawContours(glow, contours, -1, _concept_color(name, concepts), thickness=glow_w)
+    if per_obj:
         glow = cv2.GaussianBlur(glow, (0, 0), max(2, glow_w // 2))
         out = cv2.addWeighted(out, 1.0, glow, 0.75, 0)
-        for _name, mask in masks_by_name.items():  # crisp outline over the glow
-            m = mask.astype(np.uint8) if mask is not None else None
-            if m is None or not m.any():
-                continue
-            contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(out, contours, -1, accent, thickness=outline_w, lineType=cv2.LINE_AA)
-    return _draw_labels(out, labels, accent)
+        for _name, color, contours in per_obj:  # crisp outline over the glow
+            cv2.drawContours(out, contours, -1, color, thickness=outline_w, lineType=cv2.LINE_AA)
+        for name, color, contours in per_obj:
+            x, y, _bw, _bh = cv2.boundingRect(max(contours, key=cv2.contourArea))
+            out = _draw_labels(out, [(name, (x, y))], color)
+    return out
 
 
 def main() -> None:
@@ -268,12 +269,7 @@ def main() -> None:
     parser.add_argument(
         "--objects",
         default=None,
-        help='Initial monitored objects, JSON [{"name","color":[r,g,b],"sign":"+"}]',
-    )
-    parser.add_argument(
-        "--background",
-        default=None,
-        help='Background fill JSON {"color":[r,g,b]} (null/absent = transparent)',
+        help='Initial monitored objects, JSON [{"name","sign":"+","treatment":{...}}]',
     )
     parser.add_argument(
         "--background-treatment",
@@ -349,11 +345,6 @@ def main() -> None:
             logger.warning("ignoring malformed --objects: %s", args.objects)
     elif args.prompt:
         init_control["prompt"] = args.prompt
-    if args.background:
-        try:
-            init_control["background"] = json.loads(args.background)
-        except Exception:
-            logger.warning("ignoring malformed --background: %s", args.background)
     if args.style:
         init_control["style"] = args.style
     if args.smooth is not None:
@@ -472,7 +463,7 @@ def main() -> None:
                     continue
                 last_seq[cam] = seq
                 frames_by_cam[cam] = np.ascontiguousarray(result[0])
-            if frames_by_cam and bg_treatment is not None:
+            if frames_by_cam and isinstance(adapter, ConceptMaskAdapter):
                 # WYSIWYG data mode: ONE segmentation pass for the whole sweep — the
                 # adapter shares the vision encode across cameras when batching is on
                 # — then the
@@ -494,14 +485,22 @@ def main() -> None:
                         )
                         composed = composite_regions(frgb, regions, sampled)
                         display = _draw_detection_chrome(composed, masks_by_name)
-                        # Reuse a per-camera RGBA buffer: dstack allocates + copies ~5.5 MB
-                        # per frame; write_overlay copies out of it, so reuse is safe.
+                        # TRANSPARENT-DIFF overlay: opaque only where a treatment painted
+                        # (union of treated regions' feathered alphas) or chrome drew
+                        # (pixels the chrome pass changed). Untreated areas stay
+                        # transparent, so the run tab's live feed shows through at full
+                        # rate and the data tab's PNGs shrink to the changed pixels.
                         buf = rgba_bufs.get(cam)
                         if buf is None or buf.shape[:2] != (h, w):
                             buf = np.empty((h, w, 4), dtype=np.uint8)
-                            buf[..., 3] = 255
                             rgba_bufs[cam] = buf
+                        alpha = np.zeros((h, w), dtype=np.float32)
+                        for (ralpha, treatment), _samp in zip(regions, sampled, strict=True):
+                            if ((treatment or {}).get("key") or "none") != "none":
+                                np.maximum(alpha, ralpha, out=alpha)
+                        chrome_px = (display != composed).any(axis=2)
                         buf[..., :3] = display
+                        buf[..., 3] = np.maximum(alpha * 255.0, chrome_px * 255).astype(np.uint8)
                         rgba = buf
                         compute_ms_sum += (time.perf_counter() - tfx) * 1000.0
                         ti = time.perf_counter()

@@ -141,10 +141,6 @@ def test_segment_unions_instances_and_carves_negatives():
     assert set(out) == {"arm"}  # negatives are carved, never returned
     expected = (arm1 | arm2) & ~held
     assert (out["arm"] == expected).all()
-    # infer() composites the same masks into a frame-sized RGBA overlay.
-    rgba = ad.infer(frame)
-    assert rgba.shape == (h, w, 4)
-    assert (rgba[..., 3] > 0).any()
 
 
 def test_segment_many_is_the_serial_per_camera_loop():

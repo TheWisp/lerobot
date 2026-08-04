@@ -12,7 +12,6 @@
     const panels = [];
     let livePanel = null;
 
-    const PALETTE = [[239, 68, 68], [34, 197, 94], [59, 130, 246], [234, 179, 8], [168, 85, 247], [20, 184, 166]];
     const MAX_OBJECTS = 6;
 
     // Per-tab identity for the data overlay's single-owner lease (the model + obs
@@ -153,12 +152,13 @@
         // region too (see backgroundTreatment). Objects default to None (kept as-is);
         // background defaults to Random → the GreenAug recipe is zero-click.
         let objects = [{ name: '', sign: '+', treatment: { key: 'none', params: {} } }];
-        let backgroundTreatment = { key: 'random', params: {} };
+        // Data tab: background defaults Random -> the GreenAug recipe is zero-click.
+        // Run tab: everything defaults None -> pure observability (chrome only).
+        let backgroundTreatment = mode === 'data' ? { key: 'random', params: {} } : { key: 'none', params: {} };
         let multiInstance = true;               // data mode: segment ALL instances of each object (both arms) vs largest
         // SAM inference resolution (a LOAD-TIME knob: changing it respawns the worker; the
         // batch job inherits it so preview == commit). Default to the backend's default preset.
         let resolution = (RESOLUTIONS.find((r) => /default/i.test(r.label || '')) || RESOLUTIONS[0] || { value: null }).value;
-        let background = null;            // run mode only: contour-view fill; null = transparent, else [r,g,b]
         let nameTimer = null;
         let status = { state: 'idle' };
         let pollTimer = null;
@@ -213,7 +213,6 @@
             const o = objects[0] || {};
             return [{ name: 'object', sign: o.sign || '+', treatment: tr(o) }];
         }
-        const bgPayload = () => ({ color: background });  // run mode only: contour-view fill
         const camsArg = () => (selectedCameras && selectedCameras.size ? [...selectedCameras] : null);
 
         function onPick(key) {
@@ -313,8 +312,6 @@
         }
 
         // ---- object rows: [sign][name][palette][trash] + a Background row ----
-        const swatch = (rgb, sel) => `<span class="overlays-swatch${sel ? ' sel' : ''}" data-rgb="${rgb.join(',')}" style="background:rgb(${rgb[0]},${rgb[1]},${rgb[2]})"></span>`;
-        const paletteHTML = (s) => PALETTE.map((c) => swatch(c, s && c[0] === s[0] && c[1] === s[1] && c[2] === s[2])).join('');
 
         // ---- per-region treatment widget (data mode): [ Tint | Random | Blur | None ] ----
         const TINT_PRESETS = [[239, 68, 68], [34, 197, 94], [59, 130, 246], [234, 179, 8], [168, 85, 247], [20, 184, 166], [255, 255, 255], [15, 23, 42]];
@@ -417,11 +414,8 @@
             const box = els.modelBody.querySelector('.overlays-objrows');
             if (!box) return;
             const anyNamed = objects.some((o) => (o.name || '').trim());
-            const signBtn = (o, i) => `<button class="overlays-obj-btn sign${o.sign === '-' ? ' neg' : ''}" data-i="${i}" title="${o.sign === '-' ? 'excluded — click to include' : 'included — click to exclude'}">${o.sign === '-' ? '−' : '+'}</button>`;
             const nameInput = (o, i) => `<input class="overlays-obj-name" type="text" data-i="${i}" placeholder="${(i === 0 && !anyNamed) ? 'object' : 'object name (e.g. robot arm)'}" value="${esc(o.name)}">`;
-            const trail = (i) => objects.length > 1 ? `<button class="overlays-obj-btn rm" data-i="${i}" title="remove">✕</button>` : '<span class="overlays-obj-slot"></span>';
 
-            if (mode === 'data') {
                 // One line per region: [+/− polarity] [name] [treatment icons] [× remove].
                 // The polarity pill is a first-class per-concept filter: green + = add to the
                 // foreground, red − = SUPPRESS (subtract from it — e.g. arm − gripper). The
@@ -440,19 +434,6 @@
                 wireTreatments(box);
                 box.querySelectorAll('.overlays-pol').forEach((b) => b.addEventListener('click', () => { objects[+b.dataset.i].sign = objects[+b.dataset.i].sign === '-' ? '+' : '-'; renderObjects(); applyInstant(); }));
                 box.querySelectorAll('.overlays-obj-rm').forEach((b) => b.addEventListener('click', () => { if (objects.length > 1) { objects.splice(+b.dataset.i, 1); renderObjects(); applyInstant(); } }));
-            } else {
-                // Run tab: the debug-contour view keeps per-object colours + a Background fill.
-                const rows = objects.map((o, i) => {
-                    const neg = o.sign === '-';
-                    return `<div class="overlays-objrow">${signBtn(o, i)}${nameInput(o, i)}<span class="overlays-palette${neg ? ' disabled' : ''}" data-i="${i}" title="${neg ? 'a − concept is subtracted, not drawn — colour unused' : ''}">${paletteHTML(o.color)}</span>${trail(i)}</div>`;
-                }).join('');
-                const bgrow = `<div class="overlays-objrow"><span class="overlays-obj-slot"></span><span class="overlays-bg-label">Background</span><span class="overlays-palette" data-bg="1">${paletteHTML(background)}</span><button class="overlays-obj-btn bg-clear${!background ? ' on' : ''}" title="transparent (don't paint)">∅</button></div>`;
-                box.innerHTML = rows + bgrow;
-                box.querySelectorAll('.overlays-palette[data-i] .overlays-swatch').forEach((sw) => sw.addEventListener('click', () => { objects[+sw.parentElement.dataset.i].color = sw.dataset.rgb.split(',').map(Number); renderObjects(); applyInstant(); }));
-                box.querySelectorAll('.overlays-palette[data-bg] .overlays-swatch').forEach((sw) => sw.addEventListener('click', () => { background = sw.dataset.rgb.split(',').map(Number); renderObjects(); applyInstant(); }));
-                const bgClear = box.querySelector('.overlays-obj-btn.bg-clear');
-                if (bgClear) bgClear.addEventListener('click', () => { background = null; renderObjects(); applyInstant(); });
-            }
 
             box.querySelectorAll('.overlays-obj-btn.sign').forEach((b) => b.addEventListener('click', () => { objects[+b.dataset.i].sign = objects[+b.dataset.i].sign === '-' ? '+' : '-'; renderObjects(); applyInstant(); }));
             box.querySelectorAll('.overlays-obj-btn.rm').forEach((b) => b.addEventListener('click', () => { if (objects.length > 1) { objects.splice(+b.dataset.i, 1); renderObjects(); applyInstant(); } }));
@@ -637,7 +618,7 @@
                 started = true;
                 fetch('/api/overlays/live/start', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: current, objects: payloadObjects(), background: bgPayload(), cameras: camsArg(), style: ctl.style, smooth: ctl.smooth, method: ctl.method, resolution }),
+                    body: JSON.stringify({ model: current, objects: payloadObjects(), background_treatment: backgroundTreatment, cameras: camsArg(), style: ctl.style, smooth: ctl.smooth, method: ctl.method, resolution }),
                 }).then(async (r) => {
                     if (r.status === 409) {
                         // The aux-GPU slot is held by another activity (a data client, or a
@@ -654,7 +635,7 @@
             } else {
                 fetch('/api/overlays/live/control', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ objects: payloadObjects(), background: bgPayload(), style: ctl.style, smooth: ctl.smooth, method: ctl.method }),
+                    body: JSON.stringify({ objects: payloadObjects(), background_treatment: backgroundTreatment, style: ctl.style, smooth: ctl.smooth, method: ctl.method }),
                 }).catch(() => {});
             }
         }
