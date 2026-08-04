@@ -892,6 +892,7 @@ class TestHvlaRltTokenRequired:
         ):
             asyncio.run(start_hvla(req))
         # Reached the launch path, no rejection
+        assert captured_args[:3] == [sys.executable, "-m", "lerobot.policies.hvla.launch"]
         assert any("--rlt-mode" not in a for a in captured_args)
         assert "--rlt-mode" not in captured_args
 
