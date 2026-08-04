@@ -292,6 +292,51 @@ def test_training_dashboard_metrics_repair_and_resume(training_gui_server):
         # the default form look like an architecture manifest.
         page.evaluate("trainingShowStartForm()")
         page.wait_for_selector("#training-start-form")
+        page.wait_for_function("_trainingImageStatus !== null")
+        page.select_option('select[name="image_choice"]', "local")
+        force_rebuild = page.locator('input[name="image_force_full_rebuild"]')
+        assert force_rebuild.count() == 1
+        assert not force_rebuild.is_checked()
+        assert not page.is_visible('input[name="image_force_full_rebuild"]')
+        page.locator("#training-image-local details > summary").click()
+        assert force_rebuild.is_visible()
+        assert "several GB" in page.text_content(
+            'label:has(input[name="image_force_full_rebuild"]) .training-field-hint'
+        )
+
+        # Exercise the browser-to-HTTP boundary without starting a real Docker
+        # build. The checkbox must reach the API as the explicit opt-in flag.
+        page.evaluate(
+            """() => {
+              window.__trainingBuildRequest = null;
+              const realFetch = window.fetch.bind(window);
+              window.fetch = (url, options = {}) => {
+                if (url === "/api/training/build-image") {
+                  window.__trainingBuildRequest = JSON.parse(options.body);
+                  return Promise.resolve(new Response(
+                    JSON.stringify({status: "started", force_full_rebuild: true}),
+                    {status: 200, headers: {"Content-Type": "application/json"}}
+                  ));
+                }
+                if (url === "/api/training/build-image/status") {
+                  return Promise.resolve(new Response(
+                    JSON.stringify({running: false, exit_code: 0, error: null, lines: []}),
+                    {status: 200, headers: {"Content-Type": "application/json"}}
+                  ));
+                }
+                return realFetch(url, options);
+              };
+            }"""
+        )
+        force_rebuild.check()
+        page.locator("#training-image-build-btn").click()
+        page.wait_for_function("window.__trainingBuildRequest !== null")
+        assert page.evaluate("window.__trainingBuildRequest") == {"force_full_rebuild": True}
+        page.wait_for_function("_trainingBuildRunning === false")
+        page.wait_for_function(
+            "!document.querySelector('input[name=image_force_full_rebuild]').checked"
+        )
+
         page.select_option('select[name="policy_type"]', "hvla_flow_s1")
         advanced = page.locator(".training-policy-advanced")
         assert advanced.count() == 1

@@ -449,6 +449,33 @@ class TestStreamingVideoEncoder:
 
 
 class TestStreamingEncoderIntegration:
+    def test_per_camera_encoder_receives_codec_specific_options(self, tmp_path):
+        """The default recording path must not rebuild config as generic CRF options."""
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        features = {
+            "observation.images.cam": {
+                "dtype": "video",
+                "shape": (64, 96, 3),
+                "names": ["height", "width", "channels"],
+            },
+            "action": {"dtype": "float32", "shape": (1,), "names": ["joint"]},
+        }
+        cfg = RGBEncoderConfig(vcodec="libsvtav1", g=4, crf=25, preset=10, fast_decode=1)
+        dataset = LeRobotDataset.create(
+            repo_id="test/per_camera_options",
+            fps=30,
+            features=features,
+            root=tmp_path / "per_camera_options",
+            use_videos=True,
+            rgb_encoder=cfg,
+            streaming_encoding=False,
+        )
+
+        encoder = dataset.writer.video_encoders["observation.images.cam"]
+        assert encoder.codec_options == cfg.get_codec_options(as_strings=True)
+        encoder.stop()
+
     def test_add_frame_save_episode_streaming(self, tmp_path):
         """Full integration test: add_frame -> save_episode with streaming encoding."""
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
