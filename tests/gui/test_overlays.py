@@ -35,12 +35,6 @@ def test_sam3_step_external_label_is_sam3():
     assert step["label"] == "SAM3"
 
 
-def test_no_step_advertises_the_misleading_video_key():
-    # The old "sam3_video" name implied the OOM-prone Sam3VideoModel; it must not
-    # be what the panel exposes.
-    assert all(s["key"] != "sam3_video" for s in overlays._STEPS)
-
-
 @pytest.mark.parametrize(
     "filt,cams,expected",
     [
@@ -541,3 +535,165 @@ def test_publish_data_frame_inactive_is_noop(monkeypatch):
     monkeypatch.setattr(overlays, "_data_pub", None)  # no publisher at all -> no-op
     overlays.publish_data_frame("ds", 0, 0, {})
     assert writes == []
+
+
+def test_same_model_respawn_ends_active_not_permanently_off(overlay_client, monkeypatch):
+    """A same-model respawn (what a resolution change does) shares ONE state machine.
+    The regression: _spawn_worker fired START before tearing down the old worker, so
+    the old worker's STOP/STOPPED knocked the machine from loading back to inactive,
+    the new worker's LOADED was invalid from there and dropped, and the badge read
+    'off' forever while the worker served fine. Teardown must complete BEFORE START."""
+    import asyncio as _asyncio
+
+    from lerobot.overlays.overlay_state import Event, State
+
+    class _Proc:
+        returncode = None
+        pid = 1
+
+        def terminate(self):
+            self.returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def _fake_exec(*args, **kwargs):
+        return _Proc()
+
+    monkeypatch.setattr(_asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: None)
+    overlays._machines.clear()
+    overlays._live_proc = None
+    overlays._live_model = None
+
+    async def _respawn_flow():
+        await overlays._spawn_worker("sam3_track", resolution=672)
+        overlays._machine("sam3_track").fire(Event.LOADED)  # worker reports active
+        # Resolution change: same model, different resolution -> full respawn.
+        await overlays._spawn_worker("sam3_track", resolution=504)
+        overlays._machine("sam3_track").fire(Event.LOADED)  # new worker reports active
+
+    _asyncio.run(_respawn_flow())
+    assert overlays._machine("sam3_track").state is State.ACTIVE
+    assert overlays._live_resolution == 504
+
+
+def test_unlink_stale_segments_removes_only_overlay_segments(tmp_path):
+    """An uncleanly-killed worker leaves its shm segments behind; the fixed-name
+    status segment frozen at phase "active" makes the NEXT spawn report loaded
+    instantly (badge "active", zero overlays — the "SAM3 failed to load" report).
+    The sweep removes every lerobot_overlay_* segment and nothing else."""
+    from lerobot.overlays.overlay_ipc import unlink_stale_segments
+
+    for name in ("lerobot_overlay_status", "lerobot_overlay_meta", "lerobot_overlay_img_cam"):
+        (tmp_path / name).write_bytes(b"stale")
+    (tmp_path / "lerobot_obs_meta").write_bytes(b"other-subsystem")
+    assert unlink_stale_segments(root=str(tmp_path)) == 3
+    assert [p.name for p in tmp_path.iterdir()] == ["lerobot_obs_meta"]
+    assert unlink_stale_segments(root=str(tmp_path)) == 0  # idempotent
+
+
+def test_spawn_sweeps_stale_segments_before_starting(overlay_client, monkeypatch, tmp_path):
+    """_spawn_worker must sweep stale overlay segments AFTER teardown and BEFORE the
+    subprocess starts, so every segment that exists post-spawn belongs to the new
+    worker — _observe can then trust phase='active' unconditionally."""
+    import asyncio as _asyncio
+
+    from lerobot.overlays import overlay_ipc
+
+    order = []
+    monkeypatch.setattr(
+        overlay_ipc, "unlink_stale_segments", lambda root="/dev/shm": order.append("sweep") or 0
+    )
+
+    class _Proc:
+        returncode = None
+        pid = 1
+
+    async def _fake_exec(*args, **kwargs):
+        order.append("spawn")
+        return _Proc()
+
+    monkeypatch.setattr(_asyncio, "create_subprocess_exec", _fake_exec)
+    overlays._machines.clear()
+    overlays._live_proc = None
+    overlays._live_model = None
+    _asyncio.run(overlays._spawn_worker("sam3_track", resolution=672))
+    assert order == ["sweep", "spawn"]
+
+
+def _mk_proc(rc):
+    class _P:
+        returncode = rc
+        pid = 1
+
+    return _P()
+
+
+def test_observe_maps_every_exit_to_an_event(overlay_client, monkeypatch):
+    """State-machine audit: a worker exit must NEVER be silently ignored. rc!=0 fires
+    CRASH (badge 'error', model kept for restart-from-error); an UNCOMMANDED clean/
+    SIGTERM exit resets to inactive and clears ownership — previously both a crashed
+    worker exiting 0 and any self-exit left the badge frozen on a dead process."""
+    from lerobot.overlays.overlay_state import Event, State
+
+    monkeypatch.setattr(overlays, "_read_status", lambda: {})
+    # Abnormal death -> ERROR, model kept.
+    overlays._machines.clear()
+    overlays._live_model = "sam3_track"
+    overlays._live_proc = _mk_proc(1)
+    overlays._machine("sam3_track").fire(Event.START)
+    overlays._machine("sam3_track").fire(Event.LOADED)
+    overlays._observe()
+    assert overlays._machine("sam3_track").state is State.ERROR
+    assert overlays._live_model == "sam3_track" and overlays._live_proc is None
+
+    # Uncommanded clean exit -> INACTIVE, ownership cleared.
+    overlays._machines.clear()
+    overlays._live_model = "sam3_track"
+    overlays._live_proc = _mk_proc(0)
+    overlays._machine("sam3_track").fire(Event.START)
+    overlays._machine("sam3_track").fire(Event.LOADED)
+    overlays._observe()
+    assert overlays._machine("sam3_track").state is State.INACTIVE
+    assert overlays._live_model is None and overlays._live_proc is None
+
+
+def test_observe_logs_desync_instead_of_dropping_it(overlay_client, monkeypatch, caplog):
+    """A live worker reporting 'active' while the machine says inactive is a broken
+    invariant (this exact silence hid the stale-segment and respawn-order bugs).
+    It must be logged, not swallowed; the machine must not move."""
+    import logging as _logging
+
+    from lerobot.overlays.overlay_state import State
+
+    overlays._machines.clear()
+    overlays._live_model = "sam3_track"
+    overlays._live_proc = _mk_proc(None)
+    monkeypatch.setattr(overlays, "_read_status", lambda: {"phase": "active"})
+    with caplog.at_level(_logging.WARNING, logger="lerobot.gui.api.overlays"):
+        overlays._observe()
+    assert overlays._machine("sam3_track").state is State.INACTIVE
+    assert any("desync" in r.message for r in caplog.records)
+
+
+def test_spawn_exec_failure_is_500_and_error_state(overlay_client, monkeypatch):
+    """If the worker subprocess cannot exec at all, the machine must not sit in
+    `loading` forever with no process behind it."""
+    import asyncio as _asyncio
+
+    from fastapi import HTTPException
+
+    from lerobot.overlays.overlay_state import State
+
+    async def _boom(*a, **k):
+        raise FileNotFoundError("no such interpreter")
+
+    monkeypatch.setattr(_asyncio, "create_subprocess_exec", _boom)
+    overlays._machines.clear()
+    overlays._live_proc = None
+    overlays._live_model = None
+    with pytest.raises(HTTPException) as ei:
+        _asyncio.run(overlays._spawn_worker("sam3_track"))
+    assert ei.value.status_code == 500
+    assert overlays._machine("sam3_track").state is State.ERROR

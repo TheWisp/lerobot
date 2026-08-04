@@ -181,7 +181,167 @@ class DebugVisionAdapter:
         raise NotImplementedError
 
 
-class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
+class ConceptMaskAdapter(DebugVisionAdapter):
+    """Shared base for text-prompted concept->mask adapters (the SAM3 family).
+
+    Owns everything that is NOT model-specific: the control contract (objects /
+    signs / colors / background / multi_instance), the ``+``/``-`` carving in
+    :meth:`segment`, and the RGBA compositing in :meth:`infer`. Subclasses load a
+    model and implement :meth:`_infer_masks` (frame -> per-concept mask lists) plus
+    :meth:`_restart_tracking` (drop all temporal state when the concept set changes).
+
+    Resolution: SAM3's vision encoders accept any patch-multiple input size, but the
+    global-attention RoPE tables are built from the model config at load time — so
+    the inference resolution is a LOAD-TIME knob (``resolution`` ctor arg), applied
+    to the model config AND every processor call. ``RESOLUTIONS`` are the supported
+    presets; lower = quadratically less encoder work. Measured on real robot frames
+    (5090, fp16): 672 is ~1.8x faster than 1008 with equal-or-better masks.
+    """
+
+    RESOLUTIONS = (1008, 672, 504)  # supported presets (GUI: Full / Balanced / Fast)
+    DEFAULT_RESOLUTION = 672  # measured equal-or-better masks than 1008 at ~1.8x the speed
+    MAX_OBJECTS = 6  # cap monitored objects (shared encoder keeps multi-object cheap)
+    DEFAULT_PROMPT = "object"
+
+    def __init__(self, device: str = "cuda", resolution: int | None = None):
+        super().__init__(device)
+        resolution = int(resolution) if resolution else self.DEFAULT_RESOLUTION
+        assert resolution % 14 == 0 and resolution >= 224, (
+            f"resolution must be a multiple of the ViT patch (14) and >= 224, got {resolution}"
+        )
+        self.resolution = resolution
+        self._proc_size = {"height": resolution, "width": resolution}
+        self._cv2 = _import_cv2()
+        self.prompt = self.DEFAULT_PROMPT
+        self._concepts: list[str] = []
+        self._colors: dict[str, tuple[int, int, int]] = {}  # user-chosen color per concept
+        self._signs: dict[str, str] = {}
+        self._bg_color: tuple[int, int, int] | None = None
+        # Data editing unions all instances of a concept (protect every match, e.g.
+        # both arms); the debug overlay keeps the single-largest lock. Set via
+        # set_control({"multi_instance": ...}); default False = the debug lock.
+        self._seed_multi = False
+        self._cam: str | None = None
+
+    def _parse_concepts(self) -> list[str]:
+        parts = (c.strip() for c in self.prompt.replace(",", ".").split("."))
+        names = list(dict.fromkeys(c for c in parts if c))[: self.MAX_OBJECTS]
+        return names or [self.DEFAULT_PROMPT]
+
+    def set_camera(self, cam: str | None) -> None:
+        self._cam = cam  # which camera's tracking state _infer_masks() should use
+
+    def _restart_tracking(self) -> None:
+        """Drop ALL cameras' temporal state (the concept set / seed policy changed)."""
+        raise NotImplementedError
+
+    def set_control(self, control: dict) -> None:
+        # Structured monitored objects (preferred). Color/sign/background are display-only;
+        # only an object-NAME change restarts tracking.
+        names, colors, signs = _parse_objects(control, self.MAX_OBJECTS)
+        if names is not None:
+            self._colors = colors
+            self._signs = signs
+            new_prompt = " . ".join(names)
+            if new_prompt and new_prompt != self.prompt:
+                self.prompt = new_prompt
+                self._restart_tracking()  # restart tracking on every camera with the new objects
+        else:
+            p = control.get("prompt")
+            if isinstance(p, str) and p.strip() and p.strip() != self.prompt:
+                self.prompt = p.strip()
+                self._restart_tracking()
+        bg = _parse_background(control)
+        if bg is not _BG_UNSET:
+            self._bg_color = bg
+        # "Segment all instances of each concept" (both arms) vs the single largest.
+        # Absent = keep the current value (default False: the debug overlay's lock;
+        # the data-editing paths send True). A change restarts tracking so the next
+        # frame re-seeds under the new policy instead of waiting for a flush.
+        if "multi_instance" in control:
+            mv = bool(control["multi_instance"])
+            if mv != self._seed_multi:
+                self._seed_multi = mv
+                self._restart_tracking()
+
+    def segment_many(self, frames_by_cam: dict[str, np.ndarray]) -> dict[str, dict[str, np.ndarray]]:
+        """:meth:`segment` for several cameras' frames of the SAME timestep.
+
+        Serial per-camera loop. Pre: each frame is HxWx3 uint8. Post:
+        ``{cam: {concept: mask}}``, exactly one entry per input camera.
+        """
+        out: dict[str, dict[str, np.ndarray]] = {}
+        for cam, frame in frames_by_cam.items():
+            self.set_camera(cam)
+            out[cam] = self.segment(frame)
+        return out
+
+    def _infer_masks(self, frame_rgb: np.ndarray) -> tuple[dict[str, list[np.ndarray]], int, int]:
+        """Run the model for one frame -> ``(masks_by_concept, h, w)``. Mutates the
+        current camera's tracking state — the caller must have selected the camera
+        via :meth:`set_camera`."""
+        raise NotImplementedError
+
+    def segment(self, frame_rgb: np.ndarray) -> dict[str, np.ndarray]:
+        """Per-concept boolean masks for this frame (positive concepts only).
+
+        Runs the same tracking pipeline as :meth:`infer` but returns the raw
+        ``{concept: HxW bool mask}`` instead of an RGBA overlay — what an
+        offline pixel-editing pass (background replacement, recolor) needs.
+        Negative (``-``) concepts are carved out of the positives, exactly as
+        the overlay compositor does, so the returned masks are the region that
+        an effect should KEEP as foreground. Precondition: ``frame_rgb`` is
+        contiguous HxWx3 uint8 RGB; call :meth:`set_camera` / :meth:`reset` to
+        scope and reseed per-camera tracking just like the live loop. Whether a
+        concept yields all its instances (both arms) or just the largest is set via
+        ``set_control({"multi_instance": ...})`` — same knob the overlay + batch share.
+        """
+        masks_by_concept, _h, _w = self._infer_masks(frame_rgb)
+        # Apply the same +/- carving the compositor does, so a caller gets the
+        # final kept region per positive concept without re-deriving the logic.
+        neg = None
+        has_neg = any(self._signs.get(c, "+") == "-" for c in self._concepts)
+        if has_neg:
+            neg = np.zeros(frame_rgb.shape[:2], dtype=bool)
+            for c in self._concepts:
+                if self._signs.get(c, "+") == "-":
+                    for m in masks_by_concept.get(c, []):
+                        neg |= m
+        out: dict[str, np.ndarray] = {}
+        for c in self._concepts:
+            if self._signs.get(c, "+") == "-":
+                continue
+            ms = masks_by_concept.get(c, [])
+            if not ms:
+                continue
+            union = np.zeros(frame_rgb.shape[:2], dtype=bool)
+            for m in ms:
+                union |= m
+            if neg is not None:
+                union &= ~neg
+            out[c] = union
+        return out
+
+    def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
+        assert frame_rgb.ndim == 3 and frame_rgb.shape[2] == 3, (
+            f"infer expects HxWx3 RGB, got {frame_rgb.shape}"
+        )
+        masks_by_concept, h, w = self._infer_masks(frame_rgb)
+        rgba = _composite_concepts(
+            h,
+            w,
+            masks_by_concept,
+            self._concepts,
+            self._colors,
+            self._signs,
+            self._bg_color,
+            self._cv2,
+        )
+        assert rgba.shape == (h, w, 4), f"overlay {rgba.shape} != frame {(h, w, 4)}"
+        return rgba
+
+
+class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
     """SAM3 LOCKED-OBJECT tracking (tracking-by-detection). Two tiers sharing one encoder:
 
     - Tier 1 — ``Sam3Model`` image detector: text -> mask. Used only to SEED a new object
@@ -212,35 +372,46 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         }
     ]
     SAM3_ID = "facebook/sam3"
-    DEFAULT_PROMPT = "object"
-    MAX_OBJECTS = 6  # cap monitored objects (shared encoder keeps multi-object cheap)
     FLUSH_EVERY = 150  # rebuild each tracker session every N frames -> flat GPU memory
     LOST_THRESH = 0.30  # sigmoid(object_score_logits) below this = track lost -> Tier-1 recover
     RECOVER_EVERY = 5  # throttle Tier-1 re-detection attempts (frames) while an object is lost
 
-    def __init__(self, device: str = "cuda"):
-        super().__init__(device)
+    def __init__(self, device: str = "cuda", resolution: int | None = None):
+        super().__init__(device, resolution)
         try:
             import torch
             from PIL import Image
             from transformers import (
+                Sam3Config,
                 Sam3Model,
                 Sam3Processor,
+                Sam3TrackerVideoConfig,
                 Sam3TrackerVideoModel,
                 Sam3TrackerVideoProcessor,
             )
         except ImportError as e:
             raise RuntimeError(_IMPORT_HINT) from e
         self._torch = torch
-        self._cv2 = _import_cv2()
         self._Image = Image
-        logger.info("loading %s (detector + geometric tracker) ...", self.SAM3_ID)
+        logger.info("loading %s (detector + geometric tracker) at %d px ...", self.SAM3_ID, self.resolution)
         try:
+            # Inference resolution is a load-time knob: the global-attention layers build
+            # their RoPE tables from config.image_size, so it must be set BEFORE loading
+            # (pos-embeds tile to any size at runtime; a processor-only resize crashes).
+            det_cfg = Sam3Config.from_pretrained(self.SAM3_ID)
+            det_cfg.vision_config.image_size = self.resolution
+            trk_cfg = Sam3TrackerVideoConfig.from_pretrained(self.SAM3_ID)
+            trk_cfg.image_size = self.resolution
+            trk_cfg.memory_attention_rope_feat_sizes = [self.resolution // 14] * 2
             self.det_proc = Sam3Processor.from_pretrained(self.SAM3_ID)
-            self.det = Sam3Model.from_pretrained(self.SAM3_ID, dtype=torch.float16).to(device).eval()
+            self.det = (
+                Sam3Model.from_pretrained(self.SAM3_ID, config=det_cfg, dtype=torch.float16).to(device).eval()
+            )
             self.trk_proc = Sam3TrackerVideoProcessor.from_pretrained(self.SAM3_ID)
             self.trk = (
-                Sam3TrackerVideoModel.from_pretrained(self.SAM3_ID, dtype=torch.float16).to(device).eval()
+                Sam3TrackerVideoModel.from_pretrained(self.SAM3_ID, config=trk_cfg, dtype=torch.float16)
+                .to(device)
+                .eval()
             )
         except Exception as e:
             raise RuntimeError(
@@ -253,71 +424,94 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
         # seeded object onto distractors while still reporting a high score. Measured on real
         # frames: with the share the ring track jumped to the gripper by frame ~14; without it,
         # it holds. The ~0.9 GB saved is not worth a broken tracker.
-        self.prompt = self.DEFAULT_PROMPT
-        self._concepts: list[str] = []
-        self._colors: dict[str, tuple[int, int, int]] = {}  # user-chosen color per concept
-        self._signs: dict[str, str] = {}
-        self._bg_color: tuple[int, int, int] | None = None
         self._det_threshold = 0.5
-        self._cam: str | None = None
         self._tracks: dict[str | None, dict] = {}  # per-camera tracker state (session + masks)
-
-    def _parse_concepts(self) -> list[str]:
-        parts = (c.strip() for c in self.prompt.replace(",", ".").split("."))
-        names = list(dict.fromkeys(c for c in parts if c))[: self.MAX_OBJECTS]
-        return names or [self.DEFAULT_PROMPT]
-
-    def set_camera(self, cam: str | None) -> None:
-        self._cam = cam  # which camera's tracker state infer() should use
+        # Per-concept detector text features (deterministic per string -> lifetime cache);
+        # lets _detect_many skip the text encoder entirely on seed/recover.
+        self._text_cache: dict[str, tuple] = {}
 
     def reset(self) -> None:
         # Discontinuity: drop this camera's session so the next infer() re-seeds from
         # scratch instead of propagating a stale memory bank across a scrub/episode/wrap.
         self._tracks.pop(self._cam, None)
 
-    def set_control(self, control: dict) -> None:
-        # Structured monitored objects (preferred). Color/sign/background are display-only;
-        # only an object-NAME change restarts tracking.
-        names, colors, signs = _parse_objects(control, self.MAX_OBJECTS)
-        if names is not None:
-            self._colors = colors
-            self._signs = signs
-            new_prompt = " . ".join(names)
-            if new_prompt and new_prompt != self.prompt:
-                self.prompt = new_prompt
-                self._tracks = {}  # restart tracking on every camera with the new objects
-        else:
-            p = control.get("prompt")
-            if isinstance(p, str) and p.strip() and p.strip() != self.prompt:
-                self.prompt = p.strip()
-                self._tracks = {}
-        bg = _parse_background(control)
-        if bg is not _BG_UNSET:
-            self._bg_color = bg
+    def _restart_tracking(self) -> None:
+        self._tracks = {}
 
-    # ---------------- Tier 1: image detector (text -> one mask per concept) ----------------
-    def _detect(self, frame_rgb: np.ndarray, concept: str, h: int, w: int) -> np.ndarray | None:
-        """Largest instance mask for ``concept`` on this single frame, or None."""
-        torch = self._torch
-        inp = self.det_proc(images=self._Image.fromarray(frame_rgb), text=concept, return_tensors="pt").to(
-            self.device
-        )
-        with torch.inference_mode():
-            out = self.det(**inp)
-        res = self.det_proc.post_process_instance_segmentation(
-            out, threshold=self._det_threshold, target_sizes=[(h, w)]
-        )[0]
+    # ---------------- Tier 1: image detector (text -> mask per concept) ----------------
+    def _select_instances(self, res: dict, h: int, w: int) -> np.ndarray | None:
+        """Turn one post-processed detection result into a seed mask, or None.
+
+        Debug overlay (``_seed_multi`` False): the single largest instance — the
+        tracker then locks onto that one object. Data editing (``_seed_multi``
+        True): the UNION of every instance, so a concept like "robot arm" protects
+        BOTH arms, not just the biggest (SAM3 returns them as separate instances;
+        taking the largest silently dropped the second). Instances under the small
+        area gate are noise, not objects."""
         masks = res.get("masks", [])
         if len(masks) == 0:
             return None
         arrs = [(m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m)) > 0 for m in masks]
+        arrs = [a for a in arrs if int(a.sum()) > 50]
+        if not arrs:
+            return None
+        if self._seed_multi:
+            union = np.zeros((h, w), dtype=bool)
+            for a in arrs:
+                union |= a
+            assert union.shape == (h, w), f"detector mask {union.shape} != frame {(h, w)}"
+            return union
         best = max(arrs, key=lambda a: int(a.sum()))
         assert best.shape == (h, w), f"detector mask {best.shape} != frame {(h, w)}"
-        return best if int(best.sum()) > 50 else None
+        return best
+
+    def _detect_many(
+        self, frame_rgb: np.ndarray, concepts: list[str], h: int, w: int
+    ) -> dict[str, np.ndarray | None]:
+        """Seed masks for ``concepts`` on ONE frame with ONE vision encode.
+
+        The detector's vision backbone is ~73% of a full forward and depends only
+        on the frame; ``Sam3Model.forward`` takes precomputed ``vision_embeds`` /
+        ``text_embeds`` for exactly this reuse, so N concepts cost one encode plus
+        N cheap fusion/decode passes instead of N full forwards. Text features are
+        deterministic per concept string and cached for the adapter's lifetime.
+        Pre: ``frame_rgb`` is HxWx3 uint8. Post: one entry per concept (None =
+        nothing detected)."""
+        if not concepts:
+            return {}
+        torch = self._torch
+        inp = self.det_proc(
+            images=self._Image.fromarray(frame_rgb),
+            size=self._proc_size,  # match the load-time model resolution
+            return_tensors="pt",
+        ).to(self.device)
+        out: dict[str, np.ndarray | None] = {}
+        with torch.inference_mode():
+            vision_embeds = self.det.vision_encoder(inp["pixel_values"])
+            for concept in concepts:
+                cached = self._text_cache.get(concept)
+                if cached is None:
+                    tok = self.det_proc(text=concept, return_tensors="pt").to(self.device)
+                    feats = self.det.get_text_features(
+                        input_ids=tok["input_ids"],
+                        attention_mask=tok.get("attention_mask"),
+                        return_dict=True,
+                    ).pooler_output
+                    cached = (feats, tok.get("attention_mask"))
+                    self._text_cache[concept] = cached
+                text_embeds, attn = cached
+                fwd = self.det(vision_embeds=vision_embeds, text_embeds=text_embeds, attention_mask=attn)
+                res = self.det_proc.post_process_instance_segmentation(
+                    fwd, threshold=self._det_threshold, target_sizes=[(h, w)]
+                )[0]
+                out[concept] = self._select_instances(res, h, w)
+        return out
 
     # ---------------- Tier 2: geometric video tracker ----------------
     def _pv(self, frame_rgb: np.ndarray):
-        inp = self.trk_proc(images=self._Image.fromarray(frame_rgb), return_tensors="pt")
+        inp = self.trk_proc(
+            images=self._Image.fromarray(frame_rgb), size=self._proc_size, return_tensors="pt"
+        )
         return inp["pixel_values"][0].to(self.device, self._torch.float16)
 
     def _seed(self, track: dict, seeds: dict[str, np.ndarray], pv, h: int, w: int) -> None:
@@ -418,10 +612,13 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
             for c in self._concepts
         }
 
-    def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
-        assert frame_rgb.ndim == 3 and frame_rgb.shape[2] == 3, (
-            f"infer expects HxWx3 RGB, got {frame_rgb.shape}"
-        )
+    def _infer_masks(self, frame_rgb: np.ndarray) -> tuple[dict[str, list[np.ndarray]], int, int]:
+        """Drive the tracker for one frame and return ``(masks_by_concept, h, w)``.
+
+        The body shared by :meth:`infer` (which composites an RGBA overlay) and
+        :meth:`segment` (which returns the raw masks). Mutates per-camera tracker
+        state — the caller must have selected the camera via :meth:`set_camera`.
+        """
         torch = self._torch
         h, w = frame_rgb.shape[:2]
         cam = self._cam
@@ -434,15 +631,25 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
                 "masks": {},
                 "scores": {},
                 "since_flush": 0,
-                "since_recover": 0,
+                # RECOVER_EVERY so the FIRST frame after a reset/scrub probes immediately;
+                # a failed probe resets it, throttling subsequent attempts (below).
+                "since_recover": self.RECOVER_EVERY,
                 "shape": (h, w),
             }
             self._tracks[cam] = track
         pv = self._pv(frame_rgb)
 
         if track["session"] is None:
-            # No track yet — Tier 1 detects each object to seed Tier 2.
-            seeds = {c: m for c in self._concepts if (m := self._detect(frame_rgb, c, h, w)) is not None}
+            # No track yet — Tier 1 detects each object to seed Tier 2. Throttled like
+            # recovery: with no objects in view, an unthrottled probe re-runs the detector
+            # for EVERY concept on EVERY frame (measured ~30 ms/concept/frame — it
+            # dominated a live run's per-camera cost during empty-scene stretches).
+            track["since_recover"] += 1
+            if track["since_recover"] < self.RECOVER_EVERY:
+                return self._live_masks(track), h, w
+            track["since_recover"] = 0
+            detected = self._detect_many(frame_rgb, self._concepts, h, w)
+            seeds = {c: m for c, m in detected.items() if m is not None}
             # Visibility: what the detector found vs missed on the seed frame, and what we
             # hand the tracker. Periodic (seed / rebuild / recover), not per-frame.
             missing = [c for c in self._concepts if c not in seeds]
@@ -476,12 +683,27 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
                     lost and track["since_recover"] >= self.RECOVER_EVERY
                 ):
                     seeds = {}
+                    to_detect = []
                     for c in self._concepts:
                         if track["scores"].get(c, 0.0) >= self.LOST_THRESH and c in track["masks"]:
                             seeds[c] = track["masks"][c]  # healthy: reseed from current mask
-                        elif (m := self._detect(frame_rgb, c, h, w)) is not None:
-                            seeds[c] = m  # lost: Tier-1 re-detect
-                    why = "flush" if track["since_flush"] >= self.FLUSH_EVERY else "recover"
+                        else:
+                            to_detect.append(c)  # lost: Tier-1 re-detect (one shared encode)
+                    recovered = 0
+                    for c, m in self._detect_many(frame_rgb, to_detect, h, w).items():
+                        if m is not None:
+                            seeds[c] = m
+                            recovered += 1
+                    is_flush = track["since_flush"] >= self.FLUSH_EVERY
+                    if not is_flush and not recovered:
+                        # Recover attempt found nothing new: rebuilding the session would
+                        # recondition the SAME healthy masks it already tracks — pure cost
+                        # (~40-70 ms) paid every RECOVER_EVERY frames for as long as an
+                        # object stays undetectable. Keep the live session; the detect
+                        # probes above are the only work a persistent loss needs.
+                        track["since_recover"] = 0
+                        return self._live_masks(track), h, w
+                    why = "flush" if is_flush else "recover"
                     logger.info(
                         "%s[%s]: lost %s · re-seeding %s", why, self._cam or "?", lost or "none", list(seeds)
                     )
@@ -489,19 +711,7 @@ class Sam3TrackByDetectionAdapter(DebugVisionAdapter):
                     if seeds:
                         self._seed(track, seeds, pv, h, w)
 
-        masks_by_concept = self._live_masks(track)
-        rgba = _composite_concepts(
-            h,
-            w,
-            masks_by_concept,
-            self._concepts,
-            self._colors,
-            self._signs,
-            self._bg_color,
-            self._cv2,
-        )
-        assert rgba.shape == (h, w, 4), f"overlay {rgba.shape} != frame {(h, w, 4)}"
-        return rgba
+        return self._live_masks(track), h, w
 
 
 def _import_cv2():
@@ -692,8 +902,21 @@ ADAPTERS: dict[str, type[DebugVisionAdapter]] = {
     PolicySaliencyAdapter.key: PolicySaliencyAdapter,
 }
 
+# Text-prompted segmenters — the models valid for concept masking (data editing);
+# excludes overlay-only adapters like policy saliency.
+SEGMENTER_KEYS: tuple[str, ...] = tuple(
+    k for k, cls in ADAPTERS.items() if issubclass(cls, ConceptMaskAdapter)
+)
 
-def build_adapter(key: str, device: str = "cuda") -> DebugVisionAdapter:
+
+def build_adapter(key: str, device: str = "cuda", resolution: int | None = None) -> DebugVisionAdapter:
+    """Instantiate an adapter by key. ``resolution`` (a ``ConceptMaskAdapter.RESOLUTIONS``
+    preset) applies only to concept-mask adapters — it is a LOAD-TIME knob; changing it
+    means rebuilding the adapter. None = the adapter's default. Non-segmenter adapters
+    ignore it."""
     if key not in ADAPTERS:
         raise ValueError(f"unknown debug-vision model '{key}'; have {list(ADAPTERS)}")
-    return ADAPTERS[key](device=device)
+    cls = ADAPTERS[key]
+    if issubclass(cls, ConceptMaskAdapter):
+        return cls(device=device, resolution=resolution)
+    return cls(device=device)

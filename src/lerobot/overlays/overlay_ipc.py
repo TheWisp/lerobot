@@ -12,6 +12,7 @@ SharedBlock (sequence-counter header).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 
@@ -24,6 +25,26 @@ _META_BYTES = 8192
 _CONTROL_BYTES = 4096
 _STATUS_BYTES = 1024
 _CONTROL_SHM = f"/dev/shm/{_PREFIX}control"  # nosec B108  # POSIX shm path (not a temp dir), for a cheap existence check
+
+
+def unlink_stale_segments(root: str = "/dev/shm") -> int:  # nosec B108  # POSIX shm dir, not a temp dir
+    """Remove every ``lerobot_overlay_*`` shm segment. Call ONLY while no worker is
+    running (before a spawn, at server start). Precondition: caller has serialised
+    against worker lifecycle (holds the overlay lock or is single-threaded startup).
+
+    Why: a worker killed uncleanly (SIGKILL, parent-death signal when the server
+    dies) leaves its segments behind, and the status segment is a FIXED name with
+    no owner stamp — frozen at phase "active", it makes the NEXT spawn report
+    loaded instantly while the new worker is still warming (or hung): badge
+    "active", zero overlays served. Returns the number of segments removed."""
+    import glob
+
+    n = 0
+    for path in glob.glob(f"{root}/{_PREFIX}*"):
+        with contextlib.suppress(OSError):
+            os.unlink(path)  # safe-destruct: shm cleanup, our own prefix-matched segments
+            n += 1
+    return n
 
 
 def _safe(cam_key: str) -> str:
