@@ -29,6 +29,7 @@ from lerobot.gui.training.recipes import (
     CONTAINER_OUTPUT_SUBDIR,
     CONTAINER_RESUME_CHECKPOINT,
     CONTAINER_RUNS_MOUNT,
+    CONTAINER_TORCH_CACHE,
     DEFAULT_IMAGE,
     FAKE_RECIPE_MARKER,
     HOST_GID_TOKEN,
@@ -158,6 +159,11 @@ def test_docker_recipe_bind_mounts(tmp_path: Path) -> None:
     cmd = _docker_cmd(run, paths)
     # HF cache mount source is $HOME-on-the-host, tokenised at compose time
     assert f"{HOST_HOME_TOKEN}/.cache/huggingface:{CONTAINER_HF_CACHE}" in cmd
+    # torch.hub backbones (for example DINOv2) must reuse the host cache;
+    # an ephemeral TORCH_HOME makes every training run download from GitHub.
+    assert f"{HOST_HOME_TOKEN}/.cache/torch:/torch-cache" in cmd
+    assert "TORCH_HOME=/torch-cache" in cmd
+    assert "TORCH_HOME=/tmp/lerobot-home/.cache/torch" not in cmd
     # Run dir mount
     assert f"{paths.root}:{CONTAINER_RUNS_MOUNT}" in cmd
 
@@ -574,5 +580,9 @@ def test_docker_recipe_hf_mount_outside_image_home(tmp_path: Path) -> None:
     # bug #6: torchvision backbone download wanted ~/.cache/torch — HOME
     # itself must point at writable tmp for arbitrary host uids.
     assert "HOME=/tmp/lerobot-home" in cmd
-    # the image bakes TORCH_HOME; torch.hub consults it before ~
-    assert "TORCH_HOME=/tmp/lerobot-home/.cache/torch" in cmd
+    # torch.hub must use a root-level host mount: this avoids image-home
+    # traversal while preserving downloaded backbones across training runs.
+    assert CONTAINER_TORCH_CACHE == "/torch-cache"
+    assert not CONTAINER_TORCH_CACHE.startswith("/home/")
+    assert f"TORCH_HOME={CONTAINER_TORCH_CACHE}" in cmd
+    assert f"{HOST_HOME_TOKEN}/.cache/torch:{CONTAINER_TORCH_CACHE}" in cmd
