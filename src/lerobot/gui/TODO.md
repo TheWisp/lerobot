@@ -714,6 +714,26 @@ Explicitly out of scope (ruled out in the design discussion before merge of PR #
 
 ## Overlays / Data Editing
 
+- [ ] **Root-cause the camera-batching regression** (highest-value perf item). Batching
+      is the only lever that reduces kernel launches per frame, and it measured ~1.3x —
+      but it degraded tracking (an object held 199/199 frames serial fell to 176/199
+      batched; another 89/199 -> 4/199 on merged_raw ep157). The long-assumed cause was
+      "batched kernels diverge numerically"; that is now DISPROVEN — `trk.get_image_features`
+      is bit-identical batched vs serial (max |diff| exactly 0.0, for two cameras stacked
+      and for a duplicated frame). Prime suspect is the prime-cache seeding: which frame
+      index each session's pre-computed features get filed under. If that is an indexing
+      bug, batching becomes a clean ~1.3x with no quality cost.
+- [ ] **Try CUDA graphs** — `torch.compile(mode="reduce-overhead")` on the vision encoders.
+      Profiling says the workload is LAUNCH-BOUND, not compute-bound: ~1,233 kernel
+      launches and 4 blocking `cudaStreamSynchronize` (8.17 ms) per frame, ~15-20 ms of
+      actual kernel time inside a 26.5 ms call. Graph capture replays that launch sequence
+      as one submission, which is the textbook fix. NOTE: default-mode torch.compile was
+      already tested and rejected (1.12x for a 24 s compile) — it does not capture graphs,
+      so that result says nothing about this one. Capture may fail: graphs need static
+      shapes and no syncs inside the captured region, and this model has four.
+- [ ] Remove the 4 per-frame syncs if possible — deferring mask->CPU by one frame would
+      stop draining the pipeline every frame. Cheaper than graph capture, same target.
+
 - [ ] (LOW PRIORITY — only pays off at `variants` > 1, and the practical workflow is
       `variants=1`: extra variants cost disk for near-duplicate data, and randomizing
       across a decently sized dataset at episode level gives the same diversity.)
