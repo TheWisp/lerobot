@@ -76,19 +76,28 @@ class _ColorSegmenter:
         pass
 
     def segment(self, rgb):
-        return {"block": np.all(rgb == np.asarray(OBJ_COLOR, dtype=np.uint8), axis=-1)}
+        # Nearest-colour, not exact match: video storage shifts the square's pixels by
+        # a few levels, and an exact comparison would return an EMPTY mask on the video
+        # backend — the fake would fail where the real segmenter would not.
+        dist = np.abs(rgb.astype(np.int16) - np.asarray(OBJ_COLOR, np.int16)).max(axis=-1)
+        return {"block": dist <= 40}
 
     def segment_many(self, frames_by_cam):
         return {cam: self.segment(rgb) for cam, rgb in frames_by_cam.items()}
 
 
-@pytest.fixture
-def synthetic_source(tmp_path, empty_lerobot_dataset_factory):
+@pytest.fixture(params=["image", "video"])
+def synthetic_source(request, tmp_path, empty_lerobot_dataset_factory):
+    """Both storage backends. Real datasets are VIDEO-backed, which takes a different
+    write path (ffmpeg encode on save_episode) and read path (decoder) than images —
+    so the job has to be proven on both. Video is lossy, hence the per-dtype
+    tolerance below; image stays exact."""
+    dtype = request.param
     features = {
         "action": {"dtype": "float32", "shape": (3,), "names": None},
         "observation.state": {"dtype": "float32", "shape": (3,), "names": None},
-        EDITED_CAM: {"dtype": "image", "shape": (H, W, 3), "names": None},
-        EXCLUDED_CAM: {"dtype": "image", "shape": (H, W, 3), "names": None},
+        EDITED_CAM: {"dtype": dtype, "shape": (H, W, 3), "names": None},
+        EXCLUDED_CAM: {"dtype": dtype, "shape": (H, W, 3), "names": None},
     }
     ds = empty_lerobot_dataset_factory(root=tmp_path / "src", features=features)
     for ep in range(N_EPISODES):
@@ -104,7 +113,10 @@ def synthetic_source(tmp_path, empty_lerobot_dataset_factory):
             )
         ds.save_episode()
     ds.finalize()
-    return LeRobotDataset(repo_id=ds.repo_id, root=tmp_path / "src")
+    # Image round-trips are lossless; H.264 is not — a flat colour patch survives
+    # re-encoding closely but not exactly.
+    tol = 0 if dtype == "image" else 24
+    return LeRobotDataset(repo_id=ds.repo_id, root=tmp_path / "src"), tol
 
 
 def _run_worker(tmp_path, monkeypatch, source, *, variants=1):
@@ -141,7 +153,8 @@ def _run_worker(tmp_path, monkeypatch, source, *, variants=1):
 
 
 def test_job_writes_a_valid_edited_dataset(tmp_path, monkeypatch, synthetic_source):
-    rc, progress, out = _run_worker(tmp_path, monkeypatch, synthetic_source)
+    source, tol = synthetic_source
+    rc, progress, out = _run_worker(tmp_path, monkeypatch, source)
 
     assert rc == 0
     assert progress["status"] == "complete" and progress["stage"] == "done"
@@ -150,18 +163,23 @@ def test_job_writes_a_valid_edited_dataset(tmp_path, monkeypatch, synthetic_sour
     # Shape preserved: same episode/frame counts, same features.
     assert out.meta.total_episodes == N_EPISODES
     assert out.meta.total_frames == N_EPISODES * FRAMES_PER_EP
-    assert set(synthetic_source.meta.features) == set(out.meta.features)
+    assert set(source.meta.features) == set(out.meta.features)
 
     for i in range(len(out)):
-        src_item, out_item = synthetic_source[i], out[i]
+        src_item, out_item = source[i], out[i]
         # Non-camera data is copied verbatim — augmentation touches pixels only.
         np.testing.assert_allclose(out_item["action"].numpy(), src_item["action"].numpy())
         np.testing.assert_allclose(
             out_item["observation.state"].numpy(), src_item["observation.state"].numpy()
         )
         assert out_item["task"] == src_item["task"]
-        # A camera the user excluded passes through untouched.
-        np.testing.assert_array_equal(out_item[EXCLUDED_CAM].numpy(), src_item[EXCLUDED_CAM].numpy())
+        # A camera the user excluded passes through untouched — bit-exact for image
+        # storage; within the codec's loss for video, which re-encodes on write.
+        np.testing.assert_allclose(
+            _to_u8(out_item[EXCLUDED_CAM]).astype(np.int16),
+            _to_u8(src_item[EXCLUDED_CAM]).astype(np.int16),
+            atol=tol,
+        )
 
     # Pixels: the object (treatment "none") survives; the background is replaced.
     for ep in range(N_EPISODES):
@@ -169,9 +187,10 @@ def test_job_writes_a_valid_edited_dataset(tmp_path, monkeypatch, synthetic_sour
         for f in range(FRAMES_PER_EP):
             img = _to_u8(out[base + f][EDITED_CAM])
             cy, cx = _obj_center(f)
-            np.testing.assert_array_equal(
-                img[cy, cx],
-                np.asarray(OBJ_COLOR, np.uint8),
+            np.testing.assert_allclose(
+                img[cy, cx].astype(np.int16),
+                np.asarray(OBJ_COLOR, np.int16),
+                atol=tol,
                 err_msg=f"object pixel was altered at ep{ep} f{f}",
             )
             assert img[0, 0].tolist() != [BG_VALUE] * 3, f"background not treated at ep{ep} f{f}"
@@ -180,7 +199,8 @@ def test_job_writes_a_valid_edited_dataset(tmp_path, monkeypatch, synthetic_sour
 def test_variants_write_independent_copies(tmp_path, monkeypatch, synthetic_source):
     # variants=N multiplies the dataset: each source episode is written N times with
     # an independently drawn background, which is the whole point of the knob.
-    _rc, _progress, out = _run_worker(tmp_path, monkeypatch, synthetic_source, variants=2)
+    source, tol = synthetic_source
+    _rc, _progress, out = _run_worker(tmp_path, monkeypatch, source, variants=2)
 
     assert out.meta.total_episodes == N_EPISODES * 2
     assert out.meta.total_frames == N_EPISODES * FRAMES_PER_EP * 2
@@ -196,4 +216,4 @@ def test_variants_write_independent_copies(tmp_path, monkeypatch, synthetic_sour
         base = int(out.meta.episodes["dataset_from_index"][ep])
         img = _to_u8(out[base][EDITED_CAM])
         cy, cx = _obj_center(0)
-        np.testing.assert_array_equal(img[cy, cx], np.asarray(OBJ_COLOR, np.uint8))
+        np.testing.assert_allclose(img[cy, cx].astype(np.int16), np.asarray(OBJ_COLOR, np.int16), atol=tol)
