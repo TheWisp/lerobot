@@ -28,6 +28,7 @@ import pytest
 
 from lerobot.datasets.io_utils import load_episodes, load_info
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from tests.fixtures.local_artifacts import local_dataset
 
 
 @pytest.fixture
@@ -38,7 +39,7 @@ def video_dataset(tmp_path):
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    source_dataset = LeRobotDataset("lerobot/pusht", episodes=[0, 1, 2])
+    source_dataset = local_dataset("pusht_slice", episodes=[0, 1, 2])
 
     test_root = tmp_path / "pusht_test"
     shutil.copytree(source_dataset.root, test_root)
@@ -893,12 +894,16 @@ class TestVerifyDataset:
         assert isinstance(result, bool)
         assert result is True
 
+    @pytest.mark.hub_live
     @pytest.mark.parametrize("repo_id", ["lerobot/pusht"])
     def test_verify_real_dataset_from_hub(self, repo_id):
         """Verify that a real dataset from the Hub passes verification.
 
-        This test downloads the actual dataset and verifies its integrity,
-        ensuring the verification function works on real-world data.
+        Downloads the actual dataset, so it is marked ``hub_live`` and deselected by
+        default (`addopts = -m 'not hub_live'`): a network fetch at setup makes the
+        suite fail whenever HuggingFace rate-limits CI, which says nothing about the
+        code. Verification against local data is covered by the tests above; opt in
+        with `pytest -m hub_live` to check real Hub data.
         """
         from lerobot.datasets.dataset_tools import verify_dataset
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
