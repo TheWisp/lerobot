@@ -1164,17 +1164,34 @@ _build_lines: deque = deque(maxlen=300)
 _build_exit: int | None = None
 
 
-async def _run_image_build(repo_root: Path) -> None:
+class BuildImageRequest(BaseModel):
+    """Options for building the current checkout into the local image."""
+
+    force_full_rebuild: bool = False
+
+
+def _image_build_argv(force_full_rebuild: bool = False) -> list[str]:
+    """Return the Docker build command for the selected cache policy."""
+    argv = ["docker", "build"]
+    if force_full_rebuild:
+        argv.append("--no-cache")
+    argv.extend(
+        [
+            "-f",
+            "docker/Dockerfile.training",
+            "-t",
+            LOCAL_DEV_IMAGE_TAG,
+            ".",
+        ]
+    )
+    return argv
+
+
+async def _run_image_build(repo_root: Path, force_full_rebuild: bool = False) -> None:
     global _build_exit
     _build_exit = None
     proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "build",
-        "-f",
-        "docker/Dockerfile.training",
-        "-t",
-        LOCAL_DEV_IMAGE_TAG,
-        ".",
+        *_image_build_argv(force_full_rebuild),
         cwd=str(repo_root),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -1186,12 +1203,13 @@ async def _run_image_build(repo_root: Path) -> None:
 
 
 @router.post("/build-image")
-async def build_image() -> dict:
+async def build_image(request: BuildImageRequest | None = None) -> dict:
     """Build the training image from the current checkout (local dev path).
 
     Long-running (tens of minutes on first build); progress is polled via
     GET /build-image/status. Requires a git checkout to build from and a
-    working docker daemon.
+    working docker daemon. Docker's layer cache is used by default; the
+    explicit full-rebuild option passes ``--no-cache`` for diagnostics.
     """
     global _build_task, _build_exit
     from lerobot.gui.training.recipes import docker_available
@@ -1206,8 +1224,13 @@ async def build_image() -> dict:
 
     _build_lines.clear()
     _build_exit = None
-    _build_task = asyncio.create_task(_run_image_build(root))
-    return {"status": "started", "tag": LOCAL_DEV_IMAGE_TAG}
+    force_full_rebuild = request.force_full_rebuild if request is not None else False
+    _build_task = asyncio.create_task(_run_image_build(root, force_full_rebuild))
+    return {
+        "status": "started",
+        "tag": LOCAL_DEV_IMAGE_TAG,
+        "force_full_rebuild": force_full_rebuild,
+    }
 
 
 @router.get("/build-image/status")

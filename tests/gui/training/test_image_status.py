@@ -1,6 +1,11 @@
-"""Tests for the training image status endpoint helpers."""
+"""Tests for the training image status and local-build endpoint helpers."""
+
+import asyncio
+from pathlib import Path
 
 import lerobot.gui.api.training as training_mod
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_repo_root_found_in_checkout():
@@ -54,3 +59,60 @@ def test_image_status_known_image_commit(monkeypatch):
     assert status["git"]["image_commit"] == head
     assert status["git"]["commits_behind"] == 0
     assert status["git"]["image_commit_date"] is not None
+
+
+def test_local_image_build_reuses_cache_by_default():
+    """The normal GUI path must preserve Docker's layer-cache default."""
+    argv = training_mod._image_build_argv()
+    assert argv[:2] == ["docker", "build"]
+    assert "--no-cache" not in argv
+    assert argv[-1] == "."
+
+
+def test_training_dockerfile_installs_dependencies_before_source():
+    """Code-only edits must not invalidate the heavyweight dependency layer."""
+    dockerfile = (_REPO_ROOT / "docker" / "Dockerfile.training").read_text(encoding="utf-8")
+    dependency_sync = dockerfile.index(
+        "RUN uv sync --locked --extra training-image --no-cache --no-install-project"
+    )
+    source_copy = dockerfile.index("COPY --chown=user_lerobot:user_lerobot src/ src/")
+    project_sync = dockerfile.index(
+        "RUN uv sync --locked --extra training-image --no-cache", dependency_sync + 1
+    )
+
+    assert dependency_sync < source_copy < project_sync
+
+
+def test_local_image_full_rebuild_explicitly_disables_cache():
+    """The advanced opt-in maps to Docker's real cache-bypass flag."""
+    argv = training_mod._image_build_argv(force_full_rebuild=True)
+    assert argv[:3] == ["docker", "build", "--no-cache"]
+    assert argv.count("--no-cache") == 1
+
+
+def test_build_image_endpoint_forwards_full_rebuild_choice(monkeypatch, tmp_path):
+    """The JSON option must cross the endpoint and reach the build task."""
+    from lerobot.gui.training import recipes
+
+    received = []
+
+    async def fake_build(repo_root, force_full_rebuild=False):
+        received.append((repo_root, force_full_rebuild))
+
+    monkeypatch.setattr(recipes, "docker_available", lambda: True)
+    monkeypatch.setattr(training_mod, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(training_mod, "_run_image_build", fake_build)
+    training_mod._build_task = None
+
+    async def exercise_endpoint():
+        response = await training_mod.build_image(training_mod.BuildImageRequest(force_full_rebuild=True))
+        await training_mod._build_task
+        return response
+
+    try:
+        response = asyncio.run(exercise_endpoint())
+    finally:
+        training_mod._build_task = None
+
+    assert response["force_full_rebuild"] is True
+    assert received == [(tmp_path, True)]

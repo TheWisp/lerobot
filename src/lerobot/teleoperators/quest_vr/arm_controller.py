@@ -29,6 +29,7 @@ to one or two controllers) differs.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any
@@ -54,6 +55,22 @@ _SETTLE_SECS = 0.25
 _TARGET_STEP_WARN_POS_M = 0.02
 _TARGET_STEP_WARN_ROT_RAD = 0.1
 _TARGET_STEP_WARN_MIN_INTERVAL_S = 1.0
+
+
+def _raw_rotation_diagnostics(
+    previous_quat: np.ndarray | None,
+    current_quat: np.ndarray,
+    quest_to_robot_m: np.ndarray,
+    dt_s: float | None,
+) -> tuple[float | None, float | None]:
+    """Return raw sample-to-sample angle and angular speed for event logs."""
+    if previous_quat is None:
+        return None, None
+    previous = quest_rot_to_robot(previous_quat, quest_to_robot_m)
+    current = quest_rot_to_robot(current_quat, quest_to_robot_m)
+    step_deg = float(np.degrees(np.linalg.norm((current * previous.inv()).as_rotvec())))
+    speed_deg_s = None if dt_s is None or dt_s <= 0.0 else step_deg / dt_s
+    return step_deg, speed_deg_s
 
 
 class QuestArmController:
@@ -116,10 +133,16 @@ class QuestArmController:
         self._engaged: bool = False
         self._quest_pos_at_engage: np.ndarray | None = None
         self._quest_rot_at_engage = None  # scipy Rotation
-        # Previous frame's raw Quest position, in Quest stage space. Used
-        # to detect tracking glitches (huge teleport-style jumps between
-        # consecutive samples). Reset to None on disconnect / clutch loss.
+        # Previous frame's filtered Quest position, in Quest stage space.
+        # Used as the baseline for the position glitch clamp.
         self._quest_pos_prev: np.ndarray | None = None
+        # Preserve the actual consecutive WebXR samples separately. Without
+        # these, an incident log can only show the already-clamped Cartesian
+        # target and cannot distinguish an upstream Quest pose teleport from
+        # downstream IK amplification.
+        self._quest_raw_pos_prev: np.ndarray | None = None
+        self._quest_raw_quat_prev: np.ndarray | None = None
+        self._quest_raw_prev_t: float | None = None
         # Previous ENGAGED emission's (target_xyz, target_wxyz rotvec), for
         # the jump-guard diagnostic log. Cleared on disengage so a fresh
         # engage (new anchor) never compares across anchors.
@@ -167,6 +190,9 @@ class QuestArmController:
         self._quest_pos_at_engage = None
         self._quest_rot_at_engage = None
         self._quest_pos_prev = None
+        self._quest_raw_pos_prev = None
+        self._quest_raw_quat_prev = None
+        self._quest_raw_prev_t = None
         self._prev_emitted = None
         self._recover_t = None
         self._last_gripper_pos = self.gripper_open_motor
@@ -191,6 +217,9 @@ class QuestArmController:
             self._quest_pos_at_engage = None
             self._quest_rot_at_engage = None
             self._quest_pos_prev = None
+            self._quest_raw_pos_prev = None
+            self._quest_raw_quat_prev = None
+            self._quest_raw_prev_t = None
         p = self.key_prefix
         return {
             f"{p}enabled": 0.0,
@@ -228,8 +257,26 @@ class QuestArmController:
 
         now = time.monotonic()
 
-        quest_pos = np.asarray(pose["pos"], dtype=float)
-        quest_quat = pose.get("rot", [0.0, 0.0, 0.0, 1.0])  # [x, y, z, w]
+        quest_pos_raw = np.asarray(pose["pos"], dtype=float)
+        quest_quat_raw = np.asarray(pose.get("rot", [0.0, 0.0, 0.0, 1.0]), dtype=float)
+        raw_pos_prev = self._quest_raw_pos_prev
+        raw_quat_prev = self._quest_raw_quat_prev
+        raw_dt_s = None if self._quest_raw_prev_t is None else now - self._quest_raw_prev_t
+        raw_pos_step = None if raw_pos_prev is None else quest_pos_raw - raw_pos_prev
+        raw_pos_step_mag = None if raw_pos_step is None else float(np.linalg.norm(raw_pos_step))
+        raw_pos_speed_m_s = (
+            None
+            if raw_pos_step_mag is None or raw_dt_s is None or raw_dt_s <= 0.0
+            else raw_pos_step_mag / raw_dt_s
+        )
+        self._quest_raw_pos_prev = quest_pos_raw.copy()
+        self._quest_raw_quat_prev = quest_quat_raw.copy()
+        self._quest_raw_prev_t = now
+
+        # Filtering below must not mutate the raw sample retained for incident
+        # evidence.
+        quest_pos = quest_pos_raw.copy()
+        quest_quat = quest_quat_raw  # [x, y, z, w]
         buttons = pose.get("buttons") or []
         clutch = float(buttons[self.clutch_button_index]) if len(buttons) > self.clutch_button_index else 0.0
         grip = float(buttons[self.gripper_button_index]) if len(buttons) > self.gripper_button_index else 0.0
@@ -260,11 +307,16 @@ class QuestArmController:
         # moves at most ~3 m/s; at 90 Hz WebXR rate the default cap
         # (0.04 m / frame, see configuration_quest_vr) allows ~3.6 m/s.
         cap_m = self.max_pos_step_m_per_tick
+        filter_base_pos = None if self._quest_pos_prev is None else self._quest_pos_prev.copy()
+        filter_input_step_mag: float | None = None
+        position_clamped = False
         if self._quest_pos_prev is not None and cap_m > 0.0:
             step = quest_pos - self._quest_pos_prev
             step_mag = float(np.linalg.norm(step))
+            filter_input_step_mag = step_mag
             if step_mag > cap_m:
                 quest_pos = self._quest_pos_prev + step * (cap_m / step_mag)
+                position_clamped = True
         self._quest_pos_prev = quest_pos.copy()
 
         # Absolute trigger->motor mapping. Gated on clutch: a controller
@@ -308,11 +360,32 @@ class QuestArmController:
             # only moves while ENGAGED, so asymmetry between these log lines
             # and arm motion isolates the failure to upstream (clutch /
             # tracking / settle window) vs downstream (IK / CAN).
+            raw_rot_step_deg, raw_rot_speed_deg_s = _raw_rotation_diagnostics(
+                raw_quat_prev, quest_quat_raw, self._q2r, raw_dt_s
+            )
             logger.info(
-                "Quest %s clutch %s — arm %s",
+                "Quest %s clutch %s — arm %s details=%s",
                 self._label,
                 "ENGAGED" if engaged else "released",
                 "following teleop" if engaged else "holding position",
+                json.dumps(
+                    {
+                        "event": "clutch_engaged" if engaged else "clutch_released",
+                        "raw_dt_ms": None if raw_dt_s is None else raw_dt_s * 1000.0,
+                        "raw_pos_m": quest_pos_raw.tolist(),
+                        "raw_quat_xyzw": quest_quat_raw.tolist(),
+                        "raw_pos_step_m": raw_pos_step_mag,
+                        "raw_pos_speed_m_s": raw_pos_speed_m_s,
+                        "raw_rot_step_deg": raw_rot_step_deg,
+                        "raw_rot_speed_deg_s": raw_rot_speed_deg_s,
+                        "filtered_pos_m": quest_pos.tolist(),
+                        "position_clamped": position_clamped,
+                        "trigger": grip,
+                        "reset": reset,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
             )
         self._engaged = engaged
 
@@ -354,11 +427,48 @@ class QuestArmController:
                 now - self._last_step_warn_t > _TARGET_STEP_WARN_MIN_INTERVAL_S
             ):
                 self._last_step_warn_t = now
+                raw_rot_step_deg, raw_rot_speed_deg_s = _raw_rotation_diagnostics(
+                    raw_quat_prev, quest_quat_raw, self._q2r, raw_dt_s
+                )
                 logger.warning(
-                    "Quest %s target step %.0f mm / %.1f deg in one tick",
+                    "Quest %s target step %.0f mm / %.1f deg in one tick details=%s",
                     self._label,
                     dp * 1000,
                     float(np.degrees(da)),
+                    json.dumps(
+                        {
+                            "raw_dt_ms": None if raw_dt_s is None else raw_dt_s * 1000.0,
+                            "raw_pos_prev_m": None if raw_pos_prev is None else raw_pos_prev.tolist(),
+                            "raw_pos_now_m": quest_pos_raw.tolist(),
+                            "raw_pos_step_m": raw_pos_step_mag,
+                            "raw_pos_step_vector_m": (
+                                None if raw_pos_step is None else raw_pos_step.tolist()
+                            ),
+                            "raw_pos_speed_m_s": raw_pos_speed_m_s,
+                            "raw_rot_prev_xyzw": (None if raw_quat_prev is None else raw_quat_prev.tolist()),
+                            "raw_rot_now_xyzw": quest_quat_raw.tolist(),
+                            "raw_rot_step_deg": raw_rot_step_deg,
+                            "raw_rot_speed_deg_s": raw_rot_speed_deg_s,
+                            "filter_base_pos_m": (
+                                None if filter_base_pos is None else filter_base_pos.tolist()
+                            ),
+                            "filter_input_step_m": filter_input_step_mag,
+                            "filtered_pos_now_m": quest_pos.tolist(),
+                            "position_clamped": position_clamped,
+                            "engage_anchor_pos_m": self._quest_pos_at_engage.tolist(),
+                            "emitted_prev_xyz_m": self._prev_emitted[0].tolist(),
+                            "emitted_now_xyz_m": emitted[0].tolist(),
+                            "emitted_pos_step_m": dp,
+                            "emitted_prev_rotvec_rad": self._prev_emitted[1].tolist(),
+                            "emitted_now_rotvec_rad": emitted[1].tolist(),
+                            "emitted_rot_step_deg": float(np.degrees(da)),
+                            "clutch": clutch,
+                            "trigger": grip,
+                            "reset": reset,
+                        },
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
                 )
         self._prev_emitted = emitted
 
