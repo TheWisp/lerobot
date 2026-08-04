@@ -55,11 +55,13 @@ def _clean_jobs():
     dp._jobs.clear()
 
 
-def _wait_for_terminal(client: TestClient, job_id: str, timeout_s: float = 30.0) -> dict:
+def _wait_for_terminal(
+    client: TestClient, job_id: str, timeout_s: float = 30.0, statuses=("complete", "failed")
+) -> dict:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         job = client.get(f"/api/dataset-preparation/jobs/{job_id}").json()
-        if job["status"] in ("complete", "failed"):
+        if job["status"] in statuses:
             return job
         time.sleep(0.05)
     raise AssertionError(f"job {job_id} did not reach a terminal state: {job}")
@@ -139,6 +141,44 @@ class TestJobStateMachine:
 
     def test_unknown_job_404(self, client):
         assert client.get("/api/dataset-preparation/jobs/nope").status_code == 404
+
+
+class TestCancellation:
+    def test_cancel_turns_job_cancelled(self, client, monkeypatch, tmp_path):
+        def cancellable_prepare(*, progress=None, **kwargs):
+            # Drive progress until the cancel flag raises PreparationCancelled
+            # inside the callback, mirroring the real core's per-file cadence.
+            for i in range(100):
+                progress(i, 100, f"videos/cam/chunk-000/file-{i:03d}.mp4")
+                time.sleep(0.01)
+
+        _patch_core(monkeypatch, cancellable_prepare)
+        res = client.post(
+            "/api/dataset-preparation/hvla",
+            json={"source_repo_id": "test/src", "output_root": str(tmp_path / "out")},
+        )
+        assert res.status_code == 201
+        job_id = res.json()["job_id"]
+
+        cancel = client.post(f"/api/dataset-preparation/jobs/{job_id}/cancel")
+        assert cancel.status_code == 200
+
+        job = _wait_for_terminal(client, job_id, statuses=("complete", "failed", "cancelled"))
+        assert job["status"] == "cancelled"
+        assert job["done"] < 100
+
+    def test_cancel_terminal_job_rejected(self, client, monkeypatch, tmp_path):
+        _patch_core(monkeypatch, lambda **kwargs: None)
+        res = client.post(
+            "/api/dataset-preparation/hvla",
+            json={"source_repo_id": "test/src", "output_root": str(tmp_path / "out")},
+        )
+        job_id = res.json()["job_id"]
+        _wait_for_terminal(client, job_id)
+        assert client.post(f"/api/dataset-preparation/jobs/{job_id}/cancel").status_code == 409
+
+    def test_cancel_unknown_job_404(self, client):
+        assert client.post("/api/dataset-preparation/jobs/nope/cancel").status_code == 404
 
 
 class TestApiToCoreBoundary:
