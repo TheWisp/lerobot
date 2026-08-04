@@ -714,7 +714,10 @@ Explicitly out of scope (ruled out in the design discussion before merge of PR #
 
 ## Overlays / Data Editing
 
-- [ ] Hoist segmentation out of the `variants` loop. Measured (pick_ball ep0, 241
+- [ ] (LOW PRIORITY — only pays off at `variants` > 1, and the practical workflow is
+      `variants=1`: extra variants cost disk for near-duplicate data, and randomizing
+      across a decently sized dataset at episode level gives the same diversity.)
+      Hoist segmentation out of the `variants` loop. Measured (pick_ball ep0, 241
       frames, 2 cams, sam3_track@672): segmentation is **77% of a job's wall time**
       (15.9 s of 20.7 s), and `variants` is the OUTERMOST loop — so N randomized
       copies re-segment every frame N times for identical masks (masks depend on the
@@ -728,8 +731,17 @@ Explicitly out of scope (ruled out in the design discussion before merge of PR #
       max 79% (never higher, even mid-segmentation; note nvidia-smi "utilization"
       only means a kernel was running, so true compute efficiency is lower).
       Prefetch decode in a thread and composite frame N-1 while the GPU segments
-      frame N: ~1.25x, no quality risk. Beyond that: torch.compile on the detector
-      (1.34x measured, unwired), or batching, which trades tracking quality.
+      frame N: ~1.25x, no quality risk.
+- [x] ~~torch.compile the detector~~ — MEASURED AND REJECTED (2026-08-04). The old
+      "1.34x" was a micro-benchmark of the detector forward alone; it does not
+      translate, because `sam3_track` throttles detection and the per-frame cost is
+      the TRACKER. Compiling both 454M-param vision encoders end to end: **1.12x**
+      steady state (33.4 -> 29.7 ms/frame), **24.4 s** one-time compile, so
+      **break-even at ~6,600 frames** (~26 episodes). On a 274k-frame job that is a
+      ~4% saving; on anything smaller it is a net loss, and it would add 24 s before
+      the live preview's first mask. It also perturbs numerics (mean IoU 0.9998 vs
+      uncompiled, only 19/80 masks identical) — the same class of drift that made
+      camera batching collapse holds on a real dataset. Not worth 4%.
 - [ ] Encode WYSIWYG composite overlays as JPEG/WebP instead of PNG. Composites are
       full-frame photo-like images, so PNG is the pathological codec (~300-800 KB each);
       2 cams x ~10/s saturates a Wi-Fi link. The completion-gated loader keeps remote

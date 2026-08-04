@@ -146,6 +146,21 @@ async def start(req: StartRequest, x_overlay_session: str | None = Header(defaul
             status_code=400,
             detail=f"Unknown resolution {req.resolution}; presets: {list(ConceptMaskAdapter.RESOLUTIONS)}",
         )
+    if req.apply_mode not in ("per_episode", "per_frame", "static"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown apply_mode: {req.apply_mode!r} (expected per_episode, per_frame or static)",
+        )
+    if req.apply_mode == "static" and req.variants > 1:
+        # "static" draws ONE look for the whole run, so every variant would be a
+        # byte-identical copy — N times the GPU cost and N times the disk for no
+        # added diversity. Refuse rather than silently writing duplicates.
+        raise HTTPException(
+            status_code=400,
+            detail="apply_mode='static' uses a single draw for the entire run, so "
+            f"variants={req.variants} would write identical copies. Use "
+            "apply_mode='per_episode' for independently randomized variants, or set variants=1.",
+        )
     if _app_state.active_process_job_for(req.source_id) is not None:
         raise HTTPException(status_code=409, detail="A processing job is already running for this dataset")
 

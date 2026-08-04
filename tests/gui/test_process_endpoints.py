@@ -176,6 +176,31 @@ async def test_start_validation(client):
             json={"source_id": "/d", "objects": [{"name": "r"}], "background_treatment": {"key": "none"}},
         )
         assert r.status_code == 400
+        # static + variants>1 would write byte-identical copies: one draw is shared
+        # by the whole run, so the variants differ in nothing but disk usage.
+        r = await c.post(
+            "/api/process/start",
+            json={
+                "source_id": "/d",
+                "objects": [{"name": "r"}],
+                "background_treatment": {"key": "random"},
+                "apply_mode": "static",
+                "variants": 3,
+            },
+        )
+        assert r.status_code == 400 and "identical copies" in r.json()["detail"]
+        # ...and the same request with variants=1 is a legitimate single-look run.
+        # an unrecognised cadence must not silently fall through to per_episode
+        r = await c.post(
+            "/api/process/start",
+            json={
+                "source_id": "/d",
+                "objects": [{"name": "r"}],
+                "background_treatment": {"key": "random"},
+                "apply_mode": "per_decade",
+            },
+        )
+        assert r.status_code == 400 and "apply_mode" in r.json()["detail"]
         # unknown segmentation model (saliency is an overlay, not a segmenter)
         r = await c.post(
             "/api/process/start",
