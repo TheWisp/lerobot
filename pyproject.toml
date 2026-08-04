@@ -165,6 +165,10 @@ transformers-dep = ["transformers>=5.4.0,<5.6.0"]
 grpcio-dep = ["grpcio>=1.73.1,<2.0.0", "protobuf>=6.31.1,<8.0.0"]
 accelerate-dep = ["accelerate>=1.14.0,<2.0.0"]
 can-dep = ["python-can>=4.2.0,<5.0.0"]
+# DINOv3's hubconf declares only torch+numpy, but imports its classifier,
+# depther, detector and segmentor hubs at module scope, and that chain pulls
+# torchmetrics. So even loading a plain backbone needs it.
+dinov3-dep = ["torchmetrics>=1.0,<2.0"]
 peft-dep = ["peft>=0.18.0,<1.0.0"]
 scipy-dep = ["scipy>=1.14.0,<2.0.0"]
 diffusers-dep = ["diffusers>=0.27.2,<0.36.0"]

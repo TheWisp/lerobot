@@ -120,3 +120,71 @@ class TestWidthIsDerivedNotTyped:
         """
         assert resolve("dinov2_vits14").patch_size == 14
         assert resolve("dinov3_vits16").patch_size == 16
+
+
+class TestFailuresNameTheirCause:
+    """Both DINOv3 failure modes are opaque unless the loader translates them.
+
+    The dependency one fires before any weight is fetched and mentions only
+    ``torchmetrics``, giving no hint it came from choosing an encoder; the gated
+    one is an HTTP error. Neither tells an operator what to do.
+    """
+
+    def test_missing_dependency_names_the_encoder_and_the_extra(self, monkeypatch):
+        import torch
+
+        from lerobot.policies.hvla.s1.flow_matching import vision_encoders
+
+        def _raise(*_args, **_kwargs):
+            raise ModuleNotFoundError("No module named 'torchmetrics'", name="torchmetrics")
+
+        monkeypatch.setattr(torch.hub, "load", _raise)
+
+        with pytest.raises(ModuleNotFoundError) as excinfo:
+            vision_encoders.load_backbone("dinov3_vits16")
+
+        message = str(excinfo.value)
+        assert "dinov3_vits16" in message, "must say which encoder caused it"
+        assert "torchmetrics" in message
+        assert "--extra dinov3" in message, "must say how to fix it"
+
+    def test_gated_failure_says_the_licence_is_the_problem(self, monkeypatch):
+        import torch
+
+        from lerobot.policies.hvla.s1.flow_matching import vision_encoders
+
+        def _raise(*_args, **_kwargs):
+            raise RuntimeError("403 Client Error: not in the authorized list")
+
+        monkeypatch.setattr(torch.hub, "load", _raise)
+
+        with pytest.raises(RuntimeError, match="licence"):
+            vision_encoders.load_backbone("dinov3_vits16")
+
+    def test_ungated_failures_are_not_reinterpreted(self, monkeypatch):
+        """A DINOv2 network blip must not be reported as a licence problem."""
+        import torch
+
+        from lerobot.policies.hvla.s1.flow_matching import vision_encoders
+
+        def _raise(*_args, **_kwargs):
+            raise RuntimeError("connection reset")
+
+        monkeypatch.setattr(torch.hub, "load", _raise)
+
+        with pytest.raises(RuntimeError, match="connection reset"):
+            vision_encoders.load_backbone("dinov2_vits14")
+
+
+def test_the_dinov3_extra_is_declared():
+    """The registry promises an extra; pyproject has to actually define it."""
+    import tomllib
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[2]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    extras = pyproject["project"]["optional-dependencies"]
+
+    needed = {s.requires_extra for s in VISION_ENCODERS.values() if s.requires_extra}
+    for extra in needed:
+        assert f"{extra}-dep" in extras or extra in extras, f"extra {extra!r} is not declared"

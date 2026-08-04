@@ -44,6 +44,7 @@ class VisionEncoder:
         patch_size: Informational; drives token count and therefore cost.
         label: Shown in the training form.
         gated: Weights need an accepted licence and a Hub token.
+        requires_extra: Optional dependency group this family needs, if any.
     """
 
     hub_repo: str
@@ -51,6 +52,7 @@ class VisionEncoder:
     patch_size: int
     label: str
     gated: bool = False
+    requires_extra: str | None = None
 
 
 # Keys are the value persisted in the checkpoint as ``dino_model``; existing
@@ -74,6 +76,7 @@ VISION_ENCODERS: dict[str, VisionEncoder] = {
         patch_size=16,
         label="DINOv3 ViT-S/16 (21M, 384-d) — gated weights",
         gated=True,
+        requires_extra="dinov3",
     ),
     "dinov3_vitb16": VisionEncoder(
         hub_repo="facebookresearch/dinov3",
@@ -81,6 +84,7 @@ VISION_ENCODERS: dict[str, VisionEncoder] = {
         patch_size=16,
         label="DINOv3 ViT-B/16 (86M, 768-d) — gated weights",
         gated=True,
+        requires_extra="dinov3",
     ),
 }
 
@@ -120,6 +124,13 @@ def load_backbone(name: str):
     spec = resolve(name)
     try:
         return torch.hub.load(spec.hub_repo, name, pretrained=True)
+    except ModuleNotFoundError as exc:
+        # DINOv3's hubconf understates its dependencies, so this fires before
+        # any weight is fetched and says nothing about the encoder choice.
+        extra = f" Install it with: uv sync --extra {spec.requires_extra}" if spec.requires_extra else ""
+        raise ModuleNotFoundError(
+            f"Vision encoder {name!r} needs {exc.name!r}, which is not installed.{extra}"
+        ) from exc
     except Exception as exc:  # noqa: BLE001 — re-raised with context below
         if spec.gated:
             raise RuntimeError(
