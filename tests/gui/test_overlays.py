@@ -86,6 +86,32 @@ def test_png_roundtrip_preserves_rgba():
     np.testing.assert_array_equal(back, rgba)
 
 
+def test_png_zeroes_rgb_under_fully_transparent_pixels():
+    """A transparent-diff overlay keeps the whole camera frame in its RGB planes, so PNG
+    used to compress a full photo the viewer never sees. Measured on a live run-tab
+    overlay: 782 KB vs 88 KB. Oversized overlays could not finish downloading before the
+    next pull replaced them, so the tile drew nothing at all."""
+    rgba = np.zeros((32, 32, 4), dtype=np.uint8)
+    rgba[..., :3] = 200  # a "photo" everywhere...
+    rgba[8:12, 8:12, 3] = 255  # ...visible only in this small patch
+    png = overlays._png(rgba)
+    back = np.array(Image.open(io.BytesIO(png)))
+    invisible = back[..., 3] == 0
+    assert invisible.any(), "test needs transparent pixels to be meaningful"
+    assert not back[invisible][..., :3].any(), "RGB must be zeroed where alpha is 0"
+    np.testing.assert_array_equal(back[8:12, 8:12], rgba[8:12, 8:12])  # visible pixels untouched
+
+
+def test_png_leaves_a_fully_opaque_overlay_alone():
+    """The zeroing must be scoped to invisible pixels: a data-tab WYSIWYG composite is
+    opaque everywhere and must survive byte-for-byte."""
+    rgba = np.zeros((8, 8, 4), dtype=np.uint8)
+    rgba[..., :3] = 123
+    rgba[..., 3] = 255
+    back = np.array(Image.open(io.BytesIO(overlays._png(rgba))))
+    np.testing.assert_array_equal(back, rgba)
+
+
 def test_proc_sm_none_is_zero():
     assert overlays._proc_sm(None) == 0
 

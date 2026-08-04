@@ -220,10 +220,26 @@ def _frame_rgb(item: dict, cam: str) -> np.ndarray:
 
 
 def _png(rgba: np.ndarray) -> bytes:
-    """Encode an HxWx4 RGBA overlay to PNG (preserves transparency)."""
+    """Encode an HxWx4 RGBA overlay to PNG (preserves transparency).
+
+    Pre: HxWx4 uint8 RGBA. Post: PNG bytes whose visible result is unchanged —
+    only pixels the viewer cannot see are rewritten.
+
+    Fully-transparent pixels keep whatever RGB the compositor left there, which for
+    an overlay that is mostly a transparent diff is the WHOLE camera frame: PNG then
+    compresses a full photo nobody will ever see. Measured on a live 1280x720 run-tab
+    overlay that is 94.2% transparent: 782 KB as-is vs 88 KB with the invisible RGB
+    zeroed — 8.8x for pixels alpha discards anyway. Size matters here because these
+    are pulled per tile continuously, and an overlay that cannot finish downloading
+    before the next pull replaces it never draws at all.
+    """
     from PIL import Image
 
     assert rgba.ndim == 3 and rgba.shape[2] == 4, f"expected HxWx4 RGBA, got {rgba.shape}"
+    invisible = rgba[..., 3] == 0
+    if invisible.any():
+        rgba = rgba.copy()  # never mutate the caller's shm-backed view
+        rgba[invisible] = 0
     buf = io.BytesIO()
     Image.fromarray(rgba, "RGBA").save(buf, format="PNG")
     return buf.getvalue()

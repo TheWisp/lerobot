@@ -2199,6 +2199,18 @@ async function startObsStreamViewer() {
 
     const imgElements = {};
     const overlayElements = {};  // key -> live Overlays result <img> over each tile
+    // Completion-gated latest-wins overlay loading, the same helper the data tab uses.
+    // Without it this tile loop assigned ov.src every tick, and reassigning an <img>
+    // src ABORTS the in-flight download: an overlay that takes longer than one tick to
+    // arrive never finishes, so the tile shows no overlay at all while the worker fps
+    // badge reads healthy. Observed on real teleop as drawn=[] blank=['front','top']
+    // in the live/diag log while the worker was detecting every object correctly.
+    const overlayLoader = window.OverlayPullGate ? window.OverlayPullGate.createLoader() : null;
+    const nextOverlay = (key, ov) => {
+        if (!overlayLoader) return;
+        const url = overlayLoader.done(key);
+        if (url) ov.src = url;
+    };
     for (const key of camKeys) {
         const cell = document.createElement('div');
         cell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
@@ -2212,8 +2224,10 @@ async function startObsStreamViewer() {
         const ov = document.createElement('img');
         ov.className = 'overlay-layer';
         ov.alt = '';
-        ov.onload = () => { ov.style.display = 'block'; };
-        ov.onerror = () => { ov.style.display = 'none'; };
+        // onload/onerror are bound ONCE, here: the tick below must never reassign them,
+        // or the loader's in-flight bookkeeping is orphaned and every camera wedges.
+        ov.onload = () => { ov.style.display = 'block'; nextOverlay(key, ov); };
+        ov.onerror = () => { ov.style.display = 'none'; nextOverlay(key, ov); };
         cell.appendChild(ov);
         overlayElements[key] = ov;
 
@@ -2281,8 +2295,14 @@ async function startObsStreamViewer() {
             const ov = overlayElements[key];
             if (ov) {
                 const url = (window.Overlays && window.Overlays.liveFrameUrl) ? window.Overlays.liveFrameUrl(key, seq) : null;
-                if (url) ov.src = url;
-                else { ov.style.display = 'none'; ov.removeAttribute('src'); }
+                if (url) {
+                    const now = overlayLoader ? overlayLoader.request(key, url) : url;
+                    if (now) ov.src = now;  // else: queued as pending, assigned on completion
+                } else {
+                    ov.style.display = 'none';
+                    ov.removeAttribute('src');
+                    if (overlayLoader) overlayLoader.reset();
+                }
             }
         }
         _pollSubtaskOverlay();
