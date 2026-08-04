@@ -72,6 +72,24 @@ async def _capture_argv(endpoint, request) -> list[str]:
     return captured
 
 
+def _program_of(argv: list[str]) -> str:
+    """Normalize both launch forms to the entry-point name.
+
+    The GUI may spawn console scripts (``lerobot-record ...``) or the active
+    interpreter (``<python> -m lerobot.scripts.lerobot_record ...``); the
+    latter keeps subprocesses on the venv that launched the GUI even when
+    PATH shadows it. The contract under test is the flag surface, not the
+    spawn style, so both forms must normalize identically.
+    """
+    if len(argv) >= 3 and argv[1] == "-m":
+        return argv[2].rsplit(".", 1)[-1].replace("_", "-")
+    return argv[0].rsplit("/", 1)[-1]
+
+
+def _cli_args_of(argv: list[str]) -> list[str]:
+    return argv[3:] if len(argv) >= 3 and argv[1] == "-m" else argv[1:]
+
+
 def _parse(config_cls, argv: list[str]) -> object:
     """Parse argv exactly the way the script's @parser.wrap entry point does.
 
@@ -81,7 +99,7 @@ def _parse(config_cls, argv: list[str]) -> object:
     so mirror it -- a guardrail that does not match the production path is worse
     than none.
     """
-    cli_args = argv[1:]  # argv[0] is the program
+    cli_args = _cli_args_of(argv)
     if parser.has_method(config_cls, "__get_path_fields__"):
         cli_args = parser.filter_path_args(config_cls.__get_path_fields__(), cli_args)
     # Config __post_init__ hooks re-read sys.argv to recover the stripped
@@ -98,7 +116,7 @@ async def test_teleoperate_argv_parses():
         start_teleoperate,
         TeleoperateRequest(robot=ROBOT_PROFILE, teleop=TELEOP_PROFILE, fps=30),
     )
-    assert argv[0] == "lerobot-teleoperate"
+    assert _program_of(argv) == "lerobot-teleoperate"
     _parse(TeleoperateConfig, argv)
 
 
@@ -117,7 +135,7 @@ async def test_record_argv_parses():
             num_episodes=1,
         ),
     )
-    assert argv[0] == "lerobot-record"
+    assert _program_of(argv) == "lerobot-record"
     cfg = _parse(RecordConfig, argv)
     # The codec must actually reach the encoder, not just parse into some field.
     assert cfg.dataset.rgb_encoder.vcodec == "libsvtav1"
@@ -158,7 +176,7 @@ async def test_replay_argv_parses():
         start_replay,
         ReplayRequest(robot=ROBOT_PROFILE, repo_id="test/contract", episode=0),
     )
-    assert argv[0] == "lerobot-replay"
+    assert _program_of(argv) == "lerobot-replay"
     _parse(ReplayConfig, argv)
 
 

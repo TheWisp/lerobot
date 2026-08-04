@@ -1636,7 +1636,20 @@ async function checkHubAuth() {
         const data = await res.json();
         const el = document.getElementById('hf-auth-indicator');
         if (el) {
-            el.textContent = data.logged_in ? `HF: @${data.username}` : 'HF: not logged in';
+            // There is no login UI yet, so the indicator carries the command
+            // itself: without it a logged-out operator sees only grey text and
+            // has no route forward. It must run on the GUI *host* — the token
+            // is read server-side, so logging in on the browser's machine does
+            // nothing.
+            el.textContent = data.logged_in
+                ? `HF: @${data.username}`
+                : 'HF: not logged in — run `huggingface-cli login` on the GUI host';
+            el.title = data.logged_in
+                ? `Logged in to HuggingFace Hub as @${data.username}. `
+                  + 'Run `huggingface-cli login` on the GUI host to switch accounts, then reload.'
+                : 'Not logged in to HuggingFace Hub. Run `huggingface-cli login` in a terminal on '
+                  + 'the machine serving this GUI (not this browser\'s machine), then reload. '
+                  + 'Gated repos additionally need access granted on their model page.';
             el.style.color = data.logged_in ? 'var(--text-secondary, #888)' : 'var(--text-tertiary, #555)';
         }
     } catch (e) { /* ignore */ }

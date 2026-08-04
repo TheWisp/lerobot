@@ -490,6 +490,12 @@ def record_loop(
     action_keys = sorted(robot.action_features) if use_interpolation else []
 
     no_action_count = 0
+    # Rate-limit the slow-loop warning to 1 Hz (it otherwise fires every
+    # iteration when the loop persistently overruns, e.g. 65 ms policy
+    # inference against a 33 ms budget — thousands of lines per run).
+    last_slow_warn_t = 0.0
+    # Rate-limit the policy action debug log (below) to 1 Hz.
+    last_policy_action_log_t = 0.0
 
     # Reset intervention state for new episode
     if teleop is not None and hasattr(teleop, "reset_intervention"):
@@ -660,6 +666,24 @@ def record_loop(
                 robot_action_to_send = robot_action_processor((act_processed_policy, obs))
                 action_values = robot_action_to_send
 
+            # 1 Hz action debug (policy-driven path): per-joint commanded
+            # position minus current state position. Near-zero deltas every
+            # second mean the POLICY itself is commanding a static pose
+            # ("moves a frame then holds still"); varying deltas with a
+            # motionless arm mean an execution-side problem instead.
+            now = time.perf_counter()
+            if now - last_policy_action_log_t >= 1.0:
+                last_policy_action_log_t = now
+                keys = sorted(k for k in robot_action_to_send if k in obs)
+                if keys:
+                    delta = np.array([robot_action_to_send[k] for k in keys]) - np.array(
+                        [float(obs[k]) for k in keys]
+                    )
+                    logging.info(
+                        "policy action − state (deg): %s",
+                        np.array2string(delta, precision=1, suppress_small=True, max_line_width=200),
+                    )
+
             # Inverse-follow: send follower position to leader, compensating for
             # servo tracking error so the leader is always close to the follower.
             if teleop is not None and hasattr(teleop, "send_feedback"):
@@ -803,7 +827,10 @@ def record_loop(
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
         else:
             no_action_count += 1
-            if no_action_count == 1 or no_action_count % 10 == 0:
+            # Log once per record_loop invocation: this is the EXPECTED path
+            # during a human reset phase (no teleop attached), so every-Nth
+            # repetition is pure noise (thousands of lines per run).
+            if no_action_count == 1:
                 logging.warning(
                     "No policy or teleoperator provided, skipping action generation. "
                     "This is likely to happen when resetting the environment without a teleop device. "
@@ -817,10 +844,8 @@ def record_loop(
         # dropped (next start_iter() resets), which is the right behavior.
         latency_session.add_span("process_action", process_action_t0)
 
-        # Send action to robot
-        # Action can eventually be clipped using `max_relative_target`,
-        # so action actually sent is saved in the dataset. action = postprocessor.process(action)
-        # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
+        # Send action to robot. For ordinary dict actions, the robot's
+        # return value below is the post-safety action persisted to the dataset.
         # Chunk-aware path: if the teleop publishes a future horizon, the
         # chunk goes to the robot verbatim so chunk-aware robots can do
         # exact-lookup motor-τ compensation. The dict-shaped
@@ -829,12 +854,22 @@ def record_loop(
         # Only applies when teleop is a single Teleoperator (the policy /
         # composite-teleop branches don't have a teleop instance to query).
         action_to_send = robot_action_to_send
+        is_horizon_action = False
         if isinstance(teleop, Teleoperator):
             horizon = teleop.get_action_with_horizon()
             if horizon is not None:
                 action_to_send = horizon
+                is_horizon_action = True
         with latency_session.span("action_send"):
-            _sent_action = robot.send_action(action_to_send)
+            sent_action = robot.send_action(action_to_send)
+
+        # A normal dict action may be clipped or otherwise adjusted by the
+        # robot's final safety layer. Persist the value the robot reports it
+        # actually accepted, not the pre-safety intent. Horizon publishers
+        # keep their existing contract: ``action_values`` is frames[0], while
+        # the full chunk is owned and scheduled by the robot.
+        if not is_horizon_action:
+            action_values = sent_action
 
         # Write to dataset (only on real policy frames, not interpolated-only iterations)
         if dataset is not None and is_record_frame:
@@ -860,9 +895,12 @@ def record_loop(
 
         sleep_time_s: float = control_interval - dt_s
         if sleep_time_s < 0:
-            logging.warning(
-                f"Record loop is running slower ({1 / dt_s:.1f} Hz) than the target FPS ({fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
-            )
+            now = time.perf_counter()
+            if now - last_slow_warn_t >= 1.0:
+                last_slow_warn_t = now
+                logging.warning(
+                    f"Record loop is running slower ({1 / dt_s:.1f} Hz) than the target FPS ({fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
+                )
 
         precise_sleep(max(sleep_time_s, 0.0))
 

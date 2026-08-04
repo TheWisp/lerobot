@@ -126,6 +126,59 @@ Two rules when reporting what you find:
   robot; not verified against real hardware" is useful. Implying otherwise is
   the failure mode that makes all the work above worthless.
 
+## A device's behaviour is not in the repository
+
+An audit of the OpenArm CAN driver reported `set_control_mode` as a blocking
+bug: it writes to the broadcast parameter channel (`0x7FF`) and then waits for
+the acknowledgement on the motor's master ID — the ID that everywhere else in
+that driver carries state feedback. The reasoning was careful and the conclusion
+was wrong. Damiao firmware multiplexes parameter acks onto the master ID. One
+line from the rig settled it:
+
+```
+CAN_CTRL_MODE_ACK motor=gripper rx_id=0x18 mode=TORQUE_POS data=0800550a04000000
+```
+
+No amount of reading could have produced that, because the fact lives in the
+motor. The same review flagged a second "bug" resting on whether the gripper
+replies to a command at all — also unanswerable from source, also wrong.
+
+So: **before reporting a defect, ask what evidence would settle it.** If the
+answer is "what the hardware does", it is a hypothesis, not a finding. Go read
+rig logs (`~/projects/lerobot-*/logs/*.log`) first. Watch for the tell — a claim
+that rests on a convention the code follows _elsewhere_ rather than on something
+this code states.
+
+Then close it permanently: capture the real frame into a committed fixture with
+its provenance, so the next reader gets the answer from the test suite instead
+of from a robot (`tests/motors/test_damiao_protocol.py`). A device fact encoded
+as a golden fixture does not rot when the driver is refactored — and it is the
+only form of the fact that a reviewer can find.
+
+## The environment can manufacture a failure
+
+Three red suites in one session, none of them real:
+
+- `tests/motors/test_damiao*` "passing" in CI for months — actually skipping at
+  import, because `python-can` lives in an extra CI did not install.
+- Five GUI e2e tests failing with "No active process to stop" — pytest ran from
+  one virtualenv while `shutil.which("lerobot-record")` resolved to **another**,
+  so the subprocess was a different install and died instantly.
+- A checkpoint test failing because the operator's `outputs/` held a checkpoint
+  awaiting a migration — a stale local precondition, asserted as if it were code.
+
+Before believing a red test, reproduce CI's environment exactly — the extras
+list in `.github/workflows/fork_tests.yml`, and that venv **first on `PATH`**,
+not merely its `python`. Then run the same test on the base commit in the same
+environment. Identical failure means environment; only a difference means code.
+
+Two corollaries. A failure in files the branch never touched
+(`git diff main...HEAD --name-only`) is almost always flake or environment — a
+wall-clock invariant on a loaded runner, say. And a test whose precondition is
+"a file on this machine is in the right state" will eventually fail for everyone
+who has not done that migration; assert the precondition in the skip, or the
+test reports someone's pending chore as your bug.
+
 ## Tests must not touch the user's real state
 
 A pytest fixture wrote a `tmp_path` dataset into the user's `opened_datasets.json`,

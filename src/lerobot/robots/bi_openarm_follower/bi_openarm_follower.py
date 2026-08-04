@@ -16,10 +16,11 @@
 
 import logging
 from functools import cached_property
+from typing import Any
 
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.bimanual import BimanualMixin
-from lerobot.utils.decorators import check_if_not_connected
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..openarm_follower import OpenArmFollower, OpenArmFollowerConfig
 from ..robot import Robot
@@ -59,6 +60,11 @@ class BiOpenArmFollower(BimanualMixin, Robot):
             disable_torque_on_disconnect=config.left_arm_config.disable_torque_on_disconnect,
             use_velocity_and_torque=config.left_arm_config.use_velocity_and_torque,
             max_relative_target=config.left_arm_config.max_relative_target,
+            gravity_ff_gain=config.left_arm_config.gravity_ff_gain,
+            gravity_ff_xml=config.left_arm_config.gravity_ff_xml,
+            velocity_ff_gain=config.left_arm_config.velocity_ff_gain,
+            align_step_limit=config.left_arm_config.align_step_limit,
+            align_jump_threshold=config.left_arm_config.align_jump_threshold,
             cameras=left_arm_cameras,
             side=config.left_arm_config.side,
             can_interface=config.left_arm_config.can_interface,
@@ -69,6 +75,9 @@ class BiOpenArmFollower(BimanualMixin, Robot):
             position_kd=config.left_arm_config.position_kd,
             position_kp=config.left_arm_config.position_kp,
             joint_limits=config.left_arm_config.joint_limits,
+            gripper_control_mode=config.left_arm_config.gripper_control_mode,
+            gripper_speed_rad_s=config.left_arm_config.gripper_speed_rad_s,
+            gripper_torque_pu=config.left_arm_config.gripper_torque_pu,
         )
 
         right_arm_config = OpenArmFollowerConfig(
@@ -78,6 +87,11 @@ class BiOpenArmFollower(BimanualMixin, Robot):
             disable_torque_on_disconnect=config.right_arm_config.disable_torque_on_disconnect,
             use_velocity_and_torque=config.right_arm_config.use_velocity_and_torque,
             max_relative_target=config.right_arm_config.max_relative_target,
+            gravity_ff_gain=config.right_arm_config.gravity_ff_gain,
+            gravity_ff_xml=config.right_arm_config.gravity_ff_xml,
+            velocity_ff_gain=config.right_arm_config.velocity_ff_gain,
+            align_step_limit=config.right_arm_config.align_step_limit,
+            align_jump_threshold=config.right_arm_config.align_jump_threshold,
             cameras=config.right_arm_config.cameras,
             side=config.right_arm_config.side,
             can_interface=config.right_arm_config.can_interface,
@@ -88,6 +102,9 @@ class BiOpenArmFollower(BimanualMixin, Robot):
             position_kd=config.right_arm_config.position_kd,
             position_kp=config.right_arm_config.position_kp,
             joint_limits=config.right_arm_config.joint_limits,
+            gripper_control_mode=config.right_arm_config.gripper_control_mode,
+            gripper_speed_rad_s=config.right_arm_config.gripper_speed_rad_s,
+            gripper_torque_pu=config.right_arm_config.gripper_torque_pu,
         )
 
         self.left_arm = OpenArmFollower(left_arm_config)
@@ -95,6 +112,24 @@ class BiOpenArmFollower(BimanualMixin, Robot):
 
         # Only for compatibility with other parts of the codebase that expect a `robot.cameras` attribute
         self.cameras = {**self.left_arm.cameras, **self.right_arm.cameras}
+
+        # Build the official shared bimanual MJCF/Mink solver now. Doing it
+        # here — before connect() starts any camera read thread — keeps model
+        # parsing from
+        # starving the camera and tripping its frame-age watchdog.
+        self._ik_kinematics: tuple[Any, Any] | None = None
+        try:
+            from lerobot.robots.openarm_description.mink_ik import make_openarm_mink_kinematics
+            from lerobot.robots.openarm_follower.gravity_ff import default_bimanual_xml
+
+            self._ik_kinematics = make_openarm_mink_kinematics(
+                xml=default_bimanual_xml(),
+                posture_cost=config.ik_posture_cost,
+                max_iters=config.ik_max_iters,
+                damping=config.ik_damping,
+            )
+        except Exception:
+            logger.exception("%s: Cartesian-IK kinematics unavailable; Cartesian teleop disabled", self.name)
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -118,12 +153,75 @@ class BiOpenArmFollower(BimanualMixin, Robot):
 
     @cached_property
     def action_features(self) -> dict[str, type]:
-        return self._motors_ft
+        return {
+            **{f"left_{k}": v for k, v in self.left_arm.action_features.items()},
+            **{f"right_{k}": v for k, v in self.right_arm.action_features.items()},
+        }
 
     def setup_motors(self) -> None:
         raise NotImplementedError(
             "Motor ID configuration is typically done via manufacturer tools for CAN motors."
         )
+
+    def attach_teleop(self, teleop: Any) -> None:
+        """Wire a teleoperator as this robot's intent source.
+
+        For a bimanual Cartesian VR teleop (Quest), build the shared MJCF/Mink
+        controller and install it into the teleop via
+        ``set_action_transform`` so ``teleop.get_action()`` returns
+        motor-space joint commands. The IK stays robot-owned and the
+        upstream teleoperate / record / replay loops are untouched — they
+        just call ``get_action()`` and receive joints.
+
+        For a joint-space leader teleop this is a no-op: it already emits
+        joint dicts, which ``send_action`` consumes directly.
+
+        Precondition: the robot is connected — each arm's IK controller is
+        seeded from that arm's current joint configuration.
+        """
+        # Detect a bimanual Cartesian teleop by its action features. Done
+        # before importing the IK module so a joint-space leader never
+        # requires the optional OpenArm IK dependency.
+        from lerobot.robots.openarm_description.cartesian_ik import (
+            is_openarm_bimanual_cartesian_teleop,
+        )
+        from lerobot.robots.openarm_description.mink_ik import build_openarm_mink_transform
+
+        if not is_openarm_bimanual_cartesian_teleop(teleop):
+            return
+
+        assert self.is_connected, "attach_teleop requires the robot to be connected"
+        assert hasattr(teleop, "set_action_transform"), (
+            "a Cartesian teleop must expose set_action_transform()"
+        )
+
+        if self._ik_kinematics is None:
+            raise RuntimeError(
+                "OpenArm Cartesian teleop requires lerobot[openarm-ik]; "
+                "the shared MJCF/Mink solver failed to initialize"
+            )
+
+        kinematics, setup = self._ik_kinematics
+        transform = build_openarm_mink_transform(
+            kinematics,
+            setup,
+            self.left_arm,
+            self.right_arm,
+        )
+        teleop.set_action_transform(transform)
+        logger.info("%s: installed Cartesian-IK transform into %s", self.name, type(teleop).__name__)
+
+    @check_if_already_connected
+    def connect(self, calibrate: bool = False) -> None:
+        self.left_arm.connect(calibrate)
+        try:
+            self.right_arm.connect(calibrate)
+        except Exception:
+            try:
+                self.left_arm.disconnect()
+            except Exception:
+                logger.exception("Failed to disconnect left arm while rolling back bimanual connection")
+            raise
 
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:

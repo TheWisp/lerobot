@@ -36,3 +36,27 @@ class BiOpenArmFollowerConfig(RobotConfig):
     # observations (no `left_`/`right_` prefix). Per-arm cameras (declared on
     # `{left,right}_arm_config.cameras`) are prefixed.
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+
+    # Shared bimanual MJCF/Mink tuning from the pinned dora OpenArm stack.
+    ik_posture_cost: float = field(
+        default=0.01,
+        metadata={
+            "description": (
+                "PostureTask weight relative to FrameTask (which is 1.0). "
+                "Default 0.01 makes posture a null-space tiebreaker. Raise "
+                "(e.g. 0.3) for stronger 'stay near previous pose' — tighter "
+                "joint continuity near reach limits / singularities, at the "
+                "cost of small EE tracking lag."
+            ),
+        },
+    )
+    ik_max_iters: int = field(
+        default=10,
+        metadata={
+            "description": ("QP iterations per shared bimanual solve. The pinned dora OpenArm flow uses 10."),
+        },
+    )
+    ik_damping: float = field(
+        default=0.1,
+        metadata={"description": "Global Mink QP damping; pinned dora value is 0.1."},
+    )
