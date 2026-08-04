@@ -276,6 +276,7 @@ def prepare_hvla_dataset(
         os.rename(staging_root, out_root)
     except BaseException:
         if staging_root.exists():
+            # safe-destruct: this function created and exclusively owns the staging directory.
             shutil.rmtree(staging_root)
         raise
 
