@@ -16,6 +16,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
    Indicator lives in the tab bar; popover anchors top-right under the bar.
    Indicator is hidden when no jobs exist; switches colour based on whether
    anything is still in flight (cyan pulse = active, neutral = only finished). */
+/* Sits between the tabs and the Transfers/AI-setup/Report buttons. The tab bar
+   is `align-items: stretch`, so without `align-self: center` this span stretches
+   to the full 44px row and renders its 11px text against the top edge — visibly
+   higher than the buttons either side of it. */
+.hf-auth-indicator {
+    align-self: center;
+    margin-left: auto;
+    padding-right: 12px;
+    font-size: 11px;
+    color: var(--text-secondary, #666);
+    cursor: default;
+    white-space: nowrap;
+}
+
 .transfers-indicator {
     align-self: center;
     margin-right: 8px;
