@@ -19,6 +19,11 @@ import PIL.Image
 # Sentinel object to signal the encoder should discard and abort
 _DISCARD = object()
 
+# Opening several codecs on their first frame at the same time can starve the
+# camera reader threads long enough to trip the recording freshness watchdog.
+# Initialization is rare; steady-state frame encoding remains fully parallel.
+_FIRST_FRAME_ENCODE_LOCK = threading.Lock()
+
 
 class StreamingVideoEncoder:
     """Encodes video frames incrementally in a background thread during recording.
@@ -39,6 +44,8 @@ class StreamingVideoEncoder:
         crf: Constant rate factor (quality).
         fast_decode: Fast decode setting (for AV1/HEVC).
         preset: Encoder preset (speed vs quality). Only used for libsvtav1.
+        codec_options: Pre-resolved FFmpeg options from ``VideoEncoderConfig``.
+            When provided, these take the place of the legacy generic options.
         log_level: PyAV logging level during encoding.
         max_sample_size: Maximum number of frames to keep in the reservoir sample.
     """
@@ -52,6 +59,7 @@ class StreamingVideoEncoder:
         crf: int = 30,
         fast_decode: int = 0,
         preset: int = 12,
+        codec_options: dict[str, str] | None = None,
         log_level: int | None = av.logging.ERROR,
         max_sample_size: int = 300,
     ):
@@ -61,18 +69,24 @@ class StreamingVideoEncoder:
         self.log_level = log_level
         self.max_sample_size = max_sample_size
 
-        # Build codec options (mirrors encode_video_frames in video_utils.py)
-        self.codec_options: dict[str, str] = {}
-        if g is not None:
-            self.codec_options["g"] = str(g)
-        if crf is not None:
-            self.codec_options["crf"] = str(crf)
-        if fast_decode:
-            key = "svtav1-params" if vcodec == "libsvtav1" else "tune"
-            value = f"fast-decode={fast_decode}" if vcodec == "libsvtav1" else "fastdecode"
-            self.codec_options[key] = value
-        if vcodec == "libsvtav1":
-            self.codec_options["preset"] = str(preset)
+        # DatasetWriter passes the codec-specific options produced by
+        # VideoEncoderConfig. Keep the legacy construction path for direct
+        # callers, but do not reinterpret hardware-codec quality settings as
+        # generic CRF options.
+        if codec_options is not None:
+            self.codec_options = dict(codec_options)
+        else:
+            self.codec_options: dict[str, str] = {}
+            if g is not None:
+                self.codec_options["g"] = str(g)
+            if crf is not None:
+                self.codec_options["crf"] = str(crf)
+            if fast_decode:
+                key = "svtav1-params" if vcodec == "libsvtav1" else "tune"
+                value = f"fast-decode={fast_decode}" if vcodec == "libsvtav1" else "fastdecode"
+                self.codec_options[key] = value
+            if vcodec == "libsvtav1":
+                self.codec_options["preset"] = str(preset)
 
         # Encoders/pixel formats incompatibility check
         if (vcodec in ("libsvtav1", "hevc")) and pix_fmt == "yuv444p":
@@ -296,16 +310,23 @@ class StreamingVideoEncoder:
                 encoded_count += 1
 
                 # frame is HWC uint8 numpy array
-                if first_frame:
-                    height, width = frame.shape[:2]
-                    stream = container.add_stream(self.vcodec, self.fps, options=self.codec_options)
-                    stream.pix_fmt = self.pix_fmt
-                    stream.width = width
-                    stream.height = height
-                    first_frame = False
-
                 av_frame = av.VideoFrame.from_ndarray(frame, format="rgb24")
-                for packet in stream.encode(av_frame):
+                if first_frame:
+                    # avcodec_open2 is lazy and runs inside the first encode().
+                    # Serialize that one call across cameras; later calls stay
+                    # parallel and retain the existing throughput.
+                    with _FIRST_FRAME_ENCODE_LOCK:
+                        height, width = frame.shape[:2]
+                        stream = container.add_stream(self.vcodec, self.fps, options=self.codec_options)
+                        stream.pix_fmt = self.pix_fmt
+                        stream.width = width
+                        stream.height = height
+                        packets = list(stream.encode(av_frame))
+                    first_frame = False
+                else:
+                    packets = stream.encode(av_frame)
+
+                for packet in packets:
                     container.mux(packet)
 
         except Exception as e:

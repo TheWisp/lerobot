@@ -67,10 +67,11 @@ ENV HOME=/home/user_lerobot \
 
 RUN uv venv --python python${PYTHON_VERSION}
 
-# Install Python deps in a cache-friendly layer: only re-runs when
-# pyproject.toml / uv.lock / source layout changes.
-COPY --chown=user_lerobot:user_lerobot setup.py pyproject.toml uv.lock README.md MANIFEST.in ./
-COPY --chown=user_lerobot:user_lerobot src/ src/
+# Resolve and install third-party Python dependencies before copying the
+# project source.  Docker can now reuse the large Torch/CUDA dependency layer
+# when only ``src/`` changes; dependency changes remain governed by the two
+# lock/manifest files copied here.
+COPY --chown=user_lerobot:user_lerobot pyproject.toml uv.lock ./
 
 # The single `training-image` extra (defined in pyproject.toml's fork-only
 # section) is the source of truth for "what this Docker image needs at
@@ -78,6 +79,13 @@ COPY --chown=user_lerobot:user_lerobot src/ src/
 # Dockerfile is unchanged. Centralising the contract there means CI image
 # rebuilds pick up new policy deps automatically — no more SmolVLA-style
 # "I forgot --extra smolvla here" bugs.
+RUN uv sync --locked --extra training-image --no-cache --no-install-project
+
+# Installing the local project is deliberately a separate, cheap layer.  A
+# code-only rebuild invalidates this point onward without downloading Torch or
+# the NVIDIA Python packages again.
+COPY --chown=user_lerobot:user_lerobot setup.py README.md MANIFEST.in ./
+COPY --chown=user_lerobot:user_lerobot src/ src/
 RUN uv sync --locked --extra training-image --no-cache
 
 # Build-time sanity check: every registered policy's modeling module must
