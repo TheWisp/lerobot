@@ -2671,3 +2671,5 @@ canvas.mask-layer { object-fit: contain; background: none; }
 #prep-progress-bar { height: 100%; width: 0; background: #4fc3f7; transition: width 0.3s; }
 .prep-current-file { font-size: 11px; color: #888; margin-top: 8px; font-family: monospace; word-break: break-all; }
 .prep-output-path { font-size: 11px; color: #666; margin-top: 6px; font-family: monospace; word-break: break-all; }
+.prep-stop { margin-top: 12px; padding: 5px 14px; background: transparent; color: #ccc; border: 1px solid #c24038; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.prep-stop:hover { background: rgba(194,64,56,0.15); }
