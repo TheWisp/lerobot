@@ -886,7 +886,7 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             tmp_name = tmp.name
 
         args = [
-            "python",
+            sys.executable,
             "-m",
             "lerobot.policies.hvla.launch",
             f"--s1-checkpoint={req.s1_checkpoint}",
