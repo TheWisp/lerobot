@@ -54,6 +54,14 @@ function prepSourceChanged() {
     if (!sel || !out) return;
     const name = sel.selectedOptions[0]?.dataset.name || '';
     out.value = name ? `${name}_hvla224` : '';
+    _prepUpdateStartButton();
+}
+
+function _prepUpdateStartButton() {
+    const sel = document.getElementById('prep-source-select');
+    const button = document.getElementById('prep-start-btn');
+    if (!button) return;
+    button.disabled = !sel?.value || _prepJobId !== null;
 }
 
 async function startPreprocess() {
@@ -132,7 +140,7 @@ function _prepFinish() {
     _prepJobId = null;
     if (_prepPollTimer) clearTimeout(_prepPollTimer);
     _prepPollTimer = null;
-    document.getElementById('prep-start-btn').disabled = false;
+    _prepUpdateStartButton();
 }
 
 function _prepRender(job) {
