@@ -333,9 +333,7 @@ def test_training_dashboard_metrics_repair_and_resume(training_gui_server):
         page.wait_for_function("window.__trainingBuildRequest !== null")
         assert page.evaluate("window.__trainingBuildRequest") == {"force_full_rebuild": True}
         page.wait_for_function("_trainingBuildRunning === false")
-        page.wait_for_function(
-            "!document.querySelector('input[name=image_force_full_rebuild]').checked"
-        )
+        page.wait_for_function("!document.querySelector('input[name=image_force_full_rebuild]').checked")
 
         page.select_option('select[name="policy_type"]', "hvla_flow_s1")
         advanced = page.locator(".training-policy-advanced")
