@@ -185,9 +185,9 @@ class ConfigureRequest(BaseModel):
     model: str
     objects: list[dict] | None = None  # [{name, sign:'+'/'-', treatment:{key,params}}]
     cameras: list[str] | None = None  # active subset — worker infers + we publish only these; None = all
-    # Per-region background treatment ({key, params}). Its presence puts the worker in
-    # WYSIWYG mode: it composites each region's treatment + draws the detection chrome
-    # (the run-tab debug overlay omits it and draws contours instead).
+    # Per-region background treatment ({key, params}) for the region behind every object.
+    # It no longer selects a render mode: the worker composites regions + draws detection
+    # chrome for ANY segmenter, on both tabs (it branches on the adapter type, not on this).
     background_treatment: dict | None = None
     # Segment ALL instances of each object (both arms) vs the single largest.
     multi_instance: bool = True
@@ -220,10 +220,26 @@ def _frame_rgb(item: dict, cam: str) -> np.ndarray:
 
 
 def _png(rgba: np.ndarray) -> bytes:
-    """Encode an HxWx4 RGBA overlay to PNG (preserves transparency)."""
+    """Encode an HxWx4 RGBA overlay to PNG (preserves transparency).
+
+    Pre: HxWx4 uint8 RGBA. Post: PNG bytes whose visible result is unchanged —
+    only pixels the viewer cannot see are rewritten.
+
+    Fully-transparent pixels keep whatever RGB the compositor left there, which for
+    an overlay that is mostly a transparent diff is the WHOLE camera frame: PNG then
+    compresses a full photo nobody will ever see. Measured on a live 1280x720 run-tab
+    overlay that is 94.2% transparent: 782 KB as-is vs 88 KB with the invisible RGB
+    zeroed — 8.8x for pixels alpha discards anyway. Size matters here because these
+    are pulled per tile continuously, and an overlay that cannot finish downloading
+    before the next pull replaces it never draws at all.
+    """
     from PIL import Image
 
     assert rgba.ndim == 3 and rgba.shape[2] == 4, f"expected HxWx4 RGBA, got {rgba.shape}"
+    invisible = rgba[..., 3] == 0
+    if invisible.any():
+        rgba = rgba.copy()  # never mutate the caller's shm-backed view
+        rgba[invisible] = 0
     buf = io.BytesIO()
     Image.fromarray(rgba, "RGBA").save(buf, format="PNG")
     return buf.getvalue()
@@ -307,6 +323,7 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
             objects=req.objects,
             background_treatment=req.background_treatment or {"key": "random", "params": {}},
             resolution=req.resolution,
+            multi_instance=req.multi_instance,
         )
     # Narrow the worker to the panel's selected cameras so disabling one actually cuts its work:
     # publish only those + filter inference to them (None/absent = keep the default = all cameras).
@@ -736,13 +753,18 @@ async def _stop_live() -> None:
 
 class LiveStartRequest(BaseModel):
     model: str
-    objects: list[dict] | None = None
-    background: dict | None = None
+    objects: list[dict] | None = None  # [{name, sign, treatment:{key,params}}] — same shape as the data tab
+    background_treatment: dict | None = None  # {key, params}; None = background kept as-is
     cameras: list[str] | None = None
     style: str | None = None  # policy_saliency render style (see PolicySaliencyAdapter.STYLES)
     smooth: float | None = None  # policy_saliency smoothing sigma (0 = raw 64x64)
     method: str | None = None  # policy_saliency source: "gradient" | "rollout" (read by the policy)
     resolution: int | None = None  # SAM inference resolution preset (load-time; None = adapter default)
+    # Segment ALL instances of each object (both arms) vs the single largest — the same
+    # control the data tab has. Defaults FALSE here, where the tab is a live debug view and
+    # every extra masklet costs frame rate; the data tab defaults True because a treatment
+    # that protects only one of two arms silently corrupts the written dataset.
+    multi_instance: bool = False
 
 
 class LiveDiagRequest(BaseModel):
@@ -761,13 +783,13 @@ async def _spawn_worker(
     model: str,
     *,
     objects=None,
-    background=None,
     cameras=None,
     background_treatment=None,
     style=None,
     smooth=None,
     method=None,
     resolution=None,
+    multi_instance=None,
 ) -> None:
     """Spawn (or push control to) the single overlay worker for ``model``. Caller MUST hold
     ``_live_lock``. The worker is identical for live + data — it reads the obs stream; only the
@@ -788,11 +810,11 @@ async def _spawn_worker(
                 {
                     "config": {
                         "objects": objects or [],
-                        "background": background,
-                        "background_treatment": background_treatment,  # data tab: WYSIWYG composite mode
+                        "background_treatment": background_treatment,
                         "style": style,
                         "smooth": smooth,
                         "method": method,  # read by the POLICY (gradient|rollout), not the worker
+                        **({} if multi_instance is None else {"multi_instance": multi_instance}),
                     }
                 }
             )
@@ -815,13 +837,17 @@ async def _spawn_worker(
     args = [sys.executable, "-u", "-m", "lerobot.overlays.standalone", f"--model={model}"]
     if objects:
         args.append(f"--objects={json.dumps(objects)}")
-    if background is not None:
-        args.append(f"--background={json.dumps(background)}")
     # Seed the background treatment at spawn (like objects) — a control-channel push
     # is a no-op until the worker's buffer exists, so the FIRST inference would
-    # otherwise miss it. Its presence switches the worker to WYSIWYG composite mode.
+    # otherwise miss it.
     if background_treatment is not None:
         args.append(f"--background-treatment={json.dumps(background_treatment)}")
+    # Same reason: without seeding, the worker's first inferences use the adapter's own
+    # default instead of the panel's instance policy. The data tab happened to converge
+    # because its config is re-pushed on every status poll; the run tab has no such
+    # re-push, so an unseeded value would simply never arrive.
+    if multi_instance is not None:
+        args.append(f"--multi-instance={'1' if multi_instance else '0'}")
     if style:
         args.append(f"--style={style}")
     if method:
@@ -873,12 +899,13 @@ async def live_start(req: LiveStartRequest) -> dict:
         await _spawn_worker(
             req.model,
             objects=req.objects,
-            background=req.background,
+            background_treatment=req.background_treatment,
             cameras=req.cameras,
             style=req.style,
             smooth=req.smooth,
             method=req.method,
             resolution=req.resolution,
+            multi_instance=req.multi_instance,
         )
     return {"ok": True, "state": m.state.value}
 

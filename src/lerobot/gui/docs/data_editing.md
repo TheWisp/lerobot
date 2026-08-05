@@ -137,9 +137,12 @@ The one thing on the tile that is **not** committed is the **detection chrome** 
 the accent glow + tiny label on each object. It's drawn by the live worker
 (`standalone._draw_detection_chrome`) after the composite, purely so you can verify
 segmentation; `process_dataset` never draws it. Because it only ever outlines
-(never fills/recolours), it can't be mistaken for a Tint. So on the data tab there
-is **one mechanism** — the WYSIWYG composite — with the debug contour view left to
-the run tab.
+(never fills/recolours), it can't be mistaken for a Tint. Each object's outline +
+label take that concept's stable auto-assigned colour (never user-chosen), so
+colour carries identity only. BOTH tabs run this one mechanism — the WYSIWYG
+composite + chrome; the run tab simply defaults every treatment to None (pure
+observability: real pixels + chrome), and its overlay is transparent outside
+treated regions and chrome so the live feed shows through at full rate.
 
 Imperfect tracking is the main friction — the result may miss an object or drift,
 and a full run is expensive. So the flow is staged, cheapest-first:

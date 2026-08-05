@@ -51,97 +51,30 @@ _CONCEPT_PALETTE = [
 def _parse_objects(control: dict, max_objects: int):
     """Pull monitored objects from a control dict (the universal concept selector).
 
-    Returns ``(names, colors, signs)`` — ``names`` deduped and ``<= max_objects``;
-    ``colors`` maps name -> (r, g, b) (omitted when transparent/unset → palette
-    fallback); ``signs`` maps name -> "+"/"-" (default "+", "-" = exclude). Returns
-    ``(None, None, None)`` when there are no usable objects so the caller keeps state.
+    Returns ``(names, signs)`` — ``names`` deduped and ``<= max_objects``; ``signs``
+    maps name -> "+"/"-" (default "+", "-" = exclude). Returns ``(None, None)`` when
+    there are no usable objects so the caller keeps state.
     """
     objs = control.get("objects")
     if not isinstance(objs, list) or not any(str(o.get("name", "")).strip() for o in objs):
-        return None, None, None
+        return None, None
     names: list[str] = []
-    colors: dict[str, tuple[int, int, int]] = {}
     signs: dict[str, str] = {}
     for o in objs[:max_objects]:
         name = str(o.get("name", "")).strip()
         if not name:
             continue
         names.append(name)
-        c = o.get("color")
-        if isinstance(c, (list, tuple)) and len(c) == 3:
-            colors[name] = (int(c[0]), int(c[1]), int(c[2]))
         signs[name] = "-" if o.get("sign") == "-" else "+"
-    return list(dict.fromkeys(names)), colors, signs
+    return list(dict.fromkeys(names)), signs
 
 
-def _concept_color(concept, concepts, colors):
-    """Stable color for a concept: user-chosen if set, else palette by position, else hashed."""
-    if concept in colors:
-        return colors[concept]
+def _concept_color(concept, concepts):
+    """Stable color for a concept: palette by position, hashed fallback. Auto-assigned
+    (never user-chosen), used by the detection chrome to tell objects apart."""
     if concept in concepts:
         return _CONCEPT_PALETTE[concepts.index(concept) % len(_CONCEPT_PALETTE)]
-    return _color_for(concept)
-
-
-_BG_UNSET = object()  # sentinel: this control dict didn't mention the background
-
-
-def _parse_background(control: dict):
-    """Background fill color from a control dict.
-
-    Returns ``(r, g, b)`` to fill the inverse region, ``None`` for transparent
-    (don't paint), or ``_BG_UNSET`` when the key is absent (keep current state).
-    """
-    if "background" not in control:
-        return _BG_UNSET
-    bg = control.get("background") or {}
-    c = bg.get("color") if isinstance(bg, dict) else None
-    if isinstance(c, (list, tuple)) and len(c) == 3:
-        return (int(c[0]), int(c[1]), int(c[2]))
-    return None  # transparent
-
-
-def _composite_concepts(h, w, masks_by_concept, concepts, colors, signs, bg_color, cv2, fill_alpha=130):
-    """Paint an RGBA overlay from per-concept boolean masks.
-
-    ``+`` concepts are drawn in their color; ``-`` concepts are carved out of the
-    positive masks (and excluded from the detected region). ``bg_color`` (when not
-    None) fills everything NOT covered by a positive detection — the inverse region.
-    Background is painted first so positive fills + contours sit on top.
-    """
-    rgba = np.zeros((h, w, 4), dtype=np.uint8)
-    # Fast path: with no negative concepts and a transparent background (the common
-    # case) we skip the per-mask full-frame ops (carve + detected-union) entirely —
-    # they cost ~2 HxW boolean passes PER mask, which dominates when a concept like
-    # "object" returns dozens of instances.
-    has_neg = any(signs.get(c, "+") == "-" for c in concepts)
-    need_detected = bg_color is not None
-    neg = np.zeros((h, w), dtype=bool)
-    if has_neg:
-        for c in concepts:
-            if signs.get(c, "+") == "-":
-                for m in masks_by_concept.get(c, []):
-                    neg |= m
-    detected = np.zeros((h, w), dtype=bool) if need_detected else None
-    draw: list[tuple[np.ndarray, tuple[int, int, int]]] = []
-    for c in concepts:
-        if signs.get(c, "+") == "-":
-            continue
-        col = _concept_color(c, concepts, colors)
-        for m in masks_by_concept.get(c, []):
-            mm = (m & ~neg) if has_neg else m
-            if has_neg and not mm.any():
-                continue
-            draw.append((mm, col))
-            if need_detected:
-                detected |= mm
-    if need_detected:
-        rgba[~detected] = (*bg_color, fill_alpha)
-    for mm, col in draw:
-        rgba[mm] = (*col, fill_alpha)
-        cnts, _ = cv2.findContours(mm.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(rgba, cnts, -1, (*col, 255), 2)
-    return rgba
+    return _color_for(concept)  # transparent
 
 
 class DebugVisionAdapter:
@@ -214,9 +147,7 @@ class ConceptMaskAdapter(DebugVisionAdapter):
         self._cv2 = _import_cv2()
         self.prompt = self.DEFAULT_PROMPT
         self._concepts: list[str] = []
-        self._colors: dict[str, tuple[int, int, int]] = {}  # user-chosen color per concept
         self._signs: dict[str, str] = {}
-        self._bg_color: tuple[int, int, int] | None = None
         # Data editing unions all instances of a concept (protect every match, e.g.
         # both arms); the debug overlay keeps the single-largest lock. Set via
         # set_control({"multi_instance": ...}); default False = the debug lock.
@@ -238,9 +169,8 @@ class ConceptMaskAdapter(DebugVisionAdapter):
     def set_control(self, control: dict) -> None:
         # Structured monitored objects (preferred). Color/sign/background are display-only;
         # only an object-NAME change restarts tracking.
-        names, colors, signs = _parse_objects(control, self.MAX_OBJECTS)
+        names, signs = _parse_objects(control, self.MAX_OBJECTS)
         if names is not None:
-            self._colors = colors
             self._signs = signs
             new_prompt = " . ".join(names)
             if new_prompt and new_prompt != self.prompt:
@@ -251,9 +181,6 @@ class ConceptMaskAdapter(DebugVisionAdapter):
             if isinstance(p, str) and p.strip() and p.strip() != self.prompt:
                 self.prompt = p.strip()
                 self._restart_tracking()
-        bg = _parse_background(control)
-        if bg is not _BG_UNSET:
-            self._bg_color = bg
         # "Segment all instances of each concept" (both arms) vs the single largest.
         # Absent = keep the current value (default False: the debug overlay's lock;
         # the data-editing paths send True). A change restarts tracking so the next
@@ -321,24 +248,6 @@ class ConceptMaskAdapter(DebugVisionAdapter):
                 union &= ~neg
             out[c] = union
         return out
-
-    def infer(self, frame_rgb: np.ndarray) -> np.ndarray:
-        assert frame_rgb.ndim == 3 and frame_rgb.shape[2] == 3, (
-            f"infer expects HxWx3 RGB, got {frame_rgb.shape}"
-        )
-        masks_by_concept, h, w = self._infer_masks(frame_rgb)
-        rgba = _composite_concepts(
-            h,
-            w,
-            masks_by_concept,
-            self._concepts,
-            self._colors,
-            self._signs,
-            self._bg_color,
-            self._cv2,
-        )
-        assert rgba.shape == (h, w, 4), f"overlay {rgba.shape} != frame {(h, w, 4)}"
-        return rgba
 
 
 class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):

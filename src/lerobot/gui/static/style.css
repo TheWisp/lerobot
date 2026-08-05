@@ -777,10 +777,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
    while empty so the requirement is visible without a model-specific status badge. */
 .overlays-obj-name[data-i='0']:placeholder-shown { border-color: #f85149; }
 .overlays-bg-label { flex: 1; min-width: 0; opacity: 0.6; font-size: 12px; color: #ccc; }
-.overlays-palette { flex: 0 0 auto; display: flex; gap: 4px; }
-.overlays-swatch { display: inline-block; width: 15px; height: 15px; border-radius: 3px; cursor: pointer; border: 2px solid transparent; box-shadow: 0 0 0 1px #0006; }
-.overlays-swatch.sel { border-color: #fff; }
-.overlays-palette.disabled { opacity: 0.3; pointer-events: none; }
 .overlays-add-obj { margin: 2px 0 4px; background: #0f1c2e; border: 1px solid #0f3460; color: #9cf; font-size: 11.5px; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
 .overlays-add-obj:disabled { color: #667; cursor: not-allowed; }
 .overlays-cam-btn { background: #0f1c2e; border: 1px solid #0f3460; color: #889; font-size: 11.5px; padding: 3px 9px; border-radius: 12px; cursor: pointer; opacity: 0.6; }
@@ -2056,6 +2052,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 /* Data overlay: "segment all instances" checkbox (both arms vs largest). */
 .overlays-check { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; color: #cce; font-size: 12px; cursor: pointer; }
 .overlays-check input { accent-color: #4fc3f7; }
+/* Segmented single-select for a choice between NAMED alternatives — same grammar as
+   .overlays-treat, widened for text. Used where a checkbox would hide the meaning of
+   "off": unchecking "segment all instances" does not disable a feature, it selects a
+   different behaviour ("largest only"), which only a tooltip used to reveal. */
+.overlays-seg { display: inline-flex; border: 1px solid #0f3460; border-radius: 4px; overflow: hidden; }
+.overlays-seg-btn { height: 22px; padding: 0 10px; background: #0f1c2e; border: none;
+    border-right: 1px solid #0f3460; color: #889; font-size: 11.5px; cursor: pointer; }
+.overlays-seg-btn:last-child { border-right: none; }
+.overlays-seg-btn:hover { background: #15324a; }
+.overlays-seg-btn.sel { background: #15324a; color: #4fc3f7; }
 
 /* Processing tray: offset left of Transfers so both popovers can be open. */
 #proc-popover { right: 376px; width: 360px; }
