@@ -70,32 +70,32 @@ Two habits, both cheap:
   silently tolerated extras would make every other assertion in the file vacuous
   — which is precisely how the original break went unnoticed.
 
-## A refactor owes you an equivalence test
+## Prove the refactor equivalent
 
-Moving behaviour is where "obviously the same" goes wrong: nothing fails at the
-time, and the difference surfaces later as something unrelated.
+Moving, replacing or reimplementing behaviour? **Write a test that enumerates
+both versions over real inputs and asserts they match.** The whole set —
+parameter names, emitted flags, config keys — not a spot check of a few cases.
 
-A config flag replaced a hack that froze a model's language tower. The flag
-froze `paligemma.model.language_model`; the hack had frozen everything outside
-a substring allowlist. Reading the code said equivalent. Diffing the two frozen
-sets said otherwise — `lm_head` sits beside `model`, so the module walk missed
-it:
+Build the real object and read it. Do not reason about what it should contain;
+that is the step that fails.
 
 ```python
-legacy = {n for n, _ in model.named_parameters()
+# Write this. When the old code is gone, reconstruct its rule as the oracle:
+legacy = {n for n, _ in model.named_parameters()          # what the old hack froze
           if not any(k in n for k in LEGACY_ALLOWLIST)}
-assert {n for n, p in model.named_parameters() if not p.requires_grad} == legacy
+now = {n for n, p in model.named_parameters() if not p.requires_grad}  # the new flag
+assert now == legacy
 ```
 
-**Enumerate both behaviours over real inputs and assert set equality** — names,
-flags, config keys, whatever the unit is. Build the real object rather than
-reasoning about it; if the old path is gone, reconstruct its rule as the oracle.
+That test caught a config flag that claimed to replace a hack and left one
+parameter trainable. Reading the code had said equivalent.
 
-Two ways this still fails. **Measuring the wrong quantity passes trivially**: a
-CSS fix compared element-box centres, which read 0.0px before _and_ after. Ask
-what the number would say if you had not made the change. And **an uncommitted
-check protects nothing** — a lint proven once by hand then shipped with a crash
-nobody caught.
+**Ask what your number would read if you had not made the change.** A CSS fix
+compared element-box centres: 0.0px before *and* after. If the answer is "the
+same", measure something else.
+
+**Commit the check.** A lint proven once by hand, never committed, shipped with
+a crash nobody caught.
 
 ## Pin the invariant, not the enumeration
 
