@@ -91,7 +91,7 @@ That test caught a config flag that claimed to replace a hack and left one
 parameter trainable. Reading the code had said equivalent.
 
 **Ask what your number would read if you had not made the change.** A CSS fix
-compared element-box centres: 0.0px before *and* after. If the answer is "the
+compared element-box centres: 0.0px before _and_ after. If the answer is "the
 same", measure something else.
 
 **Commit the check.** A lint proven once by hand, never committed, shipped with
