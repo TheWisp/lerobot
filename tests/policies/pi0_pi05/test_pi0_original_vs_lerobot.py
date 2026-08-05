@@ -113,6 +113,7 @@ class PI0BaseOriginalConfig:
 
 
 def instantiate_lerobot_pi0(*, compile_model: bool = False, gradient_checkpointing: bool = False):
+    # external-ok: the published checkpoint is the reference this parity test compares against
     config = PreTrainedConfig.from_pretrained("lerobot/pi0_base")
     config.device = str(DEVICE)
     config.dtype = "float32"
@@ -120,6 +121,7 @@ def instantiate_lerobot_pi0(*, compile_model: bool = False, gradient_checkpointi
     config.compile_mode = COMPILE_MODE
     config.gradient_checkpointing = gradient_checkpointing
 
+    # external-ok: the published checkpoint is the reference this parity test compares against
     policy = PI0Policy.from_pretrained("lerobot/pi0_base", config=config, strict=True)
     policy.to(DEVICE)
     policy.config.device = str(DEVICE)
