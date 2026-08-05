@@ -1,6 +1,6 @@
 ---
 name: verifying-changes
-description: How to know a change actually works in this repository — which tests are worth writing, why green suites still ship broken products, and how to verify by driving the GUI rather than reasoning about it. Use when writing tests for a fix, auditing an upstream merge, or deciding whether a change is proven.
+description: How to know a change actually works in this repository — which tests are worth writing, why green suites still ship broken products, and how to verify by driving the GUI rather than reasoning about it. Use when writing tests for a fix, auditing an upstream merge, deciding whether a change is proven, or refactoring — moving, replacing or reimplementing existing behaviour, where the claim is that the new code is equivalent to the old.
 ---
 
 # Verifying changes
@@ -92,7 +92,7 @@ flags, config keys, whatever the unit is. Build the real object rather than
 reasoning about it; if the old path is gone, reconstruct its rule as the oracle.
 
 Two ways this still fails. **Measuring the wrong quantity passes trivially**: a
-CSS fix compared element-box centres, which read 0.0px before *and* after. Ask
+CSS fix compared element-box centres, which read 0.0px before _and_ after. Ask
 what the number would say if you had not made the change. And **an uncommitted
 check protects nothing** — a lint proven once by hand then shipped with a crash
 nobody caught.
