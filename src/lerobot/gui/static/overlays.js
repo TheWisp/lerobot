@@ -161,6 +161,7 @@
         // The run tab is a live debug view where every extra masklet costs frame rate, so it
         // starts Largest — visible and one click away, not hidden.
         let multiInstance = mode === 'data';
+        let batchCameras = false;               // data mode: batched vision encode — OFF by default (measured tracking-quality loss on some scenes)
         // SAM inference resolution (a LOAD-TIME knob: changing it respawns the worker; the
         // batch job inherits it so preview == commit). Default to the backend's default preset.
         let resolution = (RESOLUTIONS.find((r) => /default/i.test(r.label || '')) || RESOLUTIONS[0] || { value: null }).value;
@@ -260,6 +261,9 @@
                         <button class="overlays-seg-btn${multiInstance ? ' sel' : ''}" data-multi="1">All</button>
                         <button class="overlays-seg-btn${multiInstance ? '' : ' sel'}" data-multi="0">Largest</button>
                     </span>
+                    ${mode === 'data' ? `<label class="overlays-check" title="One batched vision encode for all active cameras (~1.3× at 2 cams). WARNING — measurably hurts tracking on some scenes (an object held 199/199 frames serial vs 176/199 batched, another 89/199 vs 4/199). The cause is NOT kernel numerics: the batched vision encode is bit-identical to the serial one, so this is an unexplained defect in the batching path, not an inherent trade. Off by default; only enable if you verify holds on YOUR data. The processing job uses the same setting, so preview = commit either way.">
+
+                        <input type="checkbox" class="overlays-batch"${batchCameras ? ' checked' : ''}> Batch cameras (faster; can degrade tracking)</label>` : ''}
                     ${RESOLUTIONS.length ? `<label class="overlays-label" title="SAM inference resolution — lower is faster; Balanced measured equal-or-better masks than Full at ~1.8× the speed. Changing it reloads the model.">Quality</label>
                     <select class="overlays-select overlays-res">${RESOLUTIONS.map((r) => `<option value="${r.value}"${r.value === resolution ? ' selected' : ''}>${esc(r.label)}</option>`).join('')}</select>` : ''}
                     <label class="overlays-label">cameras</label>
@@ -281,6 +285,10 @@
                         applyInstant();
                     });
                 });
+                // Still a checkbox, and correctly so: "off" here is not a second named
+                // behaviour, it is simply not applying an optimisation.
+                const batchCb = els.modelBody.querySelector('.overlays-batch');
+                if (batchCb) batchCb.addEventListener('change', () => { batchCameras = batchCb.checked; applyInstant(); });
                 const resSel = els.modelBody.querySelector('.overlays-res');
                 if (resSel) resSel.addEventListener('change', () => {
                     resolution = Number(resSel.value) || null;
@@ -502,6 +510,7 @@
                 multiInstance: multiInstance,
                 model: current,          // the batch job runs the SAME segmenter + resolution
                 resolution,              // as this live preview (preview == commit)
+                batchCameras,            // ...and the same camera-batching setting
                 computeMs: (status && status.compute_ms) || null,  // measured ms/frame/cam from THIS preview (null = unmeasured)
             });
         }
@@ -607,7 +616,7 @@
             if (pullLoader) pullLoader.reset();
             fetch('/api/overlays/data/configure', {
                 method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background_treatment: backgroundTreatment, multi_instance: multiInstance, resolution, cameras: selectedCameras ? [...selectedCameras] : [] }),
+                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background_treatment: backgroundTreatment, multi_instance: multiInstance, batch_cameras: batchCameras, resolution, cameras: selectedCameras ? [...selectedCameras] : [] }),
             }).then(async (r) => {
                 if (r.status === 409) {
                     // The overlay mutex is held by another client (another data tab/machine,

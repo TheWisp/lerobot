@@ -80,6 +80,7 @@ class ProcessJobConfig:
     resolution: int | None = None
     # Batch the vision encode across cameras (experimental perf option). Shared with
     # the live preview so preview == commit per setting.
+    batch_cameras: bool = False
 
     def to_json(self) -> str:
         return json.dumps(
@@ -92,6 +93,7 @@ class ProcessJobConfig:
                 "out_root": self.out_root,
                 "model": self.model,
                 "resolution": self.resolution,
+                "batch_cameras": self.batch_cameras,
                 "objects": self.objects,
                 "background_treatment": self.background_treatment,
                 "apply_mode": self.apply_mode,
@@ -116,6 +118,7 @@ class ProcessJobConfig:
             out_root=d["out_root"],
             model=d["model"],
             resolution=d.get("resolution"),
+            batch_cameras=bool(d.get("batch_cameras", False)),
             objects=d["objects"],
             background_treatment=d.get("background_treatment") or {"key": "random", "params": {}},
             apply_mode=d.get("apply_mode", "per_episode"),

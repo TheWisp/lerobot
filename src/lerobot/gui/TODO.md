@@ -763,6 +763,25 @@ Explicitly out of scope (ruled out in the design discussion before merge of PR #
       the live preview's first mask. It also perturbs numerics (mean IoU 0.9998 vs
       uncompiled, only 19/80 masks identical) — the same class of drift that made
       camera batching collapse holds on a real dataset. Not worth 4%.
+- [ ] Docs contract for the objects list: state bluntly that the named-object rows
+      DECLARE the task's sufficient statistic — everything unnamed (background
+      appearance AND geometry: table edges, fixtures, landmarks) is treated as
+      nuisance and destroyed by background randomization. Tasks with scene-anchored
+      references (place-at-the-corner) must name the anchor as an object, or its
+      geometry is gone from the training data. data_editing.md currently describes
+      the mechanism, not this contract.
+- [ ] "Restyle" treatment — structure-preserving appearance randomization: keep the
+      region's luminance/edge structure (geometry stays legible) while randomizing
+      colour/texture statistics (per-region stylization; cf. Stylized-ImageNet /
+      texture-vs-shape, Geirhos et al. arXiv:1811.12231). The hedge for when the
+      objects list may be incomplete: full replacement = "only named objects
+      matter"; Restyle = "layout matters, appearance doesn't". Slots into the
+      treatment registry next to Random.
+- [ ] Photometric jitter treatment (brightness/hue/contrast/saturation) as its own
+      invariance axis, per-episode cadence like Random — the standard colour-jitter
+      augmentation, orthogonal to regional texture randomization; do NOT match the
+      original scene (GreenAug-Gen photorealism underperformed random textures;
+      domain-randomization practice varies these deliberately).
 - [ ] Encode WYSIWYG composite overlays as JPEG/WebP instead of PNG. Composites are
       full-frame photo-like images, so PNG is the pathological codec (~300-800 KB each);
       2 cams x ~10/s saturates a Wi-Fi link. The completion-gated loader keeps remote
@@ -780,6 +799,9 @@ Explicitly out of scope (ruled out in the design discussion before merge of PR #
       arXiv:1801.00868), logit argmax (EfficientPS arXiv:2004.02307), learned occlusion
       order (Lazarow et al. CVPR 2020). Only worth it if tint seams at true occlusion
       boundaries (e.g. fingers wrapping a held object) become visible in practice.
+- [ ] SAM 3.1 live preview: replace the incremental per-frame shim (~700 ms/frame,
+      degraded holds) when huggingface/transformers#46128 lands — then sam3_1 becomes a
+      checkpoint swap on the streaming sam3_video adapter and the sidecar venv retires.
 
 ## HVLA / Policy Evaluation
 
