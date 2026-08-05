@@ -67,7 +67,16 @@
                 delete inflight[cam];
                 return null;
             },
-            reset: function () { inflight = {}; pending = {}; },
+            // Forget in-flight bookkeeping: for ONE camera when `cam` is given, else all.
+            // The per-camera form matters because callers tick over every camera and reset
+            // the ones that are currently off — an unscoped reset there wipes the ACTIVE
+            // camera's in-flight flag many times a second, which silently disables the gate
+            // and restores the abort-on-reassign freeze this loader exists to prevent.
+            reset: function (cam) {
+                if (cam === undefined) { inflight = {}; pending = {}; return; }
+                delete inflight[cam];
+                delete pending[cam];
+            },
         };
     }
     return { create: create, createLoader: createLoader };

@@ -2301,7 +2301,10 @@ async function startObsStreamViewer() {
                 } else {
                     ov.style.display = 'none';
                     ov.removeAttribute('src');
-                    if (overlayLoader) overlayLoader.reset();
+                    // Scoped to THIS camera: an unscoped reset here would clear the
+                    // in-flight flag of the cameras that ARE on — every tick, for every
+                    // camera that is off — disabling the gate entirely.
+                    if (overlayLoader) overlayLoader.reset(key);
                 }
             }
         }
