@@ -114,6 +114,18 @@ repos:
         pass_filenames: false
         files: ^src/lerobot/gui/.*\.py$
 
+  ##### Local: tests must not call external services #####
+  - repo: local
+    hooks:
+      - id: no-network-in-tests
+        name: Flag tests that call an external service
+        entry: scripts/lint/no_network_in_tests.py
+        language: python
+        # Tests only. Silence a deliberate case with `# external-ok: <reason>`, the
+        # `hub_live` marker, or `# network-lint: ignore-file` for a whole module.
+        files: ^tests/.*\.py$
+        pass_filenames: true
+
   ##### Local: setup-overfitting guard #####
   - repo: local
     hooks:

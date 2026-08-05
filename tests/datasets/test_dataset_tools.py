@@ -21,6 +21,8 @@ import numpy as np
 import pytest
 import torch
 
+from tests.fixtures.local_artifacts import local_dataset
+
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
 
 
@@ -1235,10 +1237,9 @@ def test_modify_tasks_keeps_original_when_not_overridden(sample_dataset):
 
 def test_convert_image_to_video_dataset(tmp_path):
     """Test converting lerobot/pusht_image dataset to video format."""
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     # Load the actual lerobot/pusht_image dataset (only first 2 episodes for speed)
-    source_dataset = LeRobotDataset("lerobot/pusht_image", episodes=[0, 1])
+    source_dataset = local_dataset("pusht_image_slice", episodes=[0, 1])
 
     output_dir = tmp_path / "pusht_video"
 
@@ -1300,10 +1301,9 @@ def test_convert_image_to_video_dataset(tmp_path):
 
 def test_convert_image_to_video_dataset_subset_episodes(tmp_path):
     """Test converting only specific episodes from lerobot/pusht_image to video format."""
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     # Load the actual lerobot/pusht_image dataset (only first 3 episodes)
-    source_dataset = LeRobotDataset("lerobot/pusht_image", episodes=[0, 1, 2])
+    source_dataset = local_dataset("pusht_image_slice", episodes=[0, 1, 2])
 
     output_dir = tmp_path / "pusht_video_subset"
 
@@ -1592,7 +1592,7 @@ def test_trim_episode_with_video(tmp_path):
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     # Load pusht which has videos
-    source_dataset = LeRobotDataset("lerobot/pusht", episodes=[0, 1])
+    source_dataset = local_dataset("pusht_slice", episodes=[0, 1])
 
     # Copy dataset to tmp_path so we can modify it
     import shutil
