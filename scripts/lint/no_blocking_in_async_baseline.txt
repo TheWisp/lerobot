@@ -1,0 +1,17 @@
+# Accepted event-loop blocking, per (file, kind). Regenerate with
+#   NOTE: `shared-pool` counts are sound; `blocking-call` and
+#   `blocking-via-helper` come from a name denylist and undercount.
+#   python scripts/lint/no_blocking_in_async.py --update-baseline
+# These numbers should only ever go DOWN.
+src/lerobot/gui/api/_edits_core.py shared-pool 1
+src/lerobot/gui/api/bug_reports.py blocking-via-helper 1
+src/lerobot/gui/api/datasets.py blocking-call 3
+src/lerobot/gui/api/datasets.py blocking-via-helper 1
+src/lerobot/gui/api/datasets.py shared-pool 9
+src/lerobot/gui/api/models.py shared-pool 3
+src/lerobot/gui/api/overlays.py blocking-via-helper 2
+src/lerobot/gui/api/overlays.py shared-pool 2
+src/lerobot/gui/api/playback.py shared-pool 1
+src/lerobot/gui/api/robot.py shared-pool 13
+src/lerobot/gui/api/run.py shared-pool 2
+src/lerobot/gui/server.py shared-pool 1

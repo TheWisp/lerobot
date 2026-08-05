@@ -102,6 +102,18 @@ repos:
         files: ^(src|scripts)/.*\.py$
         pass_filenames: true
 
+  ##### Local: event-loop blocking guard #####
+  - repo: local
+    hooks:
+      - id: no-blocking-in-async
+        name: Flag blocking work on the GUI event loop (net/subprocess in async, shared pool)
+        entry: scripts/lint/no_blocking_in_async.py
+        language: python
+        # Scans the whole GUI package rather than staged files: the check is a
+        # ratchet against a per-file baseline, so it needs the full picture.
+        pass_filenames: false
+        files: ^src/lerobot/gui/.*\.py$
+
   ##### Local: tests must not call external services #####
   - repo: local
     hooks:
