@@ -159,11 +159,13 @@ handler to plain `def` lets FastAPI run the whole handler in its thread pool;
 handlers that need async locks/state should instead offload the blocking slice
 and perform shared-state mutations back on the event-loop thread.
 
-- [High] **Training image status must not run subprocess/network probes inline.**
-  `/api/training/image-status` is started on every full GUI load and currently
-  runs several `git`/`docker` subprocesses, including a possible `git fetch`,
-  with individual 5–10 second timeouts. Make it a thread-backed/cached probe,
-  and remove network fetches from the passive GET path.
+- [High] **Work off the 39 baselined event-loop violations.** `scripts/lint/no_blocking_in_async_baseline.txt` accepts the debt that existed when the lint landed; the ratchet only stops it growing. Counts should only ever go down, and `--update-baseline` after a migration is part of the change. Breakdown as of landing:
+  - **32 × shared-pool** — `run_in_executor(None, …)` / `asyncio.to_thread(…)`, worst in `api/robot.py` (14) and `api/datasets.py` (9). Mechanical: give each class of work its own bounded `ThreadPoolExecutor`, following `_decode_executor` / `_prefetch_executor`. Low risk, can be done file by file.
+  - **3 × blocking-call** — `LeRobotDataset(...)` constructed inline in async handlers at `api/datasets.py` 1512, 1545, 3270. **1545 is the dangerous one**: a bare `repo_id`, so it resolves against the Hub on the event loop. Covered in more detail by the "offload remote dataset open" item above; the other two are local (`root=` / `local_files_only=True`) and merely slow.
+  - **4 × blocking-via-helper** — `_check_local_dataset_complete` (reaches `LeRobotDatasetMetadata`), `overlays.py` ×2 (`nvidia-smi pmon`, ~30 ms and cached at 1 Hz — probably an annotation rather than a fix), `bug_reports.py` (git sha).
+
+  Note the counts undercount: the name-denylist half of the lint only sees what someone listed. Do not read a shrinking baseline as approaching zero blocking.
+
 - [High] **Offload dataset mutation pipelines while retaining dataset locks.**
   Schema add/default migration/remove and Apply Edits synchronously rewrite
   Parquet shards, recompute stats, reload metadata, and verify the dataset;

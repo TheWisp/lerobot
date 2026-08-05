@@ -9,6 +9,23 @@ timeouts fired, because ``whoami()`` was awaited inline. ``/training/image-statu
 still shells out to ``git`` and ``docker`` — including a ``git fetch`` — on every
 page load.
 
+What this can and cannot do, stated up front so a green run is not misread:
+
+* The shared-executor rule is a **sound** static check. ``run_in_executor(None,
+  …)`` puts a literal ``None`` in the AST and no abstraction can disguise it,
+  so there are no false negatives for that pattern.
+* The blocking-call rules are a **heuristic**. They match a denylist of names,
+  which can only find what someone thought to list. A constructor, a property,
+  a ``__getitem__`` or a new dependency can reach the same syscall and match
+  nothing — ``LeRobotDataset(repo_id)`` resolving against the Hub inside an
+  async handler went undetected until someone looked by hand.
+
+A clean run therefore means "none of the shapes below are present", never "this
+code cannot block". Real coverage needs a runtime detector that measures the
+symptom instead of enumerating causes (asyncio's ``slow_callback_duration``, a
+loop-drift watchdog, the e2e suite run under asyncio debug) — see the [High]
+entry in ``src/lerobot/gui/TODO.md``.
+
 The three rules this enforces:
 
 1. **No blocking call directly inside an ``async def``.** Offload it.
@@ -272,6 +289,8 @@ def _write_baseline(hits: list[Hit]) -> None:
         counts[(h.path, h.kind)] = counts.get((h.path, h.kind), 0) + 1
     lines = [
         "# Accepted event-loop blocking, per (file, kind). Regenerate with",
+        "#   NOTE: `shared-pool` counts are sound; `blocking-call` and",
+        "#   `blocking-via-helper` come from a name denylist and undercount.",
         "#   python scripts/lint/no_blocking_in_async.py --update-baseline",
         "# These numbers should only ever go DOWN.",
     ]
