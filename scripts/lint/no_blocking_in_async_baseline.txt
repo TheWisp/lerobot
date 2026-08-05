@@ -3,6 +3,8 @@
 # These numbers should only ever go DOWN.
 src/lerobot/gui/api/_edits_core.py shared-pool 1
 src/lerobot/gui/api/bug_reports.py blocking-via-helper 1
+src/lerobot/gui/api/datasets.py blocking-call 3
+src/lerobot/gui/api/datasets.py blocking-via-helper 1
 src/lerobot/gui/api/datasets.py shared-pool 9
 src/lerobot/gui/api/models.py shared-pool 3
 src/lerobot/gui/api/overlays.py blocking-via-helper 2
@@ -10,5 +12,4 @@ src/lerobot/gui/api/overlays.py shared-pool 2
 src/lerobot/gui/api/playback.py shared-pool 1
 src/lerobot/gui/api/robot.py shared-pool 13
 src/lerobot/gui/api/run.py shared-pool 2
-src/lerobot/gui/api/training.py blocking-via-helper 1
 src/lerobot/gui/server.py shared-pool 1

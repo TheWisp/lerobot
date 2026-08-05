@@ -78,6 +78,12 @@ BLOCKING_CALLS: dict[str, str] = {
     "dataset_info": "route through the probe helper (cached, single-flight, bounded)",
     "list_repo_files": "route through the probe helper (cached, single-flight, bounded)",
     "time.sleep": "await asyncio.sleep",
+    # Not a call that looks like I/O, which is exactly why it was missed: the
+    # constructor resolves a repo, and without root/local_files_only it reaches
+    # the Hub. The most dangerous remaining case was invisible to a checker that
+    # only knew requests/subprocess/whoami by name.
+    "LeRobotDataset": "construct it in a named executor; a remote repo_id reaches the Hub",
+    "LeRobotDatasetMetadata": "construct it in a named executor; a remote repo_id reaches the Hub",
 }
 
 SHARED_POOL_HINT = (
