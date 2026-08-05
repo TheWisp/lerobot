@@ -231,7 +231,10 @@ def check_file(path: Path) -> list[Hit]:
     except SyntaxError:
         return []  # ruff owns syntax; do not double-report
 
-    rel = str(path.relative_to(REPO_ROOT)) if path.is_absolute() else str(path)
+    try:
+        rel = str(path.relative_to(REPO_ROOT)) if path.is_absolute() else str(path)
+    except ValueError:
+        rel = str(path)  # outside the repo (a test tmpdir, a sibling checkout)
     visitor = _Visitor(rel, source.splitlines(), _blocking_sync_helpers(tree))
     visitor.visit(tree)
     return visitor.hits
