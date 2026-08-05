@@ -336,8 +336,16 @@ def main() -> None:
     parser.add_argument(
         "--background-treatment",
         default=None,
-        help='Data-editing background treatment JSON {"key","params"} — its presence renders the '
-        "per-region WYSIWYG composite + detection chrome instead of debug contours",
+        help='Background treatment JSON {"key","params"} for the region behind every object',
+    )
+    parser.add_argument(
+        "--multi-instance",
+        default=None,
+        choices=("0", "1"),
+        help="1 = segment EVERY instance of each concept (both arms); 0 = the single largest. "
+        "Seeded here rather than left to the control channel because a control push is a "
+        "no-op until the worker's buffer exists, so the first inferences would use the "
+        "adapter default and silently disagree with the panel.",
     )
     parser.add_argument("--style", default=None, help="Initial render style (policy_saliency)")
     parser.add_argument(
@@ -411,6 +419,8 @@ def main() -> None:
         init_control["style"] = args.style
     if args.smooth is not None:
         init_control["smooth"] = args.smooth
+    if args.multi_instance is not None:
+        init_control["multi_instance"] = args.multi_instance == "1"
     if init_control:
         adapter.set_control(init_control)
     logger.info("model '%s' ready", args.model)

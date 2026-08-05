@@ -2052,6 +2052,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 /* Data overlay: "segment all instances" checkbox (both arms vs largest). */
 .overlays-check { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; color: #cce; font-size: 12px; cursor: pointer; }
 .overlays-check input { accent-color: #4fc3f7; }
+/* Segmented single-select for a choice between NAMED alternatives — same grammar as
+   .overlays-treat, widened for text. Used where a checkbox would hide the meaning of
+   "off": unchecking "segment all instances" does not disable a feature, it selects a
+   different behaviour ("largest only"), which only a tooltip used to reveal. */
+.overlays-seg { display: inline-flex; border: 1px solid #0f3460; border-radius: 4px; overflow: hidden; }
+.overlays-seg-btn { height: 22px; padding: 0 10px; background: #0f1c2e; border: none;
+    border-right: 1px solid #0f3460; color: #889; font-size: 11.5px; cursor: pointer; }
+.overlays-seg-btn:last-child { border-right: none; }
+.overlays-seg-btn:hover { background: #15324a; }
+.overlays-seg-btn.sel { background: #15324a; color: #4fc3f7; }
 
 /* Processing tray: offset left of Transfers so both popovers can be open. */
 #proc-popover { right: 376px; width: 360px; }

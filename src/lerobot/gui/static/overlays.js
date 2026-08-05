@@ -155,7 +155,12 @@
         // Data tab: background defaults Random -> the GreenAug recipe is zero-click.
         // Run tab: everything defaults None -> pure observability (chrome only).
         let backgroundTreatment = mode === 'data' ? { key: 'random', params: {} } : { key: 'none', params: {} };
-        let multiInstance = true;               // data mode: segment ALL instances of each object (both arms) vs largest
+        // Segment ALL instances of each object (both arms) vs the single largest. Same control
+        // on both tabs; the DEFAULT differs on purpose. Data edits pixels, and a treatment that
+        // protects only one of two arms silently corrupts the written dataset, so it starts All.
+        // The run tab is a live debug view where every extra masklet costs frame rate, so it
+        // starts Largest — visible and one click away, not hidden.
+        let multiInstance = mode === 'data';
         // SAM inference resolution (a LOAD-TIME knob: changing it respawns the worker; the
         // batch job inherits it so preview == commit). Default to the backend's default preset.
         let resolution = (RESOLUTIONS.find((r) => /default/i.test(r.label || '')) || RESOLUTIONS[0] || { value: null }).value;
@@ -250,8 +255,11 @@
                     <div class="overlays-hint">${hint}</div>
                     <div class="overlays-objrows"></div>
                     <button class="overlays-add-obj">+ Add object</button>
-                    ${mode === 'data' ? `<label class="overlays-check" title="On: keep every instance of each object (e.g. both robot arms). Off: keep only the single largest.">
-                        <input type="checkbox" class="overlays-multi"${multiInstance ? ' checked' : ''}> Segment all instances (e.g. both arms)</label>` : ''}
+                    <label class="overlays-label" title="All: keep every instance of each object (e.g. both robot arms). Largest: keep only the single biggest match.">instances</label>
+                    <span class="overlays-seg overlays-multi">
+                        <button class="overlays-seg-btn${multiInstance ? ' sel' : ''}" data-multi="1">All</button>
+                        <button class="overlays-seg-btn${multiInstance ? '' : ' sel'}" data-multi="0">Largest</button>
+                    </span>
                     ${RESOLUTIONS.length ? `<label class="overlays-label" title="SAM inference resolution — lower is faster; Balanced measured equal-or-better masks than Full at ~1.8× the speed. Changing it reloads the model.">Quality</label>
                     <select class="overlays-select overlays-res">${RESOLUTIONS.map((r) => `<option value="${r.value}"${r.value === resolution ? ' selected' : ''}>${esc(r.label)}</option>`).join('')}</select>` : ''}
                     <label class="overlays-label">cameras</label>
@@ -260,8 +268,19 @@
                 els.modelBody.querySelector('.overlays-add-obj').addEventListener('click', addObject);
                 const procBtn = els.modelBody.querySelector('.overlays-process');
                 if (procBtn) procBtn.addEventListener('click', openProcess);
-                const multiCb = els.modelBody.querySelector('.overlays-multi');
-                if (multiCb) multiCb.addEventListener('change', () => { multiInstance = multiCb.checked; applyInstant(); });
+                // Repaint the selection IN PLACE rather than re-rendering the body: a
+                // re-render would blow away a half-typed object name (the same reason the
+                // tint picker updates in place).
+                els.modelBody.querySelectorAll('.overlays-multi .overlays-seg-btn').forEach((b) => {
+                    b.addEventListener('click', () => {
+                        const want = b.dataset.multi === '1';
+                        if (want === multiInstance) return;
+                        multiInstance = want;
+                        els.modelBody.querySelectorAll('.overlays-multi .overlays-seg-btn').forEach((o) =>
+                            o.classList.toggle('sel', (o.dataset.multi === '1') === multiInstance));
+                        applyInstant();
+                    });
+                });
                 const resSel = els.modelBody.querySelector('.overlays-res');
                 if (resSel) resSel.addEventListener('change', () => {
                     resolution = Number(resSel.value) || null;
@@ -618,7 +637,7 @@
                 started = true;
                 fetch('/api/overlays/live/start', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: current, objects: payloadObjects(), background_treatment: backgroundTreatment, cameras: camsArg(), style: ctl.style, smooth: ctl.smooth, method: ctl.method, resolution }),
+                    body: JSON.stringify({ model: current, objects: payloadObjects(), background_treatment: backgroundTreatment, cameras: camsArg(), style: ctl.style, smooth: ctl.smooth, method: ctl.method, resolution, multi_instance: multiInstance }),
                 }).then(async (r) => {
                     if (r.status === 409) {
                         // The aux-GPU slot is held by another activity (a data client, or a
@@ -635,7 +654,7 @@
             } else {
                 fetch('/api/overlays/live/control', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ objects: payloadObjects(), background_treatment: backgroundTreatment, style: ctl.style, smooth: ctl.smooth, method: ctl.method }),
+                    body: JSON.stringify({ objects: payloadObjects(), background_treatment: backgroundTreatment, style: ctl.style, smooth: ctl.smooth, method: ctl.method, multi_instance: multiInstance }),
                 }).catch(() => {});
             }
         }

@@ -670,6 +670,56 @@ def test_spawn_sweeps_stale_segments_before_starting(overlay_client, monkeypatch
     assert order == ["sweep", "spawn"]
 
 
+def _spawn_argv(monkeypatch, **kwargs) -> list[str]:
+    """Run _spawn_worker with the subprocess stubbed out and return the argv it built."""
+    import asyncio as _asyncio
+
+    from lerobot.overlays import overlay_ipc
+
+    monkeypatch.setattr(overlay_ipc, "unlink_stale_segments", lambda root="/dev/shm": 0)
+    captured: list[str] = []
+
+    class _Proc:
+        returncode = None
+        pid = 1
+
+    async def _fake_exec(*args, **kwargs):
+        captured.extend(args)
+        return _Proc()
+
+    monkeypatch.setattr(_asyncio, "create_subprocess_exec", _fake_exec)
+    overlays._machines.clear()
+    overlays._live_proc = None
+    overlays._live_model = None
+    _asyncio.run(overlays._spawn_worker("sam3_track", **kwargs))
+    return captured
+
+
+@pytest.mark.parametrize("multi,expected", [(True, "--multi-instance=1"), (False, "--multi-instance=0")])
+def test_spawn_seeds_the_instance_policy_on_the_command_line(overlay_client, monkeypatch, multi, expected):
+    """The instance policy must be SEEDED at spawn, not left to the control channel: a
+    control push is a no-op until the worker's buffer exists. The data tab got away with
+    it because its config is re-pushed on every status poll; the run tab has no re-push,
+    so an unseeded value would never arrive and the worker would silently disagree with
+    the panel about whether both arms are segmented."""
+    assert expected in _spawn_argv(monkeypatch, multi_instance=multi)
+
+
+def test_spawn_omits_the_instance_flag_when_unset(overlay_client, monkeypatch):
+    """None means "say nothing" so the adapter default stands — callers that don't care
+    must not silently force a policy."""
+    assert not [a for a in _spawn_argv(monkeypatch) if str(a).startswith("--multi-instance")]
+
+
+def test_live_start_request_carries_the_instance_policy():
+    """Parity gap this closes: the data tab had multi_instance and the run tab did not, so
+    the same objects at the same resolution segmented both arms on one tab and one arm on
+    the other, with nothing in the UI to explain it."""
+    assert "multi_instance" in overlays.LiveStartRequest.model_fields
+    assert overlays.LiveStartRequest(model="sam3_track").multi_instance is False
+    assert overlays.ConfigureRequest(dataset_id="d", model="sam3_track").multi_instance is True
+
+
 def _mk_proc(rc):
     class _P:
         returncode = rc

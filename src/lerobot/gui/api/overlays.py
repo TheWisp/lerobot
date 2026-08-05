@@ -185,9 +185,9 @@ class ConfigureRequest(BaseModel):
     model: str
     objects: list[dict] | None = None  # [{name, sign:'+'/'-', treatment:{key,params}}]
     cameras: list[str] | None = None  # active subset — worker infers + we publish only these; None = all
-    # Per-region background treatment ({key, params}). Its presence puts the worker in
-    # WYSIWYG mode: it composites each region's treatment + draws the detection chrome
-    # (the run-tab debug overlay omits it and draws contours instead).
+    # Per-region background treatment ({key, params}) for the region behind every object.
+    # It no longer selects a render mode: the worker composites regions + draws detection
+    # chrome for ANY segmenter, on both tabs (it branches on the adapter type, not on this).
     background_treatment: dict | None = None
     # Segment ALL instances of each object (both arms) vs the single largest.
     multi_instance: bool = True
@@ -323,6 +323,7 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
             objects=req.objects,
             background_treatment=req.background_treatment or {"key": "random", "params": {}},
             resolution=req.resolution,
+            multi_instance=req.multi_instance,
         )
     # Narrow the worker to the panel's selected cameras so disabling one actually cuts its work:
     # publish only those + filter inference to them (None/absent = keep the default = all cameras).
@@ -759,6 +760,11 @@ class LiveStartRequest(BaseModel):
     smooth: float | None = None  # policy_saliency smoothing sigma (0 = raw 64x64)
     method: str | None = None  # policy_saliency source: "gradient" | "rollout" (read by the policy)
     resolution: int | None = None  # SAM inference resolution preset (load-time; None = adapter default)
+    # Segment ALL instances of each object (both arms) vs the single largest — the same
+    # control the data tab has. Defaults FALSE here, where the tab is a live debug view and
+    # every extra masklet costs frame rate; the data tab defaults True because a treatment
+    # that protects only one of two arms silently corrupts the written dataset.
+    multi_instance: bool = False
 
 
 class LiveDiagRequest(BaseModel):
@@ -783,6 +789,7 @@ async def _spawn_worker(
     smooth=None,
     method=None,
     resolution=None,
+    multi_instance=None,
 ) -> None:
     """Spawn (or push control to) the single overlay worker for ``model``. Caller MUST hold
     ``_live_lock``. The worker is identical for live + data — it reads the obs stream; only the
@@ -803,10 +810,11 @@ async def _spawn_worker(
                 {
                     "config": {
                         "objects": objects or [],
-                        "background_treatment": background_treatment,  # data tab: WYSIWYG composite mode
+                        "background_treatment": background_treatment,
                         "style": style,
                         "smooth": smooth,
                         "method": method,  # read by the POLICY (gradient|rollout), not the worker
+                        **({} if multi_instance is None else {"multi_instance": multi_instance}),
                     }
                 }
             )
@@ -831,9 +839,15 @@ async def _spawn_worker(
         args.append(f"--objects={json.dumps(objects)}")
     # Seed the background treatment at spawn (like objects) — a control-channel push
     # is a no-op until the worker's buffer exists, so the FIRST inference would
-    # otherwise miss it. Its presence switches the worker to WYSIWYG composite mode.
+    # otherwise miss it.
     if background_treatment is not None:
         args.append(f"--background-treatment={json.dumps(background_treatment)}")
+    # Same reason: without seeding, the worker's first inferences use the adapter's own
+    # default instead of the panel's instance policy. The data tab happened to converge
+    # because its config is re-pushed on every status poll; the run tab has no such
+    # re-push, so an unseeded value would simply never arrive.
+    if multi_instance is not None:
+        args.append(f"--multi-instance={'1' if multi_instance else '0'}")
     if style:
         args.append(f"--style={style}")
     if method:
@@ -891,6 +905,7 @@ async def live_start(req: LiveStartRequest) -> dict:
             smooth=req.smooth,
             method=req.method,
             resolution=req.resolution,
+            multi_instance=req.multi_instance,
         )
     return {"ok": True, "state": m.state.value}
 
