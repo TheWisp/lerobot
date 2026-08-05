@@ -1,6 +1,6 @@
 ---
 name: verifying-changes
-description: How to know a change actually works in this repository — which tests are worth writing, why green suites still ship broken products, and how to verify by driving the GUI rather than reasoning about it. Use when writing tests for a fix, auditing an upstream merge, or deciding whether a change is proven.
+description: How to know a change actually works in this repository — which tests are worth writing, why green suites still ship broken products, and how to verify by driving the GUI rather than reasoning about it. Use when writing tests for a fix, auditing an upstream merge, deciding whether a change is proven, or refactoring — moving, replacing or reimplementing existing behaviour, where the claim is that the new code is equivalent to the old.
 ---
 
 # Verifying changes
@@ -69,6 +69,33 @@ Two habits, both cheap:
   bogus flag and asserts the parse rejects it. Without that, a parser that
   silently tolerated extras would make every other assertion in the file vacuous
   — which is precisely how the original break went unnoticed.
+
+## Prove the refactor equivalent
+
+Moving, replacing or reimplementing behaviour? **Write a test that enumerates
+both versions over real inputs and asserts they match.** The whole set —
+parameter names, emitted flags, config keys — not a spot check of a few cases.
+
+Build the real object and read it. Do not reason about what it should contain;
+that is the step that fails.
+
+```python
+# Write this. When the old code is gone, reconstruct its rule as the oracle:
+legacy = {n for n, _ in model.named_parameters()          # what the old hack froze
+          if not any(k in n for k in LEGACY_ALLOWLIST)}
+now = {n for n, p in model.named_parameters() if not p.requires_grad}  # the new flag
+assert now == legacy
+```
+
+That test caught a config flag that claimed to replace a hack and left one
+parameter trainable. Reading the code had said equivalent.
+
+**Ask what your number would read if you had not made the change.** A CSS fix
+compared element-box centres: 0.0px before _and_ after. If the answer is "the
+same", measure something else.
+
+**Commit the check.** A lint proven once by hand, never committed, shipped with
+a crash nobody caught.
 
 ## Pin the invariant, not the enumeration
 
