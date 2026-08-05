@@ -444,6 +444,15 @@ class PaliGemmaWithExpertModel(
             self.paligemma.model.language_model.eval()
             for param in self.paligemma.model.language_model.parameters():
                 param.requires_grad = False
+            # lm_head is a sibling of `model`, not inside language_model, so the
+            # walk above misses it. It is the language modelling head and belongs
+            # to the tower; pi05 never computes logits, so it takes no gradient
+            # either way, but leaving it trainable would silently diverge from
+            # the train-script behaviour this flag replaces.
+            lm_head = getattr(self.paligemma, "lm_head", None)
+            if lm_head is not None:
+                for param in lm_head.parameters():
+                    param.requires_grad = False
 
         assert any(p.requires_grad for p in self.parameters()), (
             "every parameter is frozen -- this configuration would burn GPU hours "

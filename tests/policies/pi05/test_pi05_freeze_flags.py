@@ -96,3 +96,124 @@ def test_the_flags_compose(flags, expected):
 
     for name, value in flags.items():
         assert getattr(cfg, name) is value, f"{name} did not survive ({expected})"
+
+
+# --- Measured against a real module tree -------------------------------------
+#
+# Everything above tests the config surface. That cannot catch the thing that
+# actually matters -- whether parameters are frozen -- and it did not: the first
+# version of this flag left `paligemma.lm_head` trainable where the train-script
+# hack it replaced had frozen it. Only enumerating requires_grad off a
+# constructed model found that.
+#
+# Dimensions are shrunk so this builds on CPU in seconds. Parameter *names* and
+# requires_grad flags are what is under test, and neither depends on width.
+
+pytest.importorskip("transformers")
+
+# The train-script allowlist this flag replaced: anything not matching was frozen.
+LEGACY_ALLOWLIST = (
+    "gemma_expert",
+    "vision_tower",
+    "multi_modal",
+    "action_in_proj",
+    "action_out_proj",
+    "time_mlp_in",
+    "time_mlp_out",
+)
+
+
+class _TinyDims:
+    width, depth, num_heads, num_kv_heads, head_dim, mlp_dim = 32, 2, 2, 1, 16, 64
+
+
+def _build(**flags):
+    import torch
+
+    from lerobot.policies.pi05.modeling_pi05 import PaliGemmaWithExpertModel
+
+    torch.manual_seed(0)
+    return PaliGemmaWithExpertModel(
+        vlm_config=_TinyDims(),
+        action_expert_config=_TinyDims(),
+        precision="float32",
+        **flags,
+    )
+
+
+def _frozen(model) -> set[str]:
+    return {n for n, p in model.named_parameters() if not p.requires_grad}
+
+
+def _trainable(model) -> set[str]:
+    return {n for n, p in model.named_parameters() if p.requires_grad}
+
+
+class TestTheLanguageTowerIsActuallyFrozen:
+    def test_language_parameters_stop_requiring_grad(self):
+        model = _build(freeze_language_tower=True)
+
+        language = {n for n in _frozen(model) if "language_model" in n}
+
+        assert language, "no language parameters were frozen at all"
+        assert all("language_model" not in n for n in _trainable(model) if "lm_head" not in n)
+
+    def test_vision_and_expert_keep_training(self):
+        """The whole point of a separate flag: cameras must still adapt."""
+        model = _build(freeze_language_tower=True)
+        trainable = _trainable(model)
+
+        assert any("vision_tower" in n for n in trainable), "vision tower must stay trainable"
+        assert any("gemma_expert" in n for n in trainable), "action expert must stay trainable"
+
+    def test_nothing_is_frozen_when_the_flag_is_off(self):
+        model = _build(freeze_language_tower=False)
+
+        assert not _frozen(model)
+
+    def test_it_matches_what_the_train_script_hack_froze(self):
+        """Equivalence with the replaced behaviour, enumerated rather than argued.
+
+        The hack set requires_grad from a substring allowlist; this asserts the
+        flag freezes exactly the same parameter set -- including
+        paligemma.lm_head, which sits beside `model` rather than inside
+        language_model and which the first version of this flag missed.
+        """
+        model = _build(freeze_language_tower=True)
+
+        legacy_frozen = {n for n, _ in model.named_parameters() if not any(k in n for k in LEGACY_ALLOWLIST)}
+
+        assert _frozen(model) == legacy_frozen
+
+    def test_the_language_head_is_frozen_with_the_tower(self):
+        """Regression guard for the specific miss."""
+        model = _build(freeze_language_tower=True)
+
+        assert any("lm_head" in n for n in _frozen(model))
+
+    def test_no_flag_combination_can_train_nothing(self):
+        """All three at once still leaves the action expert trainable.
+
+        Asserting this rather than the opposite because writing the opposite
+        test is how I found out: `train_expert_only` freezes PaliGemma but is
+        *named* for what survives, so the expert is never frozen by any flag.
+        The guard inside _set_requires_grad is therefore a backstop against a
+        future flag, not something these three can trigger — and this pins the
+        property that makes it unreachable.
+        """
+        model = _build(freeze_language_tower=True, train_expert_only=True, freeze_vision_encoder=True)
+
+        trainable = _trainable(model)
+
+        assert trainable, "some parameter must remain trainable"
+        assert all("gemma_expert" in n or "proj" in n or "time_mlp" in n for n in trainable), (
+            f"unexpected survivors: {sorted(trainable)[:5]}"
+        )
+
+    def test_vision_and_language_freeze_composes(self):
+        model = _build(freeze_language_tower=True, freeze_vision_encoder=True)
+        frozen = _frozen(model)
+
+        assert any("language_model" in n for n in frozen)
+        assert any("vision_tower" in n for n in frozen)
+        assert any("gemma_expert" in n for n in _trainable(model)), "the expert must survive"
