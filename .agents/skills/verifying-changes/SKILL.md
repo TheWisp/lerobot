@@ -70,6 +70,47 @@ Two habits, both cheap:
   silently tolerated extras would make every other assertion in the file vacuous
   — which is precisely how the original break went unnoticed.
 
+## A refactor owes you an equivalence test
+
+Moving behaviour is where "obviously the same" goes wrong, because nothing
+fails — the new code runs, the tests pass, and the difference surfaces later as
+something unrelated.
+
+A config flag replaced a train-script hack that had frozen a model's language
+tower. The flag froze `paligemma.model.language_model`; the hack had frozen
+everything not matching a substring allowlist. Equivalent, obviously. It was
+not: `lm_head` sits beside `model` rather than inside `language_model`, so the
+module walk missed it and the flag left it trainable. Reading the code did not
+find that. Building the model and diffing the two frozen sets did:
+
+```python
+legacy = {n for n, _ in model.named_parameters()
+          if not any(k in n for k in LEGACY_ALLOWLIST)}
+assert {n for n, p in model.named_parameters() if not p.requires_grad} == legacy
+```
+
+So: **enumerate both behaviours over real inputs and assert set equality.** Not
+a spot check of a few cases — parameter names, emitted CLI flags, config keys,
+frozen sets, whatever the unit of the change is. Build the real object and read
+it, rather than reasoning about what it should contain. If the old path is
+already gone, reconstruct its rule in the test as the oracle, as the allowlist
+is reconstructed above.
+
+Two failure modes worth naming, both from the same day.
+
+**Measuring the wrong quantity passes trivially.** A CSS fix was "verified" by
+comparing the vertical centres of element boxes — which agreed to 0.0px both
+before and after, because a stretched span still has a centred box while its
+text rides at the top. That check would have certified a no-op. Ask what the
+number would read if the change had not been made; if the answer is "the same",
+measure something else.
+
+**An uncommitted check protects nothing.** A lint hook was proven once by hand —
+inject a violation, watch the exit code — and that proof was never committed. It
+then shipped with a crash on any absolute path outside the repository, found
+only when someone finally wrote the test. If the verification is not in the
+repo, the next change breaks it silently.
+
 ## Pin the invariant, not the enumeration
 
 `lerobot-replay` didn't import `virtual_bi_so107`, so it rejected the fork's own
