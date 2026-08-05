@@ -202,12 +202,16 @@ def _label_font(size: int):
     return f
 
 
-def _draw_labels(rgb: np.ndarray, labels: list, accent) -> np.ndarray:
+def _draw_labels(rgb: np.ndarray, labels: list, accent) -> tuple[np.ndarray, list]:
     """Draw each ``(text, (x, y_top))`` as an antialiased label pill sitting just above
     the object's top edge. Font size scales with the frame so it stays readable after the
-    tile downscales it. Returns a new RGB array."""
+    tile downscales it.
+
+    Post: ``(new RGB array, [(x0, y0, x1, y1), ...])`` — the pill rects actually drawn,
+    so the caller can mark them opaque without having to infer chrome from a pixel diff.
+    """
     if not labels:
-        return rgb
+        return rgb, []
     from PIL import Image, ImageDraw
 
     size = max(14, int(rgb.shape[0] * 0.032))  # ~23 px at 720p
@@ -216,20 +220,28 @@ def _draw_labels(rgb: np.ndarray, labels: list, accent) -> np.ndarray:
     pil = Image.fromarray(rgb)
     d = ImageDraw.Draw(pil)
     fill = tuple(int(c) for c in accent)
+    rects = []
     for text, (x, y_top) in labels:
         ty = max(pad, int(y_top) - size - 2 * pad)  # pill above the object
         tx = int(x)
         x0, y0, x1, y1 = d.textbbox((tx, ty), text, font=font)
-        d.rectangle([x0 - pad, y0 - pad, x1 + pad, y1 + pad], fill=(18, 22, 28))
+        box = (x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+        d.rectangle(list(box), fill=(18, 22, 28))
         d.text((tx, ty), text, font=font, fill=fill)
-    return np.asarray(pil)
+        rects.append(box)
+    return np.asarray(pil), rects
 
 
-def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict) -> np.ndarray:
-    """Return a COPY of ``rgb`` with a soft glow outline + a tiny label on each detected
-    object, in that concept's STABLE auto-assigned color (never user-chosen — the color
-    carries identity only, so it cannot be mistaken for a committed treatment).
-    Display-only chrome — NEVER committed. RGB in, RGB out."""
+def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict) -> tuple[np.ndarray, np.ndarray]:
+    """Draw a soft glow outline + a tiny label on each detected object, in that concept's
+    STABLE auto-assigned color (never user-chosen — the color carries identity only, so it
+    cannot be mistaken for a committed treatment). Display-only chrome — NEVER committed.
+
+    Pre: ``rgb`` is HxWx3 uint8. Post: ``(new RGB array, HxW bool mask)`` where the mask
+    is the chrome's own footprint — every pixel it drew on, reported rather than inferred.
+    A caller that instead diffed output against input would silently miss chrome drawn in
+    the colour already underneath it, punching hairline holes in the overlay's alpha.
+    """
     import cv2
 
     out = rgb.copy()
@@ -238,6 +250,7 @@ def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict) -> np.ndarray:
     outline_w = max(1, h // 360)  # scale line weight with resolution so it's visible
     glow_w = max(4, h // 110)
     concepts = list(masks_by_name)
+    drawn = np.zeros(rgb.shape[:2], dtype=np.uint8)
     per_obj: list[tuple[str, tuple, list]] = []  # (name, color, contours)
     for name, mask in masks_by_name.items():
         m = mask.astype(np.uint8) if mask is not None else None
@@ -248,14 +261,63 @@ def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict) -> np.ndarray:
             continue
         per_obj.append((name, _concept_color(name, concepts), contours))
         cv2.drawContours(glow, contours, -1, _concept_color(name, concepts), thickness=glow_w)
-    if per_obj:
-        glow = cv2.GaussianBlur(glow, (0, 0), max(2, glow_w // 2))
-        out = cv2.addWeighted(out, 1.0, glow, 0.75, 0)
-        for _name, color, contours in per_obj:  # crisp outline over the glow
-            cv2.drawContours(out, contours, -1, color, thickness=outline_w, lineType=cv2.LINE_AA)
-        for name, color, contours in per_obj:
-            x, y, _bw, _bh = cv2.boundingRect(max(contours, key=cv2.contourArea))
-            out = _draw_labels(out, [(name, (x, y))], color)
+    if not per_obj:
+        return out, drawn.astype(bool)
+    glow = cv2.GaussianBlur(glow, (0, 0), max(2, glow_w // 2))
+    out = cv2.addWeighted(out, 1.0, glow, 0.75, 0)
+    # The blurred glow's own footprint: wherever it carries any intensity it tinted the
+    # frame, so that is exactly the region the overlay must keep opaque.
+    drawn |= glow.any(axis=2).astype(np.uint8)
+    for _name, color, contours in per_obj:  # crisp outline over the glow
+        cv2.drawContours(out, contours, -1, color, thickness=outline_w, lineType=cv2.LINE_AA)
+        cv2.drawContours(drawn, contours, -1, 1, thickness=outline_w, lineType=cv2.LINE_AA)
+    for name, color, contours in per_obj:
+        x, y, _bw, _bh = cv2.boundingRect(max(contours, key=cv2.contourArea))
+        out, rects = _draw_labels(out, [(name, (x, y))], color)
+        for x0, y0, x1, y1 in rects:
+            drawn[max(0, y0) : max(0, y1) + 1, max(0, x0) : max(0, x1) + 1] = 1
+    return out, drawn.astype(bool)
+
+
+def _apply_treatments(cfg: dict, bg_treatment, obj_treatments) -> tuple:
+    """Fold a control update's treatments into the current ones.
+
+    Pre: ``cfg`` is the step's opaque config dict. Post: ``(bg_treatment, obj_treatments,
+    changed)``, where an ABSENT key leaves that treatment untouched — the panel sends
+    partial updates, so treating "absent" as "cleared" would silently wipe a treatment
+    the user set whenever an unrelated control changed.
+    """
+    changed = False
+    if "background_treatment" in cfg and cfg["background_treatment"] != bg_treatment:
+        bg_treatment = cfg["background_treatment"]
+        changed = True
+    if "objects" in cfg:
+        new_objt = _obj_treatments(cfg["objects"])
+        if new_objt != obj_treatments:
+            obj_treatments = new_objt
+            changed = True
+    return bg_treatment, obj_treatments, changed
+
+
+def _diff_alpha(regions: list, chrome_mask: np.ndarray | None, h: int, w: int) -> np.ndarray:
+    """Alpha plane for the TRANSPARENT-DIFF overlay: opaque only where a treatment painted
+    or the detection chrome drew, transparent everywhere else so the live feed shows
+    through at full rate and the PNG carries only changed pixels.
+
+    Pre: ``regions`` is the ``(feathered_alpha, treatment)`` list ``build_and_sample_regions``
+    returned, each alpha HxW float in [0, 1]; ``chrome_mask`` is a HxW bool (or None).
+    Post: HxW uint8 in [0, 255]; 255 wherever chrome drew.
+    """
+    alpha = np.zeros((h, w), dtype=np.float32)
+    for ralpha, treatment in regions:
+        if ((treatment or {}).get("key") or "none") != "none":
+            np.maximum(alpha, ralpha, out=alpha)
+    # Round rather than truncate: a feathered alpha reaches 0.9999998 at a large region's
+    # centre, and truncation turned that fully-treated pixel into 254 — leaking a sliver
+    # of the untreated frame under every committed-looking pixel.
+    out = (alpha * 255.0 + 0.5).astype(np.uint8)
+    if chrome_mask is not None:
+        out[chrome_mask] = 255
     return out
 
 
@@ -434,17 +496,11 @@ def main() -> None:
                 cfg = control.get("config", control)
                 adapter.set_control(cfg)
                 if isinstance(cfg, dict):
+                    bg_treatment, obj_treatments, changed = _apply_treatments(
+                        cfg, bg_treatment, obj_treatments
+                    )
                     # A treatment change (bg or per-object) must re-render the parked frame,
                     # so clear last_seq to let the inference gate fire without a scrub.
-                    changed = False
-                    if "background_treatment" in cfg and cfg["background_treatment"] != bg_treatment:
-                        bg_treatment = cfg["background_treatment"]
-                        changed = True
-                    if "objects" in cfg:
-                        new_objt = _obj_treatments(cfg["objects"])
-                        if new_objt != obj_treatments:
-                            obj_treatments = new_objt
-                            changed = True
                     if changed:
                         last_seq.clear()
             did_infer = False
@@ -484,23 +540,13 @@ def main() -> None:
                             masks_by_name, obj_treatments, bg_treatment, h, w, treat_rng, cache
                         )
                         composed = composite_regions(frgb, regions, sampled)
-                        display = _draw_detection_chrome(composed, masks_by_name)
-                        # TRANSPARENT-DIFF overlay: opaque only where a treatment painted
-                        # (union of treated regions' feathered alphas) or chrome drew
-                        # (pixels the chrome pass changed). Untreated areas stay
-                        # transparent, so the run tab's live feed shows through at full
-                        # rate and the data tab's PNGs shrink to the changed pixels.
+                        display, chrome_px = _draw_detection_chrome(composed, masks_by_name)
                         buf = rgba_bufs.get(cam)
                         if buf is None or buf.shape[:2] != (h, w):
                             buf = np.empty((h, w, 4), dtype=np.uint8)
                             rgba_bufs[cam] = buf
-                        alpha = np.zeros((h, w), dtype=np.float32)
-                        for (ralpha, treatment), _samp in zip(regions, sampled, strict=True):
-                            if ((treatment or {}).get("key") or "none") != "none":
-                                np.maximum(alpha, ralpha, out=alpha)
-                        chrome_px = (display != composed).any(axis=2)
                         buf[..., :3] = display
-                        buf[..., 3] = np.maximum(alpha * 255.0, chrome_px * 255).astype(np.uint8)
+                        buf[..., 3] = _diff_alpha(regions, chrome_px, h, w)
                         rgba = buf
                         compute_ms_sum += (time.perf_counter() - tfx) * 1000.0
                         ti = time.perf_counter()

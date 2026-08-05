@@ -237,26 +237,7 @@ def test_seed_flags_every_object_for_conditioning():
     assert set(track["objs"].values()) == {1, 2}, "both objects must survive the seed"
 
 
-# ---- composite / parse semantics (the +/- carving + control parsing) ----
-
-
-class _FakeCV2:
-    RETR_EXTERNAL = 0
-    CHAIN_APPROX_SIMPLE = 0
-
-    @staticmethod
-    def findContours(*a, **k):  # noqa: N802 — mimics cv2's camelCase API
-        return [], None
-
-    @staticmethod
-    def drawContours(*a, **k):  # noqa: N802
-        return None
-
-
-def _box(h, w, y0, y1, x0, x1):
-    m = np.zeros((h, w), bool)
-    m[y0:y1, x0:x1] = True
-    return m
+# ---- parse semantics (control parsing) ----
 
 
 def test_parse_objects_names_signs():
@@ -275,6 +256,92 @@ def test_concept_color_is_stable_by_position():
     assert adapters._concept_color("x", ["x"]) == adapters._CONCEPT_PALETTE[0]
     assert adapters._concept_color("y", ["x", "y"]) == adapters._CONCEPT_PALETTE[1]
     assert adapters._concept_color("stranger", ["x"]) == adapters._color_for("stranger")
+
+
+# ---- control updates are PARTIAL: an absent key must not clear state ----
+
+
+def test_absent_treatment_keys_keep_the_current_treatments():
+    """The panel pushes partial control updates, so "absent" must mean "unchanged". This
+    invariant used to be pinned for the retired background COLOUR (_BG_UNSET); it applies
+    just as much to the treatments that replaced it. If absence read as "cleared", moving
+    an unrelated control would silently wipe the background treatment mid-session."""
+    bg = {"key": "blur", "params": {}}
+    objs = {"ring": {"key": "tint", "params": {"color": [1, 2, 3]}}}
+    new_bg, new_objs, changed = standalone._apply_treatments({"style": "x"}, bg, objs)
+    assert new_bg == bg and new_objs == objs and not changed
+
+
+def test_present_treatment_keys_replace_and_report_the_change():
+    bg = {"key": "blur", "params": {}}
+    new_bg, _objs, changed = standalone._apply_treatments(
+        {"background_treatment": {"key": "none", "params": {}}}, bg, {}
+    )
+    assert new_bg == {"key": "none", "params": {}}, "an explicit None DOES clear it"
+    assert changed, "the caller must re-render the parked frame"
+
+    same_bg, _objs, changed = standalone._apply_treatments({"background_treatment": bg}, bg, {})
+    assert same_bg == bg and not changed, "an identical value is not a change"
+
+
+# ---- the transparent-diff overlay's alpha ----
+
+
+def _region(h, w, y0, y1, x0, x1, value=1.0):
+    a = np.zeros((h, w), dtype=np.float32)
+    a[y0:y1, x0:x1] = value
+    return a
+
+
+def test_diff_alpha_is_transparent_where_nothing_was_treated_or_drawn():
+    """The point of the diff: untreated pixels stay fully transparent so the run tab's
+    live feed shows through instead of being frozen under an opaque copy of itself."""
+    regions = [(_region(8, 8, 0, 8, 0, 8), {"key": "none"})]
+    out = standalone._diff_alpha(regions, None, 8, 8)
+    assert out.shape == (8, 8) and out.dtype == np.uint8
+    assert not out.any(), "a 'none' treatment must not make anything opaque"
+
+
+def test_diff_alpha_unions_treated_regions_and_ignores_untreated_ones():
+    treated = _region(8, 8, 0, 4, 0, 8)
+    untreated = _region(8, 8, 4, 8, 0, 8)
+    out = standalone._diff_alpha([(treated, {"key": "blur"}), (untreated, {"key": "none"})], None, 8, 8)
+    assert (out[0:4] == 255).all(), "the treated region is opaque"
+    assert (out[4:8] == 0).all(), "the untreated region stays transparent"
+
+
+def test_diff_alpha_rounds_full_feather_to_opaque():
+    """Regression: feathered alpha reaches 0.9999998 at a large region's centre, and
+    truncating gave 254 — every committed-looking pixel leaked a sliver of the untreated
+    frame. Same truncation class as the composite_regions bug."""
+    almost = _region(4, 4, 0, 4, 0, 4, value=np.float32(0.9999998))
+    out = standalone._diff_alpha([(almost, {"key": "tint"})], None, 4, 4)
+    assert (out == 255).all(), f"expected fully opaque, got {out.max()}"
+
+
+def test_diff_alpha_marks_chrome_opaque_even_over_untreated_pixels():
+    """Chrome is display-only but must be visible: the run tab defaults every treatment
+    to None, so chrome is the ONLY opaque thing in the overlay."""
+    chrome = np.zeros((8, 8), dtype=bool)
+    chrome[2:4, 2:4] = True
+    out = standalone._diff_alpha([(_region(8, 8, 0, 8, 0, 8), {"key": "none"})], chrome, 8, 8)
+    assert (out[2:4, 2:4] == 255).all()
+    assert out.sum() == 4 * 255, "only the chrome pixels are opaque"
+
+
+def test_draw_detection_chrome_reports_its_own_footprint():
+    """The mask must come from what chrome DREW, not from diffing output against input:
+    a diff silently misses chrome drawn in the colour already underneath it."""
+    pytest.importorskip("cv2")
+    rgb = np.zeros((120, 160, 3), dtype=np.uint8)
+    mask = np.zeros((120, 160), dtype=bool)
+    mask[40:80, 60:100] = True
+    out, drawn = standalone._draw_detection_chrome(rgb, {"ring": mask})
+    assert drawn.shape == (120, 160) and drawn.dtype == bool
+    assert drawn.any(), "chrome drew something, so the footprint cannot be empty"
+    changed = (out != rgb).any(axis=2)
+    assert drawn[changed].all(), "every visibly changed pixel must be inside the footprint"
+    assert not drawn[:20].any(), "chrome must not claim regions far from any object"
 
 
 # --- arbitrary observation-stream camera keys --------------------------------
