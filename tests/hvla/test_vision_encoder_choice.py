@@ -131,34 +131,35 @@ class TestFailuresNameTheirCause:
     """
 
     def test_missing_dependency_names_the_encoder_and_the_extra(self, monkeypatch):
-        import torch
-
         from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 
         def _raise(*_args, **_kwargs):
-            raise ModuleNotFoundError("No module named 'torchmetrics'", name="torchmetrics")
+            raise ModuleNotFoundError("No module named 'transformers'", name="transformers")
 
-        monkeypatch.setattr(torch.hub, "load", _raise)
+        monkeypatch.setattr(vision_encoders, "_load_hf", _raise)
 
         with pytest.raises(ModuleNotFoundError) as excinfo:
             vision_encoders.load_backbone("dinov3_vits16")
 
         message = str(excinfo.value)
         assert "dinov3_vits16" in message, "must say which encoder caused it"
-        assert "torchmetrics" in message
-        assert "--extra dinov3" in message, "must say how to fix it"
+        assert "transformers" in message
+        assert "--extra transformers-dep" in message, "must say how to fix it"
 
-    def test_gated_failure_says_the_licence_is_the_problem(self, monkeypatch):
-        import torch
+    def test_gated_failure_points_at_the_model_page(self, monkeypatch):
+        """The first version said `huggingface-cli login`, which does not help.
 
+        Access is per-model and granted on the model page; being logged in is
+        necessary and not sufficient, as a 403 with a valid token showed.
+        """
         from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 
         def _raise(*_args, **_kwargs):
             raise RuntimeError("403 Client Error: not in the authorized list")
 
-        monkeypatch.setattr(torch.hub, "load", _raise)
+        monkeypatch.setattr(vision_encoders, "_load_hf", _raise)
 
-        with pytest.raises(RuntimeError, match="licence"):
+        with pytest.raises(RuntimeError, match="huggingface.co/facebook/dinov3"):
             vision_encoders.load_backbone("dinov3_vits16")
 
     def test_ungated_failures_are_not_reinterpreted(self, monkeypatch):
@@ -188,3 +189,61 @@ def test_the_dinov3_extra_is_declared():
     needed = {s.requires_extra for s in VISION_ENCODERS.values() if s.requires_extra}
     for extra in needed:
         assert f"{extra}-dep" in extras or extra in extras, f"extra {extra!r} is not declared"
+
+
+class TestTheHFAdapterGivesS1TheInterfaceItExpects:
+    """DINOv3 comes from transformers, which speaks a different dialect.
+
+    S1 calls ``forward_features(x)["x_norm_patchtokens"]``. transformers returns
+    ``last_hidden_state`` with CLS and register tokens still attached, so the
+    adapter must strip exactly the right prefix — getting it wrong feeds S1 a
+    few non-patch tokens that look like patches.
+    """
+
+    def _wrapped(self, num_register_tokens: int, seq_len: int, dim: int = 8):
+        import torch
+
+        from lerobot.policies.hvla.s1.flow_matching.vision_encoders import _HFPatchTokens
+
+        class _Out:
+            def __init__(self, t):
+                self.last_hidden_state = t
+
+        class _Model(torch.nn.Module):
+            def forward(self, pixel_values=None):
+                # Distinct values per token so slicing is observable.
+                return _Out(
+                    torch.arange(seq_len, dtype=torch.float32).reshape(1, seq_len, 1).expand(1, seq_len, dim)
+                )
+
+        return _HFPatchTokens(_Model(), dim, 1 + num_register_tokens)
+
+    def test_it_exposes_forward_features_with_the_expected_key(self):
+        import torch
+
+        out = self._wrapped(num_register_tokens=4, seq_len=201).forward_features(torch.zeros(1, 3, 224, 224))
+
+        assert "x_norm_patchtokens" in out
+
+    def test_cls_and_register_tokens_are_stripped(self):
+        """224px at patch 16 is 196 patches; 201 - (1 CLS + 4 registers) = 196."""
+        import torch
+
+        tokens = self._wrapped(num_register_tokens=4, seq_len=201).forward_features(
+            torch.zeros(1, 3, 224, 224)
+        )
+        patches = tokens["x_norm_patchtokens"]
+
+        assert patches.shape[1] == 196
+        assert patches[0, 0, 0].item() == 5.0, "first patch must be token 5, not token 0"
+
+    def test_the_prefix_follows_the_register_count(self):
+        """DINOv3 sizes differ in register count, so it cannot be a constant."""
+        import torch
+
+        patches = self._wrapped(num_register_tokens=0, seq_len=197).forward_features(
+            torch.zeros(1, 3, 224, 224)
+        )["x_norm_patchtokens"]
+
+        assert patches.shape[1] == 196
+        assert patches[0, 0, 0].item() == 1.0, "only CLS should be stripped"
