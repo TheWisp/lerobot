@@ -848,3 +848,84 @@ def test_data_configure_respawns_on_shape_change_not_dataset_change(overlay_clie
     configure("C")
     assert calls["teardown"] == 1, "a shape change must still respawn"
     assert overlays._data_worker_dims == dims["cur"], "the tracked shape follows the worker"
+
+
+def test_data_cancel_parks_the_worker_for_the_next_configure(overlay_client, monkeypatch):
+    """Cancel fires on every switch to a dataset with no overlay config, so killing the worker
+    there made a plain dataset bounce cost a full SAM3 reload (observed live as "switching
+    dataset unloads and reloads the model" — the shape-keyed configure fix never engaged
+    because the teardown came from the STOP path). Cancel now releases the slot and stops the
+    publisher but PARKS the worker; the next same-shape configure reuses it. /data/free stays
+    the explicit kill."""
+    from types import SimpleNamespace
+
+    calls = {"teardown": 0, "spawn": 0, "stop_pub": 0}
+
+    async def fake_teardown():
+        calls["teardown"] += 1
+
+    async def fake_spawn(model, **kw):
+        calls["spawn"] += 1
+
+    monkeypatch.setattr(overlays, "SLOT", type(overlays.SLOT)())  # isolate the aux-GPU slot singleton
+    monkeypatch.setattr(overlays, "_teardown_current", fake_teardown)
+    monkeypatch.setattr(overlays, "_spawn_worker", fake_spawn)
+    monkeypatch.setattr(overlays, "start_data_publisher", lambda *a, **k: True)
+    monkeypatch.setattr(
+        overlays, "stop_data_publisher", lambda: calls.__setitem__("stop_pub", calls["stop_pub"] + 1)
+    )
+    monkeypatch.setattr(overlays, "_write_data_control", lambda: None)
+    monkeypatch.setattr(overlays, "_live_model", "sam3_track")
+    monkeypatch.setattr(overlays, "_live_resolution", None)
+    monkeypatch.setattr(overlays, "_live_proc", SimpleNamespace(returncode=None, pid=1))
+    monkeypatch.setattr(overlays, "_app_state", SimpleNamespace(datasets={"A": object(), "B": object()}))
+    shape = {"top": (480, 640), "wrist": (480, 640)}
+    monkeypatch.setattr(overlays, "_dataset_camera_dims", lambda ds: dict(shape))
+    monkeypatch.setattr(overlays, "_data_worker_dims", dict(shape))
+
+    r = overlay_client.post("/api/overlays/data/cancel", headers={"X-Overlay-Session": "park-test"})
+    assert r.status_code == 200, r.text
+    assert r.json()["parked"] is True, "an alive worker must be reported parked, not torn down"
+    assert calls["stop_pub"] == 1, "cancel must still stop the obs-stream publisher"
+    assert calls["teardown"] == 0, "cancel must NOT tear the worker down"
+
+    r = overlay_client.post(
+        "/api/overlays/data/configure",
+        json={"dataset_id": "B", "model": "sam3_track"},
+        headers={"X-Overlay-Session": "park-test"},
+    )
+    assert r.status_code == 200, r.text
+    assert calls["teardown"] == 0, "same-shape configure after a park must reuse the warm worker"
+    assert calls["spawn"] == 1  # control push on the live worker, not a process start
+
+
+def test_live_start_evicts_a_data_parked_worker(overlay_client, monkeypatch):
+    """A parked worker is bound to a DATASET's stream shape, and the worker refuses to re-attach
+    across a shape change by design — same-model reuse inside _spawn_worker would hand the run
+    overlay a worker that waits forever on teleop's differently-shaped stream. live_start must
+    evict it (a run-tab worker, _data_worker_dims is None, is still reused as before)."""
+    from types import SimpleNamespace
+
+    calls = {"teardown": 0, "spawn": 0}
+
+    async def fake_teardown():
+        calls["teardown"] += 1
+
+    async def fake_spawn(model, **kw):
+        calls["spawn"] += 1
+
+    monkeypatch.setattr(overlays, "SLOT", type(overlays.SLOT)())  # isolate the aux-GPU slot singleton
+    monkeypatch.setattr(overlays, "_teardown_current", fake_teardown)
+    monkeypatch.setattr(overlays, "_spawn_worker", fake_spawn)
+    monkeypatch.setattr(overlays, "_live_model", "sam3_track")
+    monkeypatch.setattr(overlays, "_live_resolution", None)
+    monkeypatch.setattr(overlays, "_live_proc", SimpleNamespace(returncode=None, pid=1))
+    monkeypatch.setattr(overlays, "_data_worker_dims", {"top": (480, 640)})
+    r = overlay_client.post("/api/overlays/live/start", json={"model": "sam3_track"})
+    assert r.status_code == 200, r.text
+    assert calls["teardown"] == 1, "a data-shaped worker must be evicted before the run overlay"
+
+    monkeypatch.setattr(overlays, "_data_worker_dims", None)
+    r = overlay_client.post("/api/overlays/live/start", json={"model": "sam3_track"})
+    assert r.status_code == 200, r.text
+    assert calls["teardown"] == 1, "a run-tab worker (no data shape) is reused, not evicted"

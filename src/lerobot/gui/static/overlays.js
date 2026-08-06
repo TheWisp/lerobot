@@ -834,6 +834,10 @@
             if (s.state === 'stopping') { setBadge('stopping…', 'loading'); return; }
             if (s.state === 'error') { setBadge('error', 'error'); return; }
             if (s.state === 'active') {
+                // ACTIVE without a publisher = the worker is PARKED (canceled but kept warm so the
+                // next start skips the model load). Saying "live" here would be a lie — nothing is
+                // being overlaid; say what is actually true: off, with the model held in VRAM.
+                if (!s.publishing) { setBadge('off · model warm', 'off'); return; }
                 const parts = [fpsPart(), utilPart()];
                 if (s.vram) parts.push(vramPart());
                 setBadgeParts(parts, s.fps ? 'ok' : 'idle');
