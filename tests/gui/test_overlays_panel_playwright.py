@@ -120,3 +120,50 @@ def test_process_button_enables_when_an_object_is_named(overlays_gui_server):
             )
         finally:
             browser.close()
+
+
+def test_last_row_clears_in_place_instead_of_being_immortal(overlays_gui_server):
+    """The x used to be offered only with 2+ rows, so the panel's only row could
+    never be cleared with one click — inconsistently, since every OTHER row was.
+    Now the x is always there: with several rows it removes, on the last row it
+    clears in place (a text row needs an input to type into)."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.goto(overlays_gui_server, wait_until="networkidle")
+            page.evaluate(
+                "(() => { const p = document.querySelector('#overlays-panel .overlays-picker');"
+                " p.value = 'sam3_track'; p.dispatchEvent(new Event('change', {bubbles: true})); })()"
+            )
+            page.wait_for_selector(NAME_SEL, timeout=5000)
+
+            rm_sel = '#overlays-panel .overlays-obj-rm[data-i="0"]'
+            assert page.eval_on_selector(rm_sel, "e => e.title") == "clear", (
+                "the single row must offer x, labelled as a clear"
+            )
+
+            page.click(NAME_SEL)
+            page.type(NAME_SEL, "robot arm", delay=20)
+            page.click(rm_sel)
+            page.wait_for_function(
+                f"() => {{ const i = document.querySelector('{NAME_SEL}'); return i && i.value === ''; }}",
+                timeout=5000,
+            )
+            # Still exactly one (empty) row — cleared, not deleted.
+            assert page.eval_on_selector_all("#overlays-panel .overlays-obj-name", "els => els.length") == 1
+
+            # With a second row, the x removes rather than clears.
+            page.click("#overlays-panel .overlays-add-obj")
+            page.wait_for_function(
+                "() => document.querySelectorAll('#overlays-panel .overlays-obj-name').length === 2",
+                timeout=5000,
+            )
+            assert page.eval_on_selector(rm_sel, "e => e.title") == "remove"
+            page.click('#overlays-panel .overlays-obj-rm[data-i="1"]')
+            page.wait_for_function(
+                "() => document.querySelectorAll('#overlays-panel .overlays-obj-name').length === 1",
+                timeout=5000,
+            )
+        finally:
+            browser.close()

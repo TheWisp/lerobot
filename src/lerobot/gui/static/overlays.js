@@ -440,7 +440,7 @@
                 // foreground, red − = SUPPRESS (subtract from it — e.g. arm − gripper). The
                 // Background row uses slot placeholders so its columns line up.
                 const pol = (o, i) => `<button class="overlays-pol ${o.sign === '-' ? 'neg' : 'pos'}" data-i="${i}" title="${o.sign === '-' ? '− suppress: subtracted from the foreground — click to add' : '+ foreground: added — click to suppress'}">${o.sign === '-' ? '−' : '+'}</button>`;
-                const rmBtn = (i) => objects.length > 1 ? `<span class="overlays-obj-rm" data-i="${i}" title="remove">&times;</span>` : '<span class="overlays-obj-slot"></span>';
+                const rmBtn = (i) => `<span class="overlays-obj-rm" data-i="${i}" title="${objects.length > 1 ? 'remove' : 'clear'}">&times;</span>`;
                 const rows = objects.map((o, i) => {
                     const excl = o.sign === '-';
                     const mid = excl
@@ -452,7 +452,15 @@
                 box.innerHTML = rows + bgrow;
                 wireTreatments(box);
                 box.querySelectorAll('.overlays-pol').forEach((b) => b.addEventListener('click', () => { objects[+b.dataset.i].sign = objects[+b.dataset.i].sign === '-' ? '+' : '-'; renderObjects(); applyInstant(); }));
-                box.querySelectorAll('.overlays-obj-rm').forEach((b) => b.addEventListener('click', () => { if (objects.length > 1) { objects.splice(+b.dataset.i, 1); renderObjects(); applyInstant(); } }));
+                box.querySelectorAll('.overlays-obj-rm').forEach((b) => b.addEventListener('click', () => {
+                    const i = +b.dataset.i;
+                    // Removing the LAST row clears it in place instead of deleting it — a
+                    // text row needs an input to type into. Every row is therefore always
+                    // one click from gone, instead of the first row being immortal.
+                    if (objects.length > 1) objects.splice(i, 1);
+                    else objects[0] = { name: '', sign: '+', treatment: { key: 'none', params: {} } };
+                    renderObjects(); applyInstant();
+                }));
 
             box.querySelectorAll('.overlays-obj-btn.sign').forEach((b) => b.addEventListener('click', () => { objects[+b.dataset.i].sign = objects[+b.dataset.i].sign === '-' ? '+' : '-'; renderObjects(); applyInstant(); }));
             box.querySelectorAll('.overlays-obj-btn.rm').forEach((b) => b.addEventListener('click', () => { if (objects.length > 1) { objects.splice(+b.dataset.i, 1); renderObjects(); applyInstant(); } }));
