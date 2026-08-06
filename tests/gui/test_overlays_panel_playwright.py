@@ -167,3 +167,77 @@ def test_last_row_clears_in_place_instead_of_being_immortal(overlays_gui_server)
             )
         finally:
             browser.close()
+
+
+def test_overlay_config_is_scoped_per_dataset(overlays_gui_server):
+    """Datasets differ where episodes within one do not, so the panel's config is
+    remembered PER DATASET and swapped on switch (app.js calls refreshCameras
+    exactly then). The concrete defect this pins: the auto-opened process preview
+    used to inherit the source's treatments and re-apply them onto already-treated
+    pixels — with scoping, a never-seen dataset gets a fresh, inert config."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.goto(overlays_gui_server, wait_until="networkidle")
+            # window.currentDataset is a READ-ONLY getter mirroring app.js's internal
+            # state (sibling scripts must not assign it) — a plain assignment is
+            # silently ignored, which cost this test a debugging session. It is
+            # configurable, so the test impersonates app.js by redefining it.
+            page.evaluate(
+                "window.__setDs = (v) => Object.defineProperty(window, 'currentDataset',"
+                " { value: v, writable: true, configurable: true })"
+            )
+            # Opening the first dataset fires refreshCameras too (app.js does this on
+            # every dataset change) — that is when dsA becomes the scope owner.
+            page.evaluate("window.__setDs('/tmp/dsA'); window.Overlays.refreshCameras()")
+            page.evaluate(
+                "(() => { const p = document.querySelector('#overlays-panel .overlays-picker');"
+                " p.value = 'sam3_track'; p.dispatchEvent(new Event('change', {bubbles: true})); })()"
+            )
+            page.wait_for_selector(NAME_SEL, timeout=5000)
+
+            # Author dsA's config: named object, blur treatment, instances = Largest.
+            page.click(NAME_SEL)
+            page.type(NAME_SEL, "ring", delay=15)
+            page.evaluate(
+                "(() => document.querySelector('#overlays-panel .overlays-objrow.data"
+                ' .overlays-treat[data-obj="0"] .overlays-treat-btn[data-key="blur"]\').click())()'
+            )
+            page.evaluate(
+                "(() => document.querySelector('#overlays-panel .overlays-multi"
+                ' .overlays-seg-btn[data-multi="0"]\').click())()'
+            )
+
+            def state():
+                return page.evaluate(
+                    """(() => ({
+                        name: document.querySelector('#overlays-panel .overlays-obj-name[data-i="0"]').value,
+                        treat: (document.querySelector('#overlays-panel .overlays-objrow.data'
+                                + ' .overlays-treat[data-obj="0"] .overlays-treat-btn.sel') || {}).dataset?.key,
+                        multi: document.querySelector('#overlays-panel .overlays-multi'
+                                + ' .overlays-seg-btn.sel').dataset.multi,
+                    }))()"""
+                )
+
+            assert state() == {"name": "ring", "treat": "blur", "multi": "0"}
+
+            # Switch to a never-seen dataset: fresh, inert config (the preview case).
+            page.evaluate("window.__setDs('/tmp/dsB'); window.Overlays.refreshCameras()")
+            page.wait_for_function(f"() => document.querySelector('{NAME_SEL}').value === ''", timeout=5000)
+            assert state() == {"name": "", "treat": "none", "multi": "1"}
+
+            # Author dsB differently, then bounce back and forth: each keeps its own.
+            page.click(NAME_SEL)
+            page.type(NAME_SEL, "cube", delay=15)
+            page.evaluate("window.__setDs('/tmp/dsA'); window.Overlays.refreshCameras()")
+            page.wait_for_function(
+                f"() => document.querySelector('{NAME_SEL}').value === 'ring'", timeout=5000
+            )
+            assert state() == {"name": "ring", "treat": "blur", "multi": "0"}
+            page.evaluate("window.__setDs('/tmp/dsB'); window.Overlays.refreshCameras()")
+            page.wait_for_function(
+                f"() => document.querySelector('{NAME_SEL}').value === 'cube'", timeout=5000
+            )
+        finally:
+            browser.close()

@@ -62,7 +62,7 @@ Follow-ups:
       **mask-guided diffusion restyle** (ROSIE / GenAug / RoboAgent line — RoboAgent
       used SAM masks + inpainting, exactly our setup); its hard part is temporal
       consistency, where our mask track is the natural propagation anchor.
-- [ ] **Overlay config scope: per-dataset, not global** (decided 2026-08-06).
+- [x] **Overlay config scope: per-dataset, not global** (decided and shipped 2026-08-06).
       Today the panel's objects/treatments/cameras survive dataset switches, which
       is wrong on both ends: datasets differ (episodes within one share a scene
       and task; datasets do not), and the auto-opened process **preview inherits
@@ -77,6 +77,8 @@ Follow-ups:
       Rejected alternative: auto-suspending the overlay on processed datasets —
       treats the symptom, keeps the wrong scope, and adds a state the user must
       understand.
+      Remaining: an LRU bound and cross-reload persistence (sessionStorage) —
+      the map is in-memory and unbounded by explicit decision for now.
 
 ### Feature Editing (per-frame view + edit)
 
